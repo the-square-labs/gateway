@@ -139,12 +139,13 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
     async pullImage(
       nodeId: string,
       imageRef: string,
-      registryId?: string
+      registryId?: string,
+      folderId?: string
     ): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(`/docker/nodes/${nodeId}/images/pull`, {
           method: "POST",
-          body: JSON.stringify({ imageRef, registryId }),
+          body: JSON.stringify({ imageRef, registryId, folderId }),
         })
       );
     }
@@ -350,7 +351,12 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
 
     async createVolume(
       nodeId: string,
-      config: { name: string; storageKind?: "regular" | "disk-image"; capacityBytes?: number }
+      config: {
+        name: string;
+        storageKind?: "regular" | "disk-image";
+        capacityBytes?: number;
+        folderId?: string;
+      }
     ): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(`/docker/nodes/${nodeId}/volumes`, {
@@ -483,7 +489,13 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
 
     async createNetwork(
       nodeId: string,
-      config: { name: string; driver?: string; subnet?: string; gateway?: string }
+      config: {
+        name: string;
+        driver?: string;
+        subnet?: string;
+        gateway?: string;
+        folderId?: string | null;
+      }
     ): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(`/docker/nodes/${nodeId}/networks`, {
@@ -940,7 +952,7 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
 
     async createDockerComposeSourceProject(
       nodeId: string,
-      input: { projectName: string; source: DockerSourceBindingConfig }
+      input: { projectName: string; source: DockerSourceBindingConfig; folderId?: string | null }
     ): Promise<DockerComposeSourceProjectCreateResult> {
       return this.unwrapData(
         this.request<{ data: DockerComposeSourceProjectCreateResult }>(

@@ -24,6 +24,7 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
+import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -52,6 +53,7 @@ import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
+  canCreateInFolder,
   deriveAllowedResourceIdsByScope,
   hasSelectableScopeBase,
   parseScopesForForm,
@@ -65,6 +67,7 @@ import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DatabaseConnection, LoggingSchema, Node, PermissionGroup, ProxyHost } from "@/types";
 import { GROUP_ASSIGNABLE_SCOPES, RESOURCE_SCOPABLE_SCOPES } from "@/types";
 import {
+  builtinGroupSortOrder,
   findMissingRequiredResourceSelection,
   formatGroupName,
   formatGroupNameInput,
@@ -82,7 +85,7 @@ export function AdminGroups({
   onCreateFolderRef?: (fn: () => void) => void;
 }) {
   const navigate = useNavigate();
-  const { user, hasAnyScope, hasScope } = useAuthStore();
+  const { user, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
   const { cas, fetchCAs } = useCAStore();
   const [nodesList, setNodesList] = useState<Node[]>(
     () => api.getCached<Node[]>("admin:scope-nodes") ?? []
@@ -105,6 +108,24 @@ export function AdminGroups({
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<PermissionGroup | null>(null);
   const [formName, setFormName] = useState("");
+  const [formFolderId, setFormFolderId] = useState<string | null>(null);
+  const [destinationFolders, setDestinationFolders] = useState<FolderOption[]>([]);
+  useEffect(() => {
+    if (!dialogOpen || editingGroup) return;
+    let cancelled = false;
+    setFormFolderId(null);
+    void api
+      .listAdminGroupFolders()
+      .then((tree) => {
+        if (!cancelled) setDestinationFolders(flattenFolderTree(tree, "groups"));
+      })
+      .catch(() => {
+        if (!cancelled) setDestinationFolders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dialogOpen, editingGroup]);
   const [formDescription, setFormDescription] = useState("");
   const [formParentId, setFormParentId] = useState<string | null>(null);
   const [formBaseScopes, setFormBaseScopes] = useState<string[]>([]);
@@ -145,11 +166,11 @@ export function AdminGroups({
   );
 
   useEffect(() => {
-    if (!hasScope("admin:groups")) {
+    if (!hasScopedAccess("admin:groups")) {
       navigate("/");
       return;
     }
-  }, [hasScope, navigate]);
+  }, [hasScopedAccess, navigate]);
 
   const fetchGroups = useCallback(async () => {
     try {
@@ -329,7 +350,10 @@ export function AdminGroups({
         useDashboardBootstrapStore.getState().invalidate();
         toast.success("Group updated");
       } else {
+        if (!canCreateInFolder(userScopes, "admin:groups", formFolderId))
+          throw new Error("Select an authorized destination folder");
         await api.createGroup({
+          folderId: formFolderId,
           name: normalizedName,
           description: formDescription.trim() || undefined,
           scopes: finalScopes,
@@ -431,7 +455,13 @@ export function AdminGroups({
     );
   }, [groups, listSearch]);
   const filteredBuiltinGroups = useMemo(
-    () => filteredGroups.filter((group) => group.isBuiltin),
+    () =>
+      filteredGroups
+        .filter((group) => group.isBuiltin)
+        .map((group) => ({
+          ...group,
+          sortOrder: builtinGroupSortOrder(group.name),
+        })),
     [filteredGroups]
   );
   const filteredCustomGroups = useMemo(
@@ -611,6 +641,7 @@ export function AdminGroups({
 
         <FolderedResourceList<PermissionGroup>
           resourceType="admin-group"
+          notifyOnMove={false}
           realtimeChannel="group.changed"
           resources={filteredCustomGroups}
           systemFolders={[
@@ -662,6 +693,31 @@ export function AdminGroups({
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {!editingGroup && (destinationFolders.length > 0 || !hasScope("admin:groups")) && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Folder</label>
+                <Select
+                  value={formFolderId ?? (hasScope("admin:groups") ? "__none__" : "")}
+                  onValueChange={(value) => setFormFolderId(value === "__none__" ? null : value)}
+                >
+                  <SelectTrigger aria-label="Group folder">
+                    <SelectValue placeholder="Select a folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {hasScope("admin:groups") && (
+                      <SelectItem value="__none__">No folder</SelectItem>
+                    )}
+                    {destinationFolders
+                      .filter((folder) => canCreateInFolder(userScopes, "admin:groups", folder.id))
+                      .map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {folder.label}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input

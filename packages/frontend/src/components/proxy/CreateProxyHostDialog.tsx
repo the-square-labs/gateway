@@ -113,7 +113,7 @@ export function CreateProxyHostDialog({
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
-  const hasScope = useAuthStore((state) => state.hasScope);
+  const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
   const maintenanceLocked = !!existingHost?.maintenanceEnabled;
 
   // Step navigation
@@ -276,11 +276,8 @@ export function CreateProxyHostDialog({
   }, [nginxTemplateId, nginxTemplateList, upstream.kind]);
 
   const visibleNodes = useMemo(
-    () =>
-      isEditing
-        ? nodes
-        : nodes.filter((node) => hasScope("proxy:create") || hasScope(`proxy:create:${node.id}`)),
-    [hasScope, isEditing, nodes]
+    () => (isEditing ? nodes : hasScopedAccess("proxy:create") ? nodes : []),
+    [hasScopedAccess, isEditing, nodes]
   );
   const selectedNode = useMemo(
     () => visibleNodes.find((node) => node.id === nodeId) ?? null,

@@ -1,9 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { waitForShutdownTasks } from '@/services/shutdown-coordinator.service.js';
 import { DockerMigrationService } from './docker-migration.service.js';
 
+vi.mock('./docker-migration-availability.js', () => ({
+  assertMigrationAvailabilityAllowed: vi.fn().mockResolvedValue(undefined),
+  MIGRATION_AVAILABILITY_ENABLED: 'MIGRATION_AVAILABILITY_ENABLED',
+}));
+
 function createService() {
   return new DockerMigrationService(
+    {} as never,
     {} as never,
     {} as never,
     {} as never,
@@ -15,6 +22,116 @@ function createService() {
 }
 
 describe('DockerMigrationService graceful shutdown', () => {
+  const containerScopes = ['migrate', 'view', 'manage', 'environment', 'secrets', 'create', 'delete'].map(
+    (action) => `docker:containers:${action}`
+  );
+  const permissionRow = {
+    id: 'migration-1',
+    phase: 'preparing',
+    resourceType: 'container',
+    resourceName: 'app',
+    sourceNodeId: 'source',
+    targetNodeId: 'target',
+    createdById: 'creator',
+    keepSource: true,
+    cutoverAt: null,
+    plan: {},
+    preflight: {
+      scopeResourceId: 'resource',
+      targetFolderId: null,
+      artifacts: [],
+      proxyHosts: [],
+      dependencyPermissions: { volumes: [], networks: [], proxyHostIds: [] },
+    },
+  };
+
+  it.each([
+    null,
+    { scopes: ['*'], isBlocked: true },
+    { scopes: [], isBlocked: false },
+  ])('denies a queued/resumed phase before dispatch when the actor lost access (%j)', async (actor) => {
+    const runtime = createService() as any;
+    runtime.auth = { getUserById: vi.fn().mockResolvedValue(actor) };
+    runtime.lease = { assertOwnership: vi.fn().mockResolvedValue(undefined) };
+    runtime.executor = { execute: vi.fn() };
+    await expect(runtime.executePhase(permissionRow)).rejects.toMatchObject({ code: 'MIGRATION_PERMISSION_DENIED' });
+    expect(runtime.executor.execute).not.toHaveBeenCalled();
+  });
+
+  it('loads fresh scopes at each phase instead of retaining the original grants', async () => {
+    const runtime = createService() as any;
+    runtime.auth = {
+      getUserById: vi
+        .fn()
+        .mockResolvedValueOnce({ scopes: containerScopes, isBlocked: false })
+        .mockResolvedValueOnce({ scopes: [], isBlocked: false }),
+    };
+    await expect(runtime.authorizePhase(permissionRow)).resolves.toBeUndefined();
+    await expect(runtime.authorizePhase(permissionRow)).rejects.toMatchObject({ code: 'MIGRATION_PERMISSION_DENIED' });
+    expect(runtime.auth.getUserById).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not delete target resources through rollback when initial authorization is denied', async () => {
+    const runtime = createService() as any;
+    runtime.update = vi.fn().mockResolvedValue(permissionRow);
+    runtime.lease = { release: vi.fn() };
+    runtime.clearMigrating = vi.fn();
+    runtime.log = vi.fn();
+    runtime.rollback = vi.fn();
+    await runtime.handleFailure(
+      { ...permissionRow, phase: 'locking' },
+      new AppError(403, 'MIGRATION_PERMISSION_DENIED', 'Access revoked')
+    );
+    expect(runtime.update).toHaveBeenCalledWith(permissionRow.id, expect.objectContaining({ status: 'failed' }));
+    expect(runtime.rollback).not.toHaveBeenCalled();
+    expect(runtime.lease.release).toHaveBeenCalledWith(permissionRow.id);
+  });
+
+  it('reauthorizes a cleanup retry as the user who requested the retry', async () => {
+    const runtime = createService() as any;
+    runtime.auth = { getUserById: vi.fn().mockResolvedValue({ scopes: containerScopes, isBlocked: false }) };
+    await runtime.authorizePhase({
+      ...permissionRow,
+      phase: 'cleanup_source',
+      cutoverAt: new Date(),
+      keepSource: false,
+      plan: { cleanupActorId: 'cleanup-operator' },
+    });
+    expect(runtime.auth.getUserById).toHaveBeenCalledWith('cleanup-operator');
+  });
+
+  it('passes current actor scopes to the locking preflight', async () => {
+    const runtime = createService() as any;
+    runtime.auth = { getUserById: vi.fn().mockResolvedValue({ scopes: ['current-grant'], isBlocked: false }) };
+    runtime.preflight = { run: vi.fn().mockResolvedValue({ fingerprint: 'same', blockers: [] }) };
+    await runtime.recheckPreflight({ ...permissionRow, sourceFingerprint: 'same' });
+    expect(runtime.preflight.run).toHaveBeenCalledWith(expect.any(Object), ['current-grant']);
+  });
+
+  it('places copied volumes in their authorized folder before publishing target inventory', async () => {
+    const runtime = createService() as any;
+    const values = vi.fn().mockReturnValue({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) });
+    runtime.db = { insert: vi.fn().mockReturnValue({ values }) };
+    await runtime.placeDependencies({
+      ...permissionRow,
+      phase: 'transferring',
+      preflight: {
+        ...permissionRow.preflight,
+        dependencyPermissions: {
+          volumes: [{ resourceId: 'data', folderId: 'folder-1' }],
+          networks: [],
+          proxyHostIds: [],
+        },
+      },
+    });
+    expect(values).toHaveBeenCalledWith({
+      nodeId: 'target',
+      resourceType: 'volume',
+      resourceKey: 'data',
+      folderId: 'folder-1',
+    });
+  });
+
   it('finishes the active phase, releases the lease, and does not start the next phase', async () => {
     const service = createService();
     const runtime = service as any;

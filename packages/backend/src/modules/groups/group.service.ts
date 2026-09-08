@@ -3,6 +3,7 @@ import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { permissionGroups, users } from '@/db/schema/index.js';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
@@ -96,7 +97,9 @@ export class GroupService {
       .where(and(inArray(users.groupId, affectedGroupIds), isNull(users.deletedAt)));
 
     for (const u of affected) {
-      const scopes = u.isBlocked ? [] : computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes).scopes;
+      const scopes = u.isBlocked
+        ? []
+        : await expandFolderScopes(this.db, computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes).scopes);
       this.eventBus?.publish(`permissions.changed.${u.id}`, { scopes, groupId: u.groupId });
       await this.sandboxService?.revokeUserAccess(u.id, scopes, 'permissions_changed').catch((error) => {
         logger.warn('Failed to revoke sandbox jobs after group permission cascade', { userId: u.id, groupId, error });
@@ -199,6 +202,16 @@ export class GroupService {
       return;
     }
 
+    if (input.scopes !== undefined || input.parentId !== undefined || input.requireGateway2fa !== undefined) {
+      const groupMap = await fetchGroupScopeMap(this.db);
+      const affected = [id, ...this.collectDescendantGroupIds(id, groupMap)];
+      if (affected.some((groupId) => !hasScope(actorScopes, `admin:groups:${groupId}`)))
+        throw new AppError(403, 'GROUP_ACCESS_DENIED', 'You must have access to every affected group');
+      const currentScopes = affected.flatMap((groupId) => computeEffectiveGroupAccess(groupId, groupMap).scopes);
+      if (!isScopeSubset(currentScopes, actorScopes))
+        throw new AppError(403, 'SCOPE_NOT_ALLOWED', 'Cannot change groups with permissions you do not possess');
+    }
+
     if (input.scopes === undefined && input.parentId === undefined) return;
 
     const nextScopes = input.scopes ?? existingGroup.scopes;
@@ -222,6 +235,9 @@ export class GroupService {
     }
 
     const affectedGroupIds = [id, ...this.collectDescendantGroupIds(id, groupMap)];
+    if (affectedGroupIds.some((groupId) => !hasScope(actorScopes, `admin:groups:${groupId}`))) {
+      throw new AppError(403, 'GROUP_ACCESS_DENIED', 'You must have access to every affected group');
+    }
     const affectedScopes = [
       ...new Set(affectedGroupIds.flatMap((groupId) => computeEffectiveGroupAccess(groupId, groupMap).scopes)),
     ];
@@ -333,6 +349,7 @@ export class GroupService {
           description: input.description ?? null,
           isBuiltin: false,
           parentId: input.parentId ?? null,
+          folderId: input.folderId ?? null,
           scopes,
           requireGateway2fa: input.requireGateway2fa ?? false,
         })

@@ -262,6 +262,7 @@ const confirmedHostingPrice = z
 export const HostingProvisionSchema = z
   .object({
     connectorId: z.string().uuid(),
+    folderId: z.string().uuid().nullable().optional(),
     idempotencyKey: z.string().uuid(),
     name: hostName,
     role: z.enum(['nginx', 'docker', 'builder', 'databases', 'monitoring', 'relay']),

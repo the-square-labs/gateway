@@ -1,6 +1,7 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
   CreateManagedDatabaseBindingSchema,
   CreateManagedDatabaseSchema,
@@ -44,6 +45,7 @@ import {
 } from '@/modules/pages/page-project.schemas.js';
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
 import { visiblePageProjectIds } from '@/modules/pages/page-project-access.js';
+import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
 import { UpdatePageProfileSchema } from '@/modules/pages/profile/page-profile.schemas.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { PageRetentionService } from '@/modules/pages/retention/page-retention.service.js';
@@ -179,9 +181,16 @@ async function managePages(user: User, args: Record<string, unknown>) {
     return projects.list(PageProjectListQuerySchema.parse(args), { allowedIds: visiblePageProjectIds(user.scopes) });
   }
   if (operation === 'project_create') {
-    ensureScope(user, 'pages:create');
-    if (args.folderId) ensureScope(user, 'pages:folders:manage');
-    return projects.create(CreatePageProjectSchema.parse(args), user.id);
+    const input = CreatePageProjectSchema.parse(args);
+    if (!hasScopeForCreation(user.scopes, 'pages:create', input.folderId, input.nodeId)) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        'Missing authorized Page Project creation scope for the selected destination'
+      );
+    }
+    await container.resolve(PageProjectFolderService).assertFolderExists(input.folderId);
+    return projects.create(input, user.id);
   }
 
   const projectId = requiredString(args.projectId);
@@ -457,8 +466,12 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     return service.list(ManagedDatabaseListQuerySchema.parse({ nodeId: args.nodeId, type: args.type }));
   }
   if (operation === 'create') {
-    ensureScope(user, 'databases:create');
-    return service.create(CreateManagedDatabaseSchema.parse(args), user.id);
+    const input = CreateManagedDatabaseSchema.parse(args);
+    if (!hasScopeForCreation(user.scopes, 'databases:create', input.folderId, input.nodeId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
+    }
+    await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
+    return service.create(input, user.id);
   }
 
   const databaseId = requiredString(args.databaseId);

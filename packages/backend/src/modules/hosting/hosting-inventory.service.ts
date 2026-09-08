@@ -482,11 +482,11 @@ export class HostingInventoryService {
         (resource) =>
           hasScope(user.scopes, `hosting:resources:view:${resource.id}`) &&
           !resource.missingSince &&
-          (resource.origin === 'created' ||
-            bindings.some(
-              (binding) =>
-                binding.resourceId === resource.id && hasScope(user.scopes, `nodes:details:${binding.nodeId}`)
-            ))
+          (bindings.some((binding) => binding.resourceId === resource.id)
+            ? bindings
+                .filter((binding) => binding.resourceId === resource.id)
+                .every((binding) => hasScope(user.scopes, `nodes:details:${binding.nodeId}`))
+            : resource.origin === 'created')
       )
       .map((resource) => ({
         id: resource.id,

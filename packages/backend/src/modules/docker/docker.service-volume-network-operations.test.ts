@@ -374,6 +374,30 @@ describe('DockerManagementService volume and network operations', () => {
     });
   });
 
+  it('does not persist a network identity or folder placement when create returns no network ID', async () => {
+    const dispatch = {
+      sendDockerNetworkCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }),
+    };
+    const { service, audit, eventBus } = createService(dispatch);
+    const ensureNetwork = vi.fn();
+    const moveResourcesToFolder = vi.fn();
+    service.setNetworkAccessResourceService({ ensureNetwork } as never);
+    service.setFolderService({ assertResourceDestination: vi.fn(), moveResourcesToFolder } as never);
+
+    await expect(
+      service.createNetwork(
+        'node-1',
+        { name: 'frontend', driver: 'bridge', folderId: '11111111-1111-4111-8111-111111111111' },
+        'user-1'
+      )
+    ).rejects.toMatchObject({ code: 'DOCKER_NETWORK_CREATE_INVALID_RESULT' });
+
+    expect(ensureNetwork).not.toHaveBeenCalled();
+    expect(moveResourcesToFolder).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
   it('rejects removing built-in networks after resolving network names', async () => {
     const dispatch = {
       sendDockerNetworkCommand: vi.fn(async (_nodeId: string, action: string) => {

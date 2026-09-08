@@ -1,6 +1,8 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
@@ -134,16 +136,21 @@ loggingRoutes.openapi(
   }
 );
 
-loggingRoutes.openapi(
-  { ...createLoggingEnvironmentRoute, middleware: requireLoggingScope('logs:environments:create') },
-  async (c) => {
-    const service = container.resolve(LoggingEnvironmentService);
-    const user = c.get('user')!;
-    const input = CreateLoggingEnvironmentSchema.parse(await c.req.json());
-    const data = await service.create(input, user.id);
-    return c.json({ data }, 201);
+loggingRoutes.openapi(createLoggingEnvironmentRoute, async (c) => {
+  const service = container.resolve(LoggingEnvironmentService);
+  const user = c.get('user')!;
+  const input = CreateLoggingEnvironmentSchema.parse(await c.req.json());
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'logs:environments:create', input.folderId)) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Missing authorized logging environment creation scope for the selected destination'
+    );
   }
-);
+  await container.resolve(LoggingEnvironmentFolderService).assertFolderExists(input.folderId);
+  const data = await service.create(input, user.id);
+  return c.json({ data }, 201);
+});
 
 loggingRoutes.openapi(getLoggingEnvironmentBySlugRoute, async (c) => {
   const service = container.resolve(LoggingEnvironmentService);
@@ -198,9 +205,18 @@ loggingRoutes.openapi(
       TokensService.hasScope(scopes, 'logs:manage');
     const hasGlobalView =
       TokensService.hasScope(scopes, 'logs:environments:view') || TokensService.hasScope(scopes, 'logs:manage');
+    const hasGlobalCreate = TokensService.hasScope(scopes, 'logs:environments:create');
     const allowedIds = [...resourceScopedIds(scopes, 'logs:environments:view')];
+    const allowedFolderIds = getFolderScopedIds(scopes, [
+      'logs:environments:view',
+      'logs:environments:edit',
+      'logs:environments:delete',
+      'logs:environments:create',
+    ]);
     const data = await service.getFolderTree(
-      canManageFolders || hasGlobalView ? { includeAllFolders: canManageFolders } : { allowedResourceIds: allowedIds }
+      canManageFolders || hasGlobalView || hasGlobalCreate
+        ? { includeAllFolders: true }
+        : { allowedResourceIds: allowedIds, allowedFolderIds }
     );
     return c.json({ data });
   }
@@ -233,6 +249,13 @@ loggingRoutes.openapi(
     const service = container.resolve(LoggingEnvironmentFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') ?? [];
+    if (!input.ids.every((id) => TokensService.hasScope(scopes, `logs:environments:edit:${id}`))) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing logging environment edit access for one or more move sources');
+    }
+    if (!hasScopeForCreation(scopes, 'logs:environments:edit', input.folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing logging environment edit access for the move destination');
+    }
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -300,9 +323,18 @@ loggingRoutes.openapi(
       TokensService.hasScope(scopes, 'logs:schemas:folders:manage') || TokensService.hasScope(scopes, 'logs:manage');
     const hasGlobalView =
       TokensService.hasScope(scopes, 'logs:schemas:view') || TokensService.hasScope(scopes, 'logs:manage');
+    const hasGlobalCreate = TokensService.hasScope(scopes, 'logs:schemas:create');
     const allowedIds = [...resourceScopedIds(scopes, 'logs:schemas:view')];
+    const allowedFolderIds = getFolderScopedIds(scopes, [
+      'logs:schemas:view',
+      'logs:schemas:edit',
+      'logs:schemas:delete',
+      'logs:schemas:create',
+    ]);
     const data = await service.getFolderTree(
-      canManageFolders || hasGlobalView ? { includeAllFolders: canManageFolders } : { allowedResourceIds: allowedIds }
+      canManageFolders || hasGlobalView || hasGlobalCreate
+        ? { includeAllFolders: true }
+        : { allowedResourceIds: allowedIds, allowedFolderIds }
     );
     return c.json({ data });
   }
@@ -335,6 +367,13 @@ loggingRoutes.openapi(
     const service = container.resolve(LoggingSchemaFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') ?? [];
+    if (!input.ids.every((id) => TokensService.hasScope(scopes, `logs:schemas:edit:${id}`))) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing logging schema edit access for one or more move sources');
+    }
+    if (!hasScopeForCreation(scopes, 'logs:schemas:edit', input.folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing logging schema edit access for the move destination');
+    }
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -382,16 +421,21 @@ loggingRoutes.openapi(
   }
 );
 
-loggingRoutes.openapi(
-  { ...createLoggingSchemaRoute, middleware: requireLoggingScope('logs:schemas:create') },
-  async (c) => {
-    const service = container.resolve(LoggingSchemaService);
-    const user = c.get('user')!;
-    const input = CreateLoggingSchemaSchema.parse(await c.req.json());
-    const data = await service.create(input, user.id);
-    return c.json({ data }, 201);
+loggingRoutes.openapi(createLoggingSchemaRoute, async (c) => {
+  const service = container.resolve(LoggingSchemaService);
+  const user = c.get('user')!;
+  const input = CreateLoggingSchemaSchema.parse(await c.req.json());
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'logs:schemas:create', input.folderId)) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Missing authorized logging schema creation scope for the selected destination'
+    );
   }
-);
+  await container.resolve(LoggingSchemaFolderService).assertFolderExists(input.folderId);
+  const data = await service.create(input, user.id);
+  return c.json({ data }, 201);
+});
 
 loggingRoutes.openapi(getLoggingSchemaBySlugRoute, async (c) => {
   const service = container.resolve(LoggingSchemaService);
@@ -568,8 +612,15 @@ function requireLoggingEnvironmentFolderListScope() {
     if (
       !TokensService.hasScope(scopes, 'logs:environments:folders:manage') &&
       !TokensService.hasScope(scopes, 'logs:environments:view') &&
+      !TokensService.hasScope(scopes, 'logs:environments:create') &&
       !TokensService.hasScope(scopes, 'logs:manage') &&
-      resourceScopedIds(scopes, 'logs:environments:view').size === 0
+      resourceScopedIds(scopes, 'logs:environments:view').size === 0 &&
+      getFolderScopedIds(scopes, [
+        'logs:environments:view',
+        'logs:environments:edit',
+        'logs:environments:delete',
+        'logs:environments:create',
+      ]).length === 0
     ) {
       throw new AppError(
         403,
@@ -587,8 +638,15 @@ function requireLoggingSchemaFolderListScope() {
     if (
       !TokensService.hasScope(scopes, 'logs:schemas:folders:manage') &&
       !TokensService.hasScope(scopes, 'logs:schemas:view') &&
+      !TokensService.hasScope(scopes, 'logs:schemas:create') &&
       !TokensService.hasScope(scopes, 'logs:manage') &&
-      resourceScopedIds(scopes, 'logs:schemas:view').size === 0
+      resourceScopedIds(scopes, 'logs:schemas:view').size === 0 &&
+      getFolderScopedIds(scopes, [
+        'logs:schemas:view',
+        'logs:schemas:edit',
+        'logs:schemas:delete',
+        'logs:schemas:create',
+      ]).length === 0
     ) {
       throw new AppError(403, 'FORBIDDEN', 'Missing required scope: logs:schemas:view or logs:schemas:folders:manage');
     }

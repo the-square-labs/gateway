@@ -41,6 +41,7 @@ import {
   updateContainerEnv as updateDockerContainerEnv,
 } from './docker-container-mutation-operations.js';
 import { type ContainerTransition, DockerContainerTransitions } from './docker-container-transitions.js';
+import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { getContainerEnv as getDockerContainerEnv } from './docker-env-operations.js';
@@ -71,6 +72,7 @@ import {
 } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
+import type { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 import { hasDockerPortBindIpV1Capability } from './docker-port-bindings.js';
 import {
   abortFileUpload as abortDockerFileUpload,
@@ -149,6 +151,7 @@ export class DockerManagementService {
   private evaluator?: NotificationEvaluatorService;
   private migrationGuard?: DockerMigrationGuard;
   private accessResourceService?: DockerAccessResourceService;
+  private networkAccessResourceService?: DockerNetworkAccessResourceService;
   private licensePolicy?: LicensePolicyService;
   private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
   private availabilityMutationGuard?: (nodeId: string, containerName: string) => Promise<void>;
@@ -278,6 +281,10 @@ export class DockerManagementService {
     this.accessResourceService = service;
   }
 
+  setNetworkAccessResourceService(service: DockerNetworkAccessResourceService) {
+    this.networkAccessResourceService = service;
+  }
+
   setLicensePolicyService(service: LicensePolicyService): void {
     this.licensePolicy = service;
   }
@@ -308,8 +315,9 @@ export class DockerManagementService {
     this.observeContainerLifecycle(nodeId, name, id, action, extra);
   }
 
-  async registerImportedContainer(nodeId: string, name: string, runtimeId: string): Promise<void> {
+  async registerImportedContainer(nodeId: string, name: string, runtimeId: string, folderId?: string): Promise<void> {
     await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
+    await placeCreatedDockerResource(this.db, nodeId, 'container', name, folderId);
     this.emitContainer(nodeId, name, runtimeId, 'created', { source: 'gwca-import' });
   }
 
@@ -381,6 +389,23 @@ export class DockerManagementService {
       taskService: this.taskService,
       registryService: this.registryService,
       eventBus: this.eventBus,
+      onImagePulled: async (nodeId: string, imageRef: string, folderId: string | null | undefined, userId: string) => {
+        if (!folderId) return;
+        const images = await this.listAllImages(nodeId);
+        const image = Array.isArray(images) ? resolveDockerImageByIdentifier(images, imageRef) : null;
+        const imageId = image ? dockerImageId(image) : '';
+        if (!imageId) {
+          throw new AppError(
+            502,
+            'DOCKER_IMAGE_PULL_IDENTITY_UNRESOLVED',
+            'Pulled image identity could not be resolved'
+          );
+        }
+        await this.folderService?.moveResourcesToFolder(
+          { resourceType: 'image', folderId, items: [{ nodeId, resourceKey: imageId }] },
+          userId
+        );
+      },
       parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
       createTask: (nodeId: string, containerId: string, containerName: string, type: string) =>
         this.createTask(nodeId, containerId, containerName, type),
@@ -397,6 +422,39 @@ export class DockerManagementService {
       parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
       assertContainerMutationAllowed: (nodeId: string, containerId: string) =>
         this.assertContainerMutationAllowed(nodeId, containerId),
+      onNetworkCreated: async (
+        nodeId: string,
+        networkId: string,
+        folderId: string | null | undefined,
+        userId: string
+      ) => {
+        await this.networkAccessResourceService?.ensureNetwork(nodeId, networkId);
+        if (folderId) {
+          await this.folderService?.moveResourcesToFolder(
+            { resourceType: 'network', folderId, items: [{ nodeId, resourceKey: networkId }] },
+            userId
+          );
+        }
+      },
+      onNetworkRemoved: async (nodeId: string, networkId: string) => {
+        await this.folderService?.deleteResourceAssignment(nodeId, 'network', networkId);
+        await this.networkAccessResourceService?.removeNetwork(nodeId, networkId);
+      },
+      onVolumeCreated: async (
+        nodeId: string,
+        volumeName: string,
+        folderId: string | null | undefined,
+        userId: string
+      ) => {
+        if (!folderId) return;
+        await this.folderService?.moveResourcesToFolder(
+          { resourceType: 'volume', folderId, items: [{ nodeId, resourceKey: volumeName }] },
+          userId
+        );
+      },
+      onVolumeRemoved: async (nodeId: string, volumeName: string) => {
+        await this.folderService?.deleteResourceAssignment(nodeId, 'volume', volumeName);
+      },
     };
   }
 
@@ -1197,6 +1255,7 @@ export class DockerManagementService {
   }
 
   async createContainer(nodeId: string, config: Record<string, unknown>, userId: string, actorScopes: string[] = []) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, config.folderId);
     const name = String(config.name ?? config.Name ?? '');
     if (name) await this.migrationGuard?.assertContainerNameAvailable(nodeId, name);
     return createDockerContainer(this.containerMutationContext(), nodeId, config, userId, actorScopes);
@@ -1263,9 +1322,19 @@ export class DockerManagementService {
     containerId: string,
     name: string,
     userId: string,
-    actorScopes: string[] = []
+    actorScopes: string[] = [],
+    folderId?: string | null
   ) {
-    return duplicateDockerContainer(this.containerMutationContext(), nodeId, containerId, name, userId, actorScopes);
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, folderId);
+    return duplicateDockerContainer(
+      this.containerMutationContext(),
+      nodeId,
+      containerId,
+      name,
+      userId,
+      actorScopes,
+      folderId
+    );
   }
 
   async updateContainer(
@@ -1375,18 +1444,63 @@ export class DockerManagementService {
     return listDockerImages(this.imageOperationContext(), nodeId);
   }
 
+  async decoratePublicImageSnapshot(nodeId: string, images: Array<Record<string, any>>) {
+    if (!Array.isArray(images)) return images;
+    const imageIds = images.map((image) => dockerImageId(image)).filter(Boolean);
+    const placements =
+      this.folderService && imageIds.length > 0
+        ? await this.folderService.getResourcePlacementsForRefs(
+            'image',
+            imageIds.map((resourceKey) => ({ nodeId, resourceKey }))
+          )
+        : [];
+    const placementById = new Map(placements.map((placement) => [placement.resourceKey, placement]));
+    return images.map((image) => {
+      const imageId = dockerImageId(image);
+      const placement = placementById.get(imageId);
+      return {
+        ...image,
+        scopeResourceId: imageId || null,
+        folderId: placement?.folderId ?? null,
+        folderIsSystem: placement?.folderIsSystem ?? false,
+        folderSortOrder: placement?.sortOrder ?? 0,
+      };
+    });
+  }
+
   /** Raw image inventory for reconciliation and housekeeping only. */
   async listAllImages(nodeId: string) {
     await this.validateDockerNode(nodeId);
     return listAllDockerImages(this.imageOperationContext(), nodeId);
   }
 
-  async pullImage(nodeId: string, imageRef: string, registryAuth?: string, userId?: string, registryId?: string) {
+  async pullImage(
+    nodeId: string,
+    imageRef: string,
+    registryAuth?: string,
+    userId?: string,
+    registryId?: string,
+    folderId?: string | null,
+    actorScopes?: string[]
+  ) {
+    if (actorScopes) {
+      await assertDockerCreationAccess(this.db, actorScopes, 'docker:images:pull', nodeId, folderId, 'image');
+    }
     await this.validateDockerNode(nodeId);
-    return pullDockerImage(this.imageOperationContext(), nodeId, imageRef, registryAuth, userId, registryId);
+    return pullDockerImage(this.imageOperationContext(), nodeId, imageRef, registryAuth, userId, registryId, folderId);
   }
 
-  async pullImageImmediate(nodeId: string, imageRef: string, registryAuth?: string) {
+  async pullImageImmediate(
+    nodeId: string,
+    imageRef: string,
+    registryAuth?: string,
+    folderId?: string | null,
+    userId?: string,
+    actorScopes?: string[]
+  ) {
+    if (actorScopes) {
+      await assertDockerCreationAccess(this.db, actorScopes, 'docker:images:pull', nodeId, folderId, 'image');
+    }
     await this.validateDockerNode(nodeId);
     const result = await this.nodeDispatch.sendDockerImageCommand(
       nodeId,
@@ -1394,7 +1508,11 @@ export class DockerManagementService {
       { imageRef, registryAuthJson: registryAuth },
       DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS
     );
-    return this.parseResult(result);
+    const data = this.parseResult(result);
+    if (folderId && userId) {
+      await this.imageOperationContext().onImagePulled?.(nodeId, imageRef, folderId, userId);
+    }
+    return data;
   }
 
   async removeImage(nodeId: string, imageId: string, force: boolean, userId: string) {
@@ -1541,9 +1659,20 @@ export class DockerManagementService {
 
   async createVolume(
     nodeId: string,
-    config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number },
-    userId: string
+    config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number; folderId?: string | null },
+    userId: string,
+    actorScopes?: string[]
   ) {
+    if (actorScopes) {
+      await assertDockerCreationAccess(
+        this.db,
+        actorScopes,
+        'docker:volumes:create',
+        nodeId,
+        config.folderId,
+        'volume'
+      );
+    }
     if (config.storageKind === 'disk-image') {
       await requireConfiguredLicensePolicy(this.licensePolicy).requireMinimumPlan('personal');
     }
@@ -1580,6 +1709,15 @@ export class DockerManagementService {
       .from(dockerManagedVolumes)
       .where(eq(dockerManagedVolumes.nodeId, nodeId));
     const managedByName = new Map(managedRows.map((row) => [row.volumeName, row]));
+    const volumeNames = volumes.map((volume) => String(volume.Name ?? volume.name ?? '')).filter(Boolean);
+    const placements =
+      this.folderService && volumeNames.length > 0
+        ? await this.folderService.getResourcePlacementsForRefs(
+            'volume',
+            volumeNames.map((resourceKey) => ({ nodeId, resourceKey }))
+          )
+        : [];
+    const placementByName = new Map(placements.map((placement) => [placement.resourceKey, placement]));
     const publicContainerNames = new Set(
       containers
         .filter((entry) => !isGatewayInternalContainer(entry))
@@ -1599,6 +1737,7 @@ export class DockerManagementService {
       const driver = String(volume.Driver ?? volume.driver ?? '');
       const scope = String(volume.Scope ?? volume.scope ?? '');
       const options = volume.Options ?? volume.options ?? {};
+      const placement = placementByName.get(name);
       const adoptable = !managed && driver === 'local' && scope === 'local' && Object.keys(options ?? {}).length === 0;
       return [
         {
@@ -1609,6 +1748,10 @@ export class DockerManagementService {
           adoptable,
           adoptionReason:
             !managed && !adoptable ? 'Only local volumes without driver options can be migrated' : undefined,
+          scopeResourceId: name,
+          folderId: placement?.folderId ?? null,
+          folderIsSystem: placement?.folderIsSystem ?? false,
+          folderSortOrder: placement?.sortOrder ?? 0,
         },
       ];
     });
@@ -1625,10 +1768,42 @@ export class DockerManagementService {
           capacityBytes,
           adoptable: false,
           availability: 'unavailable',
+          scopeResourceId: volumeName,
+          folderId: placementByName.get(volumeName)?.folderId ?? null,
+          folderIsSystem: placementByName.get(volumeName)?.folderIsSystem ?? false,
+          folderSortOrder: placementByName.get(volumeName)?.sortOrder ?? 0,
         });
       }
     }
     return visible;
+  }
+
+  async decoratePublicNetworkSnapshot(nodeId: string, networks: Array<Record<string, any>>) {
+    if (!Array.isArray(networks)) return networks;
+    const networkIds = networks.map((network) => String(network.id ?? network.Id ?? '')).filter((id) => id.length > 0);
+    const [accessIds, placements] = await Promise.all([
+      this.networkAccessResourceService
+        ? this.networkAccessResourceService.syncNetworks(nodeId, networks)
+        : new Map<string, string>(),
+      this.folderService && networkIds.length > 0
+        ? this.folderService.getResourcePlacementsForRefs(
+            'network',
+            networkIds.map((resourceKey) => ({ nodeId, resourceKey }))
+          )
+        : [],
+    ]);
+    const placementByNetworkId = new Map(placements.map((placement) => [placement.resourceKey, placement]));
+    return networks.map((network) => {
+      const networkId = String(network.id ?? network.Id ?? '');
+      const placement = placementByNetworkId.get(networkId);
+      return {
+        ...network,
+        scopeResourceId: accessIds.get(networkId) ?? null,
+        folderId: placement?.folderId ?? null,
+        folderIsSystem: placement?.folderIsSystem ?? false,
+        folderSortOrder: placement?.sortOrder ?? 0,
+      };
+    });
   }
 
   async registerImportedManagedVolumes(nodeId: string, volumeNames: string[], userId: string) {
@@ -1742,10 +1917,11 @@ export class DockerManagementService {
 
   async createNetwork(
     nodeId: string,
-    config: { name: string; driver: string; subnet?: string; gateway?: string },
+    config: { name: string; driver: string; subnet?: string; gateway?: string; folderId?: string | null },
     userId: string
   ) {
     await this.validateDockerNode(nodeId);
+    await this.folderService?.assertResourceDestination('network', config.folderId);
     return createDockerNetwork(this.volumeNetworkOperationContext(), nodeId, config, userId);
   }
 

@@ -12,10 +12,17 @@ export const DOCKER_VIEW_NODE_SCOPES = [
 ] as const;
 
 export type DockerViewNodeScope = (typeof DOCKER_VIEW_NODE_SCOPES)[number];
+type DockerNodeScope =
+  | DockerViewNodeScope
+  | "docker:containers:create"
+  | "docker:compose:create"
+  | "docker:networks:create"
+  | "docker:volumes:create"
+  | "docker:images:pull";
 
 function hasScopedDockerNodes(
   scopes: readonly string[],
-  scopeBases: readonly DockerViewNodeScope[]
+  scopeBases: readonly DockerNodeScope[]
 ): boolean {
   const allowedIds = deriveAllowedResourceIdsByScope(scopes);
   return scopeBases.some((scopeBase) => (allowedIds[scopeBase]?.length ?? 0) > 0);
@@ -23,19 +30,26 @@ function hasScopedDockerNodes(
 
 function hasBroadDockerNodeAccess(
   scopes: readonly string[],
-  scopeBases: readonly DockerViewNodeScope[]
+  scopeBases: readonly DockerNodeScope[]
 ) {
-  return scopeBases.some((scopeBase) => scopeMatches(scopes, scopeBase));
+  return scopeBases.some(
+    (scopeBase) =>
+      scopeMatches(scopes, scopeBase) ||
+      ((scopeBase.endsWith(":create") || scopeBase === "docker:images:pull") &&
+        scopes.some((scope) => scope.startsWith(`${scopeBase}:folder/`)))
+  );
 }
 
 function dockerNodeIdFromScopeResourceId(resourceId: string): string {
+  if (resourceId.startsWith("node/")) return resourceId.slice("node/".length);
+  if (resourceId.startsWith("folder/")) return "";
   const separator = resourceId.indexOf("/");
   return separator > 0 ? resourceId.slice(0, separator) : resourceId;
 }
 
 export async function loadVisibleDockerNodes(
   scopes: readonly string[],
-  scopeBases: readonly DockerViewNodeScope[],
+  scopeBases: readonly DockerNodeScope[],
   canListNodes: boolean
 ): Promise<Node[]> {
   const shouldListNodes =

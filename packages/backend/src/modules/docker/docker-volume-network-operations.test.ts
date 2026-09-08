@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   adoptVolume,
+  createNetwork,
   createVolume,
   exportVolume,
   listVolumes,
@@ -268,5 +269,37 @@ describe('managed volume inventory', () => {
       code: 'VOLUME_NOT_ADOPTABLE',
     });
     expect(insert).not.toHaveBeenCalled();
+  });
+});
+
+describe('network creation placement', () => {
+  it('persists the selected folder placement before it emits network creation success', async () => {
+    const order: string[] = [];
+    const context = {
+      nodeDispatch: {
+        sendDockerNetworkCommand: vi
+          .fn()
+          .mockResolvedValue({ success: true, detail: JSON.stringify({ Id: 'network-1' }) }),
+      },
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+      onNetworkCreated: vi.fn(async () => order.push('placement')),
+      auditService: { log: vi.fn(async () => order.push('audit')) },
+      eventBus: { publish: vi.fn(() => order.push('event')) },
+    };
+
+    await createNetwork(
+      context as never,
+      'node-1',
+      { name: 'frontend', driver: 'bridge', folderId: '11111111-1111-4111-8111-111111111111' },
+      'user-1'
+    );
+
+    expect(context.onNetworkCreated).toHaveBeenCalledWith(
+      'node-1',
+      'network-1',
+      '11111111-1111-4111-8111-111111111111',
+      'user-1'
+    );
+    expect(order).toEqual(['placement', 'audit', 'event']);
   });
 });

@@ -207,11 +207,12 @@ export class DockerMigrationCoordinator {
       );
     await tx
       .update(dockerContainerFolderAssignments)
-      .set({ nodeId: row.targetNodeId, folderId: null, updatedAt: new Date() })
+      .set({ nodeId: row.targetNodeId, updatedAt: new Date() })
       .where(
         and(
           eq(dockerContainerFolderAssignments.nodeId, row.sourceNodeId),
-          eq(dockerContainerFolderAssignments.containerName, row.resourceName)
+          eq(dockerContainerFolderAssignments.resourceType, 'container'),
+          eq(dockerContainerFolderAssignments.resourceKey, row.resourceName)
         )
       );
     await tx

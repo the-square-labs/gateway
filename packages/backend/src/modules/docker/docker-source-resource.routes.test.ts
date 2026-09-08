@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
@@ -20,6 +20,7 @@ function app(
   scopes = [`docker:containers:create:${NODE_ID}`, `docker:compose:create:${NODE_ID}`]
 ) {
   const router = new OpenAPIHono<AppEnv>();
+  container.registerInstance(TOKENS.DrizzleClient, {});
   container.registerInstance(LicensePolicyService, { requireFeature } as never);
   router.onError(errorHandler);
   router.use('*', async (c, next) => {

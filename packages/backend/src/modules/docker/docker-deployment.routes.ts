@@ -1,7 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -158,20 +158,17 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     });
   });
 
-  router.openapi(
-    { ...createDeploymentRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerDeploymentService);
-      const user = c.get('user')!;
-      const data = await service.create(
-        c.req.param('nodeId')!,
-        DockerDeploymentCreateSchema.parse(await c.req.json()),
-        user.id,
-        c.get('effectiveScopes') || []
-      );
-      return c.json({ data }, 201);
-    }
-  );
+  router.openapi({ ...createDeploymentRoute, middleware: requireScopeBase('docker:containers:create') }, async (c) => {
+    const service = container.resolve(DockerDeploymentService);
+    const user = c.get('user')!;
+    const data = await service.create(
+      c.req.param('nodeId')!,
+      DockerDeploymentCreateSchema.parse(await c.req.json()),
+      user.id,
+      c.get('effectiveScopes') || []
+    );
+    return c.json({ data }, 201);
+  });
 
   router.openapi({ ...getDeploymentByNameRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
     const service = container.resolve(DockerDeploymentService);

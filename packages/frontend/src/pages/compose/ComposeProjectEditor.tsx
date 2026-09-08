@@ -5,6 +5,7 @@ import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { PanelShell } from "@/components/common/PanelShell";
+import { flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { DialogFooter } from "@/components/ui/dialog";
@@ -18,13 +19,10 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClientUuid } from "@/lib/client-id";
-import {
-  canAdoptComposeProject,
-  hasComposeNodeScope,
-  hasComposeProjectScope,
-} from "@/lib/compose-access";
+import { canAdoptComposeProject, hasComposeProjectScope } from "@/lib/compose-access";
 import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { dockerComposeProjectRoute } from "@/lib/resource-routes";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
@@ -83,6 +81,10 @@ export function ComposeProjectEditor({
   const [project, setProject] = useState<DockerComposeProject | null>(null);
   const [nodeId, setNodeId] = useState(defaultNodeId ?? "");
   const [name, setName] = useState("");
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [destinationFolders, setDestinationFolders] = useState<
+    Array<{ id: string; label: string }>
+  >([]);
   const [yaml, setYaml] = useState(DEFAULT_YAML);
   const [variablesText, setVariablesText] = useState("{}");
   const [sourceMode, setSourceMode] = useState<"yaml" | "repository">("yaml");
@@ -109,7 +111,27 @@ export function ComposeProjectEditor({
     ? adoption
       ? canAdoptComposeProject(user?.scopes ?? [], nodeId, projectId)
       : hasComposeProjectScope(user?.scopes ?? [], "docker:compose:manage", nodeId, projectId)
-    : !!nodeId && hasComposeNodeScope(user?.scopes ?? [], "docker:compose:create", nodeId);
+    : !!nodeId && canCreateInFolder(user?.scopes ?? [], "docker:compose:create", folderId, nodeId);
+  useEffect(() => {
+    if (projectId) return;
+    let cancelled = false;
+    void api
+      .listDockerFolders("compose")
+      .then((tree) => {
+        if (!cancelled)
+          setDestinationFolders(
+            flattenFolderTree(tree, "docker-compose").filter((folder) =>
+              canCreateInFolder(user?.scopes ?? [], "docker:compose:create", folder.id, nodeId)
+            )
+          );
+      })
+      .catch(() => {
+        if (!cancelled) setDestinationFolders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, nodeId, user?.scopes]);
   const repositoryCreation = !projectId && sourceMode === "repository";
   const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
     useDockerSourceRepositories(repositoryCreation, sourceConnectorId);
@@ -117,7 +139,7 @@ export function ComposeProjectEditor({
   useEffect(() => {
     loadVisibleDockerNodes(
       user?.scopes ?? [],
-      ["docker:compose:view"],
+      projectId ? ["docker:compose:view"] : ["docker:compose:view", "docker:compose:create"],
       hasScopedAccess("nodes:details")
     )
       .then((available) => {
@@ -240,6 +262,7 @@ export function ComposeProjectEditor({
         }
         if (!sourceComposeFilePath.trim()) throw new Error("Compose file path is required");
         const created = await api.createDockerComposeSourceProject(nodeId, {
+          folderId,
           projectName: name.trim(),
           source: {
             connectorId: sourceConnectorId,
@@ -274,7 +297,7 @@ export function ComposeProjectEditor({
       let completionMessage = "Compose project created; Pull & Apply started";
       const inputSignature = composeRevisionResumeSignature(values);
       if (!projectId) {
-        const created = await api.createDockerComposeProject(nodeId, values);
+        const created = await api.createDockerComposeProject(nodeId, { ...values, folderId });
         targetProjectId = created.project.id;
         revisionId = created.revision.id;
       } else if (adoptionResume?.inputSignature === inputSignature) {
@@ -437,6 +460,28 @@ export function ComposeProjectEditor({
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Folder</label>
+              <Select
+                value={folderId ?? "__root__"}
+                onValueChange={(value) => setFolderId(value === "__root__" ? null : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a destination folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  {canCreateInFolder(user?.scopes ?? [], "docker:compose:create", null, nodeId) && (
+                    <SelectItem value="__root__">No folder</SelectItem>
+                  )}
+                  {destinationFolders.map((folder) => (
+                    <SelectItem key={folder.id} value={folder.id}>
+                      {folder.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <AnimatedHeight>

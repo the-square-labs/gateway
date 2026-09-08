@@ -1,6 +1,13 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { dockerDeployments, dockerEnvVars, dockerSecrets, nodes, proxyHosts } from '@/db/schema/index.js';
+import {
+  dockerContainerFolderAssignments,
+  dockerDeployments,
+  dockerEnvVars,
+  dockerSecrets,
+  nodes,
+  proxyHosts,
+} from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import type { DockerManagementService } from './docker.service.js';
@@ -110,6 +117,20 @@ export class DockerMigrationPreflightService {
       throw new AppError(500, 'DOCKER_ACCESS_RESOURCE_MISSING', 'Docker access resource identity is unavailable');
     }
     const metadataName = deployment ? `deployment:${deployment.id}` : name;
+    const [folderAssignment] = deployment
+      ? [undefined]
+      : await this.db
+          .select({ folderId: dockerContainerFolderAssignments.folderId })
+          .from(dockerContainerFolderAssignments)
+          .where(
+            and(
+              eq(dockerContainerFolderAssignments.nodeId, input.sourceNodeId),
+              eq(dockerContainerFolderAssignments.resourceType, 'container'),
+              eq(dockerContainerFolderAssignments.resourceKey, name)
+            )
+          )
+          .limit(1);
+    const targetFolderId = folderAssignment?.folderId ?? null;
     const sourceState = deployment ? String(deployment.status) : migrationContainerState(inspect ?? {});
     const allowedStates = deployment ? STABLE_DEPLOYMENT_STATES : STABLE_CONTAINER_STATES;
     if (!allowedStates.has(sourceState)) {
@@ -349,15 +370,49 @@ export class DockerMigrationPreflightService {
       })),
     ];
 
+    const folderAssignments = await this.db
+      .select()
+      .from(dockerContainerFolderAssignments)
+      .where(eq(dockerContainerFolderAssignments.nodeId, input.sourceNodeId));
+    const dependencyPermissions = {
+      volumes: [...volumeNames].map((resourceId) => ({
+        resourceId,
+        folderId:
+          folderAssignments.find((item) => item.resourceType === 'volume' && item.resourceKey === resourceId)
+            ?.folderId ?? null,
+      })),
+      networks: sourceNetworks
+        .filter((name) => !['bridge', 'host', 'none'].includes(name))
+        .map((name) => {
+          const source = sourceNetworkRows.find((item) => migrationItemName(item) === name);
+          const target = targetNetworks.find((item) => migrationItemName(item) === name);
+          if (!source?.scopeResourceId || (target && !target.scopeResourceId)) {
+            throw new AppError(409, 'DOCKER_ACCESS_RESOURCE_MISSING', 'Network access identity is unavailable');
+          }
+          return {
+            resourceId: String(source.scopeResourceId),
+            resourceKey: name,
+            folderId:
+              folderAssignments.find(
+                (item) => item.resourceType === 'network' && item.resourceKey === String(source.Id ?? source.id)
+              )?.folderId ?? null,
+            targetResourceId: target ? String(target.scopeResourceId) : null,
+          };
+        }),
+      proxyHostIds: linkedProxyHosts.map((host) => host.id),
+    };
+
     if (enforcePermissions) {
       assertDockerMigrationPermissions(scopes, {
         sourceNodeId: input.sourceNodeId,
         sourceResourceId: scopeResourceId,
         targetNodeId: input.targetNodeId,
+        targetFolderId,
         keepSource: input.keepSource,
         hasVolumes: volumeNames.size > 0,
         createsNetworks: input.resource.type === 'deployment' && missingNetworks.length > 0,
         hasProxyHosts: linkedProxyHosts.length > 0,
+        ...dependencyPermissions,
       });
     }
 
@@ -371,6 +426,8 @@ export class DockerMigrationPreflightService {
       sourceNodeId: input.sourceNodeId,
       targetNodeId: input.targetNodeId,
       keepSource: input.keepSource,
+      targetFolderId,
+      dependencyPermissions,
       sourceIdentity: inspect?.Id ?? deployment?.id,
       sourceState,
       image: inspect?.Image ?? deployment?.desiredConfig?.image,
@@ -397,6 +454,8 @@ export class DockerMigrationPreflightService {
       sourceNodeId: input.sourceNodeId,
       targetNodeId: input.targetNodeId,
       targetNodeSlug: targetNode.slug,
+      targetFolderId,
+      dependencyPermissions,
       keepSource: input.keepSource,
       sourceState,
       blockers,

@@ -1,9 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
+  requireAnyScopeBase,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
@@ -52,18 +55,26 @@ export const sslRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidatio
 
 sslRoutes.use('*', authMiddleware);
 
-sslRoutes.openapi({ ...listSslCertificateFoldersRoute, middleware: requireScopeBase('ssl:cert:view') }, async (c) => {
-  const service = container.resolve(SSLCertificateFolderService);
-  const scopes = c.get('effectiveScopes') || [];
-  const canManageFolders = hasScope(scopes, 'ssl:cert:folders:manage');
-  const hasGlobalView = hasScope(scopes, 'ssl:cert:view');
-  const data = await service.getFolderTree(
-    canManageFolders || hasGlobalView
-      ? { includeAllFolders: canManageFolders }
-      : { allowedResourceIds: getResourceScopedIds(scopes, 'ssl:cert:view') }
-  );
-  return c.json({ data });
-});
+sslRoutes.openapi(
+  {
+    ...listSslCertificateFoldersRoute,
+    middleware: requireAnyScopeBase('ssl:cert:view', 'ssl:cert:folders:manage', 'ssl:cert:issue'),
+  },
+  async (c) => {
+    const service = container.resolve(SSLCertificateFolderService);
+    const scopes = c.get('effectiveScopes') || [];
+    const canManageFolders = hasScope(scopes, 'ssl:cert:folders:manage');
+    const hasGlobalView = hasScope(scopes, 'ssl:cert:view');
+    const hasGlobalCreate = hasScope(scopes, 'ssl:cert:issue');
+    const allowedFolderIds = getFolderScopedIds(scopes, ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete']);
+    const data = await service.getFolderTree(
+      canManageFolders || hasGlobalView || hasGlobalCreate
+        ? { includeAllFolders: true }
+        : { allowedResourceIds: getResourceScopedIds(scopes, 'ssl:cert:view'), allowedFolderIds }
+    );
+    return c.json({ data });
+  }
+);
 
 sslRoutes.openapi(
   { ...createSslCertificateFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
@@ -87,7 +98,15 @@ sslRoutes.openapi(
   { ...moveSslCertificatesToFolderRoute, middleware: requireScope('ssl:cert:folders:manage') },
   async (c) => {
     const service = container.resolve(SSLCertificateFolderService);
-    await service.moveResourcesToFolder(MoveResourcesToFolderSchema.parse(await c.req.json()), c.get('user')!.id);
+    const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') ?? [];
+    if (!input.ids.every((id) => hasScopeForResource(scopes, 'ssl:cert:issue', id))) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing SSL certificate issue access for one or more move sources');
+    }
+    if (!hasScopeForCreation(scopes, 'ssl:cert:issue', input.folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing SSL certificate issue access for the move destination');
+    }
+    await service.moveResourcesToFolder(input, c.get('user')!.id);
     return c.json({ success: true });
   }
 );
@@ -170,69 +189,105 @@ sslRoutes.openapi(
 );
 
 // Request ACME certificate
-sslRoutes.openapi({ ...requestAcmeCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
+sslRoutes.openapi(requestAcmeCertificateRoute, async (c) => {
   const sslService = container.resolve(SSLService);
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = RequestACMECertSchema.parse(body);
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Missing authorized SSL certificate creation scope for the selected destination'
+    );
+  }
+  await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const result = await sslService.requestACMECert(input, user.id, user.email);
   return c.json({ data: result }, 201);
 });
 
 // Upload certificate
-sslRoutes.openapi({ ...uploadSslCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
+sslRoutes.openapi(uploadSslCertificateRoute, async (c) => {
   const sslService = container.resolve(SSLService);
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = UploadCertSchema.parse(body);
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Missing authorized SSL certificate creation scope for the selected destination'
+    );
+  }
+  await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.uploadCert(input, user.id);
   return c.json({ data: cert }, 201);
 });
 
 // Link internal CA certificate
-sslRoutes.openapi({ ...linkInternalSslCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
+sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
   const sslService = container.resolve(SSLService);
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = LinkInternalCertSchema.parse(body);
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'ssl:cert:issue', input.folderId)) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Missing authorized SSL certificate creation scope for the selected destination'
+    );
+  }
+  await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.linkInternalCert(input, user.id);
   return c.json({ data: cert }, 201);
 });
 
 // Manual renew
-sslRoutes.openapi({ ...renewSslCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
-  const sslService = container.resolve(SSLService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
-  const cert = await sslService.renewCert(id, user.id);
-  return c.json({ data: cert });
-});
+sslRoutes.openapi(
+  { ...renewSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  async (c) => {
+    const sslService = container.resolve(SSLService);
+    const user = c.get('user')!;
+    const id = c.req.param('id')!;
+    const cert = await sslService.renewCert(id, user.id);
+    return c.json({ data: cert });
+  }
+);
 
-sslRoutes.openapi({ ...setSslCertificateAutoRenewRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
-  const sslService = container.resolve(SSLService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
-  const body = await c.req.json();
-  const input = SetSslAutoRenewSchema.parse(body);
-  const cert = await sslService.setAutoRenew(id, input, user.id);
-  return c.json({ data: cert });
-});
+sslRoutes.openapi(
+  { ...setSslCertificateAutoRenewRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  async (c) => {
+    const sslService = container.resolve(SSLService);
+    const user = c.get('user')!;
+    const id = c.req.param('id')!;
+    const body = await c.req.json();
+    const input = SetSslAutoRenewSchema.parse(body);
+    const cert = await sslService.setAutoRenew(id, input, user.id);
+    return c.json({ data: cert });
+  }
+);
 
 // Complete DNS-01 verification
-sslRoutes.openapi({ ...verifyDnsSslCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
-  const sslService = container.resolve(SSLService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
-  const cert = await sslService.completeDNS01Verification(id, user.id);
-  return c.json({ data: cert });
-});
+sslRoutes.openapi(
+  { ...verifyDnsSslCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  async (c) => {
+    const sslService = container.resolve(SSLService);
+    const user = c.get('user')!;
+    const id = c.req.param('id')!;
+    const cert = await sslService.completeDNS01Verification(id, user.id);
+    return c.json({ data: cert });
+  }
+);
 
-sslRoutes.openapi({ ...cancelPendingAcmeCertificateRoute, middleware: requireScope('ssl:cert:issue') }, async (c) => {
-  const sslService = container.resolve(SSLService);
-  const user = c.get('user')!;
-  await sslService.cancelPendingAcmeIssue(c.req.param('id')!, user.id);
-  return c.body(null, 204);
-});
+sslRoutes.openapi(
+  { ...cancelPendingAcmeCertificateRoute, middleware: requireScopeForResource('ssl:cert:issue', 'id') },
+  async (c) => {
+    const sslService = container.resolve(SSLService);
+    const user = c.get('user')!;
+    await sslService.cancelPendingAcmeIssue(c.req.param('id')!, user.id);
+    return c.body(null, 204);
+  }
+);
 
 // Repair is an operator action and deliberately uses the existing global
 // admin mutation permission rather than exposing certificate material.

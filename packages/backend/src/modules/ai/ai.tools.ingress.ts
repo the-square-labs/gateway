@@ -406,6 +406,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
           description:
             'Auto-renew before expiry. Defaults true for HTTP-01 and Cloudflare DNS-01; manual DNS-01 cannot auto-renew.',
         },
+        folderId: { type: ['string', 'null'], description: 'Folder UUID for organizing this certificate.' },
       },
       required: ['domains', 'challengeType'],
     },
@@ -424,6 +425,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         internalCertId: { type: 'string', description: 'The PKI certificate UUID to import as SSL certificate' },
         name: { type: 'string', description: 'Display name for the SSL certificate (optional, defaults to cert CN)' },
+        folderId: { type: ['string', 'null'], description: 'Folder UUID for organizing this certificate.' },
       },
       required: ['internalCertId'],
     },
@@ -445,6 +447,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         certificatePem: { type: 'string' },
         privateKeyPem: { type: 'string' },
         chainPem: { type: 'string' },
+        folderId: { type: ['string', 'null'], description: 'Folder UUID for an upload operation.' },
         enabled: { type: 'boolean', description: 'Enable or disable auto-renewal when operation is set_auto_renew' },
         provider: {
           type: 'string',
@@ -496,6 +499,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
           type: 'boolean',
           description: 'Replace existing Cloudflare A/AAAA records after explicit user approval',
         },
+        folderId: { type: ['string', 'null'], description: 'Folder UUID for organizing this domain.' },
       },
       required: ['domain'],
     },

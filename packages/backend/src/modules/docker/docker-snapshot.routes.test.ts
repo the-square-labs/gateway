@@ -84,6 +84,7 @@ async function setup() {
     decorateContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     decoratePublicContainerSnapshot: vi.fn(async (_nodeId, data) => data),
     decoratePublicVolumeSnapshot: vi.fn(async (_nodeId, data) => data),
+    decoratePublicNetworkSnapshot: vi.fn(async (_nodeId, data) => data),
     decorateContainerDetailSnapshot: vi.fn(async (_nodeId, data) => data),
     decoratePublicContainerDetailSnapshot: vi.fn(async (_nodeId, data) => ({
       ...data,
@@ -148,6 +149,30 @@ describe('Docker snapshot routes', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as any;
     expect(body.data.map((network: any) => network.name)).toEqual(['application']);
+  });
+
+  it('filters network snapshot and node-list responses by the persisted network identity', async () => {
+    const { snapshots, docker } = await setup();
+    await snapshots.replaceList(NODE_1, 'networks', [
+      { Id: 'raw-visible', Name: 'visible', Driver: 'bridge' },
+      { Id: 'raw-hidden', Name: 'hidden', Driver: 'bridge' },
+    ]);
+    docker.decoratePublicNetworkSnapshot.mockResolvedValue([
+      { Id: 'raw-visible', Name: 'visible', Driver: 'bridge', scopeResourceId: 'network-visible' },
+      { Id: 'raw-hidden', Name: 'hidden', Driver: 'bridge', scopeResourceId: 'network-hidden' },
+    ]);
+    const app = appWithScopes([`docker:networks:view:${NODE_1}/network-visible`]);
+    registerNetworkRoutes(app);
+    registerDockerSnapshotRoutes(app);
+
+    const direct = await app.request(`/nodes/${NODE_1}/networks`);
+    const aggregate = await app.request(`/networks?nodeId=${NODE_1}`);
+
+    await expect(direct.json()).resolves.toMatchObject({ data: [{ id: 'raw-visible', name: 'visible' }], total: 1 });
+    await expect(aggregate.json()).resolves.toMatchObject({
+      data: [{ id: 'raw-visible', name: 'visible' }],
+      total: 1,
+    });
   });
 
   it('hides Gateway-owned images from direct and aggregate snapshots', async () => {

@@ -32,6 +32,7 @@ export const CreateNodeSchema = z
     type: z.enum(['nginx', 'bastion', 'monitoring', 'docker', 'builder', 'databases', 'relay']).default('nginx'),
     hostname: z.string().min(1).max(255),
     displayName: z.string().max(255).optional(),
+    folderId: z.string().uuid().nullable().optional(),
     serviceAddresses: NodeServiceAddressesSchema.optional(),
     servicePort: z.number().int().min(1).max(65535).optional(),
   })

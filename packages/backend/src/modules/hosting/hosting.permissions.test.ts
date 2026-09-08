@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
 import { API_TOKEN_SCOPES, isValidBaseScope } from '@/lib/scopes.js';
 import { HostingSettingsSchema } from './hosting.schemas.js';
@@ -9,6 +10,35 @@ import {
 } from './hosting-permissions.js';
 
 describe('hosting authorization boundaries', () => {
+  it('enforces provider actions independently and still requires access to every bound node', async () => {
+    const accounts = [
+      { id: 'pve-account', provider: 'proxmox' },
+      { id: 'do-account', provider: 'digitalocean' },
+    ];
+    const resources = [
+      { id: 'pve-vm', connectorId: 'pve-account' },
+      { id: 'do-vm', connectorId: 'do-account' },
+    ];
+    const db = {
+      select: (fields: Record<string, unknown>) => ({
+        from: () => ({ where: async () => ('provider' in fields ? accounts : resources) }),
+      }),
+    };
+    const scopes = await expandFolderScopes(db as never, [
+      'hosting:resources:power:provider/proxmox',
+      'hosting:resources:delete:account/do-account',
+      'nodes:details:n1',
+      'nodes:config:edit:n1',
+      'nodes:delete:n1',
+    ]);
+    expect(() => assertHostingResourceAction(scopes, 'pve-vm', 'reboot', ['n1'])).not.toThrow();
+    expect(() => assertHostingResourceAction(scopes, 'do-vm', 'reboot', ['n1'])).toThrow();
+    expect(() => assertHostingResourceAction(scopes, 'pve-vm', 'delete', ['n1'])).toThrow();
+    expect(() => assertHostingResourceAction(scopes, 'do-vm', 'delete', ['n1'])).not.toThrow();
+    expect(() => assertHostingResourceAction(scopes, 'pve-vm', 'reboot', ['hidden-node'])).toThrow();
+    expect(() => assertHostingResourceAction(scopes, 'pve-vm', 'reboot', ['n1', 'hidden-node'])).toThrow();
+    expect(hasScope(scopes, 'hosting:billing:view:pve-account')).toBe(false);
+  });
   it('registers scoped permissions without implicit node-to-finance grants', () => {
     expect(isValidBaseScope('hosting:resources:power')).toBe(true);
     expect(hasScope(['hosting:resources:power:r1'], 'hosting:resources:power:r2')).toBe(false);

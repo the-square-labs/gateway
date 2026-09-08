@@ -46,6 +46,7 @@ const fieldSchemaArray = z
 
 export const CreateLoggingEnvironmentSchema = z.object({
   name: z.string().trim().min(1).max(255),
+  folderId: z.string().uuid().nullable().optional(),
   description: z.string().trim().max(10_000).optional().nullable(),
   enabled: z.boolean().default(true),
   schemaId: z.string().uuid().nullable().optional(),
@@ -63,6 +64,7 @@ export const UpdateLoggingEnvironmentSchema = CreateLoggingEnvironmentSchema.par
 
 export const CreateLoggingSchemaSchema = z.object({
   name: z.string().trim().min(1).max(255),
+  folderId: z.string().uuid().nullable().optional(),
   description: z.string().trim().max(10_000).optional().nullable(),
   schemaMode: z.enum(['loose', 'strip', 'reject']).default('reject'),
   fieldSchema: fieldSchemaArray.default([]),

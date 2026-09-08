@@ -376,7 +376,7 @@ export function AdminNodes() {
                       },
                     ]
                   : []),
-                ...(hasScope("nodes:create")
+                ...(hasScopedAccess("nodes:create")
                   ? [
                       {
                         label: "Add Node",
@@ -393,7 +393,7 @@ export function AdminNodes() {
                   Add Folder
                 </Button>
               )}
-              {hasScope("nodes:create") && (
+              {hasScopedAccess("nodes:create") && (
                 <Button onClick={() => setChoiceOpen(true)}>
                   <Plus className="h-4 w-4 mr-1" />
                   Add Node
@@ -468,8 +468,8 @@ export function AdminNodes() {
               emptyState={
                 <EmptyState
                   message="No nodes found. Add a node to start managing infrastructure remotely."
-                  actionLabel={hasScope("nodes:create") ? "Add Node" : undefined}
-                  onAction={hasScope("nodes:create") ? () => setChoiceOpen(true) : undefined}
+                  actionLabel={hasScopedAccess("nodes:create") ? "Add Node" : undefined}
+                  onAction={hasScopedAccess("nodes:create") ? () => setChoiceOpen(true) : undefined}
                   hasActiveFilters={hasActiveFilters}
                   onReset={() => {
                     setSearchInput("");

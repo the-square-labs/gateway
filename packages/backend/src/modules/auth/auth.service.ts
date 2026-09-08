@@ -17,6 +17,7 @@ import {
   userPasswordCredentials,
   users,
 } from '@/db/schema/index.js';
+import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
@@ -438,6 +439,7 @@ export class AuthService {
   }
 
   async createUser(data: {
+    folderId?: string | null;
     email: string;
     name?: string | null;
     groupId: string;
@@ -473,6 +475,7 @@ export class AuthService {
           name: normalizedName,
           avatarUrl: null,
           groupId: data.groupId,
+          folderId: data.folderId ?? null,
         })
         .returning();
       return createdUser;
@@ -596,6 +599,7 @@ export class AuthService {
 
   private async mapDbUserToUser(dbUser: typeof users.$inferSelect): Promise<User> {
     const effective = await resolveEffectiveUserAccess(this.db, dbUser.groupId, dbUser.additionalScopes);
+    const effectiveScopes = dbUser.deletedAt ? [] : await expandFolderScopes(this.db, effective.scopes);
     const isDeleted = Boolean(dbUser.deletedAt);
 
     return {
@@ -609,7 +613,7 @@ export class AuthService {
       groupName: effective.groupName,
       groupScopes: isDeleted ? [] : effective.groupScopes,
       additionalScopes: effective.additionalScopes,
-      scopes: isDeleted ? [] : effective.scopes,
+      scopes: effectiveScopes,
       isBlocked: dbUser.isBlocked || isDeleted,
       isDeleted,
       aiApprovalMode: dbUser.aiApprovalMode,

@@ -438,6 +438,7 @@ class ApiClient extends withPagesDomainsApi(
   }
 
   async createUser(data: {
+    folderId?: string | null;
     email: string;
     name: string;
     groupId: string;
@@ -665,6 +666,7 @@ class ApiClient extends withPagesDomainsApi(
   }
 
   async createGroup(data: {
+    folderId?: string | null;
     name: string;
     description?: string;
     scopes: string[];
@@ -795,6 +797,7 @@ class ApiClient extends withPagesDomainsApi(
     type?: string;
     hostname: string;
     displayName?: string;
+    folderId?: string | null;
     serviceAddresses?: string[];
     servicePort?: number;
   }): Promise<import("@/types").CreateNodeResponse> {

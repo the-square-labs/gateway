@@ -5,6 +5,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
@@ -120,7 +121,7 @@ export interface DockerContainerMutationContext {
 }
 
 export function daemonContainerCreateConfig(config: Record<string, unknown>): Record<string, unknown> {
-  const { volumes, networks, command, ...daemonConfig } = config;
+  const { volumes, networks, command, folderId: _folderId, ...daemonConfig } = config;
   const normalizedEnv = normalizeEnvRecord(config.env);
   const binds = Array.isArray(volumes)
     ? volumes.map((value) => {
@@ -219,6 +220,13 @@ export async function createContainer(
     });
     if (createdName && newId) {
       await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+      await placeCreatedDockerResource(
+        ctx.db,
+        nodeId,
+        'container',
+        createdName,
+        config.folderId as string | null | undefined
+      );
     }
     if (createdName && ctx.environmentService) {
       const env = normalizeEnvRecord(config.env);
@@ -627,7 +635,8 @@ export async function duplicateContainer(
   containerId: string,
   name: string,
   userId: string,
-  actorScopes: string[] = []
+  actorScopes: string[] = [],
+  folderId?: string | null
 ) {
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
   await ctx.validateDockerNode(nodeId);
@@ -683,6 +692,7 @@ export async function duplicateContainer(
 
   try {
     await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
+    await placeCreatedDockerResource(ctx.db, nodeId, 'container', name, folderId);
     await ctx.environmentService?.copy(nodeId, sourceName, name);
     await ctx.runtimeSettingsService?.copy(nodeId, sourceName, name);
     await ctx.secretService?.copySecrets(nodeId, sourceName, name, userId);

@@ -3,7 +3,7 @@ import { BUILTIN_GROUP_NAMES, extractBaseScope, isValidBaseScope } from '@/lib/s
 
 const scopeString = z
   .string()
-  .regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(:[a-zA-Z0-9-]+)*$/, 'Invalid scope format')
+  .regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?::[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*)*$/, 'Invalid scope format')
   .refine(isValidBaseScope, 'Unrecognized base scope')
   .refine((scope) => extractBaseScope(scope) !== 'admin:system', 'admin:system cannot be assigned to custom groups')
   .refine(
@@ -21,6 +21,7 @@ export const CreateGroupSchema = z.object({
   description: z.string().max(500).optional(),
   scopes: z.array(scopeString),
   parentId: z.string().uuid().nullable().optional(),
+  folderId: z.string().uuid().nullable().optional(),
   requireGateway2fa: z.boolean().optional(),
 });
 

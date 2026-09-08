@@ -72,6 +72,10 @@ async function canRefreshContainerDetail(scopes: string[], nodeId: string, key: 
   return !!resourceId && hasDockerResourceScope(scopes, 'docker:containers:view', nodeId, resourceId);
 }
 
+function canRefreshVolumeDetail(scopes: string[], nodeId: string, key: string): boolean {
+  return hasDockerResourceScope(scopes, 'docker:volumes:view', nodeId, key);
+}
+
 function normalizeRows(kind: DockerSnapshotKind, data: Record<string, any>[], search?: string) {
   switch (kind) {
     case 'containers':
@@ -121,7 +125,13 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
                 standaloneSnapshot,
                 (await snapshots.getList<Record<string, any>[]>(node.id, 'containers')).data
               )
-            : standaloneSnapshot;
+            : kind === 'networks'
+              ? await docker.decoratePublicNetworkSnapshot(node.id, standaloneSnapshot)
+              : kind === 'images'
+                ? docker.decoratePublicImageSnapshot
+                  ? await docker.decoratePublicImageSnapshot(node.id, standaloneSnapshot)
+                  : standaloneSnapshot
+                : standaloneSnapshot;
       if (kind === 'volumes' && Array.isArray(source)) {
         const metrics = await snapshots.getDetails<{ usedBytes?: number | null }>(node.id, 'volume-metrics');
         source = source.map((volume) => {
@@ -131,15 +141,12 @@ async function aggregate(c: any, kind: DockerSnapshotKind) {
       }
       const availability = snapshots.availability(node.id, snapshot);
       const normalized = normalizeRows(kind, Array.isArray(source) ? source : [], search);
-      const scoped: Array<Record<string, unknown>> =
-        kind === 'containers'
-          ? filterDockerResourcesForScope(
-              normalized as Array<Record<string, unknown> & { scopeResourceId?: string | null }>,
-              scopes,
-              'docker:containers:view',
-              node.id
-            )
-          : normalized;
+      const scoped: Array<Record<string, unknown>> = filterDockerResourcesForScope(
+        normalized as Array<Record<string, unknown> & { scopeResourceId?: string | null }>,
+        scopes,
+        VIEW_SCOPE[kind],
+        node.id
+      );
       const logicalStates =
         kind === 'containers'
           ? await container.resolve(DockerAvailabilityService).listContainerSurfaceStates(
@@ -197,14 +204,18 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
     const reconciler = container.resolve(DockerSnapshotReconciler);
     if (input.nodeId) {
       await snapshots.assertDockerNode(input.nodeId);
-      const hasContainerChildAccess =
-        (resource === 'containers' || resource === 'container-detail') &&
-        dockerScopedNodeIds(scopes, ['docker:containers:view']).includes(input.nodeId);
-      if (!TokensService.hasScope(scopes, `${VIEW_SCOPE[resource]}:${input.nodeId}`) && !hasContainerChildAccess) {
+      const hasChildAccess = dockerScopedNodeIds(scopes, [VIEW_SCOPE[resource]]).includes(input.nodeId);
+      if (!TokensService.hasScope(scopes, `${VIEW_SCOPE[resource]}:${input.nodeId}`) && !hasChildAccess) {
         throw new AppError(403, 'FORBIDDEN', 'Missing required Docker node access scope');
       }
       if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, input.nodeId, input.key!))) {
         throw new AppError(403, 'FORBIDDEN', 'Missing required Docker container access scope');
+      }
+      if (
+        (resource === 'volume-detail' || resource === 'volume-metrics') &&
+        !canRefreshVolumeDetail(scopes, input.nodeId, input.key!)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker volume access scope');
       }
       reconciler.enqueue({ nodeId: input.nodeId, kind: resource, key: input.key }, { urgent: true });
       return c.json({ accepted: true, nodeCount: 1 }, 202);
@@ -218,6 +229,12 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
     const visibleNodes = await snapshots.listVisibleNodes(listKind, scopes);
     for (const node of visibleNodes) {
       if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, node.id, input.key!))) {
+        continue;
+      }
+      if (
+        (resource === 'volume-detail' || resource === 'volume-metrics') &&
+        !canRefreshVolumeDetail(scopes, node.id, input.key!)
+      ) {
         continue;
       }
       reconciler.enqueue({ nodeId: node.id, kind: resource, key: input.key }, { urgent: true });

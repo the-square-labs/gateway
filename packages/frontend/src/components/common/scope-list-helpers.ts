@@ -7,11 +7,14 @@ import {
   type LoggingEnvironment,
   type LoggingSchema,
   type Node,
+  type PaginatedResponse,
   type ProxyHost,
 } from "@/types";
+import { FOLDER_CREATION_SCOPES } from "@/types/scope-resource-restrictions";
 
 const FOLDER_TARGET_PREFIX = "folder/";
 const FOLDER_SCOPABLE_SET = new Set<string>(FOLDER_SCOPABLE_SCOPES);
+const CREATION_SCOPES = new Set<string>(FOLDER_CREATION_SCOPES);
 
 export interface ScopeItem {
   value: string;
@@ -31,6 +34,183 @@ export interface ResourceOption {
   kind?: "container" | "deployment";
 }
 
+export type ScopeResourceCatalog = Partial<Record<string, ResourceOption[]>>;
+
+async function allResourcePages<T>(
+  load: (page: number) => Promise<PaginatedResponse<T>>
+): Promise<T[]> {
+  const resources: T[] = [];
+  for (let page = 1; ; page++) {
+    const result = await load(page);
+    resources.push(...result.data);
+    if (!result.data.length || page >= result.pagination.totalPages) return resources;
+  }
+}
+
+export async function loadScopeResourceCatalog(
+  scopes: readonly ScopeItem[],
+  nodes: readonly Node[]
+): Promise<ScopeResourceCatalog> {
+  const families = new Set(
+    scopes.map((scope) => folderFamilyForScope(scope.value)).filter(Boolean)
+  );
+  const catalog: ScopeResourceCatalog = {};
+  const nodeOptions = (kind: string) =>
+    nodes
+      .filter((node) => node.type === kind)
+      .map((node) => ({
+        id: `node/${node.id}`,
+        label: node.displayName || node.hostname,
+      }));
+  const loads: Promise<void>[] = [];
+  if (families.has("groups"))
+    loads.push(
+      api
+        .listGroups()
+        .then((groups) => {
+          catalog.groups = groups.map((group) => ({
+            id: group.id,
+            label: group.name,
+            folderId: group.folderId,
+          }));
+        })
+        .catch(() => {
+          catalog.groups = [];
+        })
+    );
+  if (families.has("users"))
+    loads.push(
+      api
+        .listUsers()
+        .then((users) => {
+          catalog.users = users.map((user) => ({
+            id: user.id,
+            label: user.name || user.email,
+            folderId: user.folderId,
+          }));
+        })
+        .catch(() => {
+          catalog.users = [];
+        })
+    );
+  if (families.has("pages"))
+    loads.push(
+      (async () => {
+        const projects = await allResourcePages((page) =>
+          api.listPageProjects({ page, limit: 200 })
+        );
+        catalog.pages = [
+          ...nodeOptions("nginx"),
+          ...projects.map((project) => ({
+            id: project.id,
+            label: project.name,
+            folderId: project.folderId,
+          })),
+        ];
+      })().catch(() => {
+        catalog.pages = [];
+      })
+    );
+  if (families.has("ssl"))
+    loads.push(
+      (async () => {
+        const certs = await allResourcePages((page) =>
+          api.listSSLCertificates({ page, limit: 200 })
+        );
+        catalog.ssl = certs.map((cert) => ({
+          id: cert.id,
+          label: cert.name,
+          folderId: cert.folderId,
+        }));
+      })().catch(() => {
+        catalog.ssl = [];
+      })
+    );
+  if (
+    scopes.some(
+      ({ value }) => value.startsWith("hosting:") || value.startsWith("integrations:hosting:")
+    )
+  ) {
+    loads.push(
+      api
+        .listHostingConnectors()
+        .then((accounts) => {
+          catalog.hosting = [
+            ...[...new Set(accounts.map((account) => account.provider))].map((provider) => ({
+              id: `provider/${provider}`,
+              label: `${provider} (all accounts)`,
+            })),
+            ...accounts.map((account) => ({
+              id: `account/${account.id}`,
+              label: `${account.name} (${account.provider})`,
+            })),
+          ];
+        })
+        .catch(() => {
+          catalog.hosting = [];
+        })
+    );
+  }
+  for (const [family, type] of [
+    ["docker-network", "network"],
+    ["docker-volume", "volume"],
+    ["docker-image", "image"],
+    ["docker-compose", "compose"],
+  ] as const) {
+    if (!families.has(family)) continue;
+    loads.push(
+      (async () => {
+        const resources = await Promise.all(
+          nodes
+            .filter((node) => node.type === "docker")
+            .map(async (node) => {
+              const children: ResourceOption[] =
+                type === "network"
+                  ? (await api.listDockerNetworks(node.id)).flatMap((row) =>
+                      row.scopeResourceId
+                        ? [
+                            {
+                              id: `${node.id}/${row.scopeResourceId}`,
+                              label: row.name,
+                              parentId: node.id,
+                              folderId: row.folderId,
+                            },
+                          ]
+                        : []
+                    )
+                  : type === "volume"
+                    ? (await api.listDockerVolumes(node.id)).map((row) => ({
+                        id: `${node.id}/${row.name}`,
+                        label: row.name,
+                        parentId: node.id,
+                        folderId: row.folderId,
+                      }))
+                    : type === "image"
+                      ? (await api.listDockerImages(node.id)).map((row) => ({
+                          id: `${node.id}/${row.id}`,
+                          label: row.repoTags?.[0] ?? row.id,
+                          parentId: node.id,
+                          folderId: row.folderId,
+                        }))
+                      : (await api.listDockerComposeProjects(node.id)).map((row) => ({
+                          id: `${node.id}/${row.id}`,
+                          label: row.name,
+                          parentId: node.id,
+                          folderId: row.folderId,
+                        }));
+              return [{ id: node.id, label: node.displayName || node.hostname }, ...children];
+            })
+        );
+        catalog[family] = resources.flat();
+      })().catch(() => {
+        catalog[family] = [];
+      })
+    );
+  }
+  await Promise.all(loads);
+  return catalog;
+}
+
 export interface FolderOption {
   id: string;
   label: string;
@@ -39,10 +219,18 @@ export interface FolderOption {
 }
 
 export type FolderFamily =
+  | "groups"
+  | "users"
   | "domains"
   | "proxy"
   | "nodes"
   | "docker"
+  | "docker-network"
+  | "docker-volume"
+  | "docker-image"
+  | "docker-compose"
+  | "pages"
+  | "ssl"
   | "databases"
   | "logging-environments"
   | "logging-schemas";
@@ -81,10 +269,18 @@ export function isFolderTarget(value: string) {
 
 export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (!FOLDER_SCOPABLE_SET.has(scope)) return null;
+  if (scope === "admin:groups") return "groups";
+  if (scope === "admin:users" || scope === "admin:users:impersonate") return "users";
   if (scope.startsWith("domains:")) return "domains";
   if (scope.startsWith("proxy:")) return "proxy";
+  if (scope.startsWith("pages:")) return "pages";
+  if (scope.startsWith("ssl:cert:")) return "ssl";
   if (scope.startsWith("nodes:")) return "nodes";
   if (scope.startsWith("docker:containers:")) return "docker";
+  if (scope.startsWith("docker:networks:")) return "docker-network";
+  if (scope.startsWith("docker:volumes:")) return "docker-volume";
+  if (scope.startsWith("docker:images:")) return "docker-image";
+  if (scope.startsWith("docker:compose:")) return "docker-compose";
   if (scope.startsWith("databases:")) return "databases";
   if (scope.startsWith("logs:schemas:")) return "logging-schemas";
   if (scope.startsWith("logs:environments:") || scope === "logs:read") {
@@ -111,6 +307,10 @@ export function flattenFolderTree(
 export async function loadFolderFamily(family: FolderFamily): Promise<FolderOption[]> {
   const load = async (promise: Promise<FolderTreeLike[]>) => promise.catch(() => []);
   switch (family) {
+    case "groups":
+      return flattenFolderTree(await load(api.listAdminGroupFolders()), family);
+    case "users":
+      return flattenFolderTree(await load(api.listAdminUserFolders()), family);
     case "domains":
       return flattenFolderTree(await load(api.listDomainFolders()), family);
     case "proxy":
@@ -125,6 +325,18 @@ export async function loadFolderFamily(family: FolderFamily): Promise<FolderOpti
       return flattenFolderTree(await load(api.listLoggingSchemaFolders()), family);
     case "docker":
       return flattenFolderTree(await load(api.listDockerFolders("container")), family);
+    case "docker-network":
+      return flattenFolderTree(await load(api.listDockerFolders("network")), family);
+    case "docker-volume":
+      return flattenFolderTree(await load(api.listDockerFolders("volume")), family);
+    case "docker-image":
+      return flattenFolderTree(await load(api.listDockerFolders("image")), family);
+    case "docker-compose":
+      return flattenFolderTree(await load(api.listDockerFolders("compose")), family);
+    case "pages":
+      return flattenFolderTree(await load(api.listPageProjectFolders()), family);
+    case "ssl":
+      return flattenFolderTree(await load(api.listSSLCertificateFolders()), family);
   }
 }
 
@@ -184,8 +396,38 @@ export function getResourceOptions(
   loggingEnvironments?: LoggingEnvironment[],
   loggingSchemas?: LoggingSchema[],
   dockerResources?: DockerResourceOption[],
-  dockerRegistryRepositories?: string[]
+  dockerRegistryRepositories?: string[],
+  catalog: ScopeResourceCatalog = {}
 ): ResourceOption[] {
+  const family = folderFamilyForScope(scope);
+  if (scope.startsWith("hosting:") || scope.startsWith("integrations:hosting:")) {
+    const accountScope =
+      scope.startsWith("integrations:") ||
+      scope.startsWith("hosting:billing:") ||
+      scope === "hosting:resources:create";
+    return accountScope
+      ? (catalog.hosting ?? [])
+      : [
+          ...(catalog.hosting ?? []),
+          ...(nodes ?? []).map((node) => ({
+            id: `node/${node.id}`,
+            label: node.displayName || node.hostname,
+          })),
+        ];
+  }
+  if (CREATION_SCOPES.has(scope) && scope !== "ssl:cert:issue") {
+    if (scope.startsWith("docker:"))
+      return (nodes ?? [])
+        .filter((node) => node.type === "docker")
+        .map((node) => ({ id: node.id, label: node.displayName || node.hostname }));
+    if (scope === "proxy:create" || scope === "pages:create" || scope === "databases:create") {
+      return (nodes ?? [])
+        .filter((node) => node.type === (scope === "databases:create" ? "databases" : "nginx"))
+        .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname }));
+    }
+    return [];
+  }
+  if (family && catalog[family]) return catalog[family]!;
   if (scope.startsWith("logs:schemas:")) {
     return (loggingSchemas ?? []).map((schema) => ({
       id: schema.id,
@@ -208,11 +450,16 @@ export function getResourceOptions(
     }));
   }
   if (scope.startsWith("databases:")) {
-    return (databases ?? []).map((database) => ({
-      id: database.id,
-      label: `${database.name} (${database.host}:${database.port})`,
-      folderId: database.folderId,
-    }));
+    return [
+      ...(nodes ?? [])
+        .filter((node) => node.type === "databases")
+        .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname })),
+      ...(databases ?? []).map((database) => ({
+        id: database.id,
+        label: `${database.name} (${database.host}:${database.port})`,
+        folderId: database.folderId,
+      })),
+    ];
   }
   if (scope.startsWith("docker:containers:") && scope !== "docker:containers:create") {
     return (nodes ?? [])
@@ -255,19 +502,39 @@ export function getResourceOptions(
       .map((node) => ({ id: node.id, label: node.displayName || node.hostname }));
   }
   if (scope.startsWith("proxy:")) {
-    return (proxyHosts ?? []).map((p) => ({
-      id: p.id,
-      label: p.domainNames[0] || p.id,
-      folderId: p.folderId,
-    }));
+    return [
+      ...(nodes ?? [])
+        .filter((node) => node.type === "nginx")
+        .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname })),
+      ...(proxyHosts ?? []).map((p) => ({
+        id: p.id,
+        label: p.domainNames[0] || p.id,
+        folderId: p.folderId,
+      })),
+    ];
   }
   if (scope.startsWith("pki:cert:") || scope.startsWith("pki:ca:")) {
     return (cas ?? []).map((ca) => ({ id: ca.id, label: ca.commonName }));
   }
-  return (cas ?? []).map((ca) => ({ id: ca.id, label: ca.commonName }));
+  return [];
 }
 
 export function getResourceLabel(scope: string): string {
+  if (scope === "admin:groups" || scope === "admin:users" || scope === "admin:users:impersonate")
+    return "Restrict to folders or individual accounts/groups (creation requires a destination folder; leave unchecked for all):";
+  if (scope.startsWith("hosting:") || scope.startsWith("integrations:hosting:")) {
+    return scope.startsWith("integrations:") ||
+      scope.startsWith("hosting:billing:") ||
+      scope === "hosting:resources:create"
+      ? "Restrict to providers or hosting accounts (leave unchecked for all):"
+      : "Restrict to providers, hosting accounts or nodes (node access is also required; leave unchecked for all):";
+  }
+  if (CREATION_SCOPES.has(scope) && scope !== "ssl:cert:issue")
+    return "Restrict creation to destination folders or nodes where applicable (leave unchecked for all):";
+  if (scope.startsWith("pages:"))
+    return "Restrict to nodes, Page Project folders or individual projects (leave unchecked for all):";
+  if (scope.startsWith("ssl:cert:"))
+    return "Restrict to certificate folders or individual certificates (leave unchecked for all):";
   if (scope.startsWith("domains:")) {
     return "Restrict to domain folders or individual domains (leave unchecked for all):";
   }
@@ -278,8 +545,8 @@ export function getResourceLabel(scope: string): string {
     return "Restrict to specific internal registry repositories (leave unchecked for all):";
   }
   if (scope.startsWith("docker:")) {
-    return scope.startsWith("docker:containers:") && scope !== "docker:containers:create"
-      ? "Restrict to Docker nodes or individual containers and deployments (leave unchecked for all):"
+    return folderFamilyForScope(scope)
+      ? "Restrict to Docker nodes, folders or individual resources (leave unchecked for all):"
       : "Restrict to specific Docker nodes (leave unchecked for all):";
   }
   if (scope.startsWith("nodes:")) return "Restrict to specific nodes (leave unchecked for all):";

@@ -5,9 +5,15 @@ import { dockerMigrationArtifacts, dockerMigrationNodeLocks, dockerMigrations } 
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerManagementService } from './docker.service.js';
-import type { DockerMigrationCreateInput, DockerMigrationPreflightInput } from './docker-migration.schemas.js';
+import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
+import type {
+  DockerMigrationCreateInput,
+  DockerMigrationPreflight,
+  DockerMigrationPreflightInput,
+} from './docker-migration.schemas.js';
 import { assertMigrationAvailabilityAllowed, MIGRATION_AVAILABILITY_ENABLED } from './docker-migration-availability.js';
 import type { DockerMigrationCoordinator } from './docker-migration-coordinator.js';
 import type { DockerMigrationExecutor } from './docker-migration-executor.js';
@@ -15,7 +21,9 @@ import { DOCKER_MIGRATION_LEASE_HEARTBEAT_MS, DockerMigrationLease } from './doc
 import {
   assertDockerMigrationCleanupAccess,
   assertDockerMigrationManageAccess,
+  assertDockerMigrationPermissions,
   assertDockerMigrationReadAccess,
+  type DockerMigrationPermissionPlan,
 } from './docker-migration-permissions.js';
 import type { DockerMigrationPreflightService } from './docker-migration-preflight.js';
 import { sanitizeDockerMigration } from './docker-migration-records.js';
@@ -59,7 +67,8 @@ export class DockerMigrationService {
     private coordinator: DockerMigrationCoordinator,
     private audit: AuditService,
     private events: EventBusService,
-    private docker: DockerManagementService
+    private docker: DockerManagementService,
+    private auth: Pick<AuthService, 'getUserById'>
   ) {
     this.lease = new DockerMigrationLease(db);
   }
@@ -217,12 +226,14 @@ export class DockerMigrationService {
       row.targetNodeId,
       this.scopeResourceId(row),
       artifacts.some((artifact) => artifact.kind === 'volume'),
-      (proxySnapshot.hosts?.length ?? 0) > 0
+      (proxySnapshot.hosts?.length ?? 0) > 0,
+      (row.preflight as DockerMigrationPreflight).dependencyPermissions
     );
     const [updated] = await this.db
       .update(dockerMigrations)
       .set({
         status: 'pending',
+        plan: { ...row.plan, cleanupActorId: userId },
         phase: row.phase,
         errorCode: null,
         errorMessage: null,
@@ -341,6 +352,10 @@ export class DockerMigrationService {
   private async executePhase(row: typeof dockerMigrations.$inferSelect): Promise<void> {
     await this.lease.assertOwnership(row.id);
     await assertMigrationAvailabilityAllowed(this.db, row);
+    // Restoring maintenance and releasing locks are compensation, not new work.
+    if (!['proxy_cutover', 'finalizing', 'queued', 'done'].includes(row.phase)) {
+      await this.authorizePhase(row);
+    }
     if (row.phase === 'locking') {
       await this.recheckPreflight(row);
     } else if (row.phase === 'maintenance') {
@@ -353,6 +368,7 @@ export class DockerMigrationService {
       await this.coordinator.exitEnteredMaintenance(row);
     } else if (!['queued', 'done'].includes(row.phase)) {
       const result = await this.executor.execute(row);
+      await this.placeDependencies(row);
       if (row.phase === 'cleanup_source') await this.coordinator.refreshSourceSnapshots(row);
       if (result.verification || result.progress) {
         await this.db
@@ -384,11 +400,102 @@ export class DockerMigrationService {
         targetNodeId: row.targetNodeId,
         keepSource: row.keepSource,
       },
-      [],
-      false
+      await this.currentActorScopes(row)
     );
     if (current.fingerprint !== row.sourceFingerprint || current.blockers.length > 0) {
       throw new AppError(409, 'MIGRATION_PREFLIGHT_STALE', 'Migration preflight changed after locks were acquired');
+    }
+  }
+
+  private async currentActorScopes(row: typeof dockerMigrations.$inferSelect): Promise<string[]> {
+    const actorId =
+      row.phase === 'cleanup_source' && typeof row.plan?.cleanupActorId === 'string'
+        ? row.plan.cleanupActorId
+        : row.createdById;
+    const actor = actorId ? await this.auth.getUserById(actorId) : null;
+    if (!actor || actor.isBlocked) {
+      throw new AppError(403, 'MIGRATION_PERMISSION_DENIED', 'The migration initiator no longer has access');
+    }
+    return actor.scopes;
+  }
+
+  private async authorizePhase(row: typeof dockerMigrations.$inferSelect): Promise<void> {
+    const scopes = await this.currentActorScopes(row);
+    const report = row.preflight as DockerMigrationPreflight;
+    const plan: DockerMigrationPermissionPlan = {
+      sourceNodeId: row.sourceNodeId,
+      sourceResourceId: this.scopeResourceId(row),
+      targetNodeId: row.targetNodeId,
+      targetFolderId: report.targetFolderId ?? null,
+      keepSource: row.keepSource,
+      hasVolumes: report.artifacts.some((item) => item.kind === 'volume'),
+      createsNetworks: row.resourceType === 'deployment',
+      hasProxyHosts: report.proxyHosts.length > 0,
+      ...report.dependencyPermissions,
+    };
+    if (row.cutoverAt) {
+      if (!row.keepSource)
+        assertDockerMigrationCleanupAccess(
+          scopes,
+          row.sourceNodeId,
+          row.targetNodeId,
+          plan.sourceResourceId,
+          plan.hasVolumes,
+          plan.hasProxyHosts,
+          report.dependencyPermissions
+        );
+      return;
+    }
+    assertDockerMigrationPermissions(scopes, plan);
+    await assertDockerCreationAccess(
+      this.db,
+      scopes,
+      'docker:containers:create',
+      row.targetNodeId,
+      plan.targetFolderId
+    );
+    for (const volume of plan.volumes ?? []) {
+      await assertDockerCreationAccess(
+        this.db,
+        scopes,
+        'docker:volumes:create',
+        row.targetNodeId,
+        volume.folderId,
+        'volume'
+      );
+    }
+    for (const network of plan.networks ?? []) {
+      if (!network.targetResourceId)
+        await assertDockerCreationAccess(
+          this.db,
+          scopes,
+          'docker:networks:create',
+          row.targetNodeId,
+          network.folderId,
+          'network'
+        );
+    }
+  }
+
+  private async placeDependencies(row: typeof dockerMigrations.$inferSelect): Promise<void> {
+    const dependencies = (row.preflight as DockerMigrationPreflight).dependencyPermissions;
+    if (!dependencies) return;
+    if (row.phase === 'transferring') {
+      for (const volume of dependencies.volumes)
+        await placeCreatedDockerResource(this.db, row.targetNodeId, 'volume', volume.resourceId, volume.folderId);
+    }
+    if (row.phase === 'creating_target') {
+      const created = dependencies.networks.filter((network) => !network.targetResourceId && network.folderId);
+      if (!created.length) return;
+      const networks = await this.docker.listNetworks(row.targetNodeId);
+      for (const network of created) {
+        const target = networks.find(
+          (item: Record<string, unknown>) => (item.Name ?? item.name) === network.resourceKey
+        );
+        const id = target?.Id ?? target?.id;
+        if (!id) throw new AppError(409, 'MIGRATION_NETWORK_MISSING', 'Created network identity is unavailable');
+        await placeCreatedDockerResource(this.db, row.targetNodeId, 'network', String(id), network.folderId);
+      }
     }
   }
 
@@ -417,6 +524,21 @@ export class DockerMigrationService {
 
   private async handleFailure(row: typeof dockerMigrations.$inferSelect, error: unknown) {
     const code = error instanceof AppError ? error.code : 'MIGRATION_FAILED';
+    if (code === 'MIGRATION_PERMISSION_DENIED' && ['queued', 'locking'].includes(row.phase)) {
+      // No provider-side work has started. Do not run destructive compensation
+      // against target names when authorization fails before preparation.
+      const updated = await this.update(row.id, {
+        status: 'failed',
+        phase: 'done',
+        errorCode: code,
+        errorMessage: error instanceof Error ? error.message : 'Migration authorization failed',
+        completedAt: new Date(),
+      });
+      await this.lease.release(row.id);
+      this.clearMigrating(updated);
+      await this.log(updated, 'docker_migration.failed', row.createdById);
+      return;
+    }
     const message = error instanceof AppError ? error.message : 'Migration phase failed';
     if (code === MIGRATION_AVAILABILITY_ENABLED) {
       // Availability now owns the runtime. Automatic rollback could restart or

@@ -151,6 +151,12 @@ export class FolderService {
     return folder;
   }
 
+  async assertFolderExists(id: string | null | undefined): Promise<void> {
+    if (!id) return;
+    const folder = await this.db.query.proxyHostFolders.findFirst({ where: eq(proxyHostFolders.id, id) });
+    if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found');
+  }
+
   // -----------------------------------------------------------------------
   // Update (rename)
   // -----------------------------------------------------------------------
@@ -334,20 +340,23 @@ export class FolderService {
   // Get folder tree
   // -----------------------------------------------------------------------
 
-  async getFolderTree(options?: { allowedHostIds?: string[]; includeAllFolders?: boolean }): Promise<FolderTreeNode[]> {
+  async getFolderTree(options?: {
+    allowedHostIds?: string[];
+    allowedFolderIds?: string[];
+    includeAllFolders?: boolean;
+  }): Promise<FolderTreeNode[]> {
     const allFolders = await this.db
       .select()
       .from(proxyHostFolders)
       .orderBy(asc(proxyHostFolders.depth), asc(proxyHostFolders.sortOrder));
 
     if (options?.includeAllFolders) return this.buildTree(allFolders, []);
-    if (options?.allowedHostIds) {
-      if (options.allowedHostIds.length === 0) return [];
-      const visibleHosts = await this.db
-        .select()
-        .from(proxyHosts)
-        .where(inArray(proxyHosts.id, options.allowedHostIds));
-      return this.pruneEmptyBranches(this.buildTree(allFolders, visibleHosts));
+    if (options?.allowedHostIds || options?.allowedFolderIds) {
+      const visibleHosts =
+        options.allowedHostIds && options.allowedHostIds.length > 0
+          ? await this.db.select().from(proxyHosts).where(inArray(proxyHosts.id, options.allowedHostIds))
+          : [];
+      return this.pruneFolderTree(this.buildTree(allFolders, visibleHosts), new Set(options.allowedFolderIds ?? []));
     }
 
     return this.buildTree(allFolders, []);
@@ -544,6 +553,12 @@ export class FolderService {
     return nodes
       .map((node) => ({ ...node, children: this.pruneEmptyBranches(node.children) }))
       .filter((node) => node.hosts.length > 0 || node.children.length > 0);
+  }
+
+  private pruneFolderTree(nodes: FolderTreeNode[], allowedFolderIds: Set<string>): FolderTreeNode[] {
+    return nodes
+      .map((node) => ({ ...node, children: this.pruneFolderTree(node.children, allowedFolderIds) }))
+      .filter((node) => allowedFolderIds.has(node.id) || node.hosts.length > 0 || node.children.length > 0);
   }
 
   private async getDescendantIds(folderId: string): Promise<string[]> {

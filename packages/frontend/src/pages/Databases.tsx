@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type {
   DatabaseConnection,
   DatabaseType,
@@ -56,6 +57,7 @@ import type {
   ManagedDatabaseCatalogEntry,
   ManagedDatabaseCreateInput,
   Node,
+  ResourceFolderTreeNode,
 } from "@/types";
 import {
   buildDatabasePayload,
@@ -736,6 +738,7 @@ export function Databases({
   const [managedCreateStep, setManagedCreateStep] = useState<1 | 2 | 3>(1);
   const [managedCreateSession, setManagedCreateSession] = useState(0);
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(null));
+  const [folderId, setFolderId] = useState("");
   const [managedDraft, setManagedDraft] = useState<ManagedDatabaseCreateInput>(defaultManagedDraft);
   const [managedCatalog, setManagedCatalog] = useState<ManagedDatabaseCatalogEntry[]>([]);
   const [databaseNodes, setDatabaseNodes] = useState<Node[]>(initialListState.current.nodes);
@@ -753,6 +756,14 @@ export function Databases({
   const managedProvisioningErrorOpenTimerRef = useRef<number | null>(null);
   const managedProvisioningErrorClearTimerRef = useRef<number | null>(null);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
+  const databaseFolders = useResourceFolderStore((state) => state.foldersByType.database);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType.database);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderOptions = useMemo(() => flattenFolders(databaseFolders), [databaseFolders]);
+
+  useEffect(() => {
+    if (createOpen || managedCreateOpen) void fetchFolders("database");
+  }, [createOpen, fetchFolders, managedCreateOpen]);
 
   const openManagedCreate = useCallback(() => {
     if (!requireLicenseFeature("managed-databases", "Managed databases")) return;
@@ -930,7 +941,7 @@ export function Databases({
       .catch(() => undefined);
   });
 
-  const canCreate = !embedded && hasScope("databases:create");
+  const canCreate = !embedded && hasScopedAccess("databases:create");
   const canManageFolders = !embedded && hasScope("databases:folders:manage");
 
   const filtered = useMemo(
@@ -986,10 +997,14 @@ export function Databases({
   const save = async () => {
     setSaving(true);
     try {
-      const created = await api.createDatabase(buildDatabasePayload(draft));
+      const created = await api.createDatabase({
+        ...buildDatabasePayload(draft),
+        folderId: folderId || null,
+      });
       toast.success("Database connection created");
       setCreateOpen(false);
       setDraft(draftFromConnection(null));
+      setFolderId("");
       navigate(databaseRoute(created.slug, "overview"));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to create database connection");
@@ -1009,6 +1024,7 @@ export function Databases({
     try {
       created = await api.createManagedDatabase({
         ...managedDraft,
+        folderId: folderId || null,
         publishNativeTcp: managedDraft.publishTcp ? managedDraft.publishNativeTcp : false,
         publishedNativePort: managedDraft.publishTcp ? managedDraft.publishedNativePort : undefined,
       });
@@ -1023,6 +1039,7 @@ export function Databases({
       toast.success("Managed database is ready");
       closeManagedCreate();
       setManagedDraft(defaultManagedDraft(managedCatalog));
+      setFolderId("");
       const database = await api.getDatabase(created.databaseConnectionId);
       navigate(databaseRoute(database.slug, "overview"));
     } catch (error) {
@@ -1268,6 +1285,25 @@ export function Databases({
               <DialogTitle>Add Database</DialogTitle>
             </DialogHeader>
             <AnimatedHeight>
+              <SettingsControlRow title="Folder" description="Optional organization folder">
+                <Select
+                  value={folderId || "__none__"}
+                  onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+                  disabled={foldersLoading}
+                >
+                  <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                    <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">No folder</SelectItem>
+                    {folderOptions.map((folder) => (
+                      <SelectItem key={folder.id} value={folder.id}>
+                        {"  ".repeat(folder.depth) + folder.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </SettingsControlRow>
               <DatabaseConnectionForm draft={draft} onChange={setDraft} />
             </AnimatedHeight>
             <DialogFooter>
@@ -1306,6 +1342,29 @@ export function Databases({
               </DialogDescription>
             </DialogHeader>
             <AnimatedHeight>
+              {managedCreateStep === 1 && (
+                <SettingsControlRow title="Folder" description="Optional organization folder">
+                  <Select
+                    value={folderId || "__none__"}
+                    onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+                    disabled={foldersLoading}
+                  >
+                    <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                      <SelectValue
+                        placeholder={foldersLoading ? "Loading folders…" : "No folder"}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">No folder</SelectItem>
+                      {folderOptions.map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {"  ".repeat(folder.depth) + folder.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </SettingsControlRow>
+              )}
               <ManagedDatabaseCreateForm
                 key={managedCreateSession}
                 draft={managedDraft}
@@ -1419,4 +1478,8 @@ export function Databases({
       )}
     </PageTransition>
   );
+}
+
+function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

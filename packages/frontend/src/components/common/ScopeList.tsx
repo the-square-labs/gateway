@@ -21,10 +21,12 @@ import {
   getResourceOptions,
   isFolderTarget,
   loadFolderFamily,
+  loadScopeResourceCatalog,
   matchesQuery,
   parseScopedSelections,
   type RestrictionRow,
   type ScopeItem,
+  type ScopeResourceCatalog,
 } from "./scope-list-helpers";
 
 export type { ScopeItem } from "./scope-list-helpers";
@@ -71,6 +73,16 @@ export function ScopeList({
   selectionFilter = "all",
 }: ScopeListProps) {
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
+  const [resourceCatalog, setResourceCatalog] = useState<ScopeResourceCatalog>({});
+  useEffect(() => {
+    let cancelled = false;
+    void loadScopeResourceCatalog(scopes, nodes ?? []).then((catalog) => {
+      if (!cancelled) setResourceCatalog(catalog);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [scopes, nodes]);
   const [dockerRegistryRepositories, setDockerRegistryRepositories] = useState<string[]>([]);
   const [folderOptions, setFolderOptions] = useState<FolderOption[]>([]);
   const [domainResources, setDomainResources] = useState<Domain[]>([]);
@@ -246,6 +258,7 @@ export function ScopeList({
                 loggingSchemas={loggingSchemas}
                 dockerResources={dockerResources}
                 dockerRegistryRepositories={dockerRegistryRepositories}
+                resourceCatalog={resourceCatalog}
                 folderOptions={folderOptions}
                 restrictableScopes={restrictableScopes}
                 allowedResourceIds={allowedResourceIds}
@@ -279,6 +292,7 @@ function ScopeRow({
   loggingSchemas,
   dockerResources,
   dockerRegistryRepositories,
+  resourceCatalog,
   folderOptions,
   restrictableScopes,
   allowedResourceIds,
@@ -303,6 +317,7 @@ function ScopeRow({
   loggingSchemas?: LoggingSchema[];
   dockerResources?: DockerResourceOption[];
   dockerRegistryRepositories?: string[];
+  resourceCatalog?: ScopeResourceCatalog;
   folderOptions?: FolderOption[];
   restrictableScopes?: readonly string[];
   allowedResourceIds?: Record<string, string[]>;
@@ -326,7 +341,8 @@ function ScopeRow({
         loggingEnvironments,
         loggingSchemas,
         dockerResources,
-        dockerRegistryRepositories
+        dockerRegistryRepositories,
+        resourceCatalog
       )
     : [];
   const allowedIds = allowedResourceIds?.[scope.value];
@@ -356,7 +372,7 @@ function ScopeRow({
     ? availableFolderOptions.filter((folder) => allowedIds.includes(folderTarget(folder.id)))
     : availableFolderOptions;
   const restrictionRows: RestrictionRow[] = [];
-  if (family === "docker") {
+  if (family === "docker" || family?.startsWith("docker-")) {
     const nodeOptions = resourceOptions.filter((option) => !option.parentId);
     const childOptions = resourceOptions.filter((option) => !!option.parentId);
     const renderedFolderIds = new Set<string>();

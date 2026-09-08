@@ -65,10 +65,12 @@ export interface RequestACMECertRequest {
   provider?: string;
   dnsProvider?: "cloudflare";
   autoRenew?: boolean;
+  folderId?: string | null;
 }
 
 export interface UploadCertRequest {
   name: string;
+  folderId?: string | null;
   certificatePem: string;
   privateKeyPem: string;
   chainPem?: string;
@@ -77,6 +79,7 @@ export interface UploadCertRequest {
 export interface LinkInternalCertRequest {
   internalCertId: string;
   name?: string;
+  folderId?: string | null;
 }
 
 export interface DNSChallenge {

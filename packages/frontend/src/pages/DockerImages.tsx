@@ -37,11 +37,19 @@ import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { formatBytes, formatCreated } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import type { DockerImage, DockerRegistry, Node, NodeAppearanceColor } from "@/types";
+import { useDockerFolderStore } from "@/stores/docker-folders";
+import type {
+  DockerFolderTreeNode,
+  DockerImage,
+  DockerRegistry,
+  Node,
+  NodeAppearanceColor,
+} from "@/types";
 import { filterDockerImages } from "./docker-images-filter";
 import {
   type DockerImageUsageContainer,
@@ -79,6 +87,7 @@ export function DockerImages({
   const storeDockerNodes = useDockerStore((s) => s.dockerNodes);
   const dockerNodesLoaded = useDockerStore((s) => s.dockerNodesLoaded);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
+  const imageFolders = useDockerFolderStore((s) => s.foldersByType.image);
   const pruneNodeId =
     visibleNodeId ?? (storeDockerNodes.length === 1 ? storeDockerNodes[0]?.id : null);
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
@@ -128,6 +137,7 @@ export function DockerImages({
     setPullNodeId(selectedNodeId || "");
     setPullRef("");
     setPullRegistryId("");
+    setPullFolderId("");
     setPullOpen(true);
   }, [selectedNodeId]);
   useEffect(() => {
@@ -138,8 +148,16 @@ export function DockerImages({
   }, [onRefreshRef, requestSnapshotRefresh, visibleNodeId]);
   const [pullRef, setPullRef] = useState("");
   const [pullRegistryId, setPullRegistryId] = useState<string>("");
+  const [pullFolderId, setPullFolderId] = useState<string>("");
+  const canPullHere = canCreateInFolder(
+    user?.scopes ?? [],
+    "docker:images:pull",
+    pullFolderId || null,
+    pullNodeId
+  );
   const [pulling, setPulling] = useState(false);
   const [registries, setRegistries] = useState<DockerRegistry[]>([]);
+  const folderList = useMemo(() => flattenFolders(imageFolders), [imageFolders]);
 
   const loadImagePageState = useCallback(async () => {
     try {
@@ -160,8 +178,8 @@ export function DockerImages({
     try {
       const onlineNodes = await loadVisibleDockerNodes(
         user?.scopes ?? [],
-        ["docker:images:view"],
-        hasScopedAccess("nodes:details")
+        ["docker:images:view", "docker:images:pull"],
+        false
       );
       setDockerNodes(onlineNodes);
       useDockerStore.getState().setDockerNodes(onlineNodes);
@@ -169,7 +187,7 @@ export function DockerImages({
     } catch {
       toast.error("Failed to load Docker nodes");
     }
-  }, [dockerNodesLoaded, embedded, fixedNodeId, hasScopedAccess, setSelectedNode, user?.scopes]);
+  }, [dockerNodesLoaded, embedded, fixedNodeId, setSelectedNode, user?.scopes]);
 
   useEffect(() => {
     void loadImagePageState();
@@ -293,9 +311,18 @@ export function DockerImages({
 
   const handlePull = useCallback(async () => {
     if (!pullNodeId || !pullRef.trim()) return;
+    if (!canPullHere) {
+      toast.error("Select an authorized destination folder");
+      return;
+    }
     setPulling(true);
     try {
-      await api.pullImage(pullNodeId, pullRef.trim(), pullRegistryId || undefined);
+      await api.pullImage(
+        pullNodeId,
+        pullRef.trim(),
+        pullRegistryId || undefined,
+        pullFolderId || undefined
+      );
       toast.success(`Pulling "${pullRef.trim()}" — check Tasks tab for progress`);
       closePull();
       useDockerStore.getState().invalidate("tasks");
@@ -308,7 +335,16 @@ export function DockerImages({
     } finally {
       setPulling(false);
     }
-  }, [closePull, fetchImages, pullNodeId, pullRef, pullRegistryId, search]);
+  }, [
+    closePull,
+    fetchImages,
+    pullFolderId,
+    pullNodeId,
+    pullRef,
+    pullRegistryId,
+    search,
+    canPullHere,
+  ]);
 
   const allImageColumns: ResourceListColumn<DockerImageListItem>[] = useMemo(
     () => [
@@ -413,7 +449,9 @@ export function DockerImages({
               onClick={(e) => e.stopPropagation()}
             >
               {(hasScope("docker:images:delete") ||
-                hasScope(`docker:images:delete:${img._nodeId}`)) &&
+                hasScopedAccess(
+                  `docker:images:delete:${img._nodeId}/${img.scopeResourceId ?? img.id}`
+                )) &&
                 canDelete &&
                 img.availability !== "unavailable" && (
                   <Button
@@ -431,7 +469,7 @@ export function DockerImages({
         },
       },
     ],
-    [hasScope, handleRemove]
+    [hasScope, handleRemove, hasScopedAccess]
   );
   const imageColumns = allImageColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
@@ -484,8 +522,7 @@ export function DockerImages({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:images:pull") ||
-                    hasScope(`docker:images:pull:${selectedNodeId}`)
+                    ...(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")
                       ? [
                           {
                             label: "Pull Image",
@@ -516,8 +553,7 @@ export function DockerImages({
                     {pruning ? "Pruning..." : "Prune Dangling"}
                   </Button>
                 )}
-                {(hasScope("docker:images:pull") ||
-                  hasScope(`docker:images:pull:${selectedNodeId}`)) && (
+                {(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")) && (
                   <Button onClick={() => openPull()}>
                     <Download className="h-4 w-4 mr-1" />
                     Pull Image
@@ -671,6 +707,47 @@ export function DockerImages({
 
             {/* Image */}
             <div className="space-y-1.5">
+              <label className="text-sm font-medium">Destination folder</label>
+              <Select
+                value={
+                  pullFolderId ||
+                  (canCreateInFolder(user?.scopes ?? [], "docker:images:pull", null, pullNodeId)
+                    ? "__none__"
+                    : "")
+                }
+                onValueChange={(value) => setPullFolderId(value === "__none__" ? "" : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  {canCreateInFolder(
+                    user?.scopes ?? [],
+                    "docker:images:pull",
+                    null,
+                    pullNodeId
+                  ) && <SelectItem value="__none__">No folder</SelectItem>}
+                  {folderList
+                    .filter(
+                      (folder) =>
+                        !folder.isSystem &&
+                        canCreateInFolder(
+                          user?.scopes ?? [],
+                          "docker:images:pull",
+                          folder.id,
+                          pullNodeId
+                        )
+                    )
+                    .map((folder) => (
+                      <SelectItem key={folder.id} value={folder.id}>
+                        {"— ".repeat(folder.depth)}
+                        {folder.name}
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
               <label className="text-sm font-medium">
                 Image <span className="text-destructive">*</span>
               </label>
@@ -688,7 +765,10 @@ export function DockerImages({
             <Button variant="outline" onClick={closePull}>
               Cancel
             </Button>
-            <Button onClick={handlePull} disabled={pulling || !pullRef.trim() || !pullNodeId}>
+            <Button
+              onClick={handlePull}
+              disabled={pulling || !pullRef.trim() || !pullNodeId || !canPullHere}
+            >
               {pulling ? "Pulling..." : "Pull"}
             </Button>
           </DialogFooter>
@@ -771,4 +851,8 @@ export function DockerImages({
       <div className="h-full overflow-y-auto p-6 space-y-4">{content}</div>
     </PageTransition>
   );
+}
+
+function flattenFolders(folders: DockerFolderTreeNode[]): DockerFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
+import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { AIService } from './ai.service.js';
@@ -466,7 +467,9 @@ describe('AIService Docker tool routing', () => {
       'registry.example.com/team/api:next',
       { username: 'robot', password: 'secret' },
       'user-1',
-      '11111111-1111-4111-8111-111111111111'
+      '11111111-1111-4111-8111-111111111111',
+      undefined,
+      ['docker:images:pull:node-1']
     );
   });
 
@@ -497,7 +500,15 @@ describe('AIService Docker tool routing', () => {
     expect(registryService.resolveAuthForImagePull).toHaveBeenCalledWith('node-1', 'nginx:alpine', undefined, {
       actorScopes: ['docker:images:pull:node-1'],
     });
-    expect(dockerService.pullImage).toHaveBeenCalledWith('node-1', 'nginx:alpine', undefined, 'user-1', undefined);
+    expect(dockerService.pullImage).toHaveBeenCalledWith(
+      'node-1',
+      'nginx:alpine',
+      undefined,
+      'user-1',
+      undefined,
+      undefined,
+      ['docker:images:pull:node-1']
+    );
   });
 
   it('refuses to create an unauthenticated saved registry for public Docker Hub', async () => {
@@ -556,8 +567,9 @@ describe('AIService Docker tool routing', () => {
     });
     expect(dockerService.createVolume).toHaveBeenCalledWith(
       'node-1',
-      { name: 'cache', storageKind: 'regular' },
-      'user-1'
+      expect.objectContaining({ name: 'cache', storageKind: 'regular' }),
+      'user-1',
+      ['docker:volumes:create:node-1']
     );
 
     await expect(
@@ -578,6 +590,39 @@ describe('AIService Docker tool routing', () => {
     const dockerService = {
       connectContainerToNetwork: vi.fn().mockResolvedValue(undefined),
     };
+    container.registerInstance(DockerAccessResourceService, {
+      resolveContainer: vi.fn().mockResolvedValue('container-resource-1'),
+    } as never);
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool(
+        {
+          ...BASE_USER,
+          scopes: ['docker:networks:edit:node-1', 'docker:containers:edit:node-1/container-resource-1'],
+        },
+        'manage_docker_network',
+        {
+          operation: 'connect',
+          nodeId: 'node-1',
+          networkId: 'frontend',
+          containerId: 'container-1',
+        }
+      )
+    ).resolves.toMatchObject({
+      result: { success: true },
+      invalidateStores: ['networks', 'containers'],
+    });
+    expect(dockerService.connectContainerToNetwork).toHaveBeenCalledWith('node-1', 'frontend', 'container-1', 'user-1');
+  });
+
+  it('does not let network edit authority mutate an inaccessible container', async () => {
+    const dockerService = {
+      connectContainerToNetwork: vi.fn(),
+    };
+    container.registerInstance(DockerAccessResourceService, {
+      resolveContainer: vi.fn().mockResolvedValue('container-resource-1'),
+    } as never);
     const service = createService(dockerService);
 
     await expect(
@@ -587,11 +632,8 @@ describe('AIService Docker tool routing', () => {
         networkId: 'frontend',
         containerId: 'container-1',
       })
-    ).resolves.toMatchObject({
-      result: { success: true },
-      invalidateStores: ['networks', 'containers'],
-    });
-    expect(dockerService.connectContainerToNetwork).toHaveBeenCalledWith('node-1', 'frontend', 'container-1', 'user-1');
+    ).resolves.toMatchObject({ invalidateStores: [] });
+    expect(dockerService.connectContainerToNetwork).not.toHaveBeenCalled();
   });
 
   it('routes deployment lifecycle actions through the deployment service resolver', async () => {

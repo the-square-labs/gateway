@@ -31,6 +31,7 @@ import {
 import { CLIENT_IP_SOURCE_VALUES } from '@/modules/settings/network-settings.service.js';
 
 export const CreateUserSchema = z.object({
+  folderId: z.string().uuid().nullable().optional(),
   email: z.string().email().max(255),
   name: z.string().trim().min(1, 'Name is required').max(255),
   groupId: z.string().uuid(),

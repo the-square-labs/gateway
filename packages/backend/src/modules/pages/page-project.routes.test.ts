@@ -44,9 +44,11 @@ const mocks = vi.hoisted(() => {
       create: vi.fn(),
       update: vi.fn(),
       delete: vi.fn(),
+      placementOptions: vi.fn(),
     },
     folderService: {
       getFolderTree: vi.fn(),
+      assertFolderExists: vi.fn(),
       createFolder: vi.fn(),
       reorderFolders: vi.fn(),
       moveResourcesToFolder: vi.fn(),
@@ -127,6 +129,8 @@ describe('Page Project routes authorization', () => {
     mocks.projectService.getBySlug.mockResolvedValue({ id: PROJECT_1, name: 'Docs', slug: 'docs' });
     mocks.projectService.create.mockResolvedValue({ id: PROJECT_1, name: 'Docs' });
     mocks.projectService.update.mockResolvedValue({ id: PROJECT_1, name: 'Docs 2' });
+    mocks.projectService.placementOptions.mockResolvedValue([]);
+    mocks.folderService.assertFolderExists.mockResolvedValue(undefined);
     mocks.folderService.getFolderTree.mockResolvedValue([]);
   });
 
@@ -157,23 +161,30 @@ describe('Page Project routes authorization', () => {
     expect((await request('GET', '/by-slug/other')).status).toBe(403);
   });
 
-  it('requires folder management when creating a Project inside a folder', async () => {
+  it('allows global creation in any folder and restricts folder-scoped creation to its destination', async () => {
     mocks.scopes = ['pages:create'];
 
-    const denied = await request('POST', '/', { name: 'Docs', nodeId: PROJECT_2, folderId: FOLDER_ID });
-    expect(denied.status).toBe(403);
-    expect(mocks.projectService.create).not.toHaveBeenCalled();
+    const global = await request('POST', '/', { name: 'Docs', nodeId: PROJECT_2, folderId: FOLDER_ID });
+    expect(global.status).toBe(201);
 
-    mocks.scopes = ['pages:create', 'pages:folders:manage'];
+    mocks.scopes = [`pages:create:folder/${FOLDER_ID}`];
     const allowed = await request('POST', '/', { name: 'Docs', nodeId: PROJECT_2, folderId: FOLDER_ID });
     expect(allowed.status).toBe(201);
     expect(mocks.projectService.create).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Docs', folderId: FOLDER_ID }),
       'user-1'
     );
+
+    mocks.scopes = [`pages:create:folder/${FOLDER_ID}`];
+    const denied = await request('POST', '/', {
+      name: 'Docs',
+      nodeId: PROJECT_2,
+      folderId: '44444444-4444-4444-8444-444444444444',
+    });
+    expect(denied.status).toBe(403);
   });
 
-  it('requires pages:edit for every Project in a bulk folder move', async () => {
+  it('requires source and root destination Pages access in a bulk folder move', async () => {
     mocks.scopes = ['pages:folders:manage', `pages:edit:${PROJECT_1}`];
 
     const denied = await request('POST', '/folders/move-projects', {
@@ -184,6 +195,16 @@ describe('Page Project routes authorization', () => {
     expect(mocks.folderService.moveResourcesToFolder).not.toHaveBeenCalled();
 
     mocks.scopes = ['pages:folders:manage', `pages:edit:${PROJECT_1}`, `pages:edit:${PROJECT_2}`];
+    expect(
+      (
+        await request('POST', '/folders/move-projects', {
+          ids: [PROJECT_1, PROJECT_2],
+          folderId: null,
+        })
+      ).status
+    ).toBe(403);
+
+    mocks.scopes = ['pages:folders:manage', 'pages:edit'];
     const allowed = await request('POST', '/folders/move-projects', {
       ids: [PROJECT_1, PROJECT_2],
       folderId: null,
@@ -199,10 +220,27 @@ describe('Page Project routes authorization', () => {
     mocks.scopes = [`pages:view:${PROJECT_1}`];
 
     expect((await request('GET', '/folders')).status).toBe(200);
-    expect(mocks.folderService.getFolderTree).toHaveBeenCalledWith({ allowedResourceIds: [PROJECT_1] });
+    expect(mocks.folderService.getFolderTree).toHaveBeenCalledWith({
+      allowedResourceIds: [PROJECT_1],
+      allowedFolderIds: [],
+    });
 
     mocks.scopes = ['pages:folders:manage'];
     expect((await request('GET', '/folders')).status).toBe(200);
     expect(mocks.folderService.getFolderTree).toHaveBeenLastCalledWith({ includeAllFolders: true });
+  });
+
+  it('limits Page placement candidates to explicit creation nodes', async () => {
+    mocks.scopes = ['pages:create:node-1'];
+
+    expect((await request('GET', '/placement-options')).status).toBe(200);
+    expect(mocks.projectService.placementOptions).toHaveBeenCalledWith({ allowedNodeIds: ['node-1'] });
+  });
+
+  it('lets folder-scoped creation choose from compact placement candidates', async () => {
+    mocks.scopes = [`pages:create:folder/${FOLDER_ID}`];
+
+    expect((await request('GET', '/placement-options')).status).toBe(200);
+    expect(mocks.projectService.placementOptions).toHaveBeenCalledWith();
   });
 });

@@ -188,6 +188,7 @@ describe('migration Availability enforcement boundaries', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
       {} as never
     );
     await expect(
@@ -205,6 +206,7 @@ describe('migration Availability enforcement boundaries', () => {
       {} as never,
       executor as never,
       coordinator as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never
@@ -254,6 +256,7 @@ describe('migration Availability enforcement boundaries', () => {
 
   it('leaves HA races for operator attention instead of automatically restoring or deleting placements', async () => {
     const service = new DockerMigrationService(
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

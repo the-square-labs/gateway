@@ -279,6 +279,7 @@ export interface HostingOperation {
 }
 export interface HostingProvisionInput {
   connectorId: string;
+  folderId?: string | null;
   idempotencyKey: string;
   name: string;
   role: HostingRole;

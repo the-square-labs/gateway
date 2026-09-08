@@ -1,10 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
+  requireAnyScopeBase,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
@@ -58,18 +60,26 @@ export const domainRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValida
 
 domainRoutes.use('*', authMiddleware);
 
-domainRoutes.openapi({ ...listDomainFoldersRoute, middleware: requireScopeBase('domains:view') }, async (c) => {
-  const service = container.resolve(DomainFolderService);
-  const scopes = c.get('effectiveScopes') || [];
-  const canManageFolders = hasScope(scopes, 'domains:folders:manage');
-  const hasGlobalView = hasScope(scopes, 'domains:view');
-  const data = await service.getFolderTree(
-    canManageFolders || hasGlobalView
-      ? { includeAllFolders: canManageFolders }
-      : { allowedResourceIds: getResourceScopedIds(scopes, 'domains:view') }
-  );
-  return c.json({ data });
-});
+domainRoutes.openapi(
+  {
+    ...listDomainFoldersRoute,
+    middleware: requireAnyScopeBase('domains:view', 'domains:folders:manage', 'domains:create'),
+  },
+  async (c) => {
+    const service = container.resolve(DomainFolderService);
+    const scopes = c.get('effectiveScopes') || [];
+    const canManageFolders = hasScope(scopes, 'domains:folders:manage');
+    const hasGlobalView = hasScope(scopes, 'domains:view');
+    const hasGlobalCreate = hasScope(scopes, 'domains:create');
+    const allowedFolderIds = getFolderScopedIds(scopes, ['domains:view', 'domains:edit', 'domains:create']);
+    const data = await service.getFolderTree(
+      canManageFolders || hasGlobalView || hasGlobalCreate
+        ? { includeAllFolders: true }
+        : { allowedResourceIds: getResourceScopedIds(scopes, 'domains:view'), allowedFolderIds }
+    );
+    return c.json({ data });
+  }
+);
 
 domainRoutes.openapi({ ...createDomainFolderRoute, middleware: requireScope('domains:folders:manage') }, async (c) => {
   const service = container.resolve(DomainFolderService);
@@ -93,6 +103,13 @@ domainRoutes.openapi({ ...moveDomainsToFolderRoute, middleware: requireScope('do
   const service = container.resolve(DomainFolderService);
   const user = c.get('user')!;
   const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+  const scopes = c.get('effectiveScopes') ?? [];
+  if (!input.ids.every((id) => hasScopeForResource(scopes, 'domains:edit', id))) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing domain edit access for one or more move sources');
+  }
+  if (!hasScopeForCreation(scopes, 'domains:edit', input.folderId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing domain edit access for the move destination');
+  }
   await service.moveResourcesToFolder(input, user.id);
   return c.json({ success: true });
 });
@@ -189,10 +206,14 @@ domainRoutes.openapi({ ...getDomainRoute, middleware: requireScopeForResource('d
 });
 
 // Create domain
-domainRoutes.openapi({ ...createDomainRoute, middleware: requireScope('domains:create') }, async (c) => {
+domainRoutes.openapi(createDomainRoute, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json();
   const input = CreateDomainSchema.parse(body);
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'domains:create', input.folderId, input.nginxNodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing authorized domain creation scope for the selected destination');
+  }
+  await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
   const domainsService = container.resolve(DomainsService);
   try {
     const domain = await domainsService.createDomain(input, user.id);

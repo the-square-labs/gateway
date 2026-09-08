@@ -21,6 +21,7 @@ import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,7 @@ import {
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
-import { scopeMatches } from "@/lib/scope-utils";
+import { canCreateInFolder, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError } from "@/stores/license-paywall";
@@ -83,13 +84,31 @@ export function AdminUsers({
   onOpenDeletedUsersRef?: (fn: () => void) => void;
 }) {
   const navigate = useNavigate();
-  const { user: currentUser, hasAnyScope, hasScope } = useAuthStore();
+  const { user: currentUser, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
   const cachedUsers = api.getCached<User[]>("admin:users");
   const cachedGroups = api.getCached<PermissionGroup[]>("admin:groups");
   const [users, setUsers] = useState<User[]>(cachedUsers ?? []);
   const [groups, setGroups] = useState<PermissionGroup[]>(cachedGroups ?? []);
   const [isLoading, setIsLoading] = useState(!cachedUsers);
   const [createOpen, setCreateOpen] = useState(false);
+  const [createFolderId, setCreateFolderId] = useState<string | null>(null);
+  const [destinationFolders, setDestinationFolders] = useState<FolderOption[]>([]);
+  useEffect(() => {
+    if (!createOpen) return;
+    let cancelled = false;
+    setCreateFolderId(null);
+    void api
+      .listAdminUserFolders()
+      .then((tree) => {
+        if (!cancelled) setDestinationFolders(flattenFolderTree(tree, "users"));
+      })
+      .catch(() => {
+        if (!cancelled) setDestinationFolders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [createOpen]);
   const [creating, setCreating] = useState(false);
   const [createEmail, setCreateEmail] = useState("");
   const [createName, setCreateName] = useState("");
@@ -113,11 +132,11 @@ export function AdminUsers({
   const lastCreateRequest = useRef(createRequest);
 
   useEffect(() => {
-    if (!hasScope("admin:users")) {
+    if (!hasScopedAccess("admin:users")) {
       navigate("/");
       return;
     }
-  }, [hasScope, navigate]);
+  }, [hasScopedAccess, navigate]);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -295,7 +314,10 @@ export function AdminUsers({
 
     setCreating(true);
     try {
+      if (!canCreateInFolder(currentUser?.scopes ?? [], "admin:users", createFolderId))
+        throw new Error("Select an authorized destination folder");
       await api.createUser({
+        folderId: createFolderId,
         email: createEmail.trim(),
         name: createName.trim(),
         groupId: createGroupId,
@@ -612,6 +634,31 @@ export function AdminUsers({
             <DialogTitle>Create User</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
+            {(destinationFolders.length > 0 || !hasScope("admin:users")) && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Folder</label>
+                <Select
+                  value={createFolderId ?? (hasScope("admin:users") ? "__none__" : "")}
+                  onValueChange={(value) => setCreateFolderId(value === "__none__" ? null : value)}
+                >
+                  <SelectTrigger aria-label="User folder">
+                    <SelectValue placeholder="Select a folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {hasScope("admin:users") && <SelectItem value="__none__">No folder</SelectItem>}
+                    {destinationFolders
+                      .filter((folder) =>
+                        canCreateInFolder(currentUser?.scopes ?? [], "admin:users", folder.id)
+                      )
+                      .map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {folder.label}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label htmlFor="create-user-email" className="text-sm font-medium">
                 Email

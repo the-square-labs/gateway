@@ -1,8 +1,15 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
+import {
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  hasScopeForResource,
+} from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScope, requireScopeForResource, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import {
@@ -96,9 +103,22 @@ const BROAD_DOCKER_VIEW_SCOPES = [
   'docker:images:view',
   'docker:volumes:view',
   'docker:networks:view',
+  'docker:compose:view',
+] as const;
+
+const DOCKER_CREATION_SCOPES = [
+  'docker:containers:create',
+  'docker:compose:create',
+  'docker:volumes:create',
+  'docker:networks:create',
+  'docker:images:pull',
 ] as const;
 
 const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
+  'docker:compose:view',
+  'docker:compose:create',
+  'docker:compose:manage',
+  'docker:compose:delete',
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:manage',
@@ -144,7 +164,12 @@ function nginxLogEntryKey(entry: RelayedLogEntry): string {
 }
 
 function hasBroadDockerNodeListAccess(scopes: string[]) {
-  return BROAD_DOCKER_VIEW_SCOPES.some((scope) => hasScope(scopes, scope));
+  return (
+    BROAD_DOCKER_VIEW_SCOPES.some((scope) => hasScope(scopes, scope)) ||
+    DOCKER_CREATION_SCOPES.some(
+      (base) => hasScope(scopes, base) || scopes.some((scope) => scope.startsWith(`${base}:folder/`))
+    )
+  );
 }
 
 function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
@@ -218,8 +243,25 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     query.type === 'docker' ? dockerScopedNodeIds(scopes, RESOURCE_SCOPED_DOCKER_NODE_SCOPES) : [];
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
   const canListDockerNodes = canListAllDockerNodes || allowedDockerNodeIds.length > 0;
-  const allowedIngressNodeIds = query.type === 'nginx' ? getResourceScopedIds(scopes, 'proxy:create') : [];
-  const canListAllIngressNodes = query.type === 'nginx' && hasScope(scopes, 'proxy:create');
+  const creationBases =
+    query.type === 'nginx' ? ['proxy:create', 'pages:create'] : query.type === 'databases' ? ['databases:create'] : [];
+  const allowedIngressNodeIds = [
+    ...new Set(
+      creationBases.flatMap((base) =>
+        scopes.flatMap((scope) => {
+          const prefix = `${base}:`;
+          if (!scope.startsWith(prefix)) return [];
+          const target = scope.slice(prefix.length);
+          if (target.startsWith('node/')) return [target.slice('node/'.length)];
+          // Legacy proxy:create UUIDs name nodes; database UUIDs do not.
+          return base === 'proxy:create' && !target.includes('/') ? [target] : [];
+        })
+      )
+    ),
+  ];
+  const canListAllIngressNodes = creationBases.some(
+    (base) => hasScope(scopes, base) || scopes.some((scope) => scope.startsWith(`${base}:folder/`))
+  );
   const canListIngressNodes = canListAllIngressNodes || allowedIngressNodeIds.length > 0;
   if (
     !hasNodeDetails &&
@@ -233,7 +275,7 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
       ? [...new Set([...allowedNodeIds, ...allowedDockerNodeIds])]
-      : query.type === 'nginx' && !canListAllIngressNodes
+      : creationBases.length > 0 && !canListAllIngressNodes
         ? [...new Set([...allowedNodeIds, ...allowedIngressNodeIds])]
         : allowedNodeIds;
   const result = await service.list(
@@ -245,7 +287,7 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   if (query.type === 'docker' && canListDockerNodes && !hasNodeDetails) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
-  if (query.type === 'nginx' && canListIngressNodes && !hasNodeDetails && !canManageFolders) {
+  if (creationBases.length > 0 && canListIngressNodes && !hasNodeDetails && !canManageFolders) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
   return c.json(result);
@@ -256,14 +298,16 @@ nodesRoutes.openapi(listNodeFoldersRoute, async (c) => {
   const scopes = c.get('effectiveScopes') || [];
   const canManageFolders = hasScope(scopes, 'nodes:folders:manage');
   const hasNodeDetails = hasScope(scopes, 'nodes:details');
+  const hasGlobalCreate = hasScope(scopes, 'nodes:create');
   const allowedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
-  if (!canManageFolders && !hasScopeBase(scopes, 'nodes:details')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: nodes:details or nodes:folders:manage');
+  const allowedFolderIds = getFolderScopedIds(scopes, ['nodes:details', 'nodes:rename', 'nodes:create']);
+  if (!canManageFolders && !hasScopeBase(scopes, 'nodes:details') && !hasScopeBase(scopes, 'nodes:create')) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing required node details, create, or folder scope');
   }
   const data = await service.getFolderTree(
-    canManageFolders || hasNodeDetails
-      ? { includeAllFolders: canManageFolders }
-      : { allowedResourceIds: allowedNodeIds }
+    canManageFolders || hasNodeDetails || hasGlobalCreate
+      ? { includeAllFolders: true }
+      : { allowedResourceIds: allowedNodeIds, allowedFolderIds }
   );
   return c.json({ data });
 });
@@ -287,6 +331,13 @@ nodesRoutes.openapi({ ...moveNodesToFolderRoute, middleware: requireScope('nodes
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+  const scopes = c.get('effectiveScopes') ?? [];
+  if (!input.ids.every((id) => hasScopeForResource(scopes, 'nodes:rename', id))) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing node rename access for one or more move sources');
+  }
+  if (!hasScopeForCreation(scopes, 'nodes:rename', input.folderId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing node rename access for the move destination');
+  }
   await service.moveResourcesToFolder(input, user.id);
   return c.json({ success: true });
 });
@@ -491,10 +542,14 @@ nodesRoutes.openapi(
   }
 );
 
-nodesRoutes.openapi({ ...createNodeRoute, middleware: requireScope('nodes:create') }, async (c) => {
+nodesRoutes.openapi(createNodeRoute, async (c) => {
   const service = container.resolve(NodesService);
   const user = c.get('user')!;
   const input = CreateNodeSchema.parse(await c.req.json());
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'nodes:create', input.folderId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing authorized node creation scope for the selected destination');
+  }
+  await container.resolve(NodeFolderService).assertFolderExists(input.folderId);
   const result = await service.create(input, user.id);
   return c.json({ data: result }, 201);
 });

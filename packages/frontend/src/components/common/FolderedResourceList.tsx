@@ -51,6 +51,7 @@ interface FolderedResourceListProps<TItem extends FolderedResourceListItem> {
   minWidth?: React.CSSProperties["minWidth"];
   /** Embed search and table directly in a PanelShell. */
   embedded?: boolean;
+  notifyOnMove?: boolean;
   canManageFolders: boolean;
   canViewItem?: (item: TItem) => boolean;
   canReorganizeItem?: (item: TItem) => boolean;
@@ -148,6 +149,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
   emptyState,
   minWidth = 900,
   embedded = false,
+  notifyOnMove = true,
   canManageFolders,
   canViewItem,
   canReorganizeItem,
@@ -177,9 +179,6 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
   const [createFolderParentId, setCreateFolderParentId] = useState<string | null>(null);
   const [createFolderOpen, setCreateFolderOpen] = useState(false);
   const [optimisticResources, setOptimisticResources] = useState<TItem[] | null>(null);
-  const [collapsedSystemFolderIds, setCollapsedSystemFolderIds] = useState<Set<string>>(
-    () => new Set()
-  );
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
   const openCreateFolder = useCallback(() => {
@@ -313,27 +312,18 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
       applyOptimisticMove(resource, folderId);
       try {
         await moveResourcesToFolder(resourceType, [resource.id], folderId);
-        toast.success("Resource moved");
+        if (notifyOnMove) toast.success("Resource moved");
         await onRefresh(true);
       } catch (err) {
         setOptimisticResources(null);
         toast.error(err instanceof Error ? err.message : "Failed to move resource");
       }
     },
-    [applyOptimisticMove, moveResourcesToFolder, onRefresh, resourceType]
+    [applyOptimisticMove, moveResourcesToFolder, notifyOnMove, onRefresh, resourceType]
   );
 
   const handleToggleFolder = useCallback(
     (folder: FolderTreeNodeWithItems<TItem>) => {
-      if (folder.isSystem) {
-        setCollapsedSystemFolderIds((current) => {
-          const next = new Set(current);
-          if (next.has(folder.id)) next.delete(folder.id);
-          else next.add(folder.id);
-          return next;
-        });
-        return;
-      }
       toggleFolder(resourceType, folder.id);
     },
     [resourceType, toggleFolder]
@@ -461,10 +451,7 @@ export function FolderedResourceList<TItem extends FolderedResourceListItem>({
             isSystem: folder.isSystem,
             folder,
           }),
-          isFolderExpanded: (folder) =>
-            folder.isSystem
-              ? !collapsedSystemFolderIds.has(folder.id)
-              : expandedFolderIds.has(folder.id),
+          isFolderExpanded: (folder) => expandedFolderIds.has(folder.id),
           isFolderSystem: (folder) => !!folder.isSystem,
           isFolderCollapsible: () => true,
           canManageFolder: (folder) => canManageFolders && !folder.isSystem,

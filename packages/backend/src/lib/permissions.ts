@@ -7,8 +7,16 @@ import { isFolderScopedScope } from './folder-scopes.js';
 import { extractBaseScope, isValidBaseScope } from './scopes.js';
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (!baseScope.startsWith('docker:containers:')) return null;
+  if (
+    !baseScope.startsWith('docker:containers:') &&
+    !baseScope.startsWith('docker:compose:') &&
+    !baseScope.startsWith('docker:networks:') &&
+    !baseScope.startsWith('docker:volumes:') &&
+    !baseScope.startsWith('docker:images:')
+  )
+    return null;
   if (!resourceId) return null;
+  if (resourceId.startsWith('folder/') || resourceId.startsWith('node/')) return null;
   const separator = resourceId.indexOf('/');
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
@@ -144,6 +152,26 @@ export function hasScopeForResource(scopes: string[], baseScope: string, resourc
   return hasScope(scopes, baseScope) || (!!resourceId && hasScope(scopes, `${baseScope}:${resourceId}`));
 }
 
+/** Authorize creation in a destination, never via an existing child resource grant.
+ * Folder descendants must already have been expanded by the authentication layer.
+ * Callers validate destination existence/family before performing side effects.
+ */
+export function hasScopeForCreation(
+  scopes: readonly string[],
+  baseScope: string,
+  folderId: string | null | undefined,
+  resourceId?: string
+): boolean {
+  const grants = [...scopes];
+  return (
+    hasScope(grants, baseScope) ||
+    (!!resourceId &&
+      !resourceId.includes('/') &&
+      (hasScope(grants, `${baseScope}:${resourceId}`) || hasScope(grants, `${baseScope}:node/${resourceId}`))) ||
+    (!!folderId && !folderId.includes('/') && hasScope(grants, `${baseScope}:folder/${folderId}`))
+  );
+}
+
 /** Return resource IDs from scoped grants that satisfy baseScope:<id>. */
 export function getResourceScopedIds(scopes: readonly string[], baseScope: string): string[] {
   const ids = new Set<string>();
@@ -152,6 +180,8 @@ export function getResourceScopedIds(scopes: readonly string[], baseScope: strin
     const scopeBase = extractBaseScope(scope);
     if (scope === scopeBase) continue;
     const resourceId = scope.slice(scopeBase.length + 1);
+    if (resourceId.startsWith('node/') || resourceId.startsWith('provider/') || resourceId.startsWith('account/'))
+      continue;
     if (resourceId && hasScope([scope], `${baseScope}:${resourceId}`)) ids.add(resourceId);
   }
   return [...ids];

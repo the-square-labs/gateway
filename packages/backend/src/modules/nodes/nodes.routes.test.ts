@@ -11,12 +11,14 @@ const mocks = vi.hoisted(() => ({
     get: vi.fn(),
     getHistory: vi.fn(),
     update: vi.fn(),
+    create: vi.fn(),
   },
+  folderService: { assertFolderExists: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn(() => mocks.nodesService),
+    resolve: vi.fn((token) => (token?.name === 'NodeFolderService' ? mocks.folderService : mocks.nodesService)),
   },
 }));
 
@@ -103,6 +105,34 @@ describe('nodesRoutes list access', () => {
     vi.clearAllMocks();
     mocks.scopes = [];
     mocks.nodesService.list.mockResolvedValue({ data: [], page: 1, limit: 100, total: 0, totalPages: 0 });
+  });
+
+  it.each([
+    'docker:containers:create:folder/f1',
+    'docker:compose:create',
+    'docker:networks:create:folder/f1',
+  ])('allows creation destination discovery with %s without node details', async (scope) => {
+    mocks.scopes = [scope];
+    const response = await createApp().request('/?type=docker&limit=100');
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'docker' }), undefined);
+  });
+
+  it('does not treat a folder qualifier as a node ID', async () => {
+    mocks.scopes = ['docker:containers:view:folder/f1'];
+    const response = await createApp().request('/?type=docker&limit=100');
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.list).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['pages:create:node/ingress-1', 'nginx', ['ingress-1']],
+    ['databases:create:node/db-node', 'databases', ['db-node']],
+  ])('discovers explicit creation nodes for %s', async (scope, type, ids) => {
+    mocks.scopes = [scope as string];
+    const response = await createApp().request(`/?type=${type}&limit=100`);
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type }), { allowedIds: ids });
   });
 
   it('allows broad Docker view scopes to discover Docker nodes', async () => {
@@ -237,6 +267,51 @@ describe('nodesRoutes list access', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.nodesService.list).not.toHaveBeenCalled();
+  });
+});
+
+describe('nodesRoutes create destination authorization', () => {
+  const folderId = '22222222-2222-4222-8222-222222222222';
+  const otherFolderId = '33333333-3333-4333-8333-333333333333';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.scopes = [];
+    mocks.folderService.assertFolderExists.mockResolvedValue(undefined);
+    mocks.nodesService.create.mockResolvedValue({ node: { id: 'node-1' } });
+  });
+
+  const createNode = (targetFolderId?: string) =>
+    createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'nginx',
+        hostname: 'pending',
+        displayName: 'Ingress',
+        ...(targetFolderId === undefined ? {} : { folderId: targetFolderId }),
+      }),
+    });
+
+  it('allows an exact folder grant and validates the folder before node creation', async () => {
+    mocks.scopes = [`nodes:create:folder/${folderId}`];
+
+    const response = await createNode(folderId);
+
+    expect(response.status).toBe(201);
+    expect(mocks.folderService.assertFolderExists).toHaveBeenCalledWith(folderId);
+    expect(mocks.nodesService.create).toHaveBeenCalledWith(expect.objectContaining({ folderId }), 'user-1');
+  });
+
+  it('rejects root and unrelated folders for a folder-only create grant', async () => {
+    mocks.scopes = [`nodes:create:folder/${folderId}`];
+
+    const root = await createNode();
+    const unrelated = await createNode(otherFolderId);
+
+    expect(root.status).toBe(403);
+    expect(unrelated.status).toBe(403);
+    expect(mocks.nodesService.create).not.toHaveBeenCalled();
   });
 });
 

@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
     requireFeature: vi.fn(),
   },
   pageProfile: { requireEnabled: vi.fn() },
+  folderService: { assertFolderExists: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -32,6 +33,7 @@ vi.mock('@/container.js', () => ({
     resolve: vi.fn((token) => {
       if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
       if (token?.name === 'PageProfileService') return mocks.pageProfile;
+      if (token?.name === 'FolderService') return mocks.folderService;
       return mocks.proxyService;
     }),
   },
@@ -100,6 +102,7 @@ describe('proxy routes programmatic raw config handling', () => {
     vi.clearAllMocks();
     mocks.licensePolicy.requireFeature.mockResolvedValue(undefined);
     mocks.pageProfile.requireEnabled.mockResolvedValue(undefined);
+    mocks.folderService.assertFolderExists.mockResolvedValue(undefined);
     mocks.proxyService.listProxyHosts.mockResolvedValue({ data: [rawHost], total: 1 });
     mocks.proxyService.getProxyHost.mockResolvedValue(rawHost);
     mocks.proxyService.createProxyHost.mockResolvedValue(rawHost);
@@ -150,6 +153,35 @@ describe('proxy routes programmatic raw config handling', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.proxyService.create).not.toHaveBeenCalled();
+  });
+
+  it('validates an authorized route folder before creating a proxy host', async () => {
+    const folderId = '22222222-2222-4222-8222-222222222222';
+    mocks.authType = 'session';
+    mocks.scopes = [`proxy:create:folder/${folderId}`];
+
+    const response = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'proxy',
+        upstreamKind: 'manual',
+        nodeId: '44444444-4444-4444-8444-444444444444',
+        domainNames: ['app.example.com'],
+        forwardHost: 'upstream.example.test',
+        forwardPort: 8080,
+        forwardScheme: 'http',
+        folderId,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(mocks.folderService.assertFolderExists).toHaveBeenCalledWith(folderId);
+    expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+      expect.objectContaining({ folderId }),
+      'user-1',
+      expect.any(Object)
+    );
   });
 
   it('redacts raw config from browser detail response without raw read scope', async () => {

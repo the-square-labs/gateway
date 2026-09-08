@@ -1,4 +1,24 @@
+export const FOLDER_CREATION_SCOPES = [
+  'domains:create',
+  'proxy:create',
+  'pages:create',
+  'nodes:create',
+  'databases:create',
+  'ssl:cert:issue',
+  'logs:environments:create',
+  'logs:schemas:create',
+  'docker:containers:create',
+  'docker:compose:create',
+  'docker:networks:create',
+  'docker:volumes:create',
+  'docker:images:pull',
+] as const;
+
 export const RESOURCE_SCOPABLE: readonly string[] = [
+  'admin:users',
+  'admin:groups',
+  'admin:users:impersonate',
+  ...FOLDER_CREATION_SCOPES,
   // Hosting qualifiers: connector ID for accounts/create/billing, resource ID for VM actions.
   'integrations:hosting:view',
   'integrations:hosting:manage',
@@ -23,7 +43,6 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'pki:cert:export',
   // Proxy
   'proxy:view',
-  'proxy:create',
   'proxy:edit',
   'proxy:delete',
   'proxy:advanced',
@@ -70,7 +89,6 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'nodes:lock',
   // Docker containers
   'docker:containers:view',
-  'docker:containers:create',
   'docker:containers:edit',
   'docker:containers:config',
   'docker:containers:manage',
@@ -87,25 +105,21 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:availability:manage',
   // Docker Compose Projects
   'docker:compose:view',
-  'docker:compose:create',
   'docker:compose:manage',
   'docker:compose:delete',
   'docker:registries:internal:pull',
   'docker:registries:internal:push',
   // Docker images
   'docker:images:view',
-  'docker:images:pull',
   'docker:images:delete',
   // Docker volumes
   'docker:volumes:view',
-  'docker:volumes:create',
   'docker:volumes:delete',
   'docker:volumes:export',
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   // Docker networks
   'docker:networks:view',
-  'docker:networks:create',
   'docker:networks:edit',
   'docker:networks:delete',
   // Docker tasks
@@ -134,10 +148,28 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
 
 /**
  * Resource-scopable permissions that may target a resource folder.
- * Creation and folder-management permissions intentionally remain broad or
- * node-scoped because they do not act on an existing resource.
+ * Creation targets the destination folder; other actions target its contents.
+ * Folder-management permissions remain separate from resource actions.
  */
 export const FOLDER_SCOPABLE: readonly string[] = [
+  'admin:users',
+  'admin:groups',
+  'admin:users:impersonate',
+  ...FOLDER_CREATION_SCOPES,
+  'docker:networks:view',
+  'docker:networks:edit',
+  'docker:networks:delete',
+  'docker:volumes:view',
+  'docker:volumes:delete',
+  'docker:volumes:export',
+  'docker:volumes:files:read',
+  'docker:volumes:files:write',
+  'docker:images:view',
+  'docker:images:delete',
+  'ssl:cert:view',
+  'ssl:cert:delete',
+  'ssl:cert:revoke',
+  'ssl:cert:export',
   // Domains
   'domains:view',
   'domains:edit',

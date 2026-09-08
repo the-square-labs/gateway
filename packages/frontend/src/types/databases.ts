@@ -83,6 +83,7 @@ export const DEFAULT_MANAGED_REDIS_CONFIG: ManagedRedisConfig = {
 
 export interface ManagedDatabaseCreateInput {
   name: string;
+  folderId?: string | null;
   type: DatabaseType;
   version: string;
   nodeId: string;

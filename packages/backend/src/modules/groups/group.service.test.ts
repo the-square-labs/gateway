@@ -20,6 +20,32 @@ function createService(groups: Array<{ id: string; parentId: string | null; name
 }
 
 describe('GroupService delete authorization', () => {
+  it('rejects changing inheritance for a child outside the parent editor resource grants', async () => {
+    const service = createService([
+      { id: 'parent', parentId: null, name: 'Parent', scopes: ['nodes:details'] },
+      { id: 'child', parentId: 'parent', name: 'Child', scopes: [] },
+    ]);
+    vi.spyOn(service, 'getGroup').mockResolvedValue({
+      id: 'parent',
+      isBuiltin: false,
+      scopes: ['nodes:details'],
+    } as never);
+    await expect(
+      service.assertCanUpdateGroup('parent', { scopes: [] }, ['admin:groups:parent', 'nodes:details'])
+    ).rejects.toMatchObject({ code: 'GROUP_ACCESS_DENIED' });
+  });
+  it('rejects deleting an accessible parent when a child is outside resource grants', async () => {
+    const service = createService([
+      { id: 'parent', parentId: null, name: 'Parent', scopes: ['nodes:details'] },
+      { id: 'child', parentId: 'parent', name: 'Hidden child', scopes: [] },
+    ]);
+    await expect(
+      service.assertCanDeleteGroup('parent', ['admin:groups:parent', 'nodes:details'])
+    ).rejects.toMatchObject({ code: 'GROUP_ACCESS_DENIED' });
+    await expect(
+      service.assertCanDeleteGroup('parent', ['admin:groups:parent', 'admin:groups:child', 'nodes:details'])
+    ).resolves.toBeUndefined();
+  });
   it('rejects custom groups that would inherit admin:system from a parent', async () => {
     const service = createService([
       { id: 'system-admin', parentId: null, name: 'system-admin', scopes: ['admin:system', 'nodes:details'] },

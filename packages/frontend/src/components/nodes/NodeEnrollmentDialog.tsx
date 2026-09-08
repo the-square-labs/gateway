@@ -26,10 +26,13 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError } from "@/stores/license-paywall";
-import type { Node, NodeType } from "@/types";
+import { useResourceFolderStore } from "@/stores/resource-folders";
+import type { Node, NodeType, ResourceFolderTreeNode } from "@/types";
 import type { HostingOperation, HostingResource } from "@/types/hosting";
 
 type EnrollmentTargets = {
@@ -122,9 +125,11 @@ export function NodeEnrollmentDialog({
   onNodeEnrolled?: (nodeId: string) => void;
   onHostingCreated?: (operation: HostingOperation) => void;
 }) {
+  const user = useAuthStore((state) => state.user);
   const [mode, setMode] = useState<"external" | "hosting">(initialMode);
   const [type, setType] = useState<NodeType>(initialType);
   const [displayName, setDisplayName] = useState("");
+  const [folderId, setFolderId] = useState("");
   const [relayAddress, setRelayAddress] = useState("");
   const [creating, setCreating] = useState(false);
   const {
@@ -139,6 +144,10 @@ export function NodeEnrollmentDialog({
   const completedNodeRef = useRef<string | null>(null);
   const retainedHosting = useRetainedDialogValue(hosting ?? null, open);
   const [hostingModeLocked, setHostingModeLocked] = useState(false);
+  const nodeFolders = useResourceFolderStore((state) => state.foldersByType.node);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType.node);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderOptions = useMemo(() => flattenFolders(nodeFolders), [nodeFolders]);
   const fixedHosting = Boolean(retainedHosting?.connectorId || retainedHosting?.existingResource);
   const effectiveMode = fixedHosting ? "hosting" : mode;
 
@@ -147,8 +156,10 @@ export function NodeEnrollmentDialog({
     setMode(initialMode);
     setType(initialType);
     setDisplayName("");
+    setFolderId("");
     setRelayAddress("");
-  }, [initialMode, initialType, open]);
+    void fetchFolders("node");
+  }, [fetchFolders, initialMode, initialType, open]);
 
   useEffect(() => {
     if (!open) setHostingModeLocked(false);
@@ -200,7 +211,9 @@ export function NodeEnrollmentDialog({
     NODE_ENROLLMENT_TYPES.find((candidate) => candidate.value === type) ??
     NODE_ENROLLMENT_TYPES[0]!;
   const canCreate =
-    displayName.trim().length > 0 && (type !== "relay" || relayAddress.trim().length > 0);
+    canCreateInFolder(user?.scopes ?? [], "nodes:create", folderId || null) &&
+    displayName.trim().length > 0 &&
+    (type !== "relay" || relayAddress.trim().length > 0);
   const modeLocked = creating || hostingModeLocked;
 
   const createNode = async () => {
@@ -212,6 +225,7 @@ export function NodeEnrollmentDialog({
         type,
         hostname: "pending",
         displayName: displayName.trim(),
+        folderId: folderId || null,
         ...(type === "relay"
           ? { serviceAddresses: [normalizedRelayAddress], servicePort: 9443 }
           : {}),
@@ -364,6 +378,43 @@ export function NodeEnrollmentDialog({
                           </p>
                         </div>
                         <div className="space-y-1.5">
+                          <label className="text-sm font-medium">Folder</label>
+                          <Select
+                            value={
+                              folderId ||
+                              (canCreateInFolder(user?.scopes ?? [], "nodes:create", null)
+                                ? "__none__"
+                                : "")
+                            }
+                            onValueChange={(value) =>
+                              setFolderId(value === "__none__" ? "" : value)
+                            }
+                            disabled={foldersLoading}
+                          >
+                            <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                              <SelectValue
+                                placeholder={
+                                  foldersLoading ? "Loading folders…" : "Select a folder"
+                                }
+                              />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {canCreateInFolder(user?.scopes ?? [], "nodes:create", null) && (
+                                <SelectItem value="__none__">No folder</SelectItem>
+                              )}
+                              {folderOptions
+                                .filter((folder) =>
+                                  canCreateInFolder(user?.scopes ?? [], "nodes:create", folder.id)
+                                )
+                                .map((folder) => (
+                                  <SelectItem key={folder.id} value={folder.id}>
+                                    {"  ".repeat(folder.depth) + folder.name}
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <div className="space-y-1.5">
                           <label className="text-sm font-medium">Node Name</label>
                           <Input
                             value={displayName}
@@ -482,4 +533,8 @@ export function NodeEnrollmentDialog({
       </Dialog>
     </>
   );
+}
+
+function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

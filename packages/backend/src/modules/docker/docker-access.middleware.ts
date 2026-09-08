@@ -12,6 +12,7 @@ import {
   hasDockerResourceScope,
 } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
+import { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 import { DockerSourceService } from './docker-source.service.js';
 
 function deny(baseScope: string): never {
@@ -122,6 +123,27 @@ export function requireDockerDeploymentScope(baseScope: string): MiddlewareHandl
     const deploymentId = c.req.param('deploymentId');
     if (!nodeId || !deploymentId) deny(baseScope);
     assertDockerResourceScope(scopes, baseScope, nodeId, deploymentId);
+    await next();
+  };
+}
+
+/**
+ * Network IDs exposed by the UI and tools are full daemon IDs. Resolve only
+ * that persisted identity for scoped callers so an inaccessible network cannot
+ * be discovered by name or an arbitrary ID prefix.
+ */
+export function requireDockerNetworkScope(baseScope: string, identifierParam = 'networkId'): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const scopes = c.get('effectiveScopes') ?? [];
+    const nodeId = c.req.param('nodeId');
+    const networkId = c.req.param(identifierParam);
+    if (!nodeId || !networkId) deny(baseScope);
+    if (hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
+      await next();
+      return;
+    }
+    const resourceId = await container.resolve(DockerNetworkAccessResourceService).resolveNetwork(nodeId, networkId);
+    if (!resourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
     await next();
   };
 }

@@ -72,6 +72,7 @@ import { DockerMigrationDispatchAdapter } from '@/modules/docker/docker-migratio
 import { DockerMigrationExecutor } from '@/modules/docker/docker-migration-executor.js';
 import { DockerMigrationGuard } from '@/modules/docker/docker-migration-guard.js';
 import { DockerMigrationPreflightService } from '@/modules/docker/docker-migration-preflight.js';
+import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DockerRegistryService } from '@/modules/docker/docker-registry.service.js';
 import {
   createDockerRegistryMaintenanceExecutor,
@@ -785,6 +786,9 @@ export async function initializeContainer(): Promise<void> {
   const dockerAccessResourceService = new DockerAccessResourceService(db);
   container.registerInstance(DockerAccessResourceService, dockerAccessResourceService);
   dockerManagementService.setAccessResourceService(dockerAccessResourceService);
+  const dockerNetworkAccessResourceService = new DockerNetworkAccessResourceService(db);
+  container.registerInstance(DockerNetworkAccessResourceService, dockerNetworkAccessResourceService);
+  dockerManagementService.setNetworkAccessResourceService(dockerNetworkAccessResourceService);
   const dockerMigrationGuard = new DockerMigrationGuard(db);
   dockerManagementService.setMigrationGuard(dockerMigrationGuard);
   container.registerInstance(DockerManagementService, dockerManagementService);
@@ -1237,7 +1241,8 @@ export async function initializeContainer(): Promise<void> {
     dockerMigrationCoordinator,
     auditService,
     eventBus,
-    dockerManagementService
+    dockerManagementService,
+    authService
   );
   container.registerInstance(DockerMigrationService, dockerMigrationService);
   dockerMigrationService.start();

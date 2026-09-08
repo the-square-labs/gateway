@@ -30,8 +30,14 @@ import {
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useDockerFolderStore } from "@/stores/docker-folders";
 import { handleLicenseApiError } from "@/stores/license-paywall";
-import type { DockerNetwork, DockerVolume, Node as GatewayNode } from "@/types";
+import type {
+  DockerFolderTreeNode,
+  DockerNetwork,
+  DockerVolume,
+  Node as GatewayNode,
+} from "@/types";
 
 const BRIDGE_NETWORK: DockerNetwork = {
   id: "bridge",
@@ -105,6 +111,10 @@ function hasNodeScope(hasScope: (scope: string) => boolean, scope: string, nodeI
   return hasScope(scope) || hasScope(`${scope}:${nodeId}`);
 }
 
+function flattenFolders(folders: DockerFolderTreeNode[]): DockerFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
+}
+
 export function GwcaImportDialog({
   open,
   onOpenChange,
@@ -113,11 +123,15 @@ export function GwcaImportDialog({
   devPreview = false,
 }: GwcaImportDialogProps) {
   const hasScope = useAuthStore((state) => state.hasScope);
+  const dockerFolders = useDockerFolderStore((state) => state.foldersByType.container);
+  const foldersLoading = useDockerFolderStore((state) => state.loadingByType.container);
+  const fetchFolders = useDockerFolderStore((state) => state.fetchFolders);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
   const [metadata, setMetadata] = useState<GwcaImportMetadata | null>(null);
   const [name, setName] = useState("");
   const [nodeId, setNodeId] = useState("");
+  const [folderId, setFolderId] = useState("");
   const [targetNetworks, setTargetNetworks] = useState<DockerNetwork[]>([]);
   const [targetVolumes, setTargetVolumes] = useState<DockerVolume[]>([]);
   const [networkMappings, setNetworkMappings] = useState<Record<string, string>>({});
@@ -127,12 +141,14 @@ export function GwcaImportDialog({
   const [planning, setPlanning] = useState(false);
   const [importing, setImporting] = useState(false);
   const defaultNodeId = nodes[0]?.id ?? (devPreview ? DEV_PREVIEW_NODE_ID : "");
+  const folderOptions = useMemo(() => flattenFolders(dockerFolders), [dockerFolders]);
 
   const resetImportState = useCallback(() => {
     setFile(null);
     setMetadata(null);
     setName("");
     setNodeId("");
+    setFolderId("");
     setTargetNetworks([]);
     setTargetVolumes([]);
     setNetworkMappings({});
@@ -153,6 +169,7 @@ export function GwcaImportDialog({
 
   useEffect(() => {
     if (!open) return;
+    void fetchFolders("container");
     resetImportState();
     setNodeId(defaultNodeId);
     if (devPreview) {
@@ -175,7 +192,7 @@ export function GwcaImportDialog({
         [gwcaPortKey(DEV_PREVIEW_METADATA.ports[1])]: 0,
       });
     }
-  }, [defaultNodeId, devPreview, open, resetImportState]);
+  }, [defaultNodeId, devPreview, fetchFolders, open, resetImportState]);
 
   useEffect(() => {
     if (devPreview || !open) return;
@@ -303,6 +320,7 @@ export function GwcaImportDialog({
           createVolumes,
           ports: resolvedPortMappings,
         },
+        folderId || undefined,
         ({ loaded, total }) => {
           const description =
             total > 0
@@ -441,6 +459,25 @@ export function GwcaImportDialog({
                     {nodes.map((node) => (
                       <SelectItem key={node.id} value={node.id}>
                         {node.displayName || node.hostname}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Destination folder</label>
+                <Select
+                  value={folderId || "__root__"}
+                  onValueChange={(value) => setFolderId(value === "__root__" ? "" : value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={foldersLoading ? "Loading folders..." : "Root"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__root__">Root</SelectItem>
+                    {folderOptions.map((folder) => (
+                      <SelectItem key={folder.id} value={folder.id} disabled={folder.isSystem}>
+                        {`${"— ".repeat(folder.depth ?? 0)}${folder.name}`}
                       </SelectItem>
                     ))}
                   </SelectContent>

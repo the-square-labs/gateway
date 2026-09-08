@@ -334,6 +334,7 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
     async createDockerComposeProject(
       nodeId: string,
       input: {
+        folderId?: string | null;
         projectName: string;
         yaml: string;
         variables?: Record<string, string>;
@@ -855,12 +856,13 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
     async duplicateContainer(
       nodeId: string,
       containerId: string,
-      name: string
+      name: string,
+      folderId?: string | null
     ): Promise<Record<string, unknown>> {
       return this.unwrapData(
         this.request<{ data: Record<string, unknown> }>(
           `/docker/nodes/${nodeId}/containers/${containerId}/duplicate`,
-          { method: "POST", body: JSON.stringify({ name }) }
+          { method: "POST", body: JSON.stringify({ name, folderId }) }
         )
       );
     }
@@ -917,9 +919,11 @@ export function withDockerApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         createVolumes?: string[];
         ports?: Record<string, number>;
       } = {},
+      folderId?: string,
       onProgress?: (progress: { loaded: number; total: number }) => void
     ): Promise<{ containerId: string; containerName: string; imageId: string }> {
       const query = new URLSearchParams({ name });
+      if (folderId) query.set("folderId", folderId);
       if (Object.keys(resolution).length > 0) query.set("resolution", JSON.stringify(resolution));
       return this.unwrapData(
         this.uploadRaw<{

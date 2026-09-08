@@ -76,6 +76,7 @@ export const DockerRuntimeStatusSchema = z
 // Container create
 export const ContainerCreateSchema = z
   .object({
+    folderId: z.string().uuid().nullable().optional(),
     image: z.string().min(1),
     registryId: z.string().uuid().optional(),
     name: ContainerNameSchema.optional(),
@@ -197,7 +198,10 @@ export const ContainerRecreateSchema = z.object({
 export const ContainerStopSchema = z.object({ timeout: DockerStopTimeoutSchema.optional() });
 export const ContainerKillSchema = z.object({ signal: z.string().default('SIGKILL') });
 export const ContainerRenameSchema = z.object({ name: ContainerNameSchema });
-export const ContainerDuplicateSchema = z.object({ name: ContainerNameSchema });
+export const ContainerDuplicateSchema = z.object({
+  name: ContainerNameSchema,
+  folderId: z.string().uuid().nullable().optional(),
+});
 export const ContainerArchiveExportQuerySchema = z
   .object({
     imageMode: z.enum(['portable', 'registry']).default('portable'),
@@ -278,6 +282,7 @@ export const ContainerArchivePlanSchema = z
 
 export const ContainerArchiveImportQuerySchema = z.object({
   name: ContainerNameSchema,
+  folderId: z.string().uuid().optional(),
   resolution: z
     .string()
     .max(32 * 1024)
@@ -288,6 +293,7 @@ export const ContainerArchiveImportQuerySchema = z.object({
 export const ImagePullSchema = z.object({
   imageRef: z.string().min(1),
   registryId: z.string().uuid().optional(),
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 // Volume create
@@ -300,6 +306,7 @@ export const VolumeCreateSchema = z
       .int()
       .min(256 * 1024 * 1024)
       .optional(),
+    folderId: z.string().uuid().nullable().optional(),
   })
   .strict()
   .superRefine((value, context) => {
@@ -336,6 +343,7 @@ export const NetworkCreateSchema = z.object({
   driver: z.string().default('bridge'),
   subnet: z.string().optional(),
   gateway: z.string().optional(),
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 // Network connect/disconnect

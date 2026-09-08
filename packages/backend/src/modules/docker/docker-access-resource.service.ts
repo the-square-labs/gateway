@@ -1,20 +1,10 @@
 import { and, eq, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import {
-  apiTokens,
-  dockerAccessResources,
-  dockerDeployments,
-  oauthAccessTokens,
-  oauthAuthorizationCodes,
-  oauthRefreshTokens,
-  permissionGroups,
-  users,
-} from '@/db/schema/index.js';
+import { dockerAccessResources, dockerDeployments } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-
-const DOCKER_CONTAINER_SCOPE_PREFIX = 'docker:containers:';
+import { rewritePersistedDockerResourceScopes } from './docker-access-resource-scope-rewrite.js';
 
 export function dockerChildScopeResourceId(nodeId: string, resourceId: string): string {
   return `${nodeId}/${resourceId}`;
@@ -24,10 +14,6 @@ export function parseDockerChildScopeResourceId(value: string): { nodeId: string
   const separator = value.indexOf('/');
   if (separator <= 0 || separator === value.length - 1) return null;
   return { nodeId: value.slice(0, separator), resourceId: value.slice(separator + 1) };
-}
-
-export function isDockerContainerScope(scope: string): boolean {
-  return extractBaseScope(scope).startsWith(DOCKER_CONTAINER_SCOPE_PREFIX);
 }
 
 export function hasDockerResourceScope(
@@ -49,27 +35,17 @@ export function dockerScopedNodeIds(scopes: readonly string[], baseScopes: reado
     const base = extractBaseScope(scope);
     if (scope === base) continue;
     const resourceId = scope.slice(base.length + 1);
+    if (resourceId.startsWith('folder/') || resourceId.startsWith('provider/') || resourceId.startsWith('account/'))
+      continue;
     if (!baseScopes.some((requiredBase) => hasScope([scope], `${requiredBase}:${resourceId}`))) continue;
+    if (resourceId.startsWith('node/')) {
+      ids.add(resourceId.slice('node/'.length));
+      continue;
+    }
     const child = parseDockerChildScopeResourceId(resourceId);
     ids.add(child?.nodeId ?? resourceId);
   }
   return [...ids];
-}
-
-export function rewriteDockerResourceScopes(
-  scopes: readonly string[],
-  fromResourceId: string,
-  toResourceId: string | null
-): string[] {
-  let changed = false;
-  const rewritten = scopes.flatMap((scope) => {
-    if (!isDockerContainerScope(scope)) return [scope];
-    const base = extractBaseScope(scope);
-    if (scope !== `${base}:${fromResourceId}`) return [scope];
-    changed = true;
-    return toResourceId ? [`${base}:${toResourceId}`] : [];
-  });
-  return changed ? [...new Set(rewritten)].sort() : [...scopes];
 }
 
 type ContainerIdentity = {
@@ -415,71 +391,6 @@ export class DockerAccessResourceService {
     fromResourceId: string,
     toResourceId: string | null
   ): Promise<void> {
-    const groupRows = await tx
-      .select({ id: permissionGroups.id, scopes: permissionGroups.scopes })
-      .from(permissionGroups);
-    for (const row of groupRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      if (scopes.join('\u0000') !== row.scopes.join('\u0000')) {
-        await tx.update(permissionGroups).set({ scopes, updatedAt: new Date() }).where(eq(permissionGroups.id, row.id));
-      }
-    }
-
-    const userRows = await tx.select({ id: users.id, scopes: users.additionalScopes }).from(users);
-    for (const row of userRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      if (scopes.join('\u0000') !== row.scopes.join('\u0000')) {
-        await tx.update(users).set({ additionalScopes: scopes, updatedAt: new Date() }).where(eq(users.id, row.id));
-      }
-    }
-
-    const tokenRows = await tx.select({ id: apiTokens.id, scopes: apiTokens.scopes }).from(apiTokens);
-    for (const row of tokenRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      if (scopes.join('\u0000') !== row.scopes.join('\u0000')) {
-        await tx.update(apiTokens).set({ scopes }).where(eq(apiTokens.id, row.id));
-      }
-    }
-
-    const authorizationRows = await tx
-      .select({
-        id: oauthAuthorizationCodes.id,
-        scopes: oauthAuthorizationCodes.scopes,
-        requestedScopes: oauthAuthorizationCodes.requestedScopes,
-      })
-      .from(oauthAuthorizationCodes);
-    for (const row of authorizationRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      const requestedScopes = rewriteDockerResourceScopes(row.requestedScopes, fromResourceId, toResourceId);
-      if (
-        scopes.join('\u0000') !== row.scopes.join('\u0000') ||
-        requestedScopes.join('\u0000') !== row.requestedScopes.join('\u0000')
-      ) {
-        await tx
-          .update(oauthAuthorizationCodes)
-          .set({ scopes, requestedScopes })
-          .where(eq(oauthAuthorizationCodes.id, row.id));
-      }
-    }
-
-    const refreshRows = await tx
-      .select({ id: oauthRefreshTokens.id, scopes: oauthRefreshTokens.scopes })
-      .from(oauthRefreshTokens);
-    for (const row of refreshRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      if (scopes.join('\u0000') !== row.scopes.join('\u0000')) {
-        await tx.update(oauthRefreshTokens).set({ scopes }).where(eq(oauthRefreshTokens.id, row.id));
-      }
-    }
-
-    const accessRows = await tx
-      .select({ id: oauthAccessTokens.id, scopes: oauthAccessTokens.scopes })
-      .from(oauthAccessTokens);
-    for (const row of accessRows) {
-      const scopes = rewriteDockerResourceScopes(row.scopes, fromResourceId, toResourceId);
-      if (scopes.join('\u0000') !== row.scopes.join('\u0000')) {
-        await tx.update(oauthAccessTokens).set({ scopes }).where(eq(oauthAccessTokens.id, row.id));
-      }
-    }
+    await rewritePersistedDockerResourceScopes(tx, fromResourceId, toResourceId);
   }
 }

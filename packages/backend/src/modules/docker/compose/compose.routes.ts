@@ -2,7 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { MiddlewareHandler } from 'hono';
 import { container } from '@/container.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
@@ -122,7 +122,7 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...validateComposeProjectRoute, middleware: requireScopeForResource('docker:compose:create', 'nodeId') },
+    { ...validateComposeProjectRoute, middleware: requireScopeBase('docker:compose:create') },
     async (c) => {
       await requireManagedComposeFeature();
       const data = container.resolve(DockerComposeService).validate(ComposeYamlInputSchema.parse(await c.req.json()));
@@ -130,16 +130,18 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
     }
   );
 
-  router.openapi(
-    { ...createComposeProjectRoute, middleware: requireScopeForResource('docker:compose:create', 'nodeId') },
-    async (c) => {
-      await requireManagedComposeFeature();
-      const data = await container
-        .resolve(DockerComposeService)
-        .create(c.req.param('nodeId')!, ComposeCreateInputSchema.parse(await c.req.json()), c.get('user')!.id);
-      return c.json({ data }, 201);
-    }
-  );
+  router.openapi({ ...createComposeProjectRoute, middleware: requireScopeBase('docker:compose:create') }, async (c) => {
+    await requireManagedComposeFeature();
+    const data = await container
+      .resolve(DockerComposeService)
+      .create(
+        c.req.param('nodeId')!,
+        ComposeCreateInputSchema.parse(await c.req.json()),
+        c.get('user')!.id,
+        c.get('effectiveScopes') ?? []
+      );
+    return c.json({ data }, 201);
+  });
 
   router.openapi({ ...adoptComposeProjectRoute, middleware: requireComposeAdoptScopes }, async (c) => {
     await requireManagedComposeFeature();

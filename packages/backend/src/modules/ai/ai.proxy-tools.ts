@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
@@ -57,6 +57,10 @@ export async function executeProxyTool(
     case 'get_route':
       return compactProxyHostForAgent(await context.proxyService.getProxyHost(a.routeId));
     case 'create_route':
+      if (!hasScopeForCreation(user.scopes, 'proxy:create', a.folderId, a.nodeId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing authorized route creation scope for the selected destination');
+      }
+      await context.folderService.assertFolderExists(a.folderId);
       if (a.advancedConfig && !hasScope(user.scopes, 'proxy:advanced')) {
         throw new Error('Advanced config requires proxy:advanced scope');
       }

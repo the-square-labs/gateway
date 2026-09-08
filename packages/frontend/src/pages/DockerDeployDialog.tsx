@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import type { ComboboxOption } from "@/components/common/Combobox";
+import { flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -11,7 +12,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeRoute } from "@/lib/resource-routes";
+import { canCreateInFolder } from "@/lib/scope-utils";
+import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
@@ -53,6 +57,24 @@ export function DockerDeployDialog({
 }: DockerDeployDialogProps) {
   const navigate = useNavigate();
   const { hasScope } = useAuthStore();
+  const effectiveScopes = useAuthStore((state) => state.user?.scopes ?? []);
+  const [creationNodes, setCreationNodes] = useState<Node[]>([]);
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void loadVisibleDockerNodes(effectiveScopes, ["docker:containers:create"], false)
+      .then((nodes) => {
+        if (!cancelled) setCreationNodes(nodes);
+      })
+      .catch(() => {
+        if (!cancelled) setCreationNodes([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, effectiveScopes]);
+  const [deployFolderId, setDeployFolderId] = useState<string | null>(null);
+  const [folderOptions, setFolderOptions] = useState<ComboboxOption[]>([]);
 
   const [deployNodeId, setDeployNodeId] = useState<string>("");
   const [deployImage, setDeployImage] = useState("");
@@ -77,17 +99,51 @@ export function DockerDeployDialog({
   const [secureRuntimeSetupOpen, setSecureRuntimeSetupOpen] = useState(false);
   const storeDockerNodes = useDockerStore((state) => state.dockerNodes);
   const allNodes = useMemo(() => {
-    return storeDockerNodes.length > 0 ? storeDockerNodes : dockerNodes;
-  }, [dockerNodes, storeDockerNodes]);
+    return [
+      ...new Map(
+        [...dockerNodes, ...creationNodes, ...storeDockerNodes].map((node) => [node.id, node])
+      ).values(),
+    ];
+  }, [dockerNodes, storeDockerNodes, creationNodes]);
   const availableNodes = useMemo(
     () =>
       allNodes.filter(
         (node) =>
           !isNodeIncompatible(node) &&
-          (hasScope("docker:containers:create") || hasScope(`docker:containers:create:${node.id}`))
+          (canCreateInFolder(
+            effectiveScopes,
+            "docker:containers:create",
+            deployFolderId,
+            node.id
+          ) ||
+            effectiveScopes.some((scope) => scope.startsWith("docker:containers:create:folder/")))
       ),
-    [allNodes, hasScope]
+    [allNodes, effectiveScopes, deployFolderId]
   );
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void api
+      .listDockerFolders("container")
+      .then((tree) => {
+        if (cancelled) return;
+        const allowed = flattenFolderTree(tree, "docker").filter((folder) =>
+          canCreateInFolder(effectiveScopes, "docker:containers:create", folder.id, deployNodeId)
+        );
+        setFolderOptions([
+          ...(canCreateInFolder(effectiveScopes, "docker:containers:create", null, deployNodeId)
+            ? [{ value: "__root__", label: "No folder" }]
+            : []),
+          ...allowed.map((folder) => ({ value: folder.id, label: folder.label })),
+        ]);
+      })
+      .catch(() => {
+        if (!cancelled) setFolderOptions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, effectiveScopes, deployNodeId]);
   const {
     checkingSourceAdmission,
     deployLocalImages,
@@ -183,6 +239,7 @@ export function DockerDeployDialog({
     setDeployImage("");
     setDeployRegistryId("");
     setDeployName("");
+    setDeployFolderId(null);
     setDeployRestart("no");
     setDeployMode("container");
     setSourceMode("image");
@@ -217,6 +274,12 @@ export function DockerDeployDialog({
 
   const handleDeploy = async () => {
     if (!deployNodeId) return;
+    if (
+      !canCreateInFolder(effectiveScopes, "docker:containers:create", deployFolderId, deployNodeId)
+    ) {
+      toast.error("Select an authorized destination folder");
+      return;
+    }
     if (sourceMode === "image" && !deployImage.trim()) return;
     if (
       sourceMode === "repository" &&
@@ -258,6 +321,7 @@ export function DockerDeployDialog({
         deployMode,
         deployName,
         deployNodeId,
+        deployFolderId,
         deployRegistryId,
         deployRestart,
         deployRuntimeProfile,
@@ -316,6 +380,9 @@ export function DockerDeployDialog({
           deployMode={deployMode}
           deployName={deployName}
           deployNodeId={deployNodeId}
+          deployFolderId={deployFolderId}
+          folderOptions={folderOptions}
+          onDeployFolderIdChange={setDeployFolderId}
           deployRegistryId={deployRegistryId}
           deployRestart={deployRestart}
           deployRuntimeProfile={deployRuntimeProfile}
@@ -379,6 +446,12 @@ export function DockerDeployDialog({
             disabled={
               deploying ||
               !deployNodeId ||
+              !canCreateInFolder(
+                effectiveScopes,
+                "docker:containers:create",
+                deployFolderId,
+                deployNodeId
+              ) ||
               (sourceMode === "image"
                 ? !deployImage.trim()
                 : !sourceConnectorId ||

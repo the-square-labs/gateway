@@ -230,8 +230,14 @@ export function DockerContainerDetail({
   const canManage = hasContainerScope("docker:containers:manage");
   const canEdit = hasContainerScope("docker:containers:edit");
   const canCreate =
-    hasScope("docker:containers:create") ||
-    !!(nodeId && hasScope(`docker:containers:create:${nodeId}`));
+    (hasScope("docker:containers:create") ||
+      !!(nodeId && hasScope(`docker:containers:create:${nodeId}`)) ||
+      !!(
+        container?.folderId && hasScope(`docker:containers:create:folder/${container.folderId}`)
+      )) &&
+    hasContainerScope("docker:containers:config") &&
+    hasContainerScope("docker:containers:environment") &&
+    hasContainerScope("docker:containers:secrets");
   const canDelete = hasContainerScope("docker:containers:delete");
   const canMigrate = hasContainerScope("docker:containers:migrate");
   const canViewContainer = hasContainerScope("docker:containers:view");
@@ -1053,7 +1059,12 @@ export function DockerContainerDetail({
     const dName = `${containerDisplayName(container?.Name ?? "")}-copy`;
     setActionLoading(true);
     try {
-      const result = await api.duplicateContainer(nodeId!, containerId!, dName);
+      const result = await api.duplicateContainer(
+        nodeId!,
+        containerId!,
+        dName,
+        typeof container?.folderId === "string" ? container.folderId : null
+      );
       toast.success("Container duplicated");
       await invalidate("containers");
       if ((result as any)?.id ?? (result as any)?.Id) {

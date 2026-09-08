@@ -443,6 +443,7 @@ export interface DockerComposeValidationResult {
 
 export interface DockerImage {
   id: string;
+  scopeResourceId?: string | null;
   repoTags: string[];
   repoTagsCount?: number;
   repoTagsTruncated?: boolean;
@@ -468,6 +469,7 @@ export interface DockerImage {
 
 export interface DockerVolume {
   name: string;
+  scopeResourceId?: string | null;
   driver: string;
   mountpoint: string;
   labels?: Record<string, string>;
@@ -510,6 +512,8 @@ export interface DockerVolumeMetrics {
 
 export interface DockerNetwork {
   id: string;
+  /** Stable Gateway authorization identity; distinct from the raw Docker network ID. */
+  scopeResourceId?: string | null;
   name: string;
   driver: string;
   scope: string;
@@ -599,6 +603,7 @@ export interface FileEntry {
 }
 
 export interface ContainerCreateConfig {
+  folderId?: string | null;
   image: string;
   registryId?: string;
   name?: string;

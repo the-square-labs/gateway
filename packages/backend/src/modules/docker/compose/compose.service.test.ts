@@ -121,11 +121,14 @@ describe('DockerComposeService', () => {
   it('creates a managed pending project for a repository-backed first revision', async () => {
     const returning = vi.fn().mockResolvedValue([{ ...PROJECT, managementState: 'managed', status: 'validating' }]);
     const values = vi.fn(() => ({ returning }));
-    const db = { insert: vi.fn(() => ({ values })) };
+    const tx = { insert: vi.fn(() => ({ values })) };
+    const db = { ...tx, transaction: vi.fn(async (run: (client: typeof tx) => Promise<unknown>) => run(tx)) };
     const audit = { log: vi.fn().mockResolvedValue(undefined) };
     const compose = new DockerComposeService(db as never, audit as never, {} as never, {} as never);
 
-    await expect(compose.createPendingGitProject(PROJECT.nodeId, 'demo', 'user-1')).resolves.toMatchObject({
+    await expect(
+      compose.createPendingGitProject(PROJECT.nodeId, 'demo', 'user-1', ['docker:compose:create'])
+    ).resolves.toMatchObject({
       managementState: 'managed',
       status: 'validating',
     });

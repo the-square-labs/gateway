@@ -6,9 +6,17 @@ import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
+import {
+  canManageUser,
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  isScopeSubset,
+} from '@/lib/permissions.js';
 import { getClientIpForContext, getRemoteAddress, resolveClientIp } from '@/lib/request-ip.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
@@ -24,7 +32,13 @@ import {
 } from '@/modules/admin/admin.schemas.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
-import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import {
+  authMiddleware,
+  requireScope,
+  requireScopeBase,
+  requireScopeForResource,
+  sessionOnly,
+} from '@/modules/auth/auth.middleware.js';
 import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
@@ -97,7 +111,7 @@ adminRoutes.use('*', sessionOnly);
 function requireAnyAdminScope(...requiredScopes: string[]) {
   return async (c: any, next: () => Promise<void>) => {
     const scopes = c.get('effectiveScopes') || [];
-    if (!requiredScopes.some((scope) => scopes.includes(scope))) {
+    if (!requiredScopes.some((scope) => hasScopeBase(scopes, scope))) {
       return c.json({ code: 'FORBIDDEN', message: `Missing required scope: ${requiredScopes.join(' or ')}` }, 403);
     }
     await next();
@@ -144,11 +158,16 @@ async function refreshActiveGrpcServerIdentity(): Promise<void> {
 }
 
 // List all users
-adminRoutes.openapi({ ...listAdminUsersRoute, middleware: requireScope('admin:users') }, async (c) => {
+adminRoutes.openapi({ ...listAdminUsersRoute, middleware: requireScopeBase('admin:users') }, async (c) => {
   const authService = container.resolve(AuthService);
   const userList = await authService.listUsers();
   const actor = c.get('user');
-  return c.json(isDemoVisitor(actor) ? userList.filter((user) => user.id === actor?.id) : userList);
+  const scopes = c.get('effectiveScopes') || [];
+  return c.json(
+    userList.filter(
+      (user) => hasScope(scopes, `admin:users:${user.id}`) && (!isDemoVisitor(actor) || user.id === actor?.id)
+    )
+  );
 });
 
 // Deleted accounts are operationally invisible; only system administrators can inspect them.
@@ -162,7 +181,14 @@ adminRoutes.openapi(
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const scopes = c.get('effectiveScopes') || [];
-    const data = await service.getFolderTree({ includeAllFolders: scopes.includes('admin:users:folders:manage') });
+    const data = await service.getFolderTree(
+      hasScope(scopes, 'admin:users') || hasScope(scopes, 'admin:users:folders:manage')
+        ? { includeAllFolders: true }
+        : {
+            allowedResourceIds: getResourceScopedIds(scopes, 'admin:users'),
+            allowedFolderIds: getFolderScopedIds(scopes, ['admin:users']),
+          }
+    );
     return c.json({ data });
   }
 );
@@ -194,6 +220,12 @@ adminRoutes.openapi(
     const service = container.resolve(AdminUserFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') || [];
+    for (const id of input.ids)
+      if (!hasScope(scopes, `admin:users:${id}`))
+        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions');
+    if (!hasScopeForCreation(scopes, 'admin:users', input.folderId))
+      throw new AppError(403, 'FORBIDDEN', 'Destination folder is outside your permissions');
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -204,6 +236,9 @@ adminRoutes.openapi(
   async (c) => {
     const service = container.resolve(AdminUserFolderService);
     const input = ReorderResourcesSchema.parse(await c.req.json());
+    for (const item of input.items)
+      if (!hasScope(c.get('effectiveScopes') || [], `admin:users:${item.id}`))
+        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions');
     await service.reorderResources(input);
     return c.json({ success: true });
   }
@@ -563,7 +598,7 @@ function toAuthSettingsAuditDetails(input: UpdateAuthProvisioningSettingsInput) 
 }
 
 // Create user before first login
-adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:users') }, async (c) => {
+adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScopeBase('admin:users') }, async (c) => {
   const authService = container.resolve(AuthService);
   const groupService = container.resolve(GroupService);
   const auditService = container.resolve(AuditService);
@@ -571,6 +606,9 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:u
   const actorScopes = c.get('effectiveScopes') || [];
   const body = await c.req.json();
   const input = CreateUserSchema.parse(body);
+  if (!hasScopeForCreation(actorScopes, 'admin:users', input.folderId))
+    throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination user folder');
+  if (input.folderId) await container.resolve(AdminUserFolderService).assertFolderExists(input.folderId);
 
   const destGroup = await groupService.getGroup(input.groupId);
   if (!isScopeSubset(getEffectiveGroupScopes(destGroup), actorScopes)) {
@@ -624,43 +662,46 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScope('admin:u
   }
 });
 
-adminRoutes.openapi({ ...updateUserAuthMethodRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const { authMethod } = UpdateUserAuthMethodSchema.parse(await c.req.json());
-  const targetUser = await authService.getUserById(userId);
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  const localEmailAuth = authMethod === 'password' || authMethod === 'email_otp';
-  if (localEmailAuth && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
-    return c.json(
-      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before switching to email sign-in' },
-      409
-    );
+adminRoutes.openapi(
+  { ...updateUserAuthMethodRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const { authMethod } = UpdateUserAuthMethodSchema.parse(await c.req.json());
+    const targetUser = await authService.getUserById(userId);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    const localEmailAuth = authMethod === 'password' || authMethod === 'email_otp';
+    if (localEmailAuth && !(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+      return c.json(
+        { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before switching to email sign-in' },
+        409
+      );
+    }
+    const updated = await authService.updateUserAuthMethod(userId, authMethod);
+    const localAuthService = container.resolve(LocalAuthService);
+    if (authMethod === 'password') {
+      await localAuthService.requestPasswordLink(updated.email, 'password_setup');
+    } else if (authMethod === 'email_otp') {
+      await localAuthService.sendEmailOtpOnboarding(updated.email);
+    }
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.auth_method_change',
+      resourceType: 'user',
+      resourceId: updated.id,
+      details: { targetUserId: updated.id, previousAuthMethod: targetUser.authMethod, authMethod },
+      userAgent: c.req.header('user-agent'),
+    });
+    return c.json(updated);
   }
-  const updated = await authService.updateUserAuthMethod(userId, authMethod);
-  const localAuthService = container.resolve(LocalAuthService);
-  if (authMethod === 'password') {
-    await localAuthService.requestPasswordLink(updated.email, 'password_setup');
-  } else if (authMethod === 'email_otp') {
-    await localAuthService.sendEmailOtpOnboarding(updated.email);
-  }
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.auth_method_change',
-    resourceType: 'user',
-    resourceId: updated.id,
-    details: { targetUserId: updated.id, previousAuthMethod: targetUser.authMethod, authMethod },
-    userAgent: c.req.header('user-agent'),
-  });
-  return c.json(updated);
-});
+);
 
-adminRoutes.openapi({ ...updateUserNameRoute, middleware: requireScope('admin:users') }, async (c) => {
+adminRoutes.openapi({ ...updateUserNameRoute, middleware: requireScopeForResource('admin:users', 'id') }, async (c) => {
   const authService = container.resolve(AuthService);
   const auditService = container.resolve(AuditService);
   const currentUser = c.get('user')!;
@@ -686,61 +727,67 @@ adminRoutes.openapi({ ...updateUserNameRoute, middleware: requireScope('admin:us
   return c.json(updated);
 });
 
-adminRoutes.openapi({ ...resetUserAvatarRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const targetUser = await authService.getUserById(userId);
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  const updated = await authService.updateUserAvatar(userId, null);
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.avatar_reset',
-    resourceType: 'user',
-    resourceId: updated.id,
-    details: { targetUserId: updated.id, hadAvatar: Boolean(targetUser.avatarUrl) },
-    userAgent: c.req.header('user-agent'),
-  });
-  return c.json(updated);
-});
+adminRoutes.openapi(
+  { ...resetUserAvatarRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const targetUser = await authService.getUserById(userId);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    const updated = await authService.updateUserAvatar(userId, null);
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.avatar_reset',
+      resourceType: 'user',
+      resourceId: updated.id,
+      details: { targetUserId: updated.id, hadAvatar: Boolean(targetUser.avatarUrl) },
+      userAgent: c.req.header('user-agent'),
+    });
+    return c.json(updated);
+  }
+);
 
-adminRoutes.openapi({ ...sendAdminUserPasswordSetupRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const targetUser = await authService.getUserById(c.req.param('id')!);
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  if (targetUser.authMethod !== 'password') {
-    return c.json({ code: 'PASSWORD_AUTH_REQUIRED', message: 'User does not use password sign-in' }, 409);
+adminRoutes.openapi(
+  { ...sendAdminUserPasswordSetupRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const targetUser = await authService.getUserById(c.req.param('id')!);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    if (targetUser.authMethod !== 'password') {
+      return c.json({ code: 'PASSWORD_AUTH_REQUIRED', message: 'User does not use password sign-in' }, 409);
+    }
+    if (!(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
+      return c.json(
+        { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before sending a password setup link' },
+        409
+      );
+    }
+    const purpose = (await authService.hasCompletedSignIn(targetUser.id)) ? 'password_reset' : 'password_setup';
+    await container.resolve(LocalAuthService).requestPasswordLink(targetUser.email, purpose);
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.password_link_sent',
+      resourceType: 'user',
+      resourceId: targetUser.id,
+      details: { targetUserId: targetUser.id, purpose },
+      userAgent: c.req.header('user-agent'),
+    });
+    return c.json({
+      message: purpose === 'password_setup' ? 'Password setup link sent' : 'Password reset link sent',
+      purpose,
+    });
   }
-  if (!(await container.resolve(AuthMailService).getPublicConfig()).verifiedAt) {
-    return c.json(
-      { code: 'SMTP_NOT_VERIFIED', message: 'SMTP must be verified before sending a password setup link' },
-      409
-    );
-  }
-  const purpose = (await authService.hasCompletedSignIn(targetUser.id)) ? 'password_reset' : 'password_setup';
-  await container.resolve(LocalAuthService).requestPasswordLink(targetUser.email, purpose);
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.password_link_sent',
-    resourceType: 'user',
-    resourceId: targetUser.id,
-    details: { targetUserId: targetUser.id, purpose },
-    userAgent: c.req.header('user-agent'),
-  });
-  return c.json({
-    message: purpose === 'password_setup' ? 'Password setup link sent' : 'Password reset link sent',
-    purpose,
-  });
-});
+);
 
 adminRoutes.openapi({ ...resetAdminUserMfaRoute, middleware: requireScope('admin:system') }, async (c) => {
   const authService = container.resolve(AuthService);
@@ -765,182 +812,197 @@ adminRoutes.openapi({ ...resetAdminUserMfaRoute, middleware: requireScope('admin
 });
 
 // Update user group
-adminRoutes.openapi({ ...updateUserGroupRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const body = await c.req.json();
-  const { groupId } = UpdateUserGroupSchema.parse(body);
+adminRoutes.openapi(
+  { ...updateUserGroupRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const body = await c.req.json();
+    const { groupId } = UpdateUserGroupSchema.parse(body);
 
-  const targetUser = await authService.assertCanUpdateUserGroup(currentUser.id, actorScopes, userId, groupId);
+    const targetUser = await authService.assertCanUpdateUserGroup(currentUser.id, actorScopes, userId, groupId);
 
-  const updatedUser = await authService.updateUserGroup(userId, groupId);
+    const updatedUser = await authService.updateUserGroup(userId, groupId);
 
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.group_change',
-    resourceType: 'user',
-    resourceId: userId,
-    details: {
-      targetUserId: updatedUser.id,
-      targetUserEmail: updatedUser.email,
-      targetUserName: updatedUser.name,
-      previousGroupId: targetUser.groupId,
-      previousGroupName: targetUser.groupName,
-      newGroupId: updatedUser.groupId,
-      newGroupName: updatedUser.groupName,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.group_change',
+      resourceType: 'user',
+      resourceId: userId,
+      details: {
+        targetUserId: updatedUser.id,
+        targetUserEmail: updatedUser.email,
+        targetUserName: updatedUser.name,
+        previousGroupId: targetUser.groupId,
+        previousGroupName: targetUser.groupName,
+        newGroupId: updatedUser.groupId,
+        newGroupName: updatedUser.groupName,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
 
-  return c.json(updatedUser);
-});
+    return c.json(updatedUser);
+  }
+);
 
 // Replace user-specific additive permissions.
-adminRoutes.openapi({ ...updateUserAdditionalPermissionsRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const body = await c.req.json();
-  const { additionalScopes: requestedScopes } = UpdateUserAdditionalPermissionsSchema.parse(body);
+adminRoutes.openapi(
+  { ...updateUserAdditionalPermissionsRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const body = await c.req.json();
+    const { additionalScopes: requestedScopes } = UpdateUserAdditionalPermissionsSchema.parse(body);
 
-  const { targetUser, additionalScopes } = await authService.assertCanUpdateUserAdditionalScopes(
-    currentUser.id,
-    actorScopes,
-    userId,
-    requestedScopes
-  );
-  const previousAdditionalScopes = targetUser.additionalScopes ?? [];
-  const updatedUser = await authService.updateUserAdditionalScopes(userId, additionalScopes);
-  const previousSet = new Set(previousAdditionalScopes);
-  const nextSet = new Set(additionalScopes);
+    const { targetUser, additionalScopes } = await authService.assertCanUpdateUserAdditionalScopes(
+      currentUser.id,
+      actorScopes,
+      userId,
+      requestedScopes
+    );
+    const previousAdditionalScopes = targetUser.additionalScopes ?? [];
+    const updatedUser = await authService.updateUserAdditionalScopes(userId, additionalScopes);
+    const previousSet = new Set(previousAdditionalScopes);
+    const nextSet = new Set(additionalScopes);
 
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.additional_permissions_change',
-    resourceType: 'user',
-    resourceId: userId,
-    details: {
-      targetUserId: updatedUser.id,
-      targetUserEmail: updatedUser.email,
-      targetUserName: updatedUser.name,
-      addedScopes: additionalScopes.filter((scope) => !previousSet.has(scope)),
-      removedScopes: previousAdditionalScopes.filter((scope) => !nextSet.has(scope)),
-      previousAdditionalScopes,
-      additionalScopes,
-      previousEffectiveScopes: targetUser.scopes,
-      effectiveScopes: updatedUser.scopes,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.additional_permissions_change',
+      resourceType: 'user',
+      resourceId: userId,
+      details: {
+        targetUserId: updatedUser.id,
+        targetUserEmail: updatedUser.email,
+        targetUserName: updatedUser.name,
+        addedScopes: additionalScopes.filter((scope) => !previousSet.has(scope)),
+        removedScopes: previousAdditionalScopes.filter((scope) => !nextSet.has(scope)),
+        previousAdditionalScopes,
+        additionalScopes,
+        previousEffectiveScopes: targetUser.scopes,
+        effectiveScopes: updatedUser.scopes,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
 
-  return c.json(updatedUser);
-});
+    return c.json(updatedUser);
+  }
+);
 
 // Block / unblock user
-adminRoutes.openapi({ ...updateUserBlockRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const body = await c.req.json();
-  const { blocked } = UpdateBlockSchema.parse(body);
+adminRoutes.openapi(
+  { ...updateUserBlockRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const body = await c.req.json();
+    const { blocked } = UpdateBlockSchema.parse(body);
 
-  if (userId === currentUser.id) {
-    return c.json({ code: 'SELF_BLOCK', message: 'Cannot block yourself' }, 400);
-  }
+    if (userId === currentUser.id) {
+      return c.json({ code: 'SELF_BLOCK', message: 'Cannot block yourself' }, 400);
+    }
 
-  // Check privilege boundary
-  const targetUser = await authService.getUserById(userId);
-  if (!targetUser) {
-    return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
-  }
-  if (targetUser.isDeleted) {
-    return c.json({ code: 'USER_DELETED', message: 'Deleted users must be restored before they can be changed' }, 409);
-  }
-  if (targetUser.oidcSubject?.startsWith('system:')) {
-    return c.json({ code: 'SYSTEM_USER', message: 'Cannot modify the system user' }, 403);
-  }
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) {
-    return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  }
+    // Check privilege boundary
+    const targetUser = await authService.getUserById(userId);
+    if (!targetUser) {
+      return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    }
+    if (targetUser.isDeleted) {
+      return c.json(
+        { code: 'USER_DELETED', message: 'Deleted users must be restored before they can be changed' },
+        409
+      );
+    }
+    if (targetUser.oidcSubject?.startsWith('system:')) {
+      return c.json({ code: 'SYSTEM_USER', message: 'Cannot modify the system user' }, 403);
+    }
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) {
+      return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    }
 
-  if (blocked) {
-    await authService.blockUser(userId);
-  } else {
-    await authService.unblockUser(userId);
+    if (blocked) {
+      await authService.blockUser(userId);
+    } else {
+      await authService.unblockUser(userId);
+    }
+
+    await auditService.log({
+      userId: currentUser.id,
+      action: blocked ? 'user.block' : 'user.unblock',
+      resourceType: 'user',
+      resourceId: userId,
+      details: {
+        targetUserId: targetUser.id,
+        targetUserEmail: targetUser.email,
+        targetUserName: targetUser.name,
+        blocked,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
+
+    return c.json({ message: blocked ? 'User blocked' : 'User unblocked' });
   }
-
-  await auditService.log({
-    userId: currentUser.id,
-    action: blocked ? 'user.block' : 'user.unblock',
-    resourceType: 'user',
-    resourceId: userId,
-    details: {
-      targetUserId: targetUser.id,
-      targetUserEmail: targetUser.email,
-      targetUserName: targetUser.name,
-      blocked,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
-
-  return c.json({ message: blocked ? 'User blocked' : 'User unblocked' });
-});
+);
 
 // Delete user
-adminRoutes.openapi({ ...deleteAdminUserRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
+adminRoutes.openapi(
+  { ...deleteAdminUserRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
 
-  if (userId === currentUser.id) {
-    return c.json({ code: 'SELF_DELETE', message: 'Cannot delete your own account' }, 400);
-  }
+    if (userId === currentUser.id) {
+      return c.json({ code: 'SELF_DELETE', message: 'Cannot delete your own account' }, 400);
+    }
 
-  // Check privilege boundary
-  const targetUser = await authService.getUserById(userId);
-  if (!targetUser) {
-    return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
-  }
-  if (targetUser.isDeleted) {
-    return c.json({ code: 'USER_DELETED', message: 'User is already deleted' }, 409);
-  }
-  if (targetUser.oidcSubject?.startsWith('system:')) {
-    return c.json({ code: 'SYSTEM_USER', message: 'Cannot delete the system user' }, 403);
-  }
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) {
-    return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
-  }
+    // Check privilege boundary
+    const targetUser = await authService.getUserById(userId);
+    if (!targetUser) {
+      return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    }
+    if (targetUser.isDeleted) {
+      return c.json({ code: 'USER_DELETED', message: 'User is already deleted' }, 409);
+    }
+    if (targetUser.oidcSubject?.startsWith('system:')) {
+      return c.json({ code: 'SYSTEM_USER', message: 'Cannot delete the system user' }, 403);
+    }
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) {
+      return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    }
 
-  await authService.deleteUser(userId, currentUser.id);
+    await authService.deleteUser(userId, currentUser.id);
 
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.delete',
-    resourceType: 'user',
-    resourceId: userId,
-    details: {
-      targetUserId: targetUser.id,
-      targetUserEmail: targetUser.email,
-      targetUserName: targetUser.name,
-      targetGroupId: targetUser.groupId,
-      targetGroupName: targetUser.groupName,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.delete',
+      resourceType: 'user',
+      resourceId: userId,
+      details: {
+        targetUserId: targetUser.id,
+        targetUserEmail: targetUser.email,
+        targetUserName: targetUser.name,
+        targetGroupId: targetUser.groupId,
+        targetGroupName: targetUser.groupName,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
 
-  return c.json({ message: 'User deleted and access revoked' });
-});
+    return c.json({ message: 'User deleted and access revoked' });
+  }
+);
 
 // Restoring deliberately leaves the account blocked. A separate unblock action is required to grant access.
 adminRoutes.openapi({ ...restoreAdminUserRoute, middleware: requireScope('admin:system') }, async (c) => {
@@ -970,23 +1032,26 @@ adminRoutes.openapi({ ...restoreAdminUserRoute, middleware: requireScope('admin:
   return c.json(restoredUser);
 });
 
-adminRoutes.openapi({ ...listAdminUserSessionsRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const sessionService = container.resolve(SessionService);
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const targetUser = await authService.getUserById(userId);
+adminRoutes.openapi(
+  { ...listAdminUserSessionsRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const sessionService = container.resolve(SessionService);
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const targetUser = await authService.getUserById(userId);
 
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
 
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
 
-  return c.json(await sessionService.listPublicUserSessions(userId, c.get('sessionId')!));
-});
+    return c.json(await sessionService.listPublicUserSessions(userId, c.get('sessionId')!));
+  }
+);
 
 adminRoutes.openapi(
-  { ...impersonateAdminUserRoute, middleware: requireScope('admin:users:impersonate') },
+  { ...impersonateAdminUserRoute, middleware: requireScopeForResource('admin:users:impersonate', 'id') },
   async (c) => {
     const authService = container.resolve(AuthService);
     const sessionService = container.resolve(SessionService);
@@ -1055,67 +1120,73 @@ adminRoutes.openapi(
   }
 );
 
-adminRoutes.openapi({ ...revokeAdminUserSessionRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const sessionService = container.resolve(SessionService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const targetUser = await authService.getUserById(userId);
+adminRoutes.openapi(
+  { ...revokeAdminUserSessionRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const sessionService = container.resolve(SessionService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const targetUser = await authService.getUserById(userId);
 
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
 
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
 
-  const sessionId = c.req.param('sessionId')!;
-  const revoked = await sessionService.revokeUserSessionByPublicId(userId, sessionId);
-  if (!revoked) return c.json({ code: 'SESSION_NOT_FOUND', message: 'Session not found' }, 404);
+    const sessionId = c.req.param('sessionId')!;
+    const revoked = await sessionService.revokeUserSessionByPublicId(userId, sessionId);
+    if (!revoked) return c.json({ code: 'SESSION_NOT_FOUND', message: 'Session not found' }, 404);
 
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.session_revoke',
-    resourceType: 'session',
-    resourceId: sessionId,
-    details: {
-      targetUserId: targetUser.id,
-      targetUserEmail: targetUser.email,
-      targetUserName: targetUser.name,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.session_revoke',
+      resourceType: 'session',
+      resourceId: sessionId,
+      details: {
+        targetUserId: targetUser.id,
+        targetUserEmail: targetUser.email,
+        targetUserName: targetUser.name,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
 
-  return c.json({ message: 'Session revoked' });
-});
+    return c.json({ message: 'Session revoked' });
+  }
+);
 
-adminRoutes.openapi({ ...revokeAllAdminUserSessionsRoute, middleware: requireScope('admin:users') }, async (c) => {
-  const authService = container.resolve(AuthService);
-  const sessionService = container.resolve(SessionService);
-  const auditService = container.resolve(AuditService);
-  const currentUser = c.get('user')!;
-  const actorScopes = c.get('effectiveScopes') || [];
-  const userId = c.req.param('id')!;
-  const targetUser = await authService.getUserById(userId);
+adminRoutes.openapi(
+  { ...revokeAllAdminUserSessionsRoute, middleware: requireScopeForResource('admin:users', 'id') },
+  async (c) => {
+    const authService = container.resolve(AuthService);
+    const sessionService = container.resolve(SessionService);
+    const auditService = container.resolve(AuditService);
+    const currentUser = c.get('user')!;
+    const actorScopes = c.get('effectiveScopes') || [];
+    const userId = c.req.param('id')!;
+    const targetUser = await authService.getUserById(userId);
 
-  if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
+    if (!targetUser) return c.json({ code: 'NOT_FOUND', message: 'User not found' }, 404);
 
-  const denyReason = canManageUser(actorScopes, targetUser.scopes);
-  if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
+    const denyReason = canManageUser(actorScopes, targetUser.scopes);
+    if (denyReason) return c.json({ code: 'PRIVILEGE_BOUNDARY', message: denyReason }, 403);
 
-  await sessionService.destroyAllUserSessions(userId);
-  await auditService.log({
-    userId: currentUser.id,
-    action: 'user.sessions_revoke_all',
-    resourceType: 'user',
-    resourceId: userId,
-    details: {
-      targetUserId: targetUser.id,
-      targetUserEmail: targetUser.email,
-      targetUserName: targetUser.name,
-    },
-    userAgent: c.req.header('user-agent'),
-  });
+    await sessionService.destroyAllUserSessions(userId);
+    await auditService.log({
+      userId: currentUser.id,
+      action: 'user.sessions_revoke_all',
+      resourceType: 'user',
+      resourceId: userId,
+      details: {
+        targetUserId: targetUser.id,
+        targetUserEmail: targetUser.email,
+        targetUserName: targetUser.name,
+      },
+      userAgent: c.req.header('user-agent'),
+    });
 
-  return c.json({ message: 'All sessions revoked' });
-});
+    return c.json({ message: 'All sessions revoked' });
+  }
+);

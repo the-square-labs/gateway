@@ -76,7 +76,8 @@ export class ManagedDatabaseMutationService extends ManagedDatabaseReadService {
       storageSizeBytesFromGb(input.storageSizeGb),
       userId,
       input.tags,
-      input.tlsEnabled
+      input.tlsEnabled,
+      input.folderId ?? null
     );
     let row: ManagedDatabaseRow;
     try {

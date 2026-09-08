@@ -231,12 +231,14 @@ export type DockerSourceResourceCreateRequest = {
   resource:
     | {
         kind: "container";
+        folderId?: string | null;
         name: string;
         restartPolicy: "no" | "always" | "unless-stopped" | "on-failure";
         runtimeProfile: "default" | "secure";
       }
     | {
         kind: "deployment";
+        folderId?: string | null;
         name: string;
         restartPolicy: "no" | "always" | "unless-stopped" | "on-failure";
         runtimeProfile: "default" | "secure";

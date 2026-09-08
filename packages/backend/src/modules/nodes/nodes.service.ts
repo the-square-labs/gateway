@@ -343,6 +343,7 @@ export class NodesService {
               type: input.type,
               hostname: input.hostname,
               displayName: input.displayName,
+              folderId: input.folderId ?? null,
               slug,
               enrollmentTokenSelector: enrollmentToken.selector,
               enrollmentTokenHash: tokenHash,

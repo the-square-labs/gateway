@@ -21,6 +21,16 @@ vi.mock("@/hooks/use-realtime", () => ({
 }));
 
 describe("NodeEnrollmentDialog", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:create", "integrations:hosting:view", "hosting:resources:create"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listNodeFolders").mockResolvedValue([]);
+  });
   const hostingDefaults: HostingConnector = {
     id: "connector-1",
     name: "DO",
@@ -120,7 +130,7 @@ describe("NodeEnrollmentDialog", () => {
   it("uses the fixed provider context and keeps actions in the standard footer slot", async () => {
     const user = userEvent.setup();
     useAuthStore.setState({
-      user: makeUser({ scopes: ["hosting:resources:create"] }),
+      user: makeUser({ scopes: ["hosting:resources:create", "nodes:create"] }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -173,7 +183,7 @@ describe("NodeEnrollmentDialog", () => {
     expect(screen.queryByPlaceholderText("relay.example.com")).not.toBeInTheDocument();
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
     const form = screen.getByRole("combobox", { name: "Node Type" }).parentElement?.parentElement;
-    expect(form?.children).toHaveLength(2);
+    expect(form?.children).toHaveLength(3);
 
     await user.click(screen.getByRole("combobox", { name: "Node Type" }));
     await user.click(screen.getByRole("option", { name: /Relay/ }));
@@ -182,7 +192,7 @@ describe("NodeEnrollmentDialog", () => {
     expect(relayAddress).toBeInTheDocument();
     expect(relayAddress.parentElement?.style.height).toBe("");
     expect(relayAddress.parentElement?.parentElement).toBe(form);
-    expect(form?.children).toHaveLength(3);
+    expect(form?.children).toHaveLength(4);
     expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
@@ -231,6 +241,7 @@ describe("NodeEnrollmentDialog", () => {
       type: "relay",
       hostname: "pending",
       displayName: "EU Relay 1",
+      folderId: null,
       serviceAddresses: ["relay-1.example.com"],
       servicePort: 9443,
     });

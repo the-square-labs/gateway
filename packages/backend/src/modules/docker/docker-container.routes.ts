@@ -4,7 +4,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
-import { requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
@@ -84,6 +84,7 @@ import {
 } from './docker-access.middleware.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { importGwca, openGwcaExport } from './docker-container-archive.js';
+import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
 import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
@@ -309,18 +310,15 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   // Create container
-  router.openapi(
-    { ...createContainerRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerManagementService);
-      const nodeId = c.req.param('nodeId')!;
-      const user = c.get('user')!;
-      const body = await c.req.json();
-      const config = ContainerCreateSchema.parse(body);
-      const data = await service.createContainer(nodeId, config, user.id, c.get('effectiveScopes') || []);
-      return c.json({ data }, 201);
-    }
-  );
+  router.openapi({ ...createContainerRoute, middleware: requireScopeBase('docker:containers:create') }, async (c) => {
+    const service = container.resolve(DockerManagementService);
+    const nodeId = c.req.param('nodeId')!;
+    const user = c.get('user')!;
+    const body = await c.req.json();
+    const config = ContainerCreateSchema.parse(body);
+    const data = await service.createContainer(nodeId, config, user.id, c.get('effectiveScopes') || []);
+    return c.json({ data }, 201);
+  });
 
   // Inspect container
   router.openapi(
@@ -529,7 +527,15 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
 
   // Duplicate container
   router.openapi(
-    { ...duplicateContainerRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
+    {
+      ...duplicateContainerRoute,
+      middleware: [
+        requireScopeBase('docker:containers:create'),
+        requireDockerContainerScope('docker:containers:config'),
+        requireDockerContainerScope('docker:containers:environment'),
+        requireDockerContainerScope('docker:containers:secrets'),
+      ],
+    },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
@@ -537,8 +543,15 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const user = c.get('user')!;
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
-      const { name } = ContainerDuplicateSchema.parse(body);
-      const data = await service.duplicateContainer(nodeId, containerId, name, user.id, c.get('effectiveScopes') || []);
+      const { name, folderId } = ContainerDuplicateSchema.parse(body);
+      const data = await service.duplicateContainer(
+        nodeId,
+        containerId,
+        name,
+        (user as import('@/types.js').User).id,
+        c.get('effectiveScopes') || [],
+        folderId
+      );
       return c.json({ data }, 201);
     }
   );
@@ -632,7 +645,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...planContainerArchiveImportRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
+    { ...planContainerArchiveImportRoute, middleware: requireScopeBase('docker:containers:create') },
     async (c) => {
       await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
@@ -652,11 +665,18 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi(
-    { ...importContainerArchiveRoute, middleware: requireScopeForResource('docker:containers:create', 'nodeId') },
+    { ...importContainerArchiveRoute, middleware: requireScopeBase('docker:containers:create') },
     async (c) => {
       await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const query = ContainerArchiveImportQuerySchema.parse(c.req.query());
+      await assertDockerCreationAccess(
+        container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+        c.get('effectiveScopes') || [],
+        'docker:containers:create',
+        nodeId,
+        query.folderId
+      );
       if (c.req.header('content-type')?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/vnd.wiolett.gwca') {
         throw new AppError(415, 'GWCA_MEDIA_TYPE_REQUIRED', 'Content-Type must be application/vnd.wiolett.gwca');
       }
@@ -735,7 +755,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await container
           .resolve(DockerSecretService)
           .replaceImported(nodeId, data.containerName, data.secrets, c.get('user')!.id);
-        await docker.registerImportedContainer(nodeId, data.containerName, data.containerId);
+        await docker.registerImportedContainer(nodeId, data.containerName, data.containerId, query.folderId);
         await docker.registerImportedManagedVolumes(nodeId, data.createdVolumes, c.get('user')!.id);
       } catch (error) {
         await container

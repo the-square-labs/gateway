@@ -245,6 +245,7 @@ export class DockerFolderService {
     includeAllFolders?: boolean;
     allowedNodeIds?: string[];
     allowedResourceRefs?: DockerFolderResourceRef[];
+    allowedFolderIds?: string[];
   }): Promise<DockerFolderTreeNode[]> {
     const resourceType = options?.resourceType ?? 'container';
     const allFolders = await this.db
@@ -253,10 +254,14 @@ export class DockerFolderService {
       .where(eq(dockerContainerFolders.resourceType, resourceType))
       .orderBy(asc(dockerContainerFolders.depth), asc(dockerContainerFolders.sortOrder));
 
-    if (!options?.includeAllFolders && (options?.allowedNodeIds || options?.allowedResourceRefs)) {
+    if (
+      !options?.includeAllFolders &&
+      (options?.allowedNodeIds || options?.allowedResourceRefs || options?.allowedFolderIds)
+    ) {
       const allowedNodeIds = options.allowedNodeIds ?? [];
       const allowedResourceRefs = options.allowedResourceRefs ?? [];
-      if (allowedNodeIds.length === 0 && allowedResourceRefs.length === 0) return [];
+      if (allowedNodeIds.length === 0 && allowedResourceRefs.length === 0 && !options.allowedFolderIds?.length)
+        return [];
       const visibilityFilters = [
         allowedNodeIds.length > 0 ? inArray(dockerContainerFolderAssignments.nodeId, allowedNodeIds) : undefined,
         ...allowedResourceRefs.map((resource) =>
@@ -266,11 +271,16 @@ export class DockerFolderService {
           )
         ),
       ].filter((condition): condition is NonNullable<typeof condition> => !!condition);
-      const assignments = await this.db
-        .select({ folderId: dockerContainerFolderAssignments.folderId })
-        .from(dockerContainerFolderAssignments)
-        .where(and(eq(dockerContainerFolderAssignments.resourceType, resourceType), or(...visibilityFilters)));
-      const visibleIds = new Set(assignments.map((row) => row.folderId).filter((id): id is string => !!id));
+      const assignments = !visibilityFilters.length
+        ? []
+        : await this.db
+            .select({ folderId: dockerContainerFolderAssignments.folderId })
+            .from(dockerContainerFolderAssignments)
+            .where(and(eq(dockerContainerFolderAssignments.resourceType, resourceType), or(...visibilityFilters)));
+      const visibleIds = new Set([
+        ...assignments.map((row) => row.folderId).filter((id): id is string => !!id),
+        ...(options.allowedFolderIds ?? []),
+      ]);
       for (const folder of [...allFolders].sort((a, b) => b.depth - a.depth)) {
         if (visibleIds.has(folder.id) && folder.parentId) visibleIds.add(folder.parentId);
       }
@@ -278,6 +288,21 @@ export class DockerFolderService {
     }
 
     return this.buildTree(allFolders);
+  }
+
+  async assertResourceDestination(
+    resourceType: DockerFolderResourceType,
+    folderId: string | null | undefined
+  ): Promise<void> {
+    if (!folderId) return;
+    const folder = await this.getFolderOrThrow(folderId, resourceType);
+    if (folder.isSystem) {
+      throw new AppError(
+        400,
+        'SYSTEM_FOLDER_LOCKED',
+        'Resources cannot be placed into protected compose deployment folders'
+      );
+    }
   }
 
   async moveContainersToFolder(input: MoveDockerContainersToFolderInput, userId: string) {
@@ -715,13 +740,17 @@ export class DockerFolderService {
   }
 
   async deleteContainerAssignment(nodeId: string, containerName: string) {
+    await this.deleteResourceAssignment(nodeId, 'container', containerName);
+  }
+
+  async deleteResourceAssignment(nodeId: string, resourceType: DockerFolderResourceType, resourceKey: string) {
     await this.db
       .delete(dockerContainerFolderAssignments)
       .where(
         and(
           eq(dockerContainerFolderAssignments.nodeId, nodeId),
-          eq(dockerContainerFolderAssignments.resourceType, 'container'),
-          eq(dockerContainerFolderAssignments.resourceKey, containerName)
+          eq(dockerContainerFolderAssignments.resourceType, resourceType),
+          eq(dockerContainerFolderAssignments.resourceKey, resourceKey)
         )
       );
   }

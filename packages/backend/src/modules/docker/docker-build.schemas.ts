@@ -170,6 +170,7 @@ export const DockerSourceResourceCreateSchema = z.object({
     z
       .object({
         kind: z.literal('container'),
+        folderId: z.string().uuid().nullable().optional(),
         name: z.string().trim().min(1).max(255),
         restartPolicy: z.enum(['no', 'always', 'unless-stopped', 'on-failure']).default('no'),
         runtimeProfile: z.enum(['default', 'secure']).default('default'),
@@ -178,6 +179,7 @@ export const DockerSourceResourceCreateSchema = z.object({
     z
       .object({
         kind: z.literal('deployment'),
+        folderId: z.string().uuid().nullable().optional(),
         name: DockerDeploymentNameSchema,
         routes: z.array(DockerDeploymentRouteSchema).min(1).max(DOCKER_DEPLOYMENT_ROUTES_MAX),
         health: DockerDeploymentHealthSchema.default({}),

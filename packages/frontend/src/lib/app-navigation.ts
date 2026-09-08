@@ -378,7 +378,9 @@ export function canAccessNavigationItem(
     case "status-page":
       return context.statusPageEnabled === true && scopeMatches(scopes, "status-page:view");
     case "administration":
-      return hasAnyScope(scopes, ["admin:audit", "admin:users", "admin:groups"]);
+      return ["admin:audit", "admin:users", "admin:groups"].some((scope) =>
+        hasScopeBase(scopes, scope)
+      );
     case "settings":
       return (
         hasAnyScope(scopes, SETTINGS_SCOPES) ||

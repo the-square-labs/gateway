@@ -138,6 +138,7 @@ export class SSLService {
         .insert(sslCertificates)
         .values({
           name,
+          folderId: input.folderId ?? null,
           type: 'acme',
           domainNames: input.domains,
           certificatePem: result.certificatePem,
@@ -210,6 +211,7 @@ export class SSLService {
       .insert(sslCertificates)
       .values({
         name,
+        folderId: input.folderId ?? null,
         type: 'acme',
         domainNames: input.domains,
         acmeProvider: input.provider,
@@ -516,6 +518,7 @@ export class SSLService {
       .insert(sslCertificates)
       .values({
         name: input.name,
+        folderId: input.folderId ?? null,
         type: 'upload',
         domainNames: domains,
         certificatePem: input.certificatePem,
@@ -610,6 +613,7 @@ export class SSLService {
       .insert(sslCertificates)
       .values({
         name,
+        folderId: input.folderId ?? null,
         type: 'internal',
         domainNames: domains,
         certificatePem: pkiCert.certificatePem,

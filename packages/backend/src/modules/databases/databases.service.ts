@@ -293,6 +293,7 @@ export class DatabaseConnectionService extends DatabaseConnectionServiceRuntime 
             type: input.type,
             description: input.description ?? null,
             tags: input.tags ?? [],
+            folderId: input.folderId ?? null,
             manualSizeLimitMb: input.type === 'postgres' ? (input.manualSizeLimitMb ?? null) : null,
             interactiveQueryBudgetSeconds: input.type === 'redis' ? 300 : (input.interactiveQueryBudgetSeconds ?? 300),
             host: normalized.host,

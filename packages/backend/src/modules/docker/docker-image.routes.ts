@@ -1,7 +1,8 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { MiddlewareHandler } from 'hono';
 import { container } from '@/container.js';
+import { hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   listImagesRoute,
@@ -12,6 +13,7 @@ import {
 } from './docker.docs.js';
 import { ImagePullSchema } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
+import { assertDockerResourceScope, filterDockerResourcesForScope } from './docker-access.middleware.js';
 import { filterGatewayInternalImages } from './docker-internal-images.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
@@ -19,10 +21,23 @@ import { DockerSnapshotService } from './docker-snapshot.service.js';
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_IMAGE_REF_PREVIEW_MAX = 20;
 
-function dockerCommandErrorMessage(result: { error?: string; detail?: string }, fallback: string) {
-  if (typeof result.error === 'string' && result.error.trim()) return result.error.trim();
-  if (typeof result.detail === 'string' && result.detail.trim()) return result.detail.trim();
-  return fallback;
+function requireDockerImageScope(baseScope: string, imageParam = 'imageId'): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const nodeId = c.req.param('nodeId');
+    const imageId = c.req.param(imageParam);
+    if (!nodeId || !imageId) throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${baseScope}`);
+    assertDockerResourceScope(c.get('effectiveScopes') ?? [], baseScope, nodeId, imageId);
+    await next();
+  };
+}
+
+function requireDockerImageNodeScope(baseScope: string): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const nodeId = c.req.param('nodeId');
+    if (!nodeId) throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${baseScope}`);
+    assertDockerResourceScope(c.get('effectiveScopes') ?? [], baseScope, nodeId, '');
+    await next();
+  };
 }
 
 export function compactImageListItem(image: Record<string, any>) {
@@ -42,6 +57,10 @@ export function compactImageListItem(image: Record<string, any>) {
     virtualSize: image.virtualSize ?? image.VirtualSize,
     sharedSize: image.sharedSize ?? image.SharedSize,
     containers: image.containers ?? image.Containers,
+    scopeResourceId: image.scopeResourceId ?? image.id ?? image.Id ?? null,
+    folderId: image.folderId ?? null,
+    folderIsSystem: image.folderIsSystem ?? false,
+    folderSortOrder: image.folderSortOrder ?? 0,
   };
 }
 
@@ -65,119 +84,134 @@ export function registerImageRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Image routes ────────────────────────────────────────────────────
 
   // List images
-  router.openapi(
-    { ...listImagesRoute, middleware: requireScopeForResource('docker:images:view', 'nodeId') },
-    async (c) => {
-      const snapshots = container.resolve(DockerSnapshotService);
-      const nodeId = c.req.param('nodeId')!;
-      await snapshots.assertDockerNode(nodeId);
-      const snapshot = await snapshots.getList<any[]>(nodeId, 'images');
-      const data = snapshot.data;
-      if (!Array.isArray(data)) return c.json({ data });
-      const search = c.req.query('search')?.trim().toLowerCase();
-      const compacted = filterGatewayInternalImages(data)
+  router.openapi(listImagesRoute, async (c) => {
+    const snapshots = container.resolve(DockerSnapshotService);
+    const nodeId = c.req.param('nodeId')!;
+    const scopes = c.get('effectiveScopes') ?? [];
+    if (!hasScopeBase(scopes, 'docker:images:view')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: docker:images:view');
+    }
+    await snapshots.assertDockerNode(nodeId);
+    const snapshot = await snapshots.getList<any[]>(nodeId, 'images');
+    const data = snapshot.data;
+    if (!Array.isArray(data)) return c.json({ data });
+    const search = c.req.query('search')?.trim().toLowerCase();
+    const docker = container.resolve(DockerManagementService);
+    const decorated = docker.decoratePublicImageSnapshot
+      ? await docker.decoratePublicImageSnapshot(nodeId, data)
+      : data;
+    const compacted = filterDockerResourcesForScope(
+      filterGatewayInternalImages(decorated)
         .filter((item) => matchesImageSearch(item, search))
         .map((item) => ({
           ...compactImageListItem(item),
           nodeId,
           availability: snapshots.availability(nodeId, snapshot),
-        }));
-      const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
-      return c.json({
-        data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
-        total: compacted.length,
-        limit: DOCKER_RESOURCE_LIST_MAX,
-        truncated,
-      });
-    }
-  );
+        })),
+      scopes,
+      'docker:images:view',
+      nodeId
+    );
+    const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
+    return c.json({
+      data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
+      total: compacted.length,
+      limit: DOCKER_RESOURCE_LIST_MAX,
+      truncated,
+    });
+  });
 
   // Pull image
-  router.openapi(
-    { ...pullImageRoute, middleware: requireScopeForResource('docker:images:pull', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerManagementService);
-      const registryService = container.resolve(DockerRegistryService);
-      const nodeId = c.req.param('nodeId')!;
-      const user = c.get('user')!;
-      const body = await c.req.json();
-      const { imageRef, registryId } = body;
-      ImagePullSchema.parse({ imageRef, registryId });
+  router.openapi(pullImageRoute, async (c) => {
+    const service = container.resolve(DockerManagementService);
+    const registryService = container.resolve(DockerRegistryService);
+    const nodeId = c.req.param('nodeId')!;
+    const user = c.get('user')!;
+    const body = await c.req.json();
+    const { imageRef, registryId, folderId } = ImagePullSchema.parse(body);
 
-      // Resolve registry credentials and prefix image ref if using private registry
-      let finalImageRef = imageRef;
-      let registryAuth: string | undefined;
-      const auth = await registryService.resolveAuthForImagePull(nodeId, imageRef, registryId, {
-        actorScopes: c.get('effectiveScopes') || [],
-      });
-      if (auth) {
-        registryAuth = auth.authJson;
-        // Prefix image ref with registry URL if not already prefixed
-        if (!hasRegistryHost(imageRef)) {
-          finalImageRef = `${auth.url}/${imageRef}`;
-        }
+    // Resolve registry credentials and prefix image ref if using private registry
+    let finalImageRef = imageRef;
+    let registryAuth: string | undefined;
+    const auth = await registryService.resolveAuthForImagePull(nodeId, imageRef, registryId, {
+      actorScopes: c.get('effectiveScopes') || [],
+    });
+    if (auth) {
+      registryAuth = auth.authJson;
+      // Prefix image ref with registry URL if not already prefixed
+      if (!hasRegistryHost(imageRef)) {
+        finalImageRef = `${auth.url}/${imageRef}`;
       }
-
-      const data = await service.pullImage(nodeId, finalImageRef, registryAuth, user.id, auth?.registryId);
-      return c.json({ data });
     }
-  );
+
+    const data = await service.pullImage(
+      nodeId,
+      finalImageRef,
+      registryAuth,
+      user.id,
+      auth?.registryId,
+      folderId,
+      c.get('effectiveScopes') ?? []
+    );
+    return c.json({ data });
+  });
 
   // Pull image (synchronous — waits for completion, validates image exists)
-  router.openapi(
-    { ...pullImageSyncRoute, middleware: requireScopeForResource('docker:images:pull', 'nodeId') },
-    async (c) => {
-      const registryService = container.resolve(DockerRegistryService);
-      const nodeId = c.req.param('nodeId')!;
-      const body = await c.req.json();
-      const { imageRef, registryId } = body;
-      ImagePullSchema.parse({ imageRef, registryId });
+  router.openapi(pullImageSyncRoute, async (c) => {
+    const registryService = container.resolve(DockerRegistryService);
+    const nodeId = c.req.param('nodeId')!;
+    const body = await c.req.json();
+    const user = c.get('user')!;
+    const { imageRef, registryId, folderId } = ImagePullSchema.parse(body);
 
-      let finalImageRef = imageRef;
-      let registryAuth: string | undefined;
-      const auth = await registryService.resolveAuthForImagePull(nodeId, imageRef, registryId, {
-        actorScopes: c.get('effectiveScopes') || [],
-      });
-      if (auth) {
-        registryAuth = auth.authJson;
-        if (!hasRegistryHost(imageRef)) {
-          finalImageRef = `${auth.url}/${imageRef}`;
-        }
+    let finalImageRef = imageRef;
+    let registryAuth: string | undefined;
+    const auth = await registryService.resolveAuthForImagePull(nodeId, imageRef, registryId, {
+      actorScopes: c.get('effectiveScopes') || [],
+    });
+    if (auth) {
+      registryAuth = auth.authJson;
+      if (!hasRegistryHost(imageRef)) {
+        finalImageRef = `${auth.url}/${imageRef}`;
       }
-
-      const { NodeDispatchService } = await import('@/services/node-dispatch.service.js');
-      const dispatch = container.resolve(NodeDispatchService);
-      const result = await dispatch.sendDockerImageCommand(
-        nodeId,
-        'pull',
-        { imageRef: finalImageRef, registryAuthJson: registryAuth },
-        600000
-      );
-      if (!result.success) {
-        throw new AppError(400, 'PULL_FAILED', dockerCommandErrorMessage(result, `Failed to pull ${finalImageRef}`));
-      }
-      await registryService.rememberImageRegistry(nodeId, finalImageRef, auth?.registryId);
-      return c.json({ data: { success: true, imageRef: finalImageRef } });
     }
-  );
+
+    const service = container.resolve(DockerManagementService);
+    try {
+      await service.pullImageImmediate(
+        nodeId,
+        finalImageRef,
+        registryAuth,
+        folderId,
+        user.id,
+        c.get('effectiveScopes') ?? []
+      );
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      throw new AppError(
+        400,
+        'PULL_FAILED',
+        error instanceof Error ? error.message : `Failed to pull ${finalImageRef}`
+      );
+    }
+    await registryService.rememberImageRegistry(nodeId, finalImageRef, auth?.registryId);
+    return c.json({ data: { success: true, imageRef: finalImageRef } });
+  });
 
   // Remove image
-  router.openapi(
-    { ...removeImageRoute, middleware: requireScopeForResource('docker:images:delete', 'nodeId') },
-    async (c) => {
-      const service = container.resolve(DockerManagementService);
-      const nodeId = c.req.param('nodeId')!;
-      const imageId = c.req.param('imageId')!;
-      const user = c.get('user')!;
-      const force = c.req.query('force') === 'true';
-      await service.removeImage(nodeId, imageId, force, user.id);
-      return c.json({ success: true });
-    }
-  );
+  router.openapi({ ...removeImageRoute, middleware: requireDockerImageScope('docker:images:delete') }, async (c) => {
+    const service = container.resolve(DockerManagementService);
+    const nodeId = c.req.param('nodeId')!;
+    const imageId = c.req.param('imageId')!;
+    const user = c.get('user')!;
+    const force = c.req.query('force') === 'true';
+    await service.removeImage(nodeId, imageId, force, user.id);
+    return c.json({ success: true });
+  });
 
   // Prune images
   router.openapi(
-    { ...pruneImagesRoute, middleware: requireScopeForResource('docker:images:delete', 'nodeId') },
+    { ...pruneImagesRoute, middleware: requireDockerImageNodeScope('docker:images:delete') },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;

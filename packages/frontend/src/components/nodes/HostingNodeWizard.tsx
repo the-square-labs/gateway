@@ -4,6 +4,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -17,6 +18,7 @@ import {
 import { createClientUuid } from "@/lib/client-id";
 import { formatHostingAmount } from "@/lib/hosting-money";
 import { nodeTypeLabel } from "@/lib/node-appearance";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { AnimatedHeight, STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -91,6 +93,24 @@ export function HostingNodeWizard({
   const [selected, setSelected] = useState(connectorId ?? "");
   const [role, setRole] = useState<HostingRole>("docker");
   const [name, setName] = useState("");
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [folders, setFolders] = useState<FolderOption[]>([]);
+  const canCreateNode = canCreateInFolder(user?.scopes ?? [], "nodes:create", folderId);
+  useEffect(() => {
+    if (!open || !actorId) return;
+    let cancelled = false;
+    setFolderId(null);
+    setFolders([]);
+    void api
+      .listNodeFolders()
+      .then((tree) => {
+        if (!cancelled) setFolders(flattenFolderTree(tree, "nodes"));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [open, actorId]);
   const [location, setLocation] = useState("");
   const [size, setSize] = useState("");
   const [image, setImage] = useState("");
@@ -233,10 +253,15 @@ export function HostingNodeWizard({
 
   const submit = async () => {
     if (submitting.current) return;
+    if (!canCreateNode || !hasScope(`hosting:resources:create:${selected}`)) {
+      setError("Select an authorized hosting account and destination folder");
+      return;
+    }
     const generation = session.current;
     submitting.current = true;
     const input: HostingProvisionInput = {
       connectorId: selected,
+      folderId,
       idempotencyKey: draft.current?.input.idempotencyKey ?? createClientUuid(),
       name: name.trim(),
       role,
@@ -308,14 +333,18 @@ export function HostingNodeWizard({
   };
 
   const roleReady = Boolean(
-    name.trim() &&
+    canCreateNode &&
+      hasScope(`hosting:resources:create:${selected}`) &&
+      name.trim() &&
       (role !== "relay" || relay.trim()) &&
       connector?.enabled &&
       (existingResource || connector.capabilities?.create) &&
       (existingResource || catalog?.images.some((item) => imageSupportsRole(item, role)))
   );
   const canReview = Boolean(
-    (existingResource || connector?.capabilities?.create) &&
+    canCreateNode &&
+      hasScope(`hosting:resources:create:${selected}`) &&
+      (existingResource || connector?.capabilities?.create) &&
       name.trim() &&
       (existingResource ||
         (location && selectedSize && roleImages.some((item) => item.id === image))) &&
@@ -338,6 +367,37 @@ export function HostingNodeWizard({
       <motion.div key={step} {...STEP_ANIMATION} className="space-y-4">
         {step === "role" && (
           <div className="space-y-4">
+            {(folders.length > 0 ||
+              !canCreateInFolder(user?.scopes ?? [], "nodes:create", null)) && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Folder</label>
+                <Select
+                  value={
+                    folderId ??
+                    (canCreateInFolder(user?.scopes ?? [], "nodes:create", null) ? "__root__" : "")
+                  }
+                  onValueChange={(value) => setFolderId(value === "__root__" ? null : value)}
+                >
+                  <SelectTrigger aria-label="Node folder">
+                    <SelectValue placeholder="Select a folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {canCreateInFolder(user?.scopes ?? [], "nodes:create", null) && (
+                      <SelectItem value="__root__">No folder</SelectItem>
+                    )}
+                    {folders
+                      .filter((folder) =>
+                        canCreateInFolder(user?.scopes ?? [], "nodes:create", folder.id)
+                      )
+                      .map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {folder.label}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {!connectorId && !existingResource && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Hosting Connector</label>

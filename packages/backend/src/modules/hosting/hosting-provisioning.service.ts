@@ -6,8 +6,10 @@ import {
   hostingOperations,
   hostingResources,
   integrationConnectors,
+  nodeFolders,
   nodes,
 } from '@/db/schema/index.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
@@ -115,7 +117,7 @@ export class HostingProvisioningService {
 
   async create(input: HostingProvisionInput, user: User) {
     assertHostingScope(user.scopes, 'hosting:resources:create', input.connectorId);
-    assertHostingScope(user.scopes, 'nodes:create');
+    await this.assertNodeCreationDestination(user.scopes, input.folderId);
     const replay = await this.operations.findIntent({
       connectorId: input.connectorId,
       actorId: user.id,
@@ -234,6 +236,7 @@ export class HostingProvisioningService {
       type: input.role,
       hostname: input.name,
       displayName: input.name,
+      folderId: input.folderId ?? null,
       ...(relayAddress ? { serviceAddresses: [relayAddress] } : {}),
     });
     const reserved = await this.operations.reserve(
@@ -474,13 +477,35 @@ export class HostingProvisioningService {
     return actor;
   }
 
-  private authorizeBootstrap(row: HostingOperationRow, connector: HostingConnectorRow, actor: User) {
+  private async assertNodeCreationDestination(scopes: string[], folderId?: string | null) {
+    if (!hasScopeForCreation(scopes, 'nodes:create', folderId))
+      throw new AppError(403, 'HOSTING_ACCESS_DENIED', 'Node creation is not allowed in the destination folder');
+    if (!folderId) return;
+    const [folder] = await this.db
+      .select({ id: nodeFolders.id })
+      .from(nodeFolders)
+      .where(eq(nodeFolders.id, folderId))
+      .limit(1);
+    if (!folder) throw new AppError(404, 'FOLDER_NOT_FOUND', 'Destination node folder was not found');
+  }
+
+  private async authorizeBootstrap(row: HostingOperationRow, connector: HostingConnectorRow, actor: User) {
     if (row.action === 'install' && row.result?.retryOf && row.resourceId && row.nodeId) {
       assertHostingScope(actor.scopes, 'hosting:resources:recover', row.resourceId);
       assertHostingScope(actor.scopes, 'nodes:config:edit', row.nodeId);
     } else {
       assertHostingScope(actor.scopes, 'hosting:resources:create', connector.id);
-      assertHostingScope(actor.scopes, 'nodes:create');
+      const requestedFolder = typeof row.request?.folderId === 'string' ? row.request.folderId : null;
+      await this.assertNodeCreationDestination(actor.scopes, requestedFolder);
+      if (row.nodeId) {
+        const [node] = await this.db
+          .select({ folderId: nodes.folderId })
+          .from(nodes)
+          .where(eq(nodes.id, row.nodeId))
+          .limit(1);
+        if (!node) throw new AppError(404, 'NOT_FOUND', 'Reserved node was not found');
+        await this.assertNodeCreationDestination(actor.scopes, node.folderId);
+      }
       if (row.action === 'install' && row.resourceId)
         assertHostingScope(actor.scopes, 'hosting:resources:recover', row.resourceId);
     }
@@ -577,7 +602,7 @@ export class HostingProvisioningService {
     )
       return false;
     if (!isHostedNodeReady(node, this.dispatch.isNodeConnected(node.id))) return false;
-    this.authorizeBootstrap(row, connector, actor);
+    await this.authorizeBootstrap(row, connector, actor);
     await this.db.transaction(async (tx) => {
       await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('hosting-inventory'))`);
       const [owned] = await tx.select().from(hostingOperations).where(eq(hostingOperations.id, row.id)).for('update');
@@ -704,7 +729,7 @@ export class HostingProvisioningService {
         });
     }
     if (row.phase === 'pending') {
-      this.authorizeBootstrap(row, connector, actor);
+      await this.authorizeBootstrap(row, connector, actor);
       if (row.action === 'install') {
         await this.operations.update(row, { phase: 'provisioning' });
         return;
@@ -847,7 +872,7 @@ export class HostingProvisioningService {
             const currentConnector = await this.connectors.get(connector.id, undefined, true);
             if (currentConnector.updatedAt?.getTime() !== connector.updatedAt?.getTime())
               throw new AppError(409, 'HOSTING_CONNECTOR_CHANGED', 'Hosting connector changed before invoice payment');
-            this.authorizeBootstrap(row, currentConnector, await this.actor(row, currentConnector));
+            await this.authorizeBootstrap(row, currentConnector, await this.actor(row, currentConnector));
             await this.operations.renew(row);
             row = await this.operations.dispatchOrderCredit(row, currentConnector, payment);
           });
@@ -1077,7 +1102,7 @@ export class HostingProvisioningService {
         // The absolute config/start outcome is reconciled by current power state; never clone again.
         return;
       }
-      this.authorizeBootstrap(row, connector, actor);
+      await this.authorizeBootstrap(row, connector, actor);
       row = await this.operations.update(row, { dispatchStartedAt: null });
       row = await this.operations.dispatch(row, 'configuring');
       const task = await adapter.prepare(resource, {
@@ -1148,7 +1173,7 @@ export class HostingProvisioningService {
       throw new AppError(409, 'HOSTING_INSTALL_TRANSPORT_REQUIRED', 'A trusted installation transport is required');
     }
     const payload = this.payload(row);
-    this.authorizeBootstrap(row, connector, actor);
+    await this.authorizeBootstrap(row, connector, actor);
     if (
       row.action === 'install' &&
       !row.result?.retryOf &&

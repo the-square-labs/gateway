@@ -81,7 +81,7 @@ export function HostingIntegrationDetail({
 }: HostingIntegrationDetailProps) {
   const { connectorId } = useParams<{ connectorId?: string }>();
   const navigate = useStableNavigate();
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const canView = !!connectorId && hasScope(`integrations:hosting:view:${connectorId}`);
   const canManage = !!connectorId && hasScope(`integrations:hosting:manage:${connectorId}`);
   const canViewAccountSummary = canView && hasScope(`hosting:billing:view:${connectorId}`);
@@ -94,7 +94,7 @@ export function HostingIntegrationDetail({
   const canCreate =
     !!connectorId &&
     hasScope(`hosting:resources:create:${connectorId}`) &&
-    hasScope("nodes:create");
+    hasScopedAccess("nodes:create");
   const [configureOpen, setConfigureOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const loadGeneration = useRef(0);

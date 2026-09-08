@@ -1,10 +1,8 @@
 import type { WSContext } from 'hono/ws';
-import { container, TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
+import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { TOOL_STORE_INVALIDATION_CHANNEL_PREFIX } from '@/modules/ai/ai-tool-store-invalidation.js';
-import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { MFA_REQUIRED_CHANNEL_PREFIX } from '@/modules/auth/mfa-events.js';
 import { userResourceChannelUserId } from '@/modules/auth/user-resource-events.js';
 import { resolveWebSocketCredentialContext } from '@/modules/auth/websocket-auth.js';
@@ -36,6 +34,9 @@ const MAX_PENDING_MESSAGE_BYTES = 64 * 1024;
 const KEEPALIVE_INTERVAL_MS = 5_000;
 
 interface ConnState {
+  sessionToken?: string;
+  deliveryQueue?: Promise<void>;
+  queuedDeliveries?: number;
   user: User | null;
   scopes: string[];
   authenticated: boolean;
@@ -116,6 +117,25 @@ function hasDockerEventAccess(scopes: string[], baseScope: string, payload: unkn
 }
 
 function canReceiveChannelPayload(scopes: string[], channel: string, payload: unknown, userId?: string): boolean {
+  if (channel === 'domain.changed') {
+    const event = payload as { id?: unknown; folderId?: unknown; action?: unknown } | undefined;
+    if (typeof event?.id === 'string') return hasScope(scopes, `domains:view:${event.id}`);
+    // Layout invalidations contain no domain data; an object with no identity is
+    // not implicitly treated as a readable domain.
+    return (
+      hasScope(scopes, 'domains:folders:manage') ||
+      (hasScopeBase(scopes, 'domains:view') &&
+        typeof event?.action === 'string' &&
+        [
+          'folder_created',
+          'folder_updated',
+          'folder_deleted',
+          'folders_reordered',
+          'resources_moved',
+          'resources_reordered',
+        ].includes(event.action))
+    );
+  }
   if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
     return hasHostingSnapshotEventAccess(scopes, payload);
   const resourceChannelUserId = userResourceChannelUserId(channel);
@@ -144,10 +164,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
               : null;
     if (!scope) return false;
     if (hasScope(scopes, scope) || hasScope(scopes, `${scope}:${event.nodeId}`)) return true;
-    return (
-      scope === 'docker:containers:view' &&
-      dockerScopedNodeIds(scopes, ['docker:containers:view']).includes(event.nodeId)
-    );
+    return dockerScopedNodeIds(scopes, [scope]).includes(event.nodeId);
   }
   if (channel === 'docker.folder.changed') {
     if (
@@ -161,7 +178,14 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       return true;
     }
     const nodeIds = (payload as { nodeIds?: string[] } | undefined)?.nodeIds;
-    const childScopedNodeIds = new Set(dockerScopedNodeIds(scopes, ['docker:containers:view']));
+    const childScopedNodeIds = new Set(
+      dockerScopedNodeIds(scopes, [
+        'docker:containers:view',
+        'docker:images:view',
+        'docker:volumes:view',
+        'docker:networks:view',
+      ])
+    );
     return (
       Array.isArray(nodeIds) &&
       nodeIds.some(
@@ -222,10 +246,11 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasDockerEventAccess(scopes, 'docker:containers:files:read', payload);
   }
   if (channel === 'docker.volume.file.changed') {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
+    const event = payload as { nodeId?: string; volumeName?: string } | undefined;
     return (
-      hasScope(scopes, 'docker:volumes:files:read') ||
-      !!(nodeId && hasScope(scopes, `docker:volumes:files:read:${nodeId}`))
+      !!event?.nodeId &&
+      !!event.volumeName &&
+      hasDockerResourceScope(scopes, 'docker:volumes:files:read', event.nodeId, event.volumeName)
     );
   }
   if (channel === 'node.file.changed') {
@@ -236,12 +261,21 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasDockerEventAccess(scopes, 'docker:containers:edit', payload);
   }
   if (channel.startsWith('docker.image')) {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return hasScope(scopes, 'docker:images:view') || !!(nodeId && hasScope(scopes, `docker:images:view:${nodeId}`));
+    const event = payload as { nodeId?: string; ref?: string; action?: string } | undefined;
+    if (!event?.nodeId) return false;
+    if (hasScope(scopes, 'docker:images:view') || hasScope(scopes, `docker:images:view:${event.nodeId}`)) return true;
+    return (
+      !!event.ref &&
+      event.ref !== '*' &&
+      event.action !== 'pulled' &&
+      hasDockerResourceScope(scopes, 'docker:images:view', event.nodeId, event.ref)
+    );
   }
   if (channel.startsWith('docker.volume')) {
-    const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
-    return hasScope(scopes, 'docker:volumes:view') || !!(nodeId && hasScope(scopes, `docker:volumes:view:${nodeId}`));
+    const event = payload as { nodeId?: string; name?: string } | undefined;
+    return (
+      !!event?.nodeId && !!event.name && hasDockerResourceScope(scopes, 'docker:volumes:view', event.nodeId, event.name)
+    );
   }
   if (channel.startsWith('docker.network')) {
     const nodeId = (payload as { nodeId?: string } | undefined)?.nodeId;
@@ -393,6 +427,8 @@ function closePolicyViolation(ws: WSContext, state: ConnState, message: string) 
 }
 
 function clearAll(state: ConnState) {
+  state.authenticated = false;
+  state.sessionToken = undefined;
   for (const unsub of state.subs.values()) {
     try {
       unsub();
@@ -424,18 +460,18 @@ function subscribePerUser(ws: WSContext, state: ConnState) {
   // through the client's explicit subscribe path so we don't double-emit.
   state.permsUnsub = eventBus.subscribe(channel, async (_payload) => {
     try {
-      const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-      const fresh = await resolveLiveUser(db, state.user!.id);
-      if (!fresh || fresh.isBlocked) {
+      const fresh = state.sessionToken ? await authenticate(state.sessionToken) : null;
+      if (!fresh || fresh.user.isBlocked) {
         closeUnauthenticated(ws, state);
         return;
       }
       if (fresh) {
-        state.user = fresh;
-        state.scopes = fresh.scopes ?? [];
+        state.user = fresh.user;
+        state.scopes = fresh.scopes;
       }
     } catch {
-      /* ignore */
+      closeUnauthenticated(ws, state);
+      return;
     }
     for (const ch of [...state.subs.keys()]) {
       const required = requiredScopeFor(ch);
@@ -447,6 +483,52 @@ function subscribePerUser(ws: WSContext, state: ConnState) {
     }
     send(ws, { type: 'permissions', scopes: state.scopes });
   });
+}
+
+/** Re-evaluate dynamic membership before delivery: moves and new resources do not
+ * change the stored grant, but do change the concrete IDs it authorizes. */
+function deliverEvent(ws: WSContext, state: ConnState, channel: string, payload: unknown) {
+  const deliver = () => {
+    if (
+      !state.authenticated ||
+      !state.subs.has(channel) ||
+      !canReceiveChannelPayload(state.scopes, channel, payload, state.user?.id)
+    )
+      return;
+    send(ws, {
+      type: 'event',
+      channel,
+      payload: channel === 'hosting.snapshot.changed' ? projectHostingSnapshotEvent(state.scopes, payload) : payload,
+    });
+  };
+  const dynamic = state.scopes.some((scope) => /:(folder|node|provider|account)\//.test(scope));
+  if (!dynamic || channel.startsWith('permissions.changed.')) {
+    deliver();
+    return;
+  }
+  if ((state.queuedDeliveries ?? 0) >= MAX_PENDING_MESSAGES) {
+    closePolicyViolation(ws, state, 'event authorization queue overflow');
+    return;
+  }
+  state.queuedDeliveries = (state.queuedDeliveries ?? 0) + 1;
+  state.deliveryQueue = (state.deliveryQueue ?? Promise.resolve())
+    .then(async () => {
+      if (!state.authenticated || !state.subs.has(channel)) return;
+      const fresh = state.sessionToken ? await authenticate(state.sessionToken) : null;
+      if (!fresh) {
+        closeUnauthenticated(ws, state);
+        return;
+      }
+      const changed = JSON.stringify(state.scopes) !== JSON.stringify(fresh.scopes);
+      state.user = fresh.user;
+      state.scopes = fresh.scopes;
+      if (changed) send(ws, { type: 'permissions', scopes: state.scopes });
+      deliver();
+    })
+    .catch(() => closeUnauthenticated(ws, state))
+    .finally(() => {
+      state.queuedDeliveries = Math.max(0, (state.queuedDeliveries ?? 1) - 1);
+    });
 }
 
 export function createEventsWSHandlers() {
@@ -583,14 +665,7 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
         rejected.push(ch);
         continue;
       }
-      const unsub = eventBus.subscribe(ch, (payload) => {
-        if (!canReceiveChannelPayload(state.scopes, ch, payload, state.user?.id)) return;
-        send(ws, {
-          type: 'event',
-          channel: ch,
-          payload: ch === 'hosting.snapshot.changed' ? projectHostingSnapshotEvent(state.scopes, payload) : payload,
-        });
-      });
+      const unsub = eventBus.subscribe(ch, (payload) => deliverEvent(ws, state, ch, payload));
       state.subs.set(ch, unsub);
       accepted.push(ch);
       const retainedPayload = eventBus.getRetained(ch);
@@ -598,16 +673,7 @@ function processMessage(ws: WSContext, state: ConnState, msg: ClientMsg) {
     }
     send(ws, { type: 'subscribed', channels: accepted, rejected });
     for (const event of retained) {
-      if (canReceiveChannelPayload(state.scopes, event.channel, event.payload, state.user?.id)) {
-        send(ws, {
-          type: 'event',
-          channel: event.channel,
-          payload:
-            event.channel === 'hosting.snapshot.changed'
-              ? projectHostingSnapshotEvent(state.scopes, event.payload)
-              : event.payload,
-        });
-      }
+      deliverEvent(ws, state, event.channel, event.payload);
     }
     return;
   }
@@ -635,6 +701,7 @@ export async function authenticateEventsConnection(ws: WSContext, token: string)
     return;
   }
   state.user = authResult.user;
+  state.sessionToken = token;
   state.scopes = authResult.scopes;
   state.authenticated = true;
   subscribePerUser(ws, state);

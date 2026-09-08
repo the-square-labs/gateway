@@ -51,6 +51,7 @@ export const DockerDeploymentDesiredConfigSchema = z.object({
 });
 
 export const DockerDeploymentCreateSchema = z.object({
+  folderId: z.string().uuid().nullable().optional(),
   name: DockerDeploymentNameSchema,
   image: z.string().min(1),
   registryId: z.string().uuid().optional(),

@@ -16,15 +16,15 @@ import { AuditLog } from "./AuditLog";
 type AdministrationTab = "users" | "groups" | "audit";
 
 export function Administration() {
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const [usersCreateRequest, setUsersCreateRequest] = useState(0);
   const [groupsCreateRequest, setGroupsCreateRequest] = useState(0);
   const [createUserFolderAction, setCreateUserFolderAction] = useState<(() => void) | null>(null);
   const [createGroupFolderAction, setCreateGroupFolderAction] = useState<(() => void) | null>(null);
   const [openDeletedUsersAction, setOpenDeletedUsersAction] = useState<(() => void) | null>(null);
   const [auditHeaderActionsEl, setAuditHeaderActionsEl] = useState<HTMLDivElement | null>(null);
-  const canUsers = hasScope("admin:users");
-  const canGroups = hasScope("admin:groups");
+  const canUsers = hasScopedAccess("admin:users");
+  const canGroups = hasScopedAccess("admin:groups");
   const canAudit = hasScope("admin:audit");
   const canManageUserFolders = hasScope("admin:users:folders:manage");
   const canManageGroupFolders = hasScope("admin:groups:folders:manage");

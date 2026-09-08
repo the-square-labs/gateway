@@ -34,12 +34,14 @@ import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerVolumeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
+import { useDockerFolderStore } from "@/stores/docker-folders";
 import { handleLicenseApiError, requireMinimumLicensePlan } from "@/stores/license-paywall";
-import type { DockerVolume, Node, NodeAppearanceColor } from "@/types";
+import type { DockerFolderTreeNode, DockerVolume, Node, NodeAppearanceColor } from "@/types";
 
 interface DockerVolumeListItem extends DockerVolume {
   _nodeId: string;
@@ -70,6 +72,7 @@ export function DockerVolumes({
   const storeDockerNodes = useDockerStore((s) => s.dockerNodes);
   const dockerNodesLoaded = useDockerStore((s) => s.dockerNodesLoaded);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
+  const volumeFolders = useDockerFolderStore((s) => s.foldersByType.volume);
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
@@ -85,6 +88,7 @@ export function DockerVolumes({
     setCreateName("");
     setCreateStorageKind("regular");
     setCreateCapacityGb("10");
+    setCreateFolderId("");
     setCreateOpen(true);
   }, [fixedNodeId, selectedNodeId]);
   useEffect(() => {
@@ -96,7 +100,15 @@ export function DockerVolumes({
   const [createName, setCreateName] = useState("");
   const [createStorageKind, setCreateStorageKind] = useState<"regular" | "disk-image">("regular");
   const [createCapacityGb, setCreateCapacityGb] = useState("10");
+  const [createFolderId, setCreateFolderId] = useState("");
+  const canCreateHere = canCreateInFolder(
+    user?.scopes ?? [],
+    "docker:volumes:create",
+    createFolderId || null,
+    createNodeId
+  );
   const [creating, setCreating] = useState(false);
+  const folderList = useMemo(() => flattenFolders(volumeFolders), [volumeFolders]);
 
   const loadVolumeNodes = useCallback(async () => {
     if (embedded && !fixedNodeId) {
@@ -112,8 +124,8 @@ export function DockerVolumes({
     try {
       const onlineNodes = await loadVisibleDockerNodes(
         user?.scopes ?? [],
-        ["docker:volumes:view"],
-        hasScopedAccess("nodes:details")
+        ["docker:volumes:view", "docker:volumes:create"],
+        false
       );
       setDockerNodes(onlineNodes);
       useDockerStore.getState().setDockerNodes(onlineNodes);
@@ -121,7 +133,7 @@ export function DockerVolumes({
     } catch {
       toast.error("Failed to load Docker nodes");
     }
-  }, [dockerNodesLoaded, embedded, fixedNodeId, hasScopedAccess, setSelectedNode, user?.scopes]);
+  }, [dockerNodesLoaded, embedded, fixedNodeId, setSelectedNode, user?.scopes]);
 
   useEffect(() => {
     void loadVolumeNodes();
@@ -180,6 +192,10 @@ export function DockerVolumes({
 
   const handleCreate = async () => {
     if (!createNodeId || !createName.trim()) return;
+    if (!canCreateHere) {
+      toast.error("Select an authorized destination folder");
+      return;
+    }
     if (
       createStorageKind === "disk-image" &&
       !requireMinimumLicensePlan("personal", "Disk image volumes")
@@ -194,6 +210,7 @@ export function DockerVolumes({
         ...(createStorageKind === "disk-image"
           ? { capacityBytes: Number(createCapacityGb) * 1024 ** 3 }
           : {}),
+        folderId: createFolderId || undefined,
       });
       toast.success("Volume created");
       closeCreate();
@@ -361,7 +378,9 @@ export function DockerVolumes({
               onClick={(e) => e.stopPropagation()}
             >
               {(hasScope("docker:volumes:delete") ||
-                hasScope(`docker:volumes:delete:${(v as any)._nodeId}`)) &&
+                hasScopedAccess(
+                  `docker:volumes:delete:${(v as any)._nodeId}/${v.scopeResourceId ?? v.name}`
+                )) &&
                 !isUsed &&
                 v.availability !== "unavailable" && (
                   <Button
@@ -393,7 +412,7 @@ export function DockerVolumes({
         },
       },
     ],
-    [handleAdopt, hasScope, handleRemove]
+    [handleAdopt, hasScope, handleRemove, hasScopedAccess]
   );
   const volumeColumns = allVolumeColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
@@ -441,7 +460,7 @@ export function DockerVolumes({
                         ]
                       : []),
                     ...(hasScope("docker:volumes:create") ||
-                    hasScope(`docker:volumes:create:${selectedNodeId}`)
+                    hasScopedAccess("docker:volumes:create")
                       ? [
                           {
                             label: "Create Volume",
@@ -466,7 +485,7 @@ export function DockerVolumes({
                   </Button>
                 )}
                 {(hasScope("docker:volumes:create") ||
-                  hasScope(`docker:volumes:create:${selectedNodeId}`)) && (
+                  hasScopedAccess("docker:volumes:create")) && (
                   <Button onClick={() => openCreate()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create Volume
@@ -528,14 +547,12 @@ export function DockerVolumes({
             hasActiveFilters={search !== ""}
             onReset={() => setSearch("")}
             actionLabel={
-              hasScope("docker:volumes:create") ||
-              (!!selectedNodeId && hasScope(`docker:volumes:create:${selectedNodeId}`))
+              hasScope("docker:volumes:create") || hasScopedAccess("docker:volumes:create")
                 ? "Create a volume"
                 : undefined
             }
             onAction={
-              hasScope("docker:volumes:create") ||
-              (!!selectedNodeId && hasScope(`docker:volumes:create:${selectedNodeId}`))
+              hasScope("docker:volumes:create") || hasScopedAccess("docker:volumes:create")
                 ? () => openCreate()
                 : undefined
             }
@@ -570,6 +587,52 @@ export function DockerVolumes({
           </DialogHeader>
           <AnimatedHeight>
             <div className="space-y-4">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Destination folder</label>
+                <Select
+                  value={
+                    createFolderId ||
+                    (canCreateInFolder(
+                      user?.scopes ?? [],
+                      "docker:volumes:create",
+                      null,
+                      createNodeId
+                    )
+                      ? "__none__"
+                      : "")
+                  }
+                  onValueChange={(value) => setCreateFolderId(value === "__none__" ? "" : value)}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a folder" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {canCreateInFolder(
+                      user?.scopes ?? [],
+                      "docker:volumes:create",
+                      null,
+                      createNodeId
+                    ) && <SelectItem value="__none__">No folder</SelectItem>}
+                    {folderList
+                      .filter(
+                        (folder) =>
+                          !folder.isSystem &&
+                          canCreateInFolder(
+                            user?.scopes ?? [],
+                            "docker:volumes:create",
+                            folder.id,
+                            createNodeId
+                          )
+                      )
+                      .map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {"— ".repeat(folder.depth)}
+                          {folder.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">
                   Node <span className="text-destructive">*</span>
@@ -680,4 +743,8 @@ export function DockerVolumes({
       <div className="h-full overflow-y-auto p-6 space-y-4">{content}</div>
     </PageTransition>
   );
+}
+
+function flattenFolders(folders: DockerFolderTreeNode[]): DockerFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

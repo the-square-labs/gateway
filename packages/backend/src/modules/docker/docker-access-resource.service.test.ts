@@ -2,9 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   DockerAccessResourceService,
   dockerScopedNodeIds,
+  hasDockerResourceScope,
   parseDockerChildScopeResourceId,
-  rewriteDockerResourceScopes,
 } from './docker-access-resource.service.js';
+import { rewriteDockerResourceScopes } from './docker-access-resource-scope-rewrite.js';
 
 describe('Docker access resource scopes', () => {
   it('parses child resource ids and derives their owning nodes', () => {
@@ -55,6 +56,18 @@ describe('Docker access resource scopes', () => {
         null
       )
     ).toEqual(['docker:containers:view:node-1/resource-2']);
+  });
+
+  it('keeps network authorization bound to the persisted network resource identity', () => {
+    const baseScope = 'docker:networks:edit';
+    expect(hasDockerResourceScope([baseScope], baseScope, 'node-1', 'network-resource-1')).toBe(true);
+    expect(hasDockerResourceScope([`${baseScope}:node-1`], baseScope, 'node-1', 'network-resource-1')).toBe(true);
+    expect(
+      hasDockerResourceScope([`${baseScope}:node-1/network-resource-1`], baseScope, 'node-1', 'network-resource-1')
+    ).toBe(true);
+    expect(
+      hasDockerResourceScope([`${baseScope}:node-1/raw-daemon-network-id`], baseScope, 'node-1', 'network-resource-1')
+    ).toBe(false);
   });
 });
 

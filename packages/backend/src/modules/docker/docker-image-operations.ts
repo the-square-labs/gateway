@@ -17,6 +17,7 @@ export interface DockerImageOperationContext {
   taskService?: DockerTaskService;
   registryService?: DockerRegistryService;
   eventBus?: EventBusService;
+  onImagePulled?(nodeId: string, imageRef: string, folderId: string | null | undefined, userId: string): Promise<void>;
   parseResult(result: DockerDispatchResult): unknown;
   createTask(
     nodeId: string,
@@ -43,7 +44,8 @@ export async function pullImage(
   imageRef: string,
   registryAuth?: string,
   userId?: string,
-  registryId?: string
+  registryId?: string,
+  folderId?: string | null
 ) {
   const task = await context.createTask(nodeId, '', imageRef, 'pull');
   if (userId) {
@@ -71,6 +73,20 @@ export async function pullImage(
             .update(task.id, {
               status: 'failed',
               error: err instanceof Error ? err.message : 'Pull failed',
+              completedAt: new Date(),
+            })
+            .catch(() => {});
+        }
+        return;
+      }
+      try {
+        if (userId) await context.onImagePulled?.(nodeId, imageRef, folderId, userId);
+      } catch (err) {
+        if (task?.id && context.taskService) {
+          context.taskService
+            .update(task.id, {
+              status: 'failed',
+              error: err instanceof Error ? err.message : 'Image pull placement failed',
               completedAt: new Date(),
             })
             .catch(() => {});

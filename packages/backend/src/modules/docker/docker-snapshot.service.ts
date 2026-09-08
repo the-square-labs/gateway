@@ -424,8 +424,7 @@ export class DockerSnapshotService {
       .from(nodes)
       .where(eq(nodes.type, 'docker'));
     const scope = VIEW_SCOPES[kind];
-    const childNodeIds =
-      kind === 'containers' ? new Set(dockerScopedNodeIds(scopes, ['docker:containers:view'])) : new Set<string>();
+    const childNodeIds = new Set(dockerScopedNodeIds(scopes, [scope]));
     return rows.filter(
       (node) =>
         (!nodeId || node.id === nodeId) &&

@@ -1,7 +1,8 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, isProgrammaticAuth, requireScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -42,8 +43,12 @@ folderRoutes.use('*', authMiddleware);
 export { stripGroupedRawProxyConfigForProgrammaticResponse as stripGroupedRawConfigForProgrammaticResponse } from './raw-visibility.js';
 
 function requireFolderListAccess(scopes: string[]) {
-  if (!hasScopeBase(scopes, 'proxy:view') && !hasScope(scopes, 'proxy:folders:manage')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: proxy:view or proxy:folders:manage');
+  if (
+    !hasScopeBase(scopes, 'proxy:view') &&
+    !hasScopeBase(scopes, 'proxy:create') &&
+    !hasScope(scopes, 'proxy:folders:manage')
+  ) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing required route view, create, or folder scope');
   }
 }
 
@@ -55,10 +60,15 @@ folderRoutes.openapi(listProxyFoldersRoute, async (c) => {
   const scopes = c.get('effectiveScopes') || [];
   requireFolderListAccess(scopes);
   const canManageFolders = hasScope(scopes, 'proxy:folders:manage');
+  const hasGlobalView = hasScope(scopes, 'proxy:view');
+  const hasGlobalCreate = hasScope(scopes, 'proxy:create');
   const tree = await folderService.getFolderTree(
-    canManageFolders || hasScope(scopes, 'proxy:view')
-      ? { includeAllFolders: canManageFolders }
-      : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view') }
+    canManageFolders || hasGlobalView || hasGlobalCreate
+      ? { includeAllFolders: true }
+      : {
+          allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'),
+          allowedFolderIds: getFolderScopedIds(scopes, ['proxy:view', 'proxy:edit', 'proxy:create']),
+        }
   );
   if (isProgrammaticAuth(c)) {
     return c.json({ data: stripFolderTreeRawProxyConfigForProgrammaticResponse(tree) });
@@ -124,6 +134,9 @@ folderRoutes.openapi({ ...moveProxyHostsRoute, middleware: requireScope('proxy:f
     if (!hasScope(scopes, `proxy:edit:${hostId}`)) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:edit:${hostId}`);
     }
+  }
+  if (!hasScopeForCreation(scopes, 'proxy:edit', input.folderId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing route edit access for the move destination');
   }
   await folderService.moveHostsToFolder(input, user.id);
   return c.json({ success: true });

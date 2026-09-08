@@ -15,7 +15,9 @@ export const ComposeYamlInputSchema = z.object({
   secretKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/)).default([]),
 });
 
-export const ComposeCreateInputSchema = ComposeYamlInputSchema;
+export const ComposeCreateInputSchema = ComposeYamlInputSchema.extend({
+  folderId: z.string().uuid().nullable().optional(),
+});
 export const ComposeRevisionCreateInputSchema = ComposeYamlInputSchema.omit({ projectName: true });
 export const ComposeAdoptInputSchema = ComposeRevisionCreateInputSchema;
 

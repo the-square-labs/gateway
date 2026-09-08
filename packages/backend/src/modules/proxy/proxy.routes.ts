@@ -2,7 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeForResource } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
@@ -25,6 +25,7 @@ import {
 } from './additional-route.docs.js';
 import { AdditionalRouteService } from './additional-route.service.js';
 import { CreateAdditionalRouteSchema, UpdateAdditionalRouteSchema } from './additional-route.validation.js';
+import { FolderService } from './folder.service.js';
 import { redactPageTargetWithoutProjectAccess } from './page-target-visibility.js';
 import {
   createProxyHostRoute,
@@ -325,7 +326,7 @@ proxyRoutes.openapi(
   }
 );
 
-proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('proxy:create') }, async (c) => {
+proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const user = c.get('user')!;
   const input = CreateProxyHostSchema.parse(await c.req.json());
@@ -334,9 +335,10 @@ proxyRoutes.openapi({ ...createProxyHostRoute, middleware: requireScopeBase('pro
     await container.resolve(LicensePolicyService).requireFeature('pages');
     await container.resolve(PageProfileService).requireEnabled();
   }
-  if (!hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
+  if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing authorized route creation scope for the selected destination');
   }
+  await container.resolve(FolderService).assertFolderExists(input.folderId);
   if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input)) {
     return c.json(
       { code: 'BROWSER_SESSION_REQUIRED', message: 'Raw nginx config requires browser session authentication' },

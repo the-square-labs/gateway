@@ -20,6 +20,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
 import type {
   DockerDeploymentCreateInput,
   DockerDeploymentDeployInput,
@@ -436,6 +437,7 @@ export class DockerDeploymentService {
   }
 
   async createPending(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, input.folderId);
     await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('blue-green');
     await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
     await this.validateDockerNode(nodeId);
@@ -478,6 +480,7 @@ export class DockerDeploymentService {
         createdById: userId,
         updatedById: userId,
       });
+      await placeCreatedDockerResource(tx, nodeId, 'container', input.name, input.folderId);
       await tx.insert(dockerDeploymentRoutes).values(
         input.routes.map((route) => ({
           deploymentId: id,
@@ -641,6 +644,7 @@ export class DockerDeploymentService {
   }
 
   async create(nodeId: string, input: DockerDeploymentCreateInput, userId: string, actorScopes: string[] = []) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, input.folderId);
     // LICENSE ENFORCEMENT: New blue/green deployments require Personal under the project license/TOS.
     await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('blue-green');
     await assertNodeAllowsServiceCreation(this.db, nodeId, 'docker');
@@ -697,6 +701,7 @@ export class DockerDeploymentService {
         createdById: userId,
         updatedById: userId,
       });
+      await placeCreatedDockerResource(tx, nodeId, 'container', input.name, input.folderId);
       await tx.insert(dockerDeploymentRoutes).values(
         input.routes.map((route) => ({
           deploymentId: id,

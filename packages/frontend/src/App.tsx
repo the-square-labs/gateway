@@ -843,9 +843,9 @@ function LoggingPageGuard({ detailType }: { detailType?: "environment" | "schema
 }
 
 function AdministrationPageGuard() {
-  const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
-  if (!hasAnyScope("admin:audit", "admin:users", "admin:groups")) {
+  if (!["admin:audit", "admin:users", "admin:groups"].some(hasScopedAccess)) {
     return <Navigate to="/" replace />;
   }
 

@@ -171,7 +171,10 @@ export class PageProjectService {
     return this.withCounts(project);
   }
 
-  async placementOptions() {
+  async placementOptions(options?: { allowedNodeIds?: string[] }) {
+    if (options?.allowedNodeIds?.length === 0) return [];
+    const conditions = [eq(nodes.type, 'nginx')];
+    if (options?.allowedNodeIds) conditions.push(inArray(nodes.id, options.allowedNodeIds));
     const rows = await this.db
       .select({
         id: nodes.id,
@@ -181,7 +184,7 @@ export class PageProjectService {
         capabilities: nodes.capabilities,
       })
       .from(nodes)
-      .where(eq(nodes.type, 'nginx'))
+      .where(buildWhere(conditions))
       .orderBy(asc(nodes.displayName), asc(nodes.hostname));
     return rows.map(({ capabilities, ...node }) => ({
       ...node,

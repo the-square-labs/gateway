@@ -68,6 +68,10 @@ export class FolderedResourceService {
     return folder as FolderRow;
   }
 
+  async assertFolderExists(id: string | null | undefined): Promise<void> {
+    if (id) await this.getFolderOrThrow(id);
+  }
+
   private async getNextSortOrder(parentId: string | null): Promise<number> {
     const siblings = await this.db
       .select({ sortOrder: this.config.folderTable.sortOrder })
@@ -228,23 +232,30 @@ export class FolderedResourceService {
     this.emitLayoutChanged('folders_reordered');
   }
 
-  async getFolderTree(options?: { allowedResourceIds?: string[]; includeAllFolders?: boolean }) {
+  async getFolderTree(options?: {
+    allowedResourceIds?: string[];
+    allowedFolderIds?: string[];
+    includeAllFolders?: boolean;
+  }) {
     const allFolders = await this.db
       .select()
       .from(this.config.folderTable)
       .where(this.config.folderScope)
       .orderBy(asc(this.config.folderTable.depth), asc(this.config.folderTable.sortOrder));
 
-    if (options?.includeAllFolders || !options?.allowedResourceIds) return this.buildTree(allFolders as FolderRow[]);
-    if (options.allowedResourceIds.length === 0) return [];
+    if (options?.includeAllFolders || (!options?.allowedResourceIds && !options?.allowedFolderIds))
+      return this.buildTree(allFolders as FolderRow[]);
+    if (!options.allowedResourceIds?.length && !options.allowedFolderIds?.length) return [];
 
-    const visibleResources = await this.db
-      .select({ id: this.config.resourceTable.id, folderId: this.config.resourceTable.folderId })
-      .from(this.config.resourceTable)
-      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.id, options.allowedResourceIds)));
+    const visibleResources = !options.allowedResourceIds?.length
+      ? []
+      : await this.db
+          .select({ id: this.config.resourceTable.id, folderId: this.config.resourceTable.folderId })
+          .from(this.config.resourceTable)
+          .where(and(this.config.resourceScope, inArray(this.config.resourceTable.id, options.allowedResourceIds)));
     return this.pruneEmptyBranches(
       this.buildTree(allFolders as FolderRow[]),
-      new Set(visibleResources.map((item) => item.folderId as string | null))
+      new Set([...visibleResources.map((item) => item.folderId as string | null), ...(options.allowedFolderIds ?? [])])
     );
   }
 

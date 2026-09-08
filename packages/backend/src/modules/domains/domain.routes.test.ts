@@ -1,10 +1,12 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const DOMAIN_ID = '11111111-1111-4111-8111-111111111111';
+const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+const OTHER_FOLDER_ID = '33333333-3333-4333-8333-333333333333';
 
 const mocks = vi.hoisted(() => ({
   scopes: [] as string[],
@@ -20,11 +22,18 @@ const mocks = vi.hoisted(() => ({
   sslService: {
     requestACMECert: vi.fn(),
   },
+  folderService: {
+    assertFolderExists: vi.fn(),
+  },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
-    resolve: vi.fn((token) => (token?.name === 'DomainsService' ? mocks.domainsService : mocks.sslService)),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'DomainsService') return mocks.domainsService;
+      if (token?.name === 'DomainFolderService') return mocks.folderService;
+      return mocks.sslService;
+    }),
   },
 }));
 
@@ -46,6 +55,18 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     }
     await next();
   },
+  requireAnyScopeBase:
+    (...scopes: string[]) =>
+    async (c: any, next: () => Promise<void>) => {
+      if (
+        !scopes.some((scope) =>
+          mocks.scopes.some((candidate) => candidate === scope || candidate.startsWith(`${scope}:`))
+        )
+      ) {
+        return c.json({ code: 'FORBIDDEN', message: 'Missing required scope' }, 403);
+      }
+      await next();
+    },
   requireScopeForResource: (scope: string, param: string) => async (c: any, next: () => Promise<void>) => {
     const resourceScope = `${scope}:${c.req.param(param)}`;
     if (!mocks.scopes.includes(scope) && !mocks.scopes.includes(resourceScope)) {
@@ -98,6 +119,7 @@ describe('domain routes authorization', () => {
       cloudflareMigrationStatus: 'ignored',
     });
     mocks.sslService.requestACMECert.mockResolvedValue({ id: 'cert-1' });
+    mocks.folderService.assertFolderExists.mockResolvedValue(undefined);
     mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
       eligibleNodes: [],
       unconfiguredNodes: [],
@@ -146,6 +168,41 @@ describe('domain routes authorization', () => {
       { domain: 'example.com', dnsProvider: 'cloudflare' },
       'user-1'
     );
+  });
+
+  it('authorizes creation only for the selected folder and validates it before invoking the domain service', async () => {
+    mocks.scopes = [`domains:create:folder/${FOLDER_ID}`];
+
+    const response = await request('POST', '/', { domain: 'example.com', folderId: FOLDER_ID });
+
+    expect(response.status).toBe(201);
+    expect(mocks.folderService.assertFolderExists).toHaveBeenCalledWith(FOLDER_ID);
+    expect(mocks.domainsService.createDomain).toHaveBeenCalledWith(
+      { domain: 'example.com', dnsProvider: 'cloudflare', folderId: FOLDER_ID },
+      'user-1'
+    );
+  });
+
+  it('rejects root and unrelated folder creation grants before the domain service is called', async () => {
+    mocks.scopes = [`domains:create:folder/${FOLDER_ID}`];
+
+    const root = await request('POST', '/', { domain: 'root.example.com' });
+    const unrelated = await request('POST', '/', { domain: 'other.example.com', folderId: OTHER_FOLDER_ID });
+
+    expect(root.status).toBe(403);
+    expect(unrelated.status).toBe(403);
+    expect(mocks.folderService.assertFolderExists).not.toHaveBeenCalled();
+    expect(mocks.domainsService.createDomain).not.toHaveBeenCalled();
+  });
+
+  it('retains broad creation access and stops before external domain creation when the folder is missing', async () => {
+    mocks.scopes = ['domains:create'];
+    mocks.folderService.assertFolderExists.mockRejectedValue(new AppError(404, 'FOLDER_NOT_FOUND', 'Folder not found'));
+
+    const response = await request('POST', '/', { domain: 'example.com', folderId: FOLDER_ID });
+
+    expect(response.status).toBe(404);
+    expect(mocks.domainsService.createDomain).not.toHaveBeenCalled();
   });
 
   it('uses domains:create for the domain Nginx node options', async () => {

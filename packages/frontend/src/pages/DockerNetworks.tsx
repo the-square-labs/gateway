@@ -39,13 +39,15 @@ import { createReturnNavigationState } from "@/lib/return-navigation";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
-import type { DockerNetwork, Node, NodeAppearanceColor } from "@/types";
+import { useDockerFolderStore } from "@/stores/docker-folders";
+import type { DockerFolderTreeNode, DockerNetwork, Node, NodeAppearanceColor } from "@/types";
 
 interface DockerNetworkListItem extends DockerNetwork {
   _nodeId: string;
   _nodeSlug: string;
   _nodeName?: string;
   _nodeColor?: NodeAppearanceColor | null;
+  scopeResourceId?: string | null;
 }
 
 const CONTROLLER_NETWORK_PREFIXES = ["gwav-", "gwdep-", "gateway-db-", "gateway-db-av-"];
@@ -94,6 +96,7 @@ export function DockerNetworks({
   const isLoading = useDockerStore((s) => s.loading.networks);
   const storeDockerNodes = useDockerStore((s) => s.dockerNodes);
   const dockerNodesLoaded = useDockerStore((s) => s.dockerNodesLoaded);
+  const networkFolders = useDockerFolderStore((s) => s.foldersByType.network);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
@@ -111,6 +114,7 @@ export function DockerNetworks({
     setCreateDriver("bridge");
     setCreateSubnet("");
     setCreateGateway("");
+    setCreateFolderId("");
     setCreateOpen(true);
   }, [selectedNodeId]);
   useEffect(() => {
@@ -123,7 +127,9 @@ export function DockerNetworks({
   const [createDriver, setCreateDriver] = useState("bridge");
   const [createSubnet, setCreateSubnet] = useState("");
   const [createGateway, setCreateGateway] = useState("");
+  const [createFolderId, setCreateFolderId] = useState("");
   const [creating, setCreating] = useState(false);
+  const folderList = useMemo(() => flattenFolders(networkFolders), [networkFolders]);
 
   // Details dialog
   const {
@@ -294,6 +300,7 @@ export function DockerNetworks({
         driver: createDriver,
         subnet: createSubnet.trim() || undefined,
         gateway: createGateway.trim() || undefined,
+        folderId: createFolderId || undefined,
       });
       toast.success("Network created");
       closeCreate();
@@ -401,7 +408,9 @@ export function DockerNetworks({
               onClick={(e) => e.stopPropagation()}
             >
               {(hasScope("docker:networks:delete") ||
-                hasScope(`docker:networks:delete:${net._nodeId}`)) &&
+                hasScope(`docker:networks:delete:${net._nodeId}`) ||
+                (net.scopeResourceId &&
+                  hasScope(`docker:networks:delete:${net._nodeId}/${net.scopeResourceId}`))) &&
                 count === 0 &&
                 net.availability !== "unavailable" && (
                   <Button
@@ -493,8 +502,7 @@ export function DockerNetworks({
                           },
                         ]
                       : []),
-                    ...(hasScope("docker:networks:create") ||
-                    hasScope(`docker:networks:create:${selectedNodeId}`)
+                    ...(hasScopedAccess("docker:networks:create")
                       ? [
                           {
                             label: "Create Network",
@@ -518,8 +526,7 @@ export function DockerNetworks({
                     New Folder
                   </Button>
                 )}
-                {(hasScope("docker:networks:create") ||
-                  hasScope(`docker:networks:create:${selectedNodeId}`)) && (
+                {hasScopedAccess("docker:networks:create") && (
                   <Button onClick={() => openCreate()}>
                     <Plus className="h-4 w-4 mr-1" />
                     Create Network
@@ -580,18 +587,8 @@ export function DockerNetworks({
             message="No networks found."
             hasActiveFilters={search !== ""}
             onReset={() => setSearch("")}
-            actionLabel={
-              hasScope("docker:networks:create") ||
-              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
-                ? "Create a network"
-                : undefined
-            }
-            onAction={
-              hasScope("docker:networks:create") ||
-              (!!selectedNodeId && hasScope(`docker:networks:create:${selectedNodeId}`))
-                ? () => openCreate()
-                : undefined
-            }
+            actionLabel={hasScopedAccess("docker:networks:create") ? "Create a network" : undefined}
+            onAction={hasScopedAccess("docker:networks:create") ? () => openCreate() : undefined}
           />
         }
         minWidth={fixedNodeId ? "720px" : "860px"}
@@ -635,6 +632,28 @@ export function DockerNetworks({
                       {n.displayName || n.hostname}
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Destination folder</label>
+              <Select
+                value={createFolderId || "__none__"}
+                onValueChange={(value) => setCreateFolderId(value === "__none__" ? "" : value)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="No folder" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No folder</SelectItem>
+                  {folderList
+                    .filter((folder) => !folder.isSystem)
+                    .map((folder) => (
+                      <SelectItem key={folder.id} value={folder.id}>
+                        {"— ".repeat(folder.depth)}
+                        {folder.name}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             </div>
@@ -769,4 +788,8 @@ export function DockerNetworks({
       <div className="h-full overflow-y-auto p-6 space-y-4">{content}</div>
     </PageTransition>
   );
+}
+
+function flattenFolders(folders: DockerFolderTreeNode[]): DockerFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

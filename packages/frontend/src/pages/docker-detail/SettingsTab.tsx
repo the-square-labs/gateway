@@ -173,15 +173,13 @@ export function SettingsTab({
   imageReferenceOverride?: string | null;
   onAvailabilityDisableQueued?: (survivor: { nodeId: string; nodeSlug: string }) => void;
 }) {
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = !readOnly && hasScope(`docker:containers:edit:${scopeSuffix}`);
   const canEditMounts = !readOnly && hasScope(`docker:containers:mounts:${scopeSuffix}`);
-  const canManageNetworks =
-    !readOnly && (hasScope("docker:networks:edit") || hasScope(`docker:networks:edit:${nodeId}`));
-  const canListNetworks =
-    !readOnly && (hasScope("docker:networks:view") || hasScope(`docker:networks:view:${nodeId}`));
+  const canManageNetworks = !readOnly && canEdit && hasScopedAccess("docker:networks:edit");
+  const canListNetworks = !readOnly && hasScopedAccess("docker:networks:view");
   const recreatesRunningContainer =
     (data.State?.Status ?? (data.State?.Running ? "running" : "stopped")) === "running";
   const gpuAttachment = data.gpuAttachment ?? EMPTY_GPU_ATTACHMENT;

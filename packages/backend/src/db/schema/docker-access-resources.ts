@@ -8,7 +8,10 @@ export const dockerAccessResources = pgTable(
     nodeId: uuid('node_id')
       .notNull()
       .references(() => nodes.id, { onDelete: 'cascade' }),
-    resourceType: varchar('resource_type', { length: 32 }).$type<'container'>().notNull().default('container'),
+    resourceType: varchar('resource_type', { length: 32 })
+      .$type<'container' | 'network'>()
+      .notNull()
+      .default('container'),
     resourceKey: varchar('resource_key', { length: 255 }).notNull(),
     runtimeId: text('runtime_id'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

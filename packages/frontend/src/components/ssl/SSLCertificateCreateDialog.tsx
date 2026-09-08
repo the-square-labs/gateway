@@ -26,7 +26,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
-import type { ACMEChallengeType, DNSChallenge, DomainSearchResult } from "@/types";
+import { useResourceFolderStore } from "@/stores/resource-folders";
+import type {
+  ACMEChallengeType,
+  DNSChallenge,
+  DomainSearchResult,
+  ResourceFolderTreeNode,
+} from "@/types";
 import { DNSChallengeVerification } from "./DNSChallengeVerification";
 
 interface SSLCertificateCreateDialogProps {
@@ -83,6 +89,7 @@ export function SSLCertificateCreateDialog({
     ? "dns-01-cloudflare"
     : "dns-01-manual";
   const [activeTab, setActiveTab] = useState<CertificateCreationMethod>(defaultTab);
+  const [folderId, setFolderId] = useState("");
   // ACME tab state
   const [acmeDomains, setAcmeDomains] = useState<string[]>([""]);
   const [selectedDomains, setSelectedDomains] = useState<Array<DomainSearchResult | null>>([null]);
@@ -106,6 +113,10 @@ export function SSLCertificateCreateDialog({
   const [selectedPkiCertId, setSelectedPkiCertId] = useState("");
   const [internalName, setInternalName] = useState("");
   const [isLinking, setIsLinking] = useState(false);
+  const folders = useResourceFolderStore((state) => state.foldersByType["ssl-certificate"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["ssl-certificate"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
 
   useEffect(() => {
     if (open && resetTimerRef.current !== null) {
@@ -115,6 +126,8 @@ export function SSLCertificateCreateDialog({
     if (!open) return;
     setActiveTab(defaultTab);
     setChallengeMode(defaultChallengeMode);
+    setFolderId("");
+    void fetchFolders("ssl-certificate");
     if (!pkiEnabled) {
       setPkiCerts([]);
       return;
@@ -132,7 +145,7 @@ export function SSLCertificateCreateDialog({
       }
     };
     void loadPkiCerts();
-  }, [defaultChallengeMode, defaultTab, open, pkiEnabled]);
+  }, [defaultChallengeMode, defaultTab, fetchFolders, open, pkiEnabled]);
 
   useEffect(() => {
     if (!open || !devPreview) return;
@@ -160,6 +173,7 @@ export function SSLCertificateCreateDialog({
 
   const resetForm = () => {
     setActiveTab(defaultTab);
+    setFolderId("");
     setAcmeDomains([""]);
     setSelectedDomains([null]);
     setChallengeMode(defaultChallengeMode);
@@ -228,6 +242,7 @@ export function SSLCertificateCreateDialog({
         challengeType,
         provider: acmeProvider,
         ...(usesCloudflareDns ? { dnsProvider: "cloudflare" as const } : {}),
+        folderId: folderId || null,
         autoRenew: challengeType === "http-01" || usesCloudflareDns,
       });
       if (result.status === "pending_dns_verification" && result.challenges) {
@@ -322,6 +337,7 @@ export function SSLCertificateCreateDialog({
     try {
       await api.uploadCert({
         name: uploadName,
+        folderId: folderId || null,
         certificatePem: certPem,
         privateKeyPem: keyPem,
         chainPem: chainPem || undefined,
@@ -347,6 +363,7 @@ export function SSLCertificateCreateDialog({
       await api.linkInternalCert({
         internalCertId: selectedPkiCertId,
         name: internalName || undefined,
+        folderId: folderId || null,
       });
       toast.success("Internal certificate linked");
       onOpenChange(false);
@@ -378,6 +395,27 @@ export function SSLCertificateCreateDialog({
           <DialogTitle>Add SSL Certificate</DialogTitle>
           <DialogDescription>Choose a method to add an SSL certificate.</DialogDescription>
         </DialogHeader>
+
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Folder</label>
+          <Select
+            value={folderId || "__none__"}
+            onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+            disabled={foldersLoading || acmeFlowStarted}
+          >
+            <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+              <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">No folder</SelectItem>
+              {folderOptions.map((folder) => (
+                <SelectItem key={folder.id} value={folder.id}>
+                  {"  ".repeat(folder.depth) + folder.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
 
         <Tabs
           value={activeTab}
@@ -671,4 +709,8 @@ export function SSLCertificateCreateDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

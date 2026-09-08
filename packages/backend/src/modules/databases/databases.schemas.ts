@@ -93,6 +93,7 @@ const managedDatabaseCreateStorageSizeGbSchema = z
 export const CreateManagedDatabaseSchema = z
   .object({
     name: managedDatabaseNameSchema,
+    folderId: z.string().uuid().nullable().optional(),
     type: managedDatabaseTypeSchema,
     version: managedDatabaseVersionSchema,
     nodeId: z.string().uuid(),
@@ -239,6 +240,7 @@ export const DeleteManagedDatabaseBindingSchema = z.object({
 export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
   z.object({
     name: nameSchema,
+    folderId: z.string().uuid().nullable().optional(),
     description: optionalTextSchema,
     tags: tagsSchema,
     manualSizeLimitMb: z
@@ -254,6 +256,7 @@ export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     name: nameSchema,
+    folderId: z.string().uuid().nullable().optional(),
     description: optionalTextSchema,
     tags: tagsSchema,
     type: z.literal('redis'),
@@ -261,6 +264,7 @@ export const CreateDatabaseConnectionSchema = z.discriminatedUnion('type', [
   }),
   z.object({
     name: nameSchema,
+    folderId: z.string().uuid().nullable().optional(),
     description: optionalTextSchema,
     tags: tagsSchema,
     type: z.literal('clickhouse'),

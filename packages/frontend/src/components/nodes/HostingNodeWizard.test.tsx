@@ -64,6 +64,7 @@ const catalog: HostingCatalog = {
 };
 
 beforeEach(() => {
+  vi.spyOn(api, "listNodeFolders").mockResolvedValue([]);
   localStorage.clear();
   useAuthStore.setState({
     user: makeUser({

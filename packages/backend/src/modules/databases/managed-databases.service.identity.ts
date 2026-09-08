@@ -114,7 +114,8 @@ export abstract class ManagedDatabaseIdentityService extends ManagedDatabaseServ
     storageSizeBytes: number,
     userId: string,
     tags: string[] = [],
-    tlsEnabled = false
+    tlsEnabled = false,
+    folderId: string | null = null
   ) {
     const config = managedConnectionConfig(type, credentials, tlsEnabled);
     const encryptedConfig = JSON.stringify(this.cryptoService.encryptString(JSON.stringify(config)));
@@ -130,6 +131,7 @@ export abstract class ManagedDatabaseIdentityService extends ManagedDatabaseServ
             slug,
             type,
             tags,
+            folderId,
             host: config.host,
             port: config.port,
             databaseName: config.type === 'redis' ? `db${config.db}` : config.database,

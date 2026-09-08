@@ -7,6 +7,7 @@ export const RequestACMECertSchema = z
     domains: z.array(z.string().regex(domainRegex, 'Invalid domain format')).min(1, 'At least one domain is required'),
     challengeType: z.enum(['http-01', 'dns-01']),
     provider: z.enum(['letsencrypt', 'letsencrypt-staging']).default('letsencrypt'),
+    folderId: z.string().uuid().nullable().optional(),
     dnsProvider: z.enum(['cloudflare']).optional(),
     autoRenew: z.boolean().optional(),
   })
@@ -17,6 +18,7 @@ export const RequestACMECertSchema = z
 
 export const UploadCertSchema = z.object({
   name: z.string().min(1).max(255),
+  folderId: z.string().uuid().nullable().optional(),
   certificatePem: z.string().refine((v) => v.trimStart().startsWith('-----BEGIN CERTIFICATE-----'), {
     message: 'Certificate must start with -----BEGIN CERTIFICATE-----',
   }),
@@ -29,6 +31,7 @@ export const UploadCertSchema = z.object({
 export const LinkInternalCertSchema = z.object({
   internalCertId: z.string().uuid(),
   name: z.string().min(1).max(255).optional(),
+  folderId: z.string().uuid().nullable().optional(),
 });
 
 export const SetSslAutoRenewSchema = z.object({

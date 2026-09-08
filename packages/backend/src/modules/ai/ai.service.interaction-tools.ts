@@ -1,8 +1,14 @@
 import { container } from '@/container.js';
-import { hasScope } from '@/lib/permissions.js';
+import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { CreateNginxTemplateSchema, UpdateNginxTemplateSchema } from '@/modules/proxy/nginx-template.schemas.js';
-import { RequestACMECertSchema, SetSslAutoRenewSchema, UploadCertSchema } from '@/modules/ssl/ssl.schemas.js';
+import {
+  LinkInternalCertSchema,
+  RequestACMECertSchema,
+  SetSslAutoRenewSchema,
+  UploadCertSchema,
+} from '@/modules/ssl/ssl.schemas.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { User } from '@/types.js';
 import { AIServiceExecution } from './ai.service.execution.js';
 import {
@@ -187,18 +193,46 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           { search: a.search, page: agentPage(a.page), limit: agentPageLimit(a.limit) },
           { allowedIds: allowedResourceIdsForScopes(user.scopes, 'ssl:cert:view') }
         );
-      case 'link_internal_cert':
-        return this.sslService.linkInternalCert({ internalCertId: a.internalCertId, name: a.name }, user.id);
-      case 'request_acme_cert':
-        return this.sslService.requestACMECert(RequestACMECertSchema.parse(args), user.id, user.email);
+      case 'link_internal_cert': {
+        const input = LinkInternalCertSchema.parse(args);
+        if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
+          throw new AppError(
+            403,
+            'FORBIDDEN',
+            'Missing authorized SSL certificate creation scope for the selected destination'
+          );
+        }
+        await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
+        return this.sslService.linkInternalCert(input, user.id);
+      }
+      case 'request_acme_cert': {
+        const input = RequestACMECertSchema.parse(args);
+        if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
+          throw new AppError(
+            403,
+            'FORBIDDEN',
+            'Missing authorized SSL certificate creation scope for the selected destination'
+          );
+        }
+        await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
+        return this.sslService.requestACMECert(input, user.id, user.email);
+      }
       case 'manage_ssl_certificate': {
         if (a.operation === 'get') {
           this.ensureToolScopeForResource(user, 'ssl:cert:view', String(a.sslCertificateId));
           return this.sslService.getCert(a.sslCertificateId);
         }
         if (a.operation === 'upload') {
-          this.ensureToolScope(user, 'ssl:cert:issue');
-          return this.sslService.uploadCert(UploadCertSchema.parse(args), user.id);
+          const input = UploadCertSchema.parse(args);
+          if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
+            throw new AppError(
+              403,
+              'FORBIDDEN',
+              'Missing authorized SSL certificate creation scope for the selected destination'
+            );
+          }
+          await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
+          return this.sslService.uploadCert(input, user.id);
         }
         if (a.operation === 'renew') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));

@@ -187,7 +187,7 @@ export function HostingResourcesTab({
   onInstall,
   onChanged,
 }: HostingResourcesTabProps) {
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const [localOperations, setLocalOperations] = useState<Record<string, HostingOperation>>({});
   const [pending, setPending] = useState<string | null>(null);
   const [retryTarget, setRetryTarget] = useState<{
@@ -374,7 +374,7 @@ export function HostingResourcesTab({
           resource.nodes.length === 0 &&
           connector.enabled &&
           hasScope(`hosting:resources:create:${connector.id}`) &&
-          hasScope("nodes:create") &&
+          hasScopedAccess("nodes:create") &&
           hasScope(`hosting:resources:recover:${resource.id}`) &&
           (resource.capabilities.bootstrap?.available === true || hasScope("integrations:ssh:use"));
         const canReconcile = currentOperation?.phase === "unknown";

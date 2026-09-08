@@ -54,6 +54,21 @@ export const DockerMigrationPreflightSchema = z.object({
   resourceName: z.string(),
   sourceResourceId: z.string(),
   scopeResourceId: z.string(),
+  targetFolderId: z.string().uuid().nullable(),
+  dependencyPermissions: z
+    .object({
+      volumes: z.array(z.object({ resourceId: z.string(), folderId: z.string().uuid().nullable() })),
+      networks: z.array(
+        z.object({
+          resourceId: z.string(),
+          resourceKey: z.string(),
+          folderId: z.string().uuid().nullable(),
+          targetResourceId: z.string().nullable(),
+        })
+      ),
+      proxyHostIds: z.array(z.string().uuid()),
+    })
+    .optional(),
   sourceNodeId: z.string().uuid(),
   targetNodeId: z.string().uuid(),
   targetNodeSlug: z.string(),

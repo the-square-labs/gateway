@@ -1,5 +1,9 @@
+import { container } from '@/container.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
+import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import type { User } from '@/types.js';
 import { agentPage, agentPageLimit } from './ai.service-helpers.js';
 
@@ -26,10 +30,15 @@ export async function executeDomainTool(
         limit: agentPageLimit(a.limit),
       });
     case 'create_domain':
+      if (!hasScopeForCreation(user.scopes, 'domains:create', a.folderId, a.nginxNodeId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing authorized domain creation scope for the selected destination');
+      }
+      await container.resolve(DomainFolderService).assertFolderExists(a.folderId);
       return context.domainsService.createDomain(
         {
           domain: a.domain,
           description: a.description,
+          folderId: a.folderId,
           ttl: typeof a.ttl === 'number' ? a.ttl : undefined,
           proxied: typeof a.proxied === 'boolean' ? a.proxied : undefined,
           overwriteDns: a.overwriteDns === true,

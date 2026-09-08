@@ -31,8 +31,14 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import { useSystemConfigStore } from "@/stores/system-config";
-import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
+import type {
+  LoggingEnvironment,
+  LoggingSchema,
+  LoggingSchemaMode,
+  ResourceFolderTreeNode,
+} from "@/types";
 import { LoggingEnvironmentDetail, LoggingSchemaDetail } from "./logging/LoggingDetails";
 import { LoggingEnvironmentDialog } from "./logging/LoggingEnvironmentDialog";
 import { LoggingEnvironmentsTab, LoggingSchemasTab } from "./logging/LoggingTabs";
@@ -548,7 +554,12 @@ function LoggingSchemaDialog({
   const [description, setDescription] = useState("");
   const [schemaMode, setSchemaMode] = useState<LoggingSchemaMode>("reject");
   const [fieldSchema, setFieldSchema] = useState<LoggingSchema["fieldSchema"]>([]);
+  const [folderId, setFolderId] = useState("");
   const [saving, setSaving] = useState(false);
+  const folders = useResourceFolderStore((state) => state.foldersByType["logging-schema"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["logging-schema"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
 
   useEffect(() => {
     if (!open) return;
@@ -556,7 +567,9 @@ function LoggingSchemaDialog({
     setDescription("");
     setSchemaMode("reject");
     setFieldSchema([]);
-  }, [open]);
+    setFolderId("");
+    void fetchFolders("logging-schema");
+  }, [fetchFolders, open]);
 
   const save = async () => {
     setSaving(true);
@@ -564,6 +577,7 @@ function LoggingSchemaDialog({
       await onSave({
         name,
         description: description || null,
+        folderId: folderId || null,
         schemaMode,
         fieldSchema,
       });
@@ -591,6 +605,26 @@ function LoggingSchemaDialog({
               onChange={(event) => setName(event.target.value)}
               placeholder="Audit Events"
             />
+          </label>
+          <label className="block space-y-1.5">
+            <span className="text-sm font-medium">Folder</span>
+            <Select
+              value={folderId || "__none__"}
+              onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+              disabled={foldersLoading}
+            >
+              <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">No folder</SelectItem>
+                {folderOptions.map((folder) => (
+                  <SelectItem key={folder.id} value={folder.id}>
+                    {"  ".repeat(folder.depth) + folder.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </label>
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Description</span>
@@ -628,4 +662,8 @@ function LoggingSchemaDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

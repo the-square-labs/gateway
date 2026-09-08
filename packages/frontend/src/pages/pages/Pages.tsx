@@ -30,7 +30,8 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
-import type { PageProject, PageProjectPlacementOption } from "@/types";
+import { useResourceFolderStore } from "@/stores/resource-folders";
+import type { PageProject, PageProjectPlacementOption, ResourceFolderTreeNode } from "@/types";
 import { formatPageBytes, formatPageDate } from "./page-format";
 
 function CreateProjectDialog({
@@ -45,12 +46,18 @@ function CreateProjectDialog({
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [nodeId, setNodeId] = useState("");
+  const [folderId, setFolderId] = useState("");
   const [nodes, setNodes] = useState<PageProjectPlacementOption[]>([]);
   const [nodesLoading, setNodesLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const folders = useResourceFolderStore((state) => state.foldersByType["pages-project"]);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pages-project"]);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
 
   useEffect(() => {
     if (open) {
+      void fetchFolders("pages-project");
       setNodesLoading(true);
       void api
         .listPageProjectPlacementOptions()
@@ -64,9 +71,10 @@ function CreateProjectDialog({
       setName("");
       setDescription("");
       setNodeId("");
+      setFolderId("");
       setSaving(false);
     }
-  }, [open]);
+  }, [fetchFolders, open]);
 
   const submit = async () => {
     if (!name.trim() || !nodeId || saving) return;
@@ -76,6 +84,7 @@ function CreateProjectDialog({
         name: name.trim(),
         description: description.trim() || null,
         nodeId,
+        folderId: folderId || null,
       });
       toast.success("Page Project created");
       onCreated(project);
@@ -107,6 +116,29 @@ function CreateProjectDialog({
               onChange={(event) => setName(event.target.value)}
               autoFocus
             />
+          </div>
+          <div className="space-y-1.5">
+            <label htmlFor="page-project-folder" className="text-sm font-medium">
+              Folder
+            </label>
+            <Select
+              value={folderId || "__none__"}
+              onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
+              disabled={foldersLoading}
+            >
+              <SelectTrigger id="page-project-folder">
+                <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">No folder</SelectItem>
+                {folderOptions.map((folder) => (
+                  <SelectItem key={folder.id} value={folder.id}>
+                    {"— ".repeat(folder.depth ?? 0)}
+                    {folder.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <label htmlFor="page-project-node" className="text-sm font-medium">
@@ -152,6 +184,10 @@ function CreateProjectDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
+  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }
 
 const projectColumns: ResourceListColumn<PageProject>[] = [
@@ -210,7 +246,7 @@ export function Pages() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess } = useAuthStore();
   const canView = hasScopedAccess("pages:view");
-  const canCreate = hasScope("pages:create");
+  const canCreate = hasScopedAccess("pages:create");
   const canViewSettings = hasScope("pages:settings:view") || hasScope("pages:settings:edit");
   const canManageFolders = hasScope("pages:folders:manage");
   const canEdit = hasScopedAccess("pages:edit");

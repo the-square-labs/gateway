@@ -19,6 +19,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
             'Optional saved private/custom registry UUID. Omit for public Docker Hub images; never pass an empty string.',
         },
         name: { type: 'string', description: 'Container name (optional, auto-generated if omitted)' },
+        folderId: { type: 'string', description: 'Authorized destination container folder UUID.' },
         ports: {
           type: 'array',
           description: 'Port mappings',
@@ -683,6 +684,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         nodeId: { type: 'string', description: 'Docker node UUID.' },
         projectId: { type: 'string', description: 'Compose Project UUID.' },
         projectName: { type: 'string', description: 'Compose project name for validate/create.' },
+        folderId: { type: 'string', description: 'Authorized destination Compose folder UUID for creation.' },
         yaml: { type: 'string', description: 'Complete single-file Compose YAML.' },
         variables: { type: 'object', description: 'Compose interpolation variables.' },
         secretKeys: { type: 'array', items: { type: 'string' } },
@@ -796,6 +798,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         deploymentId: { type: 'string', description: 'Blue/green deployment UUID' },
         composeProjectId: { type: 'string', description: 'Compose Project UUID' },
         resourceName: { type: 'string', description: 'New container or deployment name for create.' },
+        folderId: { type: 'string', description: 'Authorized destination folder UUID for creation.' },
         projectName: { type: 'string', description: 'New Compose Project name for create.' },
         restartPolicy: {
           type: 'string',

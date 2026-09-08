@@ -14,6 +14,7 @@ interface ExecuteDockerDeployOptions {
   deployMode: DockerDeployMode;
   deployName: string;
   deployNodeId: string;
+  deployFolderId?: string | null;
   deployRegistryId: string;
   deployRestart: DockerRestartPolicy;
   deployRuntimeProfile: DockerRuntimeProfile;
@@ -55,6 +56,7 @@ export async function executeDockerDeploy({
   deployMode,
   deployName,
   deployNodeId,
+  deployFolderId,
   deployRegistryId,
   deployRestart,
   deployRuntimeProfile,
@@ -93,6 +95,7 @@ export async function executeDockerDeploy({
         deployMode === "deployment"
           ? {
               kind: "deployment",
+              folderId: deployFolderId,
               name: deployName.trim(),
               restartPolicy: deployRestart === "no" ? "unless-stopped" : deployRestart,
               runtimeProfile: deployRuntimeProfile,
@@ -117,6 +120,7 @@ export async function executeDockerDeploy({
             }
           : {
               kind: "container",
+              folderId: deployFolderId,
               name: deployName.trim(),
               restartPolicy: deployRestart,
               runtimeProfile: deployRuntimeProfile,
@@ -149,6 +153,7 @@ export async function executeDockerDeploy({
 
   if (deployMode === "deployment") {
     const deployment = await api.createDockerDeployment(deployNodeId, {
+      folderId: deployFolderId,
       name: deployName.trim(),
       image: imageRef,
       registryId: credentialRegistryId,
@@ -182,6 +187,7 @@ export async function executeDockerDeploy({
   }
 
   const config: ContainerCreateConfig = {
+    folderId: deployFolderId,
     image: imageRef,
     registryId: credentialRegistryId,
     restartPolicy: deployRestart,

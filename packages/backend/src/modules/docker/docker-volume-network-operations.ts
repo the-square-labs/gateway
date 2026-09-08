@@ -21,6 +21,20 @@ export interface DockerVolumeNetworkOperationContext {
   eventBus?: EventBusService;
   parseResult(result: DockerDispatchResult): any;
   assertContainerMutationAllowed?(nodeId: string, containerId: string): Promise<void>;
+  onNetworkCreated?(
+    nodeId: string,
+    networkId: string,
+    folderId: string | null | undefined,
+    userId: string
+  ): Promise<void>;
+  onNetworkRemoved?(nodeId: string, networkId: string): Promise<void>;
+  onVolumeCreated?(
+    nodeId: string,
+    volumeName: string,
+    folderId: string | null | undefined,
+    userId: string
+  ): Promise<void>;
+  onVolumeRemoved?(nodeId: string, volumeName: string): Promise<void>;
 }
 
 interface DockerVolumeFileUploadSession {
@@ -493,7 +507,7 @@ export async function updateVolumeLabels(
 export async function createVolume(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,
-  config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number },
+  config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number; folderId?: string | null },
   userId: string
 ) {
   const storageKind = config.storageKind ?? 'regular';
@@ -523,6 +537,7 @@ export async function createVolume(
       `Volume "${config.name}" was created but could not be registered; its data was preserved and must be resolved from the Docker host before retrying`
     );
   }
+  await context.onVolumeCreated?.(nodeId, config.name, config.folderId, userId);
   await context.auditService.log({
     action: 'docker.volume.create',
     userId,
@@ -563,6 +578,7 @@ export async function resizeVolume(
     10 * 60_000
   );
   context.parseResult(result);
+  await context.onVolumeRemoved?.(nodeId, name);
   await context.db
     .update(dockerManagedVolumes)
     .set({ capacityBytes, updatedAt: new Date() })
@@ -681,7 +697,7 @@ export async function resolveNetworkIdentity(
 export async function createNetwork(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,
-  config: { name: string; driver: string; subnet?: string; gateway?: string },
+  config: { name: string; driver: string; subnet?: string; gateway?: string; folderId?: string | null },
   userId: string
 ) {
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'create', {
@@ -691,6 +707,11 @@ export async function createNetwork(
     gatewayAddr: config.gateway,
   });
   const data = context.parseResult(result);
+  const networkId = String(data?.id ?? data?.Id ?? '');
+  if (!networkId) {
+    throw new AppError(502, 'DOCKER_NETWORK_CREATE_INVALID_RESULT', 'Docker network create did not return an ID');
+  }
+  await context.onNetworkCreated?.(nodeId, networkId, config.folderId, userId);
   await context.auditService.log({
     action: 'docker.network.create',
     userId,
@@ -716,6 +737,7 @@ export async function removeNetwork(
   }
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'remove', { networkId: network.id });
   context.parseResult(result);
+  await context.onNetworkRemoved?.(nodeId, network.id);
   await context.auditService.log({
     action: 'docker.network.remove',
     userId,

@@ -13,6 +13,7 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { assertDockerCreationAccess, placeCreatedDockerResource } from '../docker-creation-access.js';
 import type { DockerSecretService } from '../docker-secret.service.js';
 import type { DockerSnapshotService } from '../docker-snapshot.service.js';
 import type { DockerSnapshotReconciler } from '../docker-snapshot-reconciler.service.js';
@@ -208,7 +209,8 @@ export class DockerComposeService {
     return project ?? null;
   }
 
-  async create(nodeId: string, input: ComposeCreateInput, userId: string) {
+  async create(nodeId: string, input: ComposeCreateInput, userId: string, actorScopes: string[]) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:compose:create', nodeId, input.folderId, 'compose');
     const validation = validateComposeYaml(input);
     this.assertValid(validation);
 
@@ -245,6 +247,7 @@ export class DockerComposeService {
         .set({ activeRevisionId: revision.id, updatedAt: new Date() })
         .where(eq(dockerComposeProjects.id, project.id))
         .returning();
+      await placeCreatedDockerResource(tx, nodeId, 'compose', project.id, input.folderId);
       return { project: updated, revision };
     });
 
@@ -259,20 +262,31 @@ export class DockerComposeService {
     return result;
   }
 
-  async createPendingGitProject(nodeId: string, projectName: string, userId: string) {
-    const [project] = await this.db
-      .insert(dockerComposeProjects)
-      .values({
-        nodeId,
-        name: projectName,
-        managementState: 'managed',
-        desiredState: 'running',
-        status: 'validating',
-        availability: 'available',
-        createdById: userId,
-        updatedById: userId,
-      })
-      .returning();
+  async createPendingGitProject(
+    nodeId: string,
+    projectName: string,
+    userId: string,
+    actorScopes: string[],
+    folderId?: string | null
+  ) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:compose:create', nodeId, folderId, 'compose');
+    const project = await this.db.transaction(async (tx) => {
+      const [created] = await tx
+        .insert(dockerComposeProjects)
+        .values({
+          nodeId,
+          name: projectName,
+          managementState: 'managed',
+          desiredState: 'running',
+          status: 'validating',
+          availability: 'available',
+          createdById: userId,
+          updatedById: userId,
+        })
+        .returning();
+      await placeCreatedDockerResource(tx, nodeId, 'compose', created.id, folderId);
+      return created;
+    });
     await this.audit.log({
       userId,
       action: 'docker.compose.source.create',

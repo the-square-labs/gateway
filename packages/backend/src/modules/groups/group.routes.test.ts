@@ -78,6 +78,19 @@ afterEach(() => {
 });
 
 describe('group route permissions', () => {
+  it('does not allow an individual group grant to create new groups at root', async () => {
+    registerSession(['admin:groups:33333333-3333-4333-8333-333333333333']);
+    const createGroup = vi.fn();
+    container.registerInstance(GroupService, { createGroup } as never);
+    container.registerInstance(AuditService, { log: vi.fn() } as never);
+    const response = await createApp().request('/api/admin/groups', {
+      method: 'POST',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ name: 'unexpected', scopes: [] }),
+    });
+    expect(response.status).toBe(403);
+    expect(createGroup).not.toHaveBeenCalled();
+  });
   it('accepts a custom group without direct scopes', async () => {
     registerSession(['admin:groups']);
     const assertCanCreateGroup = vi.fn().mockResolvedValue(undefined);

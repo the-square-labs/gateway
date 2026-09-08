@@ -1,6 +1,13 @@
 import { requiresResourceSelection, scopeMatches } from "@/lib/scope-utils";
 import type { PermissionGroup } from "@/types";
 
+const BUILTIN_GROUP_ORDER = ["system-admin", "admin", "operator", "viewer", "guest"];
+
+export function builtinGroupSortOrder(name: string): number {
+  const index = BUILTIN_GROUP_ORDER.indexOf(name);
+  return index < 0 ? BUILTIN_GROUP_ORDER.length : index;
+}
+
 export function isScopeSubset(requestedScopes: string[], allowedScopes: string[]): boolean {
   return requestedScopes.every((scope) => scopeMatches(allowedScopes, scope));
 }

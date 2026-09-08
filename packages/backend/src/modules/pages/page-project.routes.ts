@@ -1,7 +1,8 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
@@ -77,15 +78,22 @@ function pageSourceTarget(projectId: string) {
 }
 
 pageProjectRoutes.openapi(
-  { ...listPageProjectFoldersRoute, middleware: requireAnyScopeBase('pages:view', 'pages:folders:manage') },
+  {
+    ...listPageProjectFoldersRoute,
+    middleware: requireAnyScopeBase('pages:view', 'pages:folders:manage', 'pages:create'),
+  },
   async (c) => {
     const scopes = c.get('effectiveScopes') ?? [];
-    const includeAllFolders = hasScope(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
-    const data = await container
-      .resolve(PageProjectFolderService)
-      .getFolderTree(
-        includeAllFolders ? { includeAllFolders: true } : { allowedResourceIds: visiblePageProjectIds(scopes) ?? [] }
-      );
+    const includeAllFolders =
+      hasScope(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage') || hasScope(scopes, 'pages:create');
+    const data = await container.resolve(PageProjectFolderService).getFolderTree(
+      includeAllFolders
+        ? { includeAllFolders: true }
+        : {
+            allowedResourceIds: visiblePageProjectIds(scopes) ?? [],
+            allowedFolderIds: getFolderScopedIds(scopes, ['pages:view', 'pages:edit', 'pages:create']),
+          }
+    );
     return c.json({ data });
   }
 );
@@ -117,6 +125,9 @@ pageProjectRoutes.openapi(
     const scopes = c.get('effectiveScopes') ?? [];
     if (!canAccessEveryPageProject(scopes, 'pages:edit', input.ids)) {
       throw new AppError(403, 'PAGE_PROJECT_FORBIDDEN', 'Missing pages:edit for one or more Projects');
+    }
+    if (!hasScopeForCreation(scopes, 'pages:edit', input.folderId)) {
+      throw new AppError(403, 'PAGE_PROJECT_FORBIDDEN', 'Missing pages:edit for the move destination');
     }
     await container.resolve(PageProjectFolderService).moveResourcesToFolder(input, c.get('user')!.id);
     return c.json({ success: true });
@@ -181,18 +192,35 @@ pageProjectRoutes.openapi({ ...listPageProjectsRoute, middleware: requireScopeBa
   return c.json(await container.resolve(PageProjectService).list(query, allowedIds ? { allowedIds } : undefined));
 });
 
-pageProjectRoutes.openapi({ ...createPageProjectRoute, middleware: requireScope('pages:create') }, async (c) => {
+pageProjectRoutes.openapi(createPageProjectRoute, async (c) => {
   const input = CreatePageProjectSchema.parse(await c.req.json());
-  if (input.folderId && !hasScope(c.get('effectiveScopes') ?? [], 'pages:folders:manage')) {
-    throw new AppError(403, 'PAGE_PROJECT_FOLDER_FORBIDDEN', 'pages:folders:manage is required to create in a folder');
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'pages:create', input.folderId, input.nodeId)) {
+    throw new AppError(
+      403,
+      'PAGE_PROJECT_FORBIDDEN',
+      'Missing authorized Page Project creation scope for the selected destination'
+    );
   }
+  await container.resolve(PageProjectFolderService).assertFolderExists(input.folderId);
   const data = await container.resolve(PageProjectService).create(input, c.get('user')!.id);
   return c.json({ data }, 201);
 });
 
 pageProjectRoutes.openapi(
   { ...listPageProjectPlacementOptionsRoute, middleware: requireAnyScopeBase('pages:create', 'pages:edit') },
-  async (c) => c.json({ data: await container.resolve(PageProjectService).placementOptions() })
+  async (c) => {
+    const scopes = c.get('effectiveScopes') ?? [];
+    const canUseAnyPlacement =
+      hasScope(scopes, 'pages:create') ||
+      hasScope(scopes, 'pages:edit') ||
+      getFolderScopedIds(scopes, ['pages:create']).length > 0;
+    const allowedNodeIds = getResourceScopedIds(scopes, 'pages:create');
+    return c.json({
+      data: canUseAnyPlacement
+        ? await container.resolve(PageProjectService).placementOptions()
+        : await container.resolve(PageProjectService).placementOptions({ allowedNodeIds }),
+    });
+  }
 );
 
 pageProjectRoutes.openapi(getPageProjectBySlugRoute, async (c) => {

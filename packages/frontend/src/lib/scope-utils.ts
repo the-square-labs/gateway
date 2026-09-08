@@ -6,9 +6,16 @@ const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE_SCOPES].sort(
 const ALL_SCOPE_VALUES = new Set<string>(TOKEN_SCOPES.map((scope) => scope.value));
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (!baseScope.startsWith("docker:containers:") && !baseScope.startsWith("docker:compose:"))
+  if (
+    !baseScope.startsWith("docker:containers:") &&
+    !baseScope.startsWith("docker:compose:") &&
+    !baseScope.startsWith("docker:networks:") &&
+    !baseScope.startsWith("docker:volumes:") &&
+    !baseScope.startsWith("docker:images:")
+  )
     return null;
   if (!resourceId) return null;
+  if (resourceId.startsWith("folder/") || resourceId.startsWith("node/")) return null;
   const separator = resourceId.indexOf("/");
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
@@ -103,6 +110,21 @@ export function hasScopeBase(availableScopes: readonly string[], baseScope: stri
     const resourceId = scope.slice(scopeBase.length + 1);
     return scopeMatches([scope], `${baseScope}:${resourceId}`);
   });
+}
+
+export function canCreateInFolder(
+  scopes: readonly string[],
+  base: string,
+  folderId: string | null | undefined,
+  nodeId?: string
+): boolean {
+  return (
+    scopeMatches(scopes, base) ||
+    (!!nodeId &&
+      (scopeMatches(scopes, `${base}:${nodeId}`) ||
+        scopeMatches(scopes, `${base}:node/${nodeId}`))) ||
+    (!!folderId && scopeMatches(scopes, `${base}:folder/${folderId}`))
+  );
 }
 
 function hasImpliedScope(availableScopes: readonly string[], requiredScope: string): boolean {

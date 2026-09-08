@@ -1,6 +1,15 @@
-import { describe, expect, it, vi } from 'vitest';
-import { AppError } from '@/middleware/error-handler.js';
-import { resolveDockerContainerScopeResourceId } from './docker-access.middleware.js';
+import 'reflect-metadata';
+import { OpenAPIHono } from '@hono/zod-openapi';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
+import type { AppEnv } from '@/types.js';
+import { requireDockerNetworkScope, resolveDockerContainerScopeResourceId } from './docker-access.middleware.js';
+import { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
+
+afterEach(() => {
+  container.reset();
+});
 
 describe('Docker container emergency scope identity', () => {
   it('uses persisted identity only while the stable name has an active transition', async () => {
@@ -40,5 +49,44 @@ describe('Docker container emergency scope identity', () => {
       })
     ).rejects.toMatchObject({ code: 'GATEWAY_INTERNAL_CONTAINER' });
     expect(resolvePersisted).not.toHaveBeenCalled();
+  });
+});
+
+describe('Docker network scoped middleware', () => {
+  it('allows only the persisted network resource identity and never a raw daemon ID grant', async () => {
+    const resources = { resolveNetwork: vi.fn().mockResolvedValue('network-resource-1') };
+    container.registerInstance(DockerNetworkAccessResourceService, resources as never);
+    const app = new OpenAPIHono<AppEnv>();
+    app.onError(errorHandler);
+    app.use('*', async (c, next) => {
+      c.set('effectiveScopes', ['docker:networks:delete:node-1/network-resource-1']);
+      await next();
+    });
+    app.delete('/nodes/:nodeId/networks/:networkId', requireDockerNetworkScope('docker:networks:delete'), (c) =>
+      c.json({ success: true })
+    );
+
+    const response = await app.request('/nodes/node-1/networks/raw-daemon-network-id', { method: 'DELETE' });
+
+    expect(response.status).toBe(200);
+    expect(resources.resolveNetwork).toHaveBeenCalledWith('node-1', 'raw-daemon-network-id');
+  });
+
+  it('denies an unrelated persisted network resource before the action handler runs', async () => {
+    const resources = { resolveNetwork: vi.fn().mockResolvedValue('network-resource-2') };
+    container.registerInstance(DockerNetworkAccessResourceService, resources as never);
+    const app = new OpenAPIHono<AppEnv>();
+    app.onError(errorHandler);
+    app.use('*', async (c, next) => {
+      c.set('effectiveScopes', ['docker:networks:delete:node-1/network-resource-1']);
+      await next();
+    });
+    const handler = vi.fn((c: any) => c.json({ success: true }));
+    app.delete('/nodes/:nodeId/networks/:networkId', requireDockerNetworkScope('docker:networks:delete'), handler);
+
+    const response = await app.request('/nodes/node-1/networks/raw-daemon-network-id', { method: 'DELETE' });
+
+    expect(response.status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
   });
 });

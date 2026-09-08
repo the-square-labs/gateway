@@ -40,6 +40,9 @@ interface DockerDeployFormFieldsProps {
   deployMode: DockerDeployMode;
   deployName: string;
   deployNodeId: string;
+  deployFolderId?: string | null;
+  folderOptions?: ComboboxOption[];
+  onDeployFolderIdChange?: (value: string | null) => void;
   deployRegistryId: string;
   deployRestart: DockerRestartPolicy;
   deployRuntimeProfile: DockerRuntimeProfile;
@@ -180,6 +183,25 @@ export function DockerDeployFormFields(props: DockerDeployFormFieldsProps) {
                 placeholder="Select a node"
                 searchPlaceholder="Search nodes..."
                 emptyMessage="No nodes found."
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Folder</label>
+              <Combobox
+                value={
+                  props.deployFolderId ??
+                  (props.folderOptions?.some((option) => option.value === "__root__")
+                    ? "__root__"
+                    : "")
+                }
+                options={props.folderOptions ?? []}
+                onValueChange={(value) =>
+                  props.onDeployFolderIdChange?.(value === "__root__" ? null : value)
+                }
+                placeholder="Select a destination folder"
+                searchPlaceholder="Search folders..."
+                emptyMessage="No authorized folders found."
               />
             </div>
 

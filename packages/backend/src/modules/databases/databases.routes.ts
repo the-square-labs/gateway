@@ -2,8 +2,15 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import type { MiddlewareHandler } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeBase } from '@/lib/permissions.js';
+import {
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  hasScopeForResource,
+} from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
@@ -293,9 +300,13 @@ databaseRoutes.openapi({ ...listManagedDatabasesRoute, middleware: requireScopeB
   });
 });
 
-databaseRoutes.openapi({ ...createManagedDatabaseRoute, middleware: requireScope('databases:create') }, async (c) => {
+databaseRoutes.openapi(createManagedDatabaseRoute, async (c) => {
   const user = c.get('user')!;
   const input = CreateManagedDatabaseSchema.parse(await c.req.json());
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'databases:create', input.folderId, input.nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
+  }
+  await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
   const data = await container.resolve(ManagedDatabaseService).create(input, user.id);
   return c.json({ data }, 201);
 });
@@ -449,12 +460,16 @@ databaseRoutes.openapi(listDatabaseFoldersRoute, async (c) => {
   const scopes = c.get('effectiveScopes') ?? [];
   const canManageFolders = hasScope(scopes, 'databases:folders:manage');
   const hasGlobalAccess = hasScope(scopes, 'databases:view');
+  const hasGlobalCreate = hasScope(scopes, 'databases:create');
   const allowedIds = getResourceScopedIds(scopes, 'databases:view');
-  if (!canManageFolders && !hasScopeBase(scopes, 'databases:view')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: databases:view or databases:folders:manage');
+  const allowedFolderIds = getFolderScopedIds(scopes, ['databases:view', 'databases:edit', 'databases:create']);
+  if (!canManageFolders && !hasScopeBase(scopes, 'databases:view') && !hasScopeBase(scopes, 'databases:create')) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing required database view, create, or folder scope');
   }
   const data = await service.getFolderTree(
-    canManageFolders || hasGlobalAccess ? { includeAllFolders: canManageFolders } : { allowedResourceIds: allowedIds }
+    canManageFolders || hasGlobalAccess || hasGlobalCreate
+      ? { includeAllFolders: true }
+      : { allowedResourceIds: allowedIds, allowedFolderIds }
   );
   return c.json({ data });
 });
@@ -486,6 +501,13 @@ databaseRoutes.openapi(
     const service = container.resolve(DatabaseFolderService);
     const user = c.get('user')!;
     const input = MoveResourcesToFolderSchema.parse(await c.req.json());
+    const scopes = c.get('effectiveScopes') ?? [];
+    if (!input.ids.every((id) => hasScopeForResource(scopes, 'databases:edit', id))) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing database edit access for one or more move sources');
+    }
+    if (!hasScopeForCreation(scopes, 'databases:edit', input.folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing database edit access for the move destination');
+    }
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -547,16 +569,17 @@ databaseRoutes.openapi(listDatabaseConnectionsRoute, async (c) => {
   return c.json(data);
 });
 
-databaseRoutes.openapi(
-  { ...createDatabaseConnectionRoute, middleware: requireScope('databases:create') },
-  async (c) => {
-    const service = container.resolve(DatabaseConnectionService);
-    const user = c.get('user')!;
-    const input = CreateDatabaseConnectionSchema.parse(await c.req.json());
-    const data = await service.create(input, user.id);
-    return c.json({ data }, 201);
+databaseRoutes.openapi(createDatabaseConnectionRoute, async (c) => {
+  const service = container.resolve(DatabaseConnectionService);
+  const user = c.get('user')!;
+  const input = CreateDatabaseConnectionSchema.parse(await c.req.json());
+  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'databases:create', input.folderId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
   }
-);
+  await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
+  const data = await service.create(input, user.id);
+  return c.json({ data }, 201);
+});
 
 databaseRoutes.openapi(getDatabaseConnectionBySlugRoute, async (c) => {
   const service = container.resolve(DatabaseConnectionService);
