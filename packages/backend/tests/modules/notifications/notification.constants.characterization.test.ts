@@ -26,7 +26,7 @@ describe('notification constants characterization', () => {
         severityColor: SEVERITY_COLOR,
         categories: ALERT_CATEGORIES,
       })
-    ).toBe('66c321f02550d2fce48d0756c1e3813bfdc20c431f175c32a6eb7f428b332e32');
+    ).toBe('6a5d729937b24afaac984d83e097c1bd66fcdc84a7f560a18dd0fd1103891081');
   });
 
   it('keeps EventBus topic, event, and stateful topology stable', () => {
@@ -46,7 +46,57 @@ describe('notification constants characterization', () => {
       ])
     );
 
-    expect(hash(topology)).toBe('858ae78e576d1e2957b5a10df4767ad3a9517694bec684eacc46e23686b23f8a');
+    expect(hash(topology)).toBe('7e032ee5260fbc9a45e70d0afa202eaa7e8617cfd7b38ef9f4d736ce7d5c0f63');
+  });
+
+  it('covers the intended hosting catalog and EventBus mapping additions', () => {
+    expect(ALERT_CATEGORIES.slice(0, 2).map(({ id }) => id)).toEqual(['hosting_vm', 'hosting_account']);
+    expect(ALERT_CATEGORIES.find(({ id }) => id === 'hosting_vm')).toMatchObject({
+      metrics: [],
+      events: expect.arrayContaining([
+        expect.objectContaining({ id: 'operation.failed', defaultSeverity: 'critical' }),
+        expect.objectContaining({ id: 'operation.ready', defaultSeverity: 'info' }),
+        expect.objectContaining({ id: 'operation.unknown', defaultSeverity: 'warning' }),
+        expect.objectContaining({ id: 'firewall.failed', defaultSeverity: 'critical', supportsThreshold: true }),
+      ]),
+    });
+    expect(ALERT_CATEGORIES.find(({ id }) => id === 'hosting_account')).toMatchObject({
+      metrics: expect.arrayContaining([
+        expect.objectContaining({ id: 'balance' }),
+        expect.objectContaining({ id: 'monthly_expenses' }),
+      ]),
+      events: [expect.objectContaining({ id: 'sync.failed', defaultSeverity: 'warning', supportsThreshold: true })],
+    });
+
+    const vmMapping = EVENT_BUS_MAPPINGS['hosting.vm.observed']?.[0];
+    const vmPayload = {
+      resourceId: 'vm-1',
+      name: 'Worker VM',
+      powerState: 'running',
+      provider: 'digitalocean',
+      connectorId: 'connector-1',
+      remoteId: 'droplet-1',
+    };
+    expect(vmMapping?.match(vmPayload)).toBe(true);
+    expect(vmMapping?.extractResource(vmPayload)).toEqual({ type: 'hosting_vm', id: 'vm-1', name: 'Worker VM' });
+    expect(vmMapping?.stateful?.currentState(vmPayload)).toBe('power.running');
+
+    const accountMapping = EVENT_BUS_MAPPINGS['hosting.account.observed']?.[0];
+    expect(accountMapping?.match({ connectorId: 'connector-1', syncStatus: 'error' })).toBe(true);
+    expect(accountMapping?.stateful?.currentState({ syncStatus: 'success' })).toBe('sync.healthy');
+
+    expect(EVENT_BUS_MAPPINGS['hosting.operation.changed']?.map(({ eventId }) => eventId)).toEqual([
+      'operation.failed',
+      'operation.ready',
+      'operation.unknown',
+    ]);
+    const operationMapping = EVENT_BUS_MAPPINGS['hosting.operation.changed']?.[0];
+    expect(operationMapping?.match({ phase: 'failed', action: 'create' })).toBe(true);
+    expect(operationMapping?.match({ phase: 'failed', action: 'topup' })).toBe(false);
+
+    const firewallMapping = EVENT_BUS_MAPPINGS['hosting.firewall.observed']?.[0];
+    expect(firewallMapping?.match({ resourceId: 'vm-1', status: 'failed' })).toBe(true);
+    expect(firewallMapping?.stateful?.currentState({ status: 'failed' })).toBe('firewall.failed');
   });
 
   it('keeps every EventBus mapping function behavior stable across lifecycle payloads', () => {
@@ -181,7 +231,7 @@ describe('notification constants characterization', () => {
       ])
     );
 
-    expect(hash(behavior)).toBe('eb9ff09088637156779e1e8c61c305c3d800e8d02687d82963f78100e8360545');
+    expect(hash(behavior)).toBe('219357a1618e79557da70197a65ca0d6a563c077bdfe3f14b3ffea59c80627b6');
   });
 
   it('keeps category, metric, event, and template-variable identities unique', () => {

@@ -61,7 +61,7 @@ describe('Pages Project platform contract', () => {
     ];
     const select = vi
       .fn()
-      .mockReturnValueOnce({ from: () => ({ orderBy: async () => folders }) })
+      .mockReturnValueOnce({ from: () => ({ where: () => ({ orderBy: async () => folders }) }) })
       .mockReturnValueOnce({
         from: () => ({ where: async () => [{ id: 'project-visible', folderId: 'visible-child' }] }),
       });
