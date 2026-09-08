@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  hostingFirewalls,
   hostingNodeBindings,
   hostingOperations,
   hostingResources,
@@ -61,6 +62,7 @@ describe('hosting management semantics', () => {
     await expect(validate({ provider: 'proxmox' }, vm, { action: 'resize', diskGb: 64 })).resolves.toBeUndefined();
   });
   function destroyRunner() {
+    const firewalls: unknown[] = [];
     let row = {
       id: 'destroy',
       resourceId: 'resource',
@@ -82,6 +84,7 @@ describe('hosting management semantics', () => {
     } as unknown as HostingOperationRow;
     const bound = [{ nodeId: 'node', type: 'docker', resourceId: 'resource', hostIdentityId: 'host' }];
     const adapter = {
+      firewall: undefined as { cleanup: ReturnType<typeof vi.fn> } | undefined,
       test: vi.fn(async () => ({ authority: 'account' })),
       listResources: vi.fn(async () => ({ complete: true, resources: [] as HostingResourceSnapshot[] })),
       getResource: vi
@@ -159,7 +162,9 @@ describe('hosting management semantics', () => {
     };
     const db = {
       update: () => ({ set: () => ({ where: async () => {} }) }),
-      select: () => ({ from: () => ({ where: async () => [{ id: 'node' }] }) }),
+      select: () => ({
+        from: (table: unknown) => ({ where: async () => (table === hostingFirewalls ? firewalls : [{ id: 'node' }]) }),
+      }),
       transaction: async (callback: (executor: unknown) => Promise<void>) => callback(tx),
     };
     const service = new HostingManagementService(
@@ -180,8 +185,88 @@ describe('hosting management semantics', () => {
         bound: [...bound],
         connector: structuredClone(connector),
       }));
-    return { service, adapter, operations, nodeService, bound, resource, actor, connector, tx, lookup, row: () => row };
+    return {
+      service,
+      adapter,
+      operations,
+      nodeService,
+      bound,
+      resource,
+      actor,
+      connector,
+      tx,
+      lookup,
+      firewalls,
+      row: () => row,
+    };
   }
+  it('checkpoints owned firewall cleanup before removing local nodes for an absent VM', async () => {
+    const test = destroyRunner();
+    test.connector.provider = 'digitalocean';
+    test.adapter.getResource.mockResolvedValue(null);
+    test.firewalls.push({ revision: 1, observation: { remoteId: 'fw-1' } });
+    const cleanup = vi.fn(async (_resource, owner, id, dispatched, beforeDelete) => {
+      expect(owner).toBe('resource');
+      expect(id).toBe('fw-1');
+      expect(dispatched).toBe(false);
+      expect(test.nodeService.remove).not.toHaveBeenCalled();
+      await beforeDelete('fw-1');
+      expect(test.row().result?.firewallCleanup).toEqual({ status: 'dispatching', remoteId: 'fw-1' });
+      expect(test.row().dispatchStartedAt).not.toBeNull();
+      return { status: 'deleted', remoteId: 'fw-1' };
+    });
+    test.adapter.firewall = { cleanup };
+    await test.service.reconcileDue();
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(test.nodeService.remove).toHaveBeenCalledTimes(1);
+    expect(test.row()).toMatchObject({
+      phase: 'ready',
+      result: { providerDeleted: true, firewallCleanup: { status: 'deleted', remoteId: 'fw-1' } },
+    });
+  });
+  it('keeps a lost firewall delete fenced and reconciles the same ID before local cleanup', async () => {
+    const test = destroyRunner();
+    test.adapter.getResource.mockResolvedValue(null);
+    test.firewalls.push({ revision: 1, observation: { remoteId: 'fw-1' } });
+    const cleanup = vi
+      .fn()
+      .mockImplementationOnce(async (_resource, _owner, _id, _dispatched, beforeDelete) => {
+        await beforeDelete('fw-1');
+        throw new HostingProviderError(502, true, 'response lost');
+      })
+      .mockResolvedValueOnce({ status: 'absent', remoteId: 'fw-1' });
+    test.adapter.firewall = { cleanup };
+    await test.service.reconcileDue();
+    expect(test.row()).toMatchObject({ phase: 'unknown', errorCode: 'HOSTING_FIREWALL_CLEANUP_PENDING' });
+    expect(test.nodeService.remove).not.toHaveBeenCalled();
+    await test.service.reconcileDue();
+    expect(cleanup.mock.calls[1]?.slice(1, 4)).toEqual(['resource', 'fw-1', true]);
+    expect(test.row().phase).toBe('ready');
+    expect(test.adapter.action).not.toHaveBeenCalled();
+  });
+  it('does not require firewall API access for a VM without a managed firewall', async () => {
+    const test = destroyRunner();
+    test.adapter.getResource.mockResolvedValue(null);
+    const cleanup = vi.fn();
+    test.adapter.firewall = { cleanup };
+    await test.service.reconcileDue();
+    expect(cleanup).not.toHaveBeenCalled();
+    expect(test.row().phase).toBe('ready');
+  });
+  it('does not complete local cleanup when provider firewall read permission is missing', async () => {
+    const test = destroyRunner();
+    test.adapter.getResource.mockResolvedValue(null);
+    test.firewalls.push({ revision: 1 });
+    test.adapter.firewall = {
+      cleanup: vi.fn().mockRejectedValue(new HostingProviderError(403, false, 'firewall:read required')),
+    };
+    await test.service.reconcileDue();
+    expect(test.row()).toMatchObject({
+      phase: 'unknown',
+      errorMessage: expect.stringContaining('firewall:read required'),
+    });
+    expect(test.nodeService.remove).not.toHaveBeenCalled();
+  });
   it('cleans up an already absent VM before first dispatch, including inventory-marked missing resources', async () => {
     const test = destroyRunner();
     test.adapter.getResource.mockResolvedValue(null);

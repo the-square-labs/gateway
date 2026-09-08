@@ -88,6 +88,14 @@ export interface HostingFirewallObservation {
   observedAt: string;
 }
 export interface HostingFirewallAdapter {
+  /** Cleanup only after VM absence is independently confirmed; checkpoint before destructive IO. */
+  cleanup?(
+    resource: HostingResourceSnapshot,
+    ownerKey: string,
+    remoteId: string | null,
+    dispatched: boolean,
+    beforeDelete: (remoteId: string) => Promise<void>
+  ): Promise<{ status: 'absent' | 'deleted' | 'preserved'; remoteId: string | null; reason?: string }>;
   read(
     resource: HostingResourceSnapshot,
     ownerKey: string,

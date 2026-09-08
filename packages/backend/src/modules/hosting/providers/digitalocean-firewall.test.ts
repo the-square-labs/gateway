@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { HostingFirewallConfig } from '../hosting-firewall.types.js';
 import type { HostingRequestOptions } from '../hosting-http.js';
+import { HostingProviderError } from '../hosting-http.js';
 import { type HostingResourceSnapshot, hostingCapabilities } from '../hosting-provider.types.js';
 import { DigitalOceanFirewallAdapter } from './digitalocean-firewall.js';
 
@@ -55,6 +56,103 @@ function adapterFor(firewalls: unknown[], attached: unknown[] = []) {
 }
 
 describe('DigitalOcean firewall adapter', () => {
+  function cleanupTarget(overrides: Record<string, unknown> = {}) {
+    const firewall = {
+      id: 'fw-1',
+      name: 'gateway-fw-e2fcc64045facd8bee7b',
+      droplet_ids: [],
+      tags: [],
+      pending_changes: [],
+      status: 'succeeded',
+      inbound_rules: [],
+      outbound_rules: [],
+      ...overrides,
+    };
+    const request = vi.fn(
+      async (path: string, options?: HostingRequestOptions): Promise<unknown> =>
+        options?.method === 'DELETE' ? undefined : path === '/v2/firewalls' ? { firewalls: [firewall] } : { firewall }
+    );
+    const getResource = vi.fn<() => Promise<HostingResourceSnapshot | null>>().mockResolvedValue(null);
+    const adapter = new DigitalOceanFirewallAdapter({ request: request as never, getResource });
+    const checkpoint = vi.fn(async (_id: string) => {});
+    return { adapter, request, getResource, checkpoint, firewall };
+  }
+  it('deletes only the exact detached owned firewall after persisting its dispatch fence', async () => {
+    const test = cleanupTarget();
+    test.checkpoint.mockImplementation(async (id) => {
+      expect(id).toBe('fw-1');
+      expect(test.request.mock.calls.some(([, options]) => options?.method === 'DELETE')).toBe(false);
+    });
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).resolves.toEqual({
+      status: 'deleted',
+      remoteId: 'fw-1',
+    });
+    expect(test.request).toHaveBeenLastCalledWith('/v2/firewalls/fw-1', { method: 'DELETE' });
+    expect(test.getResource).toHaveBeenCalledTimes(2);
+    expect(test.checkpoint).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { tags: ['shared'] },
+    { droplet_ids: [999] },
+    { droplet_ids: [123] },
+    { name: 'foreign' },
+  ])('preserves an attached or renamed policy: %j', async (overrides) => {
+    const test = cleanupTarget(overrides);
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).resolves.toMatchObject({
+      status: 'preserved',
+    });
+    expect(test.checkpoint).not.toHaveBeenCalled();
+    expect(test.request.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+  it.each([
+    'droplet_ids',
+    'tags',
+    'pending_changes',
+  ])('rejects incomplete %s evidence before deletion', async (field) => {
+    const test = cleanupTarget({ [field]: undefined });
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).rejects.toThrow('unsafe');
+    expect(test.checkpoint).not.toHaveBeenCalled();
+  });
+  it('does not delete when the exact VM exists again', async () => {
+    const test = cleanupTarget();
+    test.getResource.mockResolvedValue(resource);
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).rejects.toThrow(
+      'VM still exists'
+    );
+    expect(test.request).not.toHaveBeenCalled();
+  });
+  it('rechecks sharing after the dispatch checkpoint', async () => {
+    const test = cleanupTarget();
+    test.checkpoint.mockImplementation(async () => {
+      test.firewall.tags = ['external'] as never;
+    });
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).resolves.toMatchObject({
+      status: 'preserved',
+    });
+    expect(test.request.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+  it('reconciles a lost deletion response without issuing a second DELETE', async () => {
+    const test = cleanupTarget();
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', true, test.checkpoint)).rejects.toThrow(
+      'will not be repeated'
+    );
+    expect(test.checkpoint).not.toHaveBeenCalled();
+    test.request.mockRejectedValue(new HostingProviderError(404, false, 'not found'));
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', true, test.checkpoint)).resolves.toEqual({
+      status: 'absent',
+      remoteId: 'fw-1',
+    });
+    expect(test.request.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+  it('waits for pending provider changes and preserves ambiguous ownership', async () => {
+    const test = cleanupTarget({ pending_changes: [{ status: 'waiting' }] });
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).rejects.toThrow('waiting');
+    test.request.mockResolvedValue({ firewalls: [test.firewall, { ...test.firewall, id: 'fw-2' }] });
+    await expect(test.adapter.cleanup(resource, 'owner-1', null, false, test.checkpoint)).rejects.toThrow(
+      'Several firewalls'
+    );
+    expect(test.checkpoint).not.toHaveBeenCalled();
+  });
   it.each([
     'tags',
     'droplet_ids',

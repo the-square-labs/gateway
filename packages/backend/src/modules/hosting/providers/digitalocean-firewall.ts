@@ -157,6 +157,74 @@ function compileDirection(config: HostingFirewallConfig, direction: 'in' | 'out'
 export class DigitalOceanFirewallAdapter implements HostingFirewallAdapter {
   constructor(private readonly dependencies: DigitalOceanFirewallDependencies) {}
 
+  async cleanup(
+    resource: HostingResourceSnapshot,
+    ownerKey: string,
+    remoteId: string | null,
+    dispatched: boolean,
+    beforeDelete: (remoteId: string) => Promise<void>
+  ): Promise<{ status: 'absent' | 'deleted' | 'preserved'; remoteId: string | null; reason?: string }> {
+    const expectedName = ownedName(ownerKey, resource.remoteId);
+    const assertVmAbsent = async () => {
+      if ((await this.dependencies.getResource(resource.remoteId)) !== null)
+        throw new HostingProviderError(409, false, 'The VM still exists; its firewall will not be deleted.');
+    };
+    await assertVmAbsent();
+    if (!remoteId) {
+      if (dispatched) return unsafe();
+      const owned = (await this.listFirewalls(expectedName)).filter((firewall) => firewall.name === expectedName);
+      if (owned.length > 1)
+        throw new HostingProviderError(409, false, 'Several firewalls have the ownership name; cleanup needs review.');
+      remoteId = owned[0]?.id ?? null;
+    }
+    if (!remoteId) return { status: 'absent', remoteId: null };
+    const targetId = remoteId;
+    const inspect = async (): Promise<Firewall | null> => {
+      try {
+        const root = record(await this.dependencies.request<unknown>(`/v2/firewalls/${encodeURIComponent(targetId)}`));
+        const firewall = record(root.firewall);
+        // Missing attachment fields are not evidence that a destructive target is unused.
+        values(firewall.droplet_ids);
+        strings(firewall.tags);
+        values(firewall.pending_changes);
+        string(firewall.status);
+        const parsed = parseFirewall(firewall, expectedName);
+        if (parsed.id !== targetId) return unsafe();
+        return parsed;
+      } catch (error) {
+        if (error instanceof HostingProviderError && !error.outcomeUnknown && error.providerStatus === 404) return null;
+        throw error;
+      }
+    };
+    const check = (firewall: Firewall | null) => {
+      if (!firewall) return { status: 'absent' as const, remoteId: targetId };
+      if (firewall.name !== expectedName || firewall.tags.length || firewall.dropletIds.length)
+        return {
+          status: 'preserved' as const,
+          remoteId: targetId,
+          reason: 'Firewall ownership changed or the policy is still attached; it was not deleted.',
+        };
+      if (firewall.applying)
+        throw new HostingProviderError(409, false, 'VM deleted; waiting for firewall changes before cleanup.');
+      return null;
+    };
+    const resolved = check(await inspect());
+    if (resolved) return resolved;
+    if (dispatched)
+      throw new HostingProviderError(
+        409,
+        true,
+        'VM deleted; firewall deletion is unconfirmed and will not be repeated.'
+      );
+    await beforeDelete(targetId);
+    // Recheck after persisting the dispatch fence, without releasing the operation lease.
+    await assertVmAbsent();
+    const changed = check(await inspect());
+    if (changed) return changed;
+    await this.dependencies.request(`/v2/firewalls/${encodeURIComponent(targetId)}`, { method: 'DELETE' });
+    return { status: 'deleted', remoteId: targetId };
+  }
+
   private async listFirewalls(expectedName: string): Promise<Firewall[]> {
     const result: Firewall[] = [];
     for (let page = 1; page <= MAX_PAGES; page += 1) {

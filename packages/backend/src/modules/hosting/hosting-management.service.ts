@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { hostingNodeBindings, hostingResources, nodes } from '@/db/schema/index.js';
+import { hostingFirewalls, hostingNodeBindings, hostingResources, nodes } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
@@ -294,6 +294,46 @@ export class HostingManagementService {
               ? row.result.destroyNodeIds.filter((id): id is string => typeof id === 'string')
               : bound.map((binding) => binding.nodeId);
             assertHostingResourceAction(currentActor.scopes, resource.id, 'delete', nodeIds);
+            if (adapter.firewall?.cleanup) {
+              const cleanup = row.result?.firewallCleanup as
+                | { status: string; remoteId: string | null; reason?: string }
+                | undefined;
+              if (!cleanup || cleanup.status === 'dispatching') {
+                const [firewall] = await this.db
+                  .select()
+                  .from(hostingFirewalls)
+                  .where(eq(hostingFirewalls.resourceId, resource.id));
+                if (cleanup || (firewall && (firewall.revision > 0 || firewall.observation?.remoteId))) {
+                  try {
+                    const result = await adapter.firewall.cleanup(
+                      resource.snapshot,
+                      resource.id,
+                      cleanup?.remoteId ?? firewall?.observation?.remoteId ?? null,
+                      cleanup?.status === 'dispatching',
+                      async (remoteId) => {
+                        await this.db.transaction(async (tx) => {
+                          const target = { operation: { ...row }, connector, resource, nodeIds };
+                          if (!current.bound.length) await lockHostingDeletion(tx, target);
+                          for (const binding of current.bound) await lockHostingDeletion(tx, target, binding.nodeId);
+                        });
+                        row = await this.operations.update(row, {
+                          result: { ...row.result, firewallCleanup: { status: 'dispatching', remoteId } },
+                        });
+                        if (!row.dispatchStartedAt) row = await this.operations.dispatch(row, 'dispatching');
+                      }
+                    );
+                    row = await this.operations.update(row, { result: { ...row.result, firewallCleanup: result } });
+                  } catch (error) {
+                    if (error instanceof AppError && error.code === 'HOSTING_OPERATION_LEASE_LOST') throw error;
+                    throw new AppError(
+                      409,
+                      'HOSTING_FIREWALL_CLEANUP_PENDING',
+                      `VM deleted; firewall cleanup needs reconciliation: ${error instanceof Error ? error.message : 'provider confirmation unavailable'}`
+                    );
+                  }
+                }
+              }
+            }
             const target = { operation: { ...row }, connector, resource, nodeIds };
             for (const nodeId of nodeIds) {
               if (!current.bound.some((binding) => binding.nodeId === nodeId)) {
@@ -322,6 +362,7 @@ export class HostingManagementService {
                 .where(eq(hostingResources.id, resource.id));
             });
             await this.operations.finish(row, 'ready', {
+              ...row.result,
               resourceId: resource.id,
               providerDeleted: true,
               deletedIncarnation: input.expectedIncarnation,
@@ -519,6 +560,10 @@ export class HostingManagementService {
           if (error instanceof AppError && error.code === 'HOSTING_RESOURCE_OBSERVATION_CHANGED') {
             // Keep the dispatch boundary intact. The next pass must obtain fresh provider evidence.
             row = await this.operations.update(row, { errorCode: error.code, errorMessage: error.message });
+            continue;
+          }
+          if (error instanceof AppError && error.code === 'HOSTING_FIREWALL_CLEANUP_PENDING') {
+            await this.operations.update(row, { phase: 'unknown', errorCode: error.code, errorMessage: error.message });
             continue;
           }
           const rejectedBeforeWrite =
