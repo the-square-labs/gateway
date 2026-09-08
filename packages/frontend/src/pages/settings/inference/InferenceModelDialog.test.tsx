@@ -61,6 +61,17 @@ describe("InferenceModelDialog", () => {
     const displayName = screen.getByLabelText("Display name");
     await user.clear(displayName);
     await user.type(displayName, "Unsaved model name");
+    const modelSelector = screen.getByRole("combobox", { name: "Upstream model" });
+    await user.click(modelSelector);
+    const dropdown = screen
+      .getByRole("button", { name: "K3" })
+      .closest<HTMLElement>(".dropdown-content")!;
+    const dialog = screen.getByRole("dialog", { name: "Add inference model" });
+    const body = dialog.querySelector<HTMLElement>("[data-dialog-body]")!;
+    body.scrollTop = 240;
+    dropdown.scrollTop = 80;
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    scrollIntoView.mockClear();
 
     rerender(
       <InferenceModelDialog
@@ -77,6 +88,14 @@ describe("InferenceModelDialog", () => {
     );
 
     expect(displayName).toHaveValue("Unsaved model name");
+    expect(screen.getByRole("dialog", { name: "Add inference model" })).toBe(dialog);
+    expect(screen.getByRole("combobox", { name: "Upstream model" })).toBe(modelSelector);
+    expect(modelSelector).toHaveFocus();
+    expect(modelSelector).toHaveAttribute("aria-expanded", "true");
+    expect(body.scrollTop).toBe(240);
+    expect(dropdown.scrollTop).toBe(80);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    scrollIntoView.mockRestore();
   });
 
   it("restores reasoning rows in the model's saved order", async () => {

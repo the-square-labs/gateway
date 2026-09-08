@@ -25,6 +25,43 @@ vi.mock("@/components/ui/popover", async () => {
 });
 
 describe("Combobox", () => {
+  it("preserves an open dropdown and active option on background refresh without scrolling ancestors", async () => {
+    const options = [
+      { value: "alpha", label: "Alpha" },
+      { value: "beta", label: "Beta" },
+    ];
+    const onValueChange = vi.fn();
+    const scrollIntoView = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    const { rerender } = render(
+      <Combobox value="" options={options} onValueChange={onValueChange} ariaLabel="Provider" />
+    );
+    const input = screen.getByRole("combobox", { name: "Provider" });
+    await userEvent.setup().click(input);
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    const dropdown = screen
+      .getByRole("button", { name: "Beta" })
+      .closest<HTMLElement>(".dropdown-content")!;
+    dropdown.scrollTop = 120;
+    scrollIntoView.mockClear();
+
+    rerender(
+      <Combobox
+        value=""
+        options={options.map((option) => ({ ...option }))}
+        onValueChange={onValueChange}
+        ariaLabel="Provider"
+      />
+    );
+
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(dropdown.scrollTop).toBe(120);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onValueChange).toHaveBeenCalledWith("beta");
+    scrollIntoView.mockRestore();
+  });
+
   it("can show every option on focus while retaining free-text input", async () => {
     const user = userEvent.setup();
     render(
