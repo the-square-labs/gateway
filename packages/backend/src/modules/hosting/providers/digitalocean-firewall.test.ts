@@ -94,7 +94,6 @@ describe('DigitalOcean firewall adapter', () => {
   it.each([
     { tags: ['shared'] },
     { droplet_ids: [999] },
-    { droplet_ids: [123] },
     { name: 'foreign' },
   ])('preserves an attached or renamed policy: %j', async (overrides) => {
     const test = cleanupTarget(overrides);
@@ -108,6 +107,7 @@ describe('DigitalOcean firewall adapter', () => {
     'droplet_ids',
     'tags',
     'pending_changes',
+    'status',
   ])('rejects incomplete %s evidence before deletion', async (field) => {
     const test = cleanupTarget({ [field]: undefined });
     await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).rejects.toThrow('unsafe');
@@ -120,6 +120,16 @@ describe('DigitalOcean firewall adapter', () => {
       'VM still exists'
     );
     expect(test.request).not.toHaveBeenCalled();
+  });
+  it('waits for the deleted VM attachment to disappear before cleaning up its policy', async () => {
+    const test = cleanupTarget({ droplet_ids: [123] });
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).rejects.toThrow('waiting');
+    expect(test.checkpoint).not.toHaveBeenCalled();
+    test.firewall.droplet_ids = [];
+    await expect(test.adapter.cleanup(resource, 'owner-1', 'fw-1', false, test.checkpoint)).resolves.toMatchObject({
+      status: 'deleted',
+    });
+    expect(test.request.mock.calls.filter(([, options]) => options?.method === 'DELETE')).toHaveLength(1);
   });
   it('rechecks sharing after the dispatch checkpoint', async () => {
     const test = cleanupTarget();

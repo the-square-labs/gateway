@@ -198,13 +198,17 @@ export class DigitalOceanFirewallAdapter implements HostingFirewallAdapter {
     };
     const check = (firewall: Firewall | null) => {
       if (!firewall) return { status: 'absent' as const, remoteId: targetId };
-      if (firewall.name !== expectedName || firewall.tags.length || firewall.dropletIds.length)
+      if (
+        firewall.name !== expectedName ||
+        firewall.tags.length ||
+        firewall.dropletIds.some((id) => id !== resource.remoteId)
+      )
         return {
           status: 'preserved' as const,
           remoteId: targetId,
           reason: 'Firewall ownership changed or the policy is still attached; it was not deleted.',
         };
-      if (firewall.applying)
+      if (firewall.applying || firewall.dropletIds.length)
         throw new HostingProviderError(409, false, 'VM deleted; waiting for firewall changes before cleanup.');
       return null;
     };

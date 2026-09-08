@@ -306,7 +306,7 @@ export class HostingManagementService {
                 if (cleanup || (firewall && (firewall.revision > 0 || firewall.observation?.remoteId))) {
                   try {
                     const result = await adapter.firewall.cleanup(
-                      resource.snapshot,
+                      { ...resource.snapshot, remoteId: resource.remoteId },
                       resource.id,
                       cleanup?.remoteId ?? firewall?.observation?.remoteId ?? null,
                       cleanup?.status === 'dispatching',
