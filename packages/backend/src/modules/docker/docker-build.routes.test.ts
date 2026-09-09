@@ -34,7 +34,7 @@ describe('Docker build list route', () => {
       `docker:containers:view:${NODE_ID}/resource-1`,
     ]).request('/builds');
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toHaveLength(1);
+    expect(((await response.json()) as { data: unknown[] }).data).toHaveLength(1);
     expect(resolveContainer).toHaveBeenCalledWith(NODE_ID, { name: 'api' });
   });
 
@@ -45,7 +45,7 @@ describe('Docker build list route', () => {
     container.registerInstance(DockerBuildService, { list: vi.fn().mockResolvedValue([build(0)]) } as never);
     const response = await app([`docker:containers:view:${NODE_ID}/resource-1`]).request('/builds');
     expect(response.status).toBe(200);
-    expect((await response.json()).data).toEqual([]);
+    expect(((await response.json()) as { data: unknown[] }).data).toEqual([]);
   });
 
   it.each([
