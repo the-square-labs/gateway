@@ -1,4 +1,4 @@
-import { and, count, eq, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import * as client from 'openid-client';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
@@ -17,6 +17,7 @@ import {
   userPasswordCredentials,
   users,
 } from '@/db/schema/index.js';
+import { type CreatedResourceFamily, createdResourceScopes } from '@/lib/created-resource-scopes.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
@@ -25,7 +26,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicenseQuotaService, requireConfiguredLicenseQuota } from '@/modules/license/license-quota.service.js';
-import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CacheService } from '@/services/cache.service.js';
 import type { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
@@ -35,7 +36,9 @@ import {
   computeEffectiveGroupAccess,
   computeEffectiveUserAccess,
   fetchGroupScopeMap,
+  groupsRequireMfa,
   resolveEffectiveUserAccess,
+  userGroupIds,
 } from './live-session-user.js';
 import { mfaRequiredChannel } from './mfa-events.js';
 import type { OidcSettingsService } from './oidc-settings.service.js';
@@ -173,6 +176,29 @@ export class AuthService {
       logger.error('Failed to discover OIDC configuration', { error });
       throw new Error('OIDC configuration discovery failed');
     }
+  }
+
+  async grantCreatedResourcePermissions(
+    userId: string,
+    family: CreatedResourceFamily,
+    resourceId: string
+  ): Promise<void> {
+    const config = await (this.generalSettingsService ?? new GeneralSettingsService(this.db)).getConfig();
+    if (!config.autoAssignCreatedResourcePermissions) return;
+    const grants = createdResourceScopes(family, resourceId);
+    const [updated] = await this.db
+      .update(users)
+      .set({
+        // Merge atomically so concurrent creations cannot overwrite one another or existing explicit grants.
+        additionalScopes: sql`(SELECT COALESCE(jsonb_agg(DISTINCT value), '[]'::jsonb) FROM jsonb_array_elements(${users.additionalScopes} || ${JSON.stringify(grants)}::jsonb))`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+      .returning();
+    if (!updated) return;
+    const mapped = await this.mapDbUserToUser(updated);
+    this.emitUser(userId, 'updated');
+    this.emitPermissions(userId, mapped.isBlocked ? [] : mapped.scopes, mapped.groupId, 'resource_created');
   }
 
   async getAuthorizationUrl(returnTo?: string): Promise<string> {
@@ -443,6 +469,7 @@ export class AuthService {
     email: string;
     name?: string | null;
     groupId: string;
+    groupIds?: string[];
     authMethod?: UserAuthMethod;
   }): Promise<User> {
     const normalizedEmail = data.email.trim().toLowerCase();
@@ -466,6 +493,15 @@ export class AuthService {
     }
 
     const insertUser = async (executor: DrizzleExecutor) => {
+      const groupIds = userGroupIds(data.groupId, data.groupIds);
+      const assignedGroups = await executor
+        .select({ id: permissionGroups.id })
+        .from(permissionGroups)
+        .where(inArray(permissionGroups.id, groupIds))
+        .orderBy(permissionGroups.id)
+        .for('key share');
+      if (assignedGroups.length !== groupIds.length)
+        throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
       const [createdUser] = await executor
         .insert(users)
         .values({
@@ -475,6 +511,7 @@ export class AuthService {
           name: normalizedName,
           avatarUrl: null,
           groupId: data.groupId,
+          additionalGroupIds: groupIds.slice(1),
           folderId: data.folderId ?? null,
         })
         .returning();
@@ -598,7 +635,12 @@ export class AuthService {
   }
 
   private async mapDbUserToUser(dbUser: typeof users.$inferSelect): Promise<User> {
-    const effective = await resolveEffectiveUserAccess(this.db, dbUser.groupId, dbUser.additionalScopes);
+    const effective = await resolveEffectiveUserAccess(
+      this.db,
+      dbUser.groupId,
+      dbUser.additionalScopes,
+      dbUser.additionalGroupIds
+    );
     const effectiveScopes = dbUser.deletedAt ? [] : await expandFolderScopes(this.db, effective.scopes);
     const isDeleted = Boolean(dbUser.deletedAt);
 
@@ -611,6 +653,9 @@ export class AuthService {
       avatarUrl: dbUser.avatarUrl,
       groupId: dbUser.groupId,
       groupName: effective.groupName,
+      groupIds: effective.groupIds,
+      groupNames: effective.groupNames,
+      requireGateway2fa: effective.requireGateway2fa,
       groupScopes: isDeleted ? [] : effective.groupScopes,
       additionalScopes: effective.additionalScopes,
       scopes: effectiveScopes,
@@ -713,7 +758,7 @@ export class AuthService {
     const groupMap = await fetchGroupScopeMap(this.db);
 
     return allUsers.map((u) => {
-      const effective = computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes);
+      const effective = computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes, u.additionalGroupIds);
       return {
         id: u.id,
         oidcSubject: u.oidcSubject,
@@ -723,6 +768,9 @@ export class AuthService {
         avatarUrl: u.avatarUrl,
         groupId: u.groupId,
         groupName: effective.groupName,
+        groupIds: effective.groupIds,
+        groupNames: effective.groupNames,
+        requireGateway2fa: effective.requireGateway2fa,
         groupScopes: effective.groupScopes,
         additionalScopes: effective.additionalScopes,
         scopes: effective.scopes,
@@ -735,13 +783,19 @@ export class AuthService {
     });
   }
 
-  async updateUserGroup(userId: string, groupId: string): Promise<User> {
+  async updateUserGroup(userId: string, requestedGroups: string | string[]): Promise<User> {
+    const groupIds = [...new Set(typeof requestedGroups === 'string' ? [requestedGroups] : requestedGroups)];
+    if (groupIds.length === 0) throw new AppError(400, 'GROUP_REQUIRED', 'Select at least one group');
+    const groupId = groupIds[0];
+    const groupMap = await fetchGroupScopeMap(this.db);
+    if (groupIds.some((id) => !groupMap.has(id)))
+      throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
     const [group, currentUser] = await Promise.all([
       this.db.query.permissionGroups.findFirst({
         where: eq(permissionGroups.id, groupId),
       }),
       this.db.query.users.findFirst({
-        columns: { groupId: true, authMethod: true },
+        columns: { groupId: true, additionalGroupIds: true, authMethod: true },
         where: and(eq(users.id, userId), isNull(users.deletedAt)),
       }),
     ]);
@@ -752,17 +806,14 @@ export class AuthService {
       throw new Error('User not found');
     }
 
-    const previousGroup =
-      currentUser.groupId === groupId
-        ? group
-        : await this.db.query.permissionGroups.findFirst({
-            where: eq(permissionGroups.id, currentUser.groupId),
-          });
-    const mfaPolicyChanged =
-      currentUser.authMethod !== 'oidc' &&
-      Boolean(previousGroup?.requireGateway2fa) !== Boolean(group.requireGateway2fa);
+    const requireGateway2fa = groupsRequireMfa(groupIds, groupMap);
+    const previouslyRequired = groupsRequireMfa(
+      userGroupIds(currentUser.groupId, currentUser.additionalGroupIds),
+      groupMap
+    );
+    const mfaPolicyChanged = currentUser.authMethod !== 'oidc' && previouslyRequired !== requireGateway2fa;
 
-    if (mfaPolicyChanged && group.requireGateway2fa) {
+    if (mfaPolicyChanged && requireGateway2fa) {
       const { mfaExistingSessionGracePeriodDays } = await this.authSettingsService.getConfig();
       const gracePeriodDays =
         Number.isInteger(mfaExistingSessionGracePeriodDays) &&
@@ -776,17 +827,27 @@ export class AuthService {
       );
     }
 
-    const [updatedUser] = await this.db
-      .update(users)
-      .set({ groupId, updatedAt: new Date() })
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .returning();
+    const [updatedUser] = await this.db.transaction(async (tx) => {
+      const assignedGroups = await tx
+        .select({ id: permissionGroups.id })
+        .from(permissionGroups)
+        .where(inArray(permissionGroups.id, groupIds))
+        .orderBy(permissionGroups.id)
+        .for('key share');
+      if (assignedGroups.length !== groupIds.length)
+        throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
+      return tx
+        .update(users)
+        .set({ groupId, additionalGroupIds: groupIds.slice(1), updatedAt: new Date() })
+        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+        .returning();
+    });
 
     if (!updatedUser) {
       throw new Error('User not found');
     }
 
-    if (mfaPolicyChanged && !group.requireGateway2fa) {
+    if (mfaPolicyChanged && !requireGateway2fa) {
       await this.sessionService.clearUserSessionsMfaGraceExpiresAt(userId);
     }
 
@@ -797,7 +858,7 @@ export class AuthService {
       this.eventBus?.publish(mfaRequiredChannel(userId), {
         groupId: group.id,
         groupName: group.name,
-        requireGateway2fa: group.requireGateway2fa,
+        requireGateway2fa,
       });
     }
     return mapped;
@@ -877,7 +938,7 @@ export class AuthService {
     actorUserId: string,
     actorScopes: string[],
     userId: string,
-    groupId: string
+    requestedGroups: string | string[]
   ): Promise<User> {
     if (userId === actorUserId) {
       throw new AppError(400, 'SELF_DEMOTION', 'Cannot change your own group');
@@ -901,11 +962,13 @@ export class AuthService {
     }
 
     const groupMap = await fetchGroupScopeMap(this.db);
-    if (!groupMap.has(groupId)) {
+    const groupIds = [...new Set(typeof requestedGroups === 'string' ? [requestedGroups] : requestedGroups)];
+    if (!groupIds.length) throw new AppError(400, 'GROUP_REQUIRED', 'Select at least one group');
+    if (groupIds.some((id) => !groupMap.has(id))) {
       throw new AppError(404, 'NOT_FOUND', 'Permission group not found');
     }
 
-    const destScopes = computeEffectiveGroupAccess(groupId, groupMap).scopes;
+    const destScopes = groupIds.flatMap((id) => computeEffectiveGroupAccess(id, groupMap).scopes);
     if (!isScopeSubset(destScopes, actorScopes)) {
       throw new AppError(403, 'PRIVILEGE_BOUNDARY', 'Cannot assign a group with permissions you do not possess');
     }
@@ -964,6 +1027,8 @@ export class AuthService {
         deletedAt,
         deletedByUserId,
         deletedFromGroupId: target.groupId,
+        deletedFromAdditionalGroupIds: target.additionalGroupIds ?? [],
+        additionalGroupIds: [],
         groupId: systemAdminGroup.id,
         updatedAt: deletedAt,
       })
@@ -1006,7 +1071,10 @@ export class AuthService {
     }));
   }
 
-  async restoreUser(userId: string, requestedGroupId?: string): Promise<User> {
+  async restoreUser(userId: string, requestedGroups?: string | string[]): Promise<User> {
+    const requestedGroupIds = typeof requestedGroups === 'string' ? [requestedGroups] : requestedGroups;
+    if (requestedGroupIds?.length === 0) throw new AppError(400, 'GROUP_REQUIRED', 'Select at least one group');
+    const requestedGroupId = requestedGroupIds?.[0];
     const deletedUser = await this.db.query.users.findFirst({
       where: and(eq(users.id, userId), isNotNull(users.deletedAt)),
     });
@@ -1025,14 +1093,29 @@ export class AuthService {
     }
 
     const restore = async (executor: DrizzleExecutor) => {
+      const groupMap = await fetchGroupScopeMap(this.db);
+      const additionalGroupIds = requestedGroupIds
+        ? [...new Set(requestedGroupIds)].slice(1)
+        : (deletedUser.deletedFromAdditionalGroupIds ?? []).filter((id) => id !== group.id && groupMap.has(id));
+      const groupIds = userGroupIds(group.id, additionalGroupIds);
+      const assignedGroups = await executor
+        .select({ id: permissionGroups.id })
+        .from(permissionGroups)
+        .where(inArray(permissionGroups.id, groupIds))
+        .orderBy(permissionGroups.id)
+        .for('key share');
+      if (assignedGroups.length !== groupIds.length)
+        throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
       const [restored] = await executor
         .update(users)
         .set({
           groupId: group.id,
+          additionalGroupIds,
           isBlocked: true,
           deletedAt: null,
           deletedByUserId: null,
           deletedFromGroupId: null,
+          deletedFromAdditionalGroupIds: [],
           updatedAt: new Date(),
         })
         .where(and(eq(users.id, userId), isNotNull(users.deletedAt)))

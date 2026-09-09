@@ -13,6 +13,7 @@ import {
   proxyAdditionalRoutes,
   proxyHosts,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -167,6 +168,7 @@ export class PageProjectService {
       resourceId: project.id,
       details: { name: project.name, slug: project.slug, folderId: project.folderId, nodeId: project.nodeId },
     });
+    await grantCreatedResourcePermissions(userId, 'pages', project.id);
     this.emit(project.id, 'created');
     return this.withCounts(project);
   }

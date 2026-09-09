@@ -258,7 +258,7 @@ export function AdminUserConfigDialog({
                   <p className="truncate text-xs text-muted-foreground">{user.email}</p>
                 </div>
                 <Badge variant="secondary" size="inline" className="shrink-0">
-                  {user.groupName}
+                  {user.groupNames?.join(", ") ?? user.groupName}
                 </Badge>
               </section>
 

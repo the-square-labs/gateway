@@ -197,7 +197,10 @@ describe('admin user email onboarding', () => {
     const requestPasswordLink = vi.fn().mockResolvedValue(undefined);
     const sendEmailOtpOnboarding = vi.fn().mockResolvedValue(undefined);
     const auditLog = vi.fn().mockResolvedValue(undefined);
-    container.registerInstance(AuthService, { createUser } as unknown as AuthService);
+    container.registerInstance(AuthService, {
+      createUser,
+      grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+    } as unknown as AuthService);
     container.registerInstance(GroupService, {
       getGroup: vi.fn().mockResolvedValue({ id: groupId, name: 'viewer', scopes: [], inheritedScopes: [] }),
     } as unknown as GroupService);

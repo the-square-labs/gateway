@@ -1,6 +1,11 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { dockerSourceBindings, pageProjects, pageTagActivations } from '@/db/schema/index.js';
 import { pageProjectEvent } from './page-events.js';
 import {

@@ -107,7 +107,8 @@ export async function lockHostingDeletion(tx: DrizzleTransaction, target: Hostin
   const access = computeEffectiveUserAccess(
     actor.groupId,
     new Map(groups.map((group) => [group.id, group])),
-    actor.additionalScopes
+    actor.additionalScopes,
+    actor.additionalGroupIds
   );
   assertHostingScope(access.scopes, 'integrations:hosting:view', connector.id);
   assertHostingResourceAction(access.scopes, resource.id, 'delete', target.nodeIds);

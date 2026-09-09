@@ -48,6 +48,7 @@ export interface GeneralSettings {
   publicUrl: string | null;
   updateChannel: UpdateChannel;
   hideExternalBranding: boolean;
+  autoAssignCreatedResourcePermissions: boolean;
   fileUploadMaxBytes: number;
   fileOpenMaxBytes: number;
   gatewayGrpcPublicTarget: string | null;
@@ -90,6 +91,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   publicUrl: null,
   updateChannel: 'stable',
   hideExternalBranding: false,
+  autoAssignCreatedResourcePermissions: true,
   fileUploadMaxBytes: FILE_UPLOAD_DEFAULT_BYTES,
   fileOpenMaxBytes: FILE_OPEN_DEFAULT_BYTES,
   gatewayGrpcPublicTarget: null,
@@ -461,6 +463,7 @@ export class GeneralSettingsService {
         typeof record.hideExternalBranding === 'boolean'
           ? record.hideExternalBranding
           : DEFAULT_GENERAL_SETTINGS.hideExternalBranding,
+      autoAssignCreatedResourcePermissions: record.autoAssignCreatedResourcePermissions !== false,
       fileUploadMaxBytes,
       fileOpenMaxBytes,
       gatewayGrpcPublicTarget: normalizeHostPortTarget(record.gatewayGrpcPublicTarget as string | null | undefined),

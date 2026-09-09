@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 import type { AppError } from '@/middleware/error-handler.js';
 import { probeDnsRecords } from './dns.utils.js';
 import { DomainsService, selectBackfillNginxNode } from './domain.service.js';

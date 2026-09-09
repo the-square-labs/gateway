@@ -510,6 +510,11 @@ export async function createVolume(
   config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number; folderId?: string | null },
   userId: string
 ) {
+  const inventory = context.parseResult(await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'list'));
+  if (!Array.isArray(inventory))
+    throw new AppError(502, 'VOLUME_INVENTORY_UNAVAILABLE', 'Volume inventory is unavailable');
+  if (inventory.some((volume) => String(volume.name ?? volume.Name ?? '') === config.name))
+    throw new AppError(409, 'NAME_IN_USE', `A volume named "${config.name}" already exists on this node`);
   const storageKind = config.storageKind ?? 'regular';
   const daemonConfig = {
     name: config.name,

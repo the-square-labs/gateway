@@ -19,6 +19,20 @@ describe('normalizePublicUrl', () => {
 });
 
 describe('GeneralSettingsService feature settings', () => {
+  it('enables creator permissions by default and persists an explicit opt-out', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([{ value: {} }]) })) })),
+      })),
+      insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) })),
+    };
+    const service = new GeneralSettingsService(db as never);
+    expect((await service.getConfig()).autoAssignCreatedResourcePermissions).toBe(true);
+    expect(
+      (await service.updateConfig({ autoAssignCreatedResourcePermissions: false })).autoAssignCreatedResourcePermissions
+    ).toBe(false);
+    expect((await service.getConfig()).autoAssignCreatedResourcePermissions).toBe(false);
+  });
   it('defaults unknown or missing update channels to stable and persists preview', async () => {
     const limit = vi.fn().mockResolvedValue([{ value: { updateChannel: 'nightly' } }]);
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);

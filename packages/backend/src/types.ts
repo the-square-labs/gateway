@@ -10,6 +10,8 @@ export interface User {
   name: string | null;
   avatarUrl: string | null;
   groupId: string;
+  groupIds?: string[];
+  groupNames?: string[];
   groupName: string;
   requireGateway2fa?: boolean;
   groupScopes?: string[];

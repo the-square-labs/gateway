@@ -2,6 +2,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { hostingOperations, hostingResources, integrationConnectors } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -338,6 +339,7 @@ export class HostingConnectorsService {
         throw error;
       }
     }
+    await grantCreatedResourcePermissions(user.id, 'integrations:hosting', `account/${row.id}`);
     this.changed(row.id);
     return this.safe(await this.get(row.id));
   }

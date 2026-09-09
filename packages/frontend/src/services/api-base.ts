@@ -117,7 +117,12 @@ function forbiddenError(payload: unknown, status: number): ApiRequestError {
 
 function assertDemoRequestAllowed(url: string, method: string): void {
   const user = useAuthStore.getState().user;
-  if (user?.groupName === "system-admin" && user.scopes.includes("admin:system")) return;
+  if (
+    user &&
+    (user.groupNames ?? [user.groupName]).includes("system-admin") &&
+    user.scopes.includes("admin:system")
+  )
+    return;
   const path = new URL(url, window.location.origin).pathname;
   if (!shouldBlockDemoRequest(path, method)) return;
   useDemoModeStore.getState().show();

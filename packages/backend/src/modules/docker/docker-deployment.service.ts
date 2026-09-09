@@ -12,6 +12,7 @@ import {
   dockerWebhooks,
   nodes,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -514,6 +515,7 @@ export class DockerDeploymentService {
       resourceId: id,
       details: { nodeId, name: input.name },
     });
+    await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${id}`);
     this.emit('created', id, nodeId, { pendingSourceBuild: true });
     return this.loadDeployment(nodeId, id);
   }
@@ -824,6 +826,7 @@ export class DockerDeploymentService {
         resourceId: id,
         details: { nodeId, name: input.name },
       });
+      await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${id}`);
       this.emit('created', id, nodeId);
       return this.loadDeployment(nodeId, id);
     } catch (err) {

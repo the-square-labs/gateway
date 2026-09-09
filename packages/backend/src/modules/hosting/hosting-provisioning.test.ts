@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { hostingOperations, hostingResources, nodes } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';

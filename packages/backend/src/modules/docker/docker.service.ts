@@ -7,6 +7,7 @@ import {
   managedDatabaseInstances,
   nodes,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -315,8 +316,15 @@ export class DockerManagementService {
     this.observeContainerLifecycle(nodeId, name, id, action, extra);
   }
 
-  async registerImportedContainer(nodeId: string, name: string, runtimeId: string, folderId?: string): Promise<void> {
-    await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
+  async registerImportedContainer(
+    nodeId: string,
+    name: string,
+    runtimeId: string,
+    folderId?: string,
+    userId?: string
+  ): Promise<void> {
+    const resourceId = await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
+    if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
     await placeCreatedDockerResource(this.db, nodeId, 'container', name, folderId);
     this.emitContainer(nodeId, name, runtimeId, 'created', { source: 'gwca-import' });
   }
@@ -382,7 +390,7 @@ export class DockerManagementService {
     }
   }
 
-  private imageOperationContext() {
+  private imageOperationContext(existingImageIds?: ReadonlySet<string>) {
     return {
       nodeDispatch: this.nodeDispatch,
       auditService: this.auditService,
@@ -390,7 +398,6 @@ export class DockerManagementService {
       registryService: this.registryService,
       eventBus: this.eventBus,
       onImagePulled: async (nodeId: string, imageRef: string, folderId: string | null | undefined, userId: string) => {
-        if (!folderId) return;
         const images = await this.listAllImages(nodeId);
         const image = Array.isArray(images) ? resolveDockerImageByIdentifier(images, imageRef) : null;
         const imageId = image ? dockerImageId(image) : '';
@@ -401,10 +408,13 @@ export class DockerManagementService {
             'Pulled image identity could not be resolved'
           );
         }
-        await this.folderService?.moveResourcesToFolder(
-          { resourceType: 'image', folderId, items: [{ nodeId, resourceKey: imageId }] },
-          userId
-        );
+        if (existingImageIds && !existingImageIds.has(imageId))
+          await grantCreatedResourcePermissions(userId, 'docker:images', `${nodeId}/${imageId}`);
+        if (folderId)
+          await this.folderService?.moveResourcesToFolder(
+            { resourceType: 'image', folderId, items: [{ nodeId, resourceKey: imageId }] },
+            userId
+          );
       },
       parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
       createTask: (nodeId: string, containerId: string, containerName: string, type: string) =>
@@ -428,7 +438,8 @@ export class DockerManagementService {
         folderId: string | null | undefined,
         userId: string
       ) => {
-        await this.networkAccessResourceService?.ensureNetwork(nodeId, networkId);
+        const resourceId = await this.networkAccessResourceService?.ensureNetwork(nodeId, networkId);
+        if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:networks', `${nodeId}/${resourceId}`);
         if (folderId) {
           await this.folderService?.moveResourcesToFolder(
             { resourceType: 'network', folderId, items: [{ nodeId, resourceKey: networkId }] },
@@ -446,6 +457,7 @@ export class DockerManagementService {
         folderId: string | null | undefined,
         userId: string
       ) => {
+        await grantCreatedResourcePermissions(userId, 'docker:volumes', `${nodeId}/${volumeName}`);
         if (!folderId) return;
         await this.folderService?.moveResourcesToFolder(
           { resourceType: 'volume', folderId, items: [{ nodeId, resourceKey: volumeName }] },
@@ -1487,7 +1499,18 @@ export class DockerManagementService {
       await assertDockerCreationAccess(this.db, actorScopes, 'docker:images:pull', nodeId, folderId, 'image');
     }
     await this.validateDockerNode(nodeId);
-    return pullDockerImage(this.imageOperationContext(), nodeId, imageRef, registryAuth, userId, registryId, folderId);
+    const images = userId ? await this.listAllImages(nodeId) : [];
+    if (!Array.isArray(images))
+      throw new AppError(502, 'DOCKER_IMAGE_INVENTORY_UNAVAILABLE', 'Image inventory is unavailable');
+    return pullDockerImage(
+      this.imageOperationContext(new Set(images.map(dockerImageId))),
+      nodeId,
+      imageRef,
+      registryAuth,
+      userId,
+      registryId,
+      folderId
+    );
   }
 
   async pullImageImmediate(
@@ -1502,6 +1525,9 @@ export class DockerManagementService {
       await assertDockerCreationAccess(this.db, actorScopes, 'docker:images:pull', nodeId, folderId, 'image');
     }
     await this.validateDockerNode(nodeId);
+    const images = userId ? await this.listAllImages(nodeId) : [];
+    if (!Array.isArray(images))
+      throw new AppError(502, 'DOCKER_IMAGE_INVENTORY_UNAVAILABLE', 'Image inventory is unavailable');
     const result = await this.nodeDispatch.sendDockerImageCommand(
       nodeId,
       'pull',
@@ -1509,8 +1535,13 @@ export class DockerManagementService {
       DockerManagementService.LONG_DOCKER_OPERATION_TIMEOUT_MS
     );
     const data = this.parseResult(result);
-    if (folderId && userId) {
-      await this.imageOperationContext().onImagePulled?.(nodeId, imageRef, folderId, userId);
+    if (userId) {
+      await this.imageOperationContext(new Set(images.map(dockerImageId))).onImagePulled?.(
+        nodeId,
+        imageRef,
+        folderId,
+        userId
+      );
     }
     return data;
   }

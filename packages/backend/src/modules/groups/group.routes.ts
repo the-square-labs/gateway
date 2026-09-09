@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
@@ -182,6 +183,7 @@ groupRoutes.openapi({ ...createGroupRoute, middleware: requireScopeBase('admin:g
   await groupService.assertCanCreateGroup(input, userScopes);
 
   const group = await groupService.createGroup(input);
+  await grantCreatedResourcePermissions(user.id, 'admin:groups', group.id);
 
   await auditService.log({
     userId: user.id,

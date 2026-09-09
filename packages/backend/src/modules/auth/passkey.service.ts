@@ -7,7 +7,7 @@ import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,
 } from '@simplewebauthn/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
@@ -104,7 +104,10 @@ export class PasskeyService {
   async removePasskey(userId: string, passkeyId: string): Promise<boolean> {
     const [accounts, totp] = await Promise.all([
       this.db
-        .select({ authMethod: users.authMethod, requireGateway2fa: permissionGroups.requireGateway2fa })
+        .select({
+          authMethod: users.authMethod,
+          requireGateway2fa: sql<boolean>`${permissionGroups.requireGateway2fa} OR EXISTS (SELECT 1 FROM permission_groups g WHERE g.id = ANY(${users.additionalGroupIds}) AND g.require_gateway_2fa)`,
+        })
         .from(users)
         .innerJoin(permissionGroups, eq(permissionGroups.id, users.groupId))
         .where(eq(users.id, userId))

@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { DockerManagementService } from './docker.service.js';
 
 function dbWithOnlineDockerNode() {
@@ -26,6 +32,27 @@ function createService(dispatch: { sendDockerImageCommand: ReturnType<typeof vi.
 }
 
 describe('DockerManagementService image operations', () => {
+  it.each([
+    true,
+    false,
+  ])('only assigns image permissions when pull creates a new image (already exists: %s)', async (exists) => {
+    vi.mocked(grantCreatedResourcePermissions).mockClear();
+    const image = { Id: 'sha256:app', RepoTags: ['acme/api:latest'] };
+    let pulled = false;
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId, action) => {
+        if (action === 'pull') pulled = true;
+        return {
+          success: true,
+          detail: JSON.stringify(action === 'list' ? (exists || pulled ? [image] : []) : { status: 'pulled' }),
+        };
+      }),
+    };
+    const { service } = createService(dispatch);
+    await service.pullImageImmediate('node-1', 'acme/api:latest', undefined, undefined, 'creator');
+    if (exists) expect(grantCreatedResourcePermissions).not.toHaveBeenCalled();
+    else expect(grantCreatedResourcePermissions).toHaveBeenCalledWith('creator', 'docker:images', 'node-1/sha256:app');
+  });
   it('keeps raw internal inventory available while filtering public image lists', async () => {
     const images = [
       { Id: 'user', RepoTags: ['acme/api:latest'] },
@@ -45,7 +72,13 @@ describe('DockerManagementService image operations', () => {
 
   it('pulls images in the background, updates task state, remembers registry, and emits changes', async () => {
     const dispatch = {
-      sendDockerImageCommand: vi.fn().mockResolvedValue({ success: true, detail: '"pulled"' }),
+      sendDockerImageCommand: vi.fn().mockImplementation(async (_nodeId, action) => ({
+        success: true,
+        detail:
+          action === 'list'
+            ? JSON.stringify([{ Id: 'sha256:new-image', RepoTags: ['registry.example.com/app:latest'] }])
+            : '"pulled"',
+      })),
     };
     const { service, audit } = createService(dispatch);
     const taskService = {

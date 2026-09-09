@@ -6,6 +6,7 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
+import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -107,22 +108,31 @@ export function UserAdditionalPermissionsDialog({
   useEffect(() => {
     if (!open) return;
     void fetchCAs();
-    void api
-      .listNodes({ limit: 100 })
-      .then((response) => setNodes(response.data ?? []))
-      .catch(() => setNodes([]));
-    void api
-      .listProxyHosts({ limit: 100 })
-      .then((response) => setProxyHosts(response.data ?? []))
-      .catch(() => setProxyHosts([]));
-    void api
-      .listDatabases({ limit: 200 })
-      .then((response) => setDatabases(response.data ?? []))
-      .catch(() => setDatabases([]));
+    void allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      .then(setNodes)
+      .catch((error) => {
+        setNodes([]);
+        reportScopeLoadError("nodes", error);
+      });
+    void allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      .then(setProxyHosts)
+      .catch((error) => {
+        setProxyHosts([]);
+        reportScopeLoadError("routes", error);
+      });
+    void allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      .then(setDatabases)
+      .catch((error) => {
+        setDatabases([]);
+        reportScopeLoadError("databases", error);
+      });
     void api
       .listLoggingSchemas()
       .then((items) => setLoggingSchemas(items ?? []))
-      .catch(() => setLoggingSchemas([]));
+      .catch((error) => {
+        setLoggingSchemas([]);
+        reportScopeLoadError("logging schemas", error);
+      });
   }, [fetchCAs, open]);
 
   const additionalScopes = useMemo(
@@ -204,7 +214,10 @@ export function UserAdditionalPermissionsDialog({
           <DialogTitle>Additional permissions</DialogTitle>
           <p className="text-sm text-muted-foreground">
             {displayedUser?.name || displayedUser?.email} receives these permissions in addition to
-            the {displayedUser?.groupName} group.
+            {displayedUser?.groupIds && displayedUser.groupIds.length > 1
+              ? `${displayedUser.groupIds.length} groups`
+              : `the ${displayedUser?.groupName} group`}
+            .
           </p>
         </DialogHeader>
 
@@ -245,7 +258,7 @@ export function UserAdditionalPermissionsDialog({
               restrictableScopes={RESOURCE_SCOPABLE_SCOPES}
               allowedResourceIds={allowedResourceIdsByScope}
               inheritedScopes={groupScopes}
-              inheritedFromName={displayedUser?.groupName}
+              inheritedFromName={displayedUser?.groupNames?.join(", ") ?? displayedUser?.groupName}
               viewportClassName="max-h-[min(25rem,48dvh)] overflow-y-auto overscroll-contain"
             />
           </TabsContent>

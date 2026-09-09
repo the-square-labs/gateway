@@ -923,7 +923,7 @@ describe('OAuthService.revokeToken', () => {
         }),
       ])
     );
-    expect(auditLog).toHaveBeenCalledWith(
+    expect(auditLog).not.toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'oauth.token_refresh',
         resourceId: 'goc_client',

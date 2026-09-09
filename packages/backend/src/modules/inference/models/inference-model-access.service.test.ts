@@ -28,9 +28,30 @@ describe('inference model access precedence', () => {
     expect(evaluateModelAccess(false, [groupDeny, userAllow], 'user-1', 'group-1')).toBe(true);
     expect(evaluateModelAccess(true, [groupAllow, userDeny], 'user-1', 'group-1')).toBe(false);
   });
+
+  it('honors secondary groups and gives conflicting group denies precedence regardless of order', () => {
+    const secondaryAllow = { ...groupAllow, groupId: 'group-2' };
+    expect(evaluateModelAccess(false, [secondaryAllow], 'user-1', ['group-1', 'group-2'])).toBe(true);
+    for (const ids of [
+      ['group-1', 'group-2'],
+      ['group-2', 'group-1'],
+    ]) {
+      expect(evaluateModelAccess(true, [secondaryAllow, groupDeny], 'user-1', ids)).toBe(false);
+      expect(evaluateModelAccess(false, [groupDeny, secondaryAllow, userAllow], 'user-1', ids)).toBe(true);
+    }
+  });
 });
 
 describe('InferenceModelAccessService', () => {
+  it('changes the cache key when secondary membership changes, but not when groups are reordered', async () => {
+    const redis = { get: vi.fn().mockResolvedValue('[]') };
+    const service = new InferenceModelAccessService({} as never, redis as never);
+    await service.allowedModelIds(USER);
+    await service.allowedModelIds({ ...USER, groupIds: ['group-1', 'group-2'] });
+    await service.allowedModelIds({ ...USER, groupIds: ['group-2', 'group-1'] });
+    expect(redis.get.mock.calls[0][0]).not.toBe(redis.get.mock.calls[1][0]);
+    expect(redis.get.mock.calls[1][0]).toBe(redis.get.mock.calls[2][0]);
+  });
   it('accepts the canonical AI scope for inference model access', async () => {
     const redis = { get: vi.fn().mockResolvedValue(JSON.stringify(['model-1'])) };
     const service = new InferenceModelAccessService({} as never, redis as never);

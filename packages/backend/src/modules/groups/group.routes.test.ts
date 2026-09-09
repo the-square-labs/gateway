@@ -1,6 +1,11 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';

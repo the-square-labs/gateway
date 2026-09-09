@@ -39,6 +39,7 @@ const DEFAULT_GENERAL_SETTINGS = {
   publicUrl: null as string | null,
   updateChannel: "stable" as const,
   hideExternalBranding: false,
+  autoAssignCreatedResourcePermissions: true,
   fileUploadMaxBytes: DEFAULT_FILE_UPLOAD_MAX_BYTES,
   fileOpenMaxBytes: DEFAULT_FILE_OPEN_MAX_BYTES,
   gatewayGrpcPublicTarget: null as string | null,
@@ -207,6 +208,11 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.hideExternalBranding ?? false
   );
+  const [autoAssignCreatedResourcePermissions, setAutoAssignCreatedResourcePermissions] = useState(
+    () =>
+      api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
+        .autoAssignCreatedResourcePermissions ?? true
+  );
   const [updateChannel, setUpdateChannel] = useState<"stable" | "preview">(
     () =>
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
@@ -323,6 +329,9 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       });
       setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
       setHideExternalBranding(settingsData.generalSettings.hideExternalBranding ?? false);
+      setAutoAssignCreatedResourcePermissions(
+        settingsData.generalSettings.autoAssignCreatedResourcePermissions ?? true
+      );
       setUpdateChannel(settingsData.generalSettings.updateChannel ?? "stable");
       setTrustedProxyCidrs(settingsData.networkSecurity.trustedProxyCidrs.join(", "));
       setWebhookPrivateCidrs(settingsData.outboundWebhookPolicy.allowedPrivateCidrs.join(", "));
@@ -689,6 +698,13 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       features: { ...settings.generalSettings.features, pkiEnabled, siemEnabled, inferenceEnabled },
     });
   };
+  const advancedSettingsHaveChanges =
+    autoAssignCreatedResourcePermissions !==
+    (settings?.generalSettings.autoAssignCreatedResourcePermissions ?? true);
+  const saveAdvancedSettings = async () => {
+    if (!advancedSettingsHaveChanges) return;
+    await updateGeneralSettings({ autoAssignCreatedResourcePermissions });
+  };
 
   const saveShutdownSettings = async (
     shutdown: AuthProvisioningSettings["generalSettings"]["shutdown"]
@@ -1033,6 +1049,10 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
     setPublicUrl,
     hideExternalBranding,
     setHideExternalBranding,
+    autoAssignCreatedResourcePermissions,
+    setAutoAssignCreatedResourcePermissions,
+    advancedSettingsHaveChanges,
+    saveAdvancedSettings,
     updateChannel,
     setUpdateChannel,
     smtpDraft,

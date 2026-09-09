@@ -305,7 +305,7 @@ authRoutes.post('/demo/verify', async (c) => {
   const input = EmailCodeSchema.parse(await c.req.json());
   const user = await container.resolve(DemoAuthService).verifyCode(input.challengeId, input.code);
   if (!user) return c.json({ code: 'INVALID_CODE', message: 'Invalid or expired sign-in code' }, 401);
-  if (user.groupName === 'system-admin' && user.scopes.includes('admin:system')) {
+  if ((user.groupNames ?? [user.groupName]).includes('system-admin') && user.scopes.includes('admin:system')) {
     return finishLocalPrimaryAuth(c, user, 'email_otp');
   }
   await setLocalSession(c, user, 'demo_email_otp', true);

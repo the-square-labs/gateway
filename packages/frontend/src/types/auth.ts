@@ -9,6 +9,8 @@ export interface User {
   name: string | null;
   avatarUrl: string | null;
   groupId: string;
+  groupIds?: string[];
+  groupNames?: string[];
   groupName: string;
   groupScopes?: string[];
   additionalScopes?: string[];
@@ -134,6 +136,7 @@ export interface AuthProvisioningSettings {
     publicUrl: string | null;
     updateChannel: "stable" | "preview";
     hideExternalBranding?: boolean;
+    autoAssignCreatedResourcePermissions?: boolean;
     fileUploadMaxBytes: number;
     fileOpenMaxBytes: number;
     gatewayGrpcPublicTarget: string | null;

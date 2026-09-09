@@ -25,6 +25,47 @@ vi.mock("@/components/ui/popover", async () => {
 });
 
 describe("Combobox", () => {
+  it("searches and toggles multiple options without accepting free text or closing", async () => {
+    function Multiple() {
+      const [value, setValue] = useState(["a"]);
+      return (
+        <Combobox
+          multiple
+          value={value}
+          onValueChange={setValue}
+          ariaLabel="Groups"
+          selectionLabel={(ids) =>
+            ids.length > 1 ? `${ids.length} groups` : ids[0] === "a" ? "Alpha" : "Beta"
+          }
+          options={[
+            { value: "a", label: "Alpha" },
+            { value: "b", label: "Beta" },
+          ]}
+        />
+      );
+    }
+    const user = userEvent.setup();
+    render(<Multiple />);
+    const input = screen.getByRole("combobox", { name: "Groups" });
+    expect(input).toHaveValue("Alpha");
+    await user.click(input);
+    await user.type(input, "bet");
+    expect(screen.queryByRole("button", { name: "Alpha" })).not.toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Beta" }));
+    expect(input).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("button", { name: "Beta" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("2 groups");
+    await user.click(input);
+    await user.type(input, "not a group");
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("2 groups");
+    await user.click(input);
+    fireEvent.mouseDown(screen.getByRole("button", { name: "Alpha" }));
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(input).toHaveValue("Beta");
+  });
   it("preserves an open dropdown and active option on background refresh without scrolling ancestors", async () => {
     const options = [
       { value: "alpha", label: "Alpha" },

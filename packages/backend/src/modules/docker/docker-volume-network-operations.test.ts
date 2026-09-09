@@ -41,7 +41,9 @@ describe('exportVolume', () => {
 describe('managed volume inventory', () => {
   it('creates a disk-image volume with fixed-capacity metadata', async () => {
     const values = vi.fn().mockResolvedValue(undefined);
-    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const sendDockerVolumeCommand = vi
+      .fn()
+      .mockImplementation(async (_node, action) => ({ success: true, detail: action === 'list' ? '[]' : '{}' }));
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const context = {
       db: { insert: vi.fn(() => ({ values })) },
@@ -138,7 +140,9 @@ describe('managed volume inventory', () => {
       constraint: 'docker_managed_volumes_pkey',
     });
     const values = vi.fn().mockRejectedValue(duplicate);
-    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const sendDockerVolumeCommand = vi
+      .fn()
+      .mockImplementation(async (_node, action) => ({ success: true, detail: action === 'list' ? '[]' : '{}' }));
     const context = {
       db: { insert: vi.fn(() => ({ values })) },
       nodeDispatch: { sendDockerVolumeCommand },
@@ -151,12 +155,14 @@ describe('managed volume inventory', () => {
       code: 'NAME_IN_USE',
       message: 'A managed volume named "data" already exists on this node',
     });
-    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(1);
+    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(2);
   });
 
   it('preserves a newly created volume when registry persistence fails', async () => {
     const values = vi.fn().mockRejectedValue(new Error('database unavailable'));
-    const sendDockerVolumeCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const sendDockerVolumeCommand = vi
+      .fn()
+      .mockImplementation(async (_node, action) => ({ success: true, detail: action === 'list' ? '[]' : '{}' }));
     const context = {
       db: { insert: vi.fn(() => ({ values })) },
       nodeDispatch: { sendDockerVolumeCommand },
@@ -167,7 +173,7 @@ describe('managed volume inventory', () => {
     await expect(createVolume(context as never, 'node-1', { name: 'data' }, 'user-1')).rejects.toMatchObject({
       code: 'MANAGED_VOLUME_REGISTRY_FAILED',
     });
-    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(1);
+    expect(sendDockerVolumeCommand).toHaveBeenCalledTimes(2);
     expect(sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'create', { name: 'data' });
   });
 

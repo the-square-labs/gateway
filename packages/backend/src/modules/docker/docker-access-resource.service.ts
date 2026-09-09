@@ -1,6 +1,6 @@
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import { dockerAccessResources, dockerDeployments } from '@/db/schema/index.js';
+import { dockerAccessResources, dockerBuilds, dockerDeployments, dockerSourceBindings } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -197,10 +197,69 @@ export class DockerAccessResourceService {
     return this.ensureContainer(nodeId, name, runtimeId, true);
   }
 
+  async assertContainerRenameAllowed(
+    nodeId: string,
+    oldName: string,
+    newName: string,
+    executor: DrizzleExecutor = this.db
+  ): Promise<void> {
+    const bindings = await executor
+      .select({ id: dockerSourceBindings.id, containerName: dockerSourceBindings.containerName })
+      .from(dockerSourceBindings)
+      .where(
+        and(
+          eq(dockerSourceBindings.targetKind, 'container'),
+          eq(dockerSourceBindings.nodeId, nodeId),
+          inArray(dockerSourceBindings.containerName, [oldName, newName])
+        )
+      );
+    if (bindings.some((binding) => binding.containerName === newName && newName !== oldName))
+      throw new AppError(409, 'NAME_IN_USE', 'This name is reserved by another build source');
+    for (const binding of bindings) {
+      const [active] = await executor
+        .select({ id: dockerBuilds.id })
+        .from(dockerBuilds)
+        .where(
+          and(
+            eq(dockerBuilds.sourceBindingId, binding.id),
+            inArray(dockerBuilds.status, [
+              'queued',
+              'claimed',
+              'checking_out',
+              'building',
+              'scanning',
+              'pushing',
+              'deploying',
+            ])
+          )
+        )
+        .limit(1);
+      if (active)
+        throw new AppError(
+          409,
+          'BUILD_IN_PROGRESS',
+          'Wait for the current build to finish before renaming this container'
+        );
+    }
+  }
+
   async renameContainer(nodeId: string, oldName: string, newName: string): Promise<void> {
     if (oldName === newName) return;
     await this.db.transaction(async (tx) => {
       for (const name of [oldName, newName].sort()) await this.lockContainerIdentity(tx, nodeId, name);
+      const bindings = await tx
+        .select({ id: dockerSourceBindings.id })
+        .from(dockerSourceBindings)
+        .where(
+          and(
+            eq(dockerSourceBindings.targetKind, 'container'),
+            eq(dockerSourceBindings.nodeId, nodeId),
+            eq(dockerSourceBindings.containerName, oldName)
+          )
+        );
+      for (const binding of bindings)
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${binding.id}`}))`);
+      await this.assertContainerRenameAllowed(nodeId, oldName, newName, tx);
       const [target] = await tx
         .select({ id: dockerAccessResources.id })
         .from(dockerAccessResources)
@@ -224,6 +283,20 @@ export class DockerAccessResourceService {
             eq(dockerAccessResources.nodeId, nodeId),
             eq(dockerAccessResources.resourceType, 'container'),
             eq(dockerAccessResources.resourceKey, oldName)
+          )
+        );
+      await tx
+        .update(dockerSourceBindings)
+        .set({
+          containerName: newName,
+          initialConfig: sql`CASE WHEN ${dockerSourceBindings.initialConfig} IS NULL THEN NULL ELSE jsonb_set(${dockerSourceBindings.initialConfig}, '{name}', to_jsonb(${newName}::text), true) END`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(dockerSourceBindings.targetKind, 'container'),
+            eq(dockerSourceBindings.nodeId, nodeId),
+            eq(dockerSourceBindings.containerName, oldName)
           )
         );
     });

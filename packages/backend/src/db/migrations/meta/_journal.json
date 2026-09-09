@@ -1317,6 +1317,13 @@
       "when": 1788869100000,
       "tag": "0187_core_attempt_usage_estimated",
       "breakpoints": true
+    },
+    {
+      "idx": 188,
+      "version": "7",
+      "when": 1788914640613,
+      "tag": "0188_user_multiple_groups",
+      "breakpoints": true
     }
   ]
 }

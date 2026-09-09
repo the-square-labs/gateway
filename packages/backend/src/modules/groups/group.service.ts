@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, count, eq, isNull, or, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
@@ -14,11 +14,13 @@ import {
   computeEffectiveGroupAccess,
   computeEffectiveUserAccess,
   fetchGroupScopeMap,
+  userBelongsToGroup,
 } from '@/modules/auth/live-session-user.js';
 import { mfaRequiredChannel } from '@/modules/auth/mfa-events.js';
 import { type LicenseQuotaService, requireConfiguredLicenseQuota } from '@/modules/license/license-quota.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
+import { assertGroupParent } from './group-inheritance.js';
 
 const logger = createChildLogger('GroupService');
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -26,6 +28,7 @@ const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 interface DirectGroupMember {
   id: string;
   authMethod: string;
+  otherGroupRequiresMfa?: boolean;
 }
 
 function disallowedScopes(effectiveScopes: string[], actorScopes: string[]) {
@@ -68,11 +71,13 @@ export class GroupService {
   ): string[] {
     const descendants: string[] = [];
     const queue = [groupId];
+    const visited = new Set([groupId]);
 
     while (queue.length > 0) {
       const current = queue.shift()!;
       for (const group of groupMap.values()) {
-        if (group.parentId !== current) continue;
+        if (group.parentId !== current || visited.has(group.id)) continue;
+        visited.add(group.id);
         descendants.push(group.id);
         queue.push(group.id);
       }
@@ -90,16 +95,20 @@ export class GroupService {
       .select({
         id: users.id,
         groupId: users.groupId,
+        additionalGroupIds: users.additionalGroupIds,
         additionalScopes: users.additionalScopes,
         isBlocked: users.isBlocked,
       })
       .from(users)
-      .where(and(inArray(users.groupId, affectedGroupIds), isNull(users.deletedAt)));
+      .where(and(or(...affectedGroupIds.map(userBelongsToGroup)), isNull(users.deletedAt)));
 
     for (const u of affected) {
       const scopes = u.isBlocked
         ? []
-        : await expandFolderScopes(this.db, computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes).scopes);
+        : await expandFolderScopes(
+            this.db,
+            computeEffectiveUserAccess(u.groupId, groupMap, u.additionalScopes, u.additionalGroupIds).scopes
+          );
       this.eventBus?.publish(`permissions.changed.${u.id}`, { scopes, groupId: u.groupId });
       await this.sandboxService?.revokeUserAccess(u.id, scopes, 'permissions_changed').catch((error) => {
         logger.warn('Failed to revoke sandbox jobs after group permission cascade', { userId: u.id, groupId, error });
@@ -114,14 +123,14 @@ export class GroupService {
     requireGateway2fa: boolean,
     members: DirectGroupMember[]
   ): Promise<{ memberCount: number }> {
-    const localUserIds = members.filter((member) => member.authMethod !== 'oidc').map((member) => member.id);
-    if (localUserIds.length === 0) return { memberCount: members.length };
+    const localMembers = members.filter((member) => member.authMethod !== 'oidc');
+    if (localMembers.length === 0) return { memberCount: members.length };
 
-    for (const userId of localUserIds) {
-      this.eventBus?.publish(mfaRequiredChannel(userId), {
+    for (const member of localMembers) {
+      this.eventBus?.publish(mfaRequiredChannel(member.id), {
         groupId,
         groupName,
-        requireGateway2fa,
+        requireGateway2fa: requireGateway2fa || Boolean(member.otherGroupRequiresMfa),
       });
     }
     return { memberCount: members.length };
@@ -129,16 +138,22 @@ export class GroupService {
 
   private async getDirectGroupMembers(groupId: string): Promise<DirectGroupMember[]> {
     return this.db
-      .select({ id: users.id, authMethod: users.authMethod })
+      .select({
+        id: users.id,
+        authMethod: users.authMethod,
+        otherGroupRequiresMfa: sql<boolean>`EXISTS (SELECT 1 FROM permission_groups g WHERE g.id <> ${groupId}::uuid AND g.require_gateway_2fa AND (g.id = ${users.groupId} OR g.id = ANY(${users.additionalGroupIds})))`,
+      })
       .from(users)
-      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
+      .where(and(userBelongsToGroup(groupId), isNull(users.deletedAt)));
   }
 
   private async updateMfaSessionGraceDeadlines(
     members: DirectGroupMember[],
     requireGateway2fa: boolean
   ): Promise<void> {
-    const localUserIds = members.filter((member) => member.authMethod !== 'oidc').map((member) => member.id);
+    const localUserIds = members
+      .filter((member) => member.authMethod !== 'oidc' && !member.otherGroupRequiresMfa)
+      .map((member) => member.id);
     if (localUserIds.length === 0) return;
 
     if (requireGateway2fa) {
@@ -265,7 +280,7 @@ export class GroupService {
         requireGateway2fa: permissionGroups.requireGateway2fa,
         createdAt: permissionGroups.createdAt,
         updatedAt: permissionGroups.updatedAt,
-        memberCount: sql<number>`(SELECT count(*) FROM users WHERE users.group_id = "permission_groups"."id" AND users.deleted_at IS NULL)::int`,
+        memberCount: sql<number>`(SELECT count(*) FROM users WHERE (users.group_id = "permission_groups"."id" OR "permission_groups"."id" = ANY(users.additional_group_ids)) AND users.deleted_at IS NULL)::int`,
       })
       .from(permissionGroups)
       .orderBy(
@@ -297,7 +312,7 @@ export class GroupService {
     const [{ count: memberCount }] = await this.db
       .select({ count: count() })
       .from(users)
-      .where(and(eq(users.groupId, id), isNull(users.deletedAt)));
+      .where(and(userBelongsToGroup(id), isNull(users.deletedAt)));
 
     // Fetch all groups for inherited scope computation
     const allGroups = await this.db.select().from(permissionGroups);
@@ -326,19 +341,7 @@ export class GroupService {
     }
 
     if (input.parentId) {
-      const parent = await this.db.query.permissionGroups.findFirst({
-        where: eq(permissionGroups.id, input.parentId),
-      });
-      if (!parent) {
-        throw new AppError(404, 'PARENT_NOT_FOUND', 'Parent group not found');
-      }
-      if (parent.parentId) {
-        throw new AppError(
-          400,
-          'NESTING_TOO_DEEP',
-          'Groups can only be nested one level deep — the parent group is already a child of another group'
-        );
-      }
+      assertGroupParent(await this.db.select().from(permissionGroups), '__new__', input.parentId);
     }
 
     const createGroup = async (executor: DrizzleExecutor) => {
@@ -381,7 +384,7 @@ export class GroupService {
 
     return {
       ...group,
-      inheritedScopes: [] as string[],
+      inheritedScopes: input.parentId ? await this.getEffectiveScopesForGroupId(input.parentId) : [],
       memberCount: 0,
       createdAt: group.createdAt.toISOString(),
       updatedAt: group.updatedAt.toISOString(),
@@ -422,38 +425,7 @@ export class GroupService {
       }
       if (input.parentId) {
         const allGroups = await this.db.select().from(permissionGroups);
-        const groupMap = new Map(allGroups.map((g) => [g.id, g]));
-
-        // Only allow nesting under top-level groups
-        const parent = groupMap.get(input.parentId);
-        if (parent?.parentId) {
-          throw new AppError(
-            400,
-            'NESTING_TOO_DEEP',
-            'Groups can only be nested one level deep — the parent group is already a child of another group'
-          );
-        }
-
-        // A group with children cannot become a child itself
-        const hasChildren = allGroups.some((g) => g.parentId === id);
-        if (hasChildren) {
-          throw new AppError(
-            400,
-            'NESTING_TOO_DEEP',
-            'This group has child groups — it cannot be nested under another group'
-          );
-        }
-
-        // Walk up from proposed parent to check for cycles
-        let current: string | null = input.parentId;
-        const visited = new Set<string>([id]);
-        while (current) {
-          if (visited.has(current)) {
-            throw new AppError(400, 'CYCLE_DETECTED', 'This parent assignment would create a cycle');
-          }
-          visited.add(current);
-          current = groupMap.get(current)?.parentId ?? null;
-        }
+        assertGroupParent(allGroups, id, input.parentId);
       }
     }
 
@@ -512,26 +484,31 @@ export class GroupService {
       throw new AppError(403, 'BUILTIN_GROUP', 'Cannot delete a built-in group');
     }
 
-    const [{ count: memberCount }] = await this.db
-      .select({ count: count() })
-      .from(users)
-      .where(and(eq(users.groupId, id), isNull(users.deletedAt)));
-
-    if (Number(memberCount) > 0) {
-      throw new AppError(
-        409,
-        'GROUP_HAS_MEMBERS',
-        `Cannot delete group with ${memberCount} assigned user(s). Reassign them first.`
-      );
-    }
-
-    // Unparent child groups before deleting
-    const childGroupIds = (
-      await this.db.select({ id: permissionGroups.id }).from(permissionGroups).where(eq(permissionGroups.parentId, id))
-    ).map((group) => group.id);
-    await this.db.update(permissionGroups).set({ parentId: null }).where(eq(permissionGroups.parentId, id));
-
-    await this.db.delete(permissionGroups).where(eq(permissionGroups.id, id));
+    const childGroupIds = await this.db.transaction(async (tx) => {
+      // Serialize deletion with primary and secondary membership assignment.
+      await tx
+        .select({ id: permissionGroups.id })
+        .from(permissionGroups)
+        .where(eq(permissionGroups.id, id))
+        .for('update');
+      const [{ count: memberCount }] = await tx
+        .select({ count: count() })
+        .from(users)
+        .where(and(userBelongsToGroup(id), isNull(users.deletedAt)));
+      if (Number(memberCount) > 0)
+        throw new AppError(
+          409,
+          'GROUP_HAS_MEMBERS',
+          `Cannot delete group with ${memberCount} assigned user(s). Reassign them first.`
+        );
+      const children = await tx
+        .select({ id: permissionGroups.id })
+        .from(permissionGroups)
+        .where(eq(permissionGroups.parentId, id));
+      await tx.update(permissionGroups).set({ parentId: null }).where(eq(permissionGroups.parentId, id));
+      await tx.delete(permissionGroups).where(eq(permissionGroups.id, id));
+      return children.map((child) => child.id);
+    });
     logger.info('Deleted permission group', { groupId: id, name: group.name });
     this.emitGroup(id, 'deleted');
 
@@ -544,7 +521,7 @@ export class GroupService {
     const rows = await this.db
       .select({ id: users.id })
       .from(users)
-      .where(and(eq(users.groupId, groupId), isNull(users.deletedAt)));
+      .where(and(userBelongsToGroup(groupId), isNull(users.deletedAt)));
     return rows.map((r) => r.id);
   }
 

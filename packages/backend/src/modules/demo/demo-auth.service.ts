@@ -1,5 +1,5 @@
 import { createHash, randomInt } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
@@ -52,6 +52,7 @@ interface DemoAuthChallenge {
 interface DemoAuthIdentity {
   id: string;
   authMethod: string;
+  groupNames?: string[];
   groupName: string;
   isBlocked: boolean;
 }
@@ -103,8 +104,10 @@ export class DemoAuthService {
     const identity = challenge.userId ? { id: challenge.userId } : await this.findOrCreateIdentity(challenge.email);
     const user = identity ? await resolveLiveUser(this.db, identity.id) : null;
     if (!user || user.isBlocked) return null;
-    if (user.groupName === DEMO_ADMIN_GROUP_NAME && user.authMethod === 'demo_email_otp') return user;
-    if (user.groupName === 'system-admin' && user.scopes.includes('admin:system')) return user;
+    if ((user.groupNames ?? [user.groupName]).includes(DEMO_ADMIN_GROUP_NAME) && user.authMethod === 'demo_email_otp')
+      return user;
+    if ((user.groupNames ?? [user.groupName]).includes('system-admin') && user.scopes.includes('admin:system'))
+      return user;
     return null;
   }
 
@@ -114,6 +117,9 @@ export class DemoAuthService {
         id: users.id,
         authMethod: users.authMethod,
         groupName: permissionGroups.name,
+        groupNames: sql<
+          string[]
+        >`ARRAY(SELECT g.name FROM permission_groups g WHERE g.id = ${users.groupId} OR g.id = ANY(${users.additionalGroupIds}))`,
         isBlocked: users.isBlocked,
       })
       .from(users)
@@ -125,8 +131,9 @@ export class DemoAuthService {
 
   private isEligibleIdentity(identity: DemoAuthIdentity): boolean {
     if (identity.isBlocked) return false;
-    if (identity.groupName === DEMO_ADMIN_GROUP_NAME) return identity.authMethod === 'demo_email_otp';
-    return identity.groupName === 'system-admin' && ['email_otp', 'demo_email_otp'].includes(identity.authMethod);
+    const groups = identity.groupNames ?? [identity.groupName];
+    if (groups.includes('system-admin')) return ['email_otp', 'demo_email_otp'].includes(identity.authMethod);
+    return groups.includes(DEMO_ADMIN_GROUP_NAME) && identity.authMethod === 'demo_email_otp';
   }
 
   private async findDemoGroup() {

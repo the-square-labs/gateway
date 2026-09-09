@@ -32,6 +32,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
+import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -224,18 +225,24 @@ export function Profile() {
   useEffect(() => {
     if (activeTab !== "authorizations") return;
 
-    api
-      .listNodes({ limit: 100 })
-      .then((result) => setNodesList(result.data ?? []))
-      .catch(() => {});
-    api
-      .listProxyHosts({ limit: 100 })
-      .then((result) => setProxyHostsList(result.data ?? []))
-      .catch(() => {});
-    api
-      .listDatabases({ limit: 200 })
-      .then((result) => setDatabasesList(result.data ?? []))
-      .catch(() => {});
+    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      .then(setNodesList)
+      .catch((error) => {
+        setNodesList([]);
+        reportScopeLoadError("nodes", error);
+      });
+    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      .then(setProxyHostsList)
+      .catch((error) => {
+        setProxyHostsList([]);
+        reportScopeLoadError("routes", error);
+      });
+    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      .then(setDatabasesList)
+      .catch((error) => {
+        setDatabasesList([]);
+        reportScopeLoadError("databases", error);
+      });
     if (
       scopeMatches(userScopes ?? [], "logs:schemas:view") ||
       scopeMatches(userScopes ?? [], "logs:manage") ||
@@ -244,7 +251,10 @@ export function Profile() {
       api
         .listLoggingSchemas()
         .then(setLoggingSchemasList)
-        .catch(() => {});
+        .catch((error) => {
+          setLoggingSchemasList([]);
+          reportScopeLoadError("logging schemas", error);
+        });
     }
   }, [activeTab, userScopes]);
 

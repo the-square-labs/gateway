@@ -142,13 +142,6 @@ export class OAuthTokenLifecycle {
         throw error;
       });
 
-    await this.deps.auditService.log({
-      userId: existing.userId,
-      action: 'oauth.token_refresh',
-      resourceType: 'oauth-client',
-      resourceId: existing.clientId,
-      details: { scopes },
-    });
     return issued.response;
   }
 

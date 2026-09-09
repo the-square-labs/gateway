@@ -40,14 +40,23 @@ export function isDemoMode(): boolean {
 }
 
 export function isDemoVisitor(user: User | undefined): boolean {
-  return isDemoMode() && user?.groupName === DEMO_ADMIN_GROUP_NAME;
+  return (
+    isDemoMode() &&
+    Boolean(
+      user &&
+        (user.groupNames ?? [user.groupName]).includes(DEMO_ADMIN_GROUP_NAME) &&
+        !isCanonicalSystemAdmin(user, user.scopes)
+    )
+  );
 }
 
 export function isCanonicalSystemAdmin(
   user: User | undefined,
   effectiveScopes: readonly string[] | undefined
 ): boolean {
-  return user?.groupName === 'system-admin' && effectiveScopes?.includes('admin:system') === true;
+  return Boolean(
+    user && (user.groupNames ?? [user.groupName]).includes('system-admin') && effectiveScopes?.includes('admin:system')
+  );
 }
 
 export function isDemoRealtimeCapabilityAllowed(

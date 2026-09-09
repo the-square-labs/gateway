@@ -6,6 +6,7 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
+import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -115,22 +116,31 @@ export function OAuthConsent() {
   useEffect(() => {
     void fetchCAs();
     void Promise.all([
-      api
-        .listNodes({ limit: 100 })
-        .then((response) => setNodes(response.data ?? []))
-        .catch(() => setNodes([])),
-      api
-        .listProxyHosts({ limit: 100 })
-        .then((response) => setProxyHosts(response.data ?? []))
-        .catch(() => setProxyHosts([])),
-      api
-        .listDatabases({ limit: 200 })
-        .then((response) => setDatabases(response.data ?? []))
-        .catch(() => setDatabases([])),
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+        .then(setNodes)
+        .catch((error) => {
+          setNodes([]);
+          reportScopeLoadError("nodes", error);
+        }),
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+        .then(setProxyHosts)
+        .catch((error) => {
+          setProxyHosts([]);
+          reportScopeLoadError("routes", error);
+        }),
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+        .then(setDatabases)
+        .catch((error) => {
+          setDatabases([]);
+          reportScopeLoadError("databases", error);
+        }),
       api
         .listLoggingSchemas()
         .then(setLoggingSchemas)
-        .catch(() => setLoggingSchemas([])),
+        .catch((error) => {
+          setLoggingSchemas([]);
+          reportScopeLoadError("logging schemas", error);
+        }),
     ]);
   }, [fetchCAs]);
 

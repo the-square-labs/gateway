@@ -16,6 +16,7 @@ import {
   relayEndpointAssignments,
   relayInstances,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -375,6 +376,7 @@ export class NodesService {
   }
 
   async announceCreated(node: { id: string; hostname: string; type: string }, userId: string) {
+    await grantCreatedResourcePermissions(userId, 'nodes', node.id);
     await this.auditService.log({
       userId,
       action: 'node.create',

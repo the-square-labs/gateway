@@ -84,6 +84,10 @@ export function AuthProvisioningSection({
     setPublicUrl,
     hideExternalBranding,
     setHideExternalBranding,
+    autoAssignCreatedResourcePermissions,
+    setAutoAssignCreatedResourcePermissions,
+    advancedSettingsHaveChanges,
+    saveAdvancedSettings,
     updateChannel,
     setUpdateChannel,
     smtpDraft,
@@ -158,6 +162,33 @@ export function AuthProvisioningSection({
 
   return (
     <div className="space-y-4">
+      <PanelShell
+        hidden={section !== "all" && section !== "advanced"}
+        icon={<SlidersHorizontal className="h-4 w-4" />}
+        title="Advanced configuration"
+        dirty={advancedSettingsHaveChanges}
+        actions={
+          <Button
+            onClick={saveAdvancedSettings}
+            disabled={!canEdit || isSavingGeneral || !advancedSettingsHaveChanges}
+          >
+            <Save className="h-4 w-4" />
+            Save
+          </Button>
+        }
+      >
+        <SettingsControlRow
+          title="Auto-assign permissions for created resources"
+          help="Automatically adds resource-specific permissions to the creator's additional permissions. They can be edited or reset in Assign permissions. Turning this off affects new resources only; existing grants are retained."
+        >
+          <Switch
+            ariaLabel="Auto-assign permissions for created resources"
+            checked={autoAssignCreatedResourcePermissions}
+            disabled={!canEdit || isSavingGeneral}
+            onChange={setAutoAssignCreatedResourcePermissions}
+          />
+        </SettingsControlRow>
+      </PanelShell>
       <div
         className="grid gap-4 xl:grid-cols-2"
         hidden={section !== "all" && section !== "general"}

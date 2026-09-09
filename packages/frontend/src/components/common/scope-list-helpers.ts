@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { api } from "@/services/api";
 import {
   type CA,
@@ -7,7 +8,6 @@ import {
   type LoggingEnvironment,
   type LoggingSchema,
   type Node,
-  type PaginatedResponse,
   type ProxyHost,
 } from "@/types";
 import { FOLDER_CREATION_SCOPES } from "@/types/scope-resource-restrictions";
@@ -36,14 +36,24 @@ export interface ResourceOption {
 
 export type ScopeResourceCatalog = Partial<Record<string, ResourceOption[]>>;
 
-async function allResourcePages<T>(
-  load: (page: number) => Promise<PaginatedResponse<T>>
+export function reportScopeLoadError(resource: string, error: unknown) {
+  toast.error(`Could not load ${resource} for permission restrictions`, {
+    id: `scope-load-${resource}`,
+    description: error instanceof Error ? error.message : undefined,
+  });
+}
+
+export async function allResourcePages<T>(
+  load: (
+    page: number
+  ) => Promise<{ data: T[]; pagination?: { totalPages: number }; totalPages?: number }>
 ): Promise<T[]> {
   const resources: T[] = [];
   for (let page = 1; ; page++) {
     const result = await load(page);
     resources.push(...result.data);
-    if (!result.data.length || page >= result.pagination.totalPages) return resources;
+    if (!result.data.length || page >= (result.pagination?.totalPages ?? result.totalPages ?? 1))
+      return resources;
   }
 }
 
@@ -74,7 +84,8 @@ export async function loadScopeResourceCatalog(
             folderId: group.folderId,
           }));
         })
-        .catch(() => {
+        .catch((error) => {
+          reportScopeLoadError("groups", error);
           catalog.groups = [];
         })
     );
@@ -89,7 +100,8 @@ export async function loadScopeResourceCatalog(
             folderId: user.folderId,
           }));
         })
-        .catch(() => {
+        .catch((error) => {
+          reportScopeLoadError("users", error);
           catalog.users = [];
         })
     );
@@ -97,7 +109,7 @@ export async function loadScopeResourceCatalog(
     loads.push(
       (async () => {
         const projects = await allResourcePages((page) =>
-          api.listPageProjects({ page, limit: 200 })
+          api.listPageProjects({ page, limit: 100 })
         );
         catalog.pages = [
           ...nodeOptions("nginx"),
@@ -107,7 +119,8 @@ export async function loadScopeResourceCatalog(
             folderId: project.folderId,
           })),
         ];
-      })().catch(() => {
+      })().catch((error) => {
+        reportScopeLoadError("Pages projects", error);
         catalog.pages = [];
       })
     );
@@ -115,14 +128,15 @@ export async function loadScopeResourceCatalog(
     loads.push(
       (async () => {
         const certs = await allResourcePages((page) =>
-          api.listSSLCertificates({ page, limit: 200 })
+          api.listSSLCertificates({ page, limit: 100 })
         );
         catalog.ssl = certs.map((cert) => ({
           id: cert.id,
           label: cert.name,
           folderId: cert.folderId,
         }));
-      })().catch(() => {
+      })().catch((error) => {
+        reportScopeLoadError("SSL certificates", error);
         catalog.ssl = [];
       })
     );
@@ -146,7 +160,8 @@ export async function loadScopeResourceCatalog(
             })),
           ];
         })
-        .catch(() => {
+        .catch((error) => {
+          reportScopeLoadError("hosting accounts", error);
           catalog.hosting = [];
         })
     );
@@ -164,45 +179,52 @@ export async function loadScopeResourceCatalog(
           nodes
             .filter((node) => node.type === "docker")
             .map(async (node) => {
-              const children: ResourceOption[] =
-                type === "network"
-                  ? (await api.listDockerNetworks(node.id)).flatMap((row) =>
-                      row.scopeResourceId
-                        ? [
-                            {
-                              id: `${node.id}/${row.scopeResourceId}`,
-                              label: row.name,
-                              parentId: node.id,
-                              folderId: row.folderId,
-                            },
-                          ]
-                        : []
-                    )
-                  : type === "volume"
-                    ? (await api.listDockerVolumes(node.id)).map((row) => ({
-                        id: `${node.id}/${row.name}`,
-                        label: row.name,
-                        parentId: node.id,
-                        folderId: row.folderId,
-                      }))
-                    : type === "image"
-                      ? (await api.listDockerImages(node.id)).map((row) => ({
-                          id: `${node.id}/${row.id}`,
-                          label: row.repoTags?.[0] ?? row.id,
-                          parentId: node.id,
-                          folderId: row.folderId,
-                        }))
-                      : (await api.listDockerComposeProjects(node.id)).map((row) => ({
-                          id: `${node.id}/${row.id}`,
+              const parent = { id: node.id, label: node.displayName || node.hostname };
+              try {
+                const children: ResourceOption[] =
+                  type === "network"
+                    ? (await api.listDockerNetworks(node.id)).flatMap((row) =>
+                        row.scopeResourceId
+                          ? [
+                              {
+                                id: `${node.id}/${row.scopeResourceId}`,
+                                label: row.name,
+                                parentId: node.id,
+                                folderId: row.folderId,
+                              },
+                            ]
+                          : []
+                      )
+                    : type === "volume"
+                      ? (await api.listDockerVolumes(node.id)).map((row) => ({
+                          id: `${node.id}/${row.name}`,
                           label: row.name,
                           parentId: node.id,
                           folderId: row.folderId,
-                        }));
-              return [{ id: node.id, label: node.displayName || node.hostname }, ...children];
+                        }))
+                      : type === "image"
+                        ? (await api.listDockerImages(node.id)).map((row) => ({
+                            id: `${node.id}/${row.id}`,
+                            label: row.repoTags?.[0] ?? row.id,
+                            parentId: node.id,
+                            folderId: row.folderId,
+                          }))
+                        : (await api.listDockerComposeProjects(node.id)).map((row) => ({
+                            id: `${node.id}/${row.id}`,
+                            label: row.name,
+                            parentId: node.id,
+                            folderId: row.folderId,
+                          }));
+                return [parent, ...children];
+              } catch (error) {
+                reportScopeLoadError(`${type} resources on ${parent.label}`, error);
+                return [parent];
+              }
             })
         );
         catalog[family] = resources.flat();
-      })().catch(() => {
+      })().catch((error) => {
+        reportScopeLoadError(family, error);
         catalog[family] = [];
       })
     );
@@ -305,7 +327,11 @@ export function flattenFolderTree(
 }
 
 export async function loadFolderFamily(family: FolderFamily): Promise<FolderOption[]> {
-  const load = async (promise: Promise<FolderTreeLike[]>) => promise.catch(() => []);
+  const load = async (promise: Promise<FolderTreeLike[]>) =>
+    promise.catch((error) => {
+      reportScopeLoadError(`${family} folders`, error);
+      return [];
+    });
   switch (family) {
     case "groups":
       return flattenFolderTree(await load(api.listAdminGroupFolders()), family);

@@ -14,6 +14,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog";
 import { UserAdditionalPermissionsDialog } from "@/components/admin/UserAdditionalPermissionsDialog";
+import { groupSelectionLabel, UserGroupSelect } from "@/components/admin/UserGroupSelect";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
@@ -113,6 +114,9 @@ export function AdminUsers({
   const [createEmail, setCreateEmail] = useState("");
   const [createName, setCreateName] = useState("");
   const [createGroupId, setCreateGroupId] = useState("");
+  const [createAdditionalGroupIds, setCreateAdditionalGroupIds] = useState<string[]>([]);
+  const [updatingGroupUserId, setUpdatingGroupUserId] = useState<string | null>(null);
+  const groupUpdateInFlight = useRef(false);
   const [createAuthMethod, setCreateAuthMethod] = useState<"oidc" | "password" | "email_otp">(
     "oidc"
   );
@@ -126,6 +130,7 @@ export function AdminUsers({
   const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
   const displayedRestoreUser = useRetainedDialogValue(restoreUser, restoreUser !== null);
   const [restoreGroupId, setRestoreGroupId] = useState("");
+  const [restoreAdditionalGroupIds, setRestoreAdditionalGroupIds] = useState<string[]>([]);
   const [restoring, setRestoring] = useState(false);
   const [impersonatingUserId, setImpersonatingUserId] = useState<string | null>(null);
   const [search, setSearch] = useState("");
@@ -218,22 +223,21 @@ export function AdminUsers({
     return loadUsers();
   }, [loadUsers]);
 
-  const handleGroupChange = async (user: User, groupId: string) => {
-    const additionalCount = user.additionalScopes?.length ?? 0;
-    if (additionalCount > 0) {
-      const proceed = await confirm({
-        title: "Change Permission Group",
-        description: `${user.name || user.email} will retain ${additionalCount} additional permission${additionalCount === 1 ? "" : "s"}.`,
-        confirmLabel: "Change Group",
-      });
-      if (!proceed) return;
-    }
+  const handleGroupChange = async (user: User, groupIds: string[]) => {
+    if (groupUpdateInFlight.current) return;
+    groupUpdateInFlight.current = true;
+    setUpdatingGroupUserId(user.id);
     try {
-      await api.updateUserGroup(user.id, groupId);
-      toast.success("Group updated");
-      reloadUsers();
+      const updated = await api.updateUserGroup(user.id, groupIds);
+      setUsers((current) =>
+        current.map((entry) => (entry.id === updated.id ? { ...entry, ...updated } : entry))
+      );
+      api.invalidateCache("admin:users");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update group");
+    } finally {
+      groupUpdateInFlight.current = false;
+      setUpdatingGroupUserId(null);
     }
   };
 
@@ -268,6 +272,7 @@ export function AdminUsers({
   const openRestore = (user: DeletedUser) => {
     setRestoreUser(user);
     setRestoreGroupId("");
+    setRestoreAdditionalGroupIds([]);
   };
 
   const handleRestore = async () => {
@@ -280,7 +285,7 @@ export function AdminUsers({
     try {
       await api.restoreUser(
         restoreUser.id,
-        restoreUser.originalGroupExists ? undefined : restoreGroupId
+        restoreUser.originalGroupExists ? undefined : [restoreGroupId, ...restoreAdditionalGroupIds]
       );
       toast.success("User restored in blocked state. Unblock them separately to grant access.");
       setRestoreUser(null);
@@ -301,6 +306,7 @@ export function AdminUsers({
       groups.find((group) => !group.isBuiltin) ??
       groups[0];
     setCreateGroupId(preferred?.id ?? "");
+    setCreateAdditionalGroupIds([]);
     setCreateOpen(true);
   }, [groups]);
 
@@ -321,6 +327,7 @@ export function AdminUsers({
         email: createEmail.trim(),
         name: createName.trim(),
         groupId: createGroupId,
+        groupIds: [createGroupId, ...createAdditionalGroupIds],
         authMethod: createAuthMethod,
       });
       toast.success("User created");
@@ -348,7 +355,9 @@ export function AdminUsers({
     const query = search.trim().toLowerCase();
     if (!query) return users;
     return users.filter((user) =>
-      [user.name, user.email, user.groupName].some((value) => value?.toLowerCase().includes(query))
+      [user.name, user.email, ...(user.groupNames ?? [user.groupName])].some((value) =>
+        value?.toLowerCase().includes(query)
+      )
     );
   }, [search, users]);
   const filteredDeletedUsers = useMemo(() => {
@@ -414,25 +423,26 @@ export function AdminUsers({
         const isSelf = currentUser?.id === user.id;
         const isSystemUser = user.oidcSubject?.startsWith("system:");
         const isReadOnly = isSelf || isSystemUser;
-        if (isReadOnly) return <Badge variant="secondary">{user.groupName}</Badge>;
+        const groupIds = user.groupIds ?? [user.groupId];
+        if (isReadOnly)
+          return (
+            <Badge variant="secondary">
+              {groupSelectionLabel(groupIds, groups, user.groupName)}
+            </Badge>
+          );
         return (
           <div
             className="w-full"
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
-            <Select value={user.groupId} onValueChange={(v) => handleGroupChange(user, v)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {groups.map((group) => (
-                  <SelectItem key={group.id} value={group.id}>
-                    {group.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <UserGroupSelect
+              value={groupIds}
+              groups={groups}
+              fallback={user.groupName}
+              disabled={updatingGroupUserId !== null}
+              onChange={(ids) => handleGroupChange(user, ids)}
+            />
           </div>
         );
       },
@@ -525,7 +535,9 @@ export function AdminUsers({
     if (u.isBlocked) {
       blockedCount++;
     } else {
-      groupCounts.set(u.groupName, (groupCounts.get(u.groupName) || 0) + 1);
+      for (const name of new Set(u.groupNames ?? [u.groupName])) {
+        groupCounts.set(name, (groupCounts.get(name) || 0) + 1);
+      }
     }
   }
   const summaryParts = Array.from(groupCounts.entries()).map(
@@ -702,19 +714,16 @@ export function AdminUsers({
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Group</label>
-              <Select value={createGroupId} onValueChange={setCreateGroupId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select group" />
-                </SelectTrigger>
-                <SelectContent>
-                  {groups.map((group) => (
-                    <SelectItem key={group.id} value={group.id}>
-                      {group.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <label className="text-sm font-medium">Groups</label>
+              <UserGroupSelect
+                value={createGroupId ? [createGroupId, ...createAdditionalGroupIds] : []}
+                groups={groups}
+                disabled={creating}
+                onChange={(ids) => {
+                  setCreateGroupId(ids[0]);
+                  setCreateAdditionalGroupIds(ids.slice(1));
+                }}
+              />
             </div>
             <p className="text-xs text-muted-foreground">
               Password users receive a setup link by email. OIDC users are pre-created for their
@@ -851,18 +860,15 @@ export function AdminUsers({
             {displayedRestoreUser && !displayedRestoreUser.originalGroupExists && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">New group</label>
-                <Select value={restoreGroupId} onValueChange={setRestoreGroupId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select group" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {groups.map((group) => (
-                      <SelectItem key={group.id} value={group.id}>
-                        {group.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <UserGroupSelect
+                  value={restoreGroupId ? [restoreGroupId, ...restoreAdditionalGroupIds] : []}
+                  groups={groups}
+                  disabled={restoring}
+                  onChange={(ids) => {
+                    setRestoreGroupId(ids[0]);
+                    setRestoreAdditionalGroupIds(ids.slice(1));
+                  }}
+                />
               </div>
             )}
           </div>

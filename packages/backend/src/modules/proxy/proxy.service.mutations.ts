@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { proxyHosts } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
@@ -224,6 +225,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     });
 
     logger.info('Created proxy host', { hostId: host.id, domains: host.domainNames });
+    await grantCreatedResourcePermissions(userId, 'proxy', host.id);
     this.emitHost(host.id, 'created', host.domainNames?.[0]);
 
     // 6. Fire-and-forget immediate health check

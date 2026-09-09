@@ -610,8 +610,8 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScopeBase('adm
     throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination user folder');
   if (input.folderId) await container.resolve(AdminUserFolderService).assertFolderExists(input.folderId);
 
-  const destGroup = await groupService.getGroup(input.groupId);
-  if (!isScopeSubset(getEffectiveGroupScopes(destGroup), actorScopes)) {
+  const destGroups = await Promise.all(input.groupIds.map((id) => groupService.getGroup(id)));
+  if (!isScopeSubset(destGroups.flatMap(getEffectiveGroupScopes), actorScopes)) {
     return c.json(
       { code: 'PRIVILEGE_BOUNDARY', message: 'Cannot assign a group with permissions you do not possess' },
       403
@@ -627,6 +627,7 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScopeBase('adm
       );
     }
     const createdUser = await authService.createUser(input);
+    await authService.grantCreatedResourcePermissions(currentUser.id, 'admin:users', createdUser.id);
     const localAuthService = container.resolve(LocalAuthService);
     if (input.authMethod === 'password') {
       await localAuthService.requestPasswordLink(createdUser.email, 'password_setup');
@@ -644,6 +645,7 @@ adminRoutes.openapi({ ...createAdminUserRoute, middleware: requireScopeBase('adm
         targetUserEmail: createdUser.email,
         targetUserName: createdUser.name,
         groupId: createdUser.groupId,
+        groupIds: createdUser.groupIds ?? [createdUser.groupId],
         groupName: createdUser.groupName,
       },
       userAgent: c.req.header('user-agent'),
@@ -821,11 +823,11 @@ adminRoutes.openapi(
     const actorScopes = c.get('effectiveScopes') || [];
     const userId = c.req.param('id')!;
     const body = await c.req.json();
-    const { groupId } = UpdateUserGroupSchema.parse(body);
+    const { groupIds } = UpdateUserGroupSchema.parse(body);
 
-    const targetUser = await authService.assertCanUpdateUserGroup(currentUser.id, actorScopes, userId, groupId);
+    const targetUser = await authService.assertCanUpdateUserGroup(currentUser.id, actorScopes, userId, groupIds);
 
-    const updatedUser = await authService.updateUserGroup(userId, groupId);
+    const updatedUser = await authService.updateUserGroup(userId, groupIds);
 
     await auditService.log({
       userId: currentUser.id,
@@ -837,8 +839,10 @@ adminRoutes.openapi(
         targetUserEmail: updatedUser.email,
         targetUserName: updatedUser.name,
         previousGroupId: targetUser.groupId,
+        previousGroupIds: targetUser.groupIds ?? [targetUser.groupId],
         previousGroupName: targetUser.groupName,
         newGroupId: updatedUser.groupId,
+        newGroupIds: updatedUser.groupIds ?? [updatedUser.groupId],
         newGroupName: updatedUser.groupName,
       },
       userAgent: c.req.header('user-agent'),
@@ -1010,8 +1014,8 @@ adminRoutes.openapi({ ...restoreAdminUserRoute, middleware: requireScope('admin:
   const auditService = container.resolve(AuditService);
   const currentUser = c.get('user')!;
   const userId = c.req.param('id')!;
-  const { groupId } = RestoreUserSchema.parse(await c.req.json());
-  const restoredUser = await authService.restoreUser(userId, groupId);
+  const { groupId, groupIds } = RestoreUserSchema.parse(await c.req.json());
+  const restoredUser = await authService.restoreUser(userId, groupIds ?? groupId);
 
   await auditService.log({
     userId: currentUser.id,

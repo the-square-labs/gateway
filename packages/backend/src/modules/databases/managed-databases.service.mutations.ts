@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { and, eq, isNotNull, isNull } from 'drizzle-orm';
 import type { ManagedDatabaseEngineConfig } from '@/db/schema/databases.js';
 import { databaseConnections, managedDatabaseBindings, managedDatabaseInstances } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
@@ -125,6 +126,7 @@ export class ManagedDatabaseMutationService extends ManagedDatabaseReadService {
       await this.db.delete(databaseConnections).where(eq(databaseConnections.id, connection.id));
       throw error;
     }
+    await grantCreatedResourcePermissions(userId, 'databases', connection.id);
     this.emit(row, 'created');
     await this.auditService.log({
       userId,

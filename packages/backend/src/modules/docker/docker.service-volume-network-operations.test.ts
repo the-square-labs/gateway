@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/lib/created-resource-permissions.js', () => ({
+  grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { DockerManagementService } from './docker.service.js';
 
 function dbWithOnlineDockerNode() {
@@ -59,10 +64,10 @@ describe('DockerManagementService volume and network operations', () => {
 
   it('creates volumes with audit and volume change events', async () => {
     const dispatch = {
-      sendDockerVolumeCommand: vi.fn().mockResolvedValue({
+      sendDockerVolumeCommand: vi.fn().mockImplementation(async (_nodeId, action) => ({
         success: true,
-        detail: JSON.stringify({ Name: 'data' }),
-      }),
+        detail: JSON.stringify(action === 'list' ? [] : { Name: 'data' }),
+      })),
     };
     const { service, audit, eventBus } = createService(dispatch);
 
@@ -84,6 +89,19 @@ describe('DockerManagementService volume and network operations', () => {
       name: 'data',
       action: 'created',
     });
+  });
+
+  it('does not claim an existing external volume through create', async () => {
+    const dispatch = {
+      sendDockerVolumeCommand: vi
+        .fn()
+        .mockResolvedValue({ success: true, detail: JSON.stringify([{ name: 'foreign' }]) }),
+    };
+    const { service } = createService(dispatch);
+    await expect(service.createVolume('node-1', { name: 'foreign' }, 'user-1')).rejects.toMatchObject({
+      code: 'NAME_IN_USE',
+    });
+    expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalledWith('node-1', 'create', expect.anything());
   });
 
   it('requires Personal or higher before creating a disk-image volume', async () => {

@@ -42,7 +42,7 @@ export class InferenceModelAccessService {
         model.defaultAccessAllowed,
         rules.filter((rule) => rule.modelId === model.id),
         user.id,
-        user.groupId
+        user.groupIds ?? [user.groupId]
       );
       return permitted ? [model.id] : [];
     });
@@ -65,7 +65,9 @@ export class InferenceModelAccessService {
 
   private cacheKey(user: User): string {
     const signature = createHash('sha256')
-      .update(`${user.id}:${user.groupId}:${[...user.scopes].sort().join(',')}:${user.isBlocked}`)
+      .update(
+        `${user.id}:${[...(user.groupIds ?? [user.groupId])].sort().join(',')}:${[...user.scopes].sort().join(',')}:${user.isBlocked}`
+      )
       .digest('hex');
     return `inference:model-access:${signature}`;
   }
@@ -80,10 +82,14 @@ export function evaluateModelAccess(
     effect: 'allow' | 'deny';
   }>,
   userId: string,
-  groupId: string
+  groupIds: string | readonly string[]
 ): boolean {
   const userRule = rules.find((rule) => rule.subjectType === 'user' && rule.userId === userId);
-  const groupRule = rules.find((rule) => rule.subjectType === 'group' && rule.groupId === groupId);
-  const effect = userRule?.effect ?? groupRule?.effect;
+  const ids = typeof groupIds === 'string' ? [groupIds] : groupIds;
+  const groupRules = rules.filter(
+    (rule) => rule.subjectType === 'group' && rule.groupId !== null && ids.includes(rule.groupId)
+  );
+  const effect =
+    userRule?.effect ?? (groupRules.some((rule) => rule.effect === 'deny') ? 'deny' : groupRules[0]?.effect);
   return effect ? effect === 'allow' : defaultAllowed;
 }

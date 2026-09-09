@@ -9,6 +9,7 @@ import {
   nodeFolders,
   nodes,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -996,6 +997,12 @@ export class HostingProvisioningService {
     if (!resource) return;
     if (!row.resourceId) {
       const tracked = await this.trackResource(row, connector, resource);
+      if (row.action === 'create')
+        await grantCreatedResourcePermissions(
+          row.actorId,
+          'hosting:resources',
+          row.nodeId ? `node/${row.nodeId}` : tracked.id
+        );
       row = await this.operations.update(row, {
         resourceId: tracked.id,
         phase: 'provisioning',

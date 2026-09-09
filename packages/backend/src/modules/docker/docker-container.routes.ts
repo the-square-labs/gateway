@@ -755,7 +755,13 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
         await container
           .resolve(DockerSecretService)
           .replaceImported(nodeId, data.containerName, data.secrets, c.get('user')!.id);
-        await docker.registerImportedContainer(nodeId, data.containerName, data.containerId, query.folderId);
+        await docker.registerImportedContainer(
+          nodeId,
+          data.containerName,
+          data.containerId,
+          query.folderId,
+          c.get('user')!.id
+        );
         await docker.registerImportedManagedVolumes(nodeId, data.createdVolumes, c.get('user')!.id);
       } catch (error) {
         await container

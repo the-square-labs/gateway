@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import * as OTPAuth from 'otpauth';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
@@ -75,7 +75,10 @@ export class MfaService {
 
   async isGatewayMfaRequired(userId: string): Promise<boolean> {
     const [row] = await this.db
-      .select({ authMethod: users.authMethod, requireGateway2fa: permissionGroups.requireGateway2fa })
+      .select({
+        authMethod: users.authMethod,
+        requireGateway2fa: sql<boolean>`${permissionGroups.requireGateway2fa} OR EXISTS (SELECT 1 FROM permission_groups g WHERE g.id = ANY(${users.additionalGroupIds}) AND g.require_gateway_2fa)`,
+      })
       .from(users)
       .innerJoin(permissionGroups, eq(permissionGroups.id, users.groupId))
       .where(eq(users.id, userId))

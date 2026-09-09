@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, or, sql } from 'drizzle-orm';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { users } from '@/db/schema/index.js';
@@ -14,6 +14,18 @@ export interface GroupScopeRecord {
   scopes: unknown;
   name?: string | null;
   requireGateway2fa?: boolean;
+}
+
+export function userGroupIds(groupId: string, additionalGroupIds: readonly string[] = []): string[] {
+  return [...new Set([groupId, ...additionalGroupIds])];
+}
+
+export function userBelongsToGroup(groupId: string) {
+  return or(eq(users.groupId, groupId), sql`${groupId}::uuid = ANY(${users.additionalGroupIds})`);
+}
+
+export function groupsRequireMfa(groupIds: readonly string[], groupMap: Map<string, GroupScopeRecord>): boolean {
+  return groupIds.some((id) => groupMap.get(id)?.requireGateway2fa === true);
 }
 
 export function computeEffectiveGroupAccess(groupId: string, groupMap: Map<string, GroupScopeRecord>) {
@@ -41,9 +53,12 @@ export function computeEffectiveGroupAccess(groupId: string, groupMap: Map<strin
 export function computeEffectiveUserAccess(
   groupId: string,
   groupMap: Map<string, GroupScopeRecord>,
-  additionalScopes: unknown
+  additionalScopes: unknown,
+  additionalGroupIds: readonly string[] = []
 ) {
-  const groupAccess = computeEffectiveGroupAccess(groupId, groupMap);
+  const groupIds = userGroupIds(groupId, additionalGroupIds);
+  const groupNames = groupIds.map((id) => groupMap.get(id)?.name ?? 'unknown');
+  const groupScopes = canonicalizeScopes(groupIds.flatMap((id) => computeEffectiveGroupAccess(id, groupMap).scopes));
   const normalizedAdditionalScopes = canonicalizeScopes(
     Array.isArray(additionalScopes)
       ? additionalScopes.filter((scope): scope is string => typeof scope === 'string')
@@ -51,10 +66,13 @@ export function computeEffectiveUserAccess(
   );
 
   return {
-    groupName: groupAccess.groupName,
-    groupScopes: groupAccess.scopes,
+    groupName: groupNames[0],
+    groupIds,
+    groupNames,
+    requireGateway2fa: groupsRequireMfa(groupIds, groupMap),
+    groupScopes,
     additionalScopes: normalizedAdditionalScopes,
-    scopes: canonicalizeScopes([...groupAccess.scopes, ...normalizedAdditionalScopes]),
+    scopes: canonicalizeScopes([...groupScopes, ...normalizedAdditionalScopes]),
   };
 }
 
@@ -70,9 +88,14 @@ export async function resolveEffectiveGroupAccess(db: DrizzleClient, groupId: st
   return computeEffectiveGroupAccess(groupId, groupMap);
 }
 
-export async function resolveEffectiveUserAccess(db: DrizzleClient, groupId: string, additionalScopes: unknown) {
+export async function resolveEffectiveUserAccess(
+  db: DrizzleClient,
+  groupId: string,
+  additionalScopes: unknown,
+  additionalGroupIds: readonly string[] = []
+) {
   const groupMap = await fetchGroupScopeMap(db);
-  return computeEffectiveUserAccess(groupId, groupMap, additionalScopes);
+  return computeEffectiveUserAccess(groupId, groupMap, additionalScopes, additionalGroupIds);
 }
 
 export async function resolveLiveUser(db: DrizzleClient, userId: string): Promise<User | null> {
@@ -82,11 +105,8 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
   if (!dbUser) return null;
 
   const groupMap = await fetchGroupScopeMap(db);
-  const { groupName, groupScopes, additionalScopes, scopes } = computeEffectiveUserAccess(
-    dbUser.groupId,
-    groupMap,
-    dbUser.additionalScopes
-  );
+  const { groupName, groupNames, groupIds, requireGateway2fa, groupScopes, additionalScopes, scopes } =
+    computeEffectiveUserAccess(dbUser.groupId, groupMap, dbUser.additionalScopes, dbUser.additionalGroupIds);
   const effectiveScopes = dbUser.deletedAt ? [] : await expandFolderScopes(db, scopes);
   return {
     id: dbUser.id,
@@ -97,7 +117,9 @@ export async function resolveLiveUser(db: DrizzleClient, userId: string): Promis
     avatarUrl: dbUser.avatarUrl,
     groupId: dbUser.groupId,
     groupName,
-    requireGateway2fa: Boolean(groupMap.get(dbUser.groupId)?.requireGateway2fa),
+    groupNames,
+    groupIds,
+    requireGateway2fa,
     groupScopes,
     additionalScopes,
     scopes: effectiveScopes,

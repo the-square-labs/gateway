@@ -10,6 +10,7 @@ import {
   integrationConnectors,
   pageProjects,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { IntegrationsService } from '@/modules/integrations/integrations.service.js';
@@ -282,6 +283,7 @@ export class DockerSourceService {
       updatedById: user.id,
       updatedAt: now,
     };
+    let createdContainerResourceId: string | undefined;
     const [row] = options.createOnly
       ? await this.db.transaction(async (tx) => {
           const inserted = await tx
@@ -297,7 +299,7 @@ export class DockerSourceService {
             );
           }
           if (input.target.kind === 'container' && options.initialConfig) {
-            await new DockerAccessResourceService(this.db).ensureContainer(
+            createdContainerResourceId = await new DockerAccessResourceService(this.db).ensureContainer(
               input.target.nodeId,
               input.target.containerName,
               '',
@@ -345,6 +347,12 @@ export class DockerSourceService {
           .where(eq(dockerSourceBindings.id, row.id));
       });
       const refreshed = await this.findByTarget(input.target);
+      if (createdContainerResourceId && input.target.kind === 'container')
+        await grantCreatedResourcePermissions(
+          user.id,
+          'docker:containers',
+          `${input.target.nodeId}/${createdContainerResourceId}`
+        );
       return toPublicDockerSource(refreshed ?? row, resolved.provider);
     } catch (error) {
       // Only the source inserted by this creation request may be rolled back.

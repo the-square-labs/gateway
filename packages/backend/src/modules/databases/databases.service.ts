@@ -1,5 +1,6 @@
 import { asc, count, eq, ilike, inArray, or, type SQL } from 'drizzle-orm';
 import { type DatabaseHealthEntry, databaseConnections } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -328,6 +329,7 @@ export class DatabaseConnectionService extends DatabaseConnectionServiceRuntime 
       resourceId: row.id,
       details: { name: row.name, type: row.type, host: row.host, port: row.port },
     });
+    await grantCreatedResourcePermissions(userId, 'databases', row.id);
     this.emitChange(row.id, 'created', { name: row.name, type: row.type, healthStatus: row.healthStatus });
     return toDatabaseConnectionView(row, normalized, false, false);
   }

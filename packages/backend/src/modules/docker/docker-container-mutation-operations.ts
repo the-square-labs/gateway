@@ -1,4 +1,5 @@
 import type { DrizzleClient } from '@/db/client.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -185,6 +186,9 @@ export async function createContainer(
   const registryId = typeof config.registryId === 'string' ? config.registryId : null;
   delete config.registryId;
   const requestedName = (config.name as string | undefined)?.trim();
+  const previousResourceId = requestedName
+    ? await ctx.accessResourceService?.resolveContainer?.(nodeId, { name: requestedName })
+    : null;
   if (requestedName) {
     await ctx.assertNameAvailable(nodeId, requestedName);
     ctx.setTransition(nodeId, requestedName, 'creating');
@@ -219,7 +223,9 @@ export async function createContainer(
       details: { nodeId, name: createdName, image: config.image },
     });
     if (createdName && newId) {
-      await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+      const resourceId = await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+      if (resourceId && resourceId !== previousResourceId)
+        await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
       await placeCreatedDockerResource(
         ctx.db,
         nodeId,
@@ -558,6 +564,7 @@ export async function renameContainer(
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const oldName = await ctx.resolveContainerName(nodeId, containerId);
   ctx.requireNoTransition(nodeId, oldName);
+  await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
   await ctx.assertNameAvailable(nodeId, newName);
   ctx.setTransition(nodeId, newName, 'creating');
   try {
@@ -691,7 +698,8 @@ export async function duplicateContainer(
   }
 
   try {
-    await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
+    const resourceId = await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
+    if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
     await placeCreatedDockerResource(ctx.db, nodeId, 'container', name, folderId);
     await ctx.environmentService?.copy(nodeId, sourceName, name);
     await ctx.runtimeSettingsService?.copy(nodeId, sourceName, name);

@@ -1,4 +1,4 @@
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown } from "lucide-react";
 import { Fragment, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
@@ -29,22 +29,30 @@ interface ComboboxProps {
   renderOption?: (option: ComboboxOption) => ReactNode;
 }
 
-export function Combobox({
-  value,
-  options,
-  onValueChange,
-  freeText = false,
-  showAllOptionsOnFocus = false,
-  placeholder = "Select...",
-  searchPlaceholder = "Search...",
-  emptyMessage = "No results found.",
-  disabled,
-  className,
-  inputClassName,
-  contentClassName,
-  ariaLabel,
-  renderOption,
-}: ComboboxProps) {
+type MultiComboboxProps = Omit<ComboboxProps, "value" | "onValueChange" | "freeText"> & {
+  multiple: true;
+  value: string[];
+  onValueChange: (value: string[]) => void;
+  freeText?: false;
+  selectionLabel?: (values: string[]) => string;
+};
+
+export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiComboboxProps) {
+  const {
+    options,
+    freeText = false,
+    showAllOptionsOnFocus = false,
+    placeholder = "Select...",
+    searchPlaceholder = "Search...",
+    emptyMessage = "No results found.",
+    disabled,
+    className,
+    inputClassName,
+    contentClassName,
+    ariaLabel,
+    renderOption,
+  } = props;
+  const value = props.multiple ? "" : props.value;
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [showAllOptions, setShowAllOptions] = useState(false);
@@ -102,9 +110,25 @@ export function Combobox({
 
   const selectOption = (option: ComboboxOption) => {
     if (option.disabled) return;
-    onValueChange(option.value);
+    if (props.multiple) {
+      props.onValueChange(
+        props.value.includes(option.value)
+          ? props.value.filter((value) => value !== option.value)
+          : [...props.value, option.value]
+      );
+      return;
+    }
+    props.onValueChange(option.value);
     close();
   };
+  const displayValue = props.multiple
+    ? (props.selectionLabel?.(props.value) ??
+      (props.value.length > 1
+        ? `${props.value.length} selected`
+        : (options.find((option) => option.value === props.value[0])?.label ?? "")))
+    : freeText
+      ? value
+      : (selected?.label ?? "");
 
   return (
     <Popover
@@ -126,7 +150,7 @@ export function Combobox({
             role="combobox"
             aria-label={ariaLabel}
             aria-expanded={contentOpen}
-            value={open ? query : freeText ? value : (selected?.label ?? "")}
+            value={open ? query : displayValue}
             onFocus={() => {
               setActiveValue(null);
               setQuery(freeText ? value : "");
@@ -146,7 +170,7 @@ export function Combobox({
               setQuery(nextValue);
               setShowAllOptions(false);
               setOpen(true);
-              if (freeText) onValueChange(nextValue);
+              if (!props.multiple && freeText) props.onValueChange(nextValue);
             }}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
@@ -214,6 +238,7 @@ export function Combobox({
                   type="button"
                   ref={index === activeIndex ? activeOptionRef : undefined}
                   aria-disabled={option.disabled}
+                  aria-pressed={props.multiple ? props.value.includes(option.value) : undefined}
                   className={cn(
                     "relative flex w-full items-center gap-2 whitespace-nowrap px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground aria-disabled:opacity-50",
                     index === activeIndex && "bg-accent text-accent-foreground"
@@ -224,6 +249,14 @@ export function Combobox({
                     selectOption(option);
                   }}
                 >
+                  {props.multiple ? (
+                    <span
+                      aria-hidden="true"
+                      className="flex h-4 w-4 shrink-0 items-center justify-center border border-input"
+                    >
+                      {props.value.includes(option.value) ? <Check className="h-3 w-3" /> : null}
+                    </span>
+                  ) : null}
                   {renderOption?.(option) ?? option.label}
                 </button>
               </Fragment>

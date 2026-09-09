@@ -4,6 +4,7 @@ import { Navigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlTab } from "@/hooks/use-url-tab";
@@ -64,18 +65,15 @@ export function Administration() {
         .catch(() => {});
     }
     if (canGroups) {
-      api
-        .listNodes({ limit: 100 })
-        .then((result) => api.setCache("admin:scope-nodes", result.data ?? []))
-        .catch(() => {});
-      api
-        .listProxyHosts({ limit: 100 })
-        .then((result) => api.setCache("admin:scope-proxy-hosts", result.data ?? []))
-        .catch(() => {});
-      api
-        .listDatabases({ limit: 200 })
-        .then((result) => api.setCache("admin:scope-databases", result.data ?? []))
-        .catch(() => {});
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+        .then((result) => api.setCache("admin:scope-nodes", result))
+        .catch((error) => reportScopeLoadError("nodes", error));
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+        .then((result) => api.setCache("admin:scope-proxy-hosts", result))
+        .catch((error) => reportScopeLoadError("routes", error));
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+        .then((result) => api.setCache("admin:scope-databases", result))
+        .catch((error) => reportScopeLoadError("databases", error));
     }
     if (canAudit) {
       api

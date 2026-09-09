@@ -24,7 +24,12 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
-import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
+import {
+  allResourcePages,
+  type FolderOption,
+  flattenFolderTree,
+  reportScopeLoadError,
+} from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -158,7 +163,6 @@ export function AdminGroups({
       groups.filter(
         (group) =>
           group.id !== editingGroup?.id &&
-          !group.parentId &&
           !getGroupEffectiveScopes(group).includes("admin:system") &&
           isScopeSubset(getGroupEffectiveScopes(group), userScopes)
       ),
@@ -187,27 +191,33 @@ export function AdminGroups({
   useEffect(() => {
     fetchGroups();
     fetchCAs();
-    api
-      .listNodes({ limit: 100 })
+    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-nodes", r.data ?? []);
-        setNodesList(r.data ?? []);
+        api.setCache("admin:scope-nodes", r);
+        setNodesList(r);
       })
-      .catch(() => {});
-    api
-      .listProxyHosts({ limit: 100 })
+      .catch((error) => {
+        setNodesList([]);
+        reportScopeLoadError("nodes", error);
+      });
+    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-proxy-hosts", r.data ?? []);
-        setProxyHostsList(r.data ?? []);
+        api.setCache("admin:scope-proxy-hosts", r);
+        setProxyHostsList(r);
       })
-      .catch(() => {});
-    api
-      .listDatabases({ limit: 200 })
+      .catch((error) => {
+        setProxyHostsList([]);
+        reportScopeLoadError("routes", error);
+      });
+    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-databases", r.data ?? []);
-        setDatabasesList(r.data ?? []);
+        api.setCache("admin:scope-databases", r);
+        setDatabasesList(r);
       })
-      .catch(() => {});
+      .catch((error) => {
+        setDatabasesList([]);
+        reportScopeLoadError("databases", error);
+      });
     if (
       scopeMatches(userScopes, "logs:schemas:view") ||
       scopeMatches(userScopes, "logs:manage") ||
@@ -219,7 +229,10 @@ export function AdminGroups({
           api.setCache("admin:scope-logging-schemas", data);
           setLoggingSchemasList(data);
         })
-        .catch(() => {});
+        .catch((error) => {
+          setLoggingSchemasList([]);
+          reportScopeLoadError("logging schemas", error);
+        });
     }
   }, [fetchGroups, fetchCAs, userScopes]);
 
@@ -236,34 +249,40 @@ export function AdminGroups({
   });
 
   useRealtime("node.changed", () => {
-    api
-      .listNodes({ limit: 100 })
+    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-nodes", r.data ?? []);
-        setNodesList(r.data ?? []);
+        api.setCache("admin:scope-nodes", r);
+        setNodesList(r);
       })
-      .catch(() => {});
+      .catch((error) => {
+        setNodesList([]);
+        reportScopeLoadError("nodes", error);
+      });
   });
 
   useRealtime("proxy.host.changed", (payload) => {
     if ((payload as { action?: string } | null)?.action === "health.sampled") return;
-    api
-      .listProxyHosts({ limit: 100 })
+    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-proxy-hosts", r.data ?? []);
-        setProxyHostsList(r.data ?? []);
+        api.setCache("admin:scope-proxy-hosts", r);
+        setProxyHostsList(r);
       })
-      .catch(() => {});
+      .catch((error) => {
+        setProxyHostsList([]);
+        reportScopeLoadError("routes", error);
+      });
   });
 
   useRealtime("database.changed", () => {
-    api
-      .listDatabases({ limit: 200 })
+    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
       .then((r) => {
-        api.setCache("admin:scope-databases", r.data ?? []);
-        setDatabasesList(r.data ?? []);
+        api.setCache("admin:scope-databases", r);
+        setDatabasesList(r);
       })
-      .catch(() => {});
+      .catch((error) => {
+        setDatabasesList([]);
+        reportScopeLoadError("databases", error);
+      });
   });
 
   const openCreateDialog = useCallback(() => {
@@ -738,14 +757,7 @@ export function AdminGroups({
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Inherit From</label>
-              {editingGroup && groups.some((g) => g.parentId === editingGroup.id) ? (
-                <>
-                  <Input value="None" disabled />
-                  <p className="text-xs text-muted-foreground">
-                    This group has child groups — it cannot be nested under another group
-                  </p>
-                </>
-              ) : (
+              {
                 <>
                   <Select
                     value={formParentId ?? "__none__"}
@@ -770,7 +782,7 @@ export function AdminGroups({
                     removed here
                   </p>
                 </>
-              )}
+              }
             </div>
             <div className="border border-border">
               <ScopeSearchFilter

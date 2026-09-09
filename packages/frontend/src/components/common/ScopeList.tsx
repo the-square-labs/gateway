@@ -12,6 +12,7 @@ import type {
   ProxyHost,
 } from "@/types";
 import {
+  allResourcePages,
   type DockerResourceOption,
   type FolderFamily,
   type FolderOption,
@@ -25,6 +26,7 @@ import {
   matchesQuery,
   parseScopedSelections,
   type RestrictionRow,
+  reportScopeLoadError,
   type ScopeItem,
   type ScopeResourceCatalog,
 } from "./scope-list-helpers";
@@ -128,13 +130,15 @@ export function ScopeList({
       if (!cancelled) setFolderOptions(options.flat());
     });
     if (families.includes("domains")) {
-      void api
-        .listDomains({ limit: 200 })
+      void allResourcePages((page) => api.listDomains({ page, limit: 100 }))
         .then((response) => {
-          if (!cancelled) setDomainResources(response.data ?? []);
+          if (!cancelled) setDomainResources(response);
         })
-        .catch(() => {
-          if (!cancelled) setDomainResources([]);
+        .catch((error) => {
+          if (!cancelled) {
+            setDomainResources([]);
+            reportScopeLoadError("domains", error);
+          }
         });
     } else {
       setDomainResources([]);
@@ -145,8 +149,11 @@ export function ScopeList({
         .then((items) => {
           if (!cancelled) setLoggingEnvironments(items ?? []);
         })
-        .catch(() => {
-          if (!cancelled) setLoggingEnvironments([]);
+        .catch((error) => {
+          if (!cancelled) {
+            setLoggingEnvironments([]);
+            reportScopeLoadError("logging environments", error);
+          }
         });
     } else {
       setLoggingEnvironments([]);
@@ -172,7 +179,11 @@ export function ScopeList({
     let cancelled = false;
     void Promise.all(
       dockerNodes.map(async (node) => {
-        const containers = await api.listDockerContainers(node.id).catch(() => []);
+        const containers = await api.listDockerContainers(node.id).catch((error) => {
+          if (!cancelled)
+            reportScopeLoadError(`containers on ${node.displayName || node.hostname}`, error);
+          return [];
+        });
         return containers.flatMap((resource) =>
           resource.scopeResourceId
             ? [
@@ -214,8 +225,11 @@ export function ScopeList({
       .then((repositories) => {
         if (!cancelled) setDockerRegistryRepositories(repositories);
       })
-      .catch(() => {
-        if (!cancelled) setDockerRegistryRepositories([]);
+      .catch((error) => {
+        if (!cancelled) {
+          setDockerRegistryRepositories([]);
+          reportScopeLoadError("registry repositories", error);
+        }
       });
     return () => {
       cancelled = true;

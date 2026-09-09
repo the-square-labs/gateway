@@ -30,20 +30,41 @@ import {
 } from '@/modules/settings/general-settings.service.js';
 import { CLIENT_IP_SOURCE_VALUES } from '@/modules/settings/network-settings.service.js';
 
-export const CreateUserSchema = z.object({
-  folderId: z.string().uuid().nullable().optional(),
-  email: z.string().email().max(255),
-  name: z.string().trim().min(1, 'Name is required').max(255),
-  groupId: z.string().uuid(),
-  authMethod: z.enum(['oidc', 'password', 'email_otp']).default('oidc'),
-});
+export const CreateUserSchema = z
+  .object({
+    folderId: z.string().uuid().nullable().optional(),
+    email: z.string().email().max(255),
+    name: z.string().trim().min(1, 'Name is required').max(255),
+    groupId: z.string().uuid().optional(),
+    groupIds: z.array(z.string().uuid()).min(1).max(100).optional(),
+    authMethod: z.enum(['oidc', 'password', 'email_otp']).default('oidc'),
+  })
+  .refine((value) => Boolean(value.groupIds?.length || value.groupId), {
+    message: 'Select at least one group',
+    path: ['groupIds'],
+  })
+  .transform((value) => ({
+    ...value,
+    groupId: value.groupIds?.[0] ?? value.groupId!,
+    groupIds: [...new Set(value.groupIds ?? [value.groupId!])],
+  }));
 
-export const UpdateUserGroupSchema = z.object({
-  groupId: z.string().uuid(),
-});
+export const UpdateUserGroupSchema = z
+  .object({
+    groupId: z.string().uuid().optional(),
+    groupIds: z.array(z.string().uuid()).min(1).max(100).optional(),
+  })
+  .refine((value) => Boolean(value.groupIds?.length || value.groupId), {
+    message: 'Select at least one group',
+    path: ['groupIds'],
+  })
+  .transform((value) => ({
+    groupId: value.groupIds?.[0] ?? value.groupId!,
+    groupIds: [...new Set(value.groupIds ?? [value.groupId!])],
+  }));
 
 export const UpdateUserAdditionalPermissionsSchema = z.object({
-  additionalScopes: z.array(z.string().trim().min(1).max(512)).max(512),
+  additionalScopes: z.array(z.string().trim().min(1).max(512)).max(20000),
 });
 
 export const UpdateBlockSchema = z.object({
@@ -52,6 +73,7 @@ export const UpdateBlockSchema = z.object({
 
 export const RestoreUserSchema = z.object({
   groupId: z.string().uuid().optional(),
+  groupIds: z.array(z.string().uuid()).min(1).max(100).optional(),
 });
 
 export const UpdateUserAuthMethodSchema = z.object({
@@ -155,6 +177,7 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .optional(),
       updateChannel: z.enum(['stable', 'preview']).optional(),
       hideExternalBranding: z.boolean().optional(),
+      autoAssignCreatedResourcePermissions: z.boolean().optional(),
       fileUploadMaxBytes: z.number().int().min(FILE_UPLOAD_MIN_BYTES).max(FILE_UPLOAD_MAX_BYTES).optional(),
       fileOpenMaxBytes: z.number().int().min(FILE_OPEN_MIN_BYTES).max(FILE_OPEN_MAX_BYTES).optional(),
       gatewayGrpcPublicTarget: z

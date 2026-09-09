@@ -1,6 +1,7 @@
 import { and, asc, eq, ilike, inArray, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { type LoggingFieldDefinition, loggingEnvironments, loggingSchemas } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -96,6 +97,7 @@ export class LoggingEnvironmentService {
       resourceId: row.id,
       details: { name: row.name, slug: row.slug },
     });
+    await grantCreatedResourcePermissions(userId, 'logs:environments', row.id);
     this.eventBus?.publish('logging.environment.changed', { action: 'create', id: row.id });
     return this.get(row.id);
   }

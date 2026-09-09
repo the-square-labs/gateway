@@ -4,6 +4,7 @@ import { domains } from '@/db/schema/domains.js';
 import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
@@ -396,6 +397,7 @@ export class DomainsService extends DomainsServiceRuntime {
       },
     });
 
+    await grantCreatedResourcePermissions(userId, 'domains', row.id);
     this.emitDomain(row.id, 'created', row.domain);
 
     return row;
@@ -504,6 +506,7 @@ export class DomainsService extends DomainsServiceRuntime {
         nginxNodeId: plan.nginxNode.id,
       },
     });
+    await grantCreatedResourcePermissions(userId, 'domains', row.id);
     this.emitDomain(row.id, 'created', row.domain);
     return row;
   }

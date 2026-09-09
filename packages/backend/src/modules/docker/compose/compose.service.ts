@@ -10,6 +10,7 @@ import {
   dockerSecrets,
   managedDatabaseBindings,
 } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -258,6 +259,7 @@ export class DockerComposeService {
       resourceId: result.project.id,
       details: { nodeId, name: result.project.name, revisionId: result.revision.id },
     });
+    await grantCreatedResourcePermissions(userId, 'docker:compose', `${nodeId}/${result.project.id}`);
     this.emit('created', result.project);
     return result;
   }
@@ -294,6 +296,7 @@ export class DockerComposeService {
       resourceId: project.id,
       details: { nodeId, name: project.name },
     });
+    await grantCreatedResourcePermissions(userId, 'docker:compose', `${nodeId}/${project.id}`);
     this.emit('created', project, { source: 'repository' });
     return project;
   }

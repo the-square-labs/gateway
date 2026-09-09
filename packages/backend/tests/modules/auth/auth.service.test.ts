@@ -15,7 +15,8 @@ vi.mock('openid-client', () => ({
   authorizationCodeGrant: authorizationCodeGrantMock,
 }));
 
-vi.mock('@/modules/auth/live-session-user.js', () => ({
+vi.mock('@/modules/auth/live-session-user.js', async () => ({
+  ...await vi.importActual<typeof import('@/modules/auth/live-session-user.js')>('@/modules/auth/live-session-user.js'),
   resolveEffectiveGroupAccess: vi.fn().mockResolvedValue({
     groupName: 'admin',
     scopes: ['nodes:details'],
@@ -364,14 +365,21 @@ describe('AuthService additional permissions', () => {
       getConfig: vi.fn().mockResolvedValue({ mfaExistingSessionGracePeriodDays: 3 }),
     };
     const eventBus = { publish: vi.fn() };
+    vi.mocked(fetchGroupScopeMap).mockResolvedValue(new Map([
+      ['group-1', { id: 'group-1', name: 'Source', parentId: null, scopes: [], requireGateway2fa: sourceRequiresMfa }],
+      ['group-2', { id: 'group-2', name: 'MFA destination', parentId: null, scopes: [], requireGateway2fa: destinationRequiresMfa }],
+    ]));
+    const db = {
+      query: {
+        permissionGroups: { findFirst: findGroup },
+        users: { findFirst: vi.fn().mockResolvedValue(currentDbUser) },
+      },
+      update,
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(() => ({ for: vi.fn().mockResolvedValue([{ id: 'group-2' }]) })) })) })) })),
+      transaction: async (run: (tx: unknown) => Promise<unknown>): Promise<unknown> => run(db),
+    };
     const service = new AuthService(
-      {
-        query: {
-          permissionGroups: { findFirst: findGroup },
-          users: { findFirst: vi.fn().mockResolvedValue(currentDbUser) },
-        },
-        update,
-      } as any,
+      db as any,
       sessionService as any,
       {} as any,
       authSettingsService as any,

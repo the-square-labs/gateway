@@ -87,7 +87,7 @@ describe("IntegrationsSetupWizard", () => {
         })
       )
     );
-    expect(screen.getByText("Git connector connected")).toBeInTheDocument();
+    expect(await screen.findByText("Git connector connected")).toBeInTheDocument();
     expect(onFinished).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Continue scenario" }));

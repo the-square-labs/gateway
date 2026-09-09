@@ -1,4 +1,6 @@
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
+import { dockerAccessResources, dockerBuilds, dockerSourceBindings } from '@/db/schema/index.js';
 import {
   DockerAccessResourceService,
   dockerScopedNodeIds,
@@ -6,6 +8,58 @@ import {
   parseDockerChildScopeResourceId,
 } from './docker-access-resource.service.js';
 import { rewriteDockerResourceScopes } from './docker-access-resource-scope-rewrite.js';
+
+describe('Container rename with a build source', () => {
+  function harness(bindingName = 'api', active = false) {
+    const updates: Array<{ table: unknown; values: Record<string, any>; condition: any }> = [];
+    const binding = { id: 'source-1', containerName: bindingName };
+    const db: any = {
+      execute: vi.fn(),
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () => {
+            if (table === dockerSourceBindings) return Promise.resolve([binding]);
+            return { limit: async () => (table === dockerBuilds && active ? [{ id: 'build-1' }] : []) };
+          },
+        }),
+      })),
+      update: vi.fn((table) => ({
+        set: (values: Record<string, any>) => ({
+          where: async (condition: any) => {
+            updates.push({ table, values, condition });
+          },
+        }),
+      })),
+      transaction: vi.fn(async (run) => run(db)),
+    };
+    return { service: new DockerAccessResourceService(db), db, updates };
+  }
+
+  it('renames the source target and initial config in the same transaction without replacing the repository binding', async () => {
+    const { service, db, updates } = harness();
+    await service.renameContainer('node-1', 'api', 'renamed');
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(updates.map((update) => update.table)).toEqual([dockerAccessResources, dockerSourceBindings]);
+    const source = updates[1];
+    expect(Object.keys(source.values).sort()).toEqual(['containerName', 'initialConfig', 'updatedAt']);
+    expect(source.values.containerName).toBe('renamed');
+    const dialect = new PgDialect();
+    const config = dialect.sqlToQuery(source.values.initialConfig);
+    expect(config.sql).toContain('jsonb_set');
+    expect(config.sql).toContain("'{name}'");
+    expect(config.params).toContain('renamed');
+    expect(dialect.sqlToQuery(source.condition).params).toEqual(['container', 'node-1', 'api']);
+  });
+
+  it.each([
+    ['api', true, 'BUILD_IN_PROGRESS'],
+    ['renamed', false, 'NAME_IN_USE'],
+  ])('rejects unsafe rename before metadata writes (%s, %s)', async (name, active, code) => {
+    const { service, updates } = harness(name as string, active as boolean);
+    await expect(service.renameContainer('node-1', 'api', 'renamed')).rejects.toMatchObject({ code });
+    expect(updates).toEqual([]);
+  });
+});
 
 describe('Docker access resource scopes', () => {
   it('parses child resource ids and derives their owning nodes', () => {

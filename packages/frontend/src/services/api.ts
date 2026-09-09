@@ -442,6 +442,7 @@ class ApiClient extends withPagesDomainsApi(
     email: string;
     name: string;
     groupId: string;
+    groupIds?: string[];
     authMethod?: "oidc" | "password" | "email_otp";
   }): Promise<User> {
     return this.request<User>("/admin/users", {
@@ -450,10 +451,10 @@ class ApiClient extends withPagesDomainsApi(
     });
   }
 
-  async updateUserGroup(userId: string, groupId: string): Promise<User> {
+  async updateUserGroup(userId: string, groups: string | string[]): Promise<User> {
     return this.request<User>(`/admin/users/${userId}/group`, {
       method: "PATCH",
-      body: JSON.stringify({ groupId }),
+      body: JSON.stringify(typeof groups === "string" ? { groupId: groups } : { groupIds: groups }),
     });
   }
 
@@ -528,10 +529,12 @@ class ApiClient extends withPagesDomainsApi(
     return this.request<import("@/types").DeletedUser[]>("/admin/users/deleted");
   }
 
-  async restoreUser(userId: string, groupId?: string): Promise<User> {
+  async restoreUser(userId: string, groups?: string | string[]): Promise<User> {
     return this.request<User>(`/admin/users/${userId}/restore`, {
       method: "POST",
-      body: JSON.stringify(groupId ? { groupId } : {}),
+      body: JSON.stringify(
+        typeof groups === "string" ? { groupId: groups } : groups ? { groupIds: groups } : {}
+      ),
     });
   }
 

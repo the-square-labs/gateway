@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
@@ -203,6 +204,7 @@ sslRoutes.openapi(requestAcmeCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const result = await sslService.requestACMECert(input, user.id, user.email);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id);
   return c.json({ data: result }, 201);
 });
 
@@ -221,6 +223,7 @@ sslRoutes.openapi(uploadSslCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.uploadCert(input, user.id);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
   return c.json({ data: cert }, 201);
 });
 
@@ -239,6 +242,7 @@ sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.linkInternalCert(input, user.id);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
   return c.json({ data: cert }, 201);
 });
 

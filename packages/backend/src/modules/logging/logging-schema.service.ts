@@ -1,6 +1,7 @@
 import { asc, eq, ilike, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { type LoggingFieldDefinition, loggingSchemas } from '@/db/schema/index.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -77,6 +78,7 @@ export class LoggingSchemaService {
       resourceId: row.id,
       details: { name: row.name, slug: row.slug },
     });
+    await grantCreatedResourcePermissions(userId, 'logs:schemas', row.id);
     this.eventBus?.publish('logging.schema.changed', { action: 'create', id: row.id });
     return toView(row);
   }
