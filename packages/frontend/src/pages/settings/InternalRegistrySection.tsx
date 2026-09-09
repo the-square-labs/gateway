@@ -20,7 +20,6 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
-import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { DockerInternalRegistryState, Node, SSLCertificate } from "@/types";
 
 interface InternalRegistrySectionProps {
@@ -94,7 +93,6 @@ function certificateCoversHostname(certificate: SSLCertificate, hostname: string
 }
 
 export function InternalRegistrySection({ nodesList }: InternalRegistrySectionProps) {
-  const licensePlan = useUIBootstrapStore((store) => store.snapshot?.license.plan);
   const [state, setState] = useState<DockerInternalRegistryState | null>(null);
   const [externalEnabled, setExternalEnabled] = useState(false);
   const [hostname, setHostname] = useState("");
@@ -134,7 +132,6 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   const used = state?.storageUsedBytes ?? 0;
   const capacity = state?.storageCapacityBytes ?? null;
   const free = capacity === null ? null : Math.max(0, capacity - used);
-  const externalAccessRequiresUpgrade = licensePlan !== "business" && licensePlan !== "enterprise";
   const statusReason = registryStatusReason(state);
   const readOnlyReason =
     state && !state.writable
@@ -277,9 +274,7 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
               label="External access"
               help="Publishes the internal registry through an Nginx ingress so Docker clients outside Gateway's private transport can pull images over HTTPS."
             />
-            {externalAccessRequiresUpgrade && (
-              <LicensePlanBadge plan="business" label="Business+" />
-            )}
+            <LicensePlanBadge feature="git-push-to-deploy" label="Business+" />
           </span>
         }
         description="Internal builds and pulls keep working when this is disabled."

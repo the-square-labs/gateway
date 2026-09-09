@@ -1,6 +1,12 @@
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import type { PaidLicensePlan } from "@/stores/license-paywall";
+import {
+  LICENSE_FEATURE_PLANS,
+  LICENSE_PLAN_RANK,
+  type LicenseFeature,
+  type PaidLicensePlan,
+} from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
 const LABELS: Record<PaidLicensePlan, string> = {
   personal: "Personal",
@@ -20,7 +26,18 @@ const DESCRIPTIONS: Record<PaidLicensePlan, string> = {
   enterprise: "This feature requires the Enterprise plan.",
 };
 
-export function LicensePlanBadge({ plan, label }: { plan: PaidLicensePlan; label?: string }) {
+export function LicensePlanBadge({ feature, label }: { feature: LicenseFeature; label?: string }) {
+  const license = useUIBootstrapStore((state) => state.snapshot?.license);
+  const plan = LICENSE_FEATURE_PLANS[feature];
+
+  if (
+    !license ||
+    license.entitlements.features.includes(feature) ||
+    LICENSE_PLAN_RANK[license.plan] >= LICENSE_PLAN_RANK[plan]
+  ) {
+    return null;
+  }
+
   return (
     <TooltipProvider delayDuration={200}>
       <Tooltip>

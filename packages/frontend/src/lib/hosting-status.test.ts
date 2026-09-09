@@ -3,12 +3,29 @@ import type { HostingResource } from "@/types/hosting";
 import {
   hostingNodeLabel,
   hostingOperationLabel,
+  hostingPowerActionUnavailableReason,
   hostingPowerLabel,
   hostingSnapshotBadgeVariant,
   hostingSnapshotLabel,
   isStaleHostingOperation,
   isStaleHostingSnapshotRevision,
 } from "./hosting-status";
+
+it.each([
+  "running",
+  "stopped",
+  "starting",
+  "stopping",
+  "unknown",
+  undefined,
+] as const)("only enables applicable power actions for %s", (powerState) => {
+  expect(!hostingPowerActionUnavailableReason("start", powerState)).toBe(powerState === "stopped");
+  expect(!hostingPowerActionUnavailableReason("shutdown", powerState)).toBe(
+    powerState === "running"
+  );
+  expect(!hostingPowerActionUnavailableReason("reboot", powerState)).toBe(powerState === "running");
+  expect(hostingPowerActionUnavailableReason("delete", powerState)).toBeUndefined();
+});
 
 it("projects provisioning and destruction without altering provider power or daemon health", () => {
   const vm = { powerState: "stopped" } as HostingResource;

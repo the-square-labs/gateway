@@ -28,7 +28,7 @@ export function CertificateAuthoritiesCard({ cas, hasScope }: CertificateAuthori
           <Link
             key={ca.id}
             to={`/cas/${ca.id}`}
-            className="flex items-center gap-3 px-4 py-3 hover:bg-muted/50 transition-colors"
+            className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition-colors"
           >
             <span className="text-sm font-medium truncate flex-1">{ca.commonName}</span>
             <Badge variant="secondary" size="inline">

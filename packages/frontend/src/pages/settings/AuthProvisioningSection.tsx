@@ -54,8 +54,6 @@ export function AuthProvisioningSection({
   section = "all",
 }: AuthProvisioningSectionProps) {
   const {
-    pkiEntitled,
-    siemEntitled,
     settings,
     initialLoadComplete,
     isSavingAutoCreate,
@@ -398,7 +396,7 @@ export function AuthProvisioningSection({
                     label="PKI"
                     help="PKI enables Gateway-managed certificate authorities, certificates, revocation, and reusable issuance templates."
                   />
-                  {!pkiEntitled && <LicensePlanBadge plan="enterprise" />}
+                  <LicensePlanBadge feature="internal-pki" />
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Show PKI navigation and certificate management
@@ -420,7 +418,7 @@ export function AuthProvisioningSection({
                     label="SIEM audit export"
                     help="Sends privacy-reduced Gateway audit events to configured security monitoring collectors for centralized investigation and retention."
                   />
-                  {!siemEntitled && <LicensePlanBadge plan="enterprise" />}
+                  <LicensePlanBadge feature="siem-export" />
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Show SIEM screens and audit event delivery

@@ -32,7 +32,11 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
-import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
+import {
+  allResourcePages,
+  loadScopeResourceList,
+  reportScopeLoadError,
+} from "@/components/common/scope-list-helpers";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -225,19 +229,25 @@ export function Profile() {
   useEffect(() => {
     if (activeTab !== "authorizations") return;
 
-    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    loadScopeResourceList("nodes:details", () =>
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    )
       .then(setNodesList)
       .catch((error) => {
         setNodesList([]);
         reportScopeLoadError("nodes", error);
       });
-    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    loadScopeResourceList("proxy:view", () =>
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    )
       .then(setProxyHostsList)
       .catch((error) => {
         setProxyHostsList([]);
         reportScopeLoadError("routes", error);
       });
-    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    loadScopeResourceList("databases:view", () =>
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    )
       .then(setDatabasesList)
       .catch((error) => {
         setDatabasesList([]);
@@ -248,8 +258,7 @@ export function Profile() {
       scopeMatches(userScopes ?? [], "logs:manage") ||
       (deriveAllowedResourceIdsByScope(userScopes ?? [])["logs:schemas:view"]?.length ?? 0) > 0
     ) {
-      api
-        .listLoggingSchemas()
+      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
         .then(setLoggingSchemasList)
         .catch((error) => {
           setLoggingSchemasList([]);

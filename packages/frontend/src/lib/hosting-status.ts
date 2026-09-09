@@ -1,4 +1,19 @@
-import type { HostingOperation, HostingResource, HostingVmSnapshotStatus } from "@/types/hosting";
+import type {
+  HostingAction,
+  HostingOperation,
+  HostingResource,
+  HostingVmSnapshotStatus,
+} from "@/types/hosting";
+
+export function hostingPowerActionUnavailableReason(
+  action: HostingAction,
+  powerState: HostingResource["powerState"] | undefined
+): string | undefined {
+  if (action === "start" && powerState !== "stopped") return "The VM must be stopped to start it";
+  if ((action === "shutdown" || action === "reboot") && powerState !== "running")
+    return "The VM must be running for this action";
+  return undefined;
+}
 
 type Operation = Pick<HostingOperation, "action" | "phase"> &
   Partial<Pick<HostingOperation, "errorCode">>;

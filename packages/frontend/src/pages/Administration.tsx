@@ -4,7 +4,11 @@ import { Navigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
-import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
+import {
+  allResourcePages,
+  loadScopeResourceList,
+  reportScopeLoadError,
+} from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useUrlTab } from "@/hooks/use-url-tab";
@@ -65,13 +69,19 @@ export function Administration() {
         .catch(() => {});
     }
     if (canGroups) {
-      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      loadScopeResourceList("nodes:details", () =>
+        allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      )
         .then((result) => api.setCache("admin:scope-nodes", result))
         .catch((error) => reportScopeLoadError("nodes", error));
-      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      loadScopeResourceList("proxy:view", () =>
+        allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      )
         .then((result) => api.setCache("admin:scope-proxy-hosts", result))
         .catch((error) => reportScopeLoadError("routes", error));
-      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      loadScopeResourceList("databases:view", () =>
+        allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      )
         .then((result) => api.setCache("admin:scope-databases", result))
         .catch((error) => reportScopeLoadError("databases", error));
     }
@@ -174,7 +184,7 @@ export function Administration() {
                 },
               ]}
             >
-              {currentTab === "users" && canManageUserFolders && (
+              {currentTab === "users" && canManageUserFolders && createUserFolderAction && (
                 <Button variant="outline" onClick={() => createUserFolderAction?.()}>
                   <FolderPlus className="h-4 w-4" />
                   Add Folder
@@ -186,7 +196,7 @@ export function Administration() {
                   Deleted Users
                 </Button>
               )}
-              {currentTab === "groups" && canManageGroupFolders && (
+              {currentTab === "groups" && canManageGroupFolders && createGroupFolderAction && (
                 <Button variant="outline" onClick={() => createGroupFolderAction?.()}>
                   <FolderPlus className="h-4 w-4" />
                   Add Folder

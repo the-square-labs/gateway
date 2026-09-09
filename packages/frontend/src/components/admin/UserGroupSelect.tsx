@@ -5,9 +5,8 @@ export function groupSelectionLabel(
   groups: readonly { id: string; name: string }[],
   fallback = "Select groups"
 ) {
-  return ids.length > 1
-    ? `${ids.length} groups`
-    : (groups.find((group) => group.id === ids[0])?.name ?? fallback);
+  const names = ids.map((id) => groups.find((group) => group.id === id)?.name);
+  return names.length > 0 && names.every(Boolean) ? names.join(", ") : fallback;
 }
 
 export function UserGroupSelect({

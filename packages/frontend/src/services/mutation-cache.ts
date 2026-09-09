@@ -13,6 +13,7 @@ const RESOURCE_PROJECTIONS: Record<string, string[]> = {
   "nginx-templates": ["nginx-templates:list"],
   nodes: ["nodes:list:", "docker:snapshots:"],
   notifications: ["notifications:"],
+  pages: ["pages:"],
   "proxy-host-folders": ["proxy:grouped", "req:/api/proxy-hosts"],
   "proxy-hosts": ["proxy:grouped", "req:/api/proxy-host-folders/grouped", "domains:list"],
   "ssl-certificates": ["ssl:list:"],

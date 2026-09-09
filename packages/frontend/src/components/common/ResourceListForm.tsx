@@ -1,4 +1,4 @@
-import { DndContext } from "@dnd-kit/core";
+import { DndContext, MeasuringStrategy } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import {
   ResourceListCell,
@@ -86,6 +86,7 @@ export function ResourceListForm<TFolder, TItem>({
 
   return (
     <div className={embedded ? undefined : "space-y-3"}>
+      {initialLoading && <Skeleton />}
       <SearchFilterBar
         {...search}
         className={embedded ? "border-b border-border" : undefined}
@@ -96,6 +97,7 @@ export function ResourceListForm<TFolder, TItem>({
         loadingFrame
       ) : hasContent ? (
         <DndContext
+          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           sensors={dnd?.sensors}
           collisionDetection={dnd?.collisionDetection ?? pointerFirstCollisionDetection}
           onDragStart={dnd?.onDragStart}

@@ -24,7 +24,7 @@ export const LICENSE_FEATURE_PLANS = {
 export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type PaidLicensePlan = Exclude<LicensePlan, "community">;
 
-const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
+export const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
   community: 0,
   personal: 1,
   business: 2,

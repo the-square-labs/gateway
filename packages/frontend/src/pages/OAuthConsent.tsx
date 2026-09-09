@@ -6,7 +6,12 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
-import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
+import {
+  allResourcePages,
+  canLoadScopeResource,
+  loadScopeResourceList,
+  reportScopeLoadError,
+} from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -114,28 +119,33 @@ export function OAuthConsent() {
   }, [load]);
 
   useEffect(() => {
-    void fetchCAs();
+    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
     void Promise.all([
-      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      loadScopeResourceList("nodes:details", () =>
+        allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      )
         .then(setNodes)
         .catch((error) => {
           setNodes([]);
           reportScopeLoadError("nodes", error);
         }),
-      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      loadScopeResourceList("proxy:view", () =>
+        allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      )
         .then(setProxyHosts)
         .catch((error) => {
           setProxyHosts([]);
           reportScopeLoadError("routes", error);
         }),
-      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      loadScopeResourceList("databases:view", () =>
+        allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      )
         .then(setDatabases)
         .catch((error) => {
           setDatabases([]);
           reportScopeLoadError("databases", error);
         }),
-      api
-        .listLoggingSchemas()
+      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
         .then(setLoggingSchemas)
         .catch((error) => {
           setLoggingSchemas([]);

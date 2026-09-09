@@ -63,6 +63,32 @@ class MockWebSocket {
 }
 
 describe("eventStream", () => {
+  it.each([
+    "pages.project.changed",
+    "pages.folder.changed",
+    "pages.deployment.changed",
+  ])("invalidates pre-event Pages requests before dispatching %s", async (channel) => {
+    const { eventStream } = await import("@/services/event-stream");
+    const handler = vi.fn(() => {
+      expect(invalidateCache).toHaveBeenCalledWith("req:/api/pages");
+      expect(invalidateCache).toHaveBeenCalledWith("pages:");
+    });
+    const unsubscribe = eventStream.subscribe(channel, handler);
+    eventStream.start();
+    vi.runAllTimers();
+    const socket = MockWebSocket.instances[0];
+    socket.open();
+    for (let index = 0; index < 6; index++) {
+      invalidateCache.mockClear();
+      socket.emit({ type: "event", channel, payload: { projectId: "p1", action: "deleted" } });
+      expect(invalidateCache).toHaveBeenCalledWith("req:/api/pages");
+      expect(invalidateCache.mock.invocationCallOrder[0]).toBeLessThan(
+        handler.mock.invocationCallOrder.at(-1)!
+      );
+    }
+    expect(handler).toHaveBeenCalledTimes(6);
+    unsubscribe();
+  });
   beforeEach(() => {
     vi.resetModules();
     vi.useFakeTimers();

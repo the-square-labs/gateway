@@ -1,5 +1,5 @@
 import { PackageOpen, Pin, PinOff, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
@@ -35,6 +35,7 @@ export function PageDeploymentsTab({ projectId }: { projectId: string }) {
   const [loading, setLoading] = useState(true);
   const [selectedDeployment, setSelectedDeployment] = useState<PageDeployment | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const loadRequestRef = useRef(0);
 
   const openDetails = (deployment: PageDeployment) => {
     setSelectedDeployment(deployment);
@@ -42,17 +43,20 @@ export function PageDeploymentsTab({ projectId }: { projectId: string }) {
   };
 
   const load = useCallback(async () => {
-    setLoading((current) => current || deployments.length === 0);
+    const requestId = ++loadRequestRef.current;
     try {
       const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
+      if (requestId !== loadRequestRef.current) return;
       const next = response.data ?? [];
       setDeployments(next);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load Deployments");
+      if (requestId === loadRequestRef.current) {
+        toast.error(error instanceof Error ? error.message : "Failed to load Deployments");
+      }
     } finally {
-      setLoading(false);
+      if (requestId === loadRequestRef.current) setLoading(false);
     }
-  }, [deployments.length, projectId]);
+  }, [projectId]);
 
   useEffect(() => {
     void load();

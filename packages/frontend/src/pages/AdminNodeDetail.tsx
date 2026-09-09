@@ -11,6 +11,7 @@ import {
   Pin,
   Plus,
   Power,
+  PowerOff,
   RotateCcw,
   Scaling,
   ScrollText,
@@ -52,7 +53,11 @@ import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { getForcedDaemonUpdateForNode } from "@/lib/dev-force-updates";
 import { performHostingAction } from "@/lib/hosting-intents";
-import { hostingNodeLabel, hostingOperationPending } from "@/lib/hosting-status";
+import {
+  hostingNodeLabel,
+  hostingOperationPending,
+  hostingPowerActionUnavailableReason,
+} from "@/lib/hosting-status";
 import {
   daemonTypeForNode,
   getNodeAppearanceColor,
@@ -242,6 +247,8 @@ export function AdminNodeDetail({
       !hosting?.connectorId ||
       !hosting.resourceId ||
       !hosting.incarnation ||
+      hostingOperationPending(hosting.operation) ||
+      hostingPowerActionUnavailableReason(action, hosting.powerState) ||
       !hosting.actions[action]?.available
     )
       return;
@@ -303,22 +310,32 @@ export function AdminNodeDetail({
                 ? hosting.provider === "hostkey"
                   ? "Cancel server rental"
                   : "Destroy VM"
-                : `${action === "start" ? "Start" : action === "shutdown" ? "Shut down" : "Reboot"} VM`,
+                : `${action === "start" ? "Start" : action === "shutdown" ? "Shutdown" : "Reboot"} VM`,
           onClick: () => void hostingAction(action),
           icon:
             action === "delete" ? (
               <Trash2 className="h-4 w-4" />
             ) : action === "reboot" || action === "recover" ? (
               <RotateCcw className="h-4 w-4" />
+            ) : action === "shutdown" ? (
+              <PowerOff className="h-4 w-4" />
             ) : (
               <Power className="h-4 w-4" />
             ),
           separatorBefore: action === "start" || action === "recover" || action === "delete",
           disabled:
-            hostingOperationPending(hosting.operation) || !hosting.actions[action]?.available,
-          disabledReason: hosting.actions[action]?.reason,
+            hostingOperationPending(hosting.operation) ||
+            !hosting.actions[action]?.available ||
+            !!hostingPowerActionUnavailableReason(action, hosting.powerState),
+          disabledReason:
+            hosting.actions[action]?.reason ??
+            hostingPowerActionUnavailableReason(action, hosting.powerState),
           destructive: action === "delete",
-          alwaysOverflow: action !== "start" && action !== "recover",
+          alwaysOverflow: !(
+            (action === "start" || action === "shutdown") &&
+            !hostingPowerActionUnavailableReason(action, hosting.powerState) &&
+            hosting.actions[action]?.available
+          ),
         })),
       ]
     : [];
@@ -1000,16 +1017,6 @@ export function AdminNodeDetail({
                 : []),
             ]}
           >
-            {hostingActions.map((action) => (
-              <Button
-                key={action.label}
-                variant={"destructive" in action && action.destructive ? "destructive" : "outline"}
-                onClick={action.onClick}
-                disabled={"disabled" in action && action.disabled}
-              >
-                {action.label}
-              </Button>
-            ))}
             <Button
               variant="outline"
               size="icon"
@@ -1018,6 +1025,17 @@ export function AdminNodeDetail({
             >
               <Pin className="h-4 w-4" />
             </Button>
+            {hostingActions.map((action) => (
+              <Button
+                key={action.label}
+                variant={"destructive" in action && action.destructive ? "destructive" : "outline"}
+                onClick={action.onClick}
+                disabled={"disabled" in action && action.disabled}
+              >
+                {action.icon}
+                {action.label}
+              </Button>
+            ))}
             {canOpenNodeSettings && (
               <Button variant="outline" disabled={nodeActionsLocked} onClick={openAppearanceDialog}>
                 <Settings className="h-4 w-4" />

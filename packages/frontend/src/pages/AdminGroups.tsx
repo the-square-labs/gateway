@@ -26,8 +26,10 @@ import {
 } from "@/components/common/ScopeSearchFilter";
 import {
   allResourcePages,
+  canLoadScopeResource,
   type FolderOption,
   flattenFolderTree,
+  loadScopeResourceList,
   reportScopeLoadError,
 } from "@/components/common/scope-list-helpers";
 import { Badge } from "@/components/ui/badge";
@@ -190,8 +192,10 @@ export function AdminGroups({
 
   useEffect(() => {
     fetchGroups();
-    fetchCAs();
-    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
+    loadScopeResourceList("nodes:details", () =>
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-nodes", r);
         setNodesList(r);
@@ -200,7 +204,9 @@ export function AdminGroups({
         setNodesList([]);
         reportScopeLoadError("nodes", error);
       });
-    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    loadScopeResourceList("proxy:view", () =>
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-proxy-hosts", r);
         setProxyHostsList(r);
@@ -209,7 +215,9 @@ export function AdminGroups({
         setProxyHostsList([]);
         reportScopeLoadError("routes", error);
       });
-    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    loadScopeResourceList("databases:view", () =>
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-databases", r);
         setDatabasesList(r);
@@ -223,8 +231,7 @@ export function AdminGroups({
       scopeMatches(userScopes, "logs:manage") ||
       (deriveAllowedResourceIdsByScope(userScopes)["logs:schemas:view"]?.length ?? 0) > 0
     ) {
-      api
-        .listLoggingSchemas()
+      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
         .then((data) => {
           api.setCache("admin:scope-logging-schemas", data);
           setLoggingSchemasList(data);
@@ -245,11 +252,13 @@ export function AdminGroups({
   });
 
   useRealtime("ca.changed", () => {
-    fetchCAs();
+    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
   });
 
   useRealtime("node.changed", () => {
-    allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    loadScopeResourceList("nodes:details", () =>
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-nodes", r);
         setNodesList(r);
@@ -262,7 +271,9 @@ export function AdminGroups({
 
   useRealtime("proxy.host.changed", (payload) => {
     if ((payload as { action?: string } | null)?.action === "health.sampled") return;
-    allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    loadScopeResourceList("proxy:view", () =>
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-proxy-hosts", r);
         setProxyHostsList(r);
@@ -274,7 +285,9 @@ export function AdminGroups({
   });
 
   useRealtime("database.changed", () => {
-    allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    loadScopeResourceList("databases:view", () =>
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    )
       .then((r) => {
         api.setCache("admin:scope-databases", r);
         setDatabasesList(r);

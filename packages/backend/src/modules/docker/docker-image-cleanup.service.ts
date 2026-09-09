@@ -55,7 +55,7 @@ export class DockerImageCleanupService {
         targetType: 'container',
         containerName,
         deploymentId: null,
-        enabled: false,
+        enabled: true,
         retentionCount: 2,
         createdAt: null,
         updatedAt: null,
@@ -89,7 +89,7 @@ export class DockerImageCleanupService {
         nodeId,
         targetType: 'container',
         containerName,
-        enabled: input.enabled ?? false,
+        enabled: input.enabled ?? true,
         retentionCount: input.retentionCount ?? 2,
       })
       .returning();
@@ -116,7 +116,7 @@ export class DockerImageCleanupService {
         targetType: 'deployment',
         containerName: null,
         deploymentId,
-        enabled: false,
+        enabled: true,
         retentionCount: 2,
         createdAt: null,
         updatedAt: null,
@@ -150,7 +150,7 @@ export class DockerImageCleanupService {
         nodeId,
         targetType: 'deployment',
         deploymentId,
-        enabled: input.enabled ?? false,
+        enabled: input.enabled ?? true,
         retentionCount: input.retentionCount ?? 2,
       })
       .returning();

@@ -272,6 +272,14 @@ class EventStream {
           }
         } else if (msg.channel === "node.folder.changed") {
           this.invalidateNodeStores();
+        } else if (
+          msg.channel === "pages.project.changed" ||
+          msg.channel === "pages.folder.changed" ||
+          msg.channel === "pages.deployment.changed"
+        ) {
+          // Detach pre-event GETs before subscribers refresh. Otherwise a burst
+          // of cleanup/move events can all reuse an older in-flight response.
+          invalidate("req:/api/pages", "pages:");
         } else if (msg.channel.startsWith("docker.")) {
           invalidate("req:/api/docker", "docker:");
           if (msg.channel === "docker.container.changed") {

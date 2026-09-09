@@ -1,9 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScopeList } from "@/components/common/ScopeList";
-import type { Node } from "@/types";
+import { useAuthStore } from "@/stores/auth";
+import { useSystemConfigStore } from "@/stores/system-config";
+import { type Node, TOKEN_SCOPES } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
+  getCached: vi.fn(),
   listDockerContainers: vi.fn().mockResolvedValue([]),
   listDockerFolders: vi.fn().mockResolvedValue([]),
   listDomainFolders: vi.fn().mockResolvedValue([]),
@@ -40,6 +43,13 @@ const nodes = [
 ] as Node[];
 
 describe("ScopeList", () => {
+  beforeEach(() => {
+    useAuthStore.setState({ user: { scopes: TOKEN_SCOPES.map((scope) => scope.value) } as never });
+    const config = useSystemConfigStore.getState().config;
+    useSystemConfigStore.setState({
+      config: { ...config, features: { ...config.features, loggingEnabled: true } },
+    });
+  });
   it("shows only Docker nodes for resource-scoped Docker permissions", () => {
     render(
       <ScopeList

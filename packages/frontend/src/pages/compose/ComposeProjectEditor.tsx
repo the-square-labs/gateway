@@ -326,7 +326,7 @@ export function ComposeProjectEditor({
         idempotencyKey,
       });
       toast.success(completionMessage);
-      if (compactRevision && onClose) onClose();
+      if (onClose) onClose();
       else navigate(dockerComposeProjectRoute(targetProjectId), { replace: true });
     } catch (error) {
       if (

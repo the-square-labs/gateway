@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import { OAuthConsent } from "@/pages/OAuthConsent";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { renderWithRouter } from "@/test/render";
 import type { OAuthConsentPreview } from "@/types";
 
@@ -42,6 +43,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { scopes: preview.grantableScopes } as never });
   vi.spyOn(api, "listCAs").mockResolvedValue([]);
   vi.spyOn(api, "listNodes").mockResolvedValue({ data: [] } as never);
   vi.spyOn(api, "listProxyHosts").mockResolvedValue({ data: [] } as never);

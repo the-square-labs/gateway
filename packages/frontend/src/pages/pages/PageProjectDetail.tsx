@@ -262,6 +262,7 @@ export function PageProjectDetail({
   const [migrationAvailable, setMigrationAvailable] = useState(false);
   const [latestPreviewHostname, setLatestPreviewHostname] = useState<string | null>(null);
   const deletingRef = useRef(false);
+  const latestPreviewRequestRef = useRef(0);
   const [activeTab, setActiveTab] = useUrlTab(
     [...PROJECT_TABS],
     "deployments",
@@ -284,13 +285,15 @@ export function PageProjectDetail({
   }, [projectId]);
 
   const loadLatestPreview = useCallback(async () => {
+    const requestId = ++latestPreviewRequestRef.current;
     try {
       const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
+      if (requestId !== latestPreviewRequestRef.current) return;
       setLatestPreviewHostname(
         response.data?.find((deployment) => deployment.status === "ready")?.previewHostname ?? null
       );
     } catch {
-      setLatestPreviewHostname(null);
+      if (requestId === latestPreviewRequestRef.current) setLatestPreviewHostname(null);
     }
   }, [projectId]);
 

@@ -7,7 +7,10 @@ import { makeUser } from "@/test/fixtures";
 import type { PageProject } from "@/types";
 import { Pages } from "./Pages";
 
-vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
+const realtime = vi.hoisted(() => new Map<string, () => void>());
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: (channel: string, callback: () => void) => realtime.set(channel, callback),
+}));
 vi.mock("@/components/common/FolderedResourceList", () => ({
   FolderedResourceList: ({
     loading,
@@ -43,11 +46,44 @@ function project(id: string, name: string): PageProject {
 
 describe("Pages", () => {
   beforeEach(() => {
+    realtime.clear();
     useAuthStore.setState({
       user: makeUser({ scopes: ["pages:view"] }),
       isAuthenticated: true,
       isLoading: false,
     });
+  });
+
+  it("does not restore stale project placement when folder refreshes finish out of order", async () => {
+    const original = project("p1", "Original location");
+    const moved = { ...original, name: "Moved location", folderId: "f2" };
+    const response = (data: PageProject[]) => ({
+      data,
+      pagination: { page: 1, limit: 100, total: data.length, totalPages: 1 },
+    });
+    let finishOld!: (result: ReturnType<typeof response>) => void;
+    vi.spyOn(api, "getCached").mockReturnValue(undefined);
+    vi.spyOn(api, "setCache").mockImplementation(() => undefined);
+    const list = vi.spyOn(api, "listPageProjects").mockResolvedValue(response([original]));
+    render(
+      <MemoryRouter>
+        <Pages />
+      </MemoryRouter>
+    );
+    await screen.findByText("Original location");
+    list.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOld = resolve;
+        })
+    );
+    act(() => realtime.get("pages.folder.changed")?.());
+    list.mockResolvedValueOnce(response([moved]));
+    await act(async () => realtime.get("pages.project.changed")?.());
+    await screen.findByText("Moved location");
+    await act(async () => finishOld(response([original])));
+    expect(screen.getByText("Moved location")).toBeInTheDocument();
+    expect(screen.queryByText("Original location")).not.toBeInTheDocument();
   });
 
   afterEach(() => {

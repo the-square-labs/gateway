@@ -3,6 +3,7 @@ import {
   createContext,
   type ReactNode,
   useCallback,
+  useContext,
   useLayoutEffect,
   useRef,
   useState,
@@ -24,6 +25,7 @@ export function PageTransition({
   offsetY?: number;
 }) {
   const prefersReducedMotion = useReducedMotion();
+  const registerParentInitialLoad = useContext(InitialPageLoadContext);
   const [pendingInitialLoads, setPendingInitialLoads] = useState(0);
   const [initialLoadCollectionComplete, setInitialLoadCollectionComplete] = useState(false);
   const acceptsInitialLoads = useRef(true);
@@ -51,6 +53,12 @@ export function PageTransition({
   }, []);
 
   const waitingForInitialData = !initialLoadCollectionComplete || pendingInitialLoads > 0;
+
+  // Nested tab/list transitions must hold the initial page reveal too. Later
+  // tab changes cannot hide an already settled parent registration window.
+  useLayoutEffect(() => {
+    if (waitingForInitialData) return registerParentInitialLoad?.();
+  }, [registerParentInitialLoad, waitingForInitialData]);
 
   return (
     <InitialPageLoadContext.Provider value={registerInitialLoad}>

@@ -147,6 +147,7 @@ describe("AdminGroups characterization", () => {
     api.resetSessionState();
 
     vi.spyOn(api, "listGroups").mockResolvedValue([]);
+    vi.spyOn(api, "listAdminGroupFolders").mockResolvedValue([]);
     vi.spyOn(api, "listCAs").mockResolvedValue([]);
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [],
@@ -206,7 +207,7 @@ describe("AdminGroups characterization", () => {
     const node = makeNode({ id: "node-1", displayName: "Edge 1" });
     const createGroup = vi.spyOn(api, "createGroup").mockResolvedValue(group({ name: "node-ops" }));
     renderAdminGroups({
-      scopes: ["admin:groups", "nodes:console:node-1"],
+      scopes: ["admin:groups", "nodes:console:node-1", "nodes:details:node-1"],
       nodes: [node],
     });
 
@@ -252,7 +253,7 @@ describe("AdminGroups characterization", () => {
       .mockResolvedValue(group({ ...existing, name: "renamed-group" }));
     renderAdminGroups({
       groups: [existing],
-      scopes: ["admin:groups", "nodes:console:node-1"],
+      scopes: ["admin:groups", "nodes:console:node-1", "nodes:details:node-1"],
       nodes: [makeNode({ id: "node-1", displayName: "Edge 1" })],
     });
 

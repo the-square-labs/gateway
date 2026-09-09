@@ -39,11 +39,7 @@ export const HEADER_ACTION_PRIORITY = {
 } as const;
 
 export function shouldForceHeaderActionOverflow(action: ResponsiveHeaderAction): boolean {
-  if (action.alwaysOverflow) return true;
-  return Boolean(
-    action.destructive &&
-      (action.priority ?? HEADER_ACTION_PRIORITY.default) < HEADER_ACTION_PRIORITY.emergency
-  );
+  return Boolean(action.alwaysOverflow || action.destructive);
 }
 
 const MIN_HEADER_CONTENT_WIDTH_PX = 320;

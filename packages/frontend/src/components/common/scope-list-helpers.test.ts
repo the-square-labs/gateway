@@ -1,17 +1,105 @@
 import { toast } from "sonner";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
-import { RESOURCE_SCOPABLE_SCOPES } from "@/types";
+import { useAuthStore } from "@/stores/auth";
+import { DEFAULT_GATEWAY_FEATURES, useSystemConfigStore } from "@/stores/system-config";
+import { RESOURCE_SCOPABLE_SCOPES, TOKEN_SCOPES } from "@/types";
 import {
   allResourcePages,
+  canLoadScopeResource,
   folderFamilyForScope,
   getResourceLabel,
   getResourceOptions,
+  loadFolderFamily,
   loadScopeResourceCatalog,
+  loadScopeResourceList,
   parseScopedSelections,
+  reportScopeLoadError,
 } from "./scope-list-helpers";
 
 describe("resource restriction mappings", () => {
+  beforeEach(() => {
+    useAuthStore.setState({
+      user: { id: "actor", scopes: TOKEN_SCOPES.map((scope) => scope.value) } as never,
+    });
+    useSystemConfigStore.setState({
+      config: {
+        ...useSystemConfigStore.getState().config,
+        features: { ...DEFAULT_GATEWAY_FEATURES, loggingEnabled: true },
+      },
+    });
+  });
+  it("does not query disabled logging even for an administrator", async () => {
+    useSystemConfigStore.setState({
+      config: {
+        ...useSystemConfigStore.getState().config,
+        features: { ...DEFAULT_GATEWAY_FEATURES, loggingEnabled: false },
+      },
+    });
+    const schemas = vi.spyOn(api, "listLoggingSchemaFolders");
+    const environments = vi.spyOn(api, "listLoggingEnvironmentFolders");
+    const load = vi.fn();
+    expect(await loadFolderFamily("logging-schemas")).toEqual([]);
+    expect(await loadFolderFamily("logging-environments")).toEqual([]);
+    expect(await loadScopeResourceList("logs:schemas:view", load)).toEqual([]);
+    expect(schemas).not.toHaveBeenCalled();
+    expect(environments).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+    schemas.mockRestore();
+    environments.mockRestore();
+  });
+  it("does not request resources outside a restricted user's read permissions", async () => {
+    useAuthStore.setState({ user: { id: "actor", scopes: ["admin:users"] } as never });
+    const load = vi.fn();
+    for (const permission of [
+      "nodes:details",
+      "proxy:view",
+      "databases:view",
+      "logs:schemas:view",
+      "domains:view",
+    ]) {
+      expect(await loadScopeResourceList(permission, load)).toEqual([]);
+    }
+    expect(load).not.toHaveBeenCalled();
+    expect(canLoadScopeResource("admin:users")).toBe(true);
+  });
+  it("limits Docker lookups to the permitted node", () => {
+    useAuthStore.setState({
+      user: { id: "actor", scopes: ["docker:networks:view:n1/r1"] } as never,
+    });
+    expect(canLoadScopeResource("docker:networks:view", "n1")).toBe(true);
+    expect(canLoadScopeResource("docker:networks:view", "n2")).toBe(false);
+  });
+  it("retains folder-scoped and implied Docker view access", () => {
+    useAuthStore.setState({ user: { scopes: ["docker:networks:edit:n1/r1"] } as never });
+    expect(canLoadScopeResource("docker:networks:view", "n1")).toBe(true);
+    expect(canLoadScopeResource("docker:networks:view", "n2")).toBe(false);
+    useAuthStore.setState({ user: { scopes: ["docker:networks:view:folder/f1"] } as never });
+    expect(canLoadScopeResource("docker:networks:view", "n1")).toBe(true);
+  });
+  it("preserves folder choices for create-only access without requesting resource inventory", async () => {
+    useAuthStore.setState({ user: { scopes: ["databases:create:folder/f1"] } as never });
+    const folders = vi
+      .spyOn(api, "listDatabaseFolders")
+      .mockResolvedValue([{ id: "f1", name: "Allowed", children: [] }] as never);
+    const inventory = vi.fn();
+    expect(await loadFolderFamily("databases")).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: "f1" })])
+    );
+    expect(folders).toHaveBeenCalledOnce();
+    expect(await loadScopeResourceList("databases:view", inventory)).toEqual([]);
+    expect(inventory).not.toHaveBeenCalled();
+    folders.mockRestore();
+  });
+  it("keeps expected authorization/feature races quiet but reports real failures", () => {
+    const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
+    reportScopeLoadError("schemas", { status: 503, code: "LOGGING_DISABLED" });
+    reportScopeLoadError("nodes", { status: 403, code: "FORBIDDEN" });
+    expect(error).not.toHaveBeenCalled();
+    reportScopeLoadError("nodes", new Error("Network failed"));
+    expect(error).toHaveBeenCalledOnce();
+    error.mockRestore();
+  });
   it("loads all Pages projects and SSL certificates using the API's 100 item limit", async () => {
     const projects = vi
       .spyOn(api, "listPageProjects")

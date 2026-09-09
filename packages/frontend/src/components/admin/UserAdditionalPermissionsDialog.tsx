@@ -6,7 +6,12 @@ import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
-import { allResourcePages, reportScopeLoadError } from "@/components/common/scope-list-helpers";
+import {
+  allResourcePages,
+  canLoadScopeResource,
+  loadScopeResourceList,
+  reportScopeLoadError,
+} from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -107,27 +112,32 @@ export function UserAdditionalPermissionsDialog({
 
   useEffect(() => {
     if (!open) return;
-    void fetchCAs();
-    void allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
+    void loadScopeResourceList("nodes:details", () =>
+      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+    )
       .then(setNodes)
       .catch((error) => {
         setNodes([]);
         reportScopeLoadError("nodes", error);
       });
-    void allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    void loadScopeResourceList("proxy:view", () =>
+      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+    )
       .then(setProxyHosts)
       .catch((error) => {
         setProxyHosts([]);
         reportScopeLoadError("routes", error);
       });
-    void allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    void loadScopeResourceList("databases:view", () =>
+      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+    )
       .then(setDatabases)
       .catch((error) => {
         setDatabases([]);
         reportScopeLoadError("databases", error);
       });
-    void api
-      .listLoggingSchemas()
+    void loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
       .then((items) => setLoggingSchemas(items ?? []))
       .catch((error) => {
         setLoggingSchemas([]);

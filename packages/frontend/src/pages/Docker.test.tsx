@@ -33,6 +33,33 @@ vi.mock("./DockerTasks", () => ({ DockerTasks: () => null }));
 vi.mock("./docker/GwcaImportDialog", () => ({ GwcaImportDialog: () => null }));
 
 const node = makeNode({ id: "node-1", type: "docker", status: "online", isConnected: true });
+it("preserves the page header and tabs while checking the next tab's node access", async () => {
+  render(
+    <MemoryRouter initialEntries={["/docker/containers"]}>
+      <Routes>
+        <Route path="/docker/:tab" element={<Docker />} />
+      </Routes>
+    </MemoryRouter>
+  );
+  await screen.findByText(/containers list for/);
+  const heading = screen.getByRole("heading", { name: "Docker" });
+  const tablist = screen.getByRole("tablist");
+  let resolveNodes!: (nodes: (typeof node)[]) => void;
+  vi.mocked(loadVisibleDockerNodes).mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        resolveNodes = resolve;
+      })
+  );
+  await userEvent.click(screen.getByRole("tab", { name: "Images" }));
+  expect(screen.getByRole("heading", { name: "Docker" })).toBe(heading);
+  expect(heading).toBeVisible();
+  expect(screen.getByRole("tablist")).toBe(tablist);
+  expect(screen.queryByText(/images list for/)).not.toBeInTheDocument();
+  await act(async () => resolveNodes([node]));
+  await waitFor(() => expect(screen.getByText(/images list for/)).toBeVisible());
+  expect(screen.getByRole("heading", { name: "Docker" })).toBe(heading);
+});
 beforeEach(() => {
   vi.clearAllMocks();
   useAuthStore.setState({

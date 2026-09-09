@@ -1,5 +1,8 @@
 import { toast } from "sonner";
+import { extractBaseScope, hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { useSystemConfigStore } from "@/stores/system-config";
 import {
   type CA,
   type DatabaseConnection,
@@ -37,11 +40,82 @@ export interface ResourceOption {
 export type ScopeResourceCatalog = Partial<Record<string, ResourceOption[]>>;
 
 export function reportScopeLoadError(resource: string, error: unknown) {
+  // Feature/permission changes can race a lookup. These are not load failures.
+  if (error && typeof error === "object") {
+    const { code, status } = error as { code?: string; status?: number };
+    if (
+      status === 403 ||
+      [
+        "FORBIDDEN",
+        "LOGGING_DISABLED",
+        "PKI_DISABLED",
+        "DOMAINS_DISABLED",
+        "FEATURE_DISABLED",
+      ].includes(code ?? "")
+    )
+      return;
+  }
   toast.error(`Could not load ${resource} for permission restrictions`, {
     id: `scope-load-${resource}`,
     description: error instanceof Error ? error.message : undefined,
   });
 }
+
+export function canLoadScopeResource(permission: string, nodeId?: string): boolean {
+  const features = useSystemConfigStore.getState().config.features;
+  if (permission.startsWith("logs:") && !features.loggingEnabled) return false;
+  if (permission.startsWith("domains:") && !features.domainsEnabled) return false;
+  if (permission.startsWith("pki:") && !features.pkiEnabled) return false;
+  const scopes = useAuthStore.getState().user?.scopes ?? [];
+  const alternatives =
+    permission === "pki:ca:view"
+      ? ["pki:ca:view:root", "pki:ca:view:intermediate"]
+      : permission.startsWith("logs:")
+        ? [permission, "logs:manage"]
+        : [permission];
+  if (!alternatives.some((base) => hasScopeBase(scopes, base))) return false;
+  if (!nodeId || scopeMatches(scopes, permission)) return true;
+  return (
+    scopeMatches(scopes, `${permission}:${nodeId}`) ||
+    scopeMatches(scopes, `${permission}:node/${nodeId}`) ||
+    scopes.some((scope) => {
+      const base = extractBaseScope(scope);
+      if (base === scope) return false;
+      const target = scope.slice(base.length + 1);
+      // Folder membership is resolved by the API. The node inventory is already
+      // access-filtered, and its resource endpoint returns only permitted items.
+      return (
+        (target.startsWith("folder/") || target.startsWith(`${nodeId}/`)) &&
+        scopeMatches([scope], `${permission}:${target}`)
+      );
+    })
+  );
+}
+
+export async function loadScopeResourceList<T>(
+  permission: string,
+  load: () => Promise<T[]>
+): Promise<T[]> {
+  return canLoadScopeResource(permission) ? load() : [];
+}
+
+const folderLookupPermissions: Partial<Record<FolderFamily, string>> = {
+  groups: "admin:groups",
+  users: "admin:users",
+  domains: "domains:view",
+  proxy: "proxy:view",
+  nodes: "nodes:details",
+  databases: "databases:view",
+  pages: "pages:view",
+  ssl: "ssl:cert:view",
+  "logging-environments": "logs:environments:view",
+  "logging-schemas": "logs:schemas:view",
+  docker: "docker:containers:view",
+  "docker-network": "docker:networks:view",
+  "docker-volume": "docker:volumes:view",
+  "docker-image": "docker:images:view",
+  "docker-compose": "docker:compose:view",
+};
 
 export async function allResourcePages<T>(
   load: (
@@ -62,7 +136,14 @@ export async function loadScopeResourceCatalog(
   nodes: readonly Node[]
 ): Promise<ScopeResourceCatalog> {
   const families = new Set(
-    scopes.map((scope) => folderFamilyForScope(scope.value)).filter(Boolean)
+    scopes
+      .map((scope) => folderFamilyForScope(scope.value))
+      .filter(
+        (family) =>
+          family &&
+          (!folderLookupPermissions[family] ||
+            canLoadScopeResource(folderLookupPermissions[family]!))
+      )
   );
   const catalog: ScopeResourceCatalog = {};
   const nodeOptions = (kind: string) =>
@@ -141,6 +222,7 @@ export async function loadScopeResourceCatalog(
       })
     );
   if (
+    canLoadScopeResource("integrations:hosting:view") &&
     scopes.some(
       ({ value }) => value.startsWith("hosting:") || value.startsWith("integrations:hosting:")
     )
@@ -177,7 +259,11 @@ export async function loadScopeResourceCatalog(
       (async () => {
         const resources = await Promise.all(
           nodes
-            .filter((node) => node.type === "docker")
+            .filter(
+              (node) =>
+                node.type === "docker" &&
+                canLoadScopeResource(folderLookupPermissions[family]!, node.id)
+            )
             .map(async (node) => {
               const parent = { id: node.id, label: node.displayName || node.hostname };
               try {
@@ -327,6 +413,20 @@ export function flattenFolderTree(
 }
 
 export async function loadFolderFamily(family: FolderFamily): Promise<FolderOption[]> {
+  const permission = folderLookupPermissions[family];
+  const createPermission = FOLDER_CREATION_SCOPES.find(
+    (scope) => folderFamilyForScope(scope) === family
+  );
+  const managePermission = family.startsWith("docker")
+    ? "docker:containers:folders:manage"
+    : permission?.replace(/:(view|details)$/, ":folders:manage");
+  if (
+    permission &&
+    ![permission, createPermission, managePermission].some(
+      (scope) => scope && canLoadScopeResource(scope)
+    )
+  )
+    return [];
   const load = async (promise: Promise<FolderTreeLike[]>) =>
     promise.catch((error) => {
       reportScopeLoadError(`${family} folders`, error);

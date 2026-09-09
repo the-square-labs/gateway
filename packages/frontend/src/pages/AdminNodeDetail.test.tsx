@@ -44,6 +44,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/services/api", () => ({
   api: {
+    getCached: vi.fn(),
     getNode: vi.fn(),
     getNodeHealthHistory: vi.fn(),
     getNodeHosting: vi.fn().mockResolvedValue(null),
@@ -113,6 +114,84 @@ describe("AdminNodeDetail", () => {
     vi.clearAllMocks();
     realtimeHandlers.clear();
     vi.mocked(api.getNodeHosting).mockResolvedValue(null);
+  });
+  it.each([
+    "running",
+    "stopped",
+    "starting",
+    "stopping",
+    "unknown",
+  ] as const)("uses VM power state %s for header actions without exposing destructive buttons", async (powerState) => {
+    useAuthStore.setState({
+      user: makeUser({
+        scopes: ["nodes:details", "nodes:delete", "admin:update", "integrations:hosting:view"],
+      }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({
+        id: "node-1",
+        type: "docker",
+        status: powerState === "running" ? "offline" : "online",
+      }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+    vi.mocked(api.getNodeHosting).mockResolvedValue({
+      connectorId: "provider",
+      resourceId: "vm",
+      provider: "proxmox",
+      kind: "vm",
+      incarnation: "original",
+      powerState,
+      actions: Object.fromEntries(
+        ["start", "shutdown", "reboot", "delete", "recover"].map((action) => [
+          action,
+          { available: true },
+        ])
+      ),
+      operation: null,
+    } as never);
+    render(
+      <MemoryRouter initialEntries={["/nodes/node-1/overview"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Node details content");
+    expect(screen.queryByRole("button", { name: "Destroy VM" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+    if (powerState === "running") {
+      expect(screen.getByRole("button", { name: "Shutdown VM" })).toBeEnabled();
+      expect(
+        screen.getByRole("button", { name: "Shutdown VM" }).querySelector(".lucide-power-off")
+      ).not.toBeNull();
+    }
+    if (powerState === "stopped")
+      expect(screen.getByRole("button", { name: "Start VM" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Page actions" }));
+    expect(screen.getAllByRole("menuitem")[0]).toHaveTextContent("Pin");
+    expect(screen.getAllByRole("menuitem", { name: "Destroy VM" })).toHaveLength(1);
+    if (powerState !== "stopped")
+      expect(screen.getByRole("menuitem", { name: "Start VM" })).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+    if (powerState !== "running") {
+      expect(screen.getByRole("menuitem", { name: "Shutdown VM" })).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+      expect(screen.getByRole("menuitem", { name: "Reboot VM" })).toHaveAttribute(
+        "aria-disabled",
+        "true"
+      );
+    }
   });
   it.each([
     "docker",

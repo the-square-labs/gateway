@@ -255,6 +255,7 @@ export function Pages() {
     return cached?.data ?? [];
   });
   const projectsRef = useRef(projects);
+  const loadVersion = useRef(0);
   projectsRef.current = projects;
   const [loading, setLoading] = useState(canView);
   const [search, setSearch] = useState("");
@@ -262,6 +263,7 @@ export function Pages() {
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
 
   const load = useCallback(async () => {
+    const version = ++loadVersion.current;
     if (!canView) {
       setLoading(false);
       return;
@@ -269,19 +271,24 @@ export function Pages() {
     setLoading((current) => current || projectsRef.current.length === 0);
     try {
       const response = await api.listPageProjects({ page: 1, limit: 100 });
+      if (version !== loadVersion.current) return;
       setProjects(response.data ?? []);
       api.setCache("pages:projects", response);
     } catch (error) {
+      if (version !== loadVersion.current) return;
       if (projectsRef.current.length === 0) {
         toast.error(error instanceof Error ? error.message : "Failed to load Pages");
       }
     } finally {
-      setLoading(false);
+      if (version === loadVersion.current) setLoading(false);
     }
   }, [canView]);
 
   useEffect(() => {
     void load();
+    return () => {
+      ++loadVersion.current;
+    };
   }, [load]);
 
   useRealtime("pages.project.changed", () => void load());

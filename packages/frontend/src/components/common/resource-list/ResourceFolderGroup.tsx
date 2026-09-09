@@ -150,6 +150,7 @@ export function ResourceFolderGroup<TFolder, TItem>({
         transition={{ duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }}
         className="overflow-hidden"
         aria-hidden={!expanded}
+        inert={!expanded}
       >
         {children.length > 0 && (
           <SortableContext

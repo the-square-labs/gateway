@@ -11,15 +11,15 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type DockerViewNodeScope, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { authContextKey, useAuthStore } from "@/stores/auth";
@@ -130,6 +130,7 @@ export function Docker() {
   const [resolvedNodeSelection, setResolvedNodeSelection] = useState("");
   const [nodeSelectionError, setNodeSelectionError] = useState<string | null>(null);
   const nodeSelectionReady = resolvedNodeSelection === nodeSelectionKey;
+  const nodeActionsDisabled = !nodeSelectionReady || !!nodeSelectionError;
   const appliedNodeQuery = useRef<string | undefined>(undefined);
 
   // Fetch docker nodes on mount, store in zustand for multi-node fetching
@@ -287,19 +288,23 @@ export function Docker() {
         return (
           <>
             {canManageContainerFolders && (
-              <Button variant="outline" onClick={() => createFolderRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => createFolderRef.current?.()}
+              >
                 <FolderPlus className="h-4 w-4 mr-1" />
                 New Folder
               </Button>
             )}
             {hasScopedAccess("docker:containers:create") && (
-              <Button variant="outline" onClick={openImport}>
+              <Button disabled={nodeActionsDisabled} variant="outline" onClick={openImport}>
                 <ArchiveRestore className="h-4 w-4 mr-1" />
                 Import .gwca
               </Button>
             )}
             {hasScopedAccess("docker:containers:create") && (
-              <Button onClick={() => deployContainerRef.current?.()}>
+              <Button disabled={nodeActionsDisabled} onClick={() => deployContainerRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Deploy
               </Button>
@@ -310,19 +315,27 @@ export function Docker() {
         return (
           <>
             {canManageContainerFolders && (
-              <Button variant="outline" onClick={() => createImageFolderRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => createImageFolderRef.current?.()}
+              >
                 <FolderPlus className="h-4 w-4 mr-1" />
                 New Folder
               </Button>
             )}
             {canPruneImages && (
-              <Button variant="outline" onClick={() => pruneImagesRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => pruneImagesRef.current?.()}
+              >
                 <Trash2 className="h-4 w-4 mr-1" />
                 Prune Dangling
               </Button>
             )}
             {hasScopedAccess("docker:images:pull") && (
-              <Button onClick={() => pullImageRef.current?.()}>
+              <Button disabled={nodeActionsDisabled} onClick={() => pullImageRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Pull Image
               </Button>
@@ -333,13 +346,17 @@ export function Docker() {
         return (
           <>
             {canManageContainerFolders && (
-              <Button variant="outline" onClick={() => createVolumeFolderRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => createVolumeFolderRef.current?.()}
+              >
                 <FolderPlus className="h-4 w-4 mr-1" />
                 New Folder
               </Button>
             )}
             {hasScopedAccess("docker:volumes:create") && (
-              <Button onClick={() => createVolumeRef.current?.()}>
+              <Button disabled={nodeActionsDisabled} onClick={() => createVolumeRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Volume
               </Button>
@@ -350,13 +367,17 @@ export function Docker() {
         return (
           <>
             {canManageContainerFolders && (
-              <Button variant="outline" onClick={() => createNetworkFolderRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => createNetworkFolderRef.current?.()}
+              >
                 <FolderPlus className="h-4 w-4 mr-1" />
                 New Folder
               </Button>
             )}
             {hasScopedAccess("docker:networks:create") && (
-              <Button onClick={() => createNetworkRef.current?.()}>
+              <Button disabled={nodeActionsDisabled} onClick={() => createNetworkRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 Create Network
               </Button>
@@ -367,13 +388,17 @@ export function Docker() {
         return (
           <>
             {canManageContainerFolders && (
-              <Button variant="outline" onClick={() => createComposeFolderRef.current?.()}>
+              <Button
+                disabled={nodeActionsDisabled}
+                variant="outline"
+                onClick={() => createComposeFolderRef.current?.()}
+              >
                 <FolderPlus className="h-4 w-4 mr-1" />
                 New Folder
               </Button>
             )}
             {hasScopedAccess("docker:compose:create") && (
-              <Button onClick={() => createComposeRef.current?.()}>
+              <Button disabled={nodeActionsDisabled} onClick={() => createComposeRef.current?.()}>
                 <Plus className="h-4 w-4 mr-1" />
                 New Project
               </Button>
@@ -492,15 +517,18 @@ export function Docker() {
       : []),
   ];
 
-  if (!nodeSelectionReady) return <DetailPageSkeleton label="Loading Docker resources" tabs={5} />;
-  if (nodeSelectionError)
-    return (
-      <EmptyState
-        message={nodeSelectionError}
-        actionLabel="View all nodes"
-        onAction={() => navigate(`/docker/${activeTab}`, { replace: true })}
-      />
-    );
+  const renderTabContent = (children: ReactNode) => {
+    if (!nodeSelectionReady) return <Skeleton />;
+    if (nodeSelectionError)
+      return (
+        <EmptyState
+          message={nodeSelectionError}
+          actionLabel="View all nodes"
+          onAction={() => navigate(`/docker/${activeTab}`, { replace: true })}
+        />
+      );
+    return children;
+  };
   return (
     <PageTransition>
       <div
@@ -523,8 +551,16 @@ export function Docker() {
               </p>
             </div>
           </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            <RefreshButton onClick={handleRefresh} disabled={activeTabLoading} />
+          <ResponsiveHeaderActions
+            actions={headerActions.map((action) => ({
+              ...action,
+              disabled: nodeActionsDisabled || ("disabled" in action && action.disabled),
+            }))}
+          >
+            <RefreshButton
+              onClick={handleRefresh}
+              disabled={nodeActionsDisabled || activeTabLoading}
+            />
             {renderActions()}
           </ResponsiveHeaderActions>
         </div>
@@ -545,83 +581,93 @@ export function Docker() {
           </TabsList>
 
           <TabsContent value="containers">
-            <DockerContainers
-              embedded
-              onDeployRef={(fn) => {
-                deployContainerRef.current = fn;
-              }}
-              onCreateFolderRef={(fn) => {
-                createFolderRef.current = fn;
-              }}
-              onRefreshRef={(fn) => {
-                refreshContainersRef.current = fn;
-              }}
-            />
+            {renderTabContent(
+              <DockerContainers
+                embedded
+                onDeployRef={(fn) => {
+                  deployContainerRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createFolderRef.current = fn;
+                }}
+                onRefreshRef={(fn) => {
+                  refreshContainersRef.current = fn;
+                }}
+              />
+            )}
           </TabsContent>
           <TabsContent value="images">
-            <DockerImages
-              embedded
-              onPullRef={(fn) => {
-                pullImageRef.current = fn;
-              }}
-              onCreateFolderRef={(fn) => {
-                createImageFolderRef.current = fn;
-              }}
-              onRefreshRef={(fn) => {
-                refreshImagesRef.current = fn;
-              }}
-              onPruneRef={(fn) => {
-                pruneImagesRef.current = fn;
-              }}
-            />
+            {renderTabContent(
+              <DockerImages
+                embedded
+                onPullRef={(fn) => {
+                  pullImageRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createImageFolderRef.current = fn;
+                }}
+                onRefreshRef={(fn) => {
+                  refreshImagesRef.current = fn;
+                }}
+                onPruneRef={(fn) => {
+                  pruneImagesRef.current = fn;
+                }}
+              />
+            )}
           </TabsContent>
           <TabsContent value="volumes">
-            <DockerVolumes
-              embedded
-              onCreateRef={(fn) => {
-                createVolumeRef.current = fn;
-              }}
-              onCreateFolderRef={(fn) => {
-                createVolumeFolderRef.current = fn;
-              }}
-              onRefreshRef={(fn) => {
-                refreshVolumesRef.current = fn;
-              }}
-            />
+            {renderTabContent(
+              <DockerVolumes
+                embedded
+                onCreateRef={(fn) => {
+                  createVolumeRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createVolumeFolderRef.current = fn;
+                }}
+                onRefreshRef={(fn) => {
+                  refreshVolumesRef.current = fn;
+                }}
+              />
+            )}
           </TabsContent>
           <TabsContent value="networks">
-            <DockerNetworks
-              embedded
-              onCreateRef={(fn) => {
-                createNetworkRef.current = fn;
-              }}
-              onCreateFolderRef={(fn) => {
-                createNetworkFolderRef.current = fn;
-              }}
-              onRefreshRef={(fn) => {
-                refreshNetworksRef.current = fn;
-              }}
-            />
+            {renderTabContent(
+              <DockerNetworks
+                embedded
+                onCreateRef={(fn) => {
+                  createNetworkRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createNetworkFolderRef.current = fn;
+                }}
+                onRefreshRef={(fn) => {
+                  refreshNetworksRef.current = fn;
+                }}
+              />
+            )}
           </TabsContent>
           <TabsContent value="compose">
-            <DockerComposeProjects
-              embedded
-              onCreateRef={(fn) => {
-                createComposeRef.current = fn;
-              }}
-              onCreateFolderRef={(fn) => {
-                createComposeFolderRef.current = fn;
-              }}
-              onRefreshRef={(fn) => {
-                refreshComposeRef.current = fn;
-              }}
-            />
+            {renderTabContent(
+              <DockerComposeProjects
+                embedded
+                onCreateRef={(fn) => {
+                  createComposeRef.current = fn;
+                }}
+                onCreateFolderRef={(fn) => {
+                  createComposeFolderRef.current = fn;
+                }}
+                onRefreshRef={(fn) => {
+                  refreshComposeRef.current = fn;
+                }}
+              />
+            )}
           </TabsContent>
           <TabsContent value="tasks" className="flex flex-col flex-1 min-h-0">
-            <DockerTasks embedded />
+            {renderTabContent(<DockerTasks embedded />)}
           </TabsContent>
           <TabsContent value="builds" className="flex flex-col flex-1 min-h-0">
-            <DockerBuilds embedded />
+            {renderTabContent(<DockerBuilds embedded />)}
           </TabsContent>
         </Tabs>
         <GwcaImportDialog

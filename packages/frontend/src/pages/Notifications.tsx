@@ -237,7 +237,7 @@ export function Notifications() {
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-semibold">Notifications</h1>
-                {activeTab.startsWith("siem") ? <LicensePlanBadge plan="enterprise" /> : null}
+                {activeTab.startsWith("siem") ? <LicensePlanBadge feature="siem-export" /> : null}
               </div>
               <p className="text-sm text-muted-foreground">
                 {siemEnabled

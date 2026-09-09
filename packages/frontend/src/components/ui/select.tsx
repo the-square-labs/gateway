@@ -162,25 +162,32 @@ const SelectLabel = React.forwardRef<
 ));
 SelectLabel.displayName = SelectPrimitive.Label.displayName;
 
+export const selectItemClassName =
+  "relative flex w-full cursor-default select-none items-center py-1.5 pl-2 pr-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50";
+
+export function SelectItemCheck({ children }: { children?: React.ReactNode }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="absolute right-2 flex h-3.5 w-3.5 items-center justify-center"
+    >
+      {children ?? <Check className="h-4 w-4" />}
+    </span>
+  );
+}
+
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitive.Item>,
   React.ComponentPropsWithoutRef<typeof SelectPrimitive.Item> & {
     description?: React.ReactNode;
   }
 >(({ className, children, description, ...props }, ref) => (
-  <SelectPrimitive.Item
-    ref={ref}
-    className={cn(
-      "relative flex w-full cursor-default select-none items-center py-1.5 pl-2 pr-8 text-sm outline-none focus:bg-accent focus:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
-      className
-    )}
-    {...props}
-  >
-    <span className="absolute right-2 flex h-3.5 w-3.5 items-center justify-center">
+  <SelectPrimitive.Item ref={ref} className={cn(selectItemClassName, className)} {...props}>
+    <SelectItemCheck>
       <SelectPrimitive.ItemIndicator>
         <Check className="h-4 w-4" />
       </SelectPrimitive.ItemIndicator>
-    </span>
+    </SelectItemCheck>
     <div className="min-w-0 flex-1">
       <SelectPrimitive.ItemText className="block truncate">{children}</SelectPrimitive.ItemText>
       {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}

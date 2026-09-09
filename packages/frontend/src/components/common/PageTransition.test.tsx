@@ -10,6 +10,22 @@ function ReadyProbe() {
 }
 
 describe("PageTransition", () => {
+  it("holds the initial parent reveal for a loading nested tab without hiding it on subsequent tabs", async () => {
+    const content = (tab: string, loading: boolean) => (
+      <PageTransition>
+        <h1>Persistent header</h1>
+        <PageTransition key={tab}>{loading ? <Skeleton /> : <div>Loaded tab</div>}</PageTransition>
+      </PageTransition>
+    );
+    const { rerender } = render(content("first", true));
+    const parent = document.querySelector("[data-page-transition]");
+    expect(parent).toHaveStyle({ visibility: "hidden" });
+    rerender(content("first", false));
+    await waitFor(() => expect(parent).toHaveStyle({ visibility: "visible" }));
+    rerender(content("second", true));
+    expect(parent).toHaveStyle({ visibility: "visible" });
+    expect(parent?.querySelector("[data-page-transition]")).toHaveStyle({ visibility: "hidden" });
+  });
   it("reveals navigated page content only after its initial data is ready", async () => {
     const { rerender } = render(
       <PageTransition>

@@ -1,9 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ScopeItem, ScopeList } from "@/components/common/ScopeList";
-import type { Node, ProxyHost } from "@/types";
+import { useAuthStore } from "@/stores/auth";
+import { useSystemConfigStore } from "@/stores/system-config";
+import { type Node, type ProxyHost, TOKEN_SCOPES } from "@/types";
 
 const apiMocks = vi.hoisted(() => ({
+  getCached: vi.fn(),
   listDockerContainers: vi.fn(),
   listDockerFolders: vi.fn(),
   listDomainFolders: vi.fn(),
@@ -60,6 +63,11 @@ const nodes = [
 ] as Node[];
 
 beforeEach(() => {
+  useAuthStore.setState({ user: { scopes: TOKEN_SCOPES.map((scope) => scope.value) } as never });
+  const config = useSystemConfigStore.getState().config;
+  useSystemConfigStore.setState({
+    config: { ...config, features: { ...config.features, loggingEnabled: true } },
+  });
   apiMocks.listDockerContainers.mockReset().mockResolvedValue([]);
   apiMocks.listDockerFolders.mockReset().mockResolvedValue([]);
   apiMocks.listDomainFolders.mockReset().mockResolvedValue([]);

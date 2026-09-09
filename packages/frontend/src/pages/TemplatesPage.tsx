@@ -115,7 +115,7 @@ export function TemplatesPage() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold">Templates</h1>
-                {activeTab === "pki" ? <LicensePlanBadge plan="enterprise" /> : null}
+                {activeTab === "pki" ? <LicensePlanBadge feature="internal-pki" /> : null}
               </div>
               <p className="text-sm text-muted-foreground">
                 Certificate and nginx configuration templates

@@ -199,7 +199,7 @@ export function PagesSettingsSection() {
           title={
             <span className="inline-flex items-center gap-2">
               <span>Pages</span>
-              {!entitled && <LicensePlanBadge plan="personal" label="Personal+" />}
+              <LicensePlanBadge feature="pages" label="Personal+" />
             </span>
           }
           description="Loading wildcard deployment preview settings…"
@@ -211,7 +211,7 @@ export function PagesSettingsSection() {
             title={
               <span className="inline-flex items-center gap-2">
                 <span>Pages</span>
-                {!entitled && <LicensePlanBadge plan="personal" label="Personal+" />}
+                <LicensePlanBadge feature="pages" label="Personal+" />
               </span>
             }
             description="Each immutable Deployment gets one hostname label under this wildcard Domain."

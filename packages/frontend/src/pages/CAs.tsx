@@ -170,7 +170,7 @@ export function CAs() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold">Certificate Authorities</h1>
-                <LicensePlanBadge plan="enterprise" />
+                <LicensePlanBadge feature="internal-pki" />
               </div>
               <p className="text-sm text-muted-foreground">
                 {activeCAs.length} active &middot; {totalCerts} certificate

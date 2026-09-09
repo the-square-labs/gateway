@@ -1,7 +1,8 @@
-import { Check, ChevronDown } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import { Fragment, type ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { SelectItemCheck, selectItemClassName } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
 export interface ComboboxOption {
@@ -151,6 +152,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
             aria-label={ariaLabel}
             aria-expanded={contentOpen}
             value={open ? query : displayValue}
+            title={open ? undefined : displayValue}
             onFocus={() => {
               setActiveValue(null);
               setQuery(freeText ? value : "");
@@ -194,7 +196,7 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
               }
             }}
             placeholder={open ? searchPlaceholder : placeholder}
-            className={cn("pr-10", inputClassName)}
+            className={cn("min-w-0 truncate pr-10", inputClassName)}
             disabled={disabled}
           />
         </PopoverAnchor>
@@ -240,7 +242,8 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
                   aria-disabled={option.disabled}
                   aria-pressed={props.multiple ? props.value.includes(option.value) : undefined}
                   className={cn(
-                    "relative flex w-full items-center gap-2 whitespace-nowrap px-2 py-1.5 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground aria-disabled:opacity-50",
+                    selectItemClassName,
+                    "gap-2 whitespace-nowrap text-left hover:bg-accent hover:text-accent-foreground aria-disabled:opacity-50",
                     index === activeIndex && "bg-accent text-accent-foreground"
                   )}
                   onMouseEnter={() => setActiveValue(option.value)}
@@ -249,15 +252,10 @@ export function Combobox(props: (ComboboxProps & { multiple?: false }) | MultiCo
                     selectOption(option);
                   }}
                 >
-                  {props.multiple ? (
-                    <span
-                      aria-hidden="true"
-                      className="flex h-4 w-4 shrink-0 items-center justify-center border border-input"
-                    >
-                      {props.value.includes(option.value) ? <Check className="h-3 w-3" /> : null}
-                    </span>
-                  ) : null}
                   {renderOption?.(option) ?? option.label}
+                  {props.multiple && props.value.includes(option.value) ? (
+                    <SelectItemCheck />
+                  ) : null}
                 </button>
               </Fragment>
             ))

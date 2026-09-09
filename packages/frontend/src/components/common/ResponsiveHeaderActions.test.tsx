@@ -227,7 +227,7 @@ describe("getHeaderActionOverflowCount", () => {
 });
 
 describe("getHeaderActionOverflowIndices", () => {
-  it("keeps emergency destructive actions eligible for direct header placement", () => {
+  it("keeps destructive actions in overflow regardless of priority", () => {
     expect(
       shouldForceHeaderActionOverflow({
         label: "Kill",
@@ -235,7 +235,7 @@ describe("getHeaderActionOverflowIndices", () => {
         destructive: true,
         priority: HEADER_ACTION_PRIORITY.emergency,
       })
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldForceHeaderActionOverflow({ label: "Remove", onClick: vi.fn(), destructive: true })
     ).toBe(true);

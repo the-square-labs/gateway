@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { useSystemConfigStore } from "@/stores/system-config";
 import type {
   CA,
   DatabaseConnection,
@@ -13,6 +15,7 @@ import type {
 } from "@/types";
 import {
   allResourcePages,
+  canLoadScopeResource,
   type DockerResourceOption,
   type FolderFamily,
   type FolderOption,
@@ -74,8 +77,11 @@ export function ScopeList({
   viewportClassName,
   selectionFilter = "all",
 }: ScopeListProps) {
+  const actorScopes = useAuthStore((state) => state.user?.scopes);
+  const features = useSystemConfigStore((state) => state.config.features);
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
   const [resourceCatalog, setResourceCatalog] = useState<ScopeResourceCatalog>({});
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Lookup helpers read current auth/features from stores; rerun and cancel old loads when either changes.
   useEffect(() => {
     let cancelled = false;
     void loadScopeResourceCatalog(scopes, nodes ?? []).then((catalog) => {
@@ -84,7 +90,7 @@ export function ScopeList({
     return () => {
       cancelled = true;
     };
-  }, [scopes, nodes]);
+  }, [scopes, nodes, actorScopes, features]);
   const [dockerRegistryRepositories, setDockerRegistryRepositories] = useState<string[]>([]);
   const [folderOptions, setFolderOptions] = useState<FolderOption[]>([]);
   const [domainResources, setDomainResources] = useState<Domain[]>([]);
@@ -117,6 +123,7 @@ export function ScopeList({
     .sort()
     .join(",");
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: Folder lookup helpers read current auth/features from stores.
   useEffect(() => {
     const families = folderFamiliesKey
       .split(",")
@@ -129,7 +136,7 @@ export function ScopeList({
     void Promise.all(families.map(loadFolderFamily)).then((options) => {
       if (!cancelled) setFolderOptions(options.flat());
     });
-    if (families.includes("domains")) {
+    if (families.includes("domains") && canLoadScopeResource("domains:view")) {
       void allResourcePages((page) => api.listDomains({ page, limit: 100 }))
         .then((response) => {
           if (!cancelled) setDomainResources(response);
@@ -143,7 +150,10 @@ export function ScopeList({
     } else {
       setDomainResources([]);
     }
-    if (families.includes("logging-environments")) {
+    if (
+      families.includes("logging-environments") &&
+      canLoadScopeResource("logs:environments:view")
+    ) {
       void api
         .listLoggingEnvironments()
         .then((items) => {
@@ -161,10 +171,13 @@ export function ScopeList({
     return () => {
       cancelled = true;
     };
-  }, [folderFamiliesKey]);
+  }, [folderFamiliesKey, actorScopes, features]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The lookup permission helper reads the actor's current scopes from the store.
   useEffect(() => {
-    const dockerNodes = (nodes ?? []).filter((node) => node.type === "docker");
+    const dockerNodes = (nodes ?? []).filter(
+      (node) => node.type === "docker" && canLoadScopeResource("docker:containers:view", node.id)
+    );
     const needsDockerResources = scopes.some(
       (scope) =>
         scope.value.startsWith("docker:containers:") &&
@@ -207,15 +220,16 @@ export function ScopeList({
     return () => {
       cancelled = true;
     };
-  }, [nodes, restrictableScopes, scopes]);
+  }, [nodes, restrictableScopes, scopes, actorScopes]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The lookup permission helper reads the actor's current scopes from the store.
   useEffect(() => {
     const needsRepositories = scopes.some(
       (scope) =>
         scope.value.startsWith("docker:registries:internal:") &&
         restrictableScopes?.includes(scope.value)
     );
-    if (!needsRepositories) {
+    if (!needsRepositories || !canLoadScopeResource("docker:registries:view")) {
       setDockerRegistryRepositories([]);
       return;
     }
@@ -234,7 +248,7 @@ export function ScopeList({
     return () => {
       cancelled = true;
     };
-  }, [restrictableScopes, scopes]);
+  }, [restrictableScopes, scopes, actorScopes]);
 
   return (
     <div className={cn("max-sm:max-h-[40vh] max-sm:overflow-y-auto", viewportClassName)}>

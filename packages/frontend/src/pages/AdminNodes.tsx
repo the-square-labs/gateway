@@ -27,6 +27,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hostingNodeLabel } from "@/lib/hosting-status";
@@ -130,12 +131,13 @@ export function AdminNodes() {
     []
   );
   const hostingGeneration = useRef(0);
+  const [hostingSettledAuthKey, setHostingSettledAuthKey] = useState<string | null>(null);
   const updateHostingAccounts = useCallback((accounts: HostingConnector[]) => {
     setHostingAccounts(accounts.map((account) => ({ value: account.id, label: account.name })));
   }, []);
   const refreshHosting = useCallback(() => {
     const generation = ++hostingGeneration.current;
-    void api
+    const bindingsRequest = api
       .listNodeHostingBindings()
       .then((bindings) => {
         if (generation === hostingGeneration.current) setHostingBindings(bindings);
@@ -145,9 +147,12 @@ export function AdminNodes() {
       });
     if (!canViewHosting) {
       setHostingAccounts([]);
+      void bindingsRequest.finally(() => {
+        if (generation === hostingGeneration.current) setHostingSettledAuthKey(authKey);
+      });
       return;
     }
-    void api
+    const accountsRequest = api
       .listHostingConnectors()
       .then((accounts) => {
         if (generation === hostingGeneration.current) updateHostingAccounts(accounts);
@@ -156,7 +161,10 @@ export function AdminNodes() {
         // Keep a loaded provider tab available during a transient refresh failure.
         // Identity/permission changes clear this list in the auth-context effect below.
       });
-  }, [canViewHosting, updateHostingAccounts]);
+    void Promise.all([bindingsRequest, accountsRequest]).finally(() => {
+      if (generation === hostingGeneration.current) setHostingSettledAuthKey(authKey);
+    });
+  }, [authKey, canViewHosting, updateHostingAccounts]);
   useEffect(() => {
     if (authKey !== authContextKey(useAuthStore.getState().user)) return;
     setHostingAccounts([]);
@@ -351,6 +359,7 @@ export function AdminNodes() {
 
   return (
     <PageTransition>
+      {hostingSettledAuthKey !== authKey && <Skeleton />}
       <div className="h-full overflow-y-auto p-6 space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">

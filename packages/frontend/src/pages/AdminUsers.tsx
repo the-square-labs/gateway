@@ -115,8 +115,8 @@ export function AdminUsers({
   const [createName, setCreateName] = useState("");
   const [createGroupId, setCreateGroupId] = useState("");
   const [createAdditionalGroupIds, setCreateAdditionalGroupIds] = useState<string[]>([]);
-  const [updatingGroupUserId, setUpdatingGroupUserId] = useState<string | null>(null);
-  const groupUpdateInFlight = useRef(false);
+  const groupUpdates = useRef(new Map<string, { confirmed: User; desired: string[] }>());
+  const usersLoadVersion = useRef(0);
   const [createAuthMethod, setCreateAuthMethod] = useState<"oidc" | "password" | "email_otp">(
     "oidc"
   );
@@ -144,10 +144,26 @@ export function AdminUsers({
   }, [hasScopedAccess, navigate]);
 
   const loadUsers = useCallback(async () => {
+    const version = ++usersLoadVersion.current;
     try {
       const data = await api.listUsers();
+      if (version !== usersLoadVersion.current) return;
       api.setCache("admin:users", data || []);
-      setUsers(data || []);
+      setUsers((current) =>
+        (data || []).map((entry) => {
+          if (!groupUpdates.current.has(entry.id)) return entry;
+          const pending = current.find((user) => user.id === entry.id);
+          return pending
+            ? {
+                ...entry,
+                groupId: pending.groupId,
+                groupName: pending.groupName,
+                groupIds: pending.groupIds,
+                groupNames: pending.groupNames,
+              }
+            : entry;
+        })
+      );
     } catch {
       toast.error("Failed to load users");
     } finally {
@@ -224,20 +240,43 @@ export function AdminUsers({
   }, [loadUsers]);
 
   const handleGroupChange = async (user: User, groupIds: string[]) => {
-    if (groupUpdateInFlight.current) return;
-    groupUpdateInFlight.current = true;
-    setUpdatingGroupUserId(user.id);
+    if (!groupIds.length) return;
+    ++usersLoadVersion.current;
+    const names = groupIds.map((id) => groups.find((group) => group.id === id)?.name ?? id);
+    setUsers((current) =>
+      current.map((entry) =>
+        entry.id === user.id
+          ? { ...entry, groupId: groupIds[0], groupName: names[0], groupIds, groupNames: names }
+          : entry
+      )
+    );
+    const pending = groupUpdates.current.get(user.id);
+    if (pending) {
+      pending.desired = groupIds;
+      return;
+    }
+    const update = { confirmed: user, desired: groupIds };
+    groupUpdates.current.set(user.id, update);
     try {
-      const updated = await api.updateUserGroup(user.id, groupIds);
-      setUsers((current) =>
-        current.map((entry) => (entry.id === updated.id ? { ...entry, ...updated } : entry))
-      );
-      api.invalidateCache("admin:users");
+      while (true) {
+        const requested = update.desired;
+        const updated = await api.updateUserGroup(user.id, requested);
+        update.confirmed = updated;
+        if (requested !== update.desired) continue;
+        setUsers((current) =>
+          current.map((entry) => (entry.id === updated.id ? { ...entry, ...updated } : entry))
+        );
+        break;
+      }
     } catch (err) {
+      setUsers((current) =>
+        current.map((entry) => (entry.id === user.id ? { ...entry, ...update.confirmed } : entry))
+      );
       toast.error(err instanceof Error ? err.message : "Failed to update group");
     } finally {
-      groupUpdateInFlight.current = false;
-      setUpdatingGroupUserId(null);
+      ++usersLoadVersion.current;
+      groupUpdates.current.delete(user.id);
+      api.invalidateCache("admin:users");
     }
   };
 
@@ -416,8 +455,8 @@ export function AdminUsers({
     },
     {
       id: "group",
-      label: "Group",
-      width: "14rem",
+      label: "Groups",
+      width: "20rem",
       align: "right",
       renderCell: (user) => {
         const isSelf = currentUser?.id === user.id;
@@ -426,21 +465,26 @@ export function AdminUsers({
         const groupIds = user.groupIds ?? [user.groupId];
         if (isReadOnly)
           return (
-            <Badge variant="secondary">
-              {groupSelectionLabel(groupIds, groups, user.groupName)}
+            <Badge variant="secondary" className="min-w-0 max-w-full">
+              <span className="truncate" title={user.groupNames?.join(", ") ?? user.groupName}>
+                {groupSelectionLabel(
+                  groupIds,
+                  groups,
+                  user.groupNames?.join(", ") ?? user.groupName
+                )}
+              </span>
             </Badge>
           );
         return (
           <div
-            className="w-full"
+            className="min-w-0 w-full"
             onClick={(event) => event.stopPropagation()}
             onPointerDown={(event) => event.stopPropagation()}
           >
             <UserGroupSelect
               value={groupIds}
               groups={groups}
-              fallback={user.groupName}
-              disabled={updatingGroupUserId !== null}
+              fallback={user.groupNames?.join(", ") ?? user.groupName}
               onChange={(ids) => handleGroupChange(user, ids)}
             />
           </div>

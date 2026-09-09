@@ -187,7 +187,7 @@ export function Certificates() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-2xl font-bold">Certificates</h1>
-                <LicensePlanBadge plan="enterprise" />
+                <LicensePlanBadge feature="internal-pki" />
               </div>
               <p className="text-sm text-muted-foreground">{total} certificates total</p>
             </div>

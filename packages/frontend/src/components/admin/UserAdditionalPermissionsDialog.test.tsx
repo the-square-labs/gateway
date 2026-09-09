@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth";
 import type { User } from "@/types";
 import { UserAdditionalPermissionsDialog } from "./UserAdditionalPermissionsDialog";
 
@@ -20,6 +21,7 @@ vi.mock("@/components/common/ScopeList", () => ({
 
 vi.mock("@/services/api", () => ({
   api: {
+    getCached: vi.fn(),
     listNodes: vi.fn().mockResolvedValue({ data: [] }),
     listProxyHosts: vi.fn().mockResolvedValue({ data: [] }),
     listDatabases: vi.fn().mockResolvedValue({ data: [] }),
@@ -29,29 +31,15 @@ vi.mock("@/services/api", () => ({
   },
 }));
 
-vi.mock("@/stores/auth", () => ({
-  useAuthStore: (selector: (state: { user: User }) => unknown) =>
-    selector({
-      user: {
-        id: "actor-1",
-        oidcSubject: "actor",
-        email: "actor@example.com",
-        name: "Actor",
-        avatarUrl: null,
-        groupId: "admin-group",
-        groupName: "admin",
-        scopes: ["admin:users", "nodes:console"],
-        isBlocked: false,
-      },
-    }),
-}));
-
 vi.mock("@/stores/ca", () => ({
   useCAStore: () => ({ cas: [], fetchCAs: vi.fn().mockResolvedValue(undefined) }),
 }));
 
 describe("UserAdditionalPermissionsDialog", () => {
   beforeEach(() => {
+    useAuthStore.setState({
+      user: { id: "actor-1", scopes: ["admin:users", "nodes:console"] } as User,
+    });
     mocks.updateUserAdditionalPermissions.mockReset();
   });
 

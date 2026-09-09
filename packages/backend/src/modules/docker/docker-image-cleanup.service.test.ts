@@ -2,7 +2,36 @@ import { describe, expect, it, vi } from 'vitest';
 import { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 
 describe('DockerImageCleanupService', () => {
-  it('removes old image versions after manual or webhook updates', async () => {
+  it.each([
+    'container',
+    'deployment',
+  ] as const)('enables cleanup by default for %s without overwriting explicit opt-out', async (type) => {
+    const limit = vi.fn().mockResolvedValue([]);
+    const returning = vi.fn().mockResolvedValue([{ enabled: true }]);
+    const values = vi.fn().mockReturnValue({ returning });
+    const db = {
+      select: () => ({ from: () => ({ where: () => ({ limit }) }) }),
+      insert: () => ({ values }),
+    };
+    const service = new DockerImageCleanupService(db as never, {} as never);
+    const get = () =>
+      type === 'container' ? service.getForContainer('n1', 'app') : service.getForDeployment('n1', 'd1');
+    const upsert = (input: { enabled?: boolean }) =>
+      type === 'container'
+        ? service.upsertForContainer('n1', 'app', input)
+        : service.upsertForDeployment('n1', 'd1', input);
+    expect(await get()).toMatchObject({ enabled: true, retentionCount: 2 });
+    await upsert({});
+    expect(values).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: true }));
+    await upsert({ enabled: false });
+    expect(values).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }));
+    limit.mockResolvedValue([{ id: 'saved', enabled: false, retentionCount: 3 }]);
+    expect(await get()).toMatchObject({ enabled: false, retentionCount: 3 });
+  });
+  it.each([
+    'container',
+    'deployment',
+  ] as const)('uses the enabled default to clean %s images while retaining in-use images', async (type) => {
     vi.useFakeTimers();
     try {
       const docker = {
@@ -22,30 +51,24 @@ describe('DockerImageCleanupService', () => {
             RepoTags: ['registry.example.com/team/app:old'],
             Created: 100,
           },
+          { Id: 'sha-in-use', RepoTags: ['registry.example.com/team/app:old-running'], Created: 50 },
         ]),
-        listAllContainers: vi.fn().mockResolvedValue([{ ImageID: 'sha-new' }]),
+        listAllContainers: vi.fn().mockResolvedValue([{ ImageID: 'sha-new' }, { ImageID: 'sha-in-use' }]),
         removeImage: vi.fn().mockResolvedValue(undefined),
       };
-      const service = new DockerImageCleanupService({} as never, docker as never);
-      vi.spyOn(service, 'getForContainer').mockResolvedValue({
-        id: null,
-        nodeId: 'node-1',
-        targetType: 'container',
-        containerName: 'app',
-        deploymentId: null,
-        enabled: true,
-        retentionCount: 2,
-        createdAt: null,
-        updatedAt: null,
-      });
-
-      const cleanup = service.scheduleCleanupForContainer('node-1', 'app', 'registry.example.com/team/app:new');
+      const db = { select: () => ({ from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }) }) };
+      const service = new DockerImageCleanupService(db as never, docker as never);
+      const cleanup =
+        type === 'container'
+          ? service.scheduleCleanupForContainer('node-1', 'app', 'registry.example.com/team/app:new')
+          : service.scheduleCleanupForDeployment('node-1', 'd1', 'registry.example.com/team/app:new');
       await vi.advanceTimersByTimeAsync(5000);
       await cleanup;
 
       expect(docker.removeImage).toHaveBeenCalledWith('node-1', 'sha-old', false, 'system');
       expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-previous', false, 'system');
       expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-new', false, 'system');
+      expect(docker.removeImage).not.toHaveBeenCalledWith('node-1', 'sha-in-use', false, 'system');
     } finally {
       vi.useRealTimers();
     }
