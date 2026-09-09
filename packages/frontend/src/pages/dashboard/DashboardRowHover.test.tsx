@@ -32,7 +32,7 @@ it("uses the standard accent hover on all three dashboard resource lists", () =>
             commonName: "Test CA",
             status: "active",
             type: "root",
-            keyAlgorithm: "RSA",
+            keyAlgorithm: "rsa-2048",
           } as CA,
         ]}
       />
