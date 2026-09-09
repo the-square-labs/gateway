@@ -59,6 +59,28 @@ describe("Additional Routes path contract", () => {
 });
 
 describe("Additional Routes request mapping", () => {
+  it("maps a standalone container with explicitly empty Compose fields", () => {
+    const request = routeRequestFromDraft(
+      draft({
+        targetKind: "docker_container",
+        upstream: {
+          ...draft().upstream,
+          kind: "docker_container",
+          dockerNodeId: "11111111-1111-4111-8111-111111111111",
+          containerName: "api",
+          containerPort: 8080,
+        },
+      })
+    );
+    expect(request).toMatchObject({
+      targetKind: "docker_container",
+      dockerContainerName: "api",
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
+      dockerContainerPort: 8080,
+    });
+  });
+
   it("forces Pages routes to strip the prefix and omits proxy-only options", () => {
     const request = routeRequestFromDraft(
       draft({

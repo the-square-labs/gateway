@@ -1,6 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AdditionalRouteService } from './additional-route.service.js';
-import { normalizeAdditionalRoutePath } from './additional-route.validation.js';
+import { CreateAdditionalRouteSchema, normalizeAdditionalRoutePath } from './additional-route.validation.js';
+
+describe('Additional Route Docker create payload', () => {
+  const common = {
+    path: '/api',
+    targetKind: 'docker_container',
+    dockerNodeId: '11111111-1111-4111-8111-111111111111',
+    dockerContainerPort: 8080,
+  };
+  const composeId = '22222222-2222-4222-8222-222222222222';
+
+  it('accepts the standalone-container form payload with null Compose fields', () => {
+    const input = {
+      ...common,
+      dockerContainerName: 'api',
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
+    };
+    expect(CreateAdditionalRouteSchema.parse(input)).toMatchObject(input);
+  });
+
+  it('accepts the Compose form payload with a null standalone-container field', () => {
+    const input = {
+      ...common,
+      dockerContainerName: null,
+      dockerComposeProjectId: composeId,
+      dockerComposeServiceName: 'api',
+    };
+    expect(CreateAdditionalRouteSchema.parse(input)).toMatchObject(input);
+  });
+
+  it('still accepts clients omitting unused fields', () => {
+    expect(CreateAdditionalRouteSchema.safeParse({ ...common, dockerContainerName: 'api' }).success).toBe(true);
+    expect(
+      CreateAdditionalRouteSchema.safeParse({
+        ...common,
+        dockerComposeProjectId: composeId,
+        dockerComposeServiceName: 'api',
+      }).success
+    ).toBe(true);
+  });
+
+  it.each([
+    { dockerContainerName: null, dockerComposeProjectId: null, dockerComposeServiceName: null },
+    { dockerContainerName: 'api', dockerComposeProjectId: composeId, dockerComposeServiceName: 'api' },
+    { dockerContainerName: null, dockerComposeProjectId: composeId, dockerComposeServiceName: null },
+    { dockerContainerName: null, dockerComposeProjectId: null, dockerComposeServiceName: 'api' },
+    { dockerContainerName: null, dockerComposeProjectId: 'invalid', dockerComposeServiceName: 'api' },
+    { dockerContainerName: null, dockerComposeProjectId: composeId, dockerComposeServiceName: '' },
+  ])('rejects missing, ambiguous or invalid Docker target %j', (target) => {
+    expect(CreateAdditionalRouteSchema.safeParse({ ...common, ...target }).success).toBe(false);
+  });
+});
 
 const ADDITIONAL_ROUTES_PLACEHOLDER =
   '{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}';
