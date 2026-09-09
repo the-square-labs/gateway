@@ -270,7 +270,15 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     !canListDockerNodes &&
     !canListIngressNodes
   ) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required node access scope');
+    throw new AppError(403, 'FORBIDDEN', 'Missing permission for the requested node inventory', {
+      requiredScopes: [
+        'nodes:details',
+        'nodes:folders:manage',
+        ...creationBases,
+        ...(query.type === 'docker' ? RESOURCE_SCOPED_DOCKER_NODE_SCOPES : []),
+      ],
+      scopeMatch: 'any',
+    });
   }
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
@@ -302,7 +310,10 @@ nodesRoutes.openapi(listNodeFoldersRoute, async (c) => {
   const allowedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
   const allowedFolderIds = getFolderScopedIds(scopes, ['nodes:details', 'nodes:rename', 'nodes:create']);
   if (!canManageFolders && !hasScopeBase(scopes, 'nodes:details') && !hasScopeBase(scopes, 'nodes:create')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required node details, create, or folder scope');
+    throw new AppError(403, 'FORBIDDEN', 'Missing required node details, create, or folder scope', {
+      requiredScopes: ['nodes:details', 'nodes:create', 'nodes:folders:manage'],
+      scopeMatch: 'any',
+    });
   }
   const data = await service.getFolderTree(
     canManageFolders || hasNodeDetails || hasGlobalCreate
@@ -547,7 +558,7 @@ nodesRoutes.openapi(createNodeRoute, async (c) => {
   const user = c.get('user')!;
   const input = CreateNodeSchema.parse(await c.req.json());
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'nodes:create', input.folderId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing authorized node creation scope for the selected destination');
+    throw new AppError(403, 'FORBIDDEN', 'Missing nodes:create permission for the selected destination');
   }
   await container.resolve(NodeFolderService).assertFolderExists(input.folderId);
   const result = await service.create(input, user.id);

@@ -1,4 +1,6 @@
 import 'reflect-metadata';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
 import { __testOnly, InferenceBudgetPolicyService } from './inference-budget-policy.js';
@@ -160,7 +162,7 @@ describe('effective inference fixed-window policy', () => {
     });
   });
 
-  it('starts fresh subscription windows only on the first request after expiry', async () => {
+  it.each([true, false])('starts all subscription windows on admission with enforcement=%s', async (enabled) => {
     const now = new Date('2026-07-31T00:00:00.000Z');
     const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
     const values = vi.fn(() => ({ onConflictDoUpdate }));
@@ -182,7 +184,9 @@ describe('effective inference fixed-window policy', () => {
 
     const usage = await service.usage(
       'cef8fbd8-f149-4cd6-b69f-34bea4a10c52',
-      __testOnly.effectiveLimits(policy({})),
+      __testOnly.effectiveLimits(
+        policy({ credits5hEnabled: enabled, credits7dEnabled: enabled, credits30dEnabled: enabled })
+      ),
       now,
       database as never,
       { startSubscriptionWindows: true }
@@ -232,7 +236,163 @@ describe('effective inference fixed-window policy', () => {
     expect(usage.active).toMatchObject({ credits5h: true, credits7d: true, credits30d: true });
     expect(usage.recoveryAt.credits5h).toEqual(new Date('2026-07-31T03:00:00.000Z'));
   });
+
+  it('keeps accrued usage and window identities through disable/enable and rolls only expired dimensions', async () => {
+    const { database, entries, windows } = trackingHarness();
+    const service = new InferenceBudgetPolicyService(database as never);
+    const start = new Date('2026-09-09T13:24:04.591Z');
+    const disabled = __testOnly.effectiveLimits(
+      policy({ credits5hEnabled: false, credits7dEnabled: false, credits30dEnabled: false })
+    );
+    const enabled = __testOnly.effectiveLimits(policy({}));
+    const begin = await service.usage('user', disabled, start, database as never, { startSubscriptionWindows: true });
+    entries.push({ at: start, credits: 197.964336 });
+    const later = new Date(start.getTime() + 1000);
+    for (const limits of [disabled, enabled, disabled]) {
+      const usage = await service.usage('user', limits, later, database as never, { startSubscriptionWindows: true });
+      expect(usage).toMatchObject({ credits5h: 197.964336, credits7d: 197.964336, credits30d: 197.964336 });
+      expect(usage.recoveryAt).toEqual(begin.recoveryAt);
+    }
+    expect(database.insert).toHaveBeenCalledTimes(3);
+    const expired = begin.recoveryAt.credits5h;
+    const read = await service.usage('user', disabled, expired, database as never);
+    expect(read.credits5h).toBe(0);
+    expect(read.active?.credits5h).toBe(false);
+    expect(database.insert).toHaveBeenCalledTimes(3);
+    const next = await service.usage('user', disabled, expired, database as never, { startSubscriptionWindows: true });
+    expect(database.insert).toHaveBeenCalledTimes(4);
+    expect(next.active?.credits5h).toBe(true);
+    expect(next.credits7d).toBe(197.964336);
+    expect(next.recoveryAt.credits7d).toEqual(begin.recoveryAt.credits7d);
+    expect(windows.get('credits5h')?.resetAt).toEqual(expired);
+  });
+
+  it.each([
+    ['credits5h', 5 * 60 * 60_000],
+    ['credits7d', 7 * 24 * 60 * 60_000],
+    ['credits30d', 30 * 24 * 60 * 60_000],
+  ] as const)('recovers an expired persisted %s window without losing intervening disabled usage', async (dimension, durationMs) => {
+    const oldStart = new Date('2026-07-01T00:00:00Z');
+    const oldEnd = new Date(oldStart.getTime() + durationMs);
+    const nextStart = new Date(oldEnd.getTime() + 60 * 60_000);
+    const now = new Date(nextStart.getTime() + 60 * 60_000);
+    const { database, entries, windows } = trackingHarness(
+      ['credits5h', 'credits7d', 'credits30d'].map((key) => ({
+        dimension: key,
+        resetAt: key === dimension ? oldStart : now,
+        windowActive: true,
+      }))
+    );
+    entries.push({ at: new Date(oldEnd.getTime() - 1), credits: 900 }, { at: nextStart, credits: 100 });
+    const service = new InferenceBudgetPolicyService(database as never);
+    const limits = __testOnly.effectiveLimits(
+      policy({ credits5hEnabled: false, credits7dEnabled: false, credits30dEnabled: false })
+    );
+    const read = await service.usage('user', limits, now, database as never);
+    expect(read[dimension]).toBe(100);
+    expect(read.active?.[dimension]).toBe(true);
+    expect(read.recoveryAt[dimension]).toEqual(new Date(nextStart.getTime() + durationMs));
+    expect(database.insert).not.toHaveBeenCalled();
+    const query = new PgDialect().sqlToQuery(database.execute.mock.calls[0]![0]);
+    expect(query.params).toContainEqual(oldEnd);
+    const admitted = await service.usage('user', limits, now, database as never, { startSubscriptionWindows: true });
+    expect(admitted[dimension]).toBe(100);
+    expect(windows.get(dimension)?.resetAt).toEqual(nextStart);
+    expect(database.insert).toHaveBeenCalledTimes(1);
+    database.execute.mockClear();
+    await service.usage('user', limits, now, database as never);
+    expect(database.execute).toHaveBeenCalledTimes(1); // persisted live window skips reconstruction
+  });
+
+  it('leaves an expired legacy window idle if no usage followed its end', async () => {
+    const start = new Date('2026-09-09T00:00:00Z');
+    const { database, entries } = trackingHarness(
+      ['credits5h', 'credits7d', 'credits30d'].map((dimension) => ({ dimension, resetAt: start, windowActive: true }))
+    );
+    entries.push({ at: start, credits: 100 });
+    const usage = await new InferenceBudgetPolicyService(database as never).usage(
+      'user',
+      __testOnly.effectiveLimits(policy({})),
+      new Date('2026-09-09T07:00:00Z'),
+      database as never
+    );
+    expect(usage.credits5h).toBe(0);
+    expect(usage.active?.credits5h).toBe(false);
+    expect(database.insert).not.toHaveBeenCalled();
+  });
+
+  it('recovers disabled idle windows only from usage after the last explicit reset', async () => {
+    const start = new Date('2026-09-09T13:24:04.591Z');
+    const resetAt = new Date(start.getTime() - 1000);
+    const snapshots = ['credits5h', 'credits7d', 'credits30d'].map((dimension) => ({
+      dimension,
+      resetAt,
+      windowActive: false,
+    }));
+    const statements: Array<{ sql: string; params: unknown[] }> = [];
+    const { database, entries } = trackingHarness(snapshots);
+    database.execute.mockImplementation(async (statement: SQL) => {
+      const query = new PgDialect().sqlToQuery(statement);
+      statements.push(query);
+      if (query.sql.includes('WITH RECURSIVE')) return { rows: [{ started_at: start }] };
+      return { rows: [{ credits_5h: '25', credits_7d: '25', credits_30d: '25' }] };
+    });
+    entries.push({ at: start, credits: 25 });
+    const service = new InferenceBudgetPolicyService(database as never);
+    const disabled = __testOnly.effectiveLimits(
+      policy({ credits5hEnabled: false, credits7dEnabled: false, credits30dEnabled: false })
+    );
+    const read = await service.usage('user', disabled, start, database as never);
+    expect(read).toMatchObject({ credits5h: 25, credits7d: 25, credits30d: 25 });
+    expect(read.active).toMatchObject({ credits5h: true, credits7d: true, credits30d: true });
+    expect(database.insert).not.toHaveBeenCalled();
+    for (const statement of statements.filter((row) => row.sql.includes('WITH RECURSIVE'))) {
+      expect(statement.sql).toContain('"occurred_at" >=');
+      expect(statement.params).toContainEqual(resetAt);
+    }
+    await service.usage('user', disabled, start, database as never, { startSubscriptionWindows: true });
+    expect(database.insert).toHaveBeenCalledTimes(3);
+  });
 });
+
+function trackingHarness(initial: Array<{ dimension: string; resetAt: Date; windowActive: boolean }> = []) {
+  const windows = new Map(initial.map((row) => [row.dimension, row]));
+  const entries: Array<{ at: Date; credits: number }> = [];
+  const database = {
+    select: vi.fn((selection: Record<string, unknown>) => ({
+      from: () => ({ where: async () => ('dimension' in selection ? [...windows.values()] : [{ value: 0 }]) }),
+    })),
+    insert: vi.fn(() => ({
+      values: (row: { dimension: string; resetAt: Date; windowActive: boolean }) => ({
+        onConflictDoUpdate: async () => {
+          windows.set(row.dimension, row);
+        },
+      }),
+    })),
+    execute: vi.fn(async (statement: SQL): Promise<{ rows: Record<string, unknown>[] }> => {
+      const query = new PgDialect().sqlToQuery(statement);
+      if (query.sql.includes('WITH RECURSIVE')) {
+        const [upper, lower] = query.params.filter((value): value is Date => value instanceof Date);
+        const durationMs = query.params.at(-1) as number;
+        let startedAt: Date | undefined;
+        for (const entry of [...entries].sort((a, b) => a.at.getTime() - b.at.getTime())) {
+          if (entry.at > upper! || (lower && entry.at < lower)) continue;
+          if (!startedAt || entry.at.getTime() >= startedAt.getTime() + durationMs) startedAt = entry.at;
+        }
+        return { rows: startedAt ? [{ started_at: startedAt }] : [] };
+      }
+      // Exercise actual generated query bounds, including the inclusive first instant.
+      const sum = (offset: number) =>
+        entries
+          .filter(
+            (entry) => entry.at >= (query.params[offset] as Date) && entry.at < (query.params[offset + 1] as Date)
+          )
+          .reduce((total, entry) => total + entry.credits, 0);
+      return { rows: [{ credits_5h: String(sum(0)), credits_7d: String(sum(2)), credits_30d: String(sum(4)) }] };
+    }),
+  };
+  return { database, entries, windows };
+}
 
 describe('API token pricing', () => {
   const gpt56LunaPricing = {

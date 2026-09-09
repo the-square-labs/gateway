@@ -104,6 +104,7 @@ export function InferenceUsersTable({
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
   const initializedRef = useRef(hasCachedData);
+  const loadGeneration = useRef(0);
 
   const parsedCredits5h = parseNonNegativeNumber(creditLimitDraft.credits5h);
   const parsedCredits7d = parseNonNegativeNumber(creditLimitDraft.credits7d);
@@ -117,20 +118,33 @@ export function InferenceUsersTable({
     (!apiUsageEnabled || (parsedApiDollars !== null && parsedApiDollars > 0));
 
   const load = useCallback(
-    async ({ showLoading = !initializedRef.current }: { showLoading?: boolean } = {}) => {
+    async ({
+      showLoading = !initializedRef.current,
+      savedPolicies,
+    }: {
+      showLoading?: boolean;
+      savedPolicies?: InferenceLimitPolicy[];
+    } = {}) => {
+      const generation = ++loadGeneration.current;
       if (showLoading) setLoading(true);
       try {
         const [nextUsers, nextPolicies] = await Promise.all([
           canViewUsage ? api.listInferenceUsersUsage() : api.listInferenceLimitUsers(),
-          canManage ? api.listInferenceLimits() : Promise.resolve([]),
+          savedPolicies !== undefined
+            ? Promise.resolve(savedPolicies)
+            : canManage
+              ? api.listInferenceLimits()
+              : Promise.resolve([]),
         ]);
+        if (generation !== loadGeneration.current) return;
         setUsers(nextUsers);
         setPolicies(nextPolicies);
         initializedRef.current = true;
       } catch (error) {
+        if (generation !== loadGeneration.current) return;
         toast.error(error instanceof Error ? error.message : "Failed to load inference users");
       } finally {
-        setLoading(false);
+        if (generation === loadGeneration.current) setLoading(false);
       }
     },
     [canManage, canViewUsage]
@@ -152,7 +166,8 @@ export function InferenceUsersTable({
     const override = policies.find(
       (policy) => policy.policyType === "user" && policy.userId === user.id
     );
-    const next = override ? policyInput(override) : (user.limits ?? EMPTY_LIMITS);
+    const policy = override ?? policies.find((item) => item.policyType === "default");
+    const next = policy ? policyInput(policy) : (user.limits ?? EMPTY_LIMITS);
     setEditing(user);
     setEditingDefault(false);
     setForm(next);
@@ -188,11 +203,15 @@ export function InferenceUsersTable({
             ? Math.round(parsedApiDollars * 1_000_000)
             : 0,
       };
-      if (editingDefault) await api.setInferenceDefaultLimits(payload);
-      else await api.setInferenceUserLimits(editing!.id, payload);
+      const savedPolicies = editingDefault
+        ? await api.setInferenceDefaultLimits(payload)
+        : await api.setInferenceUserLimits(editing!.id, payload);
+      setPolicies(savedPolicies);
       setLimitsOpen(false);
-      await load({ showLoading: false });
       toast.success(editingDefault ? "Default limits updated" : "User limits updated");
+      // The PUT is the save acknowledgement. Usage aggregation is a separate
+      // refresh, and must neither delay success nor replay older policy data.
+      void load({ showLoading: false, savedPolicies });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update limits");
     } finally {

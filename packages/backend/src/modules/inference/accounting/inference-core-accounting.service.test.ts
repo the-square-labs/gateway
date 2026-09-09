@@ -201,6 +201,52 @@ function createHarness(
 }
 
 describe('inference core accounting', () => {
+  it('pins the first attempt and its settlement to the same Gateway instant as the new window', async () => {
+    const admittedAt = new Date('2026-09-09T13:24:04.591Z');
+    const earlierCoreTime = '2026-09-09T13:24:04.483Z';
+    vi.useFakeTimers();
+    vi.setSystemTime(admittedAt);
+    try {
+      const admission = createHarness();
+      expect(await admission.service.admitCoreAttempt({ ...ADMISSION, occurredAt: earlierCoreTime })).toEqual({
+        decision: 'allow',
+      });
+      expect(admission.policies.usage).toHaveBeenCalledWith('user-1', expect.anything(), admittedAt, admission.tx, {
+        startSubscriptionWindows: true,
+      });
+      expect(admission.insertedAttempts[0]).toMatchObject({ startedAt: admittedAt });
+      const settlement = createHarness({ attempt: { ...ATTEMPT, ...(admission.insertedAttempts[0] as object) } });
+      await settlement.service.settleCoreAttempt({
+        contractId: 'wiolett-core/v1',
+        rootRequestId: REQUEST.id,
+        attemptId: 'att_1',
+        parentAttemptId: null,
+        attemptKind: 'root',
+        terminalStatus: 'completed',
+        coreAccountId: 'core-conn-1',
+        coreModelId: 'core-conn-1/gpt-5.5',
+        sourceType: 'subscription',
+        upstreamStatus: 200,
+        errorCode: null,
+        usage: {
+          uncachedInputTokens: 100,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 20,
+          reasoningTokens: 0,
+        },
+        usageEstimated: false,
+        emittedOutput: true,
+        startedAt: earlierCoreTime,
+        // Completing past expiry must not move this charge into another window.
+        completedAt: new Date(admittedAt.getTime() + 5 * 60 * 60_000).toISOString(),
+      });
+      expect(settlement.ledgerRows[0]).toMatchObject({ occurredAt: admittedAt });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('admits a root attempt with a budget reservation and marks the request running', async () => {
     const { service, reservations, insertedAttempts, requestUpdates } = createHarness();
     const decision = await service.admitCoreAttempt(ADMISSION);

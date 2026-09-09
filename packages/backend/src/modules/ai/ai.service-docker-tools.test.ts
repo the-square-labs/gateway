@@ -95,6 +95,19 @@ describe('AIService Docker tool routing', () => {
     );
   });
 
+  it('does not reach saved-source build execution without manage on the target container', async () => {
+    const createBuild = vi.fn();
+    container.registerInstance(DockerSourceService, { createBuild } as never);
+    const service = createService({ inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1' }) });
+    const result = await service.executeTool(
+      { ...BASE_USER, scopes: ['docker:containers:view:node-1', 'docker:containers:manage:node-1/other'] },
+      'manage_docker_source',
+      { operation: 'build', targetType: 'container', nodeId: 'node-1', containerName: 'payments-api' }
+    );
+    expect(result).toHaveProperty('error');
+    expect(createBuild).not.toHaveBeenCalled();
+  });
+
   it('routes Compose source builds through the project-scoped authorization identity', async () => {
     const createBuild = vi.fn().mockResolvedValue({ build: { id: 'build-compose' }, created: true });
     container.registerInstance(DockerSourceService, { createBuild } as never);

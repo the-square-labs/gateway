@@ -15,7 +15,7 @@
   "confidence": 0.5,
   "importance": 0.5,
   "created_at": 1784934085269,
-  "updated_at": 1788310972296
+  "updated_at": 1788961810731
 }
 ---
-[→ dcfkgqwx] Gateway inference product contract
+[→ dcfkgqwx] Clarify recovery of expired legacy subscription windows without crossing the prior window or manual-reset boundary.

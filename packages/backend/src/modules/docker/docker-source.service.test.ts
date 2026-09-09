@@ -42,6 +42,100 @@ function allowBusiness(service: DockerSourceService) {
   return service;
 }
 
+describe('manual builds of saved sources', () => {
+  function manualHarness() {
+    const current = { ...binding };
+    const db = {
+      select: vi.fn(() => ({ from: () => ({ where: () => ({ limit: async () => [current] }) }) })),
+      execute: vi.fn(),
+      update: vi.fn(() => ({
+        set: (values: object) => ({ where: () => ({ returning: async () => [{ ...current, ...values }] }) }),
+      })),
+      transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
+    };
+    const integrations = {
+      resolveDockerBuildSource: vi.fn(async (actor: { scopes: string[] }) => {
+        if (!actor.scopes.includes('integrations:gitlab:repo:read'))
+          throw new AppError(403, 'CONNECTOR_SCOPE_DENIED', 'Missing Git permission');
+        return {
+          provider: 'gitlab',
+          remoteId: current.repositoryRemoteId,
+          fullPath: current.repositoryFullPath,
+          cloneUrl: current.repositoryCloneUrl,
+          commitSha: 'a'.repeat(40),
+        };
+      }),
+    };
+    const enqueue = vi.fn().mockResolvedValue({ build: { id: 'build' }, created: true });
+    const service = allowBusiness(
+      new DockerSourceService(db as never, { log: vi.fn() } as never, integrations as never, {} as never)
+    );
+    service.setBuildService({ enqueue } as never);
+    return { service, integrations, enqueue, db };
+  }
+  const target = { kind: 'container' as const, nodeId: binding.nodeId, containerName: binding.containerName };
+  const operator = { id: 'operator', scopes: ['docker:containers:manage'] };
+
+  it('reads only the saved source with automation credentials and records the actual initiating user', async () => {
+    const { service, integrations, enqueue } = manualHarness();
+    await service.createBuild(target, { force: true }, operator as never);
+    expect(integrations.resolveDockerBuildSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scopes: expect.arrayContaining([
+          'integrations:gitlab:repo:read',
+          'integrations:github:system',
+          'integrations:git:system',
+        ]),
+      }),
+      { connectorId: binding.connectorId, projectId: binding.projectId, branch: binding.branch }
+    );
+    expect(enqueue).toHaveBeenCalledWith({
+      sourceBindingId: binding.id,
+      commitSha: 'a'.repeat(40),
+      trigger: 'manual',
+      createdById: 'operator',
+      force: true,
+    });
+  });
+  it('keeps explicit source resolution subject to the user Git permissions', async () => {
+    const { service, integrations, enqueue } = manualHarness();
+    await expect(service.resolveCurrent(target, operator as never)).rejects.toMatchObject({
+      code: 'CONNECTOR_SCOPE_DENIED',
+    });
+    expect(integrations.resolveDockerBuildSource.mock.calls[0]?.[0]).toBe(operator);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+  it.each([
+    'CONNECTOR_DISABLED',
+    'SOURCE_PROJECT_NOT_FOUND',
+    'CONNECTOR_CAPABILITY_DENIED',
+    'SOURCE_PROJECT_ARCHIVED',
+  ])('still refuses a saved source rejected with %s', async (code) => {
+    const { service, integrations, enqueue } = manualHarness();
+    integrations.resolveDockerBuildSource.mockRejectedValueOnce(new AppError(403, code, 'Source is unavailable'));
+    await expect(service.createBuild(target, { force: false }, operator as never)).rejects.toMatchObject({ code });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+  it('does not queue a caller-supplied commit outside the saved branch head', async () => {
+    const { service, enqueue } = manualHarness();
+    await expect(
+      service.createBuild(target, { force: false, commitSha: 'b'.repeat(40) }, operator as never)
+    ).rejects.toMatchObject({
+      code: 'SOURCE_COMMIT_STALE',
+    });
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+  it('does not resolve repository credentials for a target without a saved binding', async () => {
+    const { service, integrations, enqueue, db } = manualHarness();
+    db.select.mockReturnValueOnce({ from: () => ({ where: () => ({ limit: async () => [] }) }) });
+    await expect(service.createBuild(target, { force: false }, operator as never)).rejects.toMatchObject({
+      code: 'SOURCE_BINDING_NOT_FOUND',
+    });
+    expect(integrations.resolveDockerBuildSource).not.toHaveBeenCalled();
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+});
+
 function createHarness(provider: 'gitlab' | 'github' | 'git') {
   const deliveries = new Set<string>();
   const updates: unknown[] = [];

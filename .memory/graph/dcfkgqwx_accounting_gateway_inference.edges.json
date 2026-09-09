@@ -6,30 +6,20 @@
       "to_id": "ifp3c48s",
       "relation": "same_workflow",
       "weight": 0.94,
-      "reason": "Both define the Gateway Inference data-plane, accounting, limits, credentials, and runtime integration contract.",
+      "reason": "Defines the managed inference runtime workflow that implements Gateway-owned authentication, admission, accounting, concurrency, and per-turn proxy behavior.",
       "source": "auto",
-      "created_at": 1788310977071,
-      "updated_at": 1788310977071
-    },
-    {
-      "from_id": "dcfkgqwx",
-      "to_id": "z36pcfh4",
-      "relation": "same_area",
-      "weight": 0.78,
-      "reason": "Both specify Gateway Inference request routing and runtime eligibility behavior.",
-      "source": "auto",
-      "created_at": 1788310977071,
-      "updated_at": 1788310977071
+      "created_at": 1788961815598,
+      "updated_at": 1788961815598
     },
     {
       "from_id": "dcfkgqwx",
       "to_id": "mzmjdewo",
       "relation": "same_area",
-      "weight": 0.7,
-      "reason": "Codex companion setup consumes the Gateway Inference credentials, endpoint, feature, and quota contract.",
+      "weight": 0.72,
+      "reason": "Codex integration relies on the same Gateway inference prefix, dedicated gwi_ credentials, and Gateway-owned limits and usage accounting.",
       "source": "auto",
-      "created_at": 1788310977071,
-      "updated_at": 1788310977071
+      "created_at": 1788961815598,
+      "updated_at": 1788961815598
     }
   ]
 }

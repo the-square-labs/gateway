@@ -15,8 +15,17 @@ import { inspectUserContainer } from './docker-internal-containers.js';
 import { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 import { DockerSourceService } from './docker-source.service.js';
 
-function deny(baseScope: string): never {
-  throw new HTTPException(403, { message: `Missing required scope: ${baseScope}` });
+function deny(baseScope: string, nodeId?: string, resourceId?: string): never {
+  const requiredScope = nodeId
+    ? resourceId
+      ? dockerResourceScope(baseScope, nodeId, resourceId)
+      : `${baseScope}:${nodeId}`
+    : baseScope;
+  throw new HTTPException(403, { message: `Missing required scope: ${requiredScope}` });
+}
+
+function denyUnresolvedIdentity(): never {
+  throw new HTTPException(403, { message: 'Docker resource identity could not be resolved for access verification' });
 }
 
 export function assertDockerResourceScope(
@@ -25,7 +34,7 @@ export function assertDockerResourceScope(
   nodeId: string,
   resourceId: string
 ): void {
-  if (!hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
+  if (!hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope, nodeId, resourceId);
 }
 
 export function assertDockerNodeScope(scopes: string[], baseScope: string, nodeId: string): void {
@@ -33,7 +42,7 @@ export function assertDockerNodeScope(scopes: string[], baseScope: string, nodeI
     !hasDockerResourceScope(scopes, baseScope, nodeId, '') &&
     !dockerScopedNodeIds(scopes, [baseScope]).includes(nodeId)
   ) {
-    deny(baseScope);
+    deny(baseScope, nodeId);
   }
 }
 
@@ -67,7 +76,7 @@ export function requireDockerContainerScope(
     const scopes = c.get('effectiveScopes') ?? [];
     const nodeId = c.req.param('nodeId');
     const identifier = c.req.param(identifierParam);
-    if (!nodeId || !identifier) deny(baseScope);
+    if (!nodeId || !identifier) denyUnresolvedIdentity();
     if (options.allowPendingSource) {
       const pending = await container.resolve(DockerSourceService).getPendingContainer(nodeId, identifier);
       if (pending) {
@@ -105,12 +114,12 @@ export function requireDockerContainerScope(
       await next();
       return;
     }
+    if (!resourceId) denyUnresolvedIdentity();
     if (
-      !resourceId ||
-      (!hasDockerResourceScope(scopes, baseScope, accessNodeId, '') &&
-        !hasDockerResourceScope(scopes, baseScope, accessNodeId, resourceId))
+      !hasDockerResourceScope(scopes, baseScope, accessNodeId, '') &&
+      !hasDockerResourceScope(scopes, baseScope, accessNodeId, resourceId)
     ) {
-      deny(baseScope);
+      deny(baseScope, accessNodeId, resourceId);
     }
     await next();
   };
@@ -121,7 +130,7 @@ export function requireDockerDeploymentScope(baseScope: string): MiddlewareHandl
     const scopes = c.get('effectiveScopes') ?? [];
     const nodeId = c.req.param('nodeId');
     const deploymentId = c.req.param('deploymentId');
-    if (!nodeId || !deploymentId) deny(baseScope);
+    if (!nodeId || !deploymentId) denyUnresolvedIdentity();
     assertDockerResourceScope(scopes, baseScope, nodeId, deploymentId);
     await next();
   };
@@ -137,13 +146,14 @@ export function requireDockerNetworkScope(baseScope: string, identifierParam = '
     const scopes = c.get('effectiveScopes') ?? [];
     const nodeId = c.req.param('nodeId');
     const networkId = c.req.param(identifierParam);
-    if (!nodeId || !networkId) deny(baseScope);
+    if (!nodeId || !networkId) denyUnresolvedIdentity();
     if (hasDockerResourceScope(scopes, baseScope, nodeId, '')) {
       await next();
       return;
     }
     const resourceId = await container.resolve(DockerNetworkAccessResourceService).resolveNetwork(nodeId, networkId);
-    if (!resourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope);
+    if (!resourceId) denyUnresolvedIdentity();
+    if (!hasDockerResourceScope(scopes, baseScope, nodeId, resourceId)) deny(baseScope, nodeId, resourceId);
     await next();
   };
 }

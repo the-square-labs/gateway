@@ -206,16 +206,18 @@ export function registerDockerSnapshotRoutes(router: OpenAPIHono<AppEnv>) {
       await snapshots.assertDockerNode(input.nodeId);
       const hasChildAccess = dockerScopedNodeIds(scopes, [VIEW_SCOPE[resource]]).includes(input.nodeId);
       if (!TokensService.hasScope(scopes, `${VIEW_SCOPE[resource]}:${input.nodeId}`) && !hasChildAccess) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker node access scope');
+        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker node access scope', {
+          requiredScope: `${VIEW_SCOPE[resource]}:${input.nodeId}`,
+        });
       }
       if (resource === 'container-detail' && !(await canRefreshContainerDetail(scopes, input.nodeId, input.key!))) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker container access scope');
+        throw new AppError(403, 'FORBIDDEN', 'Missing docker:containers:view permission for the requested container');
       }
       if (
         (resource === 'volume-detail' || resource === 'volume-metrics') &&
         !canRefreshVolumeDetail(scopes, input.nodeId, input.key!)
       ) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing required Docker volume access scope');
+        throw new AppError(403, 'FORBIDDEN', 'Missing docker:volumes:view permission for the requested volume');
       }
       reconciler.enqueue({ nodeId: input.nodeId, kind: resource, key: input.key }, { urgent: true });
       return c.json({ accepted: true, nodeCount: 1 }, 202);

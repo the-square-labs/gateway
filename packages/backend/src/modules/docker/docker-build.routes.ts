@@ -139,7 +139,14 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const build = await container.resolve(DockerBuildService).get(BuildIdSchema.parse(c.req.param('buildId')));
       if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
+        throw new AppError(403, 'FORBIDDEN', 'Missing resource permission for this build', {
+          requiredScope:
+            build.target.kind === 'pages_project'
+              ? 'pages:view'
+              : build.target.kind === 'compose_project'
+                ? 'docker:compose:view'
+                : 'docker:containers:view',
+        });
       }
       return c.json({ data: build });
     }
@@ -152,7 +159,14 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));
       const build = await container.resolve(DockerBuildService).get(buildId);
       if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'view', build)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource view scope for this build');
+        throw new AppError(403, 'FORBIDDEN', 'Missing resource permission for this build', {
+          requiredScope:
+            build.target.kind === 'pages_project'
+              ? 'pages:view'
+              : build.target.kind === 'compose_project'
+                ? 'docker:compose:view'
+                : 'docker:containers:view',
+        });
       }
       const query = DockerBuildLogQuerySchema.parse(c.req.query());
       const data = await container.resolve(DockerBuildService).listLogs(buildId, query.afterSequence, query.limit);
@@ -168,7 +182,14 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));
       const build = await service.get(buildId);
       if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'manage', build)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+        throw new AppError(403, 'FORBIDDEN', 'Missing resource permission for this build', {
+          requiredScope:
+            build.target.kind === 'pages_project'
+              ? 'pages:deploy'
+              : build.target.kind === 'compose_project'
+                ? 'docker:compose:manage'
+                : 'docker:containers:manage',
+        });
       }
       const data = await service.requestCancellation(buildId, c.get('user')!.id);
       return c.json({ data });
@@ -183,7 +204,14 @@ export function registerDockerBuildRoutes(router: OpenAPIHono<AppEnv>) {
       const buildId = BuildIdSchema.parse(c.req.param('buildId'));
       const build = await service.get(buildId);
       if (!canAccessBuild(c.get('effectiveScopes') ?? [], 'manage', build)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing Docker resource manage scope for this build');
+        throw new AppError(403, 'FORBIDDEN', 'Missing resource permission for this build', {
+          requiredScope:
+            build.target.kind === 'pages_project'
+              ? 'pages:deploy'
+              : build.target.kind === 'compose_project'
+                ? 'docker:compose:manage'
+                : 'docker:containers:manage',
+        });
       }
       const data = await service.retry(buildId, c.get('user')!.id);
       return c.json({ data }, 201);

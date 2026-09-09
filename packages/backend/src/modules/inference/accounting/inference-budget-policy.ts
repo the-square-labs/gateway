@@ -96,27 +96,26 @@ export class InferenceBudgetPolicyService {
     const resets = new Map(resetRows.map((row) => [row.dimension, row]));
     const legacyStarts = new Map(
       await Promise.all(
-        SUBSCRIPTION_LIMIT_WINDOWS.map(
-          async (window) =>
-            [
-              window.dimension,
-              resets.has(window.dimension)
-                ? null
-                : await legacyUsageWindowStart(database, userId, now, window.durationMs),
-            ] as const
-        )
+        SUBSCRIPTION_LIMIT_WINDOWS.map(async (window) => {
+          const reset = resets.get(window.dimension);
+          const active = reset?.windowActive && activeUsageWindow(now, reset.resetAt, window.durationMs);
+          // An expired persisted window may have been left behind by the old
+          // disabled-limit path. Recover only entries after that window ended;
+          // an explicit reset instead fences recovery at its reset timestamp.
+          const since = reset?.windowActive ? new Date(reset.resetAt.getTime() + window.durationMs) : reset?.resetAt;
+          return [
+            window.dimension,
+            active ? null : await legacyUsageWindowStart(database, userId, now, window.durationMs, since),
+          ] as const;
+        })
       )
     );
     if (options.startSubscriptionWindows) {
       for (const window of SUBSCRIPTION_LIMIT_WINDOWS) {
-        if (!limits[window.enabled]) continue;
+        // Switches gate admission only; every subscription window tracks usage.
         const reset = resets.get(window.dimension);
-        const active = activeUsageWindow(
-          now,
-          reset?.windowActive ? reset.resetAt : (legacyStarts.get(window.dimension) ?? undefined),
-          window.durationMs
-        );
-        if (reset?.windowActive && active) continue;
+        const active = currentUsageWindow(now, reset, legacyStarts.get(window.dimension), window.durationMs);
+        if (reset?.windowActive && active?.start.getTime() === reset.resetAt.getTime()) continue;
         const resetAt = active?.start ?? now;
         await database
           .insert(inferenceLimitUsageResets)
@@ -223,18 +222,16 @@ function currentUsageWindow(
   legacyStart: Date | null | undefined,
   durationMs: number
 ): { start: Date; end: Date } | null {
-  return activeUsageWindow(
-    now,
-    reset?.windowActive ? reset.resetAt : reset ? undefined : (legacyStart ?? undefined),
-    durationMs
-  );
+  const persisted = reset?.windowActive ? activeUsageWindow(now, reset.resetAt, durationMs) : null;
+  return persisted ?? activeUsageWindow(now, legacyStart ?? undefined, durationMs);
 }
 
 async function legacyUsageWindowStart(
   database: DrizzleExecutor,
   userId: string,
   now: Date,
-  durationMs: number
+  durationMs: number,
+  since?: Date
 ): Promise<Date | null> {
   const result = await database.execute(
     sql<{ started_at: Date | string | null }>`
@@ -247,6 +244,7 @@ async function legacyUsageWindowStart(
           ${inferenceUsageLedger.userId} = ${userId}
           AND ${inferenceUsageLedger.budgetType} = 'subscription'
           AND ${inferenceUsageLedger.occurredAt} <= ${now}
+          AND ${since ? sql`${inferenceUsageLedger.occurredAt} >= ${since}` : sql`TRUE`}
       ),
       window_starts AS (
         SELECT occurred_at AS started_at, sequence

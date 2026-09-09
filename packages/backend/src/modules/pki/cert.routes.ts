@@ -66,7 +66,7 @@ certRoutes.openapi({ ...listCertificatesRoute, middleware: requireScopeBase('pki
   });
   const scopes = c.get('effectiveScopes') || [];
   if (query.showSystem && !hasScope(scopes, 'admin:details:certificates')) {
-    return c.json({ code: 'FORBIDDEN', message: 'Insufficient permissions' }, 403);
+    return c.json({ code: 'FORBIDDEN', message: 'Missing required scope: admin:details:certificates' }, 403);
   }
   const result = await certService.listCertificates(
     query,

@@ -31,7 +31,7 @@ export async function executeDomainTool(
       });
     case 'create_domain':
       if (!hasScopeForCreation(user.scopes, 'domains:create', a.folderId, a.nginxNodeId)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing authorized domain creation scope for the selected destination');
+        throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
       }
       await container.resolve(DomainFolderService).assertFolderExists(a.folderId);
       return context.domainsService.createDomain(

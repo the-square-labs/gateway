@@ -13,6 +13,21 @@ function serviceWithNodes(nodeRows: unknown[] = []) {
 }
 
 describe('ExternalSshService target safety', () => {
+  it('reports the exact missing permission before connecting or reading credentials', async () => {
+    const { service, db, crypto } = serviceWithNodes();
+    await expect(
+      service.discoverHostKey({ id: 'user-1', scopes: [] } as never, {
+        host: 'example.invalid',
+        port: 22,
+      })
+    ).rejects.toMatchObject({
+      code: 'SSH_SCOPE_DENIED',
+      message: 'Missing required SSH integration scope. Required permission: integrations:ssh:manage',
+    });
+    expect(db.select).not.toHaveBeenCalled();
+    expect(crypto.decryptString).not.toHaveBeenCalled();
+  });
+
   it.each([
     '127.0.0.1',
     '::1',

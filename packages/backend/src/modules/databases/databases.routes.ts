@@ -164,7 +164,10 @@ function ensureAnyDatabaseScope(c: any, databaseId: string, scopeBases: string[]
   const scopes = c.get('effectiveScopes') ?? [];
   const granted = scopeBases.some((base) => hasScope(scopes, `${base}:${databaseId}`));
   if (!granted) {
-    throw new AppError(403, 'FORBIDDEN', `Missing required scope for database ${databaseId}`);
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope for database ${databaseId}`, {
+      requiredScopes: scopeBases.map((base) => `${base}:${databaseId}`),
+      scopeMatch: 'any',
+    });
   }
 }
 
@@ -304,7 +307,7 @@ databaseRoutes.openapi(createManagedDatabaseRoute, async (c) => {
   const user = c.get('user')!;
   const input = CreateManagedDatabaseSchema.parse(await c.req.json());
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'databases:create', input.folderId, input.nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
+    throw new AppError(403, 'FORBIDDEN', 'Missing databases:create permission for the selected destination');
   }
   await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
   const data = await container.resolve(ManagedDatabaseService).create(input, user.id);
@@ -464,7 +467,10 @@ databaseRoutes.openapi(listDatabaseFoldersRoute, async (c) => {
   const allowedIds = getResourceScopedIds(scopes, 'databases:view');
   const allowedFolderIds = getFolderScopedIds(scopes, ['databases:view', 'databases:edit', 'databases:create']);
   if (!canManageFolders && !hasScopeBase(scopes, 'databases:view') && !hasScopeBase(scopes, 'databases:create')) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required database view, create, or folder scope');
+    throw new AppError(403, 'FORBIDDEN', 'Missing required database view, create, or folder scope', {
+      requiredScopes: ['databases:view', 'databases:create', 'databases:folders:manage'],
+      scopeMatch: 'any',
+    });
   }
   const data = await service.getFolderTree(
     canManageFolders || hasGlobalAccess || hasGlobalCreate
@@ -562,7 +568,10 @@ databaseRoutes.openapi(listDatabaseConnectionsRoute, async (c) => {
   const canManageFolders = hasScope(scopes, 'databases:folders:manage');
   const allowedIds = getResourceScopedIds(scopes, 'databases:view');
   if (!hasGlobalAccess && !canManageFolders && allowedIds.length === 0) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required database access scope');
+    throw new AppError(403, 'FORBIDDEN', 'Missing required database access scope', {
+      requiredScopes: ['databases:view', 'databases:folders:manage'],
+      scopeMatch: 'any',
+    });
   }
   const query = DatabaseListQuerySchema.parse(c.req.query());
   const data = await service.list(query, hasGlobalAccess || canManageFolders ? undefined : { allowedIds });
@@ -574,7 +583,7 @@ databaseRoutes.openapi(createDatabaseConnectionRoute, async (c) => {
   const user = c.get('user')!;
   const input = CreateDatabaseConnectionSchema.parse(await c.req.json());
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'databases:create', input.folderId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
+    throw new AppError(403, 'FORBIDDEN', 'Missing databases:create permission for the selected destination');
   }
   await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
   const data = await service.create(input, user.id);

@@ -13,7 +13,12 @@ describe('integration connector permission gate', () => {
         capabilities: { repoWrite: true },
         requiredCapability: 'repoWrite',
       })
-    ).toThrowError(expect.objectContaining({ code: 'CONNECTOR_SCOPE_DENIED' }));
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CONNECTOR_SCOPE_DENIED',
+        message: expect.stringContaining('Required permission: integrations:gitlab:repo:write'),
+      })
+    );
   });
 
   it('denies an operation when the PAT capability is missing even if the Gateway scope exists', () => {
@@ -27,7 +32,12 @@ describe('integration connector permission gate', () => {
         capabilities: { repoWrite: false },
         requiredCapability: 'repoWrite',
       })
-    ).toThrowError(expect.objectContaining({ code: 'CONNECTOR_CAPABILITY_DENIED' }));
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CONNECTOR_CAPABILITY_DENIED',
+        message: 'Connector token does not allow this operation',
+      })
+    );
   });
 
   it('denies project operations outside the connector allowlist', () => {
@@ -43,7 +53,29 @@ describe('integration connector permission gate', () => {
         projectAllowed: false,
         project: { remoteId: '10', fullPath: 'private/app', name: 'app' },
       })
-    ).toThrowError(expect.objectContaining({ code: 'CONNECTOR_PROJECT_NOT_ALLOWED' }));
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CONNECTOR_PROJECT_NOT_ALLOWED',
+        message: 'Project is outside the connector allowlist',
+      })
+    );
+  });
+
+  it('names alternative permissions without requiring both', () => {
+    expect(() =>
+      assertConnectorOperationAccess({
+        actor: { scopes: [] },
+        provider: 'gitlab',
+        operation: 'file.read',
+        requiredScope: ['integrations:gitlab:manage', 'integrations:gitlab:repo:read'],
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        message:
+          'Missing required connector scope. Requires any one of these permissions: integrations:gitlab:manage, integrations:gitlab:repo:read',
+        details: expect.objectContaining({ scopeMatch: 'any' }),
+      })
+    );
   });
 
   it('returns normalized metadata for allowed operations', () => {

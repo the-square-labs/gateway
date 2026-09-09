@@ -48,7 +48,10 @@ function requireFolderListAccess(scopes: string[]) {
     !hasScopeBase(scopes, 'proxy:create') &&
     !hasScope(scopes, 'proxy:folders:manage')
   ) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing required route view, create, or folder scope');
+    throw new AppError(403, 'FORBIDDEN', 'Missing required route view, create, or folder scope', {
+      requiredScopes: ['proxy:view', 'proxy:create', 'proxy:folders:manage'],
+      scopeMatch: 'any',
+    });
   }
 }
 

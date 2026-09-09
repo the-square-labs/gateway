@@ -112,9 +112,13 @@ groupRoutes.openapi(
     const scopes = c.get('effectiveScopes') || [];
     for (const id of input.ids)
       if (!hasScope(scopes, `admin:groups:${id}`))
-        throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions');
+        throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions', {
+          requiredScope: `admin:groups:${id}`,
+        });
     if (!hasScopeForCreation(scopes, 'admin:groups', input.folderId))
-      throw new AppError(403, 'FORBIDDEN', 'Destination folder is outside your permissions');
+      throw new AppError(403, 'FORBIDDEN', 'Destination folder is outside your permissions', {
+        requiredScope: input.folderId ? `admin:groups:folder/${input.folderId}` : 'admin:groups',
+      });
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -125,7 +129,9 @@ groupRoutes.openapi({ ...reorderGroupsRoute, middleware: requireScope('admin:gro
   const input = ReorderResourcesSchema.parse(await c.req.json());
   for (const item of input.items)
     if (!hasScope(c.get('effectiveScopes') || [], `admin:groups:${item.id}`))
-      throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions');
+      throw new AppError(403, 'FORBIDDEN', 'Group is outside your permissions', {
+        requiredScope: `admin:groups:${item.id}`,
+      });
   await service.reorderResources(input);
   return c.json({ success: true });
 });

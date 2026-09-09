@@ -318,7 +318,10 @@ export class InferenceCoreAccountingService {
     connection: ConnectionRow,
     limits: EffectiveInferenceLimits
   ): Promise<InferenceCoreAdmissionResponse> {
-    const usage = await this.policies.usage(userId, limits, new Date(), database, {
+    // Use one Gateway admission timestamp for both the window and its ledger
+    // entry. The core's earlier callback timestamp can precede a new window.
+    const admittedAt = new Date();
+    const usage = await this.policies.usage(userId, limits, admittedAt, database, {
       startSubscriptionWindows: source.sourceType === 'subscription',
     });
     const pricing = source.sourceType === 'api' ? await latestPricing(database, source.id) : null;
@@ -382,7 +385,7 @@ export class InferenceCoreAccountingService {
         .update(inferenceRequests)
         .set({
           status: 'running',
-          startedAt: new Date(input.occurredAt),
+          startedAt: admittedAt,
           errorCode: null,
           completedAt: null,
           sourceId: source.id,
@@ -432,7 +435,7 @@ export class InferenceCoreAccountingService {
         fixedApiMicrodollars,
         reservedApiMicrodollars: amounts.apiMonthlyMicrodollars,
         reservationId,
-        startedAt: new Date(input.occurredAt),
+        startedAt: admittedAt,
       });
     } catch (error) {
       await this.reservations.release({ id: `${request.id}:${input.attemptId}`, userId });

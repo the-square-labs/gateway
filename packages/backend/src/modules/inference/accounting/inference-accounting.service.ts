@@ -59,7 +59,8 @@ export interface InferenceAdmission {
   reservation: BudgetReservation;
   estimatedUsage: InferenceUsage;
   admittedMaxOutputTokens?: number;
-  startedAtMs: number;
+  readonly startedAtMs: number;
+  dispatchedAtMs?: number;
   fixedApiMicrodollars?: number;
 }
 
@@ -87,7 +88,8 @@ export class InferenceAccountingService {
     return this.locks.withUserLock(input.userId, async (database) => {
       const limits = await this.policies.effective(input.userId, database);
       if (!limits.enabled) throw new InferenceProtocolError(403, 'inference_disabled', 'Inference usage is disabled');
-      const usage = await this.policies.usage(input.userId, limits, new Date(), database, {
+      const admittedAt = new Date();
+      const usage = await this.policies.usage(input.userId, limits, admittedAt, database, {
         startSubscriptionWindows: input.source.sourceType === 'subscription',
       });
       const pricing = input.source.sourceType === 'api' ? await latestPricing(database, input.source.id) : null;
@@ -181,6 +183,7 @@ export class InferenceAccountingService {
           reasoningEffort: input.request.reasoningEffort ?? null,
           budgetType: input.source.sourceType,
           status: 'reserved',
+          startedAt: admittedAt,
           isCompaction: input.request.isCompaction,
           estimatedUsage: true,
           priceVersion: pricing?.version,
@@ -248,6 +251,7 @@ export class InferenceAccountingService {
           sourceId: input.source.id,
           connectionId: input.connection.id,
           status: 'pending',
+          startedAt: admittedAt,
         });
       } catch (error) {
         await this.reservations.release(reservation);
@@ -270,7 +274,7 @@ export class InferenceAccountingService {
         reservation,
         estimatedUsage,
         ...(admittedMaxOutputTokens === undefined ? {} : { admittedMaxOutputTokens }),
-        startedAtMs: Date.now(),
+        startedAtMs: admittedAt.getTime(),
         ...(fixedApiMicrodollars > 0 ? { fixedApiMicrodollars } : {}),
       };
     });
@@ -293,7 +297,8 @@ export class InferenceAccountingService {
       }
       const limits = await this.policies.effective(input.userId, database);
       if (!limits.enabled) throw new InferenceProtocolError(403, 'inference_disabled', 'Inference usage is disabled');
-      const usage = await this.policies.usage(input.userId, limits, new Date(), database);
+      const admittedAt = new Date();
+      const usage = await this.policies.usage(input.userId, limits, admittedAt, database);
       const pricing = await latestPricing(database, input.source.id);
       const unitPrice = pricing.otherUnitPrices[input.priceKey];
       const units = Math.max(1, Math.floor(input.units));
@@ -334,6 +339,7 @@ export class InferenceAccountingService {
         upstreamModelId: input.source.upstreamModelId,
         budgetType: 'api',
         status: 'reserved',
+        startedAt: admittedAt,
         estimatedUsage: false,
         priceVersion: pricing.version,
         apiMicrodollarsCharged: fixedApiMicrodollars,
@@ -362,6 +368,7 @@ export class InferenceAccountingService {
         sourceId: input.source.id,
         connectionId: input.connection.id,
         status: 'pending',
+        startedAt: admittedAt,
       });
       return {
         requestId,
@@ -379,7 +386,7 @@ export class InferenceAccountingService {
         serviceTierMultiplier: 1,
         reservation,
         estimatedUsage: zeroUsage(),
-        startedAtMs: Date.now(),
+        startedAtMs: admittedAt.getTime(),
         fixedApiMicrodollars,
       };
     });
@@ -387,7 +394,7 @@ export class InferenceAccountingService {
 
   async markDispatched(admission: InferenceAdmission): Promise<void> {
     await this.locks.withUserLock(admission.userId, async (database) => {
-      const startedAt = new Date();
+      const startedAt = new Date(admission.startedAtMs);
       const [claimed] = await database
         .update(inferenceRequests)
         .set({ status: 'running', startedAt })
@@ -402,7 +409,7 @@ export class InferenceAccountingService {
         )
         .returning({ id: inferenceRequestAttempts.id });
       if (!attempt) throw new InferenceProtocolError(409, 'dispatch_unavailable', 'Inference dispatch is unavailable');
-      admission.startedAtMs = startedAt.getTime();
+      admission.dispatchedAtMs = Date.now();
     });
   }
 
@@ -412,7 +419,7 @@ export class InferenceAccountingService {
     emittedOutput: boolean,
     outcome: 'completed' | 'failed' = 'completed'
   ): Promise<void> {
-    const latencyMs = Math.max(0, Date.now() - admission.startedAtMs);
+    const latencyMs = Math.max(0, Date.now() - (admission.dispatchedAtMs ?? admission.startedAtMs));
     const credits =
       admission.budgetType === 'subscription'
         ? subscriptionCreditsForUsage(
@@ -498,7 +505,7 @@ export class InferenceAccountingService {
   }
 
   async fail(admission: InferenceAdmission, error: unknown, emittedOutput: boolean): Promise<void> {
-    const latencyMs = Math.max(0, Date.now() - admission.startedAtMs);
+    const latencyMs = Math.max(0, Date.now() - (admission.dispatchedAtMs ?? admission.startedAtMs));
     const code = errorCode(error);
     const claimed = await this.locks.withUserLock(admission.userId, async (database) => {
       const [row] = await database
@@ -521,7 +528,7 @@ export class InferenceAccountingService {
   }
 
   async failForRetry(admission: InferenceAdmission, error: unknown): Promise<void> {
-    const latencyMs = Math.max(0, Date.now() - admission.startedAtMs);
+    const latencyMs = Math.max(0, Date.now() - (admission.dispatchedAtMs ?? admission.startedAtMs));
     const code = errorCode(error);
     await this.locks.withUserLock(admission.userId, async (database) => {
       await database

@@ -196,11 +196,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
       case 'link_internal_cert': {
         const input = LinkInternalCertSchema.parse(args);
         if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
-          throw new AppError(
-            403,
-            'FORBIDDEN',
-            'Missing authorized SSL certificate creation scope for the selected destination'
-          );
+          throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
         return this.sslService.linkInternalCert(input, user.id);
@@ -208,11 +204,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
       case 'request_acme_cert': {
         const input = RequestACMECertSchema.parse(args);
         if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
-          throw new AppError(
-            403,
-            'FORBIDDEN',
-            'Missing authorized SSL certificate creation scope for the selected destination'
-          );
+          throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
         return this.sslService.requestACMECert(input, user.id, user.email);
@@ -225,11 +217,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         if (a.operation === 'upload') {
           const input = UploadCertSchema.parse(args);
           if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
-            throw new AppError(
-              403,
-              'FORBIDDEN',
-              'Missing authorized SSL certificate creation scope for the selected destination'
-            );
+            throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
           }
           await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
           return this.sslService.uploadCert(input, user.id);

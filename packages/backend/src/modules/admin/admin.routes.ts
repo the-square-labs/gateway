@@ -223,9 +223,13 @@ adminRoutes.openapi(
     const scopes = c.get('effectiveScopes') || [];
     for (const id of input.ids)
       if (!hasScope(scopes, `admin:users:${id}`))
-        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions');
+        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions', {
+          requiredScope: `admin:users:${id}`,
+        });
     if (!hasScopeForCreation(scopes, 'admin:users', input.folderId))
-      throw new AppError(403, 'FORBIDDEN', 'Destination folder is outside your permissions');
+      throw new AppError(403, 'FORBIDDEN', 'Destination folder is outside your permissions', {
+        requiredScope: input.folderId ? `admin:users:folder/${input.folderId}` : 'admin:users',
+      });
     await service.moveResourcesToFolder(input, user.id);
     return c.json({ success: true });
   }
@@ -238,7 +242,9 @@ adminRoutes.openapi(
     const input = ReorderResourcesSchema.parse(await c.req.json());
     for (const item of input.items)
       if (!hasScope(c.get('effectiveScopes') || [], `admin:users:${item.id}`))
-        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions');
+        throw new AppError(403, 'FORBIDDEN', 'User is outside your permissions', {
+          requiredScope: `admin:users:${item.id}`,
+        });
     await service.reorderResources(input);
     return c.json({ success: true });
   }

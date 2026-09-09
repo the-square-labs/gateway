@@ -260,7 +260,9 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     }
   ) {
     if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
+        requiredScope: 'integrations:github:manage',
+      });
     }
     const { connector, repositoryUrl, token } = await this.resolveGitRepository(
       user,
@@ -317,7 +319,9 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
     if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
+        requiredScope: 'integrations:github:manage',
+      });
     }
     const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
     const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
@@ -348,7 +352,9 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
     if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required');
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
+        requiredScope: 'integrations:github:manage',
+      });
     }
     const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
     const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
@@ -466,7 +472,9 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     }
   ) {
     if (!hasScope(user.scopes, 'integrations:git:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'Git connector manage scope is required');
+      throw new AppError(403, 'PERMISSION_DENIED', 'Git connector manage scope is required', {
+        requiredScope: 'integrations:git:manage',
+      });
     }
     if (Buffer.byteLength(input.content, 'utf8') > GIT_FILE_WRITE_LIMIT_BYTES) {
       throw new AppError(413, 'GIT_FILE_TOO_LARGE', 'Repository file exceeds the 512 KiB write limit');

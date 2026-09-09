@@ -46,6 +46,7 @@ export function assertConnectorOperationAccess(input: ConnectorOperationAccessIn
       connectorId: input.connectorId ?? null,
       operation: input.operation,
       requiredScopes,
+      scopeMatch: 'any',
     });
   }
 

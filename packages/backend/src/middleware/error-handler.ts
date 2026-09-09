@@ -11,13 +11,40 @@ export interface ApiError {
   details?: unknown;
 }
 
+/** Only explicit permission metadata is rendered; never serialize arbitrary error details into messages. */
+function permissionErrorMessage(statusCode: number, message: string, details: unknown): string {
+  if (statusCode !== 403 || !details || typeof details !== 'object' || Array.isArray(details)) return message;
+  const metadata = details as Record<string, unknown>;
+  const readScopes = (value: unknown): string[] => {
+    const values = Array.isArray(value) ? value : [value];
+    return [
+      ...new Set(values.filter((scope): scope is string => typeof scope === 'string' && scope.trim().length > 0)),
+    ];
+  };
+  const missing = readScopes(metadata.missingScope).concat(readScopes(metadata.missingScopes));
+  const required = readScopes(metadata.requiredScope).concat(readScopes(metadata.requiredScopes));
+  const scopes = [...new Set(missing.length ? missing : required)];
+  if (!scopes.length) return message;
+  // Do not infer AND/OR from an unqualified requiredScopes list. A missing list
+  // is the guard's evaluated result, while requiredScopes may contain alternatives.
+  const label =
+    scopes.length === 1
+      ? 'Required permission'
+      : metadata.scopeMatch === 'any'
+        ? 'Requires any one of these permissions'
+        : missing.length || metadata.scopeMatch === 'all'
+          ? 'Requires all of these permissions'
+          : 'Required permissions';
+  return `${message}. ${label}: ${scopes.join(', ')}`;
+}
+
 export class AppError extends Error {
   public readonly statusCode: number;
   public readonly code: string;
   public readonly details?: unknown;
 
   constructor(statusCode: number, code: string, message: string, details?: unknown) {
-    super(message);
+    super(permissionErrorMessage(statusCode, message, details));
     this.name = 'AppError';
     this.statusCode = statusCode;
     this.code = code;

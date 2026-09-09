@@ -3,8 +3,11 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { HostingAction, HostingSettings } from './hosting-provider.types.js';
 
 export function assertHostingScope(scopes: string[], scope: string, id?: string): void {
-  if (!hasScope(scopes, id ? `${scope}:${id}` : scope)) {
-    throw new AppError(403, 'HOSTING_ACCESS_DENIED', 'You do not have access to this hosting operation');
+  const requiredScope = id ? `${scope}:${id}` : scope;
+  if (!hasScope(scopes, requiredScope)) {
+    throw new AppError(403, 'HOSTING_ACCESS_DENIED', 'You do not have access to this hosting operation', {
+      requiredScope,
+    });
   }
 }
 

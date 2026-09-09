@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { afterEach, vi } from "vitest";
 import { useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { formatDateTime } from "@/lib/utils";
@@ -27,6 +28,79 @@ describe("InferenceUsersTable", () => {
     api.invalidateCache("req:/api/inference/usage/users");
     api.invalidateCache("req:/api/inference/limits");
     vi.restoreAllMocks();
+  });
+
+  it("acknowledges the saved policy before a slow usage refresh and keeps it when reopening", async () => {
+    let finishRefresh!: (users: []) => void;
+    let finishSave!: (policies: InferenceLimitPolicy[]) => void;
+    const refresh = new Promise<[]>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const saved = new Promise<InferenceLimitPolicy[]>((resolve) => {
+      finishSave = resolve;
+    });
+    vi.spyOn(api, "listInferenceUsersUsage").mockResolvedValueOnce([]).mockReturnValueOnce(refresh);
+    const listPolicies = vi.spyOn(api, "listInferenceLimits").mockResolvedValue([limitPolicy()]);
+    vi.spyOn(api, "setInferenceDefaultLimits").mockReturnValue(saved);
+    const success = vi.spyOn(toast, "success");
+    const user = userEvent.setup();
+    render(<InferenceUsersTable canManage />);
+    await user.click(await screen.findByRole("button", { name: "Configure limits" }));
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    expect(success).not.toHaveBeenCalled();
+    await act(async () => finishSave([limitPolicy({ credits5h: "250" })]));
+    expect(success).toHaveBeenCalledWith("Default limits updated");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(listPolicies).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "Configure limits" }));
+    expect(screen.getByRole("spinbutton", { name: "5-hour credit limit value" })).toHaveValue(250);
+    expect(screen.getByRole("button", { name: "Save limits" })).toBeEnabled();
+    await act(async () => finishRefresh([]));
+  });
+
+  it("does not acknowledge a failed save", async () => {
+    vi.spyOn(api, "listInferenceUsersUsage").mockResolvedValue([]);
+    vi.spyOn(api, "listInferenceLimits").mockResolvedValue([limitPolicy()]);
+    vi.spyOn(api, "setInferenceDefaultLimits").mockRejectedValue(new Error("Save rejected"));
+    const success = vi.spyOn(toast, "success");
+    const failure = vi.spyOn(toast, "error");
+    const user = userEvent.setup();
+    render(<InferenceUsersTable canManage />);
+    await user.click(await screen.findByRole("button", { name: "Configure limits" }));
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    expect(success).not.toHaveBeenCalled();
+    expect(failure).toHaveBeenCalledWith("Save rejected");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("does not let a pre-save refresh replace the acknowledged policy", async () => {
+    let finishOld!: (users: []) => void;
+    let finishNew!: (users: []) => void;
+    const oldRefresh = new Promise<[]>((resolve) => {
+      finishOld = resolve;
+    });
+    const newRefresh = new Promise<[]>((resolve) => {
+      finishNew = resolve;
+    });
+    const listUsers = vi
+      .spyOn(api, "listInferenceUsersUsage")
+      .mockResolvedValueOnce([])
+      .mockReturnValueOnce(oldRefresh)
+      .mockReturnValueOnce(newRefresh);
+    vi.spyOn(api, "listInferenceLimits").mockResolvedValue([limitPolicy()]);
+    vi.spyOn(api, "setInferenceDefaultLimits").mockResolvedValue([
+      limitPolicy({ credits5h: "250" }),
+    ]);
+    const user = userEvent.setup();
+    const view = render(<InferenceUsersTable canManage />);
+    await user.click(await screen.findByRole("button", { name: "Configure limits" }));
+    view.rerender(<InferenceUsersTable canManage refreshToken={1} />);
+    await waitFor(() => expect(listUsers).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByRole("button", { name: "Save limits" }));
+    await act(async () => finishOld([]));
+    await user.click(screen.getByRole("button", { name: "Configure limits" }));
+    expect(screen.getByRole("spinbutton", { name: "5-hour credit limit value" })).toHaveValue(250);
+    await act(async () => finishNew([]));
   });
 
   it("shows reset dates and resets all windows from one confirmed action", async () => {

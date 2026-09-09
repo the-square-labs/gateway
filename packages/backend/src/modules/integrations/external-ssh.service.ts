@@ -521,7 +521,7 @@ export class ExternalSshService {
 
   private assertScope(user: User, scope: string) {
     if (!hasScope(user.scopes, scope))
-      throw new AppError(403, 'SSH_SCOPE_DENIED', 'Missing required SSH integration scope');
+      throw new AppError(403, 'SSH_SCOPE_DENIED', 'Missing required SSH integration scope', { requiredScope: scope });
   }
 
   private emitConnector(id: string, action: string, name: string) {

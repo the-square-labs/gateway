@@ -58,7 +58,7 @@ export async function executeProxyTool(
       return compactProxyHostForAgent(await context.proxyService.getProxyHost(a.routeId));
     case 'create_route':
       if (!hasScopeForCreation(user.scopes, 'proxy:create', a.folderId, a.nodeId)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing authorized route creation scope for the selected destination');
+        throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
       }
       await context.folderService.assertFolderExists(a.folderId);
       if (a.advancedConfig && !hasScope(user.scopes, 'proxy:advanced')) {

@@ -418,15 +418,19 @@ export class DockerSourceService {
   }
 
   async resolveCurrent(target: DockerSourceTarget, user: User) {
+    return this.resolveSavedSource(target, user);
+  }
+
+  private async resolveSavedSource(target: DockerSourceTarget, sourceActor: User) {
     await this.requireTargetFeatures(target);
     const existing = await this.findByTarget(target);
     if (!existing) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
-    const resolved = await this.integrations.resolveDockerBuildSource(user, {
+    const resolved = await this.integrations.resolveDockerBuildSource(sourceActor, {
       connectorId: existing.connectorId,
       projectId: existing.projectId,
       branch: existing.branch,
     });
-    const prepared = await this.prepareSourceCommit(existing, resolved.commitSha, user);
+    const prepared = await this.prepareSourceCommit(existing, resolved.commitSha, sourceActor);
     const [updated] = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${existing.id}`}))`);
       return tx
@@ -521,7 +525,11 @@ export class DockerSourceService {
   async createBuild(target: DockerSourceTarget, input: DockerBuildCreateInput, user: User) {
     await this.requireTargetFeatures(target);
     if (!this.buildService) throw new AppError(503, 'BUILD_SCHEDULER_UNAVAILABLE', 'Build scheduler is unavailable');
-    const source = await this.resolveCurrent(target, user);
+    // Entrypoints authorize manage/deploy on the target. Reading its persisted
+    // source uses the same connector credentials and allowlist checks as an
+    // automatic build, not the operator's unrelated Git browsing permissions.
+    // Never accept connector/project/branch overrides on this path.
+    const source = await this.resolveSavedSource(target, AUTOMATION_ACTOR);
     if (input.commitSha && input.commitSha.toLowerCase() !== source.desiredCommitSha?.toLowerCase()) {
       throw new AppError(409, 'SOURCE_COMMIT_STALE', 'Requested commit is not the current configured branch head');
     }

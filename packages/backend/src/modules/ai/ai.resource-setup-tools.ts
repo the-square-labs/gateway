@@ -183,11 +183,7 @@ async function managePages(user: User, args: Record<string, unknown>) {
   if (operation === 'project_create') {
     const input = CreatePageProjectSchema.parse(args);
     if (!hasScopeForCreation(user.scopes, 'pages:create', input.folderId, input.nodeId)) {
-      throw new AppError(
-        403,
-        'FORBIDDEN',
-        'Missing authorized Page Project creation scope for the selected destination'
-      );
+      throw new AppError(403, 'FORBIDDEN', 'Missing pages:create permission for the selected destination');
     }
     await container.resolve(PageProjectFolderService).assertFolderExists(input.folderId);
     return projects.create(input, user.id);
@@ -468,7 +464,7 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
   if (operation === 'create') {
     const input = CreateManagedDatabaseSchema.parse(args);
     if (!hasScopeForCreation(user.scopes, 'databases:create', input.folderId, input.nodeId)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing authorized database creation scope for the selected destination');
+      throw new AppError(403, 'FORBIDDEN', 'Missing databases:create permission for the selected destination');
     }
     await container.resolve(DatabaseFolderService).assertFolderExists(input.folderId);
     return service.create(input, user.id);

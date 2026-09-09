@@ -256,7 +256,9 @@ proxyRoutes.openapi(
     const scopes = c.get('effectiveScopes') || [];
     const input = CreateAdditionalRouteSchema.parse(await c.req.json());
     if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
-      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
+      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required', {
+        requiredScope: `proxy:advanced:${c.req.param('id')!}`,
+      });
     }
     if (input.targetKind === 'pages') {
       await container.resolve(LicensePolicyService).requireFeature('pages');
@@ -289,7 +291,9 @@ proxyRoutes.openapi(
       await container.resolve(PageProfileService).requireEnabled();
     }
     if (input.advancedConfig !== undefined && !hasScope(scopes, `proxy:advanced:${c.req.param('id')!}`)) {
-      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required');
+      throw new AppError(403, 'FORBIDDEN', 'Advanced proxy configuration scope is required', {
+        requiredScope: `proxy:advanced:${c.req.param('id')!}`,
+      });
     }
     const row = await container
       .resolve(AdditionalRouteService)
@@ -336,7 +340,7 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
     await container.resolve(PageProfileService).requireEnabled();
   }
   if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing authorized route creation scope for the selected destination');
+    throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
   await container.resolve(FolderService).assertFolderExists(input.folderId);
   if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input)) {

@@ -195,11 +195,7 @@ pageProjectRoutes.openapi({ ...listPageProjectsRoute, middleware: requireScopeBa
 pageProjectRoutes.openapi(createPageProjectRoute, async (c) => {
   const input = CreatePageProjectSchema.parse(await c.req.json());
   if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'pages:create', input.folderId, input.nodeId)) {
-    throw new AppError(
-      403,
-      'PAGE_PROJECT_FORBIDDEN',
-      'Missing authorized Page Project creation scope for the selected destination'
-    );
+    throw new AppError(403, 'PAGE_PROJECT_FORBIDDEN', 'Missing pages:create permission for the selected destination');
   }
   await container.resolve(PageProjectFolderService).assertFolderExists(input.folderId);
   const data = await container.resolve(PageProjectService).create(input, c.get('user')!.id);

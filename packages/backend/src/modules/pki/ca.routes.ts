@@ -58,7 +58,7 @@ caRoutes.openapi(
     const showSystem = c.req.query('showSystem') === 'true';
     const scopes = c.get('effectiveScopes') || [];
     if (showSystem && !hasScope(scopes, 'admin:details:certificates')) {
-      return c.json({ code: 'FORBIDDEN', message: 'Insufficient permissions' }, 403);
+      return c.json({ code: 'FORBIDDEN', message: 'Missing required scope: admin:details:certificates' }, 403);
     }
     const tree = await caService.getCATree(showSystem);
     const issuableCAIds = new Set(getResourceScopedIds(scopes, 'pki:cert:issue'));
