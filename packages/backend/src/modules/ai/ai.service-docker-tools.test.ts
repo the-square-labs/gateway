@@ -46,6 +46,9 @@ describe('AIService Docker tool routing', () => {
   });
 
   it('lists only Git-source builds visible through Docker resource scopes', async () => {
+    container.registerInstance(DockerAccessResourceService, {
+      resolveContainer: vi.fn().mockResolvedValue('private-id'),
+    } as never);
     container.registerInstance(DockerBuildService, {
       list: vi.fn().mockResolvedValue([
         {
@@ -65,6 +68,27 @@ describe('AIService Docker tool routing', () => {
         limit: 20,
       })
     ).resolves.toMatchObject({ result: [{ id: 'build-visible' }] });
+  });
+
+  it('lists container builds using inherited folder-expanded identities instead of container names', async () => {
+    container.registerInstance(DockerBuildService, {
+      list: vi.fn().mockResolvedValue([
+        { id: 'visible', target: { kind: 'container', nodeId: 'node-1', containerName: 'api' } },
+        { id: 'hidden', target: { kind: 'container', nodeId: 'node-1', containerName: 'other' } },
+      ]),
+    } as never);
+    container.registerInstance(DockerAccessResourceService, {
+      resolveContainer: vi
+        .fn()
+        .mockImplementation(async (_node, { name }) => (name === 'api' ? 'resource-1' : 'resource-2')),
+    } as never);
+    await expect(
+      createService({}).executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:view:folder/unicorn', 'docker:containers:view:node-1/resource-1'] },
+        'list_docker_builds',
+        { limit: 20 }
+      )
+    ).resolves.toMatchObject({ result: [{ id: 'visible' }] });
   });
 
   it('queues a manual source build only after resolving the container authorization identity', async () => {

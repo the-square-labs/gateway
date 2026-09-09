@@ -14,7 +14,10 @@ import { DatabaseConnectionService } from '@/modules/databases/databases.service
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
-import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  DockerAccessResourceService,
+  hasDockerResourceScope,
+} from '@/modules/docker/docker-access-resource.service.js';
 import { DockerBuildQuery } from '@/modules/docker/docker-build-query.js';
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
@@ -546,13 +549,15 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
             if (!build || build.target.nodeId !== nodeId) continue;
             const scopeResourceId =
               build.target.kind === 'container'
-                ? build.target.containerName
+                ? await container.resolve(DockerAccessResourceService).resolveContainer(nodeId, {
+                    name: build.target.containerName,
+                  })
                 : build.target.kind === 'deployment'
                   ? build.target.deploymentId
                   : build.target.composeProjectId;
             const baseScope =
               build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
-            if (!hasDockerResourceScope(scopes, baseScope, nodeId, scopeResourceId)) continue;
+            if (!scopeResourceId || !hasDockerResourceScope(scopes, baseScope, nodeId, scopeResourceId)) continue;
             resolved.push({
               id: resource.id,
               nodeId,

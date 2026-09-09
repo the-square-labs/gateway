@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { DockerBuildStatus } from '@/db/schema/index.js';
+import { DockerAccessResourceService } from './docker-access-resource.service.js';
 import {
   assertSupportedDockerBuildResourcePolicy,
   canAcceptDockerBuildLogEvent,
@@ -11,6 +12,31 @@ import {
   redactDockerBuildLog,
 } from './docker-build.service.js';
 import { ACTIVE_BUILD_STATUSES, WORKER_ACTIVE_BUILD_STATUSES } from './docker-build-policy.js';
+
+it('publishes build updates with the stable container identity used by folder grants', async () => {
+  const service = new DockerBuildService({} as never);
+  const publish = vi.fn();
+  service.setEventBus({ publish } as never);
+  vi.spyOn(service['query'], 'get').mockResolvedValue({
+    target: { kind: 'container', nodeId: 'node-1', containerName: 'api', name: 'api' },
+  } as never);
+  const resolve = vi.spyOn(DockerAccessResourceService.prototype, 'resolveContainer').mockResolvedValue('resource-1');
+  try {
+    service['publishBuildEvent']('docker.build.changed', { buildId: 'build-1' });
+    await vi.waitFor(() =>
+      expect(publish).toHaveBeenCalledWith('docker.build.changed', {
+        buildId: 'build-1',
+        nodeId: 'node-1',
+        scopeResourceId: 'resource-1',
+        targetKind: 'container',
+        targetName: 'api',
+      })
+    );
+    expect(resolve).toHaveBeenCalledWith('node-1', { name: 'api' });
+  } finally {
+    resolve.mockRestore();
+  }
+});
 
 function queuedBuild(id: string) {
   const now = new Date('2026-08-23T00:00:00.000Z');

@@ -24,7 +24,10 @@ import {
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerNodeScope } from '@/modules/docker/docker-access.middleware.js';
-import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  DockerAccessResourceService,
+  hasDockerResourceScope,
+} from '@/modules/docker/docker-access-resource.service.js';
 import {
   DockerBuildCreateSchema,
   DockerBuildListQuerySchema,
@@ -771,23 +774,15 @@ async function listDockerBuilds(user: User, args: Record<string, unknown>) {
   });
   const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
   const builds = await container.resolve(DockerBuildService).list(query);
-  return builds.filter((build) => {
-    if (a.nodeId && build.target.nodeId !== a.nodeId) return false;
-    if (build.target.kind === 'pages_project') {
-      return hasScopeForResource(user.scopes, 'pages:view', build.target.pageProjectId);
-    }
-    const resourceId =
-      build.target.kind === 'container'
-        ? build.target.containerName
-        : build.target.kind === 'deployment'
-          ? build.target.deploymentId
-          : build.target.composeProjectId;
-    const scope = build.target.kind === 'compose_project' ? 'docker:compose:view' : 'docker:containers:view';
-    return hasDockerResourceScope(user.scopes, scope, build.target.nodeId, resourceId);
-  });
+  const visible = [];
+  for (const build of builds) {
+    if (a.nodeId && build.target.nodeId !== a.nodeId) continue;
+    if (await canAccessDockerBuild(user, build, 'view')) visible.push(build);
+  }
+  return visible;
 }
 
-function canAccessDockerBuild(user: User, build: any, action: 'view' | 'manage') {
+async function canAccessDockerBuild(user: User, build: any, action: 'view' | 'manage') {
   if (build.target.kind === 'pages_project') {
     return hasScopeForResource(
       user.scopes,
@@ -796,18 +791,18 @@ function canAccessDockerBuild(user: User, build: any, action: 'view' | 'manage')
     );
   }
   const compose = build.target.kind === 'compose_project';
+  const baseScope = compose ? `docker:compose:${action}` : `docker:containers:${action}`;
+  if (hasDockerResourceScope(user.scopes, baseScope, build.target.nodeId, '')) return true;
   const resourceId =
     build.target.kind === 'container'
-      ? build.target.containerName
+      ? await container.resolve(DockerAccessResourceService).resolveContainer(build.target.nodeId, {
+          name: build.target.containerName,
+        })
       : build.target.kind === 'deployment'
         ? build.target.deploymentId
         : build.target.composeProjectId;
-  return hasDockerResourceScope(
-    user.scopes,
-    compose ? `docker:compose:${action}` : `docker:containers:${action}`,
-    build.target.nodeId,
-    resourceId
-  );
+  if (!resourceId) return false;
+  return hasDockerResourceScope(user.scopes, baseScope, build.target.nodeId, resourceId);
 }
 
 async function manageDockerBuild(user: User, args: Record<string, unknown>) {
@@ -819,7 +814,7 @@ async function manageDockerBuild(user: User, args: Record<string, unknown>) {
   const service = container.resolve(DockerBuildService);
   const build = await service.get(buildId);
   const action = operation === 'cancel' || operation === 'retry' ? 'manage' : 'view';
-  if (!canAccessDockerBuild(user, build, action)) {
+  if (!(await canAccessDockerBuild(user, build, action))) {
     throw new Error(`PERMISSION_DENIED: Missing build target ${action} scope`);
   }
   if (operation === 'get') return build;

@@ -13,6 +13,7 @@ import type { DockerBuildEvent } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { DockerBuildArtifactStore } from './docker-build-artifact.js';
 import {
   ACTIVE_BUILD_STATUSES,
@@ -1005,10 +1006,12 @@ export class DockerBuildService {
     if (!buildId) return;
     void this.query
       .get(buildId)
-      .then((build) => {
+      .then(async (build) => {
         const scopeResourceId =
           build.target.kind === 'container'
-            ? build.target.containerName
+            ? await new DockerAccessResourceService(this.db).resolveContainer(build.target.nodeId, {
+                name: build.target.containerName,
+              })
             : build.target.kind === 'deployment'
               ? build.target.deploymentId
               : build.target.kind === 'compose_project'
