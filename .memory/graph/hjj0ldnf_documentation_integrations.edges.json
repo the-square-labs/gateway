@@ -1,0 +1,45 @@
+{
+  "file_name": "hjj0ldnf_documentation_integrations",
+  "edges": [
+    {
+      "from_id": "hjj0ldnf",
+      "to_id": "ac5muwri",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both define Gateway documentation maintenance boundaries, with the source distinguishing the public portal from root documentation sources.",
+      "source": "auto",
+      "created_at": 1789033993507,
+      "updated_at": 1789033993507
+    },
+    {
+      "from_id": "hjj0ldnf",
+      "to_id": "x2uskhdm",
+      "relation": "related_to",
+      "weight": 0.58,
+      "reason": "The portal includes Cloudflare Pages and build guidance, while this record defines the underlying Pages deployment model.",
+      "source": "auto",
+      "created_at": 1789033993507,
+      "updated_at": 1789033993507
+    },
+    {
+      "from_id": "hjj0ldnf",
+      "to_id": "8zbznen7",
+      "relation": "related_to",
+      "weight": 0.52,
+      "reason": "The portal links integration and node-enrollment guidance, which aligns with this connector and managed-node setup workflow.",
+      "source": "auto",
+      "created_at": 1789033993507,
+      "updated_at": 1789033993507
+    },
+    {
+      "from_id": "hjj0ldnf",
+      "to_id": "hqwh565e",
+      "relation": "related_to",
+      "weight": 0.43,
+      "reason": "The portal's hosting and node-enrollment guides may document use of the public Gateway installer.",
+      "source": "auto",
+      "created_at": 1789033993507,
+      "updated_at": 1789033993507
+    }
+  ]
+}
