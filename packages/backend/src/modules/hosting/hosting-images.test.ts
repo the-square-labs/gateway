@@ -5,7 +5,10 @@ import { proxmoxSeedFiles } from './proxmox-seed.js';
 
 describe('canonical cloud images and NoCloud media', () => {
   it('pins official immutable builds with strong checksums and excludes unverified distributions', () => {
-    expect(HOSTING_CLOUD_IMAGES).toHaveLength(3);
+    expect(HOSTING_CLOUD_IMAGES).toHaveLength(5);
+    expect(HOSTING_CLOUD_IMAGES.map((image) => image.name)).toEqual(
+      expect.arrayContaining(['Ubuntu 22.04 LTS', 'Debian 12'])
+    );
     for (const image of HOSTING_CLOUD_IMAGES) {
       const url = new URL(image.url);
       expect(url.protocol).toBe('https:');

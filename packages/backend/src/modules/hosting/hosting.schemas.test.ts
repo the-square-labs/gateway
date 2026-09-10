@@ -178,3 +178,24 @@ describe('hosting input contracts', () => {
     expect(HostingProvisionSchema.safeParse({ ...create, role: 'bastion' }).success).toBe(false);
   });
 });
+
+it('separates display names from strict provider hostnames with legacy request compatibility', () => {
+  const input = {
+    connectorId: id,
+    idempotencyKey: id,
+    name: 'build-worker',
+    role: 'builder',
+    location: 'pve',
+    size: 'custom',
+    image: 'ubuntu',
+  };
+  expect(HostingProvisionSchema.parse({ ...input, displayName: 'Сборочный сервер 2' })).toMatchObject({
+    name: 'build-worker',
+    displayName: 'Сборочный сервер 2',
+  });
+  expect(HostingProvisionSchema.parse(input).name).toBe('build-worker');
+  for (const name of ['bad name', '-worker', 'worker-', 'a'.repeat(64), 'сервер', 'host.example'])
+    expect(HostingProvisionSchema.safeParse({ ...input, name }).success).toBe(false);
+  for (const displayName of [' ', 'a'.repeat(256)])
+    expect(HostingProvisionSchema.safeParse({ ...input, displayName }).success).toBe(false);
+});

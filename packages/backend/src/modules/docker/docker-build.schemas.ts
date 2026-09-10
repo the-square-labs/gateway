@@ -81,6 +81,7 @@ export const DockerSourceBindingConfigSchema = z.object({
   policy: z
     .object({
       vulnerabilityThreshold: z.enum(['critical', 'high', 'medium', 'low', 'none']).optional(),
+      vulnerabilityScope: z.enum(['all', 'application']).optional(),
     })
     .passthrough()
     .default({}),

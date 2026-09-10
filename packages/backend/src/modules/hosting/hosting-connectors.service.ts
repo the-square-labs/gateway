@@ -218,6 +218,21 @@ export class HostingConnectorsService {
     return user;
   }
 
+  async assertAdoptionActor(user: User, connectorId: string, nodeIds: string[]) {
+    const current = await this.auth.getUserById(user.id);
+    if (!current || current.isBlocked || current.isDeleted)
+      throw new AppError(403, 'HOSTING_ACCESS_DENIED', 'Your access changed. Sign in again.');
+    // Preserve effective session restrictions as well as freshly loaded account permissions.
+    for (const actor of [user, current]) {
+      assertHostingScope(actor.scopes, 'integrations:hosting:view', connectorId);
+      assertHostingScope(actor.scopes, 'integrations:hosting:manage', connectorId);
+      for (const nodeId of nodeIds) {
+        assertHostingScope(actor.scopes, 'nodes:details', nodeId);
+        assertHostingScope(actor.scopes, 'nodes:config:edit', nodeId);
+      }
+    }
+  }
+
   private capabilityFlags(account: HostingAccount): Record<string, boolean> {
     return Object.fromEntries(
       Object.entries(account.capabilities).map(([key, capability]) => [key, capability.available])

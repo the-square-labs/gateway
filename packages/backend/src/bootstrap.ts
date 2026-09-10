@@ -918,7 +918,8 @@ export async function initializeContainer(): Promise<void> {
         dockerManagementService,
         dockerDeploymentService,
         relayRegistryService,
-        dockerComposeService
+        dockerComposeService,
+        authService
       )
     : null;
   if (dockerBuildRolloutService) {

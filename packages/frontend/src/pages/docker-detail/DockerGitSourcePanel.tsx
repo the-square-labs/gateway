@@ -13,7 +13,7 @@ import {
   Save,
   Trash2,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -59,6 +59,7 @@ interface DockerGitSourcePanelProps {
   composeSecretKeys?: string[];
   canEdit?: boolean;
   canBuild?: boolean;
+  pendingContainer?: boolean;
 }
 
 type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none";
@@ -92,6 +93,7 @@ export function DockerGitSourcePanel({
   composeSecretKeys = [],
   canEdit = true,
   canBuild = true,
+  pendingContainer = false,
 }: DockerGitSourcePanelProps) {
   const navigate = useNavigate();
   const [source, setSource] = useState<DockerSourceBinding | null>(suppliedSource ?? null);
@@ -100,6 +102,11 @@ export function DockerGitSourcePanel({
   const [building, setBuilding] = useState(false);
   const [buildWorkerRequiredOpen, setBuildWorkerRequiredOpen] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const connectErrorRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (connectError) connectErrorRef.current?.scrollIntoView({ block: "nearest" });
+  }, [connectError]);
   const [branch, setBranch] = useState(suppliedSource?.branch ?? "main");
   const [dockerfilePath, setDockerfilePath] = useState(
     suppliedSource?.dockerfilePath ?? "Dockerfile"
@@ -112,6 +119,9 @@ export function DockerGitSourcePanel({
   const [autoDeploy, setAutoDeploy] = useState(suppliedSource?.autoDeploy ?? true);
   const [vulnerabilityThreshold, setVulnerabilityThreshold] = useState<VulnerabilityThreshold>(
     suppliedSource?.policy?.vulnerabilityThreshold ?? "critical"
+  );
+  const [vulnerabilityScope, setVulnerabilityScope] = useState<"all" | "application">(
+    suppliedSource?.policy?.vulnerabilityScope ?? "all"
   );
   const [applicationRoot, setApplicationRoot] = useState(suppliedSource?.applicationRoot ?? ".");
   const [packageManager, setPackageManager] = useState<"npm" | "pnpm" | "yarn">(
@@ -253,6 +263,7 @@ export function DockerGitSourcePanel({
     setAutoBuild(source.autoBuild);
     setAutoDeploy(source.autoDeploy);
     setVulnerabilityThreshold(source.policy?.vulnerabilityThreshold ?? "critical");
+    setVulnerabilityScope(source.policy?.vulnerabilityScope ?? "all");
     setApplicationRoot(source.applicationRoot || ".");
     setPackageManager(source.packageManager ?? "npm");
     setPackageManagerVersion(source.packageManagerVersion ?? "");
@@ -272,6 +283,7 @@ export function DockerGitSourcePanel({
         autoBuild !== source.autoBuild ||
         autoDeploy !== source.autoDeploy ||
         vulnerabilityThreshold !== (source.policy?.vulnerabilityThreshold ?? "critical") ||
+        vulnerabilityScope !== (source.policy?.vulnerabilityScope ?? "all") ||
         (pagesTarget &&
           (applicationRoot !== source.applicationRoot ||
             packageManager !== source.packageManager ||
@@ -325,6 +337,7 @@ export function DockerGitSourcePanel({
         policy: {
           ...source.policy,
           vulnerabilityThreshold: pagesTarget ? "none" : vulnerabilityThreshold,
+          vulnerabilityScope,
         },
       });
       setSource(updated);
@@ -345,6 +358,7 @@ export function DockerGitSourcePanel({
     if (!canEdit) return;
     if (!requireLicenseFeature("git-push-to-deploy", "Git push-to-deploy")) return;
     setConnectStep(1);
+    setConnectError(null);
     setConnectOpen(true);
   };
 
@@ -361,6 +375,7 @@ export function DockerGitSourcePanel({
     )
       return;
     setConnecting(true);
+    setConnectError(null);
     try {
       const connected = await api.upsertDockerSource(target, {
         connectorId,
@@ -393,7 +408,7 @@ export function DockerGitSourcePanel({
       toast.success("Repository connected");
     } catch (error) {
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
-        toast.error(error instanceof Error ? error.message : "Failed to connect repository");
+        setConnectError(error instanceof Error ? error.message : "Failed to connect repository");
       }
     } finally {
       setConnecting(false);
@@ -560,8 +575,9 @@ export function DockerGitSourcePanel({
     if (!target || !source) return;
     const accepted = await confirm({
       title: "Disconnect repository",
-      description:
-        "Stop repository polling, webhooks, builds, and automatic deployment for this resource? Existing runtime state and build history are preserved.",
+      description: pendingContainer
+        ? "This container has not been deployed yet. Disconnecting removes the pending container and its creation settings. To change the Dockerfile or build settings, cancel and edit Source instead."
+        : "Stop repository polling, webhooks, builds, and automatic deployment for this resource? Existing runtime state and build history are preserved.",
       confirmLabel: "Disconnect",
       variant: "destructive",
     });
@@ -573,6 +589,7 @@ export function DockerGitSourcePanel({
       onSourceChange?.(null);
       setBuildSecrets([]);
       toast.success("Repository disconnected");
+      if (pendingContainer) navigate("/docker/containers", { replace: true });
     } catch (error) {
       if (!handleLicenseApiError(error, "Git push-to-deploy")) {
         toast.error(error instanceof Error ? error.message : "Failed to disconnect repository");
@@ -797,6 +814,11 @@ export function DockerGitSourcePanel({
               </AnimatedHeight>
             ) : (
               repositorySourceFields
+            )}
+            {connectError && (
+              <p ref={connectErrorRef} role="alert" className="text-sm text-destructive">
+                {connectError}
+              </p>
             )}
             <DialogFooter>
               {pagesTarget && connectStep === 1 ? (
@@ -1152,6 +1174,36 @@ export function DockerGitSourcePanel({
                 </SelectItem>
                 <SelectItem value="none" description="Report findings without blocking deployment.">
                   Report only
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </SettingsControlRow>
+        )}
+        {!pagesTarget && (
+          <SettingsControlRow
+            title="Vulnerability scope"
+            description="Choose which packages can block deployment. The report always includes all findings."
+          >
+            <Select
+              value={vulnerabilityScope}
+              onValueChange={(value) => setVulnerabilityScope(value as "all" | "application")}
+              disabled={!canEdit}
+            >
+              <SelectTrigger className="sm:w-72" aria-label="Vulnerability scope">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem
+                  value="all"
+                  description="Apply the severity threshold to all packages in the image."
+                >
+                  All packages
+                </SelectItem>
+                <SelectItem
+                  value="application"
+                  description="System packages are report-only. Application dependencies, runtime binaries and unclassified packages still count."
+                >
+                  Application dependencies
                 </SelectItem>
               </SelectContent>
             </Select>

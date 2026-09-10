@@ -8,12 +8,15 @@ import {
   dockerSourceBindings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerComposeService } from './compose/compose.service.js';
 import type { DockerManagementService } from './docker.service.js';
+import { assertBuildActivationAccess } from './docker-build-activation-access.js';
 import { readDockerBuildRolloutProgress } from './docker-build-policy.js';
 import { DockerComposeBuildRolloutService } from './docker-compose-build-rollout.service.js';
+import { assertDockerCreationAccess } from './docker-creation-access.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 
 export class DockerBuildRolloutService {
@@ -25,9 +28,10 @@ export class DockerBuildRolloutService {
     private readonly docker: DockerManagementService,
     private readonly deployments: DockerDeploymentService,
     private readonly registry: RelayRegistryService,
-    compose?: DockerComposeService
+    compose?: DockerComposeService,
+    private readonly auth?: Pick<AuthService, 'getUserById'>
   ) {
-    if (compose) this.composeRollout = new DockerComposeBuildRolloutService(db, registry, compose);
+    if (compose) this.composeRollout = new DockerComposeBuildRolloutService(db, registry, compose, auth);
   }
 
   setPagesRollout(service: PageBuildRolloutService): void {
@@ -153,11 +157,19 @@ export class DockerBuildRolloutService {
     const repository = image.slice('127.0.0.1:5443/'.length, image.indexOf('@'));
     if (source.targetKind === 'deployment') {
       const [deployment] = await this.db
-        .select({ id: dockerDeployments.id, nodeId: dockerDeployments.nodeId, status: dockerDeployments.status })
+        .select({
+          id: dockerDeployments.id,
+          nodeId: dockerDeployments.nodeId,
+          status: dockerDeployments.status,
+          name: dockerDeployments.name,
+        })
         .from(dockerDeployments)
         .where(eq(dockerDeployments.id, source.deploymentId!))
         .limit(1);
       if (!deployment) throw new AppError(404, 'DEPLOYMENT_NOT_FOUND', 'Source deployment was not found');
+      if (deployment.status === 'creating') {
+        await assertBuildActivationAccess(this.db, this.auth, actorId, deployment.nodeId, deployment.name, 'container');
+      }
       await this.registry.ensureBinding({
         nodeId: deployment.nodeId,
         role: 'runtime',
@@ -191,6 +203,25 @@ export class DockerBuildRolloutService {
           return name === source.containerName;
         })
       : null;
+    const containerId = String(container?.id ?? container?.Id ?? '');
+    let creationScopes: string[] = [];
+    if (!containerId) {
+      if (!source.initialConfig || !actorId) {
+        throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Source container was not found');
+      }
+      const actor = await this.auth?.getUserById(actorId);
+      if (!actor || actor.isBlocked || actor.isDeleted) {
+        throw new AppError(403, 'BUILD_ACTOR_FORBIDDEN', 'The build initiator no longer has access');
+      }
+      await assertDockerCreationAccess(
+        this.db,
+        actor.scopes,
+        'docker:containers:create',
+        source.nodeId!,
+        source.initialConfig.folderId
+      );
+      creationScopes = actor.scopes;
+    }
     await this.registry.ensureBinding({
       nodeId: source.nodeId!,
       role: 'runtime',
@@ -199,17 +230,13 @@ export class DockerBuildRolloutService {
       contextKind: 'container',
       contextId: `${source.nodeId}:${source.containerName}`,
     });
-    const containerId = String(container?.id ?? container?.Id ?? '');
     if (!containerId) {
-      if (!source.initialConfig || !actorId) {
-        throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Source container was not found');
-      }
       await this.docker.pullImageImmediate(source.nodeId!, image);
       const created = await this.docker.createContainer(
         source.nodeId!,
         { ...source.initialConfig, name: source.containerName!, image },
-        actorId,
-        []
+        actorId!,
+        creationScopes
       );
       const createdId = String(created?.id ?? created?.Id ?? '');
       if (!createdId) {
@@ -217,7 +244,7 @@ export class DockerBuildRolloutService {
       }
       // Keep the created resource and its stable access identity if activation
       // fails. Users must still be able to inspect, edit Source and retry.
-      await this.docker.startContainer(source.nodeId!, createdId, actorId);
+      await this.docker.startContainer(source.nodeId!, createdId, actorId!);
       await this.waitForContainerReady(source.nodeId!, source.containerName!, image, 60_000);
       return `container:${source.nodeId}:${source.containerName}`;
     }

@@ -56,6 +56,8 @@ describe('hosting HTTP authorization boundary', () => {
     ['POST', `/api/integrations/hosting/${id}/sync`],
     ['POST', `/api/integrations/hosting/${id}/test`],
     ['GET', `/api/integrations/hosting/${id}/configuration`],
+    ['GET', `/api/integrations/hosting/${id}/adoption-candidates`],
+    ['POST', `/api/integrations/hosting/${id}/adopt`],
     ['GET', `/api/integrations/hosting/${id}/account-summary`],
     ['POST', '/api/hosting/operations'],
     ['POST', `/api/hosting/operations/${id}/retry-install`],

@@ -180,7 +180,7 @@ function composeHarness() {
       composeBuildPlan: { sourceYaml: 'services:\n  api:\n    build: .\n', services: [{ serviceName: 'api' }] },
     },
     source: { id: 'source-1', desiredCommitSha: commit, deployedCommitSha: commit, autoDeploy: true },
-    project: { id: 'project-1', nodeId: 'node-1', name: 'app', activeRevisionId: 'revision-old' },
+    project: { id: 'project-1', nodeId: 'node-1', name: 'app', activeRevisionId: 'revision-old' as string | null },
   };
   const execute = vi.fn();
   const update = vi.fn((table) => ({
@@ -223,7 +223,11 @@ function composeHarness() {
     startOperation: vi.fn().mockResolvedValue({ id: 'apply-new' }),
     waitForOperation: vi.fn().mockResolvedValue(undefined),
   };
-  const service = new DockerComposeBuildRolloutService(db as never, registry as never, compose as never);
+  const getUserById = vi.fn().mockResolvedValue({ id: 'actor', scopes: ['docker:compose:create:node-1'] });
+  Object.assign(db, { select: () => query(() => []) });
+  const service = new DockerComposeBuildRolloutService(db as never, registry as never, compose as never, {
+    getUserById,
+  });
   const pinRevision = vi.spyOn(service as any, 'pinRevisionArtifacts').mockImplementation(async () => {
     current.batch.candidateRevisionId = 'revision-new';
   });
@@ -233,10 +237,34 @@ function composeHarness() {
     return 'deployed';
   });
   const markFailed = vi.spyOn(service as any, 'markFailed').mockResolvedValue(true);
-  return { service, current, artifact, compose, pinRevision, finalize, markFailed, execute };
+  return { service, current, artifact, compose, pinRevision, finalize, markFailed, execute, registry, getUserById };
 }
 
 describe('Batch-aware Compose rollout idempotency', () => {
+  it('authorizes the first activation before creating registry bindings and applying the revision', async () => {
+    const { service, current, getUserById, registry, compose } = composeHarness();
+    current.project.activeRevisionId = null;
+    current.source.deployedCommitSha = '';
+    await expect(service.rollout('build-new')).resolves.toBe('deployed');
+    expect(getUserById).toHaveBeenCalledWith('actor');
+    expect(getUserById.mock.invocationCallOrder[0]).toBeLessThan(registry.ensureBinding.mock.invocationCallOrder[0]!);
+    expect(compose.startOperation).toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    { isBlocked: true, scopes: ['*'] },
+    { scopes: [] },
+  ])('refuses revoked first-activation permissions before any external mutation: %j', async (actor) => {
+    const { service, current, getUserById, registry, compose } = composeHarness();
+    current.project.activeRevisionId = null;
+    current.source.deployedCommitSha = '';
+    getUserById.mockResolvedValue(actor);
+    await expect(service.rollout('build-new')).rejects.toMatchObject({ statusCode: 403 });
+    expect(registry.ensureBinding).not.toHaveBeenCalled();
+    expect(compose.createGitRevision).not.toHaveBeenCalled();
+    expect(compose.startOperation).not.toHaveBeenCalled();
+  });
   it('applies a new batch/new artifact at the same commit and does not apply a completed-batch replay', async () => {
     const { service, current, compose, pinRevision, finalize } = composeHarness();
     await expect(service.rollout('build-new')).resolves.toBe('deployed');

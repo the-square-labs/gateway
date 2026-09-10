@@ -64,6 +64,14 @@ func (m *Manager) build(ctx context.Context, command *pb.DockerBuildCommand, job
 	if err != nil {
 		return err
 	}
+	contextInfo, err := os.Stat(contextDir)
+	if err != nil || !contextInfo.IsDir() {
+		return fmt.Errorf("build context %q is not an accessible directory in the checked-out commit; set Build context relative to the repository root", command.GetContextPath())
+	}
+	dockerfileInfo, err := os.Stat(dockerfileAbsolute)
+	if err != nil || !dockerfileInfo.Mode().IsRegular() {
+		return fmt.Errorf("Dockerfile %q is not an accessible file in the checked-out commit; set Dockerfile to its path relative to the repository root (for example apps/api/Dockerfile)", command.GetDockerfilePath())
+	}
 	args := []string{"--addr", "unix://" + m.config.BuildkitSocket, "build", "--frontend", "dockerfile.v0",
 		"--local", "context=" + contextDir, "--local", "dockerfile=" + filepath.Dir(dockerfileAbsolute),
 		"--opt", "filename=" + filepath.Base(dockerfileAbsolute), "--opt", "platform=" + command.GetPlatform(),

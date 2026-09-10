@@ -1033,6 +1033,7 @@ it("exposes configure and non-cascading delete in header overflow", async () => 
   await screen.findByRole("tab", { name: "Virtual machines" });
   fireEvent.keyDown(screen.getByRole("button", { name: "Page actions" }), { key: "Enter" });
   expect(await screen.findByRole("menuitem", { name: "Configure" })).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Adopt nodes" })).toBeInTheDocument();
   fireEvent.click(screen.getByRole("menuitem", { name: "Delete connector" }));
   await waitFor(() => expect(remove).toHaveBeenCalledWith(connector.id));
 });
@@ -1128,4 +1129,22 @@ it("submits numeric Proxmox limits without a fake custom size identifier", async
   expect(action.mock.calls[0][1]).toMatchObject({ action: "resize", cpu: 4 });
   expect(action.mock.calls[0][1]).not.toHaveProperty("size");
   expect(action.mock.calls[0][1]).not.toHaveProperty("memoryMb");
+});
+
+it.each([
+  "/nodes/providers",
+  "/settings/integrations",
+])("returns to %s after opening a provider and switching its tabs", async (origin) => {
+  vi.spyOn(api, "listHostingConnectors").mockResolvedValue([connector]);
+  renderWithRouter(<HostingIntegrationsSection />, {
+    path: origin,
+    route: origin,
+    extraRoutes: (
+      <Route path="/hosting/:connectorId/:tab?" element={<HostingIntegrationDetail />} />
+    ),
+  });
+  fireEvent.click(await screen.findByText("Lab"));
+  fireEvent.click(await screen.findByRole("tab", { name: "Virtual machines" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(await screen.findByText("Hosting Integrations")).toBeVisible();
 });

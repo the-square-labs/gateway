@@ -120,7 +120,12 @@ export class DockerBuildArtifactStore {
           status: policy.decision === 'approved' ? 'ready' : 'rejected',
           sbomDigest: input.sbomDigest ?? null,
           provenanceDigest: input.provenanceDigest ?? null,
-          scanSummary: input.scanSummary ?? null,
+          scanSummary: input.scanSummary
+            ? {
+                ...input.scanSummary,
+                policyScope: joined.source.policy.vulnerabilityScope === 'application' ? 'application' : 'all',
+              }
+            : null,
           policyDecision: policy.decision,
           policyReason: policy.reason,
           verifiedAt: now,

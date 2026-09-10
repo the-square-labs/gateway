@@ -7,6 +7,7 @@ export const HOSTING_EVIDENCE_TTL_MS = 5 * 60 * 1000;
 export interface HostingNodeEvidence {
   nodeId: string;
   hostIdentityId: string | null;
+  registeredHostIdentityId?: string | null;
   observedAt: string | null;
   /** Read from the authenticated daemon interface, NOT serviceAddresses or external egress. */
   interfaces: Array<{ ip: string; mac?: string }>;
@@ -75,6 +76,7 @@ export function evaluateHostingAdoption(input: {
     host: string;
     nodes: HostingNodeEvidence[];
     reason: HostingAdoptionDecision['reason'];
+    bindingConflict: boolean;
   }> = [];
   for (const resource of input.resources) {
     const skip = (reason: HostingAdoptionDecision['reason']) =>
@@ -119,11 +121,7 @@ export function evaluateHostingAdoption(input: {
       const existingConflict = nodes.some((node) =>
         input.existingBindings?.some((binding) => binding.nodeId === node.nodeId && binding.resourceId !== resource.id)
       );
-      if (existingConflict) {
-        skip('already_bound_elsewhere');
-        continue;
-      }
-      edges.push({ resource, host, nodes, reason });
+      edges.push({ resource, host, nodes, reason, bindingConflict: existingConflict });
     }
     if (!edges.some((edge) => edge.resource.id === resource.id) && !decisions.has(resource.id)) skip('no_evidence');
   }
@@ -136,6 +134,16 @@ export function evaluateHostingAdoption(input: {
         hostIdentityId: null,
         nodeIds: [],
         reason: 'ambiguous',
+        evidenceDigest: null,
+      });
+      continue;
+    }
+    if (edge.bindingConflict) {
+      decisions.set(edge.resource.id, {
+        resourceId: edge.resource.id,
+        hostIdentityId: null,
+        nodeIds: [],
+        reason: 'already_bound_elsewhere',
         evidenceDigest: null,
       });
       continue;

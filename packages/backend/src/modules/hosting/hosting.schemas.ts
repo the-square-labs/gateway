@@ -265,6 +265,7 @@ export const HostingProvisionSchema = z
     folderId: z.string().uuid().nullable().optional(),
     idempotencyKey: z.string().uuid(),
     name: hostName,
+    displayName: z.string().trim().min(1).max(255).optional(),
     role: z.enum(['nginx', 'docker', 'builder', 'databases', 'monitoring', 'relay']),
     location: identifier,
     size: identifier,
@@ -322,3 +323,5 @@ export type DiscoverHostingConnectorInput = z.infer<typeof DiscoverHostingConnec
 export type HostingProvisionInput = z.infer<typeof HostingProvisionSchema>;
 export type HostingActionInput = z.infer<typeof HostingActionSchema>;
 export type HostingTopupInput = z.infer<typeof HostingTopupSchema>;
+
+export const HostingAdoptSchema = z.object({ resourceId: z.string().uuid(), nodeId: z.string().uuid() }).strict();

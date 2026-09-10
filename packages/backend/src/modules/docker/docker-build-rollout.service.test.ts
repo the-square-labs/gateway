@@ -295,7 +295,7 @@ describe('DockerBuildRolloutService', () => {
       select: vi.fn(() => ({
         from: vi.fn(() => ({
           where: vi.fn(() => ({
-            limit: vi.fn(async () => [{ id: 'deployment-1', nodeId: 'node-1', status: 'creating' }]),
+            limit: vi.fn(async () => [{ id: 'deployment-1', nodeId: 'node-1', status: 'creating', name: 'app' }]),
           })),
         })),
       })),
@@ -305,7 +305,17 @@ describe('DockerBuildRolloutService', () => {
       deploy: vi.fn(),
     };
     const registry = { ensureBinding: vi.fn().mockResolvedValue({ id: 'binding' }) };
-    const service = new DockerBuildRolloutService(db as never, {} as never, deployments as never, registry as never);
+    const auth = {
+      getUserById: vi.fn().mockResolvedValue({ id: 'user-1', scopes: ['docker:containers:create:node-1'] }),
+    };
+    const service = new DockerBuildRolloutService(
+      db as never,
+      {} as never,
+      deployments as never,
+      registry as never,
+      undefined,
+      auth
+    );
     const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'c'.repeat(64)}`;
 
     await (service as any).deployTarget({ targetKind: 'deployment', deploymentId: 'deployment-1' }, image, 'user-1');
@@ -325,7 +335,19 @@ describe('DockerBuildRolloutService', () => {
       recreateWithConfig: vi.fn(),
     };
     const registry = { ensureBinding: vi.fn().mockResolvedValue({ id: 'binding' }) };
-    const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, registry as never);
+    const scopes = ['docker:containers:create:folder/folder-1'];
+    const auth = { getUserById: vi.fn().mockResolvedValue({ id: 'user-1', isBlocked: false, scopes }) };
+    const db = {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ id: 'folder-1', isSystem: false }] }) }) }),
+    };
+    const service = new DockerBuildRolloutService(
+      db as never,
+      docker as never,
+      {} as never,
+      registry as never,
+      undefined,
+      auth
+    );
     const waitForContainerReady = vi.spyOn(service as any, 'waitForContainerReady').mockResolvedValue(undefined);
     const image = `127.0.0.1:5443/gateway/builds/source@sha256:${'d'.repeat(64)}`;
 
@@ -334,7 +356,7 @@ describe('DockerBuildRolloutService', () => {
         targetKind: 'container',
         nodeId: '11111111-1111-4111-8111-111111111111',
         containerName: 'api',
-        initialConfig: { restartPolicy: 'unless-stopped', runtimeProfile: 'secure' },
+        initialConfig: { restartPolicy: 'unless-stopped', runtimeProfile: 'secure', folderId: 'folder-1' },
       },
       image,
       'user-1'
@@ -342,10 +364,11 @@ describe('DockerBuildRolloutService', () => {
 
     expect(docker.createContainer).toHaveBeenCalledWith(
       '11111111-1111-4111-8111-111111111111',
-      { restartPolicy: 'unless-stopped', runtimeProfile: 'secure', name: 'api', image },
+      { restartPolicy: 'unless-stopped', runtimeProfile: 'secure', folderId: 'folder-1', name: 'api', image },
       'user-1',
-      []
+      scopes
     );
+    expect(auth.getUserById).toHaveBeenCalledWith('user-1');
     expect(docker.listContainers).not.toHaveBeenCalled();
     expect(docker.pullImageImmediate).toHaveBeenCalledWith('11111111-1111-4111-8111-111111111111', image);
     expect(docker.pullImageImmediate.mock.invocationCallOrder[0]).toBeLessThan(
@@ -366,7 +389,17 @@ describe('DockerBuildRolloutService', () => {
       removeContainer: vi.fn().mockResolvedValue(undefined),
     };
     const registry = { ensureBinding: vi.fn().mockResolvedValue({ id: 'binding' }) };
-    const service = new DockerBuildRolloutService({} as never, docker as never, {} as never, registry as never);
+    const auth = {
+      getUserById: vi.fn().mockResolvedValue({ id: 'user-1', isBlocked: false, scopes: ['docker:containers:create'] }),
+    };
+    const service = new DockerBuildRolloutService(
+      {} as never,
+      docker as never,
+      {} as never,
+      registry as never,
+      undefined,
+      auth
+    );
 
     await expect(
       (service as any).deployTarget(
@@ -381,6 +414,48 @@ describe('DockerBuildRolloutService', () => {
       )
     ).rejects.toThrow('start failed');
     expect(docker.removeContainer).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    { isBlocked: true, scopes: ['*'] },
+    { isDeleted: true, scopes: ['*'] },
+    { scopes: [] },
+    { scopes: ['docker:containers:create:other-node'] },
+    { scopes: ['docker:containers:create:folder/other-folder'] },
+  ])('rejects first activation with revoked or wrong-destination actor permissions: %j', async (actor) => {
+    const docker = {
+      listAllContainers: vi.fn().mockResolvedValue([]),
+      createContainer: vi.fn(),
+      pullImageImmediate: vi.fn(),
+      startContainer: vi.fn(),
+    };
+    const registry = { ensureBinding: vi.fn() };
+    const auth = { getUserById: vi.fn().mockResolvedValue(actor) };
+    const service = new DockerBuildRolloutService(
+      {} as never,
+      docker as never,
+      {} as never,
+      registry as never,
+      undefined,
+      auth
+    );
+    await expect(
+      (service as any).deployTarget(
+        {
+          targetKind: 'container',
+          nodeId: 'node-1',
+          containerName: 'api',
+          initialConfig: {},
+        },
+        `127.0.0.1:5443/gateway/builds/source@sha256:${'a'.repeat(64)}`,
+        'user-1'
+      )
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(registry.ensureBinding).not.toHaveBeenCalled();
+    expect(docker.pullImageImmediate).not.toHaveBeenCalled();
+    expect(docker.createContainer).not.toHaveBeenCalled();
+    expect(docker.startContainer).not.toHaveBeenCalled();
   });
 
   it.each([

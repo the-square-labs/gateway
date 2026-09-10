@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { hostingNodeBindings, hostingResources, integrationConnectors, nodes } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { User } from '@/types.js';
 import { HostingSettingsSchema } from './hosting.schemas.js';
 import { HostingInventoryService } from './hosting-inventory.service.js';
 
@@ -18,7 +19,7 @@ function fixture(resourceIds: string[] = []) {
   const actor = { scopes: ['nodes:config:edit', 'nodes:details'] };
   const node = {
     id: 'node',
-    hostIdentityId: 'host',
+    hostIdentityId: 'host' as string | null,
     lastSeenAt: now,
     lastHealthReport: { networkInterfaces: [{ name: 'eth0', ipAddresses: ['8.8.8.8/32'] }] },
   };
@@ -34,6 +35,15 @@ function fixture(resourceIds: string[] = []) {
   };
   const resources = [resource];
   const bindings: unknown[] = [];
+  const updateNode = vi.fn();
+  const ensureIdentity = vi.fn(async () => ({
+    success: true,
+    data: Buffer.from('11111111-1111-4111-8111-111111111111'),
+  }));
+  const readFile = vi.fn(async (_id: string, path: string) => {
+    if (path === '/var/lib/gateway/host-identity') throw new Error('missing');
+    return Buffer.from('aa:bb:cc:dd:ee:ff');
+  });
   const writeBinding = vi.fn((value: unknown) => bindings.push(value));
   const select = () => ({
     from: (table: unknown) => {
@@ -59,7 +69,13 @@ function fixture(resourceIds: string[] = []) {
   const db = {
     select,
     execute: vi.fn(async () => {}),
-    update: () => ({ set: () => ({ where: async () => {} }) }),
+    update: (table: unknown) => ({
+      set: (value: unknown) => ({
+        where: async () => {
+          if (table === nodes) updateNode(value);
+        },
+      }),
+    }),
     insert: (table: unknown) => ({
       values: (value: unknown) => ({
         onConflictDoNothing: async () => {
@@ -77,18 +93,27 @@ function fixture(resourceIds: string[] = []) {
   const connectors = {
     settings: (row: typeof connector) => row.settings,
     owner: vi.fn(async () => actor),
+    assertAdoptionActor: vi.fn(async () => {}),
   };
   const inventory = new HostingInventoryService(
     db as never,
     connectors as never,
-    { readFile: async () => Buffer.from('aa:bb:cc:dd:ee:ff') } as never,
-    { isNodeConnected: () => true },
+    { readFile } as never,
+    { isNodeConnected: () => true, sendNodeFileCommand: ensureIdentity } as never,
     { log: vi.fn() } as never
   );
-  const adopt = () =>
-    (inventory as unknown as { adopt: (row: unknown, adapter: unknown) => Promise<void> }).adopt(connector, {});
+  const adopt = (selected?: { resourceId: string; nodeId: string; user: User }) =>
+    (inventory as unknown as { adopt: (row: unknown, adapter: unknown, selected?: unknown) => Promise<unknown> }).adopt(
+      connector,
+      {},
+      selected
+    );
   return {
     adopt,
+    node,
+    readFile,
+    ensureIdentity,
+    updateNode,
     connector,
     resource,
     resources,
@@ -160,6 +185,101 @@ describe('adoption admission and commit guards', () => {
       test.connectors.owner.mockRejectedValue(new AppError(403, 'HOSTING_AUTOMATION_ACCESS_REVOKED', 'Revoked'));
     });
     await expect(test.adopt()).rejects.toThrow('Revoked');
+    expect(test.writeBinding).not.toHaveBeenCalled();
+  });
+});
+
+const explicitActor = {
+  id: 'caller',
+  scopes: ['integrations:hosting:manage', 'integrations:hosting:view', 'nodes:details', 'nodes:config:edit'],
+} as User;
+const selected = { resourceId: 'resource', nodeId: 'node', user: explicitActor };
+describe('explicit verified adoption and legacy LXC', () => {
+  it('allows explicit verified selection while automatic adoption is disabled', async () => {
+    const test = fixture();
+    test.connector.settings.adoptionEnabled = false;
+    test.current().settings.adoptionEnabled = false;
+    await expect(test.adopt(selected)).resolves.toEqual({ resourceId: 'resource', nodeIds: ['node'] });
+    expect(test.writeBinding).toHaveBeenCalledOnce();
+  });
+  it('never treats the selected pair as evidence', async () => {
+    const test = fixture();
+    test.resource.snapshot.addresses = [{ ip: '1.1.1.1', direct: true }];
+    await expect(test.adopt(selected)).resolves.toBeUndefined();
+    expect(test.writeBinding).not.toHaveBeenCalled();
+  });
+  it('retains global uniqueness for explicit selection', async () => {
+    const test = fixture();
+    test.resources.push({ ...test.resource, id: 'duplicate' });
+    await test.adopt(selected);
+    expect(test.writeBinding).not.toHaveBeenCalled();
+  });
+  it('checks explicit caller permissions independently from owner', async () => {
+    const test = fixture();
+    await expect(
+      test.adopt({
+        ...selected,
+        user: {
+          ...explicitActor,
+          scopes: ['integrations:hosting:manage', 'integrations:hosting:view', 'nodes:details'],
+        },
+      })
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(test.writeBinding).not.toHaveBeenCalled();
+  });
+  it('recovers a legacy LXC identity only after matching private IP and MAC', async () => {
+    const test = fixture();
+    test.node.hostIdentityId = null;
+    test.node.lastHealthReport.networkInterfaces[0].ipAddresses = ['10.0.0.5'];
+    Object.assign(test.resource.snapshot, {
+      kind: 'ct',
+      addresses: [{ ip: '10.0.0.5', mac: 'aa:bb:cc:dd:ee:ff', direct: true }],
+    });
+    await test.adopt();
+    expect(test.ensureIdentity).toHaveBeenCalledWith('node', 'ensure-host-identity');
+    expect(test.updateNode).toHaveBeenCalledWith({ hostIdentityId: '11111111-1111-4111-8111-111111111111' });
+    expect(test.writeBinding).toHaveBeenCalledWith(expect.objectContaining({ evidenceType: 'interface_match' }));
+  });
+  it('does not create identity for private IP alone, mismatches or ambiguous resources', async () => {
+    for (const mismatch of ['missing_mac', 'wrong_mac', 'ambiguous']) {
+      const test = fixture();
+      test.node.hostIdentityId = null;
+      test.node.lastHealthReport.networkInterfaces[0].ipAddresses = ['10.0.0.5'];
+      Object.assign(test.resource.snapshot, {
+        kind: 'ct',
+        addresses: [
+          {
+            ip: '10.0.0.5',
+            mac:
+              mismatch === 'missing_mac'
+                ? undefined
+                : mismatch === 'wrong_mac'
+                  ? '00:11:22:33:44:55'
+                  : 'aa:bb:cc:dd:ee:ff',
+            direct: true,
+          },
+        ],
+      });
+      if (mismatch === 'ambiguous') test.resources.push({ ...test.resource, id: 'duplicate' });
+      await test.adopt();
+      expect(test.ensureIdentity).not.toHaveBeenCalled();
+      expect(test.writeBinding).not.toHaveBeenCalled();
+    }
+  });
+  it('fails closed when a legacy daemon cannot persist identity', async () => {
+    const test = fixture();
+    test.node.hostIdentityId = null;
+    test.ensureIdentity.mockResolvedValue({ success: false, data: Buffer.alloc(0) });
+    await expect(test.adopt(selected)).rejects.toMatchObject({ code: 'HOSTING_NODE_IDENTITY_REQUIRED' });
+    expect(test.updateNode).not.toHaveBeenCalled();
+    expect(test.writeBinding).not.toHaveBeenCalled();
+  });
+  it('refuses malformed persisted identity rather than replacing it', async () => {
+    const test = fixture();
+    test.node.hostIdentityId = null;
+    test.readFile.mockResolvedValue(Buffer.from('broken'));
+    await test.adopt();
+    expect(test.ensureIdentity).not.toHaveBeenCalled();
     expect(test.writeBinding).not.toHaveBeenCalled();
   });
 });

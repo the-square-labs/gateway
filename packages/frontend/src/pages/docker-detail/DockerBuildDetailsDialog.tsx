@@ -133,6 +133,10 @@ export function DockerBuildDetailsDialog({
 
   const scanSummary = build?.artifact?.scanSummary ?? null;
   const vulnerabilities = scanSummary?.vulnerabilities ?? [];
+  const applicationOnly = scanSummary?.policyScope === "application";
+  const osVulnerabilityTotal = scanSummary?.osPackages
+    ? Object.values(scanSummary.osPackages).reduce((total, count) => total + count, 0)
+    : null;
   const vulnerabilityCounts = scanSummary
     ? (["critical", "high", "medium", "low", "unknown"] as const).filter(
         (severity) => scanSummary[severity] > 0
@@ -204,6 +208,13 @@ export function DockerBuildDetailsDialog({
             }
             bodyClassName="divide-y divide-border"
           >
+            {applicationOnly && (
+              <p className="px-4 py-3 text-xs text-muted-foreground">
+                {osVulnerabilityTotal === null
+                  ? "Application dependency policy requires complete OS package counts. Rebuild with an updated Build Worker."
+                  : `Application dependency policy: ${osVulnerabilityTotal} system package findings remain visible but do not block deployment. Runtime binaries and unclassified packages still count.`}
+              </p>
+            )}
             {vulnerabilities.length > 0 ? (
               vulnerabilities.map((vulnerability, index) => (
                 <div
@@ -222,6 +233,15 @@ export function DockerBuildDetailsDialog({
                         ? `Fixed in ${vulnerability.fixedVersions.join(", ")}`
                         : vulnerability.fixState || "No fix reported"}
                     </p>
+                    {applicationOnly &&
+                      osVulnerabilityTotal !== null &&
+                      ["deb", "rpm", "apk", "alpm"].includes(
+                        vulnerability.packageType.trim().toLowerCase()
+                      ) && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          OS package · Report only
+                        </p>
+                      )}
                   </div>
                   <Badge
                     variant={

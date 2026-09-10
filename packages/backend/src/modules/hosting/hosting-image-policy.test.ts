@@ -50,7 +50,7 @@ describe('shared hosting OS admission policy', () => {
       ]);
     expect(
       HOSTING_CLOUD_IMAGES.map((build) => `${build.operatingSystem.distribution}-${build.operatingSystem.version}`)
-    ).toEqual(['ubuntu-24.04', 'debian-13', 'fedora-44']);
+    ).toEqual(['ubuntu-24.04', 'debian-13', 'ubuntu-22.04', 'debian-12', 'fedora-44']);
   });
   it('does not turn a role restriction into universal compatibility', () => {
     expect(hostingImageRoles({ ...image, supportedRoles: ['monitoring'] }, 'digitalocean')).toEqual(['monitoring']);

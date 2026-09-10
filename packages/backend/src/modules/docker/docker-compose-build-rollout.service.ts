@@ -9,9 +9,11 @@ import {
   dockerSourceBindings,
 } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { RelayRegistryService } from '@/services/relay-registry.service.js';
 import type { DockerComposeService } from './compose/compose.service.js';
 import { prepareComposeGitBuild } from './compose/compose-policy.js';
+import { assertBuildActivationAccess } from './docker-build-activation-access.js';
 
 const BUILD_AUTOMATION_USER_ID = '00000000-0000-4000-8000-000000000001';
 export const COMPOSE_GIT_ROLLOUT_ACTION = 'pull_apply' as const;
@@ -52,7 +54,8 @@ export class DockerComposeBuildRolloutService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly registry: RelayRegistryService,
-    private readonly compose: DockerComposeService
+    private readonly compose: DockerComposeService,
+    private readonly auth?: Pick<AuthService, 'getUserById'>
   ) {}
 
   async recoverInterrupted(now = new Date()) {
@@ -172,6 +175,17 @@ export class DockerComposeBuildRolloutService {
     if (claim.disposition !== 'claimed') return claim.disposition;
 
     try {
+      const realActorId = claim.build.createdById ?? claim.source.createdById ?? null;
+      if (!claim.project.activeRevisionId) {
+        await assertBuildActivationAccess(
+          this.db,
+          this.auth,
+          realActorId,
+          claim.project.nodeId,
+          claim.project.id,
+          'compose'
+        );
+      }
       const images: Record<string, string> = {};
       for (const service of claim.batch.composeBuildPlan.services) {
         const artifact = claim.approved.get(service.serviceName)!;
@@ -197,7 +211,7 @@ export class DockerComposeBuildRolloutService {
       if (!prepared.valid || !prepared.runtimeYaml) {
         throw new AppError(409, 'COMPOSE_BUILD_RESOLUTION_FAILED', 'Built Compose images could not be resolved');
       }
-      const actorId = claim.build.createdById ?? claim.source.createdById ?? BUILD_AUTOMATION_USER_ID;
+      const actorId = realActorId ?? BUILD_AUTOMATION_USER_ID;
       const revision = await this.compose.createGitRevision(
         claim.project.nodeId,
         claim.project.id,

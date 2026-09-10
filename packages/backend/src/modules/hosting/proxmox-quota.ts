@@ -8,6 +8,7 @@ type Vector = { cpu?: number | null; memoryMb?: number | null; diskGb?: number |
 type Resource = {
   id: string;
   remoteId: string;
+  origin?: string;
   missingSince: Date | null;
   incarnation?: string | null;
   snapshot: Vector;
@@ -38,6 +39,8 @@ export function assertProxmoxQuota(
     if (limit === undefined) continue;
     const allocations = new Map<string, number | null>();
     for (const resource of resources) {
+      // Discovery is inventory, not an allocation managed by this connector.
+      if (resource.origin === 'discovered') continue;
       const deleted =
         resource.missingSince &&
         resource.incarnation &&
@@ -54,8 +57,12 @@ export function assertProxmoxQuota(
       allocations.set(resource.id, typeof value === 'number' && Number.isFinite(value) ? value : null);
     }
     for (const [index, operation] of operations.entries()) {
-      if (!['create', 'resize'].includes(operation.action)) continue;
-      if (operation.phase === 'ready' || (operation.phase === 'failed' && !operation.dispatchStartedAt)) continue;
+      if (!['create', 'resize', 'install'].includes(operation.action)) continue;
+      if (
+        operation.phase === 'ready' ||
+        (operation.phase === 'failed' && (operation.action === 'install' || !operation.dispatchStartedAt))
+      )
+        continue;
       const value = operation.request[dimension];
       if (typeof value !== 'number') continue;
       const key =
@@ -77,7 +84,7 @@ export function assertProxmoxQuota(
       throw new AppError(
         409,
         'HOSTING_RESOURCE_LIMIT',
-        `The connector's total ${dimension} limit would be exceeded, including pending operations`
+        `The connector's managed ${dimension} limit is ${limit}; this request would allocate ${values.reduce<number>((sum, allocation) => sum + (allocation ?? 0), 0)}, including pending operations`
       );
   }
 }

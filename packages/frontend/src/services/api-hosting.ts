@@ -106,6 +106,17 @@ export function withHostingApi<TBase extends ApiClientBaseConstructor>(Base: TBa
         `/integrations/hosting/${encodeURIComponent(id)}/catalog`
       );
     }
+    getHostingAdoptionCandidates(id: string) {
+      return this.request<import("@/types/hosting").HostingAdoptionCandidates>(
+        `/integrations/hosting/${encodeURIComponent(id)}/adoption-candidates`
+      );
+    }
+    adoptHostingNode(id: string, input: { resourceId: string; nodeId: string }) {
+      return this.request<{ resourceId: string; nodeIds: string[] }>(
+        `/integrations/hosting/${encodeURIComponent(id)}/adopt`,
+        { method: "POST", body: JSON.stringify(input) }
+      );
+    }
     listHostingResources(id: string) {
       return this.request<HostingResource[]>(
         `/integrations/hosting/${encodeURIComponent(id)}/resources`

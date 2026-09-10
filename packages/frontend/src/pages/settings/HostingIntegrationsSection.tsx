@@ -1,5 +1,6 @@
 import { Check, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useLocation } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -10,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
+import { createReturnNavigationState } from "@/lib/return-navigation";
 import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -31,6 +33,7 @@ export function HostingIntegrationsSection({
   const canView = hasScopedAccess("integrations:hosting:view");
   const canManage = hasScope("integrations:hosting:manage");
   const navigate = useStableNavigate();
+  const location = useLocation();
   const [connectors, setConnectors] = useState<HostingConnector[]>([]);
   const [loading, setLoading] = useState(canView);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -182,11 +185,17 @@ export function HostingIntegrationsSection({
                 role="link"
                 tabIndex={0}
                 aria-label={`Open ${connector.name}`}
-                onClick={() => navigate(`/hosting/${connector.id}`)}
+                onClick={() =>
+                  navigate(`/hosting/${connector.id}`, {
+                    state: createReturnNavigationState(location),
+                  })
+                }
                 onKeyDown={(event) => {
                   if (event.target !== event.currentTarget || event.key !== "Enter") return;
                   event.preventDefault();
-                  navigate(`/hosting/${connector.id}`);
+                  navigate(`/hosting/${connector.id}`, {
+                    state: createReturnNavigationState(location),
+                  });
                 }}
               >
                 <div className="flex min-w-0 items-start gap-3">

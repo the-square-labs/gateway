@@ -423,6 +423,7 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
     id: actorId,
     scopes: [
       'integrations:hosting:manage',
+      'integrations:hosting:view',
       'hosting:resources:create',
       'nodes:create',
       'nodes:details',
@@ -1228,5 +1229,206 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
       .update(schema.hostingResources)
       .set({ missingSince: new Date() })
       .where(eq(schema.hostingResources.connectorId, row.id));
+  });
+  it('explicitly adopts a legacy LXC through fresh provider evidence and real transactional identity recovery', async () => {
+    const nodeId = randomUUID();
+    const ip = `10.${parseInt(nodeId.slice(0, 2), 16)}.${parseInt(nodeId.slice(2, 4), 16)}.22`;
+    const row = await account('proxmox', { adoptionEnabled: false, adoptionNodeIds: [nodeId] });
+    const vm = await insertResource(row, {
+      kind: 'ct',
+      addresses: [{ ip: ip, mac: 'aa:bb:cc:dd:ee:22', direct: true }],
+    });
+    await db.insert(schema.nodes).values({
+      id: nodeId,
+      hostname: 'legacy-lxc',
+      slug: `legacy-${nodeId}`,
+      hostIdentityId: null,
+      lastSeenAt: new Date(),
+      lastHealthReport: { networkInterfaces: [{ name: 'eth0', ipAddresses: [ip] }] } as never,
+    });
+    let file: string | null = null;
+    const ensure = vi.fn(async () => {
+      file ??= randomUUID();
+      return { success: true, data: Buffer.from(file) };
+    });
+    const adapter = {
+      provider: 'proxmox',
+      test: async () => ({ authority: (row.settings as StoredHostingSettings).authority, capabilities: {} }),
+      listResources: async () => ({
+        resources: [{ ...vm.snapshot, observedAt: new Date().toISOString() }],
+        complete: true,
+        observedAt: new Date().toISOString(),
+      }),
+      guestIdentity: async () => null,
+    } as unknown as HostingProviderAdapter;
+    const inventory = new HostingInventoryService(
+      db,
+      connectors(adapter),
+      {
+        readFile: async (_id: string, path: string) => {
+          if (path === '/var/lib/gateway/host-identity') {
+            if (!file) throw new Error('missing');
+            return Buffer.from(file);
+          }
+          return Buffer.from('aa:bb:cc:dd:ee:22');
+        },
+      } as never,
+      { isNodeConnected: () => true, sendNodeFileCommand: ensure } as never,
+      audit
+    );
+    const candidates = await inventory.adoptionCandidates(row.id, owner);
+    expect(candidates.resources.map((r) => r.id)).toContain(vm.id);
+    const results = await Promise.allSettled([
+      inventory.adoptNode(row.id, { resourceId: vm.id, nodeId }, owner),
+      inventory.adoptNode(row.id, { resourceId: vm.id, nodeId }, owner),
+    ]);
+    expect(
+      results.filter((r) => r.status === 'fulfilled'),
+      results.map((r) => (r.status === 'rejected' ? String(r.reason) : 'ok')).join('; ')
+    ).toHaveLength(1);
+    const [bound] = await db
+      .select()
+      .from(schema.hostingNodeBindings)
+      .where(eq(schema.hostingNodeBindings.nodeId, nodeId));
+    const [node] = await db.select().from(schema.nodes).where(eq(schema.nodes.id, nodeId));
+    expect(bound).toMatchObject({ resourceId: vm.id, evidenceType: 'interface_match', hostIdentityId: file });
+    expect(node.hostIdentityId).toBe(file);
+    expect(ensure).toHaveBeenCalledTimes(1);
+    expect((await inventory.adoptionCandidates(row.id, owner)).resources).toEqual([]);
+    await expect(inventory.adoptNode(row.id, { resourceId: vm.id, nodeId }, owner)).rejects.toMatchObject({
+      code: 'HOSTING_ADOPTION_UNAVAILABLE',
+    });
+  });
+  it.each([
+    'cpu',
+    'memoryMb',
+    'diskGb',
+  ] as const)('fences explicit and automatic adoption against managed %s quota', async (dimension) => {
+    const nodeId = randomUUID(),
+      identity = randomUUID();
+    const ip = `10.${parseInt(nodeId.slice(0, 2), 16)}.${parseInt(nodeId.slice(2, 4), 16)}.23`;
+    const limits = { cpu: 'maxCpu', memoryMb: 'maxMemoryMb', diskGb: 'maxDiskGb' } as const;
+    const row = await account('proxmox', {
+      adoptionEnabled: true,
+      adoptionNodeIds: [nodeId],
+      proxmoxAllocationAuthority: `quota-${nodeId}`,
+      proxmox: { nodes: ['pve'], storage: 'test', bridge: 'test', network: 'dhcp', [limits[dimension]]: 24 },
+    });
+    const managed = await insertResource(row, { [dimension]: 20 });
+    await db
+      .update(schema.hostingResources)
+      .set({ origin: 'adopted' })
+      .where(eq(schema.hostingResources.id, managed.id));
+    const vm = await insertResource(row, {
+      kind: 'ct',
+      [dimension]: 5,
+      addresses: [{ ip, mac: 'aa:bb:cc:dd:ee:23', direct: true }],
+    });
+    await db.insert(schema.nodes).values({
+      id: nodeId,
+      hostname: 'quota-lxc',
+      slug: `quota-${nodeId}`,
+      hostIdentityId: identity,
+      lastSeenAt: new Date(),
+      lastHealthReport: { networkInterfaces: [{ name: 'eth0', ipAddresses: [ip] }] } as never,
+    });
+    const service = new HostingInventoryService(
+      db,
+      connectors(),
+      { readFile: async () => Buffer.from('aa:bb:cc:dd:ee:23') } as never,
+      { isNodeConnected: () => true },
+      audit
+    );
+    const adopt = (selected?: unknown) =>
+      (
+        service as unknown as {
+          adopt: (row: HostingConnectorRow, adapter: unknown, selected?: unknown) => Promise<unknown>;
+        }
+      ).adopt(row, {}, selected);
+    await expect(adopt({ resourceId: vm.id, nodeId, user: owner })).rejects.toMatchObject({
+      code: 'HOSTING_RESOURCE_LIMIT',
+    });
+    await adopt();
+    const [current] = await db.select().from(schema.hostingResources).where(eq(schema.hostingResources.id, vm.id));
+    expect(current).toMatchObject({
+      origin: 'discovered',
+      managedHostIdentity: null,
+      adoptionReason: 'quota_exceeded',
+    });
+    expect(
+      await db.select().from(schema.hostingNodeBindings).where(eq(schema.hostingNodeBindings.nodeId, nodeId))
+    ).toHaveLength(0);
+  });
+  it('rechecks install quota at enrollment after a provider resize without an incarnation change', async () => {
+    const row = await account('proxmox', {
+      proxmoxAllocationAuthority: `install-${randomUUID()}`,
+      proxmox: { nodes: ['pve'], storage: 'test', bridge: 'test', network: 'dhcp', maxCpu: 24 },
+    });
+    const managed = await insertResource(row, { cpu: 20 });
+    await db
+      .update(schema.hostingResources)
+      .set({ origin: 'adopted' })
+      .where(eq(schema.hostingResources.id, managed.id));
+    const vm = await insertResource(row, { cpu: 2 });
+    const nodeId = randomUUID();
+    await db.insert(schema.nodes).values({
+      id: nodeId,
+      hostname: 'install-finalize',
+      slug: `install-${nodeId}`,
+      type: 'monitoring',
+      status: 'online',
+      hostIdentityId: randomUUID(),
+      certificateFingerprint: 'test-fingerprint',
+    });
+    const [operation] = await db
+      .insert(schema.hostingOperations)
+      .values({
+        connectorId: row.id,
+        resourceId: vm.id,
+        nodeId,
+        actorId,
+        action: 'install',
+        phase: 'installing',
+        idempotencyKey: randomUUID(),
+        requestHash: randomUUID(),
+        request: { cpu: 2, memoryMb: 1024, diskGb: 8 },
+        leaseOwner: 'test-worker',
+        leaseExpiresAt: new Date(Date.now() + 60000),
+        generation: 1,
+      })
+      .returning();
+    await db
+      .update(schema.hostingResources)
+      .set({ snapshot: { ...vm.snapshot, cpu: 8 } })
+      .where(eq(schema.hostingResources.id, vm.id));
+    const service = new HostingProvisioningService(
+      db,
+      connectors(),
+      first,
+      {} as never,
+      crypto as never,
+      auth,
+      { isNodeConnected: () => true },
+      audit,
+      {} as never
+    );
+    await expect(
+      (
+        service as unknown as {
+          enrolled: (
+            operation: HostingOperationRow,
+            connector: HostingConnectorRow,
+            actor: User,
+            adapter: unknown
+          ) => Promise<boolean>;
+        }
+      ).enrolled(operation, row, { ...owner, scopes: [...owner.scopes, 'hosting:resources:recover'] }, {})
+    ).rejects.toMatchObject({ code: 'HOSTING_RESOURCE_LIMIT' });
+    const [current] = await db.select().from(schema.hostingResources).where(eq(schema.hostingResources.id, vm.id));
+    expect(current.origin).toBe('discovered');
+    expect(current.managedHostIdentity).toBeNull();
+    expect(
+      await db.select().from(schema.hostingNodeBindings).where(eq(schema.hostingNodeBindings.nodeId, nodeId))
+    ).toHaveLength(0);
   });
 });

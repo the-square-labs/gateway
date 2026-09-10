@@ -224,6 +224,15 @@ export class HostingProvisioningService {
           'Only an unbound discovered VM can be installed explicitly'
         );
       assertHostingScope(user.scopes, 'hosting:resources:recover', existing.id);
+      if (connector.provider === 'proxmox') {
+        // Installing an existing VM reserves its observed allocation, never caller-supplied sizes.
+        acceptedInput = {
+          ...input,
+          cpu: existing.snapshot.cpu ?? undefined,
+          memoryMb: existing.snapshot.memoryMb ?? undefined,
+          diskGb: existing.snapshot.diskGb ?? undefined,
+        };
+      }
       if (!existing.snapshot.capabilities.bootstrap.available && !input.sshConnectorId)
         throw new AppError(
           409,
@@ -236,7 +245,7 @@ export class HostingProvisioningService {
     const nodeInput = CreateNodeSchema.parse({
       type: input.role,
       hostname: input.name,
-      displayName: input.name,
+      displayName: input.displayName ?? input.name,
       folderId: input.folderId ?? null,
       ...(relayAddress ? { serviceAddresses: [relayAddress] } : {}),
     });
@@ -251,6 +260,8 @@ export class HostingProvisioningService {
         intent: { ...input },
       },
       async (tx, operationId) => {
+        if (existing && connector.provider === 'proxmox')
+          await reserveProxmoxQuota(tx, connector.id, existing.snapshot, existing.id);
         let acceptedRequest: HostingProvisionInput & { vmid?: number } = acceptedInput;
         let ipConfig = 'ip=dhcp';
         let proxmoxProfile: HostingCreateRequest['proxmox'];
@@ -627,6 +638,8 @@ export class HostingProvisioningService {
         (resource.managedHostIdentity && resource.managedHostIdentity !== node.hostIdentityId)
       )
         throw new AppError(409, 'HOSTING_RESOURCE_IDENTITY_CONFLICT', 'VM identity changed during enrollment');
+      if (row.action === 'install' && connector.provider === 'proxmox')
+        await reserveProxmoxQuota(tx, connector.id, resource.snapshot, resource.id);
       const [binding] = await tx.select().from(hostingNodeBindings).where(eq(hostingNodeBindings.nodeId, node.id));
       if (binding && (binding.resourceId !== resource.id || binding.hostIdentityId !== node.hostIdentityId))
         throw new AppError(

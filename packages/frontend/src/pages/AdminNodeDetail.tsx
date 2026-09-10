@@ -22,7 +22,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
@@ -66,6 +66,7 @@ import {
 } from "@/lib/node-appearance";
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { dockerNodeListRoute, nodeRoute } from "@/lib/resource-routes";
+import { createReturnNavigationState } from "@/lib/return-navigation";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -149,6 +150,7 @@ export function AdminNodeDetail({
   const id = resolvedNodeId ?? params.id;
   const routeSlug = resolvedNodeSlug ?? params.nodeSlug ?? params.id ?? "";
   const navigate = useStableNavigate();
+  const location = useLocation();
   const { user, hasScope } = useAuthStore();
 
   const [node, setNode] = useState<NodeDetail | null>(null);
@@ -287,7 +289,10 @@ export function AdminNodeDetail({
                 label: "Hosting account",
                 icon: <Server className="h-4 w-4" />,
                 alwaysOverflow: true,
-                onClick: () => navigate(`/hosting/${hosting.connectorId}`),
+                onClick: () =>
+                  navigate(`/hosting/${hosting.connectorId}`, {
+                    state: createReturnNavigationState(location),
+                  }),
               },
               ...(hosting.actions.resize?.available
                 ? [

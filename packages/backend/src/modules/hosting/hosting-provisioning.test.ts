@@ -1147,6 +1147,21 @@ describe('hosting paid provisioning state machine', () => {
     expect(test.adapter.create).not.toHaveBeenCalled();
     expect(test.row().encryptedBootstrap).toBeNull();
   });
+  it('preserves a friendly display name separately from the provider hostname', async () => {
+    const test = runner();
+    test.connectors.get.mockResolvedValue({ id: input.connectorId, provider: 'hetzner' });
+    const reserve = vi.fn(async (_input, initialize) => initialize({}, 'operation'));
+    Object.assign(test.operations, { reserve });
+    test.nodeService.create.mockRejectedValue(new Error('stop-after-node-input'));
+    await expect(test.service.create({ ...input, displayName: 'Build Worker 2' }, actor)).rejects.toThrow(
+      'stop-after-node-input'
+    );
+    expect(test.nodeService.create).toHaveBeenCalledWith(
+      expect.objectContaining({ hostname: 'worker', displayName: 'Build Worker 2' }),
+      actor.id,
+      {}
+    );
+  });
   it('returns a persisted request before a changed quote can be mistaken for a new admission failure', async () => {
     const test = runner();
     test.operations.findIntent.mockResolvedValue(test.row());

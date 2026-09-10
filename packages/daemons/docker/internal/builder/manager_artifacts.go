@@ -150,14 +150,18 @@ func summarizeGrype(path string) (string, error) {
 		Namespace        string   `json:"namespace"`
 		DataSource       string   `json:"dataSource"`
 	}
+	type severityCounts struct {
+		Critical   int `json:"critical"`
+		High       int `json:"high"`
+		Medium     int `json:"medium"`
+		Low        int `json:"low"`
+		Negligible int `json:"negligible"`
+		Unknown    int `json:"unknown"`
+	}
 	type scanSummary struct {
+		severityCounts
 		Scanner                  string                 `json:"scanner"`
-		Critical                 int                    `json:"critical"`
-		High                     int                    `json:"high"`
-		Medium                   int                    `json:"medium"`
-		Low                      int                    `json:"low"`
-		Negligible               int                    `json:"negligible"`
-		Unknown                  int                    `json:"unknown"`
+		OSPackages               severityCounts         `json:"osPackages"`
 		Vulnerabilities          []vulnerabilityFinding `json:"vulnerabilities"`
 		VulnerabilitiesTruncated int                    `json:"vulnerabilitiesTruncated"`
 	}
@@ -171,20 +175,29 @@ func summarizeGrype(path string) (string, error) {
 	summary := scanSummary{Scanner: "grype", Vulnerabilities: make([]vulnerabilityFinding, 0, len(report.Matches))}
 	for _, match := range report.Matches {
 		severity := strings.ToLower(match.Vulnerability.Severity)
-		switch severity {
-		case "critical":
-			summary.Critical++
-		case "high":
-			summary.High++
-		case "medium":
-			summary.Medium++
-		case "low":
-			summary.Low++
-		case "negligible":
-			summary.Negligible++
-		default:
-			severity = "unknown"
-			summary.Unknown++
+		counts := []*severityCounts{&summary.severityCounts}
+		// OS package managers only: runtime binaries and unknown package types
+		// remain subject to application policy. Count before truncating details.
+		switch strings.ToLower(strings.TrimSpace(match.Artifact.Type)) {
+		case "deb", "rpm", "apk", "alpm":
+			counts = append(counts, &summary.OSPackages)
+		}
+		for _, count := range counts {
+			switch severity {
+			case "critical":
+				count.Critical++
+			case "high":
+				count.High++
+			case "medium":
+				count.Medium++
+			case "low":
+				count.Low++
+			case "negligible":
+				count.Negligible++
+			default:
+				severity = "unknown"
+				count.Unknown++
+			}
 		}
 		id := trimValue(match.Vulnerability.ID)
 		if id == "" {

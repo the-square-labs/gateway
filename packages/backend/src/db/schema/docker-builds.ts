@@ -71,6 +71,7 @@ export type DockerRegistryMaintenancePhase =
 
 export interface DockerBuildPolicySnapshot {
   vulnerabilityThreshold?: string;
+  vulnerabilityScope?: 'all' | 'application';
   [key: string]: unknown;
 }
 
@@ -95,6 +96,8 @@ export interface DockerBuildScanSummary {
   unknown: number;
   vulnerabilities?: DockerBuildVulnerability[];
   vulnerabilitiesTruncated?: number;
+  osPackages?: { critical: number; high: number; medium: number; low: number; unknown: number };
+  policyScope?: 'all' | 'application';
   [key: string]: unknown;
 }
 

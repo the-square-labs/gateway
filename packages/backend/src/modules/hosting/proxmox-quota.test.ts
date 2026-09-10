@@ -118,3 +118,32 @@ describe('aggregate Proxmox resource budgets', () => {
     ).toThrow(/limit/);
   });
 });
+
+it('counts Gateway allocations rather than all discovered Proxmox capacity', () => {
+  const managed = { ...resource, origin: 'adopted', snapshot: { ...vector, cpu: 20 } };
+  const discovered = { ...resource, id: 'unmanaged', origin: 'discovered', snapshot: { ...vector, cpu: 34 } };
+  const budget = { ...profile, maxCpu: 24 };
+  expect(() => assertProxmoxQuota(budget, [managed, discovered], [], vector)).not.toThrow();
+  expect(() =>
+    assertProxmoxQuota(budget, [managed, discovered], [{ ...create, request: { ...vector, cpu: 4 } }], vector)
+  ).toThrow(/limit/);
+});
+
+it.each([
+  'cpu',
+  'memoryMb',
+  'diskGb',
+] as const)('reserves pending install %s from the observed resource allocation exactly once', (dimension) => {
+  const limits = { cpu: 'maxCpu', memoryMb: 'maxMemoryMb', diskGb: 'maxDiskGb' } as const;
+  const installed = { ...resource, origin: 'discovered', snapshot: { ...vector, [dimension]: 20 } };
+  const pending = { ...create, action: 'install', resourceId: installed.id, request: installed.snapshot };
+  const budget = { ...profile, [limits[dimension]]: 24 };
+  const small = { ...vector, [dimension]: 2 },
+    large = { ...vector, [dimension]: 5 };
+  expect(() => assertProxmoxQuota(budget, [installed], [pending], small)).not.toThrow();
+  expect(() => assertProxmoxQuota(budget, [installed], [pending], large)).toThrow(/limit/);
+  expect(() => assertProxmoxQuota(budget, [{ ...installed, origin: 'adopted' }], [pending], small)).not.toThrow();
+  expect(() =>
+    assertProxmoxQuota(budget, [installed], [{ ...pending, phase: 'failed', dispatchStartedAt: new Date() }], large)
+  ).not.toThrow();
+});

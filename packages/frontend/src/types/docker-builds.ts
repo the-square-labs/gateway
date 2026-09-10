@@ -59,6 +59,7 @@ export interface DockerSourceBinding {
   publishTag?: string | null;
   policy: {
     vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
+    vulnerabilityScope?: "all" | "application";
   };
   desiredCommitSha: string | null;
   deployedCommitSha: string | null;
@@ -94,6 +95,7 @@ export interface DockerSourceBindingConfig {
   publishTag?: string;
   policy?: {
     vulnerabilityThreshold?: "critical" | "high" | "medium" | "low" | "none";
+    vulnerabilityScope?: "all" | "application";
   };
 }
 
@@ -123,6 +125,8 @@ export interface DockerBuildArtifact {
     unknown: number;
     vulnerabilities?: DockerBuildVulnerability[];
     vulnerabilitiesTruncated?: number;
+    osPackages?: { critical: number; high: number; medium: number; low: number; unknown: number };
+    policyScope?: "all" | "application";
   } | null;
   policyDecision: DockerArtifactPolicyDecision;
   policyReason: string | null;

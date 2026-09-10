@@ -112,3 +112,14 @@ describe('fully automatic hosting adoption evidence', () => {
     ).toBe('already_bound_elsewhere');
   });
 });
+
+it('keeps already-bound matching hosts in global uniqueness evidence', () => {
+  const result = evaluateHostingAdoption({
+    resources: [resource('r1', '8.8.8.8')],
+    nodes: [node('bound', '8.8.8.8'), node('unbound', '8.8.8.8')],
+    existingBindings: [{ nodeId: 'bound', resourceId: 'other' }],
+    inventoryComplete: true,
+    now,
+  });
+  expect(result[0]).toMatchObject({ reason: 'ambiguous', hostIdentityId: null });
+});

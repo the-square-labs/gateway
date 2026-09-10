@@ -33,6 +33,14 @@ import type {
   HostingRole,
 } from "@/types/hosting";
 
+export function hostingHostnameError(value: string) {
+  const hostname = value.trim();
+  if (!hostname) return "Hostname is required.";
+  if (hostname.length > 63 || !/^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(hostname))
+    return "Use 1–63 letters, digits or hyphens. Start and end with a letter or digit.";
+  return null;
+}
+
 const ROLES: HostingRole[] = ["nginx", "docker", "builder", "databases", "monitoring", "relay"];
 type Draft = { input: HostingProvisionInput };
 
@@ -93,6 +101,8 @@ export function HostingNodeWizard({
   const [selected, setSelected] = useState(connectorId ?? "");
   const [role, setRole] = useState<HostingRole>("docker");
   const [name, setName] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const hostnameError = hostingHostnameError(name);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderOption[]>([]);
   const canCreateNode = canCreateInFolder(user?.scopes ?? [], "nodes:create", folderId);
@@ -166,7 +176,9 @@ export function HostingNodeWizard({
     setSizeFamily("");
     setRole("docker");
     setSsh("");
-    setName(`gateway-${createClientUuid().slice(0, 8)}`);
+    const initialName = `gateway-${createClientUuid().slice(0, 8)}`;
+    setName(initialName);
+    setDisplayName(initialName);
     setIp("");
     setRelay("");
     draft.current = null;
@@ -264,6 +276,7 @@ export function HostingNodeWizard({
       folderId,
       idempotencyKey: draft.current?.input.idempotencyKey ?? createClientUuid(),
       name: name.trim(),
+      displayName: displayName.trim(),
       role,
       location: existingResource?.location ?? location,
       size: size || "existing",
@@ -335,7 +348,9 @@ export function HostingNodeWizard({
   const roleReady = Boolean(
     canCreateNode &&
       hasScope(`hosting:resources:create:${selected}`) &&
-      name.trim() &&
+      !hostnameError &&
+      displayName.trim().length > 0 &&
+      displayName.trim().length <= 255 &&
       (role !== "relay" || relay.trim()) &&
       connector?.enabled &&
       (existingResource || connector.capabilities?.create) &&
@@ -345,7 +360,9 @@ export function HostingNodeWizard({
     canCreateNode &&
       hasScope(`hosting:resources:create:${selected}`) &&
       (existingResource || connector?.capabilities?.create) &&
-      name.trim() &&
+      !hostnameError &&
+      displayName.trim().length > 0 &&
+      displayName.trim().length <= 255 &&
       (existingResource ||
         (location && selectedSize && roleImages.some((item) => item.id === image))) &&
       (role !== "relay" || relay.trim()) &&
@@ -478,14 +495,41 @@ export function HostingNodeWizard({
               </p>
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Node Name</label>
+              <label htmlFor="hosting-display-name" className="text-sm font-medium">
+                Name
+              </label>
               <Input
+                id="hosting-display-name"
                 aria-label="Node name"
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
+                maxLength={255}
+                placeholder="Build Worker"
+              />
+              <p className="text-xs text-muted-foreground">Display name in Gateway.</p>
+            </div>
+            <div className="space-y-1.5">
+              <label htmlFor="hosting-hostname" className="text-sm font-medium">
+                Hostname
+              </label>
+              <Input
+                id="hosting-hostname"
+                aria-label="Hostname"
                 value={name}
                 onChange={(event) => setName(event.target.value)}
-                maxLength={63}
-                placeholder={role === "relay" ? "EU Relay" : "US-East Docker"}
+                aria-invalid={!!hostnameError}
+                aria-describedby="hosting-hostname-help"
+                placeholder="build-worker"
               />
+              <p
+                id="hosting-hostname-help"
+                className={
+                  hostnameError ? "text-xs text-destructive" : "text-xs text-muted-foreground"
+                }
+              >
+                {hostnameError ??
+                  "Network hostname used for the VM. Letters, digits and hyphens only."}
+              </p>
             </div>
             {role === "relay" && (
               <div className="space-y-1.5">
@@ -629,7 +673,7 @@ export function HostingNodeWizard({
                       />
                       <p className="text-xs text-muted-foreground">
                         Virtual CPU cores allocated to this VM. This allocation counts toward the
-                        connector's total CPU limit.
+                        connector's managed CPU limit.
                       </p>
                     </div>
                     <div className="space-y-1.5">
@@ -718,7 +762,10 @@ export function HostingNodeWizard({
             icon={<Check className="h-4 w-4" />}
           >
             <SettingsControlRow title="Node" controlsClassName="text-right">
-              <span className="text-sm text-muted-foreground">{`${name} · ${nodeTypeLabel(role)}`}</span>
+              <span className="text-sm text-muted-foreground">{`${displayName} · ${nodeTypeLabel(role)}`}</span>
+            </SettingsControlRow>
+            <SettingsControlRow title="Hostname" controlsClassName="text-right">
+              <span className="text-sm text-muted-foreground">{name}</span>
             </SettingsControlRow>
             <SettingsControlRow title="Account" controlsClassName="text-right">
               <span className="text-sm text-muted-foreground">{connector?.name ?? selected}</span>

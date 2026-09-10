@@ -14,6 +14,7 @@ interface DockerResourceGitTabsProps {
   composeSecretKeys?: string[];
   canEdit?: boolean;
   canBuild?: boolean;
+  pendingContainer?: boolean;
 }
 
 const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
@@ -34,6 +35,7 @@ export function DockerResourceGitTabs({
   composeSecretKeys,
   canEdit = true,
   canBuild = true,
+  pendingContainer = false,
 }: DockerResourceGitTabsProps) {
   const [source, setSource] = useState<DockerSourceBinding | null>(null);
   const [builds, setBuilds] = useState<DockerBuild[]>([]);
@@ -145,6 +147,7 @@ export function DockerResourceGitTabs({
         composeSecretKeys={composeSecretKeys}
         canEdit={canEdit}
         canBuild={canBuild}
+        pendingContainer={pendingContainer}
       />
       {includeBuilds && source ? (
         <DockerBuildHistoryPanel

@@ -540,3 +540,29 @@ async function review() {
   }
   return screen.findByRole("button", { name: "Confirm and create VM" });
 }
+
+it("validates hostname before leaving the first step and submits a separate friendly name", async () => {
+  const create = vi.spyOn(api, "provisionHostingNode").mockResolvedValue(operation);
+  renderWithRouter(<HostingNodeWizard open connectorId={connector.id} onClose={vi.fn()} />);
+  await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled());
+  fireEvent.change(screen.getByRole("textbox", { name: "Node name" }), {
+    target: { value: "Сборочный сервер" },
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "Hostname" }), {
+    target: { value: "bad hostname" },
+  });
+  expect(screen.getByRole("textbox", { name: "Hostname" })).toHaveAttribute("aria-invalid", "true");
+  expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+  expect(create).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("textbox", { name: "Hostname" }), {
+    target: { value: "build-worker" },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+  await waitFor(() => expect(screen.getByText("build-worker")).toBeVisible());
+  expect(screen.getByText(/Сборочный сервер/)).toBeVisible();
+  await userEvent.click(screen.getByRole("button", { name: /Confirm and create VM/ }));
+  expect(create).toHaveBeenCalledWith(
+    expect.objectContaining({ name: "build-worker", displayName: "Сборочный сервер" })
+  );
+});

@@ -7,6 +7,7 @@ import {
   integrationConnectors,
   nodes,
 } from '@/db/schema/index.js';
+import { commandResultDataToBuffer } from '@/lib/command-result-data.js';
 import { normalizeIp } from '@/lib/ip-cidr.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -32,6 +33,7 @@ import {
   type HostingProviderAdapter,
   type HostingResourceSnapshot,
 } from './hosting-provider.types.js';
+import { reserveProxmoxQuota } from './proxmox-quota.js';
 
 export const HOSTING_RESOURCE_SNAPSHOT = 'hosting-resources';
 export const HOSTING_CATALOG_SNAPSHOT = 'hosting-catalog';
@@ -61,10 +63,75 @@ export class HostingInventoryService {
     private readonly db: DrizzleClient,
     private readonly connectors: HostingConnectorsService,
     private readonly nodeService: Pick<NodesService, 'readFile'>,
-    private readonly dispatch: Pick<NodeDispatchService, 'isNodeConnected'>,
+    private readonly dispatch: Pick<NodeDispatchService, 'isNodeConnected'> &
+      Partial<Pick<NodeDispatchService, 'sendNodeFileCommand'>>,
     private readonly audit: Pick<AuditService, 'log'>,
     private readonly snapshots?: ResourceSnapshotStore
   ) {}
+
+  async adoptionCandidates(connectorId: string, user: User) {
+    assertHostingScope(user.scopes, 'integrations:hosting:manage', connectorId);
+    const connector = await this.connectors.get(connectorId, user, true);
+    const owner = await this.connectors.owner(connector);
+    const settings = this.connectors.settings(connector);
+    const resources = await this.db
+      .select()
+      .from(hostingResources)
+      .where(and(eq(hostingResources.connectorId, connectorId), isNull(hostingResources.missingSince)));
+    const bindings = await this.db.select().from(hostingNodeBindings);
+    const availableNodes = await this.db.select().from(nodes);
+    return {
+      resources: resources
+        .filter(
+          (r) =>
+            r.origin === 'discovered' &&
+            !r.managedHostIdentity &&
+            !bindings.some((b) => b.resourceId === r.id) &&
+            (!settings.resourceIds.length || settings.resourceIds.includes(r.remoteId))
+        )
+        .map((r) => ({
+          id: r.id,
+          remoteId: r.remoteId,
+          name: r.snapshot.name,
+          kind: r.kind,
+          location: r.snapshot.location,
+        })),
+      nodes: availableNodes
+        .filter(
+          (n) =>
+            !bindings.some((b) => b.nodeId === n.id) &&
+            (!settings.adoptionNodeIds.length || settings.adoptionNodeIds.includes(n.id)) &&
+            [user, owner].every(
+              (actor) =>
+                hasScope(actor.scopes, `nodes:details:${n.id}`) && hasScope(actor.scopes, `nodes:config:edit:${n.id}`)
+            )
+        )
+        .map((n) => ({ id: n.id, hostname: n.hostname, displayName: n.displayName, type: n.type, status: n.status })),
+    };
+  }
+
+  async adoptNode(connectorId: string, input: { resourceId: string; nodeId: string }, user: User) {
+    const candidates = await this.adoptionCandidates(connectorId, user);
+    if (
+      !candidates.resources.some((r) => r.id === input.resourceId) ||
+      !candidates.nodes.some((n) => n.id === input.nodeId)
+    )
+      throw new AppError(409, 'HOSTING_ADOPTION_UNAVAILABLE', 'Choose an available unbound resource and node.');
+    // Refresh the complete provider inventory; do not implicitly adopt other nodes during this request.
+    const refreshed = await this.sync(connectorId, user, false, true);
+    if ('skipped' in refreshed)
+      throw new AppError(409, 'HOSTING_ADOPTION_BUSY', 'Provider inventory is synchronizing. Try again shortly.');
+    const connector = await this.connectors.get(connectorId, user, true);
+    const result = await this.adopt(connector, this.connectors.adapter(connector), { ...input, user });
+    if (!result)
+      throw new AppError(
+        409,
+        'HOSTING_ADOPTION_NOT_VERIFIED',
+        'Could not verify that this resource and node are the same host. Check node connectivity, provider permissions and matching network interfaces.'
+      );
+    this.connectors.changed(connectorId);
+    return result;
+  }
 
   async initialize(connectorId: string) {
     const result = await this.sync(connectorId, undefined, true);
@@ -513,7 +580,7 @@ export class HostingInventoryService {
       }));
   }
 
-  async sync(connectorId: string, user?: User, requireCatalog = false) {
+  async sync(connectorId: string, user?: User, requireCatalog = false, skipAdoption = false) {
     if (user) assertHostingScope(user.scopes, 'integrations:hosting:manage', connectorId);
     const connector = await this.connectors.get(connectorId, user, true);
     await this.connectors.owner(connector);
@@ -662,7 +729,7 @@ export class HostingInventoryService {
             )
           );
       });
-      await this.adopt(connector, adapter);
+      if (!skipAdoption) await this.adopt(connector, adapter);
       try {
         await this.refreshCatalog(connector, adapter);
       } catch (error) {
@@ -705,7 +772,7 @@ export class HostingInventoryService {
   private async nodeEvidence(connector: HostingConnectorRow): Promise<HostingNodeEvidence[]> {
     const settings = this.connectors.settings(connector);
     const owner = await this.connectors.owner(connector);
-    const candidates = await this.db.select().from(nodes).where(isNotNull(nodes.hostIdentityId));
+    const candidates = await this.db.select().from(nodes);
     const evidence: HostingNodeEvidence[] = [];
     for (const node of candidates) {
       if (settings.adoptionNodeIds.length && !settings.adoptionNodeIds.includes(node.id)) continue;
@@ -715,6 +782,19 @@ export class HostingInventoryService {
       )
         continue;
       const connected = this.dispatch.isNodeConnected(node.id);
+      let hostIdentityId = node.hostIdentityId;
+      if (!hostIdentityId && connected) {
+        try {
+          const persisted = (await this.nodeService.readFile(node.id, '/var/lib/gateway/host-identity'))
+            .toString('utf8')
+            .trim();
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(persisted)) continue;
+          hostIdentityId = persisted;
+        } catch {
+          // This identity is proof grouping only and is never persisted or used for guest matching.
+          hostIdentityId = `legacy:${node.id}`;
+        }
+      }
       const interfaces: HostingNodeEvidence['interfaces'] = [];
       for (const iface of connected ? (node.lastHealthReport?.networkInterfaces ?? []) : []) {
         if (!/^[a-zA-Z0-9_.:-]{1,32}$/.test(iface.name) || iface.name === 'lo') continue;
@@ -737,7 +817,8 @@ export class HostingInventoryService {
       }
       evidence.push({
         nodeId: node.id,
-        hostIdentityId: node.hostIdentityId,
+        hostIdentityId,
+        registeredHostIdentityId: node.hostIdentityId,
         observedAt: connected ? (node.lastSeenAt?.toISOString() ?? null) : null,
         interfaces,
         interfaceSnapshot: JSON.stringify(node.lastHealthReport?.networkInterfaces ?? []),
@@ -746,9 +827,13 @@ export class HostingInventoryService {
     return evidence;
   }
 
-  private async adopt(connector: HostingConnectorRow, adapter: HostingProviderAdapter) {
+  private async adopt(
+    connector: HostingConnectorRow,
+    adapter: HostingProviderAdapter,
+    selected?: { resourceId: string; nodeId: string; user: User }
+  ): Promise<{ resourceId: string; nodeIds: string[] } | undefined> {
     const settings = this.connectors.settings(connector);
-    if (!connector.enabled || !settings.adoptionEnabled) return;
+    if (!connector.enabled || (!settings.adoptionEnabled && !selected)) return;
     const ownRows = await this.db
       .select()
       .from(hostingResources)
@@ -781,7 +866,10 @@ export class HostingInventoryService {
     const ownIds = new Set(
       ownRows.filter((r) => !settings.resourceIds.length || settings.resourceIds.includes(r.remoteId)).map((r) => r.id)
     );
-    for (const decision of decisions.filter((decision) => ownIds.has(decision.resourceId))) {
+    for (let decision of decisions.filter(
+      (decision) => ownIds.has(decision.resourceId) && (!selected || selected.resourceId === decision.resourceId)
+    )) {
+      if (selected && !decision.nodeIds.includes(selected.nodeId)) continue;
       if (!decision.hostIdentityId || !decision.evidenceDigest) {
         await this.db
           .update(hostingResources)
@@ -790,6 +878,14 @@ export class HostingInventoryService {
         continue;
       }
       const original = ownRows.find((row) => row.id === decision.resourceId)!;
+      if (
+        selected &&
+        (original.origin !== 'discovered' ||
+          original.managedHostIdentity ||
+          bindings.some((b) => b.resourceId === original.id || b.nodeId === selected.nodeId))
+      )
+        continue;
+      const targetNodeIds = selected ? [selected.nodeId] : decision.nodeIds;
       if (original.adoptionReason === 'resource_identity_changed' || !original.incarnation) continue;
       let changed = false;
       await this.db.transaction(async (tx) => {
@@ -807,6 +903,15 @@ export class HostingInventoryService {
         )
           return;
         const owner = await this.connectors.owner(currentConnector);
+        if (selected) {
+          await this.connectors.assertAdoptionActor(selected.user, connector.id, targetNodeIds);
+          assertHostingScope(selected.user.scopes, 'integrations:hosting:manage', connector.id);
+          assertHostingScope(selected.user.scopes, 'integrations:hosting:view', connector.id);
+          for (const nodeId of targetNodeIds) {
+            assertHostingScope(selected.user.scopes, 'nodes:details', nodeId);
+            assertHostingScope(selected.user.scopes, 'nodes:config:edit', nodeId);
+          }
+        }
         if (
           decision.nodeIds.some(
             (id) => !hasScope(owner.scopes, `nodes:config:edit:${id}`) || !hasScope(owner.scopes, `nodes:details:${id}`)
@@ -841,22 +946,29 @@ export class HostingInventoryService {
         )
           return;
         if (current.managedHostIdentity && current.managedHostIdentity !== decision.hostIdentityId) return;
-        const [conflict] = await tx
-          .select({ id: hostingResources.id })
-          .from(hostingResources)
-          .where(
-            and(eq(hostingResources.managedHostIdentity, decision.hostIdentityId!), ne(hostingResources.id, current.id))
-          )
-          .limit(1);
+        const [conflict] = decision.hostIdentityId?.startsWith('legacy:')
+          ? []
+          : await tx
+              .select({ id: hostingResources.id })
+              .from(hostingResources)
+              .where(
+                and(
+                  eq(hostingResources.managedHostIdentity, decision.hostIdentityId!),
+                  ne(hostingResources.id, current.id)
+                )
+              )
+              .limit(1);
         if (conflict) return;
         const nodeRows = await tx.select().from(nodes).where(inArray(nodes.id, decision.nodeIds)).for('update');
         if (
           nodeRows.length !== decision.nodeIds.length ||
-          nodeRows.some((node) => node.hostIdentityId !== decision.hostIdentityId)
+          nodeRows.some(
+            (node) => node.hostIdentityId !== evidence.find((item) => item.nodeId === node.id)?.registeredHostIdentityId
+          )
         )
           return;
         if (
-          decision.reason !== 'guest_identity' &&
+          (decision.reason !== 'guest_identity' || nodeRows.some((n) => !n.hostIdentityId)) &&
           nodeRows.some((node) => {
             const source = evidence.find((item) => item.nodeId === node.id);
             // Offline sibling roles can share independently confirmed host identity; only the roles
@@ -898,7 +1010,83 @@ export class HostingInventoryService {
           .from(hostingNodeBindings)
           .where(inArray(hostingNodeBindings.nodeId, decision.nodeIds));
         if (existing.some((binding) => binding.resourceId !== current.id)) return;
-        changed = current.origin === 'discovered' || existing.length !== decision.nodeIds.length;
+        if (selected && (current.origin !== 'discovered' || current.managedHostIdentity || existing.length)) return;
+        if (current.origin === 'discovered' && currentConnector.provider === 'proxmox') {
+          try {
+            await reserveProxmoxQuota(tx, connector.id, current.snapshot, current.id);
+          } catch (error) {
+            if (
+              selected ||
+              !(error instanceof AppError) ||
+              !['HOSTING_RESOURCE_LIMIT', 'HOSTING_QUOTA_UNKNOWN'].includes(error.code)
+            )
+              throw error;
+            await tx
+              .update(hostingResources)
+              .set({ adoptionReason: error.code === 'HOSTING_RESOURCE_LIMIT' ? 'quota_exceeded' : 'quota_unknown' })
+              .where(eq(hostingResources.id, current.id));
+            return;
+          }
+        }
+        if (nodeRows.some((n) => !n.hostIdentityId)) {
+          // No identity writes until full, unique provider/daemon proof and commit guards have passed.
+          for (const node of nodeRows.filter((n) => !n.hostIdentityId)) {
+            if (!this.dispatch.isNodeConnected(node.id)) return;
+            const source = evidence.find((item) => item.nodeId === node.id)!;
+            let identity: string;
+            if (source.hostIdentityId?.startsWith('legacy:')) {
+              const result = await this.dispatch.sendNodeFileCommand?.(node.id, 'ensure-host-identity');
+              if (!result?.success) {
+                if (selected)
+                  throw new AppError(
+                    409,
+                    'HOSTING_NODE_IDENTITY_REQUIRED',
+                    'Update the node daemon to support verified host identity recovery, then try again.'
+                  );
+                return;
+              }
+              identity = commandResultDataToBuffer(result.data).toString('utf8').trim();
+            } else {
+              identity = (await this.nodeService.readFile(node.id, '/var/lib/gateway/host-identity'))
+                .toString('utf8')
+                .trim();
+              if (source.hostIdentityId !== identity) return;
+            }
+            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(identity)) return;
+            source.hostIdentityId = identity;
+          }
+          const recovered = evaluateHostingAdoption({
+            resources,
+            nodes: evidence,
+            inventoryComplete: true,
+            existingBindings: bindings,
+          }).find((item) => item.resourceId === current.id);
+          if (
+            !recovered?.hostIdentityId ||
+            !recovered.evidenceDigest ||
+            JSON.stringify(recovered.nodeIds) !== JSON.stringify(decision.nodeIds)
+          )
+            return;
+          decision = recovered;
+          const [identityConflict] = await tx
+            .select({ id: hostingResources.id })
+            .from(hostingResources)
+            .where(
+              and(
+                eq(hostingResources.managedHostIdentity, decision.hostIdentityId!),
+                ne(hostingResources.id, current.id)
+              )
+            )
+            .limit(1);
+          if (identityConflict) return;
+          for (const node of nodeRows.filter((n) => !n.hostIdentityId && targetNodeIds.includes(n.id))) {
+            await tx
+              .update(nodes)
+              .set({ hostIdentityId: decision.hostIdentityId })
+              .where(and(eq(nodes.id, node.id), isNull(nodes.hostIdentityId)));
+          }
+        }
+        changed = current.origin === 'discovered' || existing.length !== targetNodeIds.length;
         await tx
           .update(hostingResources)
           .set({
@@ -908,7 +1096,7 @@ export class HostingInventoryService {
             updatedAt: new Date(),
           })
           .where(eq(hostingResources.id, current.id));
-        for (const nodeId of decision.nodeIds) {
+        for (const nodeId of targetNodeIds) {
           await tx
             .insert(hostingNodeBindings)
             .values({
@@ -924,12 +1112,13 @@ export class HostingInventoryService {
       });
       if (changed)
         await this.audit.log({
-          userId: null,
+          userId: selected?.user.id ?? null,
           action: 'hosting.node.adopted',
           resourceType: 'hosting-resource',
           resourceId: original.id,
-          details: { evidenceType: decision.reason, nodeCount: decision.nodeIds.length },
+          details: { evidenceType: decision.reason, nodeCount: targetNodeIds.length, requested: !!selected },
         });
+      if (changed && selected) return { resourceId: original.id, nodeIds: targetNodeIds };
     }
   }
 

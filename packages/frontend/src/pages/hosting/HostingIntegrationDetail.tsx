@@ -2,6 +2,7 @@ import {
   Activity,
   CreditCard,
   History,
+  Link2,
   Plus,
   ServerCog,
   Settings,
@@ -9,7 +10,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
@@ -31,6 +32,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { hostingOperationLabel } from "@/lib/hosting-status";
+import { getReturnNavigationTarget } from "@/lib/return-navigation";
 import { formatDateTime, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -43,6 +45,7 @@ import {
   type HostingOperation,
   type HostingResource,
 } from "@/types/hosting";
+import { HostingAdoptDialog } from "./HostingAdoptDialog";
 import { HostingConnectorDialog } from "./HostingConnectorDialog";
 import { HostingResourcesTab } from "./HostingResourcesTab";
 
@@ -81,6 +84,9 @@ export function HostingIntegrationDetail({
 }: HostingIntegrationDetailProps) {
   const { connectorId } = useParams<{ connectorId?: string }>();
   const navigate = useStableNavigate();
+  const location = useLocation();
+  const returnTo = getReturnNavigationTarget(location.state, "/settings/integrations");
+  const [adoptOpen, setAdoptOpen] = useState(false);
   const { hasScope, hasScopedAccess } = useAuthStore();
   const canView = !!connectorId && hasScope(`integrations:hosting:view:${connectorId}`);
   const canManage = !!connectorId && hasScope(`integrations:hosting:manage:${connectorId}`);
@@ -254,8 +260,8 @@ export function HostingIntegrationDetail({
       <PageTransition>
         <EmptyState
           message={error ?? "Hosting integration was not found."}
-          actionLabel="Back to settings"
-          actionHref="/settings"
+          actionLabel="Back"
+          actionHref={returnTo}
         />
       </PageTransition>
     );
@@ -283,6 +289,14 @@ export function HostingIntegrationDetail({
       : []),
     ...(canManage
       ? ([
+          {
+            id: "adopt",
+            label: "Adopt nodes",
+            icon: <Link2 className="h-4 w-4" />,
+            onClick: () => setAdoptOpen(true),
+            alwaysOverflow: true,
+            disabled: deleting || !connector.enabled,
+          },
           {
             id: "configure",
             label: "Configure",
@@ -313,7 +327,7 @@ export function HostingIntegrationDetail({
               try {
                 await api.deleteHostingConnector(connector.id);
                 toast.success("Hosting connector deleted");
-                navigate("/settings/integrations");
+                navigate(returnTo);
               } catch (cause) {
                 toast.error(errorMessage(cause, "Failed to delete hosting connector."));
               } finally {
@@ -330,7 +344,7 @@ export function HostingIntegrationDetail({
       <div className="h-full overflow-y-auto p-6 space-y-4">
         <div className="flex items-start justify-between gap-3 shrink-0">
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/settings/integrations")} />
+            <PageBackButton onClick={() => navigate(returnTo)} />
             <div className="min-w-0">
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <h1 className="min-w-0 truncate text-2xl font-bold">{connector.name}</h1>
@@ -542,6 +556,12 @@ export function HostingIntegrationDetail({
           </TabsContent>
         </Tabs>
       </div>
+      <HostingAdoptDialog
+        open={adoptOpen}
+        connectorId={connector.id}
+        onClose={() => setAdoptOpen(false)}
+        onAdopted={() => void load()}
+      />
       <HostingConnectorDialog
         open={configureOpen}
         connector={connector}

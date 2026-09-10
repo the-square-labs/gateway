@@ -165,6 +165,25 @@ export function parseDockerBuildScanSummary(value: string): DockerBuildScanSumma
           ];
         })
       : [];
+    // These are full-report aggregates, independent of the truncated detail list.
+    const os = parsed.osPackages;
+    const osCounts = os && typeof os === 'object' && !Array.isArray(os) ? (os as Record<string, unknown>) : null;
+    const validTotals =
+      ['critical', 'high', 'medium', 'low', 'unknown'].every(
+        (key) => typeof parsed[key] === 'number' && Number.isSafeInteger(parsed[key]) && Number(parsed[key]) >= 0
+      ) &&
+      (parsed.negligible === undefined ||
+        (typeof parsed.negligible === 'number' && Number.isSafeInteger(parsed.negligible) && parsed.negligible >= 0));
+    const validOSCounts =
+      validTotals &&
+      osCounts &&
+      ['critical', 'high', 'medium', 'low', 'unknown'].every(
+        (key) => typeof osCounts[key] === 'number' && Number.isSafeInteger(osCounts[key]) && Number(osCounts[key]) >= 0
+      ) &&
+      (osCounts.negligible === undefined ||
+        (typeof osCounts.negligible === 'number' &&
+          Number.isSafeInteger(osCounts.negligible) &&
+          osCounts.negligible >= 0));
     return {
       scanner: typeof parsed.scanner === 'string' ? parsed.scanner : 'grype',
       critical: count('critical'),
@@ -174,6 +193,17 @@ export function parseDockerBuildScanSummary(value: string): DockerBuildScanSumma
       unknown: count('unknown') + count('negligible'),
       vulnerabilities,
       vulnerabilitiesTruncated: count('vulnerabilitiesTruncated'),
+      ...(validOSCounts
+        ? {
+            osPackages: {
+              critical: Number(osCounts.critical),
+              high: Number(osCounts.high),
+              medium: Number(osCounts.medium),
+              low: Number(osCounts.low),
+              unknown: Number(osCounts.unknown) + Number(osCounts.negligible ?? 0),
+            },
+          }
+        : {}),
     };
   } catch {
     return null;
@@ -224,11 +254,35 @@ export function evaluateDockerArtifactPolicy(
     return { decision: 'error', reason: 'Vulnerability scan result is required' };
   }
   const severities = ['critical', 'high', 'medium', 'low'] as const;
+  const applicationOnly = policy.vulnerabilityScope === 'application';
+  const osPackages = artifact.scanSummary.osPackages;
+  if (
+    applicationOnly &&
+    (!osPackages ||
+      ![...severities, 'unknown' as const].every(
+        (severity) =>
+          Number.isSafeInteger(osPackages[severity]) &&
+          osPackages[severity] >= 0 &&
+          Number.isSafeInteger(artifact.scanSummary?.[severity]) &&
+          osPackages[severity] <= Number(artifact.scanSummary?.[severity])
+      ))
+  ) {
+    return {
+      decision: 'error',
+      reason:
+        'Complete OS package scan counts are required for application-only policy. Rebuild with an updated Build Worker.',
+    };
+  }
   const thresholdIndex = severities.indexOf(threshold as (typeof severities)[number]);
   const violations = severities
     .slice(0, thresholdIndex + 1)
-    .filter((severity) => Number(artifact.scanSummary?.[severity] ?? 0) > 0);
+    .filter(
+      (severity) => Number(artifact.scanSummary?.[severity] ?? 0) - (applicationOnly ? osPackages![severity] : 0) > 0
+    );
   return violations.length > 0
-    ? { decision: 'rejected', reason: `Vulnerabilities at or above ${threshold}: ${violations.join(', ')}` }
+    ? {
+        decision: 'rejected',
+        reason: `${applicationOnly ? 'Application vulnerabilities' : 'Vulnerabilities'} at or above ${threshold}: ${violations.join(', ')}`,
+      }
     : { decision: 'approved', reason: null };
 }

@@ -9,6 +9,7 @@ import {
   CreateHostingConnectorSchema,
   DiscoverHostingConnectorSchema,
   HostingActionSchema,
+  HostingAdoptSchema,
   HostingProvisionSchema,
   UpdateHostingConnectorSchema,
 } from './hosting.schemas.js';
@@ -80,6 +81,16 @@ hostingIntegrationRoutes.get('/:id/catalog', async (c) =>
 );
 hostingIntegrationRoutes.get('/:id/resources', async (c) =>
   c.json(await container.resolve(HostingInventoryService).resources(id(c.req.param('id')), actor(c)))
+);
+hostingIntegrationRoutes.get('/:id/adoption-candidates', sessionOnly, async (c) =>
+  c.json(await container.resolve(HostingInventoryService).adoptionCandidates(id(c.req.param('id')), actor(c)))
+);
+hostingIntegrationRoutes.post('/:id/adopt', sessionOnly, async (c) =>
+  c.json(
+    await container
+      .resolve(HostingInventoryService)
+      .adoptNode(id(c.req.param('id')), HostingAdoptSchema.parse(await c.req.json()), actor(c))
+  )
 );
 hostingIntegrationRoutes.get('/:id/operations', async (c) =>
   c.json(await container.resolve(HostingOperationsService).list(id(c.req.param('id')), actor(c)))

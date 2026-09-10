@@ -1,4 +1,4 @@
-import { act, render } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import type { DockerBuild } from "@/types";
@@ -59,6 +59,66 @@ it("polls logs while an active build is open so a missed realtime event cannot l
   expect(request).toHaveBeenCalledTimes(1);
   await act(async () => vi.advanceTimersByTimeAsync(6_000));
   expect(request).toHaveBeenCalledTimes(4);
+});
+
+it.each([
+  "all",
+  "application",
+] as const)("keeps OS and application findings visible under %s scope", async (policyScope) => {
+  vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
+  const item = build("failed");
+  item.artifact = {
+    id: "artifact-1",
+    buildId: item.id,
+    registryRepository: "app",
+    digest: "sha256:artifact",
+    platform: "linux/amd64",
+    sizeBytes: 100,
+    status: "rejected",
+    sbomDigest: null,
+    provenanceDigest: null,
+    policyDecision: "rejected",
+    policyReason: "Application vulnerabilities at or above critical: critical",
+    verifiedAt: null,
+    createdAt: item.createdAt,
+    scanSummary: {
+      critical: 2,
+      high: 0,
+      medium: 0,
+      low: 0,
+      unknown: 0,
+      policyScope,
+      osPackages: { critical: 1, high: 0, medium: 0, low: 0, unknown: 0 },
+      vulnerabilities: ["deb", "npm"].map((packageType) => ({
+        id: `CVE-${packageType}`,
+        severity: "critical",
+        packageName: `${packageType}-package`,
+        packageType,
+        installedVersion: "1",
+        fixedVersions: [],
+        fixState: "not-fixed",
+        namespace: "",
+        dataSource: "",
+      })),
+    },
+  };
+  render(
+    <DockerBuildDetailsDialog
+      open
+      build={item}
+      onOpenChange={() => undefined}
+      onExited={() => undefined}
+    />
+  );
+  await act(async () => undefined);
+  expect(screen.getByText("CVE-deb")).toBeInTheDocument();
+  expect(screen.getByText("CVE-npm")).toBeInTheDocument();
+  if (policyScope === "application") {
+    expect(screen.getAllByText("OS package · Report only")).toHaveLength(1);
+    expect(screen.getByText(/1 system package findings/)).toBeInTheDocument();
+  } else {
+    expect(screen.queryByText("OS package · Report only")).not.toBeInTheDocument();
+  }
 });
 
 function build(status: DockerBuild["status"]): DockerBuild {

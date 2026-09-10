@@ -282,6 +282,7 @@ export interface HostingProvisionInput {
   folderId?: string | null;
   idempotencyKey: string;
   name: string;
+  displayName?: string;
   role: HostingRole;
   location: string;
   size: string;
@@ -407,4 +408,21 @@ export interface HostingFirewallView {
   observation: HostingFirewallObservation | null;
   error: string | null;
   canEdit: boolean;
+}
+
+export interface HostingAdoptionCandidates {
+  resources: Array<{
+    id: string;
+    remoteId: string;
+    name: string;
+    kind: "vm" | "ct";
+    location: string;
+  }>;
+  nodes: Array<{
+    id: string;
+    hostname: string;
+    displayName: string | null;
+    type: string;
+    status: string;
+  }>;
 }

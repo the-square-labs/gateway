@@ -29,6 +29,16 @@ func handleNodeFile(_ context.Context, cmd *pb.GatewayCommand) *pb.CommandResult
 	result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
 
 	switch nodeFile.GetAction() {
+	case "ensure-host-identity":
+		// Fixed canonical operation: callers cannot select a path or identity.
+		identity, err := loadOrCreateHostIdentity("")
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return result
+		}
+		result.Data = []byte(identity)
+
 	case "list":
 		entries, err := listNodeDirectory(nodeFile.GetPath())
 		if err != nil {
