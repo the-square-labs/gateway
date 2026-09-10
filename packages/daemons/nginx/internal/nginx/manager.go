@@ -164,6 +164,9 @@ func (m *Manager) GetPID() (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if err := prepareOpenRCPIDDirectory(pidFile); err != nil {
+		return 0, err
+	}
 	data, err := readTrustedPIDFile(pidFile)
 	if err != nil {
 		return 0, err

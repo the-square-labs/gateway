@@ -61,7 +61,7 @@ func readTrustedPIDFile(path string) ([]byte, error) {
 	if err := unix.Fstat(fd, &stat); err != nil {
 		return nil, fmt.Errorf("stat authoritative nginx pid file: %w", err)
 	}
-	if stat.Mode&unix.S_IFMT != unix.S_IFREG || !trustedPIDOwner(stat.Uid) || stat.Mode&0o022 != 0 {
+	if stat.Mode&unix.S_IFMT != unix.S_IFREG || !trustedPIDOwner(stat.Uid) || stat.Mode&0o022 != 0 || stat.Nlink != 1 {
 		return nil, errors.New("authoritative nginx pid file is not trusted")
 	}
 	data, err := io.ReadAll(file)

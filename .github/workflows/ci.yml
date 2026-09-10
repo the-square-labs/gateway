@@ -163,6 +163,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Alpine OpenRC nginx lifecycle regression
+        run: bash scripts/test-nginx-openrc.sh
+
   build:
     name: Build
     needs: changes

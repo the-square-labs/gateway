@@ -1301,6 +1301,39 @@ nginx_worker_requires_restart() {
     [[ "$running_nofile" =~ ^[0-9]+$ ]] && (( running_nofile < NGINX_WORKER_NOFILE_MIN ))
 }
 
+ensure_nginx_openrc_pid_directory() {
+    has_openrc || return 0
+    local service=/etc/init.d/nginx
+    local original='checkpath --directory --owner nginx:nginx ${pidfile%/*}'
+    local secured='checkpath --directory --mode 0755 --owner root:root ${pidfile%/*}'
+    local mode
+    local parent
+    local candidate
+
+    [[ -f "$service" && ! -L "$service" ]] || return 0
+    grep -Fq "$original" "$service" || return 0
+    [[ "$(head -n 1 "$service")" == '#!/sbin/openrc-run' ]] || return 0
+    for parent in /etc /etc/init.d; do
+        [[ -d "$parent" && ! -L "$parent" && "$(stat -c %u "$parent")" == 0 ]] || \
+            die "Untrusted nginx OpenRC service directory"
+        mode=$(stat -c %a "$parent")
+        (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service directory permissions"
+    done
+    [[ "$(stat -c %u "$service")" == 0 ]] || die "Untrusted nginx OpenRC service owner"
+    mode=$(stat -c %a "$service")
+    (( (8#$mode & 8#022) == 0 )) || die "Untrusted nginx OpenRC service permissions"
+    candidate=$(mktemp /etc/init.d/.nginx-gateway-XXXXXX)
+    sed 's/checkpath --directory --owner nginx:nginx/checkpath --directory --mode 0755 --owner root:root/' "$service" > "$candidate"
+    if ! grep -Fq "$secured" "$candidate" || ! sh -n "$candidate"; then
+        rm -f "$candidate"
+        die "Invalid nginx OpenRC service after PID-directory migration"
+    fi
+    chmod "$mode" "$candidate"
+    backup_if_exists "$service"
+    mv -f "$candidate" "$service"
+    log "Secured nginx OpenRC PID-directory ownership for start and reload"
+}
+
 ensure_nginx_service_limit() {
     if nginx_worker_requires_restart; then
         NGINX_SERVICE_RESTART_REQUIRED=1
@@ -1526,6 +1559,7 @@ configure_nginx() {
     fi
 
     ensure_nginx_worker_limits
+    ensure_nginx_openrc_pid_directory
     ensure_nginx_service_limit
 
     if nginx -t >> "$LOG_FILE" 2>&1; then
