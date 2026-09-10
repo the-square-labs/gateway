@@ -197,7 +197,7 @@ export function InferenceProviderConnectDialog({
       !oauth ||
       oauth.status !== "pending" ||
       oauth.completionMode !== "paste_callback" ||
-      !isCompleteCallback(value) ||
+      !isCompleteCallback(value, oauth.providerId) ||
       saving
     )
       return;
@@ -447,7 +447,11 @@ export function InferenceProviderConnectDialog({
                       <Input
                         value={callback}
                         onChange={(event) => setCallback(event.target.value)}
-                        placeholder="Paste code#state or callback URL"
+                        placeholder={
+                          oauth.providerId === "xai"
+                            ? "Paste authorization code or callback URL"
+                            : "Paste code#state or callback URL"
+                        }
                         className="min-w-0 flex-1 border-0"
                         disabled={saving}
                         autoFocus
@@ -457,7 +461,7 @@ export function InferenceProviderConnectDialog({
                         variant="ghost"
                         size="icon"
                         className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                        disabled={saving || !isCompleteCallback(callback.trim())}
+                        disabled={saving || !isCompleteCallback(callback.trim(), oauth.providerId)}
                         aria-label={`Complete ${authorizationProviderLabel} authorization`}
                         title="Complete authorization"
                       >
@@ -530,8 +534,9 @@ export function InferenceProviderConnectDialog({
   );
 }
 
-function isCompleteCallback(value: string) {
+function isCompleteCallback(value: string, providerId: string) {
   if (!value) return false;
+  if (providerId === "xai" && /^[A-Za-z0-9_-]+$/.test(value)) return true;
   try {
     const url = new URL(value);
     return Boolean(url.searchParams.get("code") && url.searchParams.get("state"));

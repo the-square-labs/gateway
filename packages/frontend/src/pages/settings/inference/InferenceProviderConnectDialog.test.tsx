@@ -371,6 +371,11 @@ describe("InferenceProviderConnectDialog", () => {
     expect(completeButton).toBeDisabled();
 
     fireEvent.change(screen.getByPlaceholderText("Paste code#state or callback URL"), {
+      target: { value: "bare-code-without-state" },
+    });
+    expect(completeButton).toBeDisabled();
+
+    fireEvent.change(screen.getByPlaceholderText("Paste code#state or callback URL"), {
       target: { value: "authorization-code#oauth-state" },
     });
     expect(completeButton).toBeEnabled();
@@ -385,6 +390,52 @@ describe("InferenceProviderConnectDialog", () => {
     );
     await waitFor(() => expect(onConnected).toHaveBeenCalled());
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it.each([
+    "test-authorization_code-0123456789",
+    "authorization-code#oauth-state",
+    "http://127.0.0.1:56121/callback?code=authorization-code&state=oauth-state",
+  ])("submits Grok authorization input after explicit confirmation: %s", async (input) => {
+    const onConnected = vi.fn();
+    const pendingSession = {
+      id: "session-grok",
+      providerId: "xai",
+      status: "pending" as const,
+      authorizationUrl: "https://auth.x.ai/oauth2/authorize",
+      completionMode: "paste_callback" as const,
+      expiresAt: new Date(Date.now() + 600_000).toISOString(),
+    };
+    vi.mocked(api.startInferenceOAuth).mockResolvedValue(pendingSession);
+    vi.mocked(api.completeInferenceOAuth).mockResolvedValue({
+      ...pendingSession,
+      status: "complete",
+      connectionId: "connection-grok",
+    });
+    renderConnectDialog({
+      catalog: [{ ...XAI, oauthFlow: "redirect", completionMode: "paste_callback" }],
+      onConnected,
+    });
+    fireEvent.change(screen.getByPlaceholderText("Team account"), {
+      target: { value: "Grok team" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
+    fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
+    const field = await screen.findByPlaceholderText("Paste authorization code or callback URL");
+    const completeButton = screen.getByRole("button", { name: "Complete xAI Grok authorization" });
+    expect(completeButton).toBeDisabled();
+    for (const invalid of ["   ", "code with spaces", "http://127.0.0.1:56121/callback?code=abc"]) {
+      fireEvent.change(field, { target: { value: invalid } });
+      expect(completeButton).toBeDisabled();
+    }
+    fireEvent.change(field, { target: { value: `  ${input}  ` } });
+    expect(completeButton).toBeEnabled();
+    expect(api.completeInferenceOAuth).not.toHaveBeenCalled();
+    fireEvent.click(completeButton);
+    await waitFor(() =>
+      expect(api.completeInferenceOAuth).toHaveBeenCalledWith("session-grok", input)
+    );
+    await waitFor(() => expect(onConnected).toHaveBeenCalledOnce());
   });
 
   it("keeps the callback submit loading and polls until the core finishes authorization", async () => {
