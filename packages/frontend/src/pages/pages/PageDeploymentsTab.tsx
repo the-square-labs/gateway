@@ -27,7 +27,13 @@ import {
   pageStatusVariant,
 } from "./page-format";
 
-export function PageDeploymentsTab({ projectId }: { projectId: string }) {
+export function PageDeploymentsTab({
+  projectId,
+  previewsEnabled = true,
+}: {
+  projectId: string;
+  previewsEnabled?: boolean;
+}) {
   const canManage = useAuthStore((state) =>
     state.hasScopedAccess(`pages:deployments:manage:${projectId}`)
   );
@@ -185,9 +191,10 @@ export function PageDeploymentsTab({ projectId }: { projectId: string }) {
     },
   ];
 
-  const selectedPreviewUrl = selectedDeployment
-    ? pagePreviewUrl(selectedDeployment.previewHostname)
-    : null;
+  const selectedPreviewUrl =
+    previewsEnabled && selectedDeployment
+      ? pagePreviewUrl(selectedDeployment.previewHostname)
+      : null;
 
   return (
     <>
@@ -197,7 +204,7 @@ export function PageDeploymentsTab({ projectId }: { projectId: string }) {
         description="Immutable static artifacts and their preview publication status."
       >
         <SimpleTable
-          columns={columns}
+          columns={previewsEnabled ? columns : columns.filter((column) => column.id !== "preview")}
           rows={deployments}
           getRowKey={(deployment) => deployment.id}
           loading={loading}
@@ -251,28 +258,30 @@ export function PageDeploymentsTab({ projectId }: { projectId: string }) {
               <SettingsControlRow title="Requested Tag" controlsClassName="sm:min-w-0">
                 <span className="text-sm">{selectedDeployment.requestedTag ?? "None"}</span>
               </SettingsControlRow>
-              <SettingsControlRow title="Preview" controlsClassName="sm:min-w-0">
-                {selectedPreviewUrl ? (
-                  <div className="flex min-w-0 items-center gap-1">
-                    <a
-                      className="truncate text-sm text-primary underline"
-                      href={selectedPreviewUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {selectedDeployment.previewHostname}
-                    </a>
-                    <CopyButton
-                      value={selectedPreviewUrl}
-                      label="immutable preview URL"
-                      className="h-auto w-auto bg-transparent p-0 text-muted-foreground hover:bg-transparent hover:text-primary"
-                      iconClassName="h-3 w-3"
-                    />
-                  </div>
-                ) : (
-                  <Badge variant="secondary">Unavailable</Badge>
-                )}
-              </SettingsControlRow>
+              {previewsEnabled && (
+                <SettingsControlRow title="Preview" controlsClassName="sm:min-w-0">
+                  {selectedPreviewUrl ? (
+                    <div className="flex min-w-0 items-center gap-1">
+                      <a
+                        className="truncate text-sm text-primary underline"
+                        href={selectedPreviewUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {selectedDeployment.previewHostname}
+                      </a>
+                      <CopyButton
+                        value={selectedPreviewUrl}
+                        label="immutable preview URL"
+                        className="h-auto w-auto bg-transparent p-0 text-muted-foreground hover:bg-transparent hover:text-primary"
+                        iconClassName="h-3 w-3"
+                      />
+                    </div>
+                  ) : (
+                    <Badge variant="secondary">Unavailable</Badge>
+                  )}
+                </SettingsControlRow>
+              )}
               {selectedDeployment.failureMessage && (
                 <SettingsControlRow title="Failure" controlsClassName="sm:min-w-0">
                   <span className="text-right text-sm">{selectedDeployment.failureMessage}</span>

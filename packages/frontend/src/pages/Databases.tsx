@@ -36,6 +36,7 @@ import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -340,6 +341,10 @@ export function ManagedDatabaseCreateForm({
   capacity,
   step,
   onChange,
+  folderId = "",
+  folderOptions = [],
+  foldersLoading = false,
+  onFolderChange,
 }: {
   draft: ManagedDatabaseCreateInput;
   nodes: Node[];
@@ -347,6 +352,10 @@ export function ManagedDatabaseCreateForm({
   capacity: ManagedDatabaseCapacity;
   step: 1 | 2 | 3;
   onChange: (draft: ManagedDatabaseCreateInput) => void;
+  folderId?: string;
+  folderOptions?: ResourceFolderTreeNode[];
+  foldersLoading?: boolean;
+  onFolderChange?: (folderId: string) => void;
 }) {
   const set = <K extends keyof ManagedDatabaseCreateInput>(
     key: K,
@@ -377,6 +386,32 @@ export function ManagedDatabaseCreateForm({
           className="space-y-4"
         >
           <div className="grid gap-4">
+            {onFolderChange && (
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="managed-db-folder">
+                  Folder
+                </label>
+                <Select
+                  value={folderId || "__none__"}
+                  onValueChange={(value) => onFolderChange(value === "__none__" ? "" : value)}
+                  disabled={foldersLoading}
+                >
+                  <SelectTrigger id="managed-db-folder" aria-busy={foldersLoading}>
+                    <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      <SelectItem value="__none__">No folder</SelectItem>
+                      {folderOptions.map((folder) => (
+                        <SelectItem key={folder.id} value={folder.id}>
+                          {"  ".repeat(folder.depth) + folder.name}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-name">
                 Name
@@ -1342,29 +1377,6 @@ export function Databases({
               </DialogDescription>
             </DialogHeader>
             <AnimatedHeight>
-              {managedCreateStep === 1 && (
-                <SettingsControlRow title="Folder" description="Optional organization folder">
-                  <Select
-                    value={folderId || "__none__"}
-                    onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-                    disabled={foldersLoading}
-                  >
-                    <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                      <SelectValue
-                        placeholder={foldersLoading ? "Loading folders…" : "No folder"}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">No folder</SelectItem>
-                      {folderOptions.map((folder) => (
-                        <SelectItem key={folder.id} value={folder.id}>
-                          {"  ".repeat(folder.depth) + folder.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </SettingsControlRow>
-              )}
               <ManagedDatabaseCreateForm
                 key={managedCreateSession}
                 draft={managedDraft}
@@ -1373,6 +1385,10 @@ export function Databases({
                 capacity={managedCapacity}
                 step={managedCreateStep}
                 onChange={setManagedDraft}
+                folderId={folderId}
+                folderOptions={folderOptions}
+                foldersLoading={foldersLoading}
+                onFolderChange={setFolderId}
               />
             </AnimatedHeight>
             <DialogFooter>

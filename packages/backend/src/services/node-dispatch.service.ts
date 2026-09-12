@@ -825,6 +825,10 @@ export class NodeDispatchService {
     }
   }
 
+  async assertPagesPreviewRevocation(nodeId: string): Promise<void> {
+    await this.assertPagesNode(nodeId, 'nginx_pages_preview_revocation_v1');
+  }
+
   async supportsPagesReconciliation(nodeId: string): Promise<boolean> {
     const [node] = await this.db
       .select({ type: nodes.type, status: nodes.status, capabilities: nodes.capabilities })

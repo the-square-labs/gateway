@@ -1,5 +1,13 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import { relayEndpoints, relayGrantSigningKeys, relayPolicyState, relayRoutes } from '@/db/schema/index.js';
+import {
+  relayEndpoints,
+  relayGrantSigningKeys,
+  relayInstances,
+  relayPolicyState,
+  relayRoutes,
+} from '@/db/schema/index.js';
 import { managedDatabaseListenerConfigsEqual, RelayPolicyService } from './relay-policy.service.js';
 
 function createService(
@@ -8,6 +16,8 @@ function createService(
     applySnapshot: ReturnType<typeof vi.fn>;
     getHealth?: ReturnType<typeof vi.fn>;
     getRouteRuntime?: ReturnType<typeof vi.fn>;
+    bootstrapPolicyTrust?: ReturnType<typeof vi.fn>;
+    applyEncodedSnapshot?: ReturnType<typeof vi.fn>;
   }
 ) {
   return new RelayPolicyService(
@@ -64,6 +74,30 @@ describe('managed database listener equality', () => {
 });
 
 describe('RelayPolicyService route runtime', () => {
+  it('allocates signed revisions above both pool and legacy/global revisions', async () => {
+    const rows = [[{ revision: 900, gatewayInstanceId: 'gateway' }], [{ id: 'local', poolId: 'system' }], [], []];
+    const lock = vi.fn();
+    const select = () => {
+      if (rows.length < 4) expect(lock).toHaveBeenCalledWith('share');
+      const q: any = Promise.resolve(rows.shift());
+      for (const method of ['from', 'where', 'limit', 'innerJoin']) q[method] = () => q;
+      q.for = (mode: string) => {
+        lock(mode);
+        return q;
+      };
+      return q;
+    };
+    const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 901 }] }) }));
+    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    db.transaction = (fn: any) => fn(db);
+    const service = createService(db, { applySnapshot: vi.fn() });
+    (service as any).policyKeys.listPublishedKeys = async () => [];
+    (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
+    expect(await (service as any).buildInstanceSnapshot('local')).toMatchObject({ revision: 901, globalRevision: 900 });
+    const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].desiredPolicyRevision);
+    expect(expression.sql).toBe('greatest("relay_pools"."desired_policy_revision", $1) + 1');
+    expect(expression.params).toEqual([900]);
+  });
   it('reads managed database binding runtime from its owned Relay route', async () => {
     const limit = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
     const where = vi.fn(() => ({ limit }));
@@ -152,6 +186,94 @@ describe('RelayPolicyService route runtime', () => {
 });
 
 describe('RelayPolicyService snapshots', () => {
+  it('does not let a delayed pool ACK authorize a newer global projection', async () => {
+    let globalRevision = 10;
+    let transportRevision = 100;
+    const local = {
+      id: 'local',
+      poolId: 'system',
+      buildVersion: 'test',
+      protocolMajor: 1,
+      capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] },
+    };
+    const key = { keyId: 'grant-key', encryptedPrivateKey: 'encrypted', encryptedDek: 'dek', publicKey: '' };
+    const db: any = {
+      select: () => {
+        let table: unknown;
+        const query: any = {
+          from: (value: unknown) => {
+            table = value;
+            return query;
+          },
+          // biome-ignore lint/suspicious/noThenProperty: emulate Drizzle's lazy thenable query
+          then: (resolve: (rows: unknown[]) => unknown) =>
+            Promise.resolve(
+              table === relayPolicyState
+                ? [{ revision: globalRevision, gatewayInstanceId: 'gateway' }]
+                : table === relayInstances
+                  ? [local]
+                  : table === relayGrantSigningKeys
+                    ? [key]
+                    : []
+            ).then(resolve),
+        };
+        for (const method of ['where', 'limit', 'innerJoin', 'for']) query[method] = () => query;
+        return query;
+      },
+      execute: vi.fn(),
+      update: () => ({
+        set: () => ({ where: () => ({ returning: async () => [{ revision: ++transportRevision }] }) }),
+      }),
+    };
+    db.transaction = (fn: any) => fn(db);
+    let releaseFirstAck!: () => void;
+    let snapshotSent!: () => void;
+    const firstAck = new Promise<void>((resolve) => {
+      releaseFirstAck = resolve;
+    });
+    const sent = new Promise<void>((resolve) => {
+      snapshotSent = resolve;
+    });
+    const applyEncodedSnapshot = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        snapshotSent();
+        await firstAck;
+        return { appliedRevision: '101' };
+      })
+      .mockResolvedValueOnce({ appliedRevision: '102' });
+    const service = createService(db, {
+      applySnapshot: vi.fn(),
+      getHealth: vi
+        .fn()
+        .mockResolvedValue({ ...local, relayInstanceId: local.id, capabilities: local.capabilities.features }),
+      bootstrapPolicyTrust: vi.fn(),
+      applyEncodedSnapshot,
+    });
+    const keys = (service as any).policyKeys;
+    keys.listPublishedKeys = async () => [];
+    keys.getEnrollmentTrust = async () => ({ keyId: 'policy-key', publicKey: '', fingerprint: '' });
+    keys.signPayload = async () => ({ signingKeyId: 'policy-key', signature: Buffer.alloc(64) });
+    const issuer = (service as any).grantIssuer;
+    const { privateKey } = generateKeyPairSync('ed25519');
+    issuer.cryptoService.decryptPrivateKey = () => privateKey.export({ type: 'pkcs8', format: 'pem' });
+    const claims = { kind: 'endpoint', subjectKind: 'daemon', subjectId: 'node', certificateSha256: 'sha256:test' };
+
+    const syncingOldProjection = service.syncSnapshot();
+    await sent;
+    // A transition commits while the old projection is in flight. The pool's
+    // transport sequence already exceeds both global revisions.
+    globalRevision = 11;
+    releaseFirstAck();
+    await expect(syncingOldProjection).resolves.toBe(101);
+    await expect(issuer.signGrant(claims)).rejects.toThrow(
+      'Relay policy revision 11 has not been durably acknowledged'
+    );
+
+    await expect(service.syncSnapshot()).resolves.toBe(102);
+    await expect(issuer.signGrant(claims)).resolves.toMatchObject({ keyId: 'grant-key' });
+  });
+
   it('does not replace a pool snapshot with legacy policy when Relay health lookup fails', async () => {
     const applySnapshot = vi.fn();
     const getHealth = vi.fn().mockRejectedValue(new Error('temporary Relay health failure'));

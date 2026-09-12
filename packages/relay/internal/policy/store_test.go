@@ -53,6 +53,54 @@ func TestApplyIsDurableMonotonicAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestLegacyConfiguredIdentitySurvivesApplyAndReopen(t *testing.T) {
+	publicKey, _, _ := ed25519.GenerateKey(nil)
+	dir := t.TempDir()
+	options := Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED, PoolID: "system", InstanceID: "relay-1",
+	}
+	store, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, _, err := store.Apply(validSnapshot(publicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if applied.PoolID != options.PoolID || applied.RelayInstanceID != options.InstanceID {
+		t.Fatalf("legacy apply lost configured identity: pool=%q instance=%q", applied.PoolID, applied.RelayInstanceID)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	current := reopened.Current()
+	if current.PoolID != options.PoolID || current.RelayInstanceID != options.InstanceID {
+		t.Fatalf("legacy reopen lost configured identity: pool=%q instance=%q", current.PoolID, current.RelayInstanceID)
+	}
+}
+
+func TestLegacySnapshotWithoutConfiguredIdentityRemainsIdentityless(t *testing.T) {
+	publicKey, _, _ := ed25519.GenerateKey(nil)
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, _, err := store.Apply(validSnapshot(publicKey)); err != nil {
+		t.Fatal(err)
+	}
+	current := store.Current()
+	if current.PoolID != "" || current.RelayInstanceID != "" {
+		t.Fatalf("legacy snapshot acquired an unconfigured identity: pool=%q instance=%q", current.PoolID, current.RelayInstanceID)
+	}
+}
+
 func TestFullSnapshotRevocationSurvivesRestart(t *testing.T) {
 	publicKey, _, _ := ed25519.GenerateKey(nil)
 	dir := t.TempDir()
@@ -136,6 +184,32 @@ func TestRemoteRelayRejectsLegacySnapshot(t *testing.T) {
 	defer store.Close()
 	if _, _, err := store.Apply(validSnapshot(grantPublic)); err == nil {
 		t.Fatal("remote relay accepted an unsigned legacy snapshot")
+	}
+}
+
+func TestSignedPolicyRejectsMismatchedRelayIdentity(t *testing.T) {
+	policyPublic, policyPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	store, err := OpenWithOptions(t.TempDir(), Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_REMOTE_DATA_ONLY, PoolID: "system", InstanceID: "relay-1", Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.BootstrapPolicyTrust("policy-1", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
+		t.Fatal(err)
+	}
+	mismatched := signedSnapshotWithPolicyKeysForTarget(t, policyPrivate, "policy-1", grantPublic, 1, now, []*relayv1.PolicySigningKey{
+		policyKey("policy-1", policyPublic),
+	}, "other-system", "relay-1")
+	if _, _, err := store.Apply(mismatched); err == nil {
+		t.Fatal("signed policy targeting another relay identity was accepted")
+	}
+	current := store.Current()
+	if current.PoolID != "system" || current.RelayInstanceID != "relay-1" {
+		t.Fatalf("mismatched signed policy changed configured identity: pool=%q instance=%q", current.PoolID, current.RelayInstanceID)
 	}
 }
 
@@ -290,13 +364,18 @@ func signedSnapshot(t *testing.T, policyPrivate ed25519.PrivateKey, policyKeyID 
 
 func signedSnapshotWithPolicyKeys(t *testing.T, privateKey ed25519.PrivateKey, keyID string, grantPublic ed25519.PublicKey, revision uint64, now time.Time, policyKeys []*relayv1.PolicySigningKey) *relayv1.ApplySnapshotRequest {
 	t.Helper()
+	return signedSnapshotWithPolicyKeysForTarget(t, privateKey, keyID, grantPublic, revision, now, policyKeys, "system", "relay-1")
+}
+
+func signedSnapshotWithPolicyKeysForTarget(t *testing.T, privateKey ed25519.PrivateKey, keyID string, grantPublic ed25519.PublicKey, revision uint64, now time.Time, policyKeys []*relayv1.PolicySigningKey, poolID, relayInstanceID string) *relayv1.ApplySnapshotRequest {
+	t.Helper()
 	payload := &relayv1.PolicyEnvelopePayload{
-		SchemaVersion: 2, GatewayInstanceId: "gateway-1", PoolId: "system", RelayInstanceId: "relay-1",
+		SchemaVersion: 2, GatewayInstanceId: "gateway-1", PoolId: poolID, RelayInstanceId: relayInstanceID,
 		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(PolicyLease).Unix(),
 		GrantPublicKeys: []*relayv1.PublicKey{{KeyId: "grant-1", PublicKey: grantPublic}},
 		Endpoints: []*relayv1.EndpointPolicy{{
 			EndpointId: "endpoint-1", Generation: 1, SubjectKind: "daemon", SubjectId: "node-target",
-			CertificateSha256: "sha256:target", PoolId: "system", RelayInstanceId: "relay-1", AssignmentGeneration: 1,
+			CertificateSha256: "sha256:target", PoolId: poolID, RelayInstanceId: relayInstanceID, AssignmentGeneration: 1,
 		}},
 		Routes: []*relayv1.RoutePolicy{{
 			RouteId: "route-1", Generation: 1, SourceKind: "daemon", SourceId: "node-source",

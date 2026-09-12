@@ -1255,7 +1255,7 @@ export function DockerDeploymentDetail({
               view="source"
             />
           </TabsContent>
-          <TabsContent value="builds" className="pb-0">
+          <TabsContent value="builds" className="flex min-h-0 flex-1 flex-col pb-0">
             <DockerResourceGitTabs
               target={{ kind: "deployment", nodeId, deploymentId }}
               view="builds"

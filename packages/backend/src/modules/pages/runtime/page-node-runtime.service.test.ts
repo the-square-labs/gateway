@@ -381,8 +381,8 @@ describe('Pages runtime config daemon commands', () => {
 
   it('re-reads Default after a concurrent save before marking a preview ready', async () => {
     const states = [
+      { projectId: 'project-1', previewsEnabled: true },
       { enabled: true },
-      { projectId: 'project-1' },
       { replicaId: 'replica-1', runtimeConfigGeneration: 0, defaultGeneration: 1, value: { api: 'A' } },
       { generation: 2 },
       { replicaId: 'replica-1', runtimeConfigGeneration: 1, defaultGeneration: 2, value: { api: 'B' } },
@@ -431,8 +431,8 @@ describe('Pages runtime config daemon commands', () => {
 
   it('retries when Default commits after the final read but before the ready CAS', async () => {
     const states = [
+      { projectId: 'project-1', previewsEnabled: true },
       { enabled: true },
-      { projectId: 'project-1' },
       { replicaId: 'replica-1', runtimeConfigGeneration: 0, defaultGeneration: 1, value: { api: 'A' } },
       { generation: 1 },
       { replicaId: 'replica-1', runtimeConfigGeneration: 1, defaultGeneration: 2, value: { api: 'B' } },
@@ -532,5 +532,132 @@ describe('Pages runtime config daemon commands', () => {
         generation: '4',
       },
     });
+  });
+});
+
+describe('Project public preview revocation', () => {
+  it('still stores files when revocation wins between publication lookup and target resolution', async () => {
+    const db = { select: vi.fn(() => selectResult([{ nodeId: 'node-1', previewsEnabled: true }])) };
+    const service = new PageNodeRuntimeService(db as never, {} as never, {} as never, {} as never);
+    vi.spyOn(service as any, 'previewTarget').mockResolvedValue(null);
+    vi.spyOn(service as any, 'previewProjectConfig').mockResolvedValue({ nodeId: 'node-1', previewsEnabled: false });
+    const store = vi.spyOn(service as any, 'storeRelease').mockResolvedValue(undefined);
+    await service.publish('deployment-1');
+    expect(store).toHaveBeenCalledWith('node-1', 'deployment-1');
+  });
+
+  it('reuses retained files without allocating disk or uploading them again', async () => {
+    const db = {
+      select: vi.fn(() =>
+        selectResult([{ artifactKey: 'artifact', artifactSha256: 'digest', compressedSizeBytes: 50 }])
+      ),
+    };
+    const dispatch = { sendPagesCommand: vi.fn().mockResolvedValue({}) };
+    const service = new PageNodeRuntimeService(db as never, {} as never, dispatch as never, {} as never);
+    vi.spyOn(service as any, 'upsertReplica').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'markReplica').mockResolvedValue(undefined);
+    const preflight = vi.spyOn(service, 'preflight');
+    await (service as any).ensureRelease('node-1', 'deployment-1', 'preview', 'preview.example');
+    expect(dispatch.sendPagesCommand).toHaveBeenCalledExactlyOnceWith('node-1', {
+      pagesVerifyRelease: { deploymentId: 'deployment-1', sha256: 'digest' },
+    });
+    expect(preflight).not.toHaveBeenCalled();
+  });
+
+  it('stores a newly published private deployment without certificates or public hosts', async () => {
+    const dispatch = { sendPagesCommand: vi.fn() };
+    const certificates = { deployForPages: vi.fn() };
+    const db = { select: vi.fn(() => selectResult([{ nodeId: 'node-1', previewsEnabled: false }])) };
+    const service = new PageNodeRuntimeService(db as never, {} as never, dispatch as never, certificates as never);
+    const store = vi.spyOn(service as any, 'storeRelease').mockResolvedValue(undefined);
+    await service.publish('deployment-1');
+    expect(store).toHaveBeenCalledWith('node-1', 'deployment-1');
+    expect(certificates.deployForPages).not.toHaveBeenCalled();
+    expect(dispatch.sendPagesCommand).not.toHaveBeenCalled();
+  });
+
+  it('rechecks revocation under the profile lock before an in-flight publication can expose a host', async () => {
+    const db = defaultRuntimeConfigLockDatabase();
+    const dispatch = { sendPagesCommand: vi.fn() };
+    const service = new PageNodeRuntimeService(db as never, {} as never, dispatch as never, {} as never);
+    vi.spyOn(service as any, 'previewProjectConfig').mockResolvedValue({
+      projectId: 'project-1',
+      previewsEnabled: false,
+    });
+    const store = vi.spyOn(service as any, 'storeRelease').mockResolvedValue(undefined);
+    const profile = vi.spyOn(service as any, 'assertProfileEnabled');
+    await (service as any).materializePreview('node-1', 'deployment-1', 'preview.example', {});
+    expect(store).toHaveBeenCalledWith('node-1', 'deployment-1');
+    expect(profile).not.toHaveBeenCalled();
+    expect(dispatch.sendPagesCommand).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    false,
+    true,
+  ])('retains files and retries failed removal without touching tag routes (failure=%s)', async (failure) => {
+    const replica = {
+      replicaId: 'replica-1',
+      deploymentId: 'deployment-1',
+      nodeId: 'node-1',
+      hostname: 'preview.example',
+    };
+    const deleted = vi.fn();
+    const states: string[] = [];
+    const db = {
+      ...defaultRuntimeConfigLockDatabase(),
+      select: vi.fn(() => selectResult([replica])),
+      update: vi.fn(() => ({
+        set: (value: { status: string }) => ({
+          where: async () => {
+            states.push(value.status);
+          },
+        }),
+      })),
+      delete: vi.fn(() => ({ where: deleted })),
+    };
+    const dispatch = {
+      assertPagesPreviewRevocation: vi.fn().mockResolvedValue(undefined),
+      sendPagesCommand: failure ? vi.fn().mockRejectedValue(new Error('offline')) : vi.fn().mockResolvedValue({}),
+    };
+    const service = new PageNodeRuntimeService(db as never, {} as never, dispatch as never, {} as never);
+    vi.spyOn(service, 'removeRuntimeConfig').mockResolvedValue(undefined);
+    const result = service.disableProjectPreviews('project-1');
+    if (failure) await expect(result).rejects.toThrow('cleanup is pending');
+    else await result;
+    expect(dispatch.sendPagesCommand).toHaveBeenCalledExactlyOnceWith('node-1', {
+      pagesRemovePreview: { hostname: replica.hostname },
+    });
+    expect(deleted).not.toHaveBeenCalled();
+    expect(states.at(-1)).toBe(failure ? 'cleanup_pending' : 'revoked');
+    if (!failure) {
+      // A second pass still has durable hostname state and repairs disk drift.
+      dispatch.sendPagesCommand.mockClear();
+      await service.disableProjectPreviews('project-1');
+      expect(dispatch.sendPagesCommand).toHaveBeenCalledExactlyOnceWith('node-1', {
+        pagesRemovePreview: { hostname: replica.hostname },
+      });
+    }
+  });
+
+  it('does not remove previews if the project was re-enabled while reconciliation waited for its lock', async () => {
+    const results = [[{ id: 'project-1' }], [{ enabled: true }]];
+    const db = { ...defaultRuntimeConfigLockDatabase(), select: vi.fn(() => selectResult(results.shift())) };
+    const service = new PageNodeRuntimeService(db as never, {} as never, {} as never, {} as never);
+    const disable = vi.spyOn(service, 'disableProjectPreviews');
+    await service.reconcileDisabledProjectPreviews();
+    expect(disable).not.toHaveBeenCalled();
+  });
+
+  it('stages private project migration as files without requiring the global preview profile', async () => {
+    const results = [[{ previewsEnabled: false }], [{ id: 'deployment-1', compressedSizeBytes: 50 }]];
+    const db = { select: vi.fn(() => selectResult(results.shift())) };
+    const certificates = { deployForPages: vi.fn() };
+    const service = new PageNodeRuntimeService(db as never, {} as never, {} as never, certificates as never);
+    vi.spyOn(service, 'preflight').mockResolvedValue(undefined);
+    const store = vi.spyOn(service as any, 'storeRelease').mockResolvedValue(undefined);
+    await service.stageProjectMigration('project-1', 'node-2');
+    expect(store).toHaveBeenCalledWith('node-2', 'deployment-1');
+    expect(certificates.deployForPages).not.toHaveBeenCalled();
   });
 });

@@ -351,7 +351,7 @@ func (s *Store) normalizeLocked(request *relayv1.ApplySnapshotRequest, allowExpi
 		if s.mode != relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 			return nil, digest, nil, nil, fmt.Errorf("remote relay requires signed policy envelope")
 		}
-		next, err := normalizeLegacy(request, digest)
+		next, err := s.normalizeLegacy(request, digest)
 		return encoded, digest, next, cloneTrust(s.policyTrust), err
 	}
 	if len(s.policyTrust) == 0 {
@@ -373,15 +373,16 @@ func (s *Store) normalizeLocked(request *relayv1.ApplySnapshotRequest, allowExpi
 	return encoded, digest, next, nextTrust, nil
 }
 
-func normalizeLegacy(request *relayv1.ApplySnapshotRequest, digest [sha256.Size]byte) (*Snapshot, error) {
+func (s *Store) normalizeLegacy(request *relayv1.ApplySnapshotRequest, digest [sha256.Size]byte) (*Snapshot, error) {
 	if request.Revision == 0 || request.GatewayInstanceId == "" {
 		return nil, fmt.Errorf("snapshot revision and gateway instance id are required")
 	}
 	return buildSnapshot(&relayv1.PolicyEnvelopePayload{
 		SchemaVersion: 1, GatewayInstanceId: request.GatewayInstanceId, Revision: request.Revision,
+		PoolId: s.poolID, RelayInstanceId: s.instanceID,
 		GrantPublicKeys: request.PublicKeys, Endpoints: request.Endpoints, Routes: request.Routes,
 		AdmissionPolicy: request.AdmissionPolicy,
-	}, relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED, digest)
+	}, s.mode, digest)
 }
 
 func (s *Store) normalizeSignedPayload(payload *relayv1.PolicyEnvelopePayload, digest [sha256.Size]byte, signer string, allowExpired bool) (*Snapshot, map[string]trustedPolicyKey, error) {

@@ -86,6 +86,7 @@ export interface PageProject {
   description: string | null;
   appearanceColor: NodeAppearanceColor | null;
   spaFallback: boolean;
+  previewsEnabled: boolean;
   fallbackUrl: string | null;
   nodeId: string | null;
   migrationSourceNodeId: string | null;
@@ -259,6 +260,7 @@ export interface UpdatePageProjectRequest {
   description?: string | null;
   appearanceColor?: NodeAppearanceColor | null;
   spaFallback?: boolean;
+  previewsEnabled?: boolean;
   fallbackUrl?: string | null;
   maxDeployments?: number;
   storageQuotaBytes?: number;

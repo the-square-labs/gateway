@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   confirm: vi.fn(async () => true),
   activeTab: "deployments",
   realtimeHandlers: new Map<string, (payload: unknown) => void>(),
+  headerActions: vi.fn(),
+  deploymentsTab: vi.fn(),
 }));
 
 vi.mock("react-router-dom", async (importOriginal) => ({
@@ -23,7 +25,10 @@ vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: mocks.confirm }))
 vi.mock("@/components/common/PageBackButton", () => ({ PageBackButton: () => null }));
 vi.mock("@/components/common/ResponsiveHeaderActions", () => ({
   HEADER_ACTION_PRIORITY: { primary: 100 },
-  ResponsiveHeaderActions: ({ children }: { children: ReactNode }) => children,
+  ResponsiveHeaderActions: ({ children, actions }: { children: ReactNode; actions: unknown }) => {
+    mocks.headerActions(actions);
+    return children;
+  },
 }));
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: (event: string, handler: (payload: unknown) => void) => {
@@ -31,9 +36,13 @@ vi.mock("@/hooks/use-realtime", () => ({
   },
 }));
 vi.mock("@/hooks/use-url-tab", () => ({ useUrlTab: () => [mocks.activeTab, vi.fn()] }));
-vi.mock("./PageDeploymentsTab", () => ({ PageDeploymentsTab: () => null }));
+vi.mock("./PageDeploymentsTab", () => ({
+  PageDeploymentsTab: (props: unknown) => {
+    mocks.deploymentsTab(props);
+    return null;
+  },
+}));
 vi.mock("./PageManualDeployDialog", () => ({ PageManualDeployDialog: () => null }));
-vi.mock("./PageProjectSettingsTab", () => ({ PageProjectSettingsDialog: () => null }));
 vi.mock("./PageRuntimeConfigTab", () => ({ PageRuntimeConfigTab: () => null }));
 vi.mock("./PageTagsTab", () => ({ PageTagsTab: () => null }));
 vi.mock("./PageTokensTab", () => ({ PageTokensTab: () => null }));
@@ -45,6 +54,7 @@ const project: PageProject = {
   description: null,
   appearanceColor: null,
   spaFallback: false,
+  previewsEnabled: true,
   fallbackUrl: null,
   primaryDomain: null,
   nodeId: null,
@@ -68,7 +78,36 @@ const project: PageProject = {
   updatedAt: new Date(0).toISOString(),
 };
 
-describe("PageProjectDetail deletion", () => {
+const previewResponse = {
+  data: [
+    {
+      id: "deployment-1",
+      projectId: project.id,
+      sequence: 1,
+      publicSlug: "preview-slug",
+      previewHostname: "preview-slug.pages.example.test",
+      status: "ready" as const,
+      artifactSha256: "a".repeat(64),
+      compressedSizeBytes: 1,
+      expandedSizeBytes: 1,
+      fileCount: 1,
+      sourceMetadata: {},
+      requestedTag: null,
+      pinned: false,
+      failureCode: null,
+      failureMessage: null,
+      createdById: "user-1",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      readyAt: new Date(0).toISOString(),
+      deletedAt: null,
+      credentialType: "user" as const,
+    },
+  ],
+  pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
+};
+
+describe("PageProjectDetail", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.navigate.mockReset();
@@ -112,84 +151,121 @@ describe("PageProjectDetail deletion", () => {
     expect(mocks.navigate).toHaveBeenCalledWith("/pages");
   });
 
-  it("shows the latest immutable preview without mounting the deployments tab", async () => {
+  it.each([
+    true,
+    undefined,
+  ])("shows the latest preview with previewsEnabled=%s without mounting deployments", async (previewsEnabled) => {
     mocks.activeTab = "source";
-    vi.spyOn(api, "getPageProject").mockResolvedValue(project);
-    vi.mocked(api.listPageDeployments).mockResolvedValue({
-      data: [
-        {
-          id: "deployment-1",
-          projectId: project.id,
-          sequence: 1,
-          publicSlug: "preview-slug",
-          previewHostname: "preview-slug.pages.example.test",
-          status: "ready",
-          artifactSha256: "a".repeat(64),
-          compressedSizeBytes: 1,
-          expandedSizeBytes: 1,
-          fileCount: 1,
-          sourceMetadata: {},
-          requestedTag: null,
-          pinned: false,
-          failureCode: null,
-          failureMessage: null,
-          createdById: "user-1",
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-          readyAt: new Date(0).toISOString(),
-          deletedAt: null,
-          credentialType: "user",
-        },
-      ],
-      pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
-    });
+    vi.spyOn(api, "getPageProject").mockResolvedValue({
+      ...project,
+      previewsEnabled,
+    } as PageProject);
+    vi.mocked(api.listPageDeployments).mockResolvedValue(previewResponse);
 
     render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
 
     expect(await screen.findByText("Latest immutable preview")).toBeInTheDocument();
     expect(screen.getByText("preview-slug.pages.example.test")).toBeInTheDocument();
     expect(screen.queryByText("Pages Project")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Copy preview" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open preview" })).toBeInTheDocument();
+    expect(mocks.headerActions).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.objectContaining({ label: "Copy latest preview" })])
+    );
   });
 
-  it("prefers the first bound domain over the immutable preview", async () => {
+  it.each([
+    true,
+    false,
+  ])("keeps the bound domain with previewsEnabled=%s", async (previewsEnabled) => {
     mocks.activeTab = "source";
     vi.spyOn(api, "getPageProject").mockResolvedValue({
       ...project,
       primaryDomain: "docs.example.test",
+      previewsEnabled,
     });
-    vi.mocked(api.listPageDeployments).mockResolvedValue({
-      data: [
-        {
-          id: "deployment-1",
-          projectId: project.id,
-          sequence: 1,
-          publicSlug: "preview-slug",
-          previewHostname: "preview-slug.pages.example.test",
-          status: "ready",
-          artifactSha256: "a".repeat(64),
-          compressedSizeBytes: 1,
-          expandedSizeBytes: 1,
-          fileCount: 1,
-          sourceMetadata: {},
-          requestedTag: null,
-          pinned: false,
-          failureCode: null,
-          failureMessage: null,
-          createdById: "user-1",
-          createdAt: new Date(0).toISOString(),
-          updatedAt: new Date(0).toISOString(),
-          readyAt: new Date(0).toISOString(),
-          deletedAt: null,
-          credentialType: "user",
-        },
-      ],
-      pagination: { page: 1, limit: 100, total: 1, totalPages: 1 },
-    });
+    vi.mocked(api.listPageDeployments).mockResolvedValue(previewResponse);
 
     render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
 
     expect(await screen.findByText("Domain")).toBeInTheDocument();
     expect(screen.getByText("docs.example.test")).toBeInTheDocument();
     expect(screen.queryByText("preview-slug.pages.example.test")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open domain" })).toHaveAttribute(
+      "href",
+      `${window.location.protocol}//docs.example.test`
+    );
+    const user = userEvent.setup();
+    const copy = vi.spyOn(navigator.clipboard, "writeText");
+    await user.click(screen.getByRole("button", { name: "Copy domain" }));
+    expect(copy).toHaveBeenCalledWith(`${window.location.protocol}//docs.example.test`);
+    expect(mocks.headerActions).toHaveBeenLastCalledWith(
+      expect.arrayContaining([expect.objectContaining({ label: "Copy domain" })])
+    );
+  });
+
+  it("hides all preview actions and passes the disabled setting to deployments", async () => {
+    vi.spyOn(api, "getPageProject").mockResolvedValue({ ...project, previewsEnabled: false });
+    vi.mocked(api.listPageDeployments).mockResolvedValue(previewResponse);
+    render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
+    await screen.findByRole("heading", { name: project.name });
+    expect(screen.queryByText("Latest immutable preview")).not.toBeInTheDocument();
+    expect(screen.queryByText("preview-slug.pages.example.test")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /copy.*preview/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /open preview/i })).not.toBeInTheDocument();
+    expect(mocks.headerActions).toHaveBeenLastCalledWith(
+      expect.not.arrayContaining([expect.objectContaining({ id: "copy-latest-preview" })])
+    );
+    expect(mocks.deploymentsTab).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      previewsEnabled: false,
+    });
+  });
+
+  it("updates preview visibility only after the settings save succeeds", async () => {
+    const user = userEvent.setup();
+    const editableProject = { ...project, storageQuotaBytes: 1024 ** 3 };
+    useAuthStore.setState({
+      user: {
+        id: "user-1",
+        scopes: ["pages:view:project-1", "pages:edit:project-1"],
+        isBlocked: false,
+      } as never,
+    });
+    vi.spyOn(api, "getPageProject").mockResolvedValue(editableProject);
+    vi.spyOn(api, "listPageProjectPlacementOptions").mockResolvedValue([]);
+    vi.mocked(api.listPageDeployments).mockResolvedValue(previewResponse);
+    let finishSave!: (value: PageProject) => void;
+    const update = vi.spyOn(api, "updatePageProject").mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve;
+        })
+    );
+    render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
+    await screen.findByText("Latest immutable preview");
+    await user.click(screen.getByRole("button", { name: "Settings" }));
+    await user.click(screen.getByRole("button", { name: "Enable public previews" }));
+    expect(update).not.toHaveBeenCalled();
+    expect(screen.getByText("Latest immutable preview")).toBeInTheDocument();
+    expect(mocks.deploymentsTab).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      previewsEnabled: true,
+    });
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(update).toHaveBeenCalledWith(
+      project.id,
+      expect.objectContaining({ previewsEnabled: false })
+    );
+    expect(screen.getByText("Latest immutable preview")).toBeInTheDocument();
+    finishSave({ ...editableProject, previewsEnabled: false });
+    await waitFor(() =>
+      expect(screen.queryByText("Latest immutable preview")).not.toBeInTheDocument()
+    );
+    expect(screen.queryByRole("button", { name: /copy.*preview/i })).not.toBeInTheDocument();
+    expect(mocks.deploymentsTab).toHaveBeenLastCalledWith({
+      projectId: project.id,
+      previewsEnabled: false,
+    });
   });
 });

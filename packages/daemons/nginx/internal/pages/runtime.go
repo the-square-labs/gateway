@@ -339,7 +339,12 @@ func (r *Runtime) RemovePreview(hostname string) error {
 	if !validHostname(hostname) {
 		return errors.New("invalid preview hostname")
 	}
-	return r.applyConfig(r.previewConfigPath(hostname), nil)
+	// Keep an explicit denial vhost: deleting the server block lets this Host
+	// fall through to another preview or a tag route acting as nginx's default.
+	// The tombstone references neither artifacts nor certificates, survives
+	// restarts, and is atomically replaced by MaterializePreview on re-enable.
+	content := fmt.Sprintf("# gateway-pages revoked preview\nserver {\n    listen 80;\n    listen 443 ssl;\n    server_name %s;\n    ssl_reject_handshake on;\n    return 404;\n}\n", hostname)
+	return r.applyConfig(r.previewConfigPath(hostname), []byte(content))
 }
 
 func (r *Runtime) ActivateTagRoute(routeID, deploymentID string) error {
@@ -418,7 +423,7 @@ func (r *Runtime) Inventory() (Inventory, error) {
 	sort.Slice(result.Deployments, func(i, j int) bool { return result.Deployments[i].DeploymentID < result.Deployments[j].DeploymentID })
 	previews, _ := filepath.Glob(filepath.Join(r.configDir, "pages-preview-*.conf"))
 	for _, item := range previews {
-		if content, err := os.ReadFile(item); err == nil {
+		if content, err := os.ReadFile(item); err == nil && !strings.HasPrefix(string(content), "# gateway-pages revoked preview\n") {
 			for _, line := range strings.Split(string(content), "\n") {
 				if hostname, found := strings.CutPrefix(strings.TrimSpace(line), "server_name "); found {
 					result.Previews = append(result.Previews, strings.TrimSuffix(hostname, ";"))

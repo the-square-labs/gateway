@@ -34,6 +34,7 @@ export const UpdatePageProjectSchema = z
     name: z.string().trim().min(1).max(255).optional(),
     description: z.string().trim().max(2000).optional().nullable(),
     appearanceColor: z.enum(NODE_APPEARANCE_COLORS).nullable().optional(),
+    previewsEnabled: z.boolean().optional(),
     spaFallback: z.boolean().optional(),
     fallbackUrl: PageFallbackUrlSchema.nullable().optional(),
     maxDeployments: z.number().int().min(1).max(500).optional(),

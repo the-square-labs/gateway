@@ -271,6 +271,19 @@ describe('NodeDispatchService', () => {
     expect(registry.sendCommand).not.toHaveBeenCalled();
   });
 
+  it('requires safe preview revocation support before removing project URLs', async () => {
+    const old = createService('nginx', { status: 'online', capabilities: { capabilities: ['nginx_pages_v1'] } });
+    await expect(old.service.assertPagesPreviewRevocation('node-1')).rejects.toMatchObject({
+      code: 'PAGES_DAEMON_UPDATE_REQUIRED',
+    });
+    const current = createService('nginx', {
+      status: 'online',
+      capabilities: { capabilities: ['nginx_pages_v1', 'nginx_pages_preview_revocation_v1'] },
+    });
+    await expect(current.service.assertPagesPreviewRevocation('node-1')).resolves.toBeUndefined();
+    expect(old.registry.sendCommand).not.toHaveBeenCalled();
+  });
+
   it('dispatches and parses capability-gated Pages command data', async () => {
     const { registry, service } = createService('nginx', {
       status: 'online',

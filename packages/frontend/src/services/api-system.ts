@@ -5,6 +5,7 @@ import type {
   HousekeepingRunResult,
   HousekeepingStats,
   LicenseStatusView,
+  RelayRebalanceOutcome,
   SystemConfig,
   UpdateStatus,
 } from "@/types";
@@ -32,9 +33,11 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
-    async rebalanceRelayPool(): Promise<unknown> {
+    async rebalanceRelayPool(): Promise<RelayRebalanceOutcome[]> {
       return this.unwrapData(
-        this.request<{ data: unknown }>("/system/relay/rebalance", { method: "POST" })
+        this.request<{ data: RelayRebalanceOutcome[] }>("/system/relay/rebalance", {
+          method: "POST",
+        })
       );
     }
 

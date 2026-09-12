@@ -88,6 +88,19 @@ describe("DockerResourceGitTabs source loading", () => {
     expect(await screen.findByText(/No repository connected/)).toBeInTheDocument();
   });
 
+  it("keeps the separate Source view free of build history and build-list requests", async () => {
+    vi.spyOn(api, "getDockerSource").mockResolvedValue(source);
+    const recent = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
+    const history = vi
+      .spyOn(api, "listDockerBuildPage")
+      .mockResolvedValue({ data: [], nextCursor: null });
+    renderWithRouter(<DockerResourceGitTabs target={target} view="source" />);
+    expect(await screen.findByText("platform/api")).toBeInTheDocument();
+    expect(screen.queryByText("Builds")).not.toBeInTheDocument();
+    expect(recent).not.toHaveBeenCalled();
+    expect(history).not.toHaveBeenCalled();
+  });
+
   it("loads recent builds below repository settings when they share the Source view", async () => {
     vi.spyOn(api, "getDockerSource").mockResolvedValue(source);
     const listBuilds = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
@@ -98,15 +111,20 @@ describe("DockerResourceGitTabs source loading", () => {
     expect(listBuilds).toHaveBeenCalledWith({ sourceBindingId: "source-1", limit: 5 });
   });
 
-  it("loads Pages build history inline without the recent-builds View all pattern", async () => {
-    vi.spyOn(api, "getDockerSource").mockResolvedValue({ ...source, target: pagesTarget });
+  it.each([
+    target,
+    pagesTarget,
+    { kind: "deployment" as const, nodeId: "node-1", deploymentId: "deployment-1" },
+    { kind: "compose_project" as const, nodeId: "node-1", composeProjectId: "compose-1" },
+  ])("loads $kind build history using the same inline Pages table", async (resourceTarget) => {
+    vi.spyOn(api, "getDockerSource").mockResolvedValue({ ...source, target: resourceTarget });
     const listRecent = vi.spyOn(api, "listDockerBuilds").mockResolvedValue([]);
     const listPage = vi.spyOn(api, "listDockerBuildPage").mockResolvedValue({
       data: [],
       nextCursor: null,
     });
 
-    renderWithRouter(<DockerResourceGitTabs target={pagesTarget} view="builds" />);
+    renderWithRouter(<DockerResourceGitTabs target={resourceTarget} view="builds" />);
 
     await waitFor(() =>
       expect(listPage).toHaveBeenCalledWith({

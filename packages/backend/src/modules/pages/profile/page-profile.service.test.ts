@@ -292,6 +292,13 @@ describe('PageProfileService', () => {
     );
   });
 
+  it('does not assign a public URL for a new private deployment', async () => {
+    const { db, raw } = mockDb([[{ deployment: { previewHostname: null }, project: { previewsEnabled: false } }]]);
+    const service = new PageProfileService(db, { log: vi.fn() } as never, 'https://gateway.example.com');
+    await expect(service.assignImmutableHostname(DEPLOYMENT_ID)).resolves.toBeNull();
+    expect(raw.update).not.toHaveBeenCalled();
+  });
+
   it('assigns an immutable preview hostname only once', async () => {
     const baseRow = {
       deployment: { id: DEPLOYMENT_ID, publicSlug: 'abc123', previewHostname: null },

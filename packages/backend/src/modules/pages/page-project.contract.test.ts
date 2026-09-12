@@ -327,3 +327,80 @@ describe('Pages Project platform contract', () => {
     expect(migration).not.toContain('"environment_id"');
   });
 });
+
+describe('Pages public preview settings', () => {
+  function fixture(failCleanup = false) {
+    let project = {
+      id: 'project-1',
+      name: 'Site',
+      previewsEnabled: true,
+      maxDeployments: 20,
+      storageQuotaBytes: 1024,
+      spaFallback: false,
+      fallbackUrl: null,
+    };
+    const client = { query: vi.fn().mockResolvedValue({}), release: vi.fn() };
+    const db = {
+      $client: { connect: async () => client },
+      update: vi.fn(() => ({
+        set: (input: object) => ({
+          where: () => ({
+            returning: async () => {
+              project = { ...project, ...input };
+              return [project];
+            },
+          }),
+        }),
+      })),
+    };
+    const service = new PageProjectService(db as never, { log: vi.fn() } as never);
+    vi.spyOn(service, 'get').mockImplementation(async () => project as never);
+    vi.spyOn(service as any, 'withCounts').mockImplementation(async (value) => value);
+    const runtime = {
+      stageProjectMigration: vi.fn(),
+      cleanupProjectNode: vi.fn(),
+      refreshProjectFallback: vi.fn(),
+      disableProjectPreviews: vi.fn(async () => {
+        expect(project.previewsEnabled).toBe(false);
+        if (failCleanup) throw new Error('offline');
+      }),
+    };
+    const retention = { runProject: vi.fn() };
+    service.setRuntimeAdapter(runtime);
+    service.setRetentionService(retention as never);
+    return { service, runtime, retention, project: () => project, client };
+  }
+
+  it('accepts explicit false and preserves the default when omitted', () => {
+    expect(UpdatePageProjectSchema.parse({ previewsEnabled: false })).toEqual({ previewsEnabled: false });
+    expect(UpdatePageProjectSchema.parse({ name: 'Site' })).not.toHaveProperty('previewsEnabled');
+    expect(() => UpdatePageProjectSchema.parse({ previewsEnabled: 'false' })).toThrow();
+    expect(pageProjects.previewsEnabled.default).toBe(true);
+  });
+
+  it('revokes before acknowledging, leaves retention alone, and can re-enable the same deployments', async () => {
+    const { service, runtime, retention, client } = fixture();
+    await expect(
+      service.update('project-1', { previewsEnabled: false, maxDeployments: 20, storageQuotaBytes: 1024 }, 'user-1')
+    ).resolves.toMatchObject({ previewsEnabled: false });
+    expect(runtime.disableProjectPreviews).toHaveBeenCalledWith('project-1');
+    expect(retention.runProject).not.toHaveBeenCalled();
+    expect(client.query.mock.calls[0][0]).toContain('pg_advisory_lock');
+    expect(client.query.mock.calls[1][0]).toContain('pg_advisory_unlock');
+    await expect(service.update('project-1', { previewsEnabled: true }, 'user-1')).resolves.toMatchObject({
+      previewsEnabled: true,
+    });
+    expect(runtime.refreshProjectFallback).toHaveBeenCalledWith('project-1');
+  });
+
+  it('keeps revocation committed on an offline node, reports pending cleanup and retries even when already false', async () => {
+    const { service, runtime, project } = fixture(true);
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(service.update('project-1', { previewsEnabled: false }, 'user-1')).rejects.toMatchObject({
+        code: 'PAGE_PROJECT_PREVIEW_CLEANUP_PENDING',
+      });
+      expect(project().previewsEnabled).toBe(false);
+    }
+    expect(runtime.disableProjectPreviews).toHaveBeenCalledTimes(2);
+  });
+});

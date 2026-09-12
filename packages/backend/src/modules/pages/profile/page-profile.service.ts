@@ -551,6 +551,7 @@ export class PageProfileService {
       .limit(1);
     if (!row) return null;
     if (row.deployment.previewHostname) return row.deployment.previewHostname;
+    if (row.project.previewsEnabled === false) return null;
     const hostname = renderPageHostname(
       row.profile.labelTemplate,
       row.deployment.publicSlug,

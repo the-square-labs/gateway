@@ -45,12 +45,15 @@ export function AdditionalSecureLinkBindings({
   const [pending, setPending] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const hiddenBindingIds = useRef(new Set<string>());
+  const requestGeneration = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++requestGeneration.current;
     const [nextBindings, nextContainers] = await Promise.all([
       api.listProxyAdditionalSecureLinks(hostId),
       api.listDockerContainerSnapshots(),
     ]);
+    if (generation !== requestGeneration.current) return;
     setBindings(
       nextBindings.filter(
         (binding) =>
@@ -67,8 +70,19 @@ export function AdditionalSecureLinkBindings({
         error instanceof Error ? error.message : "Failed to load additional Secure Links"
       );
     });
+    return () => {
+      requestGeneration.current++;
+    };
   }, [load]);
   useRealtime("proxy.secure-link.changed", load);
+  useRealtime(
+    "proxy.additional-route.changed",
+    (payload) => {
+      const event = payload as { hostId?: string; id?: string };
+      if ((event.hostId ?? event.id) === hostId) return load();
+    },
+    { onReconnect: load }
+  );
   useRealtime("docker.snapshot.changed", load);
   useRealtime("docker.deployment.changed", load);
 

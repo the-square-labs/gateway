@@ -533,3 +533,88 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 		t.Fatalf("mode %s = %04o, want %04o", path, got, want)
 	}
 }
+
+func TestPreviewRevocationKeepsFilesAndTagRoutes(t *testing.T) {
+	runtime, manager := newRuntime(t)
+	stageRelease(t, runtime)
+	host := "private.pages.example"
+	if err := runtime.MaterializePreview(profileID, deploymentID, host, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.ActivateTagRoute(routeID, deploymentID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(runtime.routeIncludePath(routeID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RemovePreview(host); err != nil {
+		t.Fatal(err)
+	}
+	denied, err := os.ReadFile(runtime.previewConfigPath(host))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(denied), "return 404;") || !strings.Contains(string(denied), "ssl_reject_handshake on;") || strings.Contains(string(denied), runtime.releaseContentDir(deploymentID)) {
+		t.Fatalf("unsafe revocation config: %s", denied)
+	}
+	if _, err := runtime.VerifyRelease(deploymentID, ""); err != nil {
+		t.Fatal("revocation removed files:", err)
+	}
+	after, err := os.ReadFile(runtime.routeIncludePath(routeID))
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatal("tag route changed")
+	}
+	inventory, err := runtime.Inventory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inventory.Previews) != 0 || len(inventory.Deployments) != 1 {
+		t.Fatalf("unexpected inventory: %#v", inventory)
+	}
+	// Reconciliation is cheap when unchanged and restores missing or rolled-back configuration.
+	reloads := manager.reloadCalls
+	if err := runtime.RemovePreview(host); err != nil {
+		t.Fatal(err)
+	}
+	if manager.reloadCalls != reloads {
+		t.Fatal("unchanged revocation reloaded nginx")
+	}
+	if err := os.Remove(runtime.previewConfigPath(host)); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RemovePreview(host); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ := os.ReadFile(runtime.previewConfigPath(host))
+	if !bytes.Equal(denied, restored) {
+		t.Fatal("lost denial was not restored")
+	}
+	if err := os.WriteFile(runtime.previewConfigPath(host), []byte("old active preview"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.RemovePreview(host); err != nil {
+		t.Fatal(err)
+	}
+	restored, _ = os.ReadFile(runtime.previewConfigPath(host))
+	if !bytes.Equal(denied, restored) {
+		t.Fatal("rolled-back preview was not denied")
+	}
+	// A failed attempt to re-enable must preserve denial, not expose a partial host.
+	manager.reloadErr = errors.New("reload failed")
+	if err := runtime.MaterializePreview(profileID, deploymentID, host, "", ""); err == nil {
+		t.Fatal("expected reload failure")
+	}
+	stillDenied, _ := os.ReadFile(runtime.previewConfigPath(host))
+	if !bytes.Equal(denied, stillDenied) {
+		t.Fatal("denial did not survive rollback")
+	}
+	manager.reloadErr = nil
+	if err := runtime.MaterializePreview(profileID, deploymentID, host, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	live, _ := os.ReadFile(runtime.previewConfigPath(host))
+	if !strings.Contains(string(live), runtime.releaseContentDir(deploymentID)) {
+		t.Fatal("preview did not reopen")
+	}
+}

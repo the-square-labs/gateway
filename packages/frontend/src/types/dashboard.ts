@@ -86,8 +86,24 @@ export interface DashboardRelaySnapshot {
   endpointCount?: number;
   instances?: DashboardRelayInstance[];
   staging?: Array<{ id: string; endpointId: string; generation: number; state: string }>;
+  failures?: Array<{
+    id: string;
+    endpointId: string;
+    generation: number;
+    activationError: string | null;
+    updatedAt: string;
+  }>;
+  blockers?: string[];
+  automaticRebalancePaused?: boolean;
+  automaticRebalanceRetryAt?: string | null;
   update?: { state: string; targetVersion: string; error: string | null } | null;
   local?: DashboardRelaySnapshot | null;
+}
+
+export interface RelayRebalanceOutcome {
+  id: string;
+  state: "active" | "staging" | "failed" | "draining" | "retired";
+  error: string | null;
 }
 
 export interface DashboardRelayInstance {

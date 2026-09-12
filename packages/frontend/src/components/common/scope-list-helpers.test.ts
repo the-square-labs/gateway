@@ -91,6 +91,24 @@ describe("resource restriction mappings", () => {
     expect(inventory).not.toHaveBeenCalled();
     folders.mockRestore();
   });
+
+  it("loads Compose permission folders with the canonical API type and preserves nested folder IDs", async () => {
+    useAuthStore.setState({ user: { scopes: ["docker:compose:create:folder/f1"] } as never });
+    const folders = vi
+      .spyOn(api, "listDockerFolders")
+      .mockResolvedValue([
+        { id: "f1", name: "Production", children: [{ id: "f2", name: "Analytics", children: [] }] },
+      ] as never);
+    try {
+      expect(await loadFolderFamily("docker-compose")).toEqual([
+        { id: "f1", label: "Production", family: "docker-compose", ancestorIds: [] },
+        { id: "f2", label: "Production/Analytics", family: "docker-compose", ancestorIds: ["f1"] },
+      ]);
+      expect(folders).toHaveBeenCalledExactlyOnceWith("compose");
+    } finally {
+      folders.mockRestore();
+    }
+  });
   it("keeps expected authorization/feature races quiet but reports real failures", () => {
     const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
     reportScopeLoadError("schemas", { status: 503, code: "LOGGING_DISABLED" });

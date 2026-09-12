@@ -97,6 +97,7 @@ export function EnvironmentTab({
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
   const envContainerIdRef = useRef(containerId);
   const envRequestGenerationRef = useRef(0);
+  const envMutationInProgressRef = useRef(false);
 
   const scopeSuffix = `${nodeId}${scopeResourceId ? `/${scopeResourceId}` : ""}`;
   const canEdit = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
@@ -164,6 +165,7 @@ export function EnvironmentTab({
   }, [activeManagedDatabaseVariableNames]);
 
   const fetchEnv = useCallback(async () => {
+    if (envMutationInProgressRef.current || disabled) return;
     const targetContainerId = envContainerIdRef.current;
     const requestGeneration = ++envRequestGenerationRef.current;
     const isCurrentRequest = () =>
@@ -245,11 +247,14 @@ export function EnvironmentTab({
     } finally {
       if (isCurrentRequest()) setIsLoading(false);
     }
-  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature, secretApi]);
+  }, [canEdit, canManageSecrets, nodeId, isServiceEnv, serviceEnvSignature, secretApi, disabled]);
 
   useEffect(() => {
     envContainerIdRef.current = containerId;
     fetchEnv();
+    return () => {
+      envRequestGenerationRef.current++;
+    };
   }, [containerId, fetchEnv]);
 
   useEffect(
@@ -486,6 +491,8 @@ export function EnvironmentTab({
     if (!ok) return;
 
     setIsSaving(true);
+    envMutationInProgressRef.current = true;
+    envRequestGenerationRef.current++;
     onMutationStart?.(savingDatabaseLinks || recreatesRunningContainer ? "recreating" : "updating");
     try {
       // 1. Flush secret changes to DB
@@ -606,6 +613,11 @@ export function EnvironmentTab({
       }
 
       if (canEdit || savingDatabaseLinks) {
+        const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
+        setEnvVars(Object.entries(newEnv).map(([key, value]) => ({ key, value })));
+        setOriginalEnv(entries);
+        setRawText(entries.join("\n"));
+        setIsLoading(false);
         toast.success(
           savingDatabaseLinks || recreatesRunningContainer
             ? "Environment and database links updated — recreating container"
@@ -626,6 +638,7 @@ export function EnvironmentTab({
       onMutationEnd?.();
       toast.error(err instanceof Error ? err.message : "Failed to update environment");
     } finally {
+      envMutationInProgressRef.current = false;
       setIsSaving(false);
     }
   };

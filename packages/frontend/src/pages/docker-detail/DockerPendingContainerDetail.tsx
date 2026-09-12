@@ -119,8 +119,8 @@ export function DockerPendingContainerDetail({
           title="Resource created"
           description="The container will be created by the first successful deployment. You can edit the security policy in Source and retry failed or blocked builds. Runtime actions become available after deployment."
         />
-        <Tabs value={tab} onValueChange={setTab} className="min-w-0">
-          <TabsList>
+        <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <TabsList className="shrink-0">
             <TabsTrigger value="source" className="gap-1.5">
               <GitBranch className="h-3.5 w-3.5" />
               Source
@@ -139,7 +139,7 @@ export function DockerPendingContainerDetail({
               canBuild={canBuild}
             />
           </TabsContent>
-          <TabsContent value="builds">
+          <TabsContent value="builds" className="flex min-h-0 flex-1 flex-col pb-0">
             <DockerResourceGitTabs
               target={{ kind: "container", nodeId, containerName }}
               view="builds"

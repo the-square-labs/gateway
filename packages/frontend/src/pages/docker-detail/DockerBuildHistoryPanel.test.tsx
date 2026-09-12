@@ -60,6 +60,37 @@ describe("DockerBuildHistoryPanel", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("ticks inline history every second without refetching and freezes completed rows", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-10T12:00:10Z"));
+    const active = {
+      ...build(0),
+      status: "building" as const,
+      startedAt: "2026-09-10T12:00:00Z",
+      completedAt: null,
+      progress: { elapsedSeconds: 1 },
+    };
+    const completed = {
+      ...build(1),
+      startedAt: "2026-09-10T12:00:00Z",
+      completedAt: "2026-09-10T12:00:04Z",
+    };
+    const request = vi
+      .spyOn(api, "listDockerBuildPage")
+      .mockResolvedValue({ data: [active, completed], nextCursor: null });
+    renderWithRouter(
+      <DockerBuildHistoryPanel builds={[]} sourceBindingId="source-1" inlineHistory />
+    );
+    await act(async () => undefined);
+    expect(screen.getByText("10s")).toBeInTheDocument();
+    expect(screen.getByText("4s")).toBeInTheDocument();
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(screen.getByText("11s")).toBeInTheDocument();
+    expect(screen.getByText("4s")).toBeInTheDocument();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("shows 5 recent builds and opens the full history from View all", async () => {

@@ -4,6 +4,7 @@ import {
   Code2,
   Copy,
   GitBranch,
+  Hammer,
   Pin,
   Play,
   RotateCcw,
@@ -365,7 +366,17 @@ export function DockerContainerDetail({
   const runtimeSecureLinkContainerRef = useRef(containerId);
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "source", "logs", "console", "files", "stats", "environment", "settings"],
+    [
+      "overview",
+      "source",
+      "builds",
+      "logs",
+      "console",
+      "files",
+      "stats",
+      "environment",
+      "settings",
+    ],
     "overview",
     (tab) => dockerContainerRoute(nodeSlug, routeContainerName, tab)
   );
@@ -1667,6 +1678,10 @@ export function DockerContainerDetail({
               <GitBranch className="h-3.5 w-3.5" />
               Source
             </TabsTrigger>
+            <TabsTrigger value="builds" className="gap-1.5">
+              <Hammer className="h-3.5 w-3.5" />
+              Builds
+            </TabsTrigger>
             {canViewContainer && (
               <TabsTrigger value="logs" disabled={isTabDisabled("logs")}>
                 Logs
@@ -1720,7 +1735,12 @@ export function DockerContainerDetail({
             <DockerResourceGitTabs
               target={{ kind: "container", nodeId: nodeId!, containerName: routeContainerName }}
               view="source"
-              includeBuilds
+            />
+          </TabsContent>
+          <TabsContent value="builds" className="flex min-h-0 flex-1 flex-col pb-0">
+            <DockerResourceGitTabs
+              target={{ kind: "container", nodeId: nodeId!, containerName: routeContainerName }}
+              view="builds"
             />
           </TabsContent>
           {canViewContainer && !currentTransition && (!unavailable || availabilityManaged) && (

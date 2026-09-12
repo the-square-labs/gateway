@@ -337,7 +337,8 @@ export function PageProjectDetail({
     };
   }, [canEdit, project]);
 
-  const publicHostname = project?.primaryDomain ?? latestPreviewHostname;
+  const previewsEnabled = project?.previewsEnabled ?? true;
+  const publicHostname = project?.primaryDomain ?? (previewsEnabled ? latestPreviewHostname : null);
   const latestPreviewUrl = publicHostname ? `${window.location.protocol}//${publicHostname}` : null;
   const visibleTab = PROJECT_TABS.includes(activeTab as (typeof PROJECT_TABS)[number])
     ? activeTab
@@ -491,7 +492,7 @@ export function PageProjectDetail({
                 }}
               >
                 <Copy className="h-4 w-4" />
-                Copy preview
+                {project.primaryDomain ? "Copy domain" : "Copy preview"}
               </Button>
             )}
             {canDelete && (
@@ -519,7 +520,7 @@ export function PageProjectDetail({
                   href={latestPreviewUrl}
                   target="_blank"
                   rel="noreferrer"
-                  aria-label="Open preview"
+                  aria-label={project.primaryDomain ? "Open domain" : "Open preview"}
                 >
                   <ExternalLink className="h-4 w-4" />
                 </a>
@@ -554,7 +555,7 @@ export function PageProjectDetail({
             </TabsTrigger>
           </TabsList>
           <TabsContent value="deployments" className="pb-0">
-            <PageDeploymentsTab projectId={project.id} />
+            <PageDeploymentsTab projectId={project.id} previewsEnabled={previewsEnabled} />
           </TabsContent>
           <TabsContent value="source" className="pb-6">
             <DockerResourceGitTabs

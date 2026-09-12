@@ -29,6 +29,11 @@ import { useDockerStore } from "@/stores/docker";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import type { DockerBuild, DockerBuildStatus } from "@/types";
 import { DockerBuildDetailsDialog } from "./docker-detail/DockerBuildDetailsDialog";
+import {
+  formatDockerBuildDuration,
+  useDockerBuildClock,
+} from "./docker-detail/docker-build-duration";
+import { ACTIVE_DOCKER_BUILD_STATUSES as ACTIVE } from "./docker-detail/docker-build-status";
 
 const STATUS_VARIANT: Record<
   DockerBuildStatus,
@@ -47,30 +52,8 @@ const STATUS_VARIANT: Record<
   superseded: "secondary",
 };
 
-const ACTIVE = new Set<DockerBuildStatus>([
-  "queued",
-  "claimed",
-  "checking_out",
-  "building",
-  "scanning",
-  "pushing",
-  "deploying",
-]);
 function shortSha(value: string) {
   return value.slice(0, 8);
-}
-
-function buildDuration(build: DockerBuild) {
-  const start = Date.parse(build.startedAt ?? build.queuedAt);
-  const elapsedSeconds = Number(build.progress.elapsedSeconds);
-  const end = build.completedAt
-    ? Date.parse(build.completedAt)
-    : Number.isFinite(elapsedSeconds)
-      ? start + elapsedSeconds * 1000
-      : Date.now();
-  const seconds = Math.max(0, Math.round((end - start) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 export interface DockerBuildsProps {
@@ -80,6 +63,7 @@ export interface DockerBuildsProps {
 export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [rows, setRows] = useState<DockerBuild[]>([]);
+  const now = useDockerBuildClock(rows);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -369,25 +353,13 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         },
       },
       {
-        key: "artifactSha",
-        header: "SHA",
-        align: "right",
-        width: "12rem",
-        render: (build) =>
-          build.artifact ? (
-            <span className="font-mono text-xs">{`${build.artifact.digest.slice(0, 19)}…`}</span>
-          ) : (
-            <span className="text-muted-foreground">—</span>
-          ),
-      },
-      {
         key: "time",
         header: "Duration / created",
         align: "right",
         width: "11rem",
         render: (build) => (
           <span className="block">
-            <span className="block">{buildDuration(build)}</span>
+            <span className="block">{formatDockerBuildDuration(build, now)}</span>
             <span className="block text-xs text-muted-foreground">
               {new Date(build.createdAt).toLocaleString()}
             </span>
@@ -438,7 +410,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         ),
       },
     ],
-    [act]
+    [act, now]
   );
 
   return (

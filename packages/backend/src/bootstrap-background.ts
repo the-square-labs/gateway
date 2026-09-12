@@ -52,6 +52,7 @@ import { NotificationWebhookService } from '@/modules/notifications/notification
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { PageMaintenanceService } from '@/modules/pages/retention/page-maintenance.service.js';
 import { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
+import { PageNodeRuntimeService } from '@/modules/pages/runtime/page-node-runtime.service.js';
 import { TemplatesService } from '@/modules/pki/templates.service.js';
 import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
@@ -118,6 +119,7 @@ export async function initializeBackgroundServices(): Promise<void> {
   const dockerSnapshotService = container.resolve(DockerSnapshotService);
   const pageMaintenanceService = container.resolve(PageMaintenanceService);
   const pageProfileService = container.resolve(PageProfileService);
+  const pageNodeRuntimeService = container.resolve(PageNodeRuntimeService);
   const pageRouteService = container.resolve(PageRouteService);
   const updateService = container.resolve(UpdateService);
   const eventBus = container.resolve(EventBusService);
@@ -261,6 +263,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('pages-maintenance', 15 * 60 * 1000, async () => {
     await pageMaintenanceService.run();
   });
+  scheduler.registerInterval('pages-preview-revocation', 60 * 1000, () =>
+    pageNodeRuntimeService.reconcileDisabledProjectPreviews()
+  );
   scheduler.registerInterval('pages-profile-reconcile', 60 * 1000, async () => {
     await pageProfileService.reconcile();
   });

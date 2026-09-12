@@ -13,13 +13,26 @@ import {
   relayPoolUpdateSteps,
   relayRoutes,
 } from '@/db/schema/index.js';
+import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { RelayPolicyService } from './relay-policy.service.js';
+import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
+const AUTO_REBALANCE_SETTLE_MS = 30_000;
+const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
+const STAGING_RECOVERY_MS = 2 * 60_000;
+
+function poolBlockers(instances: RelayInstanceRow[]): string[] {
+  return instances.flatMap((instance) =>
+    instance.capabilities?.features?.includes('relay_pool_v1')
+      ? []
+      : [`${instance.displayName}: Relay Pool capability is unavailable; update or repair this relay`]
+  );
+}
 
 function rendezvousScore(endpointId: string, instance: RelayInstanceRow): bigint {
   const digest = createHash('sha256').update(`${endpointId}:${instance.id}`).digest();
@@ -63,6 +76,10 @@ function sameAssignmentSet(assignments: Array<{ relayInstanceId: string }>, inst
 
 export class RelayPoolService {
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
+  private reconciliationFlight: Promise<void> | null = null;
+  private rebalanceFlight = false;
+  private stablePlan: { key: string; since: number } | null = null;
+  private retryAfter = 0;
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -74,9 +91,73 @@ export class RelayPoolService {
   startReconciliation(): void {
     if (this.reconciliationTimer) return;
     this.reconciliationTimer = setInterval(() => {
-      void this.retireDrainedGenerations().catch(() => undefined);
+      void this.reconcile().catch((error) =>
+        logger.warn('Relay pool reconciliation failed', {
+          error: error instanceof Error ? error.message : String(error),
+        })
+      );
     }, 5_000);
     this.reconciliationTimer.unref();
+  }
+
+  stopReconciliation(): void {
+    if (this.reconciliationTimer) clearInterval(this.reconciliationTimer);
+    this.reconciliationTimer = null;
+  }
+
+  reconcile(): Promise<void> {
+    if (this.reconciliationFlight) return this.reconciliationFlight;
+    const flight = this.reconcileOnce().finally(() => {
+      if (this.reconciliationFlight === flight) this.reconciliationFlight = null;
+    });
+    this.reconciliationFlight = flight;
+    return flight;
+  }
+
+  private async reconcileOnce(): Promise<void> {
+    await this.retireDrainedGenerations();
+    if (this.rebalanceFlight) return;
+    const snapshot = await this.getSnapshot();
+    const now = Date.now();
+    if (snapshot.automaticRebalancePaused || snapshot.blockers.length) {
+      this.stablePlan = null;
+      return;
+    }
+    if (snapshot.staging.length) {
+      const abandoned = snapshot.staging.filter(
+        (generation) => now - generation.updatedAt.getTime() >= STAGING_RECOVERY_MS
+      );
+      if (abandoned.length) {
+        // Do not replay a partially acknowledged generation: stale acknowledgements
+        // must never activate it ahead of the next full set of probes.
+        await this.failStaging(
+          abandoned.map(({ id }) => id),
+          new Error('Rebalance preparation was interrupted; a fresh verified attempt is required')
+        );
+      }
+      return;
+    }
+    if (!snapshot.rebalanceAvailable) {
+      this.stablePlan = null;
+      return;
+    }
+    if (this.stablePlan?.key !== snapshot.rebalancePlanKey) {
+      this.stablePlan = { key: snapshot.rebalancePlanKey, since: now };
+      return;
+    }
+    const failedAt = new Map(snapshot.failures.map((failure) => [failure.endpointId, failure.updatedAt.getTime()]));
+    const endpointIds = snapshot.rebalanceEndpointIds.filter(
+      (id) => now >= (failedAt.get(id) ?? 0) + AUTO_REBALANCE_RETRY_MS
+    );
+    if (now - this.stablePlan.since < AUTO_REBALANCE_SETTLE_MS || now < this.retryAfter || !endpointIds.length) return;
+    // Set the guard before any await, including failures before a generation can
+    // be persisted. A broken dependency must not produce a five-second storm.
+    this.retryAfter = now + AUTO_REBALANCE_RETRY_MS;
+    await this.stageRebalance(undefined, { allowNoop: true, automatic: true, endpointIds });
+    // Persisted failed generations carry their own cooldown. Successful/no-op
+    // runs must not delay a subsequent independent topology change for minutes.
+    this.retryAfter = 0;
+    this.stablePlan = null;
   }
 
   async retireDrainedGenerations(): Promise<number> {
@@ -102,16 +183,20 @@ export class RelayPoolService {
         );
       });
       if (!fullyObservedAndIdle) continue;
-      const result = await this.db
-        .update(relayEndpointAssignmentGenerations)
-        .set({ state: 'retired', retiredAt: new Date(), updatedAt: new Date() })
-        .where(
-          and(
-            eq(relayEndpointAssignmentGenerations.id, generation.id),
-            eq(relayEndpointAssignmentGenerations.state, 'draining')
+      const result = await this.db.transaction(async (tx) => {
+        const changed = await tx
+          .update(relayEndpointAssignmentGenerations)
+          .set({ state: 'retired', retiredAt: new Date(), updatedAt: new Date() })
+          .where(
+            and(
+              eq(relayEndpointAssignmentGenerations.id, generation.id),
+              eq(relayEndpointAssignmentGenerations.state, 'draining')
+            )
           )
-        )
-        .returning({ id: relayEndpointAssignmentGenerations.id });
+          .returning({ id: relayEndpointAssignmentGenerations.id });
+        if (changed.length) await bumpRelayPolicyRevision(tx);
+        return changed;
+      });
       retired += result.length;
     }
     if (retired > 0) {
@@ -122,16 +207,21 @@ export class RelayPoolService {
   }
 
   async getSnapshot() {
-    const [persistedInstances, endpoints, generations, assignments, generalSettings] = await Promise.all([
-      this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system')),
-      this.db.select().from(relayEndpoints).where(eq(relayEndpoints.status, 'active')),
-      this.db
-        .select()
-        .from(relayEndpointAssignmentGenerations)
-        .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])),
-      this.db.select().from(relayEndpointAssignments),
-      this.settings.getConfig(),
-    ]);
+    const [persistedInstances, endpoints, generations, assignments, generalSettings, latestGenerations] =
+      await Promise.all([
+        this.db.select().from(relayInstances).where(eq(relayInstances.poolId, 'system')),
+        this.db.select().from(relayEndpoints).where(eq(relayEndpoints.status, 'active')),
+        this.db
+          .select()
+          .from(relayEndpointAssignmentGenerations)
+          .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])),
+        this.db.select().from(relayEndpointAssignments),
+        this.settings.getConfig(),
+        this.db
+          .selectDistinctOn([relayEndpointAssignmentGenerations.endpointId])
+          .from(relayEndpointAssignmentGenerations)
+          .orderBy(relayEndpointAssignmentGenerations.endpointId, desc(relayEndpointAssignmentGenerations.generation)),
+      ]);
     const instances = persistedInstances.filter(isEnrolledRelayInstance);
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, generalSettings.relay.assignmentSpread);
     const assignmentsByGeneration = new Map<string, typeof assignments>();
@@ -164,19 +254,57 @@ export class RelayPoolService {
     const readyFaultDomains = new Set(
       instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
     );
-    const rebalanceAvailable =
-      readyFaultDomains.size > 0 &&
-      endpoints.some((endpoint) => {
-        if (endpoint.ownerKind === 'internal_registry') return false;
-        const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
-        const selectedIds = chooseCandidates(
-          endpoint.id,
-          instances,
-          effectiveCount(spread, readyFaultDomains.size)
-        ).map(({ id }) => id);
-        const active = activeByEndpoint.get(endpoint.id);
-        return !active || !sameAssignmentSet(assignmentsByGeneration.get(active.id) ?? [], selectedIds);
-      });
+    const rebalancePlan =
+      readyFaultDomains.size === 0
+        ? []
+        : endpoints.flatMap((endpoint) => {
+            if (endpoint.ownerKind === 'internal_registry') return [];
+            const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
+            const selectedIds = chooseCandidates(
+              endpoint.id,
+              instances,
+              effectiveCount(spread, readyFaultDomains.size)
+            ).map(({ id }) => id);
+            const active = activeByEndpoint.get(endpoint.id);
+            if (active && sameAssignmentSet(assignmentsByGeneration.get(active.id) ?? [], selectedIds)) return [];
+            const participants = new Set(selectedIds);
+            for (const retained of generations.filter(
+              (generation) => generation.endpointId === endpoint.id && ['active', 'draining'].includes(generation.state)
+            )) {
+              for (const assignment of assignmentsByGeneration.get(retained.id) ?? [])
+                participants.add(assignment.relayInstanceId);
+            }
+            return [
+              {
+                endpointId: endpoint.id,
+                instanceIds: selectedIds.sort(),
+                blockers: poolBlockers(instances.filter(({ id }) => participants.has(id))),
+              },
+            ];
+          });
+    const eligiblePlan = rebalancePlan.filter(({ blockers }) => !blockers.length);
+    const rebalanceAvailable = eligiblePlan.length > 0;
+    // A blocked workload must not disable the action for unrelated eligible ones.
+    const blockers = rebalanceAvailable ? [] : [...new Set(rebalancePlan.flatMap(({ blockers }) => blockers))];
+    const rebalancePlanKey = createHash('sha256')
+      .update(JSON.stringify(eligiblePlan.sort((a, b) => a.endpointId.localeCompare(b.endpointId))))
+      .digest('hex');
+    const endpointIds = new Set(endpoints.map(({ id }) => id));
+    const failures = latestGenerations.filter(
+      (generation) => generation.state === 'failed' && endpointIds.has(generation.endpointId)
+    );
+    const failuresByEndpoint = new Map(failures.map((failure) => [failure.endpointId, failure]));
+    const nextAutomaticRetry = eligiblePlan.length
+      ? Math.min(
+          ...eligiblePlan.map(({ endpointId }) => {
+            const failure = failuresByEndpoint.get(endpointId);
+            return failure ? failure.updatedAt.getTime() + AUTO_REBALANCE_RETRY_MS : 0;
+          })
+        )
+      : 0;
+    const automaticRebalancePaused =
+      Boolean(updateRun && !['complete', 'failed'].includes(updateRun.state)) ||
+      instances.some(({ state }) => state === 'draining');
     const activeTunnels = instances.reduce((sum, instance) => sum + (instance.health?.activeTunnels ?? 0), 0);
     const registeredEndpoints = instances.reduce(
       (sum, instance) => sum + (instance.health?.registeredEndpoints ?? 0),
@@ -192,12 +320,18 @@ export class RelayPoolService {
         ? 'unavailable'
         : generations.some(({ state }) => state === 'staging')
           ? 'rebalancing'
-          : degraded
+          : degraded || failures.length > 0 || blockers.length > 0
             ? 'degraded'
             : rebalanceAvailable
               ? 'rebalance_available'
               : 'healthy',
       rebalanceAvailable,
+      rebalanceEndpointIds: eligiblePlan.map(({ endpointId }) => endpointId),
+      rebalancePlanKey,
+      blockers,
+      failures,
+      automaticRebalancePaused,
+      automaticRebalanceRetryAt: nextAutomaticRetry > Date.now() ? new Date(nextAutomaticRetry) : null,
       activeTunnels,
       registeredEndpoints,
       worstPressurePercent: worstPressure,
@@ -321,7 +455,27 @@ export class RelayPoolService {
     });
   }
 
-  async stageRebalance(userId: string, options: { endpointIds?: string[]; allowNoop?: boolean } = {}) {
+  async stageRebalance(
+    userId?: string,
+    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean } = {}
+  ) {
+    if (this.rebalanceFlight)
+      throw new AppError(409, 'RELAY_REBALANCE_IN_PROGRESS', 'Relay rebalance is already running');
+    this.rebalanceFlight = true;
+    try {
+      return await this.stageRebalanceOnce(userId, options);
+    } finally {
+      this.rebalanceFlight = false;
+    }
+  }
+
+  private async stageRebalanceOnce(
+    userId: string | undefined,
+    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean }
+  ) {
+    // Synchronize local live capabilities before selecting candidates. This also
+    // recovers the persisted legacy capability row after a compatible relay upgrade.
+    await this.policy.syncSnapshot();
     const endpointFilter = options.endpointIds?.length
       ? inArray(relayEndpoints.id, options.endpointIds)
       : eq(relayEndpoints.status, 'active');
@@ -333,15 +487,36 @@ export class RelayPoolService {
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, globalSpread);
     const staged = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
-      const readyInstances = await tx
-        .select()
-        .from(relayInstances)
-        .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.state, 'ready')));
+      if (options.automatic) {
+        const [update] = await tx
+          .select()
+          .from(relayPoolUpdateRuns)
+          .where(eq(relayPoolUpdateRuns.poolId, 'system'))
+          .orderBy(desc(relayPoolUpdateRuns.startedAt))
+          .limit(1);
+        const draining = await tx
+          .select({ id: relayInstances.id })
+          .from(relayInstances)
+          .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.state, 'draining')))
+          .limit(1);
+        if ((update && !['complete', 'failed'].includes(update.state)) || draining.length) return [];
+      }
+      const candidates = await tx.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
+      const readyInstances = candidates.filter(
+        (instance) => instance.state === 'ready' && isEnrolledRelayInstance(instance)
+      );
       const readyFaultDomains = new Set(readyInstances.map(({ faultDomainId }) => faultDomainId)).size;
       if (readyFaultDomains < 1) {
         throw new AppError(409, 'RELAY_CAPACITY_UNAVAILABLE', 'At least one ready physical relay host is required');
       }
-      const created: Array<{ id: string; endpointId: string; generation: number; instanceIds: string[] }> = [];
+      const created: Array<{
+        id: string;
+        endpointId: string;
+        generation: number;
+        instanceIds: string[];
+        state: 'staging' | 'failed';
+      }> = [];
+      let alreadyStaging = false;
       for (const endpoint of endpoints) {
         if (endpoint.ownerKind === 'internal_registry') continue;
         const [staging] = await tx
@@ -354,27 +529,43 @@ export class RelayPoolService {
             )
           )
           .limit(1);
-        if (staging) continue;
-        const [active] = await tx
+        if (staging) {
+          alreadyStaging = true;
+          continue;
+        }
+        const retained = await tx
           .select()
           .from(relayEndpointAssignmentGenerations)
           .where(
             and(
               eq(relayEndpointAssignmentGenerations.endpointId, endpoint.id),
-              eq(relayEndpointAssignmentGenerations.state, 'active')
+              inArray(relayEndpointAssignmentGenerations.state, ['active', 'draining'])
             )
-          )
-          .limit(1);
-        const activeAssignments = active
+          );
+        const active = retained.find(({ state }) => state === 'active');
+        const retainedAssignments = retained.length
           ? await tx
               .select()
               .from(relayEndpointAssignments)
-              .where(eq(relayEndpointAssignments.assignmentGenerationId, active.id))
+              .where(
+                inArray(
+                  relayEndpointAssignments.assignmentGenerationId,
+                  retained.map(({ id }) => id)
+                )
+              )
           : [];
+        const activeAssignments = retainedAssignments.filter(
+          ({ assignmentGenerationId }) => assignmentGenerationId === active?.id
+        );
         const spread = effectiveSpreads.get(endpoint.id) ?? globalSpread;
         const selected = chooseCandidates(endpoint.id, readyInstances, effectiveCount(spread, readyFaultDomains));
         const selectedIds = selected.map(({ id }) => id);
         if (!selectedIds.length || sameAssignmentSet(activeAssignments, selectedIds)) continue;
+        const participantIds = new Set([
+          ...selectedIds,
+          ...retainedAssignments.map(({ relayInstanceId }) => relayInstanceId),
+        ]);
+        const blockers = poolBlockers(candidates.filter(({ id }) => participantIds.has(id)));
         const [latest] = await tx
           .select({ generation: relayEndpointAssignmentGenerations.generation })
           .from(relayEndpointAssignmentGenerations)
@@ -387,10 +578,19 @@ export class RelayPoolService {
           .values({
             endpointId: endpoint.id,
             generation: generationNumber,
-            state: 'staging',
+            state: blockers.length ? 'failed' : 'staging',
+            activationError: blockers.length ? blockers.join('; ').slice(0, 1000) : null,
             desiredRedundancy: selectedIds.length,
           })
           .returning();
+        created.push({
+          id: generation.id,
+          endpointId: endpoint.id,
+          generation: generationNumber,
+          instanceIds: selectedIds,
+          state: blockers.length ? 'failed' : 'staging',
+        });
+        if (blockers.length) continue;
         await tx.insert(relayEndpointAssignments).values(
           selectedIds.map((relayInstanceId) => ({
             assignmentGenerationId: generation.id,
@@ -412,12 +612,9 @@ export class RelayPoolService {
             )
           );
         }
-        created.push({
-          id: generation.id,
-          endpointId: endpoint.id,
-          generation: generationNumber,
-          instanceIds: selectedIds,
-        });
+      }
+      if (!created.length && alreadyStaging && !options.allowNoop) {
+        throw new AppError(409, 'RELAY_REBALANCE_IN_PROGRESS', 'Relay assignments are still being verified');
       }
       return created;
     });
@@ -428,30 +625,149 @@ export class RelayPoolService {
     // Both local and remote Relays must authorize the staged generation before
     // endpoint/source probes receive grants for it. Remote snapshots are sent
     // below through daemon control; apply the local snapshot explicitly first.
-    await this.policy.syncSnapshot();
-    const remoteNodes = await this.db
-      .select({ nodeId: relayInstances.nodeId })
-      .from(relayInstances)
-      .where(
-        and(
-          eq(relayInstances.poolId, 'system'),
-          eq(relayInstances.kind, 'remote'),
-          inArray(relayInstances.state, ['synchronizing', 'ready', 'draining'])
-        )
-      );
-    await Promise.allSettled(
-      remoteNodes.flatMap(({ nodeId }) => (nodeId ? [this.policy.syncRemoteInstancePolicy(nodeId)] : []))
-    );
-    await Promise.all(staged.map((generation) => this.prepareStagedGeneration(generation)));
+    await this.prepareGenerations(staged.filter(({ state }) => state === 'staging'));
+    const outcomes = await this.generationOutcomes(staged.map(({ id }) => id));
     await this.audit.log({
-      userId,
+      userId: userId ?? null,
       action: 'relay.pool.rebalance.stage',
       resourceType: 'relay_pool',
       resourceId: 'system',
-      details: { generations: staged, endpointIds: options.endpointIds ?? null },
+      details: {
+        generations: outcomes,
+        endpointIds: options.endpointIds ?? null,
+        automatic: options.automatic === true,
+      },
     });
-    this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_staged' });
-    return staged;
+    this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_finished' });
+    return staged.map((generation) => {
+      const outcome = outcomes.find(({ id }) => id === generation.id);
+      if (!outcome) throw new Error(`Relay assignment generation ${generation.id} disappeared during rebalance`);
+      return { ...generation, ...outcome };
+    });
+  }
+
+  private async generationOutcomes(ids: string[]) {
+    return this.db
+      .select({
+        id: relayEndpointAssignmentGenerations.id,
+        state: relayEndpointAssignmentGenerations.state,
+        error: relayEndpointAssignmentGenerations.activationError,
+      })
+      .from(relayEndpointAssignmentGenerations)
+      .where(inArray(relayEndpointAssignmentGenerations.id, ids));
+  }
+
+  private async prepareGenerations(
+    generations: Array<{ id: string; endpointId: string; generation: number }>
+  ): Promise<void> {
+    if (!generations.length) return;
+    try {
+      await this.policy.syncSnapshot();
+    } catch (error) {
+      await this.failStaging(
+        generations.map(({ id }) => id),
+        error
+      );
+      return;
+    }
+    const nodeSyncs = new Map<string, Promise<number>>();
+    const results = await Promise.allSettled(
+      generations.map(async (generation) => {
+        try {
+          const remoteNodes = await this.remoteNodesForGenerations([generation.id]);
+          await Promise.all(
+            remoteNodes.flatMap(({ nodeId }) => {
+              if (!nodeId) throw new Error('Selected remote relay is not enrolled');
+              let sync = nodeSyncs.get(nodeId);
+              if (!sync) {
+                sync = this.policy.syncRemoteInstancePolicy(nodeId);
+                nodeSyncs.set(nodeId, sync);
+              }
+              return [sync];
+            })
+          );
+          await this.prepareStagedGeneration(generation);
+        } catch (error) {
+          await this.failStaging([generation.id], error);
+        }
+      })
+    );
+    // A failure to persist one outcome must not interrupt the other preparations.
+    const rejected = results.find((result) => result.status === 'rejected');
+    if (rejected?.status === 'rejected') throw rejected.reason;
+  }
+
+  private async remoteNodesForGenerations(ids: string[]) {
+    return this.db
+      .selectDistinct({ nodeId: relayInstances.nodeId })
+      .from(relayEndpointAssignments)
+      .innerJoin(relayInstances, eq(relayEndpointAssignments.relayInstanceId, relayInstances.id))
+      .where(
+        and(
+          inArray(relayEndpointAssignments.assignmentGenerationId, ids),
+          eq(relayInstances.poolId, 'system'),
+          eq(relayInstances.kind, 'remote')
+        )
+      );
+  }
+
+  private async withdrawFailedGenerations(ids: string[]): Promise<void> {
+    // Keep the committed failure and original diagnostic even if a disconnected
+    // participant cannot receive revocation yet. Normal policy refresh retries it.
+    try {
+      await this.policy.reconcileAndSync();
+    } catch (error) {
+      logger.warn('Failed relay generation policy cleanup remains pending', { error: String(error) });
+    }
+    try {
+      const remoteNodes = await this.remoteNodesForGenerations(ids);
+      const results = await Promise.allSettled(
+        remoteNodes.flatMap(({ nodeId }) => (nodeId ? [this.policy.syncRemoteInstancePolicy(nodeId)] : []))
+      );
+      for (const result of results) {
+        if (result.status === 'rejected')
+          logger.warn('Failed relay generation remote cleanup remains pending', { error: String(result.reason) });
+      }
+    } catch (error) {
+      logger.warn('Failed relay generation remote cleanup remains pending', { error: String(error) });
+    }
+  }
+
+  private async failStaging(ids: string[], error: unknown): Promise<void> {
+    const failed: string[] = [];
+    try {
+      for (const id of ids) {
+        const changed = await this.db.transaction(async (tx) => {
+          // Serialize abandonment with activation; a stale read must not activate a
+          // generation that another reconciliation has already failed.
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-assignment-generation:${id}`}))`);
+          const changed = await tx
+            .update(relayEndpointAssignmentGenerations)
+            .set({
+              state: 'failed',
+              activationError: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+              updatedAt: new Date(),
+            })
+            .where(
+              and(
+                eq(relayEndpointAssignmentGenerations.id, id),
+                eq(relayEndpointAssignmentGenerations.state, 'staging')
+              )
+            )
+            .returning({ id: relayEndpointAssignmentGenerations.id });
+          if (changed.length) await bumpRelayPolicyRevision(tx);
+          return changed;
+        });
+        // Record only committed transitions. Later DB failures must not skip
+        // withdrawal of generations already changed by this batch.
+        failed.push(...changed.map(({ id }) => id));
+      }
+    } finally {
+      if (failed.length) {
+        await this.withdrawFailedGenerations(failed);
+        this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_failed' });
+      }
+    }
   }
 
   async stageProxyWorkloadRebalance(proxyHostId: string, userId: string) {
@@ -556,6 +872,7 @@ export class RelayPoolService {
   }
 
   private async tryActivate(generationId: string): Promise<boolean> {
+    let failed = false;
     const activated = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-assignment-generation:${generationId}`}))`);
       const [generation] = await tx
@@ -582,10 +899,21 @@ export class RelayPoolService {
           .update(relayEndpointAssignmentGenerations)
           .set({
             state: 'failed',
-            activationError: 'Target registration or source reachability probe failed',
+            activationError:
+              [
+                ...assignments
+                  .filter(({ targetRegistrationState }) => targetRegistrationState === 'failed')
+                  .map(({ targetRegistrationError }) => targetRegistrationError),
+                ...probes.filter(({ state }) => state === 'failed').map(({ error }) => error),
+              ]
+                .filter(Boolean)
+                .join('; ')
+                .slice(0, 1000) || 'Target registration or source reachability probe failed',
             updatedAt: new Date(),
           })
           .where(eq(relayEndpointAssignmentGenerations.id, generation.id));
+        await bumpRelayPolicyRevision(tx);
+        failed = true;
         return false;
       }
       if (
@@ -612,8 +940,10 @@ export class RelayPoolService {
         .update(relayEndpoints)
         .set({ activeAssignmentGeneration: generation.generation, updatedAt: new Date() })
         .where(eq(relayEndpoints.id, generation.endpointId));
+      await bumpRelayPolicyRevision(tx);
       return true;
     });
+    if (failed) await this.withdrawFailedGenerations([generationId]);
     if (activated) {
       await this.policy.reconcileAndSync();
       this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'rebalance_activated' });
@@ -625,7 +955,6 @@ export class RelayPoolService {
     id: string;
     endpointId: string;
     generation: number;
-    instanceIds: string[];
   }): Promise<void> {
     const [[endpoint], routes, assignments, probes] = await Promise.all([
       this.db.select().from(relayEndpoints).where(eq(relayEndpoints.id, generation.endpointId)).limit(1),

@@ -8,6 +8,17 @@ import { DockerBuilds } from "./DockerBuilds";
 
 vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
 
+// jsdom has no viewport measurements; expose the real table's rows for display assertions.
+vi.mock("@tanstack/react-virtual", () => ({
+  useVirtualizer: ({ count }: { count: number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: count }, (_, index) => ({ index, start: index * 49 })),
+    getTotalSize: () => count * 49,
+    measure: vi.fn(),
+    measureElement: vi.fn(),
+  }),
+}));
+
 let intersectionCallback: IntersectionObserverCallback | undefined;
 
 describe("DockerBuilds", () => {
@@ -64,7 +75,7 @@ describe("DockerBuilds", () => {
     );
   });
 
-  it("renders the artifact digest in its own SHA column", async () => {
+  it("omits the artifact SHA column while keeping the commit and ref", async () => {
     const row = build("artifact-sha");
     row.artifact = {
       id: "artifact-1",
@@ -86,7 +97,11 @@ describe("DockerBuilds", () => {
 
     renderWithRouter(<DockerBuilds />);
 
-    expect(await screen.findByText("SHA")).toBeInTheDocument();
+    expect(await screen.findByText(row.commitSha.slice(0, 8))).toBeInTheDocument();
+    expect(screen.getByText("Commit / ref")).toBeInTheDocument();
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.queryByText("SHA")).not.toBeInTheDocument();
+    expect(screen.queryByText(/sha256:/)).not.toBeInTheDocument();
   });
 
   it("opens build details from a pinned build link", async () => {
@@ -115,6 +130,29 @@ describe("DockerBuilds", () => {
     expect(request).toHaveBeenCalledTimes(1);
 
     await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates active duration each second despite stale progress without fetching each tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-24T02:32:00.000Z"));
+    const active = { ...build("active"), status: "building" as const, completedAt: null };
+    const request = vi.mocked(api.listDockerBuildPage).mockResolvedValue({
+      data: [active, build("terminal")],
+      nextCursor: null,
+    });
+
+    renderWithRouter(<DockerBuilds />);
+    await act(async () => undefined);
+    expect(screen.getByText("59s")).toBeInTheDocument();
+
+    for (let second = 0; second < 4; second++) {
+      await act(async () => vi.advanceTimersByTimeAsync(1_000));
+      expect(screen.getByText(`1m ${second}s`)).toBeInTheDocument();
+      expect(screen.getByText("10s")).toBeInTheDocument();
+      expect(request).toHaveBeenCalledTimes(1);
+    }
+    await act(async () => vi.advanceTimersByTimeAsync(1_000));
     expect(request).toHaveBeenCalledTimes(2);
   });
 

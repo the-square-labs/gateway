@@ -37,6 +37,7 @@ export function PageProjectSettingsDialog({
     project.appearanceColor
   );
   const [spaFallback, setSpaFallback] = useState(project.spaFallback);
+  const [previewsEnabled, setPreviewsEnabled] = useState(project.previewsEnabled ?? true);
   const [fallbackUrl, setFallbackUrl] = useState(project.fallbackUrl ?? "");
   const [maxDeployments, setMaxDeployments] = useState(String(project.maxDeployments));
   const [storageQuotaGiB, setStorageQuotaGiB] = useState(
@@ -50,6 +51,7 @@ export function PageProjectSettingsDialog({
     setDescription(project.description ?? "");
     setAppearanceColor(project.appearanceColor);
     setSpaFallback(project.spaFallback);
+    setPreviewsEnabled(project.previewsEnabled ?? true);
     setFallbackUrl(project.fallbackUrl ?? "");
     setMaxDeployments(String(project.maxDeployments));
     setStorageQuotaGiB(String((project.storageQuotaBytes / 1024 / 1024 / 1024).toFixed(2)));
@@ -90,6 +92,7 @@ export function PageProjectSettingsDialog({
         description: description.trim() || null,
         appearanceColor,
         spaFallback,
+        previewsEnabled,
         fallbackUrl: normalizedFallbackUrl || null,
         maxDeployments: retention,
         storageQuotaBytes: Math.round(quotaGiB * 1024 * 1024 * 1024),
@@ -174,6 +177,17 @@ export function PageProjectSettingsDialog({
                 </Badge>
               </div>
             </div>
+          </SettingsControlRow>
+          <SettingsControlRow
+            title="Public previews"
+            description="Disabling public previews revokes only preview URLs. Deployment files and Tags are retained, and bound domains remain available."
+          >
+            <Switch
+              checked={previewsEnabled}
+              onChange={setPreviewsEnabled}
+              disabled={saving}
+              ariaLabel="Enable public previews"
+            />
           </SettingsControlRow>
           <SettingsControlRow
             title="SPA fallback"

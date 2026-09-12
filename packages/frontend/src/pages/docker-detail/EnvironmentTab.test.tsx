@@ -56,6 +56,130 @@ describe("EnvironmentTab managed database links", () => {
     realtimeHandlers.clear();
   });
 
+  it("keeps saved environment visible through stale reads, secret events and replacement", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+    let resolveStale!: (value: string[]) => void;
+    let resolveSave!: (value: Record<string, unknown>) => void;
+    const getEnv = vi
+      .spyOn(api, "getContainerEnv")
+      .mockResolvedValueOnce(["VERSION=old"])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveStale = resolve;
+          })
+      )
+      .mockResolvedValue(["VERSION=new", "ADDED=present"]);
+    vi.spyOn(api, "updateContainerEnv").mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve;
+        })
+    );
+    vi.mocked(confirm).mockResolvedValue(true);
+    const props = {
+      nodeId: "node-1",
+      containerId: "old-id",
+      containerName: "app",
+      containerState: "running",
+    };
+    const { rerender } = render(
+      <MemoryRouter>
+        <EnvironmentTab {...props} />
+      </MemoryRouter>
+    );
+    await screen.findByDisplayValue("old");
+    act(() =>
+      realtimeHandlers.get("docker.container.changed")?.({
+        nodeId: "node-1",
+        name: "app",
+        action: "secret_updated",
+      })
+    );
+    await waitFor(() => expect(resolveStale).toBeDefined());
+    fireEvent.change(screen.getByDisplayValue("old"), { target: { value: "new" } });
+    fireEvent.click(screen.getByTitle("Add variable"));
+    fireEvent.change(screen.getAllByPlaceholderText("KEY")[1]!, { target: { value: "ADDED" } });
+    fireEvent.change(screen.getAllByPlaceholderText("value")[1]!, { target: { value: "present" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+    await waitFor(() => expect(resolveSave).toBeDefined());
+    await act(async () => resolveStale(["VERSION=old"]));
+    expect(screen.getByDisplayValue("present")).toBeInTheDocument();
+    rerender(
+      <MemoryRouter>
+        <EnvironmentTab {...props} disabled />
+      </MemoryRouter>
+    );
+    await act(async () => resolveSave({}));
+    act(() =>
+      realtimeHandlers.get("docker.container.changed")?.({
+        nodeId: "node-1",
+        name: "app",
+        action: "secret_updated",
+      })
+    );
+    expect(getEnv).toHaveBeenCalledTimes(2);
+    expect(screen.getByDisplayValue("new")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("present")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeDisabled();
+    rerender(
+      <MemoryRouter>
+        <EnvironmentTab {...props} containerId="new-id" />
+      </MemoryRouter>
+    );
+    await waitFor(() => expect(getEnv).toHaveBeenLastCalledWith("node-1", "new-id"));
+    expect(screen.getByDisplayValue("present")).toBeInTheDocument();
+  });
+
+  it("keeps unsaved values available for retry when environment save fails", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:environment"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 1,
+      totalPages: 0,
+    });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue(["VERSION=old"]);
+    const update = vi
+      .spyOn(api, "updateContainerEnv")
+      .mockRejectedValue(new Error("Recreate rejected"));
+    vi.mocked(confirm).mockResolvedValue(true);
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="old-id"
+          containerName="app"
+          containerState="running"
+        />
+      </MemoryRouter>
+    );
+    fireEvent.change(await screen.findByDisplayValue("old"), { target: { value: "new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Save & Recreate" })).toBeEnabled()
+    );
+    expect(screen.getByDisplayValue("new")).toBeInTheDocument();
+  });
+
   it("labels service environment changes as Save & Recreate while the workload is running", async () => {
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [],

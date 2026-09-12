@@ -19,6 +19,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerBuild } from "@/types";
 import { DockerBuildDetailsDialog } from "./DockerBuildDetailsDialog";
+import { formatDockerBuildDuration, useDockerBuildClock } from "./docker-build-duration";
 
 interface DockerBuildHistoryPanelProps {
   builds: DockerBuild[];
@@ -40,18 +41,6 @@ const ACTIVE_BUILD_STATUSES = new Set<DockerBuild["status"]>([
 function compareBuildsNewestFirst(left: DockerBuild, right: DockerBuild): number {
   const createdAtOrder = right.createdAt.localeCompare(left.createdAt);
   return createdAtOrder || right.id.localeCompare(left.id);
-}
-
-function formatBuildTime(build: DockerBuild): string {
-  if (!build.startedAt) return "—";
-  const startedAt = Date.parse(build.startedAt);
-  const endedAt = build.completedAt ? Date.parse(build.completedAt) : Date.now();
-  if (!Number.isFinite(startedAt) || !Number.isFinite(endedAt) || endedAt < startedAt) return "—";
-  const seconds = Math.round((endedAt - startedAt) / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
 }
 
 export function DockerBuildHistoryPanel({
@@ -195,6 +184,7 @@ export function DockerBuildHistoryPanel({
   );
 
   const historyActive = inlineHistory || allOpen;
+  const buildClock = useDockerBuildClock(historyActive ? allBuilds : builds);
 
   useEffect(() => {
     if (historyActive) void loadHead(true);
@@ -430,7 +420,7 @@ export function DockerBuildHistoryPanel({
       header: "Time",
       align: "center",
       width: "0.7fr",
-      render: formatBuildTime,
+      render: (build) => formatDockerBuildDuration(build, buildClock),
     },
     {
       key: "artifactSha",
@@ -478,6 +468,8 @@ export function DockerBuildHistoryPanel({
       scrollRef={tableScrollRef}
       emptyMessage="No builds yet."
       embedded={embedded}
+      horizontalScroll={embedded}
+      minWidth={embedded ? "900px" : undefined}
       footer={
         nextCursor ? (
           <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">

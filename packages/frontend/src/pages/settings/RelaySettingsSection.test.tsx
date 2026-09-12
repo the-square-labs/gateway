@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { toast } from "sonner";
 import { beforeEach, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -24,6 +25,102 @@ describe("RelaySettingsSection", () => {
     vi.restoreAllMocks();
     api.invalidateCache();
     vi.mocked(confirm).mockReset().mockResolvedValue(true);
+  });
+
+  it.each([
+    "active",
+    "failed",
+    "staging",
+  ] as const)("reports the actual %s rebalance result before the status refresh", async (state) => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    const status = { ...relayStatus(), poolId: "system", rebalanceAvailable: true, instances: [] };
+    let finishRefresh!: (value: DashboardRelaySnapshot) => void;
+    vi.spyOn(api, "getRelayStatus")
+      .mockResolvedValueOnce(status)
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishRefresh = resolve;
+          })
+      );
+    vi.spyOn(api, "rebalanceRelayPool").mockResolvedValue([
+      {
+        id: "new",
+        state,
+        error: state === "failed" ? "Pool candidate grant is unavailable" : null,
+      },
+    ]);
+    const success = vi.spyOn(toast, "success");
+    const error = vi.spyOn(toast, "error");
+    const info = vi.spyOn(toast, "info");
+    renderRelaySettings();
+    await user.click(await screen.findByRole("button", { name: "Rebalance" }));
+    await waitFor(() => {
+      if (state === "active") expect(success).toHaveBeenCalledWith("Relay rebalance activated");
+      if (state === "failed")
+        expect(error).toHaveBeenCalledWith("Relay rebalance failed for 1 workload", {
+          description: "Pool candidate grant is unavailable",
+        });
+      if (state === "staging")
+        expect(info).toHaveBeenCalledWith("Relay rebalance is still verifying routes");
+    });
+    if (state !== "active") expect(success).not.toHaveBeenCalled();
+    await act(async () => {
+      finishRefresh(status);
+    });
+  });
+
+  it("does not report a successful rebalance as failed when the follow-up read fails", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    vi.spyOn(api, "getRelayStatus")
+      .mockResolvedValueOnce({
+        ...relayStatus(),
+        poolId: "system",
+        rebalanceAvailable: true,
+        instances: [],
+      })
+      .mockRejectedValue(new Error("refresh timeout"));
+    vi.spyOn(api, "rebalanceRelayPool").mockResolvedValue([
+      { id: "new", state: "active", error: null },
+    ]);
+    const success = vi.spyOn(toast, "success");
+    const error = vi.spyOn(toast, "error");
+    const warning = vi.spyOn(toast, "warning");
+    renderRelaySettings();
+    await user.click(await screen.findByRole("button", { name: "Rebalance" }));
+    await waitFor(() => expect(warning).toHaveBeenCalled());
+    expect(success).toHaveBeenCalledWith("Relay rebalance activated");
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed generations and incompatible relay reasons visible after reload", async () => {
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      ...relayStatus(),
+      poolId: "system",
+      rebalanceAvailable: true,
+      instances: [],
+      blockers: ["Local relay: Relay Pool capability is unavailable"],
+      failures: [
+        {
+          id: "new",
+          endpointId: "endpoint",
+          generation: 2,
+          activationError: "Pool candidate grant is unavailable",
+          updatedAt: "2026-09-11T00:00:00Z",
+        },
+      ],
+    });
+    renderRelaySettings();
+    expect(
+      await screen.findByText(/Local relay: Relay Pool capability is unavailable/)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Rebalance generation 2 failed: Pool candidate grant is unavailable/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rebalance" })).toBeDisabled();
   });
 
   it("renders relay-owned telemetry as metric cards without a last-probe header", async () => {

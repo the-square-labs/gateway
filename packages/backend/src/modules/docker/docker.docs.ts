@@ -51,6 +51,7 @@ import {
 import {
   CreateDockerFolderSchema,
   DockerFolderPlacementsSchema,
+  DockerFolderResourceTypeSchema,
   MoveDockerContainersToFolderSchema,
   MoveDockerResourcesToFolderSchema,
   ReorderDockerContainersSchema,
@@ -1113,7 +1114,7 @@ export const listDockerFoldersRoute = appRoute({
   path: '/folders',
   tags: ['Docker Folders'],
   summary: 'List Docker folders',
-  request: { query: z.object({ resourceType: z.enum(['container', 'image', 'network', 'volume']).optional() }) },
+  request: { query: z.object({ resourceType: DockerFolderResourceTypeSchema.optional() }) },
   responses: okJson(UnknownDataResponseSchema),
 });
 export const createDockerFolderRoute = appRoute({

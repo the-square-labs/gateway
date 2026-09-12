@@ -6,6 +6,7 @@ import { errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import { DockerAccessResourceService } from './docker-access-resource.service.js';
 import { registerDockerFolderRoutes } from './docker-folder.routes.js';
+import { DockerFolderResourceTypeSchema } from './docker-folder.schemas.js';
 import { DockerFolderService } from './docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from './docker-network-access-resource.service.js';
 
@@ -29,6 +30,72 @@ afterEach(() => {
 });
 
 describe('Docker folder routes', () => {
+  it.each(
+    DockerFolderResourceTypeSchema.options
+  )('accepts the canonical %s folder type at the HTTP boundary', async (resourceType) => {
+    const folders = [{ id: FOLDER_ID, resourceType, children: [] }];
+    const getFolderTree = vi.fn().mockResolvedValue(folders);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes(['docker:containers:folders:manage']).request(
+      `/folders?resourceType=${resourceType}`
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: folders });
+    expect(getFolderTree).toHaveBeenCalledExactlyOnceWith({ resourceType, includeAllFolders: true });
+  });
+
+  it('keeps the default container type when the query parameter is omitted', async () => {
+    const getFolderTree = vi.fn().mockResolvedValue([]);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes(['docker:containers:folders:manage']).request('/folders');
+    expect(response.status).toBe(200);
+    expect(getFolderTree).toHaveBeenCalledWith({ resourceType: 'container', includeAllFolders: true });
+  });
+
+  it('still rejects unknown resource types before loading folders', async () => {
+    const getFolderTree = vi.fn();
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes(['docker:containers:folders:manage']).request(
+      '/folders?resourceType=not-a-resource'
+    );
+    expect(response.status).toBe(400);
+    expect(getFolderTree).not.toHaveBeenCalled();
+  });
+
+  it.each(['docker:compose:view', 'docker:compose:create'])('allows compose folder lookup with %s', async (scope) => {
+    const getFolderTree = vi.fn().mockResolvedValue([]);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes([scope]).request('/folders?resourceType=compose');
+    expect(response.status).toBe(200);
+    expect(getFolderTree).toHaveBeenCalledWith({ resourceType: 'compose', includeAllFolders: true });
+  });
+
+  it('preserves folder restrictions when loading compose folders', async () => {
+    const getFolderTree = vi.fn().mockResolvedValue([]);
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes([`docker:compose:view:folder/${FOLDER_ID}`]).request(
+      '/folders?resourceType=compose'
+    );
+    expect(response.status).toBe(200);
+    expect(getFolderTree).toHaveBeenCalledWith({
+      resourceType: 'compose',
+      allowedFolderIds: [FOLDER_ID],
+      allowedNodeIds: [],
+      allowedResourceRefs: [],
+    });
+  });
+
+  it.each([
+    { scopes: [] },
+    { scopes: ['docker:containers:view'] },
+  ])('does not grant compose folder access from unrelated scopes $scopes', async ({ scopes }) => {
+    const getFolderTree = vi.fn();
+    container.registerInstance(DockerFolderService, { getFolderTree } as never);
+    const response = await appWithScopes(scopes).request('/folders?resourceType=compose');
+    expect(response.status).toBe(403);
+    expect(getFolderTree).not.toHaveBeenCalled();
+  });
+
   it('resolves scoped network UUIDs to raw network assignment keys for folder visibility', async () => {
     const getFolderTree = vi.fn().mockResolvedValue([]);
     const resolveNetworkResourceKey = vi.fn().mockResolvedValue('raw-network-id');

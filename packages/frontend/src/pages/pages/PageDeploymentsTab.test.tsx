@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -102,5 +103,50 @@ describe("PageDeploymentsTab realtime cleanup", () => {
 
     await waitFor(() => expect(screen.queryAllByText("cleaning")).toHaveLength(0));
     expect(screen.queryByText("deployment-1")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    true,
+    undefined,
+  ])("shows preview links with previewsEnabled=%s", async (previewsEnabled) => {
+    const user = userEvent.setup();
+    const item = { ...deployment(1), status: "ready" as const };
+    vi.spyOn(api, "listPageDeployments").mockResolvedValue(response([item]));
+    const { rerender } = render(
+      <PageDeploymentsTab projectId={PROJECT_ID} previewsEnabled={previewsEnabled} />
+    );
+
+    expect(await screen.findByRole("columnheader", { name: "Preview" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: item.previewHostname! })).toHaveAttribute(
+      "href",
+      `${window.location.protocol}//${item.previewHostname}`
+    );
+    await user.click(screen.getByText(item.publicSlug));
+    const details = within(screen.getByRole("dialog"));
+    expect(details.getByText("Preview")).toBeInTheDocument();
+    expect(details.getByRole("link", { name: item.previewHostname! })).toBeInTheDocument();
+    expect(details.getByRole("button", { name: "Copy immutable preview URL" })).toBeInTheDocument();
+
+    rerender(<PageDeploymentsTab projectId={PROJECT_ID} previewsEnabled={false} />);
+    expect(details.queryByText("Preview")).not.toBeInTheDocument();
+    expect(details.queryByRole("link")).not.toBeInTheDocument();
+    expect(details.queryByRole("button", { name: /copy.*preview/i })).not.toBeInTheDocument();
+  });
+
+  it("hides the preview column and detail row even with a stored hostname", async () => {
+    const user = userEvent.setup();
+    const item = { ...deployment(1), status: "ready" as const };
+    vi.spyOn(api, "listPageDeployments").mockResolvedValue(response([item]));
+    render(<PageDeploymentsTab projectId={PROJECT_ID} previewsEnabled={false} />);
+
+    await screen.findByText(item.publicSlug);
+    expect(screen.queryByRole("columnheader", { name: "Preview" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+    await user.click(screen.getByText(item.publicSlug));
+    const details = within(screen.getByRole("dialog"));
+    expect(details.getByText("Artifact")).toBeInTheDocument();
+    expect(details.queryByText("Preview")).not.toBeInTheDocument();
+    expect(details.queryByRole("link")).not.toBeInTheDocument();
+    expect(details.queryByRole("button", { name: /copy.*preview/i })).not.toBeInTheDocument();
   });
 });

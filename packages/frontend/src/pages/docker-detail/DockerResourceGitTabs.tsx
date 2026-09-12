@@ -53,7 +53,7 @@ export function DockerResourceGitTabs({
         : target.kind === "compose_project"
           ? target.composeProjectId
           : target.pageProjectId;
-  const inlineBuildHistory = view === "builds" && targetKind === "pages_project";
+  const inlineBuildHistory = view === "builds";
   const stableTarget = useMemo<DockerSourceTarget>(
     () =>
       targetKind === "container"
@@ -90,7 +90,7 @@ export function DockerResourceGitTabs({
   }, [includeBuilds, inlineBuildHistory, stableTarget, view]);
 
   const refreshBuilds = useCallback(async () => {
-    if (!source || inlineBuildHistory || (view !== "builds" && !includeBuilds)) return;
+    if (!source || inlineBuildHistory || !includeBuilds) return;
     const currentRequest = ++buildRequestId.current;
     try {
       const nextBuilds = await api.listDockerBuilds({ sourceBindingId: source.id, limit: 5 });
@@ -98,7 +98,7 @@ export function DockerResourceGitTabs({
     } catch {
       // Background polling remains silent; the existing rows stay visible.
     }
-  }, [includeBuilds, inlineBuildHistory, source, view]);
+  }, [includeBuilds, inlineBuildHistory, source]);
 
   useEffect(() => {
     void load();
@@ -123,7 +123,7 @@ export function DockerResourceGitTabs({
   });
 
   useEffect(() => {
-    if (!source || inlineBuildHistory || (view !== "builds" && !includeBuilds)) return;
+    if (!source || inlineBuildHistory || !includeBuilds) return;
     const interval = window.setInterval(
       () => {
         if (!document.hidden) void refreshBuilds();
@@ -131,7 +131,7 @@ export function DockerResourceGitTabs({
       hasActiveBuilds ? 5_000 : 15_000
     );
     return () => window.clearInterval(interval);
-  }, [hasActiveBuilds, includeBuilds, inlineBuildHistory, refreshBuilds, source, view]);
+  }, [hasActiveBuilds, includeBuilds, inlineBuildHistory, refreshBuilds, source]);
 
   return view === "source" ? (
     <div className="space-y-4">

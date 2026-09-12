@@ -313,7 +313,9 @@ export class RelayPolicyService {
       if (!Number.isSafeInteger(applied) || applied !== signed.revision) {
         throw new Error(`Relay acknowledged revision ${response.appliedRevision}, expected ${signed.revision}`);
       }
-      this.grantIssuer.acknowledgeRevision(applied);
+      // Pool snapshot sequence numbers include lease refreshes and are not the
+      // global grant revision. Only acknowledge the projection actually sent.
+      this.grantIssuer.acknowledgeRevision(signed.globalRevision);
       return applied;
     }
     const snapshot = await this.buildSnapshot();
@@ -1044,6 +1046,7 @@ export class RelayPolicyService {
   private async buildInstanceSnapshot(instanceId: string): Promise<{
     encodedRequest: Buffer;
     revision: number;
+    globalRevision: number;
     expiresAtUnix: number;
   }> {
     const relaySettings = (await this.settings.getConfig()).relay;
@@ -1052,9 +1055,17 @@ export class RelayPolicyService {
     const expiresAtUnix = Math.floor((issuedAt.getTime() + 15 * 60 * 1000) / 1000);
     const projection = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-remote-policy-revision'))`);
-      const [[instance], [state], grantKeys] = await Promise.all([
+      // Writers bump this row in the same transaction as projection changes.
+      // Holding SHARE until the projection is built prevents mixed revisions
+      // under READ COMMITTED, while allowing writers to proceed during RPC I/O.
+      const [state] = await tx
+        .select()
+        .from(relayPolicyState)
+        .where(eq(relayPolicyState.id, 'current'))
+        .limit(1)
+        .for('share');
+      const [[instance], grantKeys] = await Promise.all([
         tx.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1),
-        tx.select().from(relayPolicyState).where(eq(relayPolicyState.id, 'current')).limit(1),
         tx
           .select()
           .from(relayGrantSigningKeys)
@@ -1091,7 +1102,12 @@ export class RelayPolicyService {
         : [];
       const [poolRevision] = await tx
         .update(relayPools)
-        .set({ desiredPolicyRevision: sql`${relayPools.desiredPolicyRevision} + 1`, updatedAt: issuedAt })
+        // Legacy snapshots use the global revision as their transport sequence.
+        // Keep pool snapshots strictly newer when upgrading from that format.
+        .set({
+          desiredPolicyRevision: sql`greatest(${relayPools.desiredPolicyRevision}, ${state.revision}) + 1`,
+          updatedAt: issuedAt,
+        })
         .where(eq(relayPools.id, instance.poolId))
         .returning({ revision: relayPools.desiredPolicyRevision });
       if (!poolRevision) throw new Error('Relay pool is unavailable');
@@ -1166,6 +1182,7 @@ export class RelayPolicyService {
         signedEnvelope: { signingKeyId: signed.signingKeyId, payload, signature: signed.signature },
       }),
       revision: projection.revision,
+      globalRevision: projection.state.revision,
       expiresAtUnix,
     };
   }

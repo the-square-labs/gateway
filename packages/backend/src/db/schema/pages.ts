@@ -47,9 +47,10 @@ export const pageReplicaStatusEnum = pgEnum('page_replica_status', [
   'failed',
   'capability_missing',
   'cleanup_pending',
+  'revoked',
 ]);
 
-export const pageReplicaPurposeEnum = pgEnum('page_replica_purpose', ['preview', 'route', 'migration']);
+export const pageReplicaPurposeEnum = pgEnum('page_replica_purpose', ['preview', 'route', 'migration', 'storage']);
 
 export const pageTagActivationStatusEnum = pgEnum('page_tag_activation_status', [
   'requested',
@@ -135,6 +136,7 @@ export const pageProjects = pgTable(
     slug: varchar('slug', { length: 60 }).notNull(),
     description: text('description'),
     appearanceColor: varchar('appearance_color', { length: 32 }),
+    previewsEnabled: boolean('previews_enabled').notNull().default(true),
     spaFallback: boolean('spa_fallback').notNull().default(false),
     fallbackUrl: text('fallback_url'),
     nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'restrict' }),

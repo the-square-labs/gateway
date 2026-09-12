@@ -87,7 +87,7 @@ systemRoutes.get('/relay', requireScope('settings:gateway:view'), async (c) => {
 systemRoutes.post('/relay/rebalance', sessionOnly, requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const data = await container.resolve(RelayPoolService).stageRebalance(user.id);
-  return c.json({ data }, 202);
+  return c.json({ data }, data.some(({ state }) => state === 'staging') ? 202 : 200);
 });
 
 systemRoutes.post('/relay/instances/:instanceId/drain', sessionOnly, requireScope('admin:system'), async (c) => {

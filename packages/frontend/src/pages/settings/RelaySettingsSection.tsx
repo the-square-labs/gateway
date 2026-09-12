@@ -231,9 +231,33 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       return;
     setPoolAction(true);
     try {
-      await api.rebalanceRelayPool();
-      recordStatus(await api.getRelayStatus());
-      toast.success("Relay rebalance staged");
+      const outcomes = await api.rebalanceRelayPool();
+      const failed = outcomes.filter(({ state }) => state === "failed");
+      const pending = outcomes.some(({ state }) => state === "staging");
+      if (failed.length) {
+        toast.error(
+          `Relay rebalance failed for ${failed.length} workload${failed.length === 1 ? "" : "s"}`,
+          {
+            description:
+              failed.find(({ error }) => error)?.error ??
+              "Existing assignments were preserved for failed workloads.",
+          }
+        );
+      } else if (!outcomes.length) {
+        toast.info("Relay assignments are already balanced");
+      } else if (pending) {
+        toast.info("Relay rebalance is still verifying routes");
+      } else if (outcomes.every(({ state }) => state === "active")) {
+        toast.success("Relay rebalance activated");
+      } else {
+        toast.info("Relay rebalance finished; refreshing assignment status");
+      }
+      // A secondary read must not hide a known mutation outcome or delay its toast.
+      try {
+        recordStatus(await api.getRelayStatus());
+      } catch {
+        toast.warning("Rebalance result received, but relay status could not be refreshed");
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay rebalance failed");
     } finally {
@@ -513,7 +537,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             </Button>
             <Button
               onClick={() => void rebalance()}
-              disabled={!canEdit || poolAction || !status?.rebalanceAvailable}
+              disabled={
+                !canEdit ||
+                poolAction ||
+                !status?.rebalanceAvailable ||
+                Boolean(status?.blockers?.length)
+              }
             >
               <RefreshCw className="h-4 w-4" />
               Rebalance
@@ -527,12 +556,42 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           getRowKey={(row) => row.id}
           emptyMessage="No relay instances are registered"
         />
-        {status?.state === "rebalance_available" && (
-          <p className="border-t border-border p-3 text-sm text-warning">
-            Relay capacity or workload spread changed. Existing Secure Links stay unchanged until
-            you rebalance explicitly.
+        {status?.rebalanceAvailable &&
+          !status?.automaticRebalancePaused &&
+          !status?.blockers?.length && (
+            <p className="border-t border-border p-3 text-sm text-warning">
+              Relay capacity or workload spread changed. Automatic rebalance starts after the new
+              placement stays stable for 30 seconds. Existing connections drain without
+              interruption.
+              {status.automaticRebalanceRetryAt &&
+                ` Failed attempts wait until ${new Date(status.automaticRebalanceRetryAt).toLocaleString()} before automatic retry. You can retry manually now.`}
+            </p>
+          )}
+        {status?.automaticRebalancePaused && (
+          <p className="border-t border-border p-3 text-sm text-muted-foreground">
+            Automatic rebalance is paused during Relay Pool updates or manual drain.
           </p>
         )}
+        {status?.blockers?.map((blocker) => (
+          <p
+            key={blocker}
+            role="alert"
+            className="border-t border-border p-3 text-sm text-destructive"
+          >
+            {blocker}
+          </p>
+        ))}
+        {status?.failures?.map((failure) => (
+          <p
+            key={failure.id}
+            role="alert"
+            className="border-t border-border p-3 text-sm text-destructive"
+          >
+            Rebalance generation {failure.generation} failed:{" "}
+            {failure.activationError ?? "Route verification failed"}. Previous assignments remain
+            active for this workload.
+          </p>
+        ))}
         {status?.staging && status.staging.length > 0 && (
           <p className="border-t border-border p-3 text-sm text-warning">
             Rebalance is verifying {status.staging.length} staged assignment generation

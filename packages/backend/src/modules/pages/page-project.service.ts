@@ -27,12 +27,14 @@ import type {
   UpdatePageProjectInput,
 } from './page-project.schemas.js';
 import { hasRequiredNginxPagesCapabilities } from './profile/page-node-capability.js';
+import { withPageProfileLock } from './profile/page-profile.service.js';
 import type { PageRetentionService } from './retention/page-retention.service.js';
 
 export interface PageProjectRuntimeAdapter {
   stageProjectMigration(projectId: string, targetNodeId: string): Promise<void>;
   cleanupProjectNode(projectId: string, nodeId: string): Promise<void>;
   refreshProjectFallback(projectId: string): Promise<void>;
+  disableProjectPreviews(projectId: string): Promise<void>;
 }
 
 export interface PageProjectRouteRuntimeAdapter {
@@ -380,11 +382,29 @@ export class PageProjectService {
 
   async update(id: string, input: UpdatePageProjectInput, userId: string) {
     const existing = await this.get(id);
-    const [updated] = await this.db
-      .update(pageProjects)
-      .set({ ...input, updatedById: userId, updatedAt: new Date() })
-      .where(eq(pageProjects.id, id))
-      .returning();
+    // The profile lock also guards every preview materialization, including
+    // reconciliation and migration staging. Persist revocation before cleanup
+    // so a failed/offline node cannot cause previews to be republished later.
+    let previewCleanupError: unknown;
+    const save = async () => {
+      if (input.previewsEnabled !== undefined && !this.runtimeAdapter) {
+        throw new AppError(503, 'PAGES_RUNTIME_UNAVAILABLE', 'Pages runtime is unavailable');
+      }
+      const [updated] = await this.db
+        .update(pageProjects)
+        .set({ ...input, updatedById: userId, updatedAt: new Date() })
+        .where(eq(pageProjects.id, id))
+        .returning();
+      if (updated && input.previewsEnabled === false) {
+        try {
+          await this.runtimeAdapter!.disableProjectPreviews(id);
+        } catch (error) {
+          previewCleanupError = error;
+        }
+      }
+      return updated;
+    };
+    const updated = input.previewsEnabled === undefined ? await save() : await withPageProfileLock(this.db, save);
     if (!updated) throw new AppError(404, 'PAGE_PROJECT_NOT_FOUND', 'Page Project not found');
     await this.auditService.log({
       userId,
@@ -394,10 +414,36 @@ export class PageProjectService {
       details: { name: updated.name, changes: Object.keys(input), previousName: existing.name },
     });
     this.emit(id, 'updated');
-    if (input.maxDeployments !== undefined || input.storageQuotaBytes !== undefined) {
+    if (previewCleanupError) {
+      throw new AppError(
+        502,
+        'PAGE_PROJECT_PREVIEW_CLEANUP_PENDING',
+        'Public previews are disabled in settings, but some links may remain accessible until the Nginx node is updated or reconnected and cleanup succeeds. Retry Save to verify removal.',
+        { cause: previewCleanupError instanceof Error ? previewCleanupError.message : String(previewCleanupError) }
+      );
+    }
+    if (
+      (input.maxDeployments !== undefined && input.maxDeployments !== existing.maxDeployments) ||
+      (input.storageQuotaBytes !== undefined && input.storageQuotaBytes !== existing.storageQuotaBytes)
+    ) {
       await this.retentionService?.runProject(id);
     }
-    if (input.spaFallback !== undefined || input.fallbackUrl !== undefined) {
+    if (input.previewsEnabled === true) {
+      try {
+        await this.runtimeAdapter!.refreshProjectFallback(id);
+      } catch (error) {
+        throw new AppError(
+          502,
+          'PAGE_PROJECT_PREVIEW_APPLY_PENDING',
+          'Public previews are enabled in settings, but some links could not be published. Retry Save after the Nginx node is available.',
+          { cause: error instanceof Error ? error.message : String(error) }
+        );
+      }
+    }
+    if (
+      (input.spaFallback !== undefined && input.spaFallback !== existing.spaFallback) ||
+      (input.fallbackUrl !== undefined && input.fallbackUrl !== existing.fallbackUrl)
+    ) {
       try {
         await this.refreshFallbackRuntime(id);
       } catch (error) {

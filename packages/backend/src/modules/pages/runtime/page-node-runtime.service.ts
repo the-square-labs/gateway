@@ -26,7 +26,7 @@ import {
 
 const PROFILE_ID = 'default';
 
-type ReplicaPurpose = 'preview' | 'route' | 'migration';
+type ReplicaPurpose = 'preview' | 'route' | 'migration' | 'storage';
 const PREVIEW_CLEANUP_STATUSES = [
   'pending',
   'uploading',
@@ -35,6 +35,7 @@ const PREVIEW_CLEANUP_STATUSES = [
   'failed',
   'capability_missing',
   'cleanup_pending',
+  'revoked',
 ] as const;
 export type PageRuntimeConfigBindingKind = 'route' | 'preview';
 export interface PagePreviewRuntimeConfigProgress {
@@ -184,6 +185,7 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         value: pageRuntimeConfigs.value,
         sha256: pageDeployments.artifactSha256,
         size: pageDeployments.compressedSizeBytes,
+        previewsEnabled: pageProjects.previewsEnabled,
         spaFallback: pageProjects.spaFallback,
         fallbackUrl: pageProjects.fallbackUrl,
       })
@@ -233,10 +235,31 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
   }
 
   async publish(deploymentId: string): Promise<void> {
+    const [project] = await this.db
+      .select({ nodeId: pageProjects.nodeId, previewsEnabled: pageProjects.previewsEnabled })
+      .from(pageDeployments)
+      .innerJoin(pageProjects, eq(pageDeployments.projectId, pageProjects.id))
+      .where(eq(pageDeployments.id, deploymentId))
+      .limit(1);
+    if (project?.previewsEnabled === false) {
+      if (project.nodeId) await this.storeRelease(project.nodeId, deploymentId);
+      return;
+    }
     const target = await this.previewTarget(deploymentId);
-    if (!target) return;
+    if (!target) {
+      // Revocation can commit between the initial project read and target
+      // resolution. Preserve the private copy even in that window.
+      const current = await this.previewProjectConfig(deploymentId);
+      if (current.previewsEnabled === false && current.nodeId) await this.storeRelease(current.nodeId, deploymentId);
+      return;
+    }
     const certificate = await this.certificates.deployForPages(target.nodeId, target.certificateId);
     await this.materializePreview(target.nodeId, deploymentId, target.hostname, certificate);
+  }
+
+  private async storeRelease(nodeId: string, deploymentId: string): Promise<void> {
+    await this.ensureRelease(nodeId, deploymentId, 'storage', deploymentId);
+    await this.markReplica(nodeId, deploymentId, 'storage', deploymentId, 'ready');
   }
 
   async refreshProjectFallback(projectId: string): Promise<void> {
@@ -252,7 +275,7 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       .select({ deployment: pageDeployments, projectSlug: pageProjects.slug, nodeId: pageProjects.nodeId })
       .from(pageDeployments)
       .innerJoin(pageProjects, eq(pageDeployments.projectId, pageProjects.id))
-      .where(eq(pageDeployments.status, 'ready'));
+      .where(and(eq(pageDeployments.status, 'ready'), eq(pageProjects.previewsEnabled, true)));
     const byNode = new Map<string, typeof rows>();
     for (const row of rows) {
       if (!row.nodeId) continue;
@@ -312,6 +335,38 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
   }
 
   async disable(profile: { domain: string }): Promise<void> {
+    await this.removePreviewReplicas({ domain: profile.domain });
+  }
+
+  // Caller holds the profile lock, just like global profile disable().
+  async disableProjectPreviews(projectId: string): Promise<void> {
+    await withPageDefaultRuntimeConfigLock(this.db, projectId, () => this.removePreviewReplicas({ projectId }));
+  }
+
+  async reconcileDisabledProjectPreviews(): Promise<void> {
+    const projects = await this.db
+      .select({ id: pageProjects.id })
+      .from(pageProjects)
+      .where(eq(pageProjects.previewsEnabled, false));
+    const failures: unknown[] = [];
+    for (const project of projects) {
+      try {
+        await withPageProfileLock(this.db, async () => {
+          const [current] = await this.db
+            .select({ enabled: pageProjects.previewsEnabled })
+            .from(pageProjects)
+            .where(eq(pageProjects.id, project.id))
+            .limit(1);
+          if (current?.enabled === false) await this.disableProjectPreviews(project.id);
+        });
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) throw new AggregateError(failures, 'Pages preview cleanup is pending');
+  }
+
+  private async removePreviewReplicas(filter: { domain?: string; projectId?: string }): Promise<void> {
     const rows = await this.db
       .select({
         replicaId: pageDeploymentReplicas.id,
@@ -325,12 +380,12 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         and(
           eq(pageDeploymentReplicas.purpose, 'preview'),
           inArray(pageDeploymentReplicas.status, PREVIEW_CLEANUP_STATUSES),
-          inArray(pageDeployments.status, ['stored', 'staging', 'ready', 'cleaning'])
+          filter.projectId ? eq(pageDeployments.projectId, filter.projectId) : undefined
         )
       );
     const failures: unknown[] = [];
     for (const row of rows) {
-      if (!row.hostname?.endsWith(`.${profile.domain}`)) continue;
+      if (filter.domain && !row.hostname?.endsWith(`.${filter.domain}`)) continue;
 
       // Invalidate the DB row before touching the daemon. A preview that is
       // already uploading/materializing must not win a later ready CAS after
@@ -357,14 +412,17 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
 
       let cleanupError: unknown;
       try {
+        if (filter.projectId) await this.dispatch.assertPagesPreviewRevocation(row.nodeId);
         await this.dispatch.sendPagesCommand(row.nodeId, { pagesRemovePreview: { hostname: row.hostname } });
       } catch (error) {
         cleanupError = error;
       }
-      try {
-        await this.removeRuntimeConfig(row.nodeId, 'preview', row.hostname);
-      } catch (error) {
-        cleanupError = cleanupError ? new AggregateError([cleanupError, error]) : error;
+      if (!cleanupError) {
+        try {
+          await this.removeRuntimeConfig(row.nodeId, 'preview', row.hostname);
+        } catch (error) {
+          cleanupError = error;
+        }
       }
 
       if (cleanupError) {
@@ -385,7 +443,19 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         continue;
       }
 
-      await this.db.delete(pageDeploymentReplicas).where(eq(pageDeploymentReplicas.id, row.replicaId));
+      // Keep hostname and node identity as durable revocation intent. The
+      // reconciler reapplies this deny-vhost after daemon/config restoration;
+      // ready artifacts remain available to tag routes and normal retention.
+      await this.db
+        .update(pageDeploymentReplicas)
+        .set({
+          status: 'revoked',
+          cleanupAfter: null,
+          lastErrorCode: null,
+          lastVerifiedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(pageDeploymentReplicas.id, row.replicaId));
     }
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Pages preview cleanup is pending');
@@ -664,6 +734,25 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
   }
 
   async stageProjectMigration(projectId: string, targetNodeId: string): Promise<void> {
+    const [project] = await this.db
+      .select({ previewsEnabled: pageProjects.previewsEnabled })
+      .from(pageProjects)
+      .where(eq(pageProjects.id, projectId))
+      .limit(1);
+    if (project?.previewsEnabled === false) {
+      const deployments = await this.db
+        .select()
+        .from(pageDeployments)
+        .where(and(eq(pageDeployments.projectId, projectId), eq(pageDeployments.status, 'ready')));
+      await this.preflight(
+        targetNodeId,
+        deployments.reduce((total, deployment) => total + deployment.compressedSizeBytes, 0)
+      );
+      for (const deployment of deployments) {
+        await this.storeRelease(targetNodeId, deployment.id);
+      }
+      return;
+    }
     const [profile] = await this.db
       .select({
         domain: domains.domain,
@@ -705,6 +794,7 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         id: pageDeploymentReplicas.id,
         deploymentId: pageDeploymentReplicas.deploymentId,
         hostname: pageDeploymentReplicas.referenceId,
+        purpose: pageDeploymentReplicas.purpose,
       })
       .from(pageDeploymentReplicas)
       .innerJoin(pageDeployments, eq(pageDeploymentReplicas.deploymentId, pageDeployments.id))
@@ -712,12 +802,14 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         and(
           eq(pageDeployments.projectId, projectId),
           eq(pageDeploymentReplicas.nodeId, nodeId),
-          eq(pageDeploymentReplicas.purpose, 'preview')
+          inArray(pageDeploymentReplicas.purpose, ['preview', 'migration', 'storage'])
         )
       );
     for (const replica of replicas) {
-      await this.dispatch.sendPagesCommand(nodeId, { pagesRemovePreview: { hostname: replica.hostname } });
-      await this.removeRuntimeConfig(nodeId, 'preview', replica.hostname);
+      if (replica.purpose === 'preview') {
+        await this.dispatch.sendPagesCommand(nodeId, { pagesRemovePreview: { hostname: replica.hostname } });
+        await this.removeRuntimeConfig(nodeId, 'preview', replica.hostname);
+      }
       await this.db.delete(pageDeploymentReplicas).where(eq(pageDeploymentReplicas.id, replica.id));
       const [remaining] = await this.db
         .select({ id: pageDeploymentReplicas.id })
@@ -743,10 +835,14 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
   ): Promise<void> {
     try {
       await withPageProfileLock(this.db, async () => {
+        const project = await this.previewProjectConfig(deploymentId);
+        if (project.previewsEnabled === false) {
+          await this.storeRelease(nodeId, deploymentId);
+          return;
+        }
         await this.assertProfileEnabled();
         let repairExisting = false;
         if (inspection?.has(bindingInspectionKey(nodeId, { kind: 'preview', id: hostname }))) {
-          const project = await this.previewProjectConfig(deploymentId);
           const unchanged = await withPageDefaultRuntimeConfigLock(this.db, project.projectId, () =>
             this.withDeploymentLock(`${nodeId}:${deploymentId}`, async () =>
               bindingInspectionMatches(
@@ -760,7 +856,6 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
           repairExisting = true;
         }
         await this.ensureRelease(nodeId, deploymentId, 'preview', hostname);
-        const project = await this.previewProjectConfig(deploymentId);
         // Take the project lock before the deployment lock. Default publication
         // takes the same order when it updates existing preview replicas.
         await withPageDefaultRuntimeConfigLock(this.db, project.projectId, () =>
@@ -963,12 +1058,12 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
 
       await this.upsertReplica(nodeId, deploymentId, purpose, referenceId, 'uploading');
       try {
-        await this.preflight(nodeId, deployment.compressedSizeBytes);
         try {
           await this.dispatch.sendPagesCommand(nodeId, {
             pagesVerifyRelease: { deploymentId, sha256: deployment.artifactSha256 },
           });
         } catch {
+          await this.preflight(nodeId, deployment.compressedSizeBytes);
           const uploadId = randomUUID();
           await this.dispatch.sendPagesCommand(nodeId, {
             pagesUploadInit: {
@@ -1011,6 +1106,7 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
         deployment: pageDeployments,
         projectSlug: pageProjects.slug,
         projectNodeId: pageProjects.nodeId,
+        previewsEnabled: pageProjects.previewsEnabled,
         profile: pageWildcardProfiles,
         domain: domains,
       })
@@ -1023,7 +1119,7 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
       .innerJoin(domains, eq(pageWildcardProfiles.domainId, domains.id))
       .where(eq(pageDeployments.id, deploymentId))
       .limit(1);
-    if (!row?.projectNodeId || !row.profile.certificateId) return null;
+    if (!row?.projectNodeId || !row.profile.certificateId || row.previewsEnabled === false) return null;
     const computed = renderPageHostname(
       row.profile.labelTemplate,
       row.deployment.publicSlug,
@@ -1053,12 +1149,16 @@ export class PageNodeRuntimeService implements PageProfileRuntimeAdapter {
 
   private async previewProjectConfig(deploymentId: string): Promise<{
     projectId: string;
+    previewsEnabled: boolean;
+    nodeId: string | null;
     spaFallback: boolean;
     fallbackUrl: string | null;
   }> {
     const [deployment] = await this.db
       .select({
         projectId: pageDeployments.projectId,
+        previewsEnabled: pageProjects.previewsEnabled,
+        nodeId: pageProjects.nodeId,
         spaFallback: pageProjects.spaFallback,
         fallbackUrl: pageProjects.fallbackUrl,
       })
