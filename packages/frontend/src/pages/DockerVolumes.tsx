@@ -1,4 +1,4 @@
-import { Database, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { ArrowRightLeft, Database, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -399,12 +399,13 @@ export function DockerVolumes({
                   hasScope(`docker:volumes:create:${(v as any)._nodeId}`)) && (
                   <Button
                     variant="ghost"
-                    size="sm"
-                    className="h-7"
+                    size="icon"
+                    className="size-7"
                     onClick={() => handleAdopt(v.name, (v as any)._nodeId)}
                     title="Migrate to Gateway management"
+                    aria-label="Migrate to Gateway management"
                   >
-                    Migrate
+                    <ArrowRightLeft />
                   </Button>
                 )}
             </div>

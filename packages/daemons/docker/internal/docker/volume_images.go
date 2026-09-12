@@ -12,11 +12,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/types/volume"
 	"github.com/moby/moby/client"
 	"golang.org/x/sys/unix"
 )
@@ -158,6 +160,52 @@ func (m *volumeImageManager) loadRecord(name string) (volumeImageRecord, error) 
 		return volumeImageRecord{}, errors.New("invalid volume image record")
 	}
 	return record, nil
+}
+
+// matchesVolumeRecord accepts only the bind definition owned by this manager.
+// Labels alone cannot establish that an arbitrary host path is safe to attach.
+func (m *volumeImageManager) matchesVolumeRecord(v volume.Volume) bool {
+	if m == nil || v.Driver != "local" || v.Scope != "local" ||
+		v.Labels[managedVolumeLabel] != "true" ||
+		v.Labels[managedVolumeStorageKindLabel] != volumeStorageKindDiskImage {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	record, err := m.loadRecord(v.Name)
+	return err == nil && len(v.Options) == 3 && v.Options["type"] == "none" &&
+		v.Options["o"] == "bind" && v.Options["device"] == record.MountPath && volumeImageMounted(record)
+}
+
+func volumeImageMounted(record volumeImageRecord) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	// --mountpoint requires this exact mount, unlike --target which can return
+	// the parent host filesystem when the image has not been mounted.
+	output, err := exec.CommandContext(ctx, "findmnt", "-n", "-o", "SOURCE", "--types", "ext4", "--mountpoint", record.MountPath).Output()
+	if err != nil {
+		return false
+	}
+	device := strings.TrimSpace(string(output))
+	index, ok := strings.CutPrefix(device, "/dev/loop")
+	if !ok || index == "" {
+		return false
+	}
+	if _, err := strconv.ParseUint(index, 10, 32); err != nil {
+		return false
+	}
+	// Resolve the live backing-file association; a persisted loop number can
+	// belong to another image after reboot or detach/reattach.
+	output, err = exec.CommandContext(ctx, "losetup", "--list", "--noheadings", "--output", "NAME", "--associated", record.ImagePath).Output()
+	if err != nil {
+		return false
+	}
+	for _, associated := range strings.Fields(string(output)) {
+		if associated == device {
+			return true
+		}
+	}
+	return false
 }
 
 func pathWithin(root string, candidate string) bool {

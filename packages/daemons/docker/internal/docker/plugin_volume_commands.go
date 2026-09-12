@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/moby/moby/api/types/volume"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
 
@@ -31,6 +32,23 @@ func (p *DockerPlugin) handleVolumeCommand(cmd *pb.DockerVolumeCommand, result *
 		if err != nil {
 			result.Success = false
 			result.Error = err.Error()
+			return
+		}
+		var inspected struct {
+			volume.Volume
+			UsedBy           []string `json:"UsedBy"`
+			ManagedDiskImage bool     `json:"ManagedDiskImage"`
+		}
+		if err := json.Unmarshal(data, &inspected); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("parse volume inspection: %v", err)
+			return
+		}
+		inspected.ManagedDiskImage = p.volumeImages.matchesVolumeRecord(inspected.Volume)
+		data, err = json.Marshal(inspected)
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("marshal volume inspection: %v", err)
 			return
 		}
 		result.Detail = string(data)

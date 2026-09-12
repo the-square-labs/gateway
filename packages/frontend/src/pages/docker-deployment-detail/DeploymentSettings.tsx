@@ -42,6 +42,7 @@ import { WebhookSection } from "../docker-detail/SettingsTab";
 import {
   ensureManagedMountVolumes,
   type MountEntry,
+  serializeMounts,
   VolumeMountsSection,
 } from "../docker-detail/VolumeMountsSection";
 
@@ -204,7 +205,7 @@ export function DeploymentSettings({
       user: initialUser,
       ports: JSON.stringify(initialPorts),
       readinessRouteIndex: initialReadinessRouteIndex,
-      mounts: JSON.stringify(initialMounts),
+      mounts: serializeMounts(initialMounts),
       labels: JSON.stringify(initialLabels),
       restartPolicy: deployment.desiredConfig.restartPolicy ?? "unless-stopped",
       maxRetries: String(runtime.maxRetries ?? 0),
@@ -321,7 +322,7 @@ export function DeploymentSettings({
       user === previous.user &&
       JSON.stringify(ports) === previous.ports &&
       readinessRouteIndex === previous.readinessRouteIndex &&
-      JSON.stringify(mounts) === previous.mounts &&
+      serializeMounts(mounts) === previous.mounts &&
       JSON.stringify(labels) === previous.labels &&
       restartPolicy === previous.restartPolicy &&
       maxRetries === previous.maxRetries &&
@@ -395,7 +396,7 @@ export function DeploymentSettings({
   const portsChanged = JSON.stringify(ports) !== JSON.stringify(initialPorts);
   const selectedReadinessRouteIndex =
     ports.length > 0 ? Math.min(readinessRouteIndex, ports.length - 1) : 0;
-  const mountsChanged = JSON.stringify(mounts) !== JSON.stringify(initialMounts);
+  const mountsChanged = serializeMounts(mounts) !== serializeMounts(initialMounts);
   const labelsChanged = JSON.stringify(labels) !== JSON.stringify(initialLabels);
   const drainChanged = drainSeconds !== String(deployment.drainSeconds);
   const gpuChanged = JSON.stringify(gpuDeviceIds) !== deploymentBaseline.gpuDeviceIds;

@@ -8,6 +8,7 @@ import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
 import type { DockerDeployment } from "@/types";
+import type { MountEntry } from "./docker-detail/VolumeMountsSection";
 
 const realtimeHandlers = vi.hoisted(() => new Map<string, (payload: unknown) => void>());
 
@@ -44,8 +45,35 @@ vi.mock("./docker-detail/PortMappingsSection", () => ({
   PortMappingsSection: () => <div data-testid="port-mappings-section" />,
 }));
 
-vi.mock("./docker-detail/VolumeMountsSection", () => ({
-  VolumeMountsSection: () => <div data-testid="volume-mounts-section" />,
+vi.mock("./docker-detail/VolumeMountsSection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./docker-detail/VolumeMountsSection")>()),
+  VolumeMountsSection: ({
+    mountsChanged,
+    setMounts,
+  }: {
+    mountsChanged: boolean;
+    setMounts: (mounts: MountEntry[]) => void;
+  }) => (
+    <div data-testid="volume-mounts-section">
+      <output data-testid="mounts-dirty">{String(mountsChanged)}</output>
+      <button
+        type="button"
+        onClick={() =>
+          setMounts([
+            {
+              hostPath: "",
+              name: "new-data",
+              containerPath: "/data",
+              readOnly: false,
+              existing: false,
+            },
+          ])
+        }
+      >
+        Attach volume
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./docker-detail/LabelsSection", () => ({
@@ -349,6 +377,35 @@ describe("DockerDeploymentDetail", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "Page actions" }), { key: "Enter" });
     await screen.findByRole("menuitem", { name: "View config" });
     expect(screen.queryByRole("menuitem", { name: "Migrate" })).not.toBeInTheDocument();
+  });
+
+  it("clears mount changes after saving deployment settings", async () => {
+    const deployment = makeDeployment();
+    const refreshed = makeDeployment({
+      desiredConfig: {
+        ...deployment.desiredConfig,
+        mounts: [{ hostPath: "", name: "new-data", containerPath: "/data", readOnly: false }],
+      },
+    });
+    vi.spyOn(api, "getDockerDeployment").mockResolvedValue(deployment);
+    vi.spyOn(api, "inspectContainer").mockResolvedValue({
+      State: { Status: "running", Running: true },
+    } as never);
+    vi.spyOn(api, "listManagedVolumeOptions").mockResolvedValue([{ name: "new-data" }] as never);
+    vi.spyOn(api, "updateDockerDeployment").mockImplementation(async () => {
+      vi.mocked(api.getDockerDeployment).mockResolvedValue(refreshed);
+      return refreshed;
+    });
+    renderWithRouter(<DockerDeploymentDetail />, {
+      path: "/docker/deployments/:nodeId/:deploymentId/:tab",
+      route: "/docker/deployments/node-1/deployment-1/settings",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Attach volume" }));
+    expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("true");
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(api.updateDockerDeployment).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("false"));
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeDisabled();
   });
 
   it("saves deployment settings with the current execution, route, mount, label, and drain payload", async () => {

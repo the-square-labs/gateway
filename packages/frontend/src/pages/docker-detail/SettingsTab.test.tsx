@@ -5,6 +5,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { makeUser } from "@/test/fixtures";
 import { SettingsTab, WebhookSection } from "./SettingsTab";
+import type { MountEntry } from "./VolumeMountsSection";
 
 const portMappingsSectionSpy = vi.hoisted(() => vi.fn());
 
@@ -51,8 +52,35 @@ vi.mock("./PortMappingsSection", () => ({
   },
 }));
 
-vi.mock("./VolumeMountsSection", () => ({
-  VolumeMountsSection: () => null,
+vi.mock("./VolumeMountsSection", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./VolumeMountsSection")>()),
+  VolumeMountsSection: ({
+    mountsChanged,
+    setMounts,
+  }: {
+    mountsChanged: boolean;
+    setMounts: (mounts: MountEntry[]) => void;
+  }) => (
+    <div>
+      <output data-testid="mounts-dirty">{String(mountsChanged)}</output>
+      <button
+        type="button"
+        onClick={() =>
+          setMounts([
+            {
+              hostPath: "",
+              name: "data",
+              containerPath: "/data",
+              readOnly: false,
+              existing: false,
+            },
+          ])
+        }
+      >
+        Attach volume
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./LabelsSection", () => ({
@@ -97,6 +125,56 @@ describe("docker detail SettingsTab", () => {
       createdAt: null,
       updatedAt: null,
     });
+  });
+
+  it("clears mount changes only after the saved mount arrives in the container snapshot", async () => {
+    vi.spyOn(api, "recreateWithConfig").mockResolvedValue({});
+    vi.spyOn(api, "listManagedVolumeOptions").mockResolvedValue([{ name: "data" }] as never);
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:edit", "docker:containers:mounts"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const data = {
+      Id: "container-1",
+      Name: "/app",
+      State: { Status: "exited", Running: false },
+      Config: { Image: "nginx:latest", Entrypoint: [], Cmd: [] },
+      HostConfig: { PortBindings: {} },
+      Mounts: [],
+    };
+    const { rerender } = render(
+      <SettingsTab nodeId="node-1" containerId="container-1" data={data} />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Attach volume" }));
+    expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("true");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(api.recreateWithConfig).toHaveBeenCalledWith("node-1", "container-1", {
+        mounts: [{ hostPath: "", name: "data", containerPath: "/data", readOnly: false }],
+      })
+    );
+    expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("true");
+    rerender(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        data={{
+          ...data,
+          Mounts: [
+            {
+              Type: "volume",
+              Name: "data",
+              Source: "/docker/volumes/data/_data",
+              Destination: "/data",
+              RW: true,
+            },
+          ],
+        }}
+      />
+    );
+    await waitFor(() => expect(screen.getByTestId("mounts-dirty")).toHaveTextContent("false"));
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("loads publish addresses through Docker-scoped node discovery when node details are forbidden", async () => {

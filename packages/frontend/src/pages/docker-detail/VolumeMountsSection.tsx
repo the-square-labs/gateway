@@ -32,6 +32,10 @@ function comparableMount(mount: MountEntry) {
   });
 }
 
+export function serializeMounts(mounts: MountEntry[]) {
+  return JSON.stringify(mounts.map(comparableMount));
+}
+
 export async function ensureManagedMountVolumes(
   nodeId: string,
   mounts: MountEntry[],

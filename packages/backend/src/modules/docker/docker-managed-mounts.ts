@@ -24,7 +24,7 @@ export async function assertManagedMountMutation(args: {
       throw new AppError(409, 'HOST_BIND_MOUNTS_DISABLED', 'New host bind mounts are not allowed');
     }
     const [managed] = await args.db
-      .select({ volumeName: dockerManagedVolumes.volumeName })
+      .select({ volumeName: dockerManagedVolumes.volumeName, storageKind: dockerManagedVolumes.storageKind })
       .from(dockerManagedVolumes)
       .where(and(eq(dockerManagedVolumes.nodeId, args.nodeId), eq(dockerManagedVolumes.volumeName, mount.source)))
       .limit(1);
@@ -40,7 +40,13 @@ export async function assertManagedMountMutation(args: {
     const driver = String(volume?.Driver ?? volume?.driver ?? '');
     const scope = String(volume?.Scope ?? volume?.scope ?? '');
     const options = volume?.Options ?? volume?.options ?? {};
-    if (driver !== 'local' || scope !== 'local' || !options || Object.keys(options).length > 0) {
+    // Disk images intentionally use a local bind. Only the daemon can validate
+    // its device against the durable image record, including renamed volumes.
+    const safeOptions =
+      managed.storageKind === 'disk-image'
+        ? volume?.ManagedDiskImage === true
+        : options && Object.keys(options).length === 0;
+    if (driver !== 'local' || scope !== 'local' || !safeOptions) {
       throw new AppError(
         409,
         'MANAGED_VOLUME_UNSAFE',

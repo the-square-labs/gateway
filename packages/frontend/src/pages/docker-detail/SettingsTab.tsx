@@ -54,6 +54,7 @@ import { buildRecreatePayloadFromForm, type RecreateBaseline } from "./settings-
 import {
   ensureManagedMountVolumes,
   type MountEntry,
+  serializeMounts,
   VolumeMountsSection,
 } from "./VolumeMountsSection";
 import { WebhookSection } from "./WebhookSection";
@@ -370,7 +371,7 @@ export function SettingsTab({
       imageName: parsedImageName,
       imageTag: parsedTag,
       ports: JSON.stringify(initialPorts),
-      mounts: JSON.stringify(initialMounts),
+      mounts: serializeMounts(initialMounts),
       entrypoint: initialEntrypoint.join(" "),
       command: initialCmd.join(" "),
       stopTimeout: initialStopTimeout,
@@ -443,7 +444,7 @@ export function SettingsTab({
       imageName === previous.imageName &&
       imageTag === previous.imageTag &&
       JSON.stringify(ports) === previous.ports &&
-      JSON.stringify(mounts) === previous.mounts &&
+      serializeMounts(mounts) === previous.mounts &&
       entrypoint === previous.entrypoint &&
       command === previous.command &&
       stopTimeout === previous.stopTimeout &&
@@ -732,7 +733,7 @@ export function SettingsTab({
 
   // ── Track recreate changes per section ──
   const portsChanged = JSON.stringify(ports) !== recreateBaseline.ports;
-  const mountsChanged = JSON.stringify(mounts) !== recreateBaseline.mounts;
+  const mountsChanged = serializeMounts(mounts) !== recreateBaseline.mounts;
   const execChanged =
     entrypoint !== recreateBaseline.entrypoint ||
     command !== recreateBaseline.command ||
