@@ -17,8 +17,8 @@ describe("Docker Git delivery UI structure", () => {
     expect(builds).toContain("listDockerBuildPage");
     expect(builds).toContain("Scroll to load older builds");
     expect(builds).not.toContain("View all");
-    expect(builds).toContain('header: "SHA"');
-    expect(builds).toContain("build.artifact.digest.slice(0, 19)");
+    expect(builds).not.toContain('header: "SHA"');
+    expect(builds).toContain("formatDockerBuildDuration(build, now)");
     expect(builds).toContain('"Deployment completed"');
     expect(builds).not.toContain('size="sm"');
     expect(builds).not.toContain("embedded={embedded}");
@@ -45,10 +45,11 @@ describe("Docker Git delivery UI structure", () => {
     expect(history).toContain("View all");
     expect(history).toContain("listDockerBuildPage");
     expect(history).not.toContain('minWidth="54rem"');
-    expect(history).not.toContain("horizontalScroll");
+    expect(history).toContain("horizontalScroll={embedded}");
+    expect(history).toContain('minWidth={embedded ? "900px" : undefined}');
   });
 
-  it("consolidates container build history into Source while retaining deployment tabs", () => {
+  it("keeps separate Source and Builds tabs for containers and deployments", () => {
     const containerDetail = source("./DockerContainerDetail.tsx");
     const deploymentDetail = source("./DockerDeploymentDetail.tsx");
 
@@ -60,13 +61,14 @@ describe("Docker Git delivery UI structure", () => {
       )
     );
     expect(containerTabs).toContain('"source"');
-    expect(containerTabs).not.toContain('"builds"');
+    expect(containerTabs).toContain('"builds"');
     expect(containerTabs).toContain('"config"');
-    expect(containerDetail).toContain("includeBuilds");
+    expect(containerDetail).not.toContain("includeBuilds");
+    expect(containerDetail).toContain('view="builds"');
     expect(containerDetail).toContain('className="pb-6"');
     expect(containerDetail).toContain('label: "View config"');
     expect(containerDetail).toContain("alwaysOverflow: true");
-    expect(containerDetail).not.toContain('<TabsTrigger value="builds"');
+    expect(containerDetail).toContain('<TabsTrigger value="builds"');
 
     const deploymentTabs = deploymentDetail.slice(
       deploymentDetail.indexOf("const visibleTabs = useMemo"),

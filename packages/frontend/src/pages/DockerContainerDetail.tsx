@@ -607,6 +607,7 @@ export function DockerContainerDetail({
     () => [
       "overview",
       "source",
+      "builds",
       ...(canViewContainer ? ["logs"] : []),
       ...(canUseConsole ? ["console"] : []),
       ...(canReadFiles ? ["files"] : []),
