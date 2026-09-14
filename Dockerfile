@@ -48,7 +48,7 @@ RUN pnpm --filter status-page build
 FROM base AS backend-builder
 
 COPY packages/backend/ packages/backend/
-RUN pnpm --filter backend build
+RUN NODE_OPTIONS=--max-old-space-size=4096 pnpm --filter backend build
 
 # ── Production image ────────────────────────────────────────────────
 FROM ${NODE_IMAGE} AS production
@@ -87,6 +87,10 @@ COPY scripts/healthcheck.mjs /app/healthcheck.mjs
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
+ARG BACKUP_RUNNER_IMAGE
+COPY scripts/bundle-backup-runner.mjs /tmp/bundle-backup-runner.mjs
+RUN node /tmp/bundle-backup-runner.mjs "$APP_VERSION" "$BACKUP_RUNNER_IMAGE" ./dist/config/backup-runner-image.json && \
+    rm /tmp/bundle-backup-runner.mjs
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV GRPC_PORT=9443

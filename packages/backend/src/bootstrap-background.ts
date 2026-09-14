@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { resolveBackupRunnerImage } from '@/config/backup-runner-image.js';
 import type { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -240,7 +241,10 @@ export async function initializeBackgroundServices(): Promise<void> {
       },
     },
     scheduler,
-    { get: () => env.BACKUP_RUNNER_IMAGE, getRedisStage: () => Object.values(MANAGED_DATABASE_CATALOG.redis)[0] },
+    {
+      get: () => resolveBackupRunnerImage(env.BACKUP_RUNNER_IMAGE),
+      getRedisStage: () => Object.values(MANAGED_DATABASE_CATALOG.redis)[0],
+    },
     backupRuntime,
     backupRuntime,
     backupRuntime,

@@ -16,7 +16,9 @@ The curated MinIO runtime is pinned to an immutable image digest. Runtime versio
 
 ## Backup configuration
 
-Build the native runner from `packages/daemons/backup-runner/Dockerfile`, publish it to a registry reachable by Storage nodes, and set `BACKUP_RUNNER_IMAGE` to its immutable `repository@sha256:…` reference in Gateway. An unset or mutable reference fails closed. The runner contains the fixed native programs and transport clients; API clients cannot supply commands, scripts, SQL or arbitrary runner images.
+Gateway releases build and publish the native runner for amd64 and arm64 within the main release workflow, without a separate Git tag or release. Its immutable digest is bundled inside the signed Gateway image. Installation and upgrade use that default automatically, including when an older Compose file passes an empty `BACKUP_RUNNER_IMAGE`. Storage nodes must be able to pull the runner from GHCR. The runner runs only for backup/restore operations; it is not a persistent service.
+
+`BACKUP_RUNNER_IMAGE` is an optional explicit override and must use an immutable `repository@sha256:…` reference. Source/development builds without a bundled runner still require an override. The runner contains the fixed native programs and transport clients; API clients cannot supply commands, scripts, SQL or arbitrary runner images.
 
 In a database's **Backups** tab, select a destination, bucket, prefix and executor Storage node. Policies support manual execution, cron schedules with an explicit time zone, retention count, timeout and workspace/CPU/memory limits. Choose an existing destination bucket. The executor must be able to reach external database and storage endpoints. Private managed resources receive temporary routes for that run; Gateway's own ephemeral loopback ports are not forwarded to the executor.
 
