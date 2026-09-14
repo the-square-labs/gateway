@@ -20,6 +20,7 @@ const EXPECTED_TOPICS = [
   'permissions',
   'docker',
   'databases',
+  'storage',
   'pages',
   'postgres',
   'redis',

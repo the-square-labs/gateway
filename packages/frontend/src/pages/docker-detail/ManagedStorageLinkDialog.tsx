@@ -127,7 +127,7 @@ export function ManagedStorageLinkDialog({
             <span className="text-sm font-medium">Managed secret names</span>
             <div className="grid gap-2 md:grid-cols-2">
               {ENVIRONMENT_FIELDS.map(({ field, label }) => (
-                <label key={field} className="space-y-1">
+                <label key={field} className="space-y-1.5">
                   <span className="text-xs text-muted-foreground">{label}</span>
                   <Input
                     className="font-mono text-xs"

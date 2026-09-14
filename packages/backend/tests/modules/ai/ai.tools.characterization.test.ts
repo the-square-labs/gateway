@@ -42,8 +42,8 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 249,
-      digest: '685fd1a3a2877e69feabf8a1c5d4f47ff7516f80dd30f66c76b2705df6dfab16',
+      count: 255,
+      digest: 'b099e840bb693cf01e96c51feee3284d624d7116fe2733263352154f2e274adb',
       categoryCounts: {
         Discovery: 6,
         Artifact: 2,
@@ -69,7 +69,8 @@ describe('AI tool registry characterization', () => {
         Setup: 2,
         Documentation: 2,
         Docker: 38,
-        Databases: 11,
+        Databases: 12,
+        Storage: 5,
         GitLab: 26,
         GitHub: 12,
         Git: 6,
@@ -88,10 +89,10 @@ describe('AI tool registry characterization', () => {
         Planning: 9,
       },
       destructive: {
-        count: 133,
-        digest: 'ce0c79e62afc96f73e20f455c15ac51e3cf45f7364cf18886a5cee2d6fd856f3',
+        count: 137,
+        digest: '4780f1f9c12629c169c86f07425a3c528b98994219ad3775ec5b95ad9fd91fd8',
       },
-      invalidationMapDigest: '64dc9ba1ebe5e4a5e4b86985714fb88a42ad432acce97ddc3bf93264f58d94a7',
+      invalidationMapDigest: '8e085cf6d990249d5a3b196675af430bc20e8fed576341f4b601bc5f64ea974d',
     });
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
   });
@@ -113,20 +114,20 @@ describe('AI tool registry characterization', () => {
       )
     ).toEqual({
       allDefault: {
-        count: 235,
-        digest: 'b5ae07dfb7efb3edb7d96c9b190566791240f1c50f9fb632e589b3e7288f3652',
+        count: 241,
+        digest: '2b0a39f624c366f2d4a8f456611d1d187d9854f6db55cb72075a302b91aa4363',
       },
       allCapabilities: {
-        count: 247,
-        digest: '54c06ce8a99eec0d422bfda34347e0359247b431e8595f36cfbafd53e8d023d7',
+        count: 253,
+        digest: '59e5488913837ac7b81c044a8ed4da7ee5e1a2e89160c41905d814ddab9cdeed',
       },
       discoveredIngressDocker: {
         count: 81,
         digest: '1cc98bc5ffd014cac4fac12e1257186d450580fa199893cbf158c003fcfa33de',
       },
       planningMode: {
-        count: 140,
-        digest: '7a694f0466966d145d9af6b3d903770e5381c77b684fcbf1e428126296134528',
+        count: 145,
+        digest: '5264e85940663736a919d324f4224f888e2cd717a0c68a2585f6d3de343055f2',
       },
     });
     expect(matrix.allDefault).not.toContain('web_search');

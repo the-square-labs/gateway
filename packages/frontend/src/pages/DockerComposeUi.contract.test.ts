@@ -122,7 +122,8 @@ describe("Compose UI contract", () => {
     const list = source("pages/DockerComposeProjects.tsx");
     expect(list.match(/clipOverflow className="sm:max-w-2xl"/g)).toHaveLength(2);
     expect(editor).not.toContain("<TabsContent");
-    expect(repositoryFields.match(/border border-border bg-muted\/30 p-3/g)).toHaveLength(2);
+    expect(repositoryFields).toContain('from "@/components/common/ToggleField"');
+    expect(repositoryFields.match(/<ToggleField\b/g)).toHaveLength(2);
     expect(editor).toContain("createDockerComposeSourceProject");
     expect(editor).toContain("composeFilePath={sourceComposeFilePath}");
     expect(editor).toContain('"Create and build"');

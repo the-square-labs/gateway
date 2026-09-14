@@ -769,6 +769,7 @@ describe('AI tool scope filtering', () => {
       'manage_database_connection',
       'manage_postgres_data',
       'manage_redis_data',
+      'manage_database_backups',
     ]);
     expect(databaseToolNamesForScopes(['databases:view'])).toEqual([
       'list_databases',
@@ -789,6 +790,8 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('query_postgres_read')).toBe(false);
     expect(isDestructiveTool('execute_postgres_sql')).toBe(true);
     expect(isDestructiveTool('manage_database_connection')).toBe(true);
+    expect(databaseToolNamesForScopes(['databases:backups:view'])).toEqual(['manage_database_backups']);
+    expect(isDestructiveTool('manage_database_backups')).toBe(true);
   });
 
   it('keeps docker tool registry contracts stable', () => {

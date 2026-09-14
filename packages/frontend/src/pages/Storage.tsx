@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { storageRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -646,6 +647,10 @@ export function Storage() {
     error: string;
   } | null>(null);
   const [managedRetrying, setManagedRetrying] = useState(false);
+  const retainedProvisioningError = useRetainedDialogValue(
+    managedProvisioningError,
+    managedProvisioningError !== null
+  );
 
   const openManagedCreate = useCallback(() => {
     if (!requireLicenseFeature("managed-storage", "Managed storage")) return;
@@ -1161,7 +1166,7 @@ export function Storage() {
               What the node reported, and the options for recovering this cluster.
             </DialogDescription>
           </DialogHeader>
-          <p className="text-sm text-muted-foreground">{managedProvisioningError?.error}</p>
+          <p className="text-sm text-muted-foreground">{retainedProvisioningError?.error}</p>
           <DialogFooter>
             <Button
               variant="outline"
