@@ -288,6 +288,8 @@ export interface GatewayCommand {
   dockerBuildEventAck?: DockerBuildEventAck;
   dockerMigration?: DockerMigrationCommand;
   dockerDatabase?: DockerDatabaseCommand;
+  dockerStorage?: DockerStorageCommand;
+  dockerBackup?: DockerBackupCommand;
   dockerAvailability?: DockerAvailabilityCommand;
   applyTlsBundle?: ApplyTlsBundleCommand;
   inspectCertificates?: InspectCertificatesCommand;
@@ -343,6 +345,7 @@ export interface DockerBuildCommand {
   buildScript: string;
   artifactDirectory: string;
   workerParallelism?: number;
+  skipVulnerabilityScan?: boolean;
   attempt?: number;
 }
 
@@ -729,6 +732,20 @@ export interface DockerLogsCommand {
 export interface DockerDatabaseCommand {
   action: string;
   managedDatabaseId: string;
+  configJson: string;
+}
+
+/** Restricted lifecycle command accepted only by a storage-profile docker daemon. */
+export interface DockerStorageCommand {
+  action: string;
+  managedStorageId: string;
+  configJson: string;
+}
+
+/** Typed backup runner command accepted only by a storage-profile docker daemon. */
+export interface DockerBackupCommand {
+  action: string;
+  runId: string;
   configJson: string;
 }
 

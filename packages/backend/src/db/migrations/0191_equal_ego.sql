@@ -1,0 +1,5 @@
+ALTER TABLE "backup_runs" ADD COLUMN "artifacts_deleted_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "backup_policies" ADD CONSTRAINT "backup_policies_destination_id_object_storage_connections_id_fk" FOREIGN KEY ("destination_id") REFERENCES "public"."object_storage_connections"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "backup_policies" ADD CONSTRAINT "backup_policies_staging_storage_connection_id_object_storage_connections_id_fk" FOREIGN KEY ("staging_storage_connection_id") REFERENCES "public"."object_storage_connections"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD CONSTRAINT "backup_runs_destination_id_object_storage_connections_id_fk" FOREIGN KEY ("destination_id") REFERENCES "public"."object_storage_connections"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "backup_runs" ADD CONSTRAINT "backup_runs_staging_storage_connection_id_object_storage_connections_id_fk" FOREIGN KEY ("staging_storage_connection_id") REFERENCES "public"."object_storage_connections"("id") ON DELETE restrict ON UPDATE no action;

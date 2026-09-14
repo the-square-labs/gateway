@@ -1,6 +1,7 @@
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { relayPolicyState } from '@/db/schema/index.js';
+import { relayEndpointAssignments, relayPolicyState } from '@/db/schema/index.js';
 import { RelayPoolService, relayPoolInternals } from './relay-pool.service.js';
 
 afterEach(() => {
@@ -13,6 +14,7 @@ function service(db: any = {}) {
     syncSnapshot: vi.fn().mockResolvedValue(undefined),
     reconcileAndSync: vi.fn().mockResolvedValue(undefined),
     syncRemoteInstancePolicy: vi.fn().mockResolvedValue(undefined),
+    setRemoteInstanceDrain: vi.fn().mockResolvedValue(undefined),
   };
   const audit = { log: vi.fn().mockResolvedValue(undefined) };
   const events = { publish: vi.fn() };
@@ -28,11 +30,16 @@ function service(db: any = {}) {
 // A queued query boundary exercises orchestration without a running production DB.
 function queuedDb(rows: unknown[][]) {
   const conditions: any[] = [];
+  const locks: unknown[] = [];
   function result(value: unknown[]) {
     const query: any = Promise.resolve(value);
-    for (const method of ['from', 'where', 'orderBy', 'limit', 'innerJoin']) query[method] = () => query;
+    for (const method of ['from', 'where', 'orderBy', 'limit', 'innerJoin', 'leftJoin']) query[method] = () => query;
     query.where = (condition: any) => {
       conditions.push(condition);
+      return query;
+    };
+    query.for = (mode: unknown) => {
+      locks.push(mode);
       return query;
     };
     return query;
@@ -44,6 +51,12 @@ function queuedDb(rows: unknown[][]) {
       return result(rows.shift()!);
     }),
     execute: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn((table) => ({
+      where: (where: any) => {
+        writes.push({ table, where, deleted: true });
+        return { returning: async () => [{ id: 'assignment' }] };
+      },
+    })),
     update: vi.fn((table) => ({
       set: (values: any) => ({
         where: (where: any) => {
@@ -58,7 +71,7 @@ function queuedDb(rows: unknown[][]) {
   db.selectDistinctOn = db.select;
   db.selectDistinct = db.select;
   db.transaction = vi.fn((callback) => callback(db));
-  return { db, writes, conditions };
+  return { db, writes, conditions, locks };
 }
 
 function reconciliationHarness() {
@@ -200,26 +213,103 @@ describe('RelayPoolService automatic reconciliation', () => {
 
 describe('RelayPoolService activation safety and outcomes', () => {
   it('invalidates grants in the same transaction when a drained generation retires', async () => {
-    const { db, writes } = queuedDb([
-      [{ id: 'new', endpointId: 'endpoint', generation: 1, state: 'draining' }],
-      [{ health: { assignmentTunnels: [] } }],
+    const { db, writes, locks } = queuedDb([
+      [{ id: 'new', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(1000) }],
+      [{ lastSeenAt: new Date(2000), health: { assignmentTunnels: [] } }],
+      [{ lastSeenAt: new Date(3000), health: { assignmentTunnels: [] } }],
     ]);
     const { pool, policy } = service(db);
     expect(await pool.retireDrainedGenerations()).toBe(1);
     expect(db.transaction).toHaveBeenCalledOnce();
+    expect(locks).toEqual(['update']);
     expect(writes[0].values.state).toBe('retired');
     expect(writes[1].table).toBe(relayPolicyState);
     expect(policy.reconcileAndSync).toHaveBeenCalledOnce();
   });
-  it.each([
-    'draining',
-    'updating',
-  ])('rechecks %s after policy synchronization before automatic staging', async (condition) => {
-    const { db } = queuedDb([
-      [{ id: 'endpoint', ownerKind: 'test' }],
-      condition === 'updating' ? [{ state: 'running' }] : [],
-      condition === 'draining' ? [{ id: 'relay' }] : [],
+  it('does not retire or revoke a generation when a live tunnel is reported after the optimistic read', async () => {
+    const { db, locks } = queuedDb([
+      [{ id: 'old', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(1000) }],
+      [{ id: 'assignment', state: 'draining', lastSeenAt: new Date(2000), health: { assignmentTunnels: [] } }],
+      [
+        {
+          id: 'assignment',
+          state: 'draining',
+          lastSeenAt: new Date(3000),
+          health: { assignmentTunnels: [{ endpointId: 'endpoint', assignmentGeneration: 1, activeTunnels: 1 }] },
+        },
+      ],
     ]);
+    const { pool, policy } = service(db);
+    expect(await pool.retireDrainedGenerations()).toBe(0);
+    expect(locks).toEqual(['update']);
+    expect(db.update).not.toHaveBeenCalled();
+    expect(db.delete).not.toHaveBeenCalled();
+    expect(policy.reconcileAndSync).not.toHaveBeenCalled();
+  });
+  it('releases an idle drained relay without retiring another relay with live old-generation tunnels', async () => {
+    const { db, writes } = queuedDb([
+      [{ id: 'old', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(1000) }],
+      [
+        { id: 'empty', state: 'draining', lastSeenAt: new Date(2000), health: { assignmentTunnels: [] } },
+        {
+          id: 'busy',
+          state: 'ready',
+          lastSeenAt: new Date(2000),
+          health: { assignmentTunnels: [{ endpointId: 'endpoint', assignmentGeneration: 1, activeTunnels: 2 }] },
+        },
+      ],
+    ]);
+    const { pool, policy } = service(db);
+    expect(await pool.retireDrainedGenerations()).toBe(0);
+    expect(writes).toHaveLength(2);
+    expect(writes[0]).toMatchObject({ table: relayEndpointAssignments, deleted: true });
+    const filter = new PgDialect().sqlToQuery(writes[0].where);
+    expect(filter.params).toContain('empty');
+    expect(filter.params).not.toContain('busy');
+    expect(filter.sql).toContain("'draining'");
+    expect(filter.sql).toContain('last_seen_at');
+    expect(writes[1].table).toBe(relayPolicyState);
+    expect(policy.reconcileAndSync).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    null,
+    new Date(500),
+  ])('does not retire assignments from missing or pre-handover observations (%s)', async (lastSeenAt) => {
+    const { db } = queuedDb([
+      [{ id: 'old', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(1000) }],
+      [{ id: 'empty', state: 'draining', lastSeenAt, health: { assignmentTunnels: [] } }],
+    ]);
+    expect(await service(db).pool.retireDrainedGenerations()).toBe(0);
+    expect(db.delete).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+  });
+
+  it('retires a generation whose last idle assignment was already released', async () => {
+    const { db } = queuedDb([[{ id: 'empty', state: 'draining' }], [], []]);
+    expect(await service(db).pool.retireDrainedGenerations()).toBe(1);
+  });
+
+  it.each([
+    'drain',
+    'force disconnect',
+  ])('%s evacuates only affected workloads through verified automatic staging', async (action) => {
+    const remote = { ...instance('remote', 'host'), state: 'draining' };
+    const { db } = queuedDb([[remote], [{ endpointId: 'affected' }]]);
+    const { pool, policy } = service(db);
+    const stage = vi.spyOn(pool, 'stageRebalance').mockResolvedValue([]);
+    vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
+    if (action === 'drain') await pool.drainInstance('remote', 'user');
+    else await pool.forceDisconnectInstance('remote', 'user');
+    expect(policy.setRemoteInstanceDrain).toHaveBeenCalled();
+    expect(stage).toHaveBeenCalledExactlyOnceWith(undefined, {
+      automatic: true,
+      allowNoop: true,
+      endpointIds: ['affected'],
+    });
+  });
+  it('rechecks maintenance after policy synchronization before automatic staging', async () => {
+    const { db } = queuedDb([[{ id: 'endpoint', ownerKind: 'test' }], [{ state: 'running' }]]);
     const { pool, policy } = service(db);
     expect(await pool.stageRebalance(undefined, { automatic: true, allowNoop: true })).toEqual([]);
     expect(policy.syncSnapshot).toHaveBeenCalledOnce();
@@ -356,6 +446,7 @@ describe('RelayPoolService activation safety and outcomes', () => {
     });
     const prepare = vi.spyOn(pool as any, 'prepareStagedGeneration').mockResolvedValue(undefined);
     const fail = vi.spyOn(pool as any, 'failStaging');
+    vi.spyOn(pool as any, 'tryActivate').mockResolvedValue(true);
     await (pool as any).prepareGenerations([{ id: 'new', endpointId: 'endpoint', generation: 2 }]);
     const filter = new PgDialect().sqlToQuery(conditions[0]);
     expect(filter.sql).toContain('"relay_endpoint_assignments"."assignment_generation_id" in');
@@ -391,6 +482,16 @@ describe('RelayPoolService activation safety and outcomes', () => {
 });
 
 describe('RelayPoolService status', () => {
+  it('builds a bounded newest-first history query with readable JSONB domain names', () => {
+    const { pool } = service(drizzle({ query: vi.fn() } as any));
+    const query = (pool as any).getRecentAttempts().toSQL();
+    expect(query.sql).toContain('"proxy_hosts"."domain_names"->>0');
+    expect(query.sql).toContain('"managed_database_instances"."name"');
+    expect(query.sql).toContain('order by "relay_endpoint_assignment_generations"."created_at" desc');
+    expect(query.sql).toContain('limit');
+    expect(query.params.at(-1)).toBe(20);
+  });
+
   function snapshotDb(latest: any[], kind = 'test', capable = true, updateState?: string) {
     const relay = {
       ...instance('relay', 'host'),
@@ -406,6 +507,7 @@ describe('RelayPoolService status', () => {
       latest,
       updateState ? [{ id: 'update', state: updateState, targetArtifact: { version: 'next' } }] : [],
       ...(updateState ? [[]] : []),
+      latest,
     ]);
   }
 
@@ -423,7 +525,8 @@ describe('RelayPoolService status', () => {
     const snapshot = await pool.getSnapshot();
     expect(snapshot.failures).toEqual([failure]);
     expect(snapshot.staging).toEqual([]);
-    expect(snapshot.state).toBe('degraded');
+    expect(snapshot.state).toBe('healthy');
+    expect(snapshot.attempts).toEqual([failure]);
     expect(snapshot.instances[0].activeAssignments).toBe(1);
     expect(snapshot.automaticRebalanceRetryAt).toBeNull(); // This workload is already balanced.
   });

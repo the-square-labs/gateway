@@ -5,6 +5,7 @@ export type CreatedResourceFamily =
   | 'proxy'
   | 'pages'
   | 'databases'
+  | 'storage'
   | 'domains'
   | 'ssl:cert'
   | 'logs:environments'

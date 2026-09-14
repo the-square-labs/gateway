@@ -1,0 +1,465 @@
+import { Activity, FolderOpen, Key } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { useParams } from "react-router-dom";
+import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { PageTransition } from "@/components/common/PageTransition";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { HealthBars } from "@/components/ui/health-bars";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useRealtime } from "@/hooks/use-realtime";
+import { useStableNavigate } from "@/hooks/use-stable-navigate";
+import { useUrlTab } from "@/hooks/use-url-tab";
+import { storageRoute } from "@/lib/resource-routes";
+import { cn } from "@/lib/utils";
+import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { usePinnedStorageStore } from "@/stores/pinned-storage";
+import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
+import { ManagedObjectStorageSettingsTab } from "./storage-detail/ManagedObjectStorageSettingsTab";
+import { ObjectBrowser } from "./storage-detail/ObjectBrowser";
+import { StorageCredentialsDialog } from "./storage-detail/StorageCredentialsDialog";
+import { StorageHeader } from "./storage-detail/StorageHeader";
+import { StorageIamKeysTab } from "./storage-detail/StorageIamKeysTab";
+import { StorageOverviewTab } from "./storage-detail/StorageOverviewTab";
+import { StorageSettingsTab } from "./storage-detail/StorageSettingsTab";
+
+export function StorageDetail({
+  resolvedStorageId,
+  resolvedStorageSlug,
+}: {
+  resolvedStorageId?: string;
+  resolvedStorageSlug?: string;
+} = {}) {
+  const params = useParams<{ id?: string; storageSlug?: string; tab?: string }>();
+  const id = resolvedStorageId ?? params.id;
+  const routeSlug = resolvedStorageSlug ?? params.storageSlug ?? params.id ?? "";
+  const navigate = useStableNavigate();
+  const { hasScope } = useAuthStore();
+  const [storage, setStorage] = useState<ObjectStorageConnection | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [liveHealthHistory, setLiveHealthHistory] = useState<
+    ObjectStorageConnection["healthHistory"]
+  >([]);
+  const [liveHealthStatus, setLiveHealthStatus] =
+    useState<ObjectStorageConnection["healthStatus"]>("unknown");
+  const [monitoringHistory, setMonitoringHistory] = useState<ObjectStorageMetricSnapshot[]>([]);
+  const [monitoringLoading, setMonitoringLoading] = useState(true);
+  const [pinOpen, setPinOpen] = useState(false);
+  const [credentialsOpen, setCredentialsOpen] = useState(false);
+  const [managedCredentialsOpen, setManagedCredentialsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [revealedCredentials, setRevealedCredentials] = useState<Record<string, unknown> | null>(
+    null
+  );
+  const [loadingCredentials, setLoadingCredentials] = useState(false);
+  const { isPinnedSidebar, toggleSidebar } = usePinnedStorageStore();
+
+  const canEdit = !!(id && (hasScope("storage:edit") || hasScope(`storage:edit:${id}`)));
+  const canDelete = !!(id && (hasScope("storage:delete") || hasScope(`storage:delete:${id}`)));
+  const canRestart = canEdit && !!storage?.managed;
+  const canRetry = canEdit && storage?.managed?.status === "error";
+  const canRead = !!(
+    id &&
+    (hasScope("storage:objects:read") || hasScope(`storage:objects:read:${id}`))
+  );
+  const canWrite = !!(
+    id &&
+    (hasScope("storage:objects:write") || hasScope(`storage:objects:write:${id}`))
+  );
+  const canReveal = !!(
+    id &&
+    (hasScope("storage:credentials:reveal") || hasScope(`storage:credentials:reveal:${id}`))
+  );
+  const canViewMonitoring = !!(id && (hasScope("storage:view") || hasScope(`storage:view:${id}`)));
+  const canManageIam = !!(id && (hasScope("storage:iam") || hasScope(`storage:iam:${id}`)));
+
+  const [activeTab, setActiveTab] = useUrlTab(
+    ["overview", "browser", "iam-keys"],
+    "overview",
+    (tab) => storageRoute(routeSlug, tab)
+  );
+
+  const load = useCallback(async () => {
+    if (!id) return;
+    setLoading(true);
+    try {
+      const [storage, healthHistory] = await Promise.all([
+        api.getObjectStorage(id),
+        api.getObjectStorageHealthHistory(id),
+      ]);
+      setStorage(storage);
+      setLiveHealthHistory(healthHistory);
+      setLiveHealthStatus(storage.healthStatus);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load storage");
+      navigate("/storage");
+    } finally {
+      setLoading(false);
+    }
+  }, [id, navigate]);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    if (liveHealthStatus === "offline" && activeTab === "browser") {
+      setActiveTab("overview");
+    }
+  }, [activeTab, liveHealthStatus, setActiveTab]);
+
+  useEffect(() => {
+    if (!storage) return;
+    setLiveHealthStatus(storage.healthStatus);
+    setMonitoringHistory([]);
+    setMonitoringLoading(canViewMonitoring && storage.healthStatus !== "offline");
+  }, [canViewMonitoring, storage]);
+
+  useEffect(() => {
+    if (!storage || !canViewMonitoring) {
+      setMonitoringLoading(false);
+      return;
+    }
+    const es = api.createObjectStorageMonitoringStream(storage.id);
+    es.addEventListener("connected", (event: MessageEvent) => {
+      const message = JSON.parse(event.data);
+      setLiveHealthHistory(message.healthHistory ?? storage.healthHistory ?? []);
+      setLiveHealthStatus(message.healthStatus ?? storage.healthStatus);
+      setMonitoringLoading(false);
+    });
+    es.addEventListener("history", (event: MessageEvent) => {
+      const message = JSON.parse(event.data);
+      setMonitoringHistory(message.history ?? []);
+      setMonitoringLoading(false);
+    });
+    es.addEventListener("snapshot", (event: MessageEvent) => {
+      const snapshot = JSON.parse(event.data) as ObjectStorageMetricSnapshot;
+      setMonitoringHistory((prev) => [...prev, snapshot].slice(-60));
+      setLiveHealthStatus(snapshot.status);
+      setMonitoringLoading(false);
+    });
+    es.onerror = () => setMonitoringLoading(false);
+    return () => es.close();
+  }, [canViewMonitoring, storage]);
+
+  useRealtime(id ? "storage.changed" : null, (payload) => {
+    const event = payload as {
+      id?: string;
+      action?: string;
+      healthStatus?: ObjectStorageConnection["healthStatus"];
+      sampledAt?: string;
+      oldSlug?: string;
+      slug?: string;
+    };
+    if (!event || event.id !== id) return;
+    if (event.oldSlug === routeSlug && event.slug) {
+      navigate(storageRoute(event.slug, activeTab), { replace: true });
+      return;
+    }
+    if (event.action === "deleted") {
+      navigate("/storage");
+      return;
+    }
+    if (event.action === "health.sampled") {
+      if (event.healthStatus) setLiveHealthStatus(event.healthStatus);
+      if (event.sampledAt && event.healthStatus) {
+        setLiveHealthHistory((prev) => [
+          ...(prev ?? []),
+          { ts: event.sampledAt!, status: event.healthStatus! },
+        ]);
+      }
+      return;
+    }
+    if (
+      event.action === "health.online" ||
+      event.action === "health.degraded" ||
+      event.action === "health.offline"
+    ) {
+      if (event.healthStatus) setLiveHealthStatus(event.healthStatus);
+      return;
+    }
+    void load();
+  });
+
+  const remove = async () => {
+    if (!id || !storage) return;
+    const ok = await confirm({
+      title: "Delete Storage",
+      description: `Delete saved connection "${storage.name}"?`,
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    try {
+      if (storage.managed) {
+        await api.deleteManagedObjectStorage(storage.managed.id);
+      } else {
+        await api.deleteObjectStorage(id);
+      }
+      usePinnedStorageStore.getState().removePin(id);
+      toast.success("Storage deleted");
+      navigate("/storage");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to delete storage");
+    }
+  };
+
+  const restart = async () => {
+    if (!storage?.managed || !canRestart) return;
+    try {
+      await api.restartManagedObjectStorage(storage.managed.id);
+      toast.success("Storage restart requested");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to restart storage");
+    }
+  };
+
+  const retryProvisioning = async () => {
+    if (!storage?.managed || !canRetry) return;
+    try {
+      await api.retryManagedObjectStorageProvisioning(storage.managed.id);
+      toast.success("Storage provisioning retry requested");
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to retry provisioning");
+    }
+  };
+
+  const testConnection = async () => {
+    if (!canEdit || !storage) return;
+    try {
+      const result = await api.testObjectStorage(storage.id);
+      if (result.ok) {
+        toast.success(`Connection OK in ${result.responseMs} ms`);
+      } else {
+        toast.error(`Connection failed: ${result.status}`);
+      }
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Connection test failed");
+    }
+  };
+
+  const revealCredentials = async () => {
+    if (!storage || !canReveal) return;
+    if (storage.managed) {
+      setManagedCredentialsOpen(true);
+      return;
+    }
+    setCredentialsOpen(true);
+    if (revealedCredentials) return;
+    setLoadingCredentials(true);
+    try {
+      setRevealedCredentials(
+        (await api.revealObjectStorageCredentials(storage.id)) as unknown as Record<string, unknown>
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to reveal credentials");
+    } finally {
+      setLoadingCredentials(false);
+    }
+  };
+
+  if (loading || !storage) {
+    return (
+      <div className="flex items-center justify-center py-16">
+        <LoadingSpinner className="" />
+      </div>
+    );
+  }
+
+  const isFullHeightTab = activeTab === "browser";
+  const browserDisabled = liveHealthStatus === "offline";
+
+  return (
+    <PageTransition>
+      <div
+        className={cn(
+          isFullHeightTab
+            ? "h-full flex flex-col overflow-hidden gap-4 p-6"
+            : "h-full overflow-y-auto p-6 space-y-4"
+        )}
+      >
+        <StorageHeader
+          storage={storage}
+          healthStatus={liveHealthStatus}
+          canEdit={canEdit}
+          canRestart={canRestart}
+          canRetry={canRetry}
+          canReveal={canReveal}
+          canDelete={canDelete}
+          onOpenPin={() => setPinOpen(true)}
+          onBack={() => navigate("/storage")}
+          onTest={() => void testConnection()}
+          onOpenSettings={() => setSettingsOpen(true)}
+          onRestart={() => void restart()}
+          onRetry={() => void retryProvisioning()}
+          onRevealCredentials={() => void revealCredentials()}
+          onRemove={() => void remove()}
+        />
+
+        <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
+
+        <Tabs
+          value={activeTab}
+          onValueChange={setActiveTab}
+          className={cn("flex flex-col", isFullHeightTab && "flex-1 min-h-0")}
+        >
+          <TabsList className="shrink-0">
+            <TabsTrigger value="overview" className="gap-1.5">
+              <Activity className="h-3.5 w-3.5" />
+              Overview
+            </TabsTrigger>
+            {canRead && (
+              <TabsTrigger value="browser" disabled={browserDisabled} className="gap-1.5">
+                <FolderOpen className="h-3.5 w-3.5" />
+                Objects
+              </TabsTrigger>
+            )}
+            {storage.managed && (
+              <TabsTrigger value="iam-keys" className="gap-1.5">
+                <Key className="h-3.5 w-3.5" />
+                IAM Keys
+              </TabsTrigger>
+            )}
+          </TabsList>
+
+          <TabsContent value="overview" className="space-y-4">
+            <StorageOverviewTab
+              storage={storage}
+              canViewMonitoring={canViewMonitoring}
+              healthStatus={liveHealthStatus}
+              history={monitoringHistory}
+              monitoringLoading={monitoringLoading}
+            />
+          </TabsContent>
+
+          {canRead && (
+            <TabsContent value="browser" className="flex flex-col flex-1 min-h-0">
+              {browserDisabled ? (
+                <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
+                  Object browser is unavailable while the storage is offline.
+                </div>
+              ) : (
+                <ObjectBrowser storage={storage} canWrite={canWrite} />
+              )}
+            </TabsContent>
+          )}
+
+          {storage.managed && (
+            <TabsContent value="iam-keys" className="space-y-4">
+              <StorageIamKeysTab managedId={storage.managed.id} canManage={canManageIam} />
+            </TabsContent>
+          )}
+        </Tabs>
+      </div>
+
+      <Dialog open={credentialsOpen} onOpenChange={setCredentialsOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Stored Credentials</DialogTitle>
+            <DialogDescription>
+              The credentials Gateway uses to reach this storage, decrypted for viewing.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="border border-border bg-card overflow-hidden">
+            {loadingCredentials ? (
+              <div className="p-6 text-sm text-muted-foreground">Revealing credentials...</div>
+            ) : (
+              <pre className="overflow-x-auto p-4 text-sm whitespace-pre-wrap">
+                {revealedCredentials
+                  ? JSON.stringify(revealedCredentials, null, 2)
+                  : "Credentials are hidden."}
+              </pre>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {storage.managed && (
+        <StorageCredentialsDialog
+          managedId={storage.managed.id}
+          endpoint={storage.endpoint}
+          publishedPort={storage.managed.publishedPort}
+          connectionName={storage.name}
+          open={managedCredentialsOpen}
+          onOpenChange={setManagedCredentialsOpen}
+        />
+      )}
+
+      <Dialog open={pinOpen} onOpenChange={setPinOpen}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Pin Storage</DialogTitle>
+            <DialogDescription>Choose where this storage appears as a shortcut.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Add to sidebar</p>
+                <p className="text-xs text-muted-foreground">Quick access link in the sidebar</p>
+              </div>
+              <Switch
+                checked={isPinnedSidebar(storage.id)}
+                onChange={() => {
+                  toggleSidebar(storage.id, {
+                    slug: storage.slug,
+                    name: storage.name,
+                    provider: storage.provider,
+                    healthStatus: liveHealthStatus,
+                  });
+                  usePinnedStorageStore.getState().invalidate();
+                }}
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {canEdit && (
+        <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Storage Settings</DialogTitle>
+              <DialogDescription>
+                Connection details and metadata for this storage.
+              </DialogDescription>
+            </DialogHeader>
+            {storage.managed ? (
+              <ManagedObjectStorageSettingsTab
+                storage={storage}
+                onSaved={() => {
+                  setSettingsOpen(false);
+                  void load();
+                }}
+              />
+            ) : (
+              <StorageSettingsTab
+                storage={storage}
+                onSaved={(updated) => {
+                  setSettingsOpen(false);
+                  setStorage(updated);
+                  if (updated.slug !== routeSlug) {
+                    navigate(storageRoute(updated.slug, activeTab), { replace: true });
+                  } else {
+                    void load();
+                  }
+                }}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
+    </PageTransition>
+  );
+}

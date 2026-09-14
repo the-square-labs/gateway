@@ -5,6 +5,7 @@ import {
   managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
+  managedStorageBindings,
   nodes,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -792,6 +793,29 @@ export class ManagedDatabaseBindingService {
             'MANAGED_DATABASE_IDENTITY_UNAVAILABLE',
             'Managed database binding identity is not ready'
           );
+        }
+        await tx.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, input.targetNodeId)).for('update');
+        if (input.targetType !== 'compose_service') {
+          const storageClaims = await tx
+            .select({ environment: managedStorageBindings.environment })
+            .from(managedStorageBindings)
+            .where(
+              and(
+                eq(managedStorageBindings.targetNodeId, input.targetNodeId),
+                eq(managedStorageBindings.targetType, input.targetType),
+                eq(managedStorageBindings.targetResourceId, targetResourceId)
+              )
+            );
+          const requested = new Set(Object.values(input.environment).filter(Boolean));
+          if (
+            storageClaims.some((claim) => Object.values(claim.environment).some((name) => name && requested.has(name)))
+          ) {
+            throw new AppError(
+              409,
+              'MANAGED_DATABASE_BINDING_ENV_CONFLICT',
+              'A storage link already uses an environment variable'
+            );
+          }
         }
         const owner = this.ownerCredentials(locked);
         const credentials = newManagedDatabaseBindingCredentials(locked.type, id, owner.databaseName);

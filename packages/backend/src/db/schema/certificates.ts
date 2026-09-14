@@ -23,6 +23,7 @@ export const certTypeEnum = pgEnum('cert_type', ['tls-server', 'tls-client', 'co
 export const systemCertificateOwnerTypeEnum = pgEnum('system_certificate_owner_type', [
   'node',
   'managed_database',
+  'managed_storage',
   'gateway_listener',
   'gateway_service',
   'relay_node_server',

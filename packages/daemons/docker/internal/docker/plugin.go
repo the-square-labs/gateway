@@ -28,35 +28,39 @@ type DockerPlugin struct {
 	client  *Client
 	version string // Docker engine version
 
-	allowlist         *AllowlistChecker
-	envStore          *EnvStore
-	taskMgr           *TaskManager
-	deploymentOpMu    sync.Mutex
-	deploymentOps     map[string]deploymentOperation
-	deploymentOpSeq   uint64
-	registryMu        sync.RWMutex
-	registryCreds     map[string]string // registry URL -> base64-encoded auth
-	statsCollector    *StatsCollector
-	execMgr           *ExecManager
-	migrationStore    *migrationArtifactStore
-	archiveStreams    *archiveLiveStore
-	databaseManager   *managedDatabaseManager
-	composeExecutor   *composeExecutor
-	volumeImages      *volumeImageManager
-	relayGrants       *relayGrantStore
-	relayTunnelMu     sync.Mutex
-	relayTunnels      map[string]*relayTunnelRouter
-	relaySelection    uint64
-	relayListener     net.Listener
-	databaseListeners *managedDatabaseHostListenerManager
-	registryProxy     *dockerRegistryProxyManager
-	builderManager    *builderruntime.Manager
-	secureLinks       *dockerSecureLinkManager
-	secureLinkState   *securelink.StateStore
-	runtimeManager    *runtimemanager.Manager
-	runtimeStatusMu   sync.RWMutex
-	runtimeStatus     runtimemanager.Status
-	availability      *availabilityManager
+	allowlist                *AllowlistChecker
+	envStore                 *EnvStore
+	taskMgr                  *TaskManager
+	deploymentOpMu           sync.Mutex
+	deploymentOps            map[string]deploymentOperation
+	deploymentOpSeq          uint64
+	registryMu               sync.RWMutex
+	registryCreds            map[string]string // registry URL -> base64-encoded auth
+	statsCollector           *StatsCollector
+	execMgr                  *ExecManager
+	migrationStore           *migrationArtifactStore
+	archiveStreams           *archiveLiveStore
+	databaseManager          *managedDatabaseManager
+	storageManager           *managedStorageManager
+	backupHandler            backupCommandHandler
+	composeExecutor          *composeExecutor
+	volumeImages             *volumeImageManager
+	relayGrants              *relayGrantStore
+	relayTunnelMu            sync.Mutex
+	relayTunnels             map[string]*relayTunnelRouter
+	relaySelection           uint64
+	relayListener            net.Listener
+	storageConnectorListener net.Listener
+	storageConnectorSocket   string
+	databaseListeners        *managedDatabaseHostListenerManager
+	registryProxy            *dockerRegistryProxyManager
+	builderManager           *builderruntime.Manager
+	secureLinks              *dockerSecureLinkManager
+	secureLinkState          *securelink.StateStore
+	runtimeManager           *runtimemanager.Manager
+	runtimeStatusMu          sync.RWMutex
+	runtimeStatus            runtimemanager.Status
+	availability             *availabilityManager
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -88,6 +92,27 @@ func dockerTimeoutProvided(configJSON string) bool {
 // NewDockerPlugin creates a new DockerPlugin with the given configuration.
 func NewDockerPlugin(cfg *config.Config) *DockerPlugin {
 	return &DockerPlugin{cfg: cfg}
+}
+
+// backupCommandHandler is deliberately narrow: backup runtime files can
+// register the typed runner without giving the storage profile generic Docker
+// execution. A missing handler is an explicit command error, never success.
+type backupCommandHandler interface {
+	handleBackupCommand(*pb.DockerBackupCommand, *pb.CommandResult)
+}
+
+func (p *DockerPlugin) RegisterBackupCommandHandler(handler backupCommandHandler) {
+	p.backupHandler = handler
+}
+
+// registerCompiledBackupHandler makes the DockerPlugin itself the handler
+// when backup_commands.go is linked into this package. Keeping the assertion
+// dynamic preserves a runnable storage daemon before that optional worker is
+// merged, while a linked worker receives p as its only command entrypoint.
+func (p *DockerPlugin) registerCompiledBackupHandler() {
+	if handler, ok := any(p).(backupCommandHandler); ok {
+		p.backupHandler = handler
+	}
 }
 
 // Type returns the daemon type identifier.
@@ -185,7 +210,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	if err != nil {
 		return fmt.Errorf("initialize relay grant store: %w", err)
 	}
-	if p.cfg.Docker.Mode != "databases" {
+	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		p.databaseListeners = newManagedDatabaseHostListenerManager(p)
 		for bindingID, status := range p.databaseListeners.reconcile(ctx, p.relayGrants.get()) {
 			if status.State == "error" {
@@ -193,7 +218,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 			}
 		}
 	}
-	if p.cfg.Docker.Mode != "databases" {
+	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		p.registryProxy, err = newDockerRegistryProxyManager(p)
 		if err != nil {
 			return fmt.Errorf("initialize docker registry proxy: %w", err)
@@ -209,6 +234,28 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 		}
 	}
 	if p.cfg.Docker.Mode != "databases" {
+		if err := p.startStorageConnectorRelay(); err != nil {
+			return err
+		}
+	}
+	if p.cfg.Docker.Mode == "storage" {
+		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
+		if err != nil {
+			return fmt.Errorf("initialize managed database storage for storage profile: %w", err)
+		}
+		if err := p.databaseManager.reconcile(ctx); err != nil {
+			return fmt.Errorf("reconcile managed database storage for storage profile: %w", err)
+		}
+		p.storageManager, err = newManagedStorageManager(p.cfg, p.client, p.logger)
+		if err != nil {
+			return fmt.Errorf("initialize managed storage runtime: %w", err)
+		}
+		if err := p.storageManager.reconcile(ctx); err != nil {
+			return fmt.Errorf("reconcile managed storage runtime: %w", err)
+		}
+		p.registerCompiledBackupHandler()
+	}
+	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		composeExecutor, composeErr := newComposeExecutor(p.cfg, p.client, p.logger)
 		if composeErr != nil {
 			p.logger.Warn("docker compose executor unavailable", "reason", composeErr.Error())
@@ -340,6 +387,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 					"docker_builder_execution_v1",
 					"docker_builder_dedicated_runtime_v1",
 					"docker_builder_resource_limits_v1",
+					"docker_builder_scan_disable_v1",
 				)
 			}
 			return values
@@ -353,6 +401,24 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_database_binding_principals_v2",
 				"relay_pool_v1",
 			}
+		}
+		if p.cfg.Docker.Mode == "storage" {
+			values := []string{
+				"managed_databases_v1",
+				"managed_database_storage_images_v1",
+				"managed_clickhouse_principals_v1",
+				"managed_database_binding_principals_v2",
+				"managed_storage_v1",
+				"managed_storage_ext4_quota_v1",
+				"managed_storage_iam_v1",
+				"managed_storage_private_relay_v1",
+				"generic_relay_tunnel_v1",
+				"relay_pool_v1",
+			}
+			if p.backupHandler != nil {
+				values = append(values, "database_backups_v1")
+			}
+			return values
 		}
 		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1"}
 		if p.cfg.Docker.Mode == "" && p.availability != nil {

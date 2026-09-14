@@ -23,6 +23,9 @@ const RESOURCE_SCOPABLE_SET = new Set<string>(RESOURCE_SCOPABLE);
 const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE].sort((a, b) => b.length - a.length);
 
 export const MANUAL_APPROVAL_SCOPES = [
+  'storage:credentials:reveal',
+  'storage:iam',
+  'databases:backups:restore',
   'pki:ca:create:root',
   'pki:ca:create:intermediate',
   'pki:ca:revoke:root',

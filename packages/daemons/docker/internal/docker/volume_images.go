@@ -271,6 +271,11 @@ func (m *volumeImageManager) create(ctx context.Context, name string, capacity i
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return err
 	}
+	// The application UID is unknown at creation time. Initialize only the new
+	// filesystem root; remounts must preserve permissions chosen by its owner.
+	if err := os.Chmod(record.MountPath, 0777); err != nil {
+		return fmt.Errorf("initialize volume image root permissions: %w", err)
+	}
 	if err := m.saveRecord(record); err != nil {
 		return fmt.Errorf("save mounted volume image record: %w", err)
 	}

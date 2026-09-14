@@ -873,6 +873,7 @@ export async function recreateWithConfig(
     skipWebhookCleanup?: boolean;
     actorScopes?: string[];
     backgroundImagePull?: boolean;
+    expectedState?: 'running' | 'created';
     onComplete?: (newContainerId: string) => Promise<void>;
   }
 ) {
@@ -881,7 +882,7 @@ export async function recreateWithConfig(
   if (hasRequestedGpuChange(config)) await ctx.assertDockerGpuCapability(nodeId);
   if (hasRequestedSpecificPortBindIp(config)) await ctx.assertDockerPortBindIpCapability(nodeId);
   const name = await ctx.resolveContainerName(nodeId, containerId);
-  const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
+  const expectedState = options?.expectedState ?? (await ctx.resolveExpectedRecreateState(nodeId, containerId));
   ctx.requireNoTransition(nodeId, name);
   config = await applyPersistedDockerRuntimeSettingsToConfig(ctx.runtimeOperationContext(), nodeId, name, config);
   const normalizedEnv = normalizeEnvRecord(config.env);

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  managedDatabaseInstances,
   proxyAdditionalSecureLinks,
   proxyHosts,
   relayAssignmentSourceProbes,
@@ -78,6 +79,7 @@ export class RelayPoolService {
   private reconciliationTimer: ReturnType<typeof setInterval> | null = null;
   private reconciliationFlight: Promise<void> | null = null;
   private rebalanceFlight = false;
+  private readonly preparingGenerations = new Set<string>();
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
   constructor(
@@ -166,14 +168,20 @@ export class RelayPoolService {
       .from(relayEndpointAssignmentGenerations)
       .where(eq(relayEndpointAssignmentGenerations.state, 'draining'));
     let retired = 0;
+    let released = 0;
     for (const generation of generations) {
       const assignments = await this.db
-        .select({ health: relayInstances.health })
+        .select({
+          id: relayEndpointAssignments.id,
+          state: relayInstances.state,
+          lastSeenAt: relayInstances.lastSeenAt,
+          health: relayInstances.health,
+        })
         .from(relayEndpointAssignments)
         .innerJoin(relayInstances, eq(relayEndpointAssignments.relayInstanceId, relayInstances.id))
         .where(eq(relayEndpointAssignments.assignmentGenerationId, generation.id));
-      if (!assignments.length) continue;
-      const fullyObservedAndIdle = assignments.every(({ health }) => {
+      const isIdle = ({ health, lastSeenAt }: (typeof assignments)[number]) => {
+        if (!generation.drainStartedAt || !lastSeenAt || lastSeenAt < generation.drainStartedAt) return false;
         if (!Array.isArray(health?.assignmentTunnels)) return false;
         return !health.assignmentTunnels.some(
           (count) =>
@@ -181,9 +189,52 @@ export class RelayPoolService {
             count.assignmentGeneration === generation.generation &&
             count.activeTunnels > 0
         );
-      });
-      if (!fullyObservedAndIdle) continue;
+      };
+      const fullyObservedAndIdle = assignments.every(isIdle);
+      if (!fullyObservedAndIdle) {
+        // A live tunnel on another relay must not pin an idle, drained member.
+        // Only touch old generations and require an observation after handover.
+        for (const assignment of assignments.filter(
+          (row) =>
+            row.state === 'draining' &&
+            isIdle(row) &&
+            row.lastSeenAt &&
+            generation.drainStartedAt &&
+            row.lastSeenAt >= generation.drainStartedAt
+        )) {
+          released += await this.db.transaction(async (tx) => {
+            const removed = await tx
+              .delete(relayEndpointAssignments)
+              .where(
+                and(
+                  eq(relayEndpointAssignments.id, assignment.id),
+                  sql`exists (select 1 from ${relayEndpointAssignmentGenerations} where ${relayEndpointAssignmentGenerations.id} = ${generation.id} and ${relayEndpointAssignmentGenerations.state} = 'draining')`,
+                  sql`exists (select 1 from ${relayInstances} where ${relayInstances.id} = ${relayEndpointAssignments.relayInstanceId} and ${relayInstances.state} = 'draining' and ${relayInstances.lastSeenAt} = ${assignment.lastSeenAt})`
+                )
+              )
+              .returning({ id: relayEndpointAssignments.id });
+            if (removed.length) await bumpRelayPolicyRevision(tx);
+            return removed.length;
+          });
+        }
+        continue;
+      }
       const result = await this.db.transaction(async (tx) => {
+        // Health may have changed after the optimistic read. Re-read under row
+        // locks and keep reports/assignment cleanup serialized with retirement.
+        const currentAssignments = await tx
+          .select({
+            id: relayEndpointAssignments.id,
+            state: relayInstances.state,
+            lastSeenAt: relayInstances.lastSeenAt,
+            health: relayInstances.health,
+          })
+          .from(relayEndpointAssignments)
+          .innerJoin(relayInstances, eq(relayEndpointAssignments.relayInstanceId, relayInstances.id))
+          .where(eq(relayEndpointAssignments.assignmentGenerationId, generation.id))
+          .orderBy(relayInstances.id, relayEndpointAssignments.id)
+          .for('update');
+        if (!currentAssignments.every(isIdle)) return [];
         const changed = await tx
           .update(relayEndpointAssignmentGenerations)
           .set({ state: 'retired', retiredAt: new Date(), updatedAt: new Date() })
@@ -199,7 +250,7 @@ export class RelayPoolService {
       });
       retired += result.length;
     }
-    if (retired > 0) {
+    if (retired > 0 || released > 0) {
       await this.policy.reconcileAndSync();
       this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'generations_retired' });
     }
@@ -251,6 +302,7 @@ export class RelayPoolService {
           .orderBy(relayPoolUpdateSteps.sequence)
       : [];
     const updateStepByInstance = new Map(updateSteps.map((step) => [step.relayInstanceId, step]));
+    const attempts = await this.getRecentAttempts();
     const readyFaultDomains = new Set(
       instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
     );
@@ -285,7 +337,12 @@ export class RelayPoolService {
     const eligiblePlan = rebalancePlan.filter(({ blockers }) => !blockers.length);
     const rebalanceAvailable = eligiblePlan.length > 0;
     // A blocked workload must not disable the action for unrelated eligible ones.
-    const blockers = rebalanceAvailable ? [] : [...new Set(rebalancePlan.flatMap(({ blockers }) => blockers))];
+    const blockers =
+      readyFaultDomains.size === 0 && endpoints.some(({ ownerKind }) => ownerKind !== 'internal_registry')
+        ? ['No ready relay is available to receive assignments; resume or add a relay before evacuation']
+        : rebalanceAvailable
+          ? []
+          : [...new Set(rebalancePlan.flatMap(({ blockers }) => blockers))];
     const rebalancePlanKey = createHash('sha256')
       .update(JSON.stringify(eligiblePlan.sort((a, b) => a.endpointId.localeCompare(b.endpointId))))
       .digest('hex');
@@ -302,9 +359,7 @@ export class RelayPoolService {
           })
         )
       : 0;
-    const automaticRebalancePaused =
-      Boolean(updateRun && !['complete', 'failed'].includes(updateRun.state)) ||
-      instances.some(({ state }) => state === 'draining');
+    const automaticRebalancePaused = Boolean(updateRun && !['complete', 'failed'].includes(updateRun.state));
     const activeTunnels = instances.reduce((sum, instance) => sum + (instance.health?.activeTunnels ?? 0), 0);
     const registeredEndpoints = instances.reduce(
       (sum, instance) => sum + (instance.health?.registeredEndpoints ?? 0),
@@ -320,7 +375,9 @@ export class RelayPoolService {
         ? 'unavailable'
         : generations.some(({ state }) => state === 'staging')
           ? 'rebalancing'
-          : degraded || failures.length > 0 || blockers.length > 0
+          : degraded ||
+              failures.some(({ endpointId }) => rebalancePlan.some((entry) => entry.endpointId === endpointId)) ||
+              blockers.length > 0
             ? 'degraded'
             : rebalanceAvailable
               ? 'rebalance_available'
@@ -330,6 +387,7 @@ export class RelayPoolService {
       rebalancePlanKey,
       blockers,
       failures,
+      attempts,
       automaticRebalancePaused,
       automaticRebalanceRetryAt: nextAutomaticRetry > Date.now() ? new Date(nextAutomaticRetry) : null,
       activeTunnels,
@@ -347,6 +405,14 @@ export class RelayPoolService {
         return {
           ...instance,
           activeAssignments,
+          retainedAssignments: generations.reduce(
+            (count, generation) =>
+              count +
+              (assignmentsByGeneration.get(generation.id) ?? []).filter(
+                (assignment) => assignment.relayInstanceId === instance.id
+              ).length,
+            0
+          ),
           updateStep: updateStepByInstance.get(instance.id) ?? null,
         };
       }),
@@ -355,6 +421,45 @@ export class RelayPoolService {
         ? { state: updateRun.state, targetVersion: updateRun.targetArtifact.version, error: updateRun.terminalError }
         : null,
     };
+  }
+
+  private getRecentAttempts() {
+    return this.db
+      .select({
+        id: relayEndpointAssignmentGenerations.id,
+        endpointId: relayEndpointAssignmentGenerations.endpointId,
+        generation: relayEndpointAssignmentGenerations.generation,
+        state: relayEndpointAssignmentGenerations.state,
+        activationError: relayEndpointAssignmentGenerations.activationError,
+        createdAt: relayEndpointAssignmentGenerations.createdAt,
+        updatedAt: relayEndpointAssignmentGenerations.updatedAt,
+        workload: sql<string>`coalesce(${proxyHosts.domainNames}->>0, ${managedDatabaseInstances.name}, ${relayEndpoints.ownerKind} || ' · ' || ${relayEndpoints.ownerId})`,
+      })
+      .from(relayEndpointAssignmentGenerations)
+      .innerJoin(relayEndpoints, eq(relayEndpoints.id, relayEndpointAssignmentGenerations.endpointId))
+      .leftJoin(
+        proxyAdditionalSecureLinks,
+        and(
+          eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'),
+          sql`${proxyAdditionalSecureLinks.id}::text = ${relayEndpoints.ownerId}`
+        )
+      )
+      .leftJoin(
+        proxyHosts,
+        and(
+          eq(relayEndpoints.ownerKind, 'proxy_host_secure_link'),
+          sql`(${proxyHosts.id}::text = ${relayEndpoints.ownerId} or ${proxyHosts.id} = ${proxyAdditionalSecureLinks.proxyHostId})`
+        )
+      )
+      .leftJoin(
+        managedDatabaseInstances,
+        and(
+          eq(relayEndpoints.ownerKind, 'managed_database'),
+          sql`${managedDatabaseInstances.id}::text = ${relayEndpoints.ownerId}`
+        )
+      )
+      .orderBy(desc(relayEndpointAssignmentGenerations.createdAt), desc(relayEndpointAssignmentGenerations.id))
+      .limit(20);
   }
 
   private async resolveEffectiveSpreads(
@@ -494,12 +599,7 @@ export class RelayPoolService {
           .where(eq(relayPoolUpdateRuns.poolId, 'system'))
           .orderBy(desc(relayPoolUpdateRuns.startedAt))
           .limit(1);
-        const draining = await tx
-          .select({ id: relayInstances.id })
-          .from(relayInstances)
-          .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.state, 'draining')))
-          .limit(1);
-        if ((update && !['complete', 'failed'].includes(update.state)) || draining.length) return [];
+        if (update && !['complete', 'failed'].includes(update.state)) return [];
       }
       const candidates = await tx.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
       const readyInstances = candidates.filter(
@@ -671,30 +771,39 @@ export class RelayPoolService {
       return;
     }
     const nodeSyncs = new Map<string, Promise<number>>();
+    for (const generation of generations) this.preparingGenerations.add(generation.id);
     const results = await Promise.allSettled(
       generations.map(async (generation) => {
-        try {
-          const remoteNodes = await this.remoteNodesForGenerations([generation.id]);
-          await Promise.all(
-            remoteNodes.flatMap(({ nodeId }) => {
-              if (!nodeId) throw new Error('Selected remote relay is not enrolled');
-              let sync = nodeSyncs.get(nodeId);
-              if (!sync) {
-                sync = this.policy.syncRemoteInstancePolicy(nodeId);
-                nodeSyncs.set(nodeId, sync);
-              }
-              return [sync];
-            })
-          );
-          await this.prepareStagedGeneration(generation);
-        } catch (error) {
-          await this.failStaging([generation.id], error);
-        }
+        const remoteNodes = await this.remoteNodesForGenerations([generation.id]);
+        const remoteResults = await Promise.allSettled(
+          remoteNodes.map(async ({ nodeId }) => {
+            if (!nodeId) throw new Error('Selected remote relay is not enrolled');
+            let sync = nodeSyncs.get(nodeId);
+            if (!sync) {
+              sync = this.policy.syncRemoteInstancePolicy(nodeId);
+              nodeSyncs.set(nodeId, sync);
+            }
+            return sync;
+          })
+        );
+        const remoteFailure = remoteResults.find((result) => result.status === 'rejected');
+        if (remoteFailure?.status === 'rejected') throw remoteFailure.reason;
+        await this.prepareStagedGeneration(generation);
       })
     );
-    // A failure to persist one outcome must not interrupt the other preparations.
-    const rejected = results.find((result) => result.status === 'rejected');
-    if (rejected?.status === 'rejected') throw rejected.reason;
+    // Publishing any outcome advances the signing fence. Finish every sibling's
+    // grant issuance and probes before activation OR failure can change policy.
+    for (const generation of generations) this.preparingGenerations.delete(generation.id);
+    const publicationErrors: unknown[] = [];
+    for (const [index, result] of results.entries()) {
+      try {
+        if (result.status === 'rejected') await this.failStaging([generations[index].id], result.reason);
+        else await this.tryActivate(generations[index].id);
+      } catch (error) {
+        publicationErrors.push(error);
+      }
+    }
+    if (publicationErrors.length) throw publicationErrors[0];
   }
 
   private async remoteNodesForGenerations(ids: string[]) {
@@ -845,6 +954,7 @@ export class RelayPoolService {
       details: {},
     });
     this.events.publish('system.relay.health.changed', { poolId: instance.poolId, instanceId: instance.id });
+    if (enabled) await this.evacuateInstance(instance.id);
   }
 
   async forceDisconnectInstance(instanceId: string, userId: string) {
@@ -869,9 +979,37 @@ export class RelayPoolService {
       instanceId: instance.id,
       action: 'force_disconnect',
     });
+    await this.evacuateInstance(instance.id);
+    await this.retireDrainedGenerations();
+  }
+
+  private async evacuateInstance(instanceId: string): Promise<void> {
+    // An in-flight placement is allowed to finish; the regular reconciler will
+    // pick up the persisted drain on its next pass. Never race another batch.
+    if (this.rebalanceFlight) return;
+    const affected = await this.db
+      .selectDistinct({ endpointId: relayEndpointAssignmentGenerations.endpointId })
+      .from(relayEndpointAssignments)
+      .innerJoin(
+        relayEndpointAssignmentGenerations,
+        eq(relayEndpointAssignments.assignmentGenerationId, relayEndpointAssignmentGenerations.id)
+      )
+      .where(
+        and(
+          eq(relayEndpointAssignments.relayInstanceId, instanceId),
+          eq(relayEndpointAssignmentGenerations.state, 'active')
+        )
+      );
+    if (!affected.length) return;
+    await this.stageRebalance(undefined, {
+      allowNoop: true,
+      automatic: true,
+      endpointIds: affected.map(({ endpointId }) => endpointId),
+    });
   }
 
   private async tryActivate(generationId: string): Promise<boolean> {
+    if (this.preparingGenerations.has(generationId)) return false;
     let failed = false;
     const activated = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-assignment-generation:${generationId}`}))`);
@@ -973,7 +1111,11 @@ export class RelayPoolService {
       endpoint.subjectId,
       ...routes.filter(({ sourceKind }) => sourceKind === 'daemon').map(({ sourceId }) => sourceId),
     ];
-    await Promise.all([...new Set(daemonNodeIds)].map((nodeId) => this.policy.syncNodeGrants(nodeId)));
+    const grantResults = await Promise.allSettled(
+      [...new Set(daemonNodeIds)].map(async (nodeId) => this.policy.syncNodeGrants(nodeId))
+    );
+    const grantFailure = grantResults.find((result) => result.status === 'rejected');
+    if (grantFailure?.status === 'rejected') throw grantFailure.reason;
 
     const bundleCache = new Map<string, Awaited<ReturnType<RelayPolicyService['getNodeGrantBundle']>>>();
     const getBundle = async (nodeId: string) => {

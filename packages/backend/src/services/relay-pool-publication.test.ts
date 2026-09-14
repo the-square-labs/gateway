@@ -81,6 +81,44 @@ function fixture() {
 }
 
 describe('Relay Pool assignment publication through the real refresh gate', () => {
+  it('does not publish a successful or failed sibling while another preparation is still issuing grants', async () => {
+    const { pool, revision, generation } = fixture();
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.spyOn(pool as any, 'remoteNodesForGenerations').mockResolvedValue([]);
+    const failures = vi.spyOn(pool as any, 'failStaging').mockResolvedValue(undefined);
+    vi.spyOn(pool as any, 'prepareStagedGeneration').mockImplementation(async (...args: any[]) => {
+      if (args[0].id === 'failed') throw new Error('probe failed');
+      if (args[0].id === 'new') {
+        expect(await (pool as any).tryActivate('new')).toBe(false);
+        entered();
+      } else {
+        await blocked;
+        expect(revision()).toBe(10); // Grant issuance still sees the acknowledged projection.
+        expect(failures).not.toHaveBeenCalled();
+        throw new Error('late probe failed');
+      }
+    });
+    const batch = (pool as any).prepareGenerations(
+      ['new', 'failed', 'slow'].map((id) => ({ id, endpointId: id, generation: 2 }))
+    );
+    await ready;
+    expect(generation.state).toBe('staging');
+    expect(revision()).toBe(10);
+    release();
+    await batch;
+    expect(generation.state).toBe('active');
+    expect(revision()).toBe(11);
+    expect(failures).toHaveBeenCalledTimes(2);
+    expect((pool as any).preparingGenerations.size).toBe(0);
+  });
+
   it('publishes active candidates immediately after a recent staging grant refresh', async () => {
     const { pool, policy, send, revision } = fixture();
     await policy.refreshAllNodeGrantsIfDue();

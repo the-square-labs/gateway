@@ -1,5 +1,8 @@
-// Must be first — set up environment and reflection metadata
 import 'reflect-metadata';
+import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
+import { ObjectStorageMonitoringService } from '@/modules/object-storage/object-storage-monitoring.service.js';
+import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
+// Must be first — set up environment and reflection metadata
 import 'dotenv/config';
 
 import { serve } from '@hono/node-server';
@@ -286,7 +289,10 @@ async function main() {
           logger.info('HTTP server closed');
         },
         finalize: async (deadline) => {
+          container.resolve(ObjectStorageMonitoringService).destroy();
+          container.resolve(ObjectStorageService).shutdown();
           const independentFinalizers = [
+            settleShutdownTask('managed_storage_tunnel', container.resolve(ManagedStorageTunnelProxy).shutdown()),
             settleShutdownTask('managed_database_tunnel', container.resolve(ManagedDatabaseTunnelProxy).shutdown()),
             settleShutdownTask('auth_email_queue', container.resolve(AuthEmailQueueService).close()),
             settleShutdownTask(

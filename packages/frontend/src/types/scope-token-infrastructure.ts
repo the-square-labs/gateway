@@ -1,4 +1,75 @@
 export const INFRASTRUCTURE_TOKEN_SCOPES = [
+  { value: "storage:view", label: "View Storage", desc: "storage:view", group: "Storage" },
+  { value: "storage:edit", label: "Edit Storage", desc: "storage:edit", group: "Storage" },
+  { value: "storage:delete", label: "Delete Storage", desc: "storage:delete", group: "Storage" },
+  {
+    value: "storage:iam",
+    label: "Manage Storage Access Keys",
+    desc: "Create and revoke storage credentials",
+    group: "Storage",
+  },
+  {
+    value: "storage:credentials:reveal",
+    label: "Reveal Storage",
+    desc: "storage:credentials:reveal",
+    group: "Storage",
+  },
+  {
+    value: "storage:objects:read",
+    label: "Read Storage",
+    desc: "storage:objects:read",
+    group: "Storage",
+  },
+  {
+    value: "storage:objects:write",
+    label: "Write Storage",
+    desc: "storage:objects:write",
+    group: "Storage",
+  },
+  {
+    value: "storage:objects:admin",
+    label: "Admin Storage",
+    desc: "storage:objects:admin",
+    group: "Storage",
+  },
+  {
+    value: "databases:backups:view",
+    label: "View Backups",
+    desc: "databases:backups:view",
+    group: "Database Backups",
+  },
+  {
+    value: "databases:backups:manage",
+    label: "Manage Backups",
+    desc: "databases:backups:manage",
+    group: "Database Backups",
+  },
+  {
+    value: "databases:backups:run",
+    label: "Run Backups",
+    desc: "databases:backups:run",
+    group: "Database Backups",
+  },
+  {
+    value: "databases:backups:restore",
+    label: "Restore Backups",
+    desc: "databases:backups:restore",
+    group: "Database Backups",
+  },
+  {
+    value: "nodes:backups:execute",
+    label: "Execute Backups",
+    desc: "nodes:backups:execute",
+    group: "Database Backups",
+  },
+  { value: "storage:create", label: "Create Storage", desc: "storage:create", group: "Storage" },
+  {
+    value: "storage:folders:manage",
+    label: "Manage Storage",
+    desc: "storage:folders:manage",
+    group: "Storage",
+  },
+
   // Docker: Containers
   {
     value: "docker:containers:view",

@@ -20,6 +20,7 @@ export const nodeTypeEnum = pgEnum('node_type', [
   'docker',
   'builder',
   'databases',
+  'storage',
   'relay',
 ]);
 export const nodeStatusEnum = pgEnum('node_status', ['pending', 'online', 'offline', 'error']);

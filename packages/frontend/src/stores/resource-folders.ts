@@ -40,6 +40,7 @@ const RESOURCE_TYPES: ResourceFolderType[] = [
   "domain",
   "ssl-certificate",
   "database",
+  "storage",
   "logging-environment",
   "logging-schema",
   "admin-user",
@@ -241,6 +242,8 @@ function listFolders(type: ResourceFolderType): Promise<ResourceFolderTreeNode[]
       return api.listSSLCertificateFolders();
     case "database":
       return api.listDatabaseFolders();
+    case "storage":
+      return api.listObjectStorageFolders();
     case "logging-environment":
       return api.listLoggingEnvironmentFolders();
     case "logging-schema":
@@ -269,6 +272,8 @@ function createFolderByType(
       return api.createSSLCertificateFolder(data);
     case "database":
       return api.createDatabaseFolder(data);
+    case "storage":
+      return api.createObjectStorageFolder(data);
     case "logging-environment":
       return api.createLoggingEnvironmentFolder(data);
     case "logging-schema":
@@ -298,6 +303,8 @@ function updateFolderByType(
       return api.updateSSLCertificateFolder(id, data);
     case "database":
       return api.updateDatabaseFolder(id, data);
+    case "storage":
+      return api.updateObjectStorageFolder(id, data);
     case "logging-environment":
       return api.updateLoggingEnvironmentFolder(id, data);
     case "logging-schema":
@@ -323,6 +330,8 @@ function deleteFolderByType(type: ResourceFolderType, id: string): Promise<void>
       return api.deleteSSLCertificateFolder(id);
     case "database":
       return api.deleteDatabaseFolder(id);
+    case "storage":
+      return api.deleteObjectStorageFolder(id);
     case "logging-environment":
       return api.deleteLoggingEnvironmentFolder(id);
     case "logging-schema":
@@ -351,6 +360,8 @@ function reorderFoldersByType(
       return api.reorderSSLCertificateFolders(items);
     case "database":
       return api.reorderDatabaseFolders(items);
+    case "storage":
+      return api.reorderObjectStorageFolders(items);
     case "logging-environment":
       return api.reorderLoggingEnvironmentFolders(items);
     case "logging-schema":
@@ -380,6 +391,8 @@ function moveResourcesToFolderByType(
       return api.moveSSLCertificatesToFolder(ids, folderId);
     case "database":
       return api.moveDatabasesToFolder(ids, folderId);
+    case "storage":
+      return api.moveObjectStoragesToFolder(ids, folderId);
     case "logging-environment":
       return api.moveLoggingEnvironmentsToFolder(ids, folderId);
     case "logging-schema":
@@ -408,6 +421,8 @@ function reorderResourcesByType(
       return api.reorderSSLCertificates(items);
     case "database":
       return api.reorderDatabases(items);
+    case "storage":
+      return api.reorderObjectStorages(items);
     case "logging-environment":
       return api.reorderLoggingEnvironments(items);
     case "logging-schema":

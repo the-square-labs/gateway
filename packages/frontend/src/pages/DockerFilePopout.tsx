@@ -69,18 +69,21 @@ async function copyImageBlobAsPng(blob: Blob) {
 }
 
 export function DockerFilePopout() {
-  const { nodeId, containerId, volumeName } = useParams<{
+  const { nodeId, containerId, volumeName, storageId } = useParams<{
     nodeId: string;
     containerId?: string;
     volumeName?: string;
+    storageId?: string;
   }>();
   const [searchParams] = useSearchParams();
   const { hasScope, hasScopedAccess } = useAuthStore();
   const filePath = searchParams.get("path") || "/";
   const isWritable = searchParams.get("writable") === "1";
+  const bucket = searchParams.get("bucket") || "";
+  const isStorageFile = !!storageId;
   const isVolumeFile = !!volumeName;
-  const isNodeFile = !containerId && !volumeName;
-  const resourceId = volumeName ?? containerId ?? nodeId;
+  const isNodeFile = !containerId && !volumeName && !storageId;
+  const resourceId = storageId ?? volumeName ?? containerId ?? nodeId;
   const canUseContainerFiles =
     !!nodeId && !!containerId && hasScopedAccess("docker:containers:files:read");
   const canWriteContainerFiles =
@@ -101,14 +104,30 @@ export function DockerFilePopout() {
     !!nodeId &&
     isNodeFile &&
     (hasScope("nodes:files:write") || hasScope(`nodes:files:write:${nodeId}`));
-  const canUseFiles = isNodeFile
-    ? canUseNodeFiles
-    : isVolumeFile
-      ? canUseVolumeFiles
-      : canUseContainerFiles;
+  const canUseStorageFiles =
+    !!storageId &&
+    !!bucket &&
+    (hasScope("storage:objects:read") || hasScope(`storage:objects:read:${storageId}`));
+  const canWriteStorageFiles =
+    !!storageId &&
+    !!bucket &&
+    (hasScope("storage:objects:write") || hasScope(`storage:objects:write:${storageId}`));
+  const canUseFiles = isStorageFile
+    ? canUseStorageFiles
+    : isNodeFile
+      ? canUseNodeFiles
+      : isVolumeFile
+        ? canUseVolumeFiles
+        : canUseContainerFiles;
   const canSaveFile =
     isWritable &&
-    (isNodeFile ? canWriteNodeFiles : isVolumeFile ? canWriteVolumeFiles : canWriteContainerFiles);
+    (isStorageFile
+      ? canWriteStorageFiles
+      : isNodeFile
+        ? canWriteNodeFiles
+        : isVolumeFile
+          ? canWriteVolumeFiles
+          : canWriteContainerFiles);
 
   const [content, setContent] = useState<string | null>(null);
   const [savedContent, setSavedContent] = useState<string | null>(null);
@@ -140,15 +159,17 @@ export function DockerFilePopout() {
       setIsLoading(false);
       return;
     }
-    if (!nodeId || !resourceId || didFetch.current) return;
+    if ((!nodeId && !storageId) || !resourceId || didFetch.current) return;
     didFetch.current = true;
 
     setIsLoading(true);
-    const readFile = isNodeFile
-      ? api.readNodeFile(nodeId, filePath)
-      : isVolumeFile
-        ? api.readVolumeFile(nodeId, resourceId, filePath)
-        : api.readContainerFile(nodeId, resourceId, filePath);
+    const readFile = storageId
+      ? api.readObject(storageId, bucket, filePath.replace(/^\//, ""))
+      : isNodeFile
+        ? api.readNodeFile(nodeId!, filePath)
+        : isVolumeFile
+          ? api.readVolumeFile(nodeId!, resourceId, filePath)
+          : api.readContainerFile(nodeId!, resourceId, filePath);
 
     readFile
       .then((bytes) => {
@@ -181,7 +202,7 @@ export function DockerFilePopout() {
         setError(err instanceof Error ? err.message : "Failed to read file");
       })
       .finally(() => setIsLoading(false));
-  }, [canUseFiles, nodeId, resourceId, filePath, isNodeFile, isVolumeFile]);
+  }, [canUseFiles, nodeId, resourceId, filePath, isNodeFile, isVolumeFile, storageId, bucket]);
 
   useEffect(() => {
     return () => {
@@ -320,15 +341,25 @@ export function DockerFilePopout() {
   };
 
   const handleSave = useCallback(async () => {
-    if (!nodeId || !resourceId || content === null || !canSaveFile) return;
+    if ((!nodeId && !storageId) || !resourceId || content === null || !canSaveFile) return;
     setIsSaving(true);
     try {
-      if (isVolumeFile) {
-        await api.writeVolumeFile(nodeId, resourceId, filePath, content);
+      if (storageId) {
+        const key = filePath.replace(/^\//, "");
+        const metadata = await api.getObjectMetadata(storageId, bucket, key);
+        const contentType = metadata.contentType || "application/octet-stream";
+        await api.uploadObject(storageId, {
+          bucket,
+          key,
+          contentType,
+          body: new Blob([content], { type: contentType }),
+        });
+      } else if (isVolumeFile) {
+        await api.writeVolumeFile(nodeId!, resourceId, filePath, content);
       } else if (isNodeFile) {
-        await api.writeNodeFile(nodeId, filePath, content);
+        await api.writeNodeFile(nodeId!, filePath, content);
       } else {
-        await api.writeContainerFile(nodeId, resourceId, filePath, content);
+        await api.writeContainerFile(nodeId!, resourceId, filePath, content);
       }
       setSavedContent(content);
       toast.success("File saved");
@@ -337,7 +368,17 @@ export function DockerFilePopout() {
     } finally {
       setIsSaving(false);
     }
-  }, [canSaveFile, nodeId, resourceId, filePath, content, isNodeFile, isVolumeFile]);
+  }, [
+    canSaveFile,
+    nodeId,
+    resourceId,
+    filePath,
+    content,
+    isNodeFile,
+    isVolumeFile,
+    storageId,
+    bucket,
+  ]);
 
   if (!canUseFiles) {
     return (

@@ -7,6 +7,7 @@ export const LICENSE_FEATURE_PLANS = {
   "container-export": "personal",
   "blue-green": "personal",
   "cross-node-migration": "personal",
+  "managed-storage": "personal",
   "managed-databases": "personal",
   "status-pages": "personal",
   "registry-discovery": "personal",
@@ -61,7 +62,9 @@ function currentPlan(): LicensePlan {
 export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
   const license = useUIBootstrapStore.getState().snapshot?.license;
   if (!license) return null;
-  return license.entitlements.features.includes(feature);
+  return license.entitlements.features.includes(
+    feature === "managed-storage" ? "managed-databases" : feature
+  );
 }
 
 export function requireLicenseFeature(feature: LicenseFeature, capability: string): boolean {

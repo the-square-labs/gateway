@@ -1,0 +1,1 @@
+ALTER TABLE "docker_secrets" ADD COLUMN "managed_owner" text;

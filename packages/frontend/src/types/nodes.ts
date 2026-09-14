@@ -5,6 +5,7 @@ export type NodeType =
   | "docker"
   | "builder"
   | "databases"
+  | "storage"
   | "relay";
 export type NodeStatus = "pending" | "online" | "offline" | "error";
 export type NodeAppearanceColor =

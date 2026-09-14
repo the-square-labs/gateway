@@ -19,8 +19,11 @@ import {
   loggingSchemaFolders,
   loggingSchemas,
   managedDatabaseInstances,
+  managedStorageClusters,
   nodeFolders,
   nodes,
+  objectStorageConnections,
+  objectStorageFolders,
   pageProjectFolders,
   pageProjects,
   permissionGroupFolders,
@@ -275,6 +278,7 @@ function familyForBaseScope(baseScope: string) {
     baseScope.startsWith('docker:images:')
   )
     return 'docker';
+  if (baseScope.startsWith('storage:')) return 'storage';
   if (baseScope.startsWith('databases:')) return 'databases';
   if (baseScope.startsWith('logs:schemas:')) return 'logging-schemas';
   if (baseScope.startsWith('logs:environments:') || baseScope === 'logs:read') return 'logging-environments';
@@ -299,6 +303,11 @@ async function expandNodeScopes(db: DrizzleClient, scopes: readonly string[]): P
       rows = await db.select({ id: proxyHosts.id }).from(proxyHosts).where(eq(proxyHosts.nodeId, nodeId));
     } else if (base.startsWith('pages:')) {
       rows = await db.select({ id: pageProjects.id }).from(pageProjects).where(eq(pageProjects.nodeId, nodeId));
+    } else if (base.startsWith('storage:')) {
+      rows = await db
+        .select({ id: managedStorageClusters.objectStorageConnectionId })
+        .from(managedStorageClusters)
+        .where(eq(managedStorageClusters.nodeId, nodeId));
     } else if (base.startsWith('databases:')) {
       rows = await db
         .select({ id: managedDatabaseInstances.databaseConnectionId })
@@ -406,6 +415,7 @@ export async function expandFolderScopes(db: DrizzleClient, scopes: readonly str
     expandSimpleFamily(db, byFamily.get('ssl') ?? [], sslCertificateFolders, sslCertificates),
     expandSimpleFamily(db, byFamily.get('nodes') ?? [], nodeFolders, nodes),
     expandDockerFamily(db, byFamily.get('docker') ?? []),
+    expandSimpleFamily(db, byFamily.get('storage') ?? [], objectStorageFolders, objectStorageConnections),
     expandSimpleFamily(db, byFamily.get('databases') ?? [], databaseConnectionFolders, databaseConnections),
     expandSimpleFamily(db, byFamily.get('logging-environments') ?? [], loggingEnvironmentFolders, loggingEnvironments),
     expandSimpleFamily(db, byFamily.get('logging-schemas') ?? [], loggingSchemaFolders, loggingSchemas),

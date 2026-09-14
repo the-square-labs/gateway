@@ -93,6 +93,7 @@ import {
 } from './docker-read-operations.js';
 import { dockerDispatchErrorMessage } from './docker-recreate-watch.js';
 import type { DockerRegistryService } from './docker-registry.service.js';
+import { collectDockerRolloutDiagnostics, DOCKER_ROLLOUT_RAW_LIMIT } from './docker-rollout-diagnostics.js';
 import { applyRuntimeSettingsToInspect } from './docker-runtime-inspect.js';
 import type { DockerRuntimeOperationContext } from './docker-runtime-operations.js';
 import type { DockerRuntimeSettingsService } from './docker-runtime-settings.service.js';
@@ -1366,6 +1367,36 @@ export class DockerManagementService {
     return getDockerContainerLogs(this.readOperationContext(), target.nodeId, target.containerId, tail, timestamps);
   }
 
+  /** Bounded, redacted evidence captured before a failed rollout removes its runtime. */
+  async getContainerFailureDiagnostics(nodeId: string, containerId: string): Promise<string> {
+    const parseBounded = (result: { success: boolean; error?: string; detail?: string }) => {
+      if (
+        (result.detail?.length ?? 0) > DOCKER_ROLLOUT_RAW_LIMIT ||
+        Buffer.byteLength(result.detail ?? '') > DOCKER_ROLLOUT_RAW_LIMIT
+      ) {
+        throw new Error('Oversized runtime diagnostic response');
+      }
+      return this.parseResult(result);
+    };
+    return collectDockerRolloutDiagnostics({
+      inspect: async (timeoutMs) =>
+        parseBounded(await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'inspect', { containerId }, timeoutMs)),
+      logs: async (timeoutMs) =>
+        parseBounded(
+          await this.nodeDispatch.sendDockerLogsCommand(
+            nodeId,
+            containerId,
+            {
+              tailLines: 30,
+              timestamps: false,
+              follow: false,
+            },
+            timeoutMs
+          )
+        ),
+    });
+  }
+
   async getContainerEnv(nodeId: string, containerId: string) {
     const managed = await this.availabilityMutationCoordinator?.getEnvironment(nodeId, containerId);
     if (managed) return managed;
@@ -1393,6 +1424,8 @@ export class DockerManagementService {
       backgroundImagePull?: boolean;
       waitForAvailability?: boolean;
       forceAvailabilityRollout?: boolean;
+      // Internal rollback override: preserve intent from before the failed revision.
+      expectedState?: 'running' | 'created';
     }
   ) {
     const availabilityOptions =

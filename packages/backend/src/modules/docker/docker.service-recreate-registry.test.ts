@@ -17,6 +17,7 @@ function dbWithOnlineDockerNode() {
 function createService(dispatch: {
   sendDockerContainerCommand: ReturnType<typeof vi.fn>;
   sendDockerImageCommand: ReturnType<typeof vi.fn>;
+  sendDockerLogsCommand?: ReturnType<typeof vi.fn>;
 }) {
   const service = new DockerManagementService(
     dbWithOnlineDockerNode() as never,
@@ -42,6 +43,80 @@ function createService(dispatch: {
 }
 
 describe('DockerManagementService recreate registry auth', () => {
+  it.each([
+    'running',
+    'created',
+  ] as const)('forwards rollback intent %s independently of the failed runtime state', async (expectedState) => {
+    const inspect = {
+      Id: 'failed',
+      Name: '/app',
+      Config: { Image: 'new', Labels: {} },
+      State: { Status: 'restarting', Running: false },
+    };
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn(async (_nodeId: string, action: string) => ({
+        success: true,
+        detail: JSON.stringify(action === 'inspect' ? inspect : { Id: 'restored' }),
+      })),
+      sendDockerImageCommand: vi.fn(),
+    };
+    const service = createService(dispatch);
+    await service.recreateWithConfig('node-1', 'failed', {}, 'user-1', { skipImagePull: true, expectedState });
+    const recreate = (dispatch.sendDockerContainerCommand.mock.calls as unknown as any[][]).find(
+      (call) => call[1] === 'recreate'
+    );
+    expect(JSON.parse(recreate![2].configJson).expectedState).toBe(expectedState);
+    expect((service as any).watchRecreateByName).toHaveBeenCalledWith(
+      'node-1',
+      'app',
+      'failed',
+      undefined,
+      'Container recreated',
+      expectedState,
+      expect.any(Number),
+      undefined,
+      undefined
+    );
+  });
+
+  it('collects rollout diagnostics from internal inspect and redacts actual environment values', async () => {
+    const dispatch = {
+      sendDockerContainerCommand: vi.fn().mockResolvedValue({
+        success: true,
+        detail: JSON.stringify({
+          Config: { Env: ['TOKEN=private-token'] },
+          State: { Status: 'exited', ExitCode: 1 },
+        }),
+      }),
+      sendDockerImageCommand: vi.fn(),
+      sendDockerLogsCommand: vi
+        .fn()
+        .mockResolvedValue({ success: true, detail: JSON.stringify(['startup failed private-token']) }),
+    };
+    const service = createService(dispatch);
+    const publicInspect = vi.spyOn(service, 'inspectContainer');
+    const detail = await service.getContainerFailureDiagnostics('node-1', 'failed');
+    expect(detail).toContain('startup failed [REDACTED]');
+    expect(detail).not.toContain('private-token');
+    expect(publicInspect).not.toHaveBeenCalled();
+    expect(dispatch.sendDockerLogsCommand).toHaveBeenCalledWith(
+      'node-1',
+      'failed',
+      {
+        tailLines: 30,
+        timestamps: false,
+        follow: false,
+      },
+      expect.any(Number)
+    );
+    expect(dispatch.sendDockerContainerCommand).toHaveBeenCalledWith(
+      'node-1',
+      'inspect',
+      { containerId: 'failed' },
+      3000
+    );
+  });
+
   it('runs the registered binding reconciliation after the replacement container is ready', async () => {
     const inspect = {
       Id: 'container-1',

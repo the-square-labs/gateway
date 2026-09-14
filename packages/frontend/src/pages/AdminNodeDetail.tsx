@@ -58,6 +58,7 @@ import {
   hostingOperationPending,
   hostingPowerActionUnavailableReason,
 } from "@/lib/hosting-status";
+import { isManagedDatabaseCandidateNode } from "@/lib/managed-database-nodes";
 import {
   daemonTypeForNode,
   getNodeAppearanceColor,
@@ -502,7 +503,7 @@ export function AdminNodeDetail({
   );
   const canEditNodeServiceAddress =
     !!id &&
-    (node?.type === "databases"
+    (isManagedDatabaseCandidateNode(node)
       ? hasScope("nodes:rename") || hasScope(`nodes:rename:${id}`)
       : node?.type === "nginx"
         ? hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`)
@@ -550,7 +551,7 @@ export function AdminNodeDetail({
       hasScope(`hosting:snapshots:view:${hosting.resourceId}`)
         ? ["snapshots"]
         : []),
-      ...(isCompatibleNode && node?.type === "databases" ? ["databases"] : []),
+      ...(isCompatibleNode && isManagedDatabaseCandidateNode(node) ? ["databases"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeConfig ? ["configuration"] : []),
       ...(isCompatibleNode && node.type === "nginx" && canViewNodeLogs ? ["nginx-logs"] : []),
       ...(isCompatibleNode && canReadNodeFiles ? ["files"] : []),
@@ -773,7 +774,9 @@ export function AdminNodeDetail({
               appearanceColor,
             }
           : {}),
-        ...((node?.type === "docker" || node?.type === "databases" || node?.type === "nginx") &&
+        ...((node?.type === "docker" ||
+          isManagedDatabaseCandidateNode(node) ||
+          node?.type === "nginx") &&
         canEditNodeServiceAddress
           ? { serviceAddresses: configuredServiceAddresses }
           : {}),
@@ -1125,7 +1128,7 @@ export function AdminNodeDetail({
                   Snapshots
                 </TabsTrigger>
               )}
-            {!isNodeIncompatible(node) && node.type === "databases" && (
+            {!isNodeIncompatible(node) && isManagedDatabaseCandidateNode(node) && (
               <TabsTrigger
                 value="databases"
                 className="gap-1.5"
@@ -1269,7 +1272,7 @@ export function AdminNodeDetail({
                   )}
                 </TabsContent>
               )}
-            {!isNodeIncompatible(node) && node.type === "databases" && (
+            {!isNodeIncompatible(node) && isManagedDatabaseCandidateNode(node) && (
               <TabsContent value="databases" className="pb-0">
                 {activeTab === "databases" && !nodeUnavailable && (
                   <Databases embedded managedNodeId={node.id} />
@@ -1395,7 +1398,9 @@ export function AdminNodeDetail({
                   </Badge>
                 </div>
               </div>
-              {(node.type === "docker" || node.type === "databases" || node.type === "nginx") && (
+              {(node.type === "docker" ||
+                isManagedDatabaseCandidateNode(node) ||
+                node.type === "nginx") && (
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Service Addresses</label>
                   <div className="w-full border border-input bg-background">
@@ -1496,7 +1501,7 @@ export function AdminNodeDetail({
                     </AnimatePresence>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    {node.type === "databases"
+                    {isManagedDatabaseCandidateNode(node)
                       ? "Used as the hosts shown for published managed database ports."
                       : node.type === "nginx"
                         ? "Used as the public ingress addresses for domains assigned to this node."

@@ -252,6 +252,12 @@ message GatewayCommand {
     // Restricted managed database lifecycle; accepted only by docker-daemon
     // running with docker.mode = "databases".
     DockerDatabaseCommand docker_database = 32;
+    // Restricted managed object-storage lifecycle. Accepted only by a
+    // docker-daemon running with docker.mode = "storage".
+    DockerStorageCommand docker_storage = 70;
+    // Typed backup runner control. The storage profile delegates this to the
+    // registered backup implementation and never exposes generic Docker exec.
+    DockerBackupCommand docker_backup = 71;
     // Nginx TLS distribution v2. These commands are accepted only by a daemon
     // that reports nginx_certificate_distribution_v2 during registration.
     ApplyTlsBundleCommand apply_tls_bundle = 34;
@@ -884,6 +890,8 @@ message DockerBuildCommand {
   // Attempt number echoed by worker events. Zero preserves compatibility with
   // peers that predate terminal-event acknowledgements.
   uint32 attempt = 28;
+  // Explicit opt-out; false preserves scanning for existing senders.
+  bool skip_vulnerability_scan = 29;
 }
 
 message DockerBuildCancelCommand {
@@ -1104,6 +1112,23 @@ message DockerMigrationCommand {
 message DockerDatabaseCommand {
   string action = 1; // create, start, stop, update, remove, inspect
   string managed_database_id = 2;
+  string config_json = 3;
+}
+
+// Managed object-storage control intentionally names a Gateway-owned storage
+// resource. The daemon validates the opaque config against its MinIO runtime
+// contract and derives all Docker paths, names and arguments itself.
+message DockerStorageCommand {
+  string action = 1;
+  string managed_storage_id = 2;
+  string config_json = 3;
+}
+
+// Node-executed backup control. The run id is immutable and lets the runner
+// return durable status after a control-channel reconnect.
+message DockerBackupCommand {
+  string action = 1; // preflight, start, status, cancel
+  string run_id = 2;
   string config_json = 3;
 }
 

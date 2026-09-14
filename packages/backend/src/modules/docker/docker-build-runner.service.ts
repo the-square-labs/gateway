@@ -96,7 +96,7 @@ export class DockerBuildRunnerService {
             and(eq(dockerBuilds.builderNodeId, builder.id), inArray(dockerBuilds.status, WORKER_ACTIVE_BUILD_STATUSES))
           );
         for (let slot = active.length; slot < settings.parallelism; slot += 1) {
-          if (!(await this.claimAndDispatch(builder.id, platform, settings))) break;
+          if (!(await this.claimAndDispatch(builder.id, platform, settings, builder.capabilities))) break;
         }
       }
     } finally {
@@ -107,10 +107,16 @@ export class DockerBuildRunnerService {
   private async claimAndDispatch(
     builderNodeId: string,
     platform: 'linux/amd64' | 'linux/arm64',
-    settings = readBuilderNodeSettings(undefined)
+    settings = readBuilderNodeSettings(undefined),
+    capabilities?: unknown
   ): Promise<boolean> {
     const leaseOwner = `gateway:${process.pid}:${randomUUID()}`;
-    const build = await this.builds.claimNext({ builderNodeId, leaseOwner, platform });
+    const features =
+      capabilities && typeof capabilities === 'object'
+        ? (capabilities as Record<string, unknown>).capabilities
+        : undefined;
+    const supportsScanDisable = Array.isArray(features) && features.includes('docker_builder_scan_disable_v1');
+    const build = await this.builds.claimNext({ builderNodeId, leaseOwner, platform, supportsScanDisable });
     if (!build) return false;
     let dispatchAccepted = false;
     let dispatchResultReceived = false;
@@ -127,6 +133,11 @@ export class DockerBuildRunnerService {
           errorMessage: 'Build settings or Build Secrets changed before the build was dispatched',
         });
         return false;
+      }
+      const skipVulnerabilityScan =
+        source.targetKind !== 'pages_project' && source.policy.vulnerabilityThreshold === 'disabled';
+      if (skipVulnerabilityScan && !supportsScanDisable) {
+        throw new Error('Update this Build Worker to support disabled vulnerability scanning');
       }
       if (!this.sources) throw new Error('Docker source secret service is unavailable');
       const buildSecrets = await this.sources.getDecryptedBuildSecrets(source.id);
@@ -169,6 +180,7 @@ export class DockerBuildRunnerService {
           settings.timeoutMinutes * 60
         ),
         workerParallelism: settings.parallelism,
+        skipVulnerabilityScan,
         outputKind: source.targetKind === 'pages_project' ? 'pages_archive' : 'oci_image',
         applicationRoot: build.applicationRoot,
         packageManager: build.packageManager ?? '',

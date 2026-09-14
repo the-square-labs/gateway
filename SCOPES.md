@@ -63,6 +63,21 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 
 | Scope | Resource-scopable |
 |-------|-------------------|
+| `storage:view` | Resource-scopable storage or backup permission. |
+| `storage:create` | Create storage in permitted folders or nodes. |
+| `storage:edit` | Resource-scopable storage or backup permission. |
+| `storage:delete` | Resource-scopable storage or backup permission. |
+| `storage:credentials:reveal` | Resource-scopable storage or backup permission. |
+| `storage:iam` | Manage storage access keys | Yes |
+| `storage:objects:read` | Resource-scopable storage or backup permission. |
+| `storage:objects:write` | Resource-scopable storage or backup permission. |
+| `storage:objects:admin` | Resource-scopable storage or backup permission. |
+| `storage:folders:manage` | Manage storage resource folders. |
+| `databases:backups:view` | Resource-scopable storage or backup permission. |
+| `databases:backups:manage` | Resource-scopable storage or backup permission. |
+| `databases:backups:run` | Resource-scopable storage or backup permission. |
+| `databases:backups:restore` | Resource-scopable storage or backup permission. |
+| `nodes:backups:execute` | Resource-scopable storage or backup permission. |
 | `pki:ca:view:root` |  |
 | `pki:ca:view:intermediate` |  |
 | `pki:ca:create:root` |  |
@@ -356,6 +371,9 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 
 | Scope | Risk |
 |-------|------|
+| `storage:credentials:reveal` | Reveals storage credentials. |
+| `storage:iam` | Issues and revokes credentials |
+| `databases:backups:restore` | Restores database contents into an authorized target. |
 | `pki:ca:create:root` | Can create trust anchors and currently gates CA private-key export. |
 | `pki:ca:create:intermediate` | Can create subordinate CAs. |
 | `pki:ca:revoke:root` | Can revoke or delete root CAs. |

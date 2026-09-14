@@ -127,7 +127,23 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 			result.Error = "config_json is required for create"
 			return
 		}
-		id, name, err := p.client.CreateContainer(ctx, cmd.ConfigJson)
+		var internal struct {
+			Workload string `json:"internal_workload"`
+		}
+		if err := json.Unmarshal([]byte(cmd.ConfigJson), &internal); err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("parse container config: %v", err)
+			return
+		}
+		var id, name string
+		var err error
+		if internal.Workload == "" {
+			id, name, err = p.client.CreateContainer(ctx, cmd.ConfigJson)
+		} else if internal.Workload == managedStorageConnectorWorkload {
+			id, name, err = p.createManagedStorageConnector(ctx, cmd.ConfigJson)
+		} else {
+			err = fmt.Errorf("unsupported internal workload %q", internal.Workload)
+		}
 		if err != nil {
 			result.Success = false
 			result.Error = err.Error()

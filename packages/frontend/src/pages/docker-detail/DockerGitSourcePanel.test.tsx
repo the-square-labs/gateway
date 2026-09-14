@@ -176,6 +176,9 @@ describe("DockerGitSourcePanel Build Secrets", () => {
       "All packages"
     );
     await user.click(screen.getByRole("combobox", { name: "Vulnerability scope" }));
+    expect(screen.getByRole("listbox")).toHaveClass(
+      "max-w-[min(var(--container-md),var(--radix-select-content-available-width))]"
+    );
     await user.click(screen.getByRole("option", { name: /Application dependencies/ }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() =>
@@ -204,6 +207,30 @@ describe("DockerGitSourcePanel Build Secrets", () => {
     expect(screen.getByRole("combobox", { name: "Vulnerability scope" })).toBeDisabled();
     expect(screen.getByRole("combobox", { name: "Vulnerability scope" })).toHaveTextContent(
       "Application dependencies"
+    );
+  });
+
+  it.each([
+    ["Report only", "none"],
+    ["Disabled", "disabled"],
+  ] as const)("saves %s as a distinct scan policy", async (label, threshold) => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "listDockerBuildSecrets").mockResolvedValue([]);
+    const save = vi.spyOn(api, "upsertDockerSource").mockResolvedValue({
+      ...source,
+      policy: { vulnerabilityThreshold: threshold, vulnerabilityScope: "all" },
+    });
+    renderWithRouter(<DockerGitSourcePanel target={source.target} source={source} />);
+    await user.click(screen.getByRole("combobox", { name: "Vulnerability policy" }));
+    await user.click(screen.getByRole("option", { name: new RegExp(label) }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(save).toHaveBeenCalledWith(
+        source.target,
+        expect.objectContaining({
+          policy: { vulnerabilityThreshold: threshold, vulnerabilityScope: "all" },
+        })
+      )
     );
   });
 

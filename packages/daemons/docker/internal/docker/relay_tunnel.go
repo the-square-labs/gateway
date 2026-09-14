@@ -43,6 +43,30 @@ type relayEndpointRegistration struct {
 	ready  atomic.Bool
 }
 
+// BackupRelayRoute is a daemon-local TCP entrypoint for one signed, per-run
+// relay connect grant. It accepts concurrent helper connections until Close;
+// it neither opens a host port nor accepts an upstream endpoint supplied by
+// Gateway.
+type BackupRelayRoute struct {
+	Address  string
+	listener net.Listener
+	cancel   context.CancelFunc
+	done     chan struct{}
+	once     sync.Once
+	active   sync.WaitGroup
+}
+
+func (r *BackupRelayRoute) Close() {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		r.cancel()
+		_ = r.listener.Close()
+		<-r.done
+	})
+}
+
 func (p *DockerPlugin) RunRelayTunnels(ctx context.Context, conn *grpc.ClientConn, _ string) {
 	p.RunRelayTargetTunnels(ctx, conn, "", relaybridge.LegacyTargetID)
 }
@@ -68,7 +92,7 @@ func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Cli
 		}
 		p.relayTunnelMu.Unlock()
 	}()
-	if p.cfg.Docker.Mode != "databases" {
+	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		if err := p.startRelayListener(); err != nil {
 			p.logger.Warn("relay tunnel listener failed", "error", err)
 			return
@@ -107,7 +131,15 @@ func (r *relayTunnelRouter) reconcileRegistrations() {
 	desired := map[string]*pb.RelayGrantAssignment{}
 	if r.plugin.cfg.Docker.Mode == "databases" {
 		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && assignment.OwnerKind == "managed_database" && assignment.EndpointId != "" {
+			if assignment.Role == "endpoint" && isManagedDatabaseRelayOwnerKind(assignment.OwnerKind) && assignment.EndpointId != "" {
+				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
+					desired[relayRegistrationKey(projected)] = projected
+				}
+			}
+		}
+	} else if r.plugin.cfg.Docker.Mode == "storage" {
+		for _, assignment := range bundle.Grants {
+			if assignment.Role == "endpoint" && (isManagedStorageRelayOwnerKind(assignment.OwnerKind) || isManagedDatabaseRelayOwnerKind(assignment.OwnerKind)) && assignment.EndpointId != "" {
 				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
 					desired[relayRegistrationKey(projected)] = projected
 				}
@@ -299,11 +331,30 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 			return
 		}
 		connection, err = r.plugin.databaseManager.dial(ctx, assignment.OwnerId)
+	case "database_backup_source", "database_backup_restore":
+		if r.plugin.databaseManager == nil || !managedDatabaseIDPattern.MatchString(assignment.GetRouteId()) {
+			return
+		}
+		// ownerId is the signed backup-run UUID. routeId is the server-selected
+		// managed database UUID, never a client-provided address or port.
+		connection, err = r.plugin.databaseManager.dial(ctx, assignment.GetRouteId())
 	case proxySecureLinkOwnerKind:
 		if r.plugin.secureLinks == nil {
 			return
 		}
 		connection, err = r.plugin.secureLinks.dial(ctx, assignment.OwnerId)
+	case "managed_storage", "managed_storage_binding", "managed_storage_gateway":
+		if r.plugin.storageManager == nil {
+			return
+		}
+		connection, err = r.plugin.storageManager.dial(ctx, assignment.OwnerId)
+	case "storage_backup_target", "storage_backup_staging":
+		if r.plugin.storageManager == nil || !managedStorageIDPattern.MatchString(assignment.GetRouteId()) {
+			return
+		}
+		// ownerId is the signed backup-run UUID. routeId is the server-selected
+		// managed storage UUID, never an address supplied by the backup runner.
+		connection, err = r.plugin.storageManager.dial(ctx, assignment.GetRouteId())
 	default:
 		return
 	}
@@ -322,6 +373,19 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		return
 	}
 	_ = bridgeRelayConnection(connection, stream, int(first.GetReady().MaxFrameBytes), cancel)
+}
+
+func isManagedStorageRelayOwnerKind(ownerKind string) bool {
+	return ownerKind == "managed_storage" || ownerKind == "managed_storage_binding" || ownerKind == "managed_storage_gateway" || ownerKind == "storage_backup_target" || ownerKind == "storage_backup_staging"
+}
+
+func isManagedDatabaseRelayOwnerKind(ownerKind string) bool {
+	return ownerKind == "managed_database" || ownerKind == "database_backup_source" || ownerKind == "database_backup_restore"
+}
+
+func isBackupRelayOwnerKind(ownerKind string) bool {
+	return ownerKind == "database_backup_source" || ownerKind == "database_backup_restore" ||
+		ownerKind == "storage_backup_target" || ownerKind == "storage_backup_staging"
 }
 
 func (p *DockerPlugin) startRelayListener() error {
@@ -432,6 +496,68 @@ func (p *DockerPlugin) relayRouter(targetID string) *relayTunnelRouter {
 	p.relayTunnelMu.Lock()
 	defer p.relayTunnelMu.Unlock()
 	return p.relayTunnels[targetID]
+}
+
+// OpenBackupRelayRoute resolves a signed per-run connect grant. routeID is the
+// RelayGrantAssignment.ownerId (the backup run UUID); the matching endpoint
+// assignment's routeId selects the owned target runtime server-side.
+func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, routeID string) (*BackupRelayRoute, error) {
+	if !isBackupRelayOwnerKind(ownerKind) {
+		return nil, errors.New("unsupported backup relay route owner kind")
+	}
+	if !managedStorageIDPattern.MatchString(routeID) {
+		return nil, errors.New("backup relay route id must be a UUID")
+	}
+	assignment := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, routeID)
+	if assignment == nil || (assignment.GetGrant() == nil && len(relaybridge.PoolCandidates(assignment, false)) == 0) {
+		return nil, errors.New("backup relay route is unavailable")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("open backup relay loopback listener: %w", err)
+	}
+	routeCtx, cancel := context.WithCancel(ctx)
+	route := &BackupRelayRoute{Address: listener.Addr().String(), listener: listener, cancel: cancel, done: make(chan struct{})}
+	go func() {
+		defer close(route.done)
+		defer listener.Close()
+		defer route.active.Wait()
+		for {
+			connection, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			if routeCtx.Err() != nil {
+				_ = connection.Close()
+				return
+			}
+			route.active.Add(1)
+			go func(connection net.Conn) {
+				defer route.active.Done()
+				defer connection.Close()
+				closeOnCancel := make(chan struct{})
+				go func() {
+					select {
+					case <-routeCtx.Done():
+						_ = connection.Close()
+					case <-closeOnCancel:
+					}
+				}()
+				defer close(closeOnCancel)
+				candidates := relaybridge.PoolCandidates(assignment, false)
+				if len(candidates) == 0 {
+					candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
+				}
+				for _, candidate := range p.orderRelayCandidates(candidates) {
+					router := p.relayRouter(candidate.GetRelayInstanceId())
+					if router != nil && router.openSourceTunnel(connection, candidate.GetGrant()) {
+						return
+					}
+				}
+			}(connection)
+		}
+	}()
+	return route, nil
 }
 
 func (r *relayTunnelRouter) openSourceTunnel(connection net.Conn, grant *pb.RelaySignedGrant) bool {

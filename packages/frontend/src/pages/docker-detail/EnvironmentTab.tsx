@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Input } from "@/components/ui/input";
 import { useRealtime } from "@/hooks/use-realtime";
+import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -17,6 +18,11 @@ import {
   ManagedDatabaseLinksSection,
   type ManagedDatabaseLinksSectionHandle,
 } from "./ManagedDatabaseLinksSection";
+import {
+  type ManagedStorageLinkDraft,
+  ManagedStorageLinksSection,
+  type ManagedStorageLinksSectionHandle,
+} from "./ManagedStorageLinksSection";
 import { type SecretRow, SecretsSection } from "./SecretsSection";
 
 const EMPTY_DATABASE_LINK_DRAFT: ManagedDatabaseLinkDraft = {
@@ -24,6 +30,12 @@ const EMPTY_DATABASE_LINK_DRAFT: ManagedDatabaseLinkDraft = {
   managedVariableNames: [],
   pendingAdditionVariableNames: [],
   replacementVariableNames: [],
+};
+
+const EMPTY_STORAGE_LINK_DRAFT: ManagedStorageLinkDraft = {
+  hasChanges: false,
+  managedVariableNames: [],
+  pendingAdditionVariableNames: [],
 };
 
 export function EnvironmentTab({
@@ -76,7 +88,7 @@ export function EnvironmentTab({
   databaseTargetResourceId?: string;
   flushBottom?: boolean;
 }) {
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess } = useAuthStore();
   const invalidate = useDockerStore((s) => s.invalidate);
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -95,6 +107,10 @@ export function EnvironmentTab({
   const databaseLinksRef = useRef<ManagedDatabaseLinksSectionHandle>(null);
   const [databaseLinkDraft, setDatabaseLinkDraft] =
     useState<ManagedDatabaseLinkDraft>(EMPTY_DATABASE_LINK_DRAFT);
+  const [storageLinksLoading, setStorageLinksLoading] = useState(true);
+  const storageLinksRef = useRef<ManagedStorageLinksSectionHandle>(null);
+  const [storageLinkDraft, setStorageLinkDraft] =
+    useState<ManagedStorageLinkDraft>(EMPTY_STORAGE_LINK_DRAFT);
   const envContainerIdRef = useRef(containerId);
   const envRequestGenerationRef = useRef(0);
   const envMutationInProgressRef = useRef(false);
@@ -109,6 +125,24 @@ export function EnvironmentTab({
   const isServiceEnv = !!onSaveServiceEnv;
   const managedDatabaseLinksEnabled = !isServiceEnv || Boolean(databaseTargetResourceId);
   const resolvedDatabaseTargetResourceId = databaseTargetResourceId ?? containerName ?? "";
+  const storageTargetType =
+    databaseTargetType === "container" || databaseTargetType === "deployment"
+      ? databaseTargetType
+      : null;
+  const resolvedStorageTargetResourceId =
+    storageTargetType === "deployment" ? (databaseTargetResourceId ?? "") : (containerName ?? "");
+  const canViewManagedStorage = hasScopedAccess("storage:view");
+  const canManageManagedStorage = hasScopedAccess("storage:iam");
+  const canManageStorageCluster = useCallback(
+    (connectionId: string | null) =>
+      hasScope("storage:iam") || Boolean(connectionId && hasScope(`storage:iam:${connectionId}`)),
+    [hasScope]
+  );
+  const managedStorageLinksEnabled =
+    managedDatabaseLinksEnabled &&
+    canViewManagedStorage &&
+    Boolean(storageTargetType) &&
+    Boolean(resolvedStorageTargetResourceId);
   const serviceEnvSignature = useMemo(() => JSON.stringify(serviceEnv ?? {}), [serviceEnv]);
   const managedDatabaseVariableNames = useMemo(
     () => new Set(databaseLinkDraft.managedVariableNames),
@@ -118,18 +152,31 @@ export function EnvironmentTab({
     () => new Set(databaseLinkDraft.pendingAdditionVariableNames),
     [databaseLinkDraft.pendingAdditionVariableNames]
   );
+  const managedStorageVariableNames = useMemo(
+    () => new Set(storageLinkDraft.managedVariableNames),
+    [storageLinkDraft.managedVariableNames]
+  );
+  const pendingStorageVariableNames = useMemo(
+    () => new Set(storageLinkDraft.pendingAdditionVariableNames),
+    [storageLinkDraft.pendingAdditionVariableNames]
+  );
+  const managedLinkVariableNames = useMemo(
+    () => new Set([...managedDatabaseVariableNames, ...managedStorageVariableNames]),
+    [managedDatabaseVariableNames, managedStorageVariableNames]
+  );
   const replacementDatabaseVariableNames = useMemo(
     () => new Set(databaseLinkDraft.replacementVariableNames),
     [databaseLinkDraft.replacementVariableNames]
   );
-  const activeManagedDatabaseVariableNames = useMemo(
+  const activeManagedLinkVariableNames = useMemo(
     () =>
       new Set(
-        databaseLinkDraft.managedVariableNames.filter(
-          (name) => !pendingDatabaseVariableNames.has(name)
+        [...managedLinkVariableNames].filter(
+          (name) =>
+            !pendingDatabaseVariableNames.has(name) && !pendingStorageVariableNames.has(name)
         )
       ),
-    [databaseLinkDraft.managedVariableNames, pendingDatabaseVariableNames]
+    [managedLinkVariableNames, pendingDatabaseVariableNames, pendingStorageVariableNames]
   );
 
   // Runtime inspection includes values injected by Managed Database Links.
@@ -138,17 +185,15 @@ export function EnvironmentTab({
   // binding metadata arrives so credentials are not exposed or accidentally
   // deleted by an unrelated environment save.
   useEffect(() => {
-    if (activeManagedDatabaseVariableNames.size === 0) return;
+    if (activeManagedLinkVariableNames.size === 0) return;
     const isManagedEntry = (entry: string) => {
       const separator = entry.indexOf("=");
       const key = (separator >= 0 ? entry.slice(0, separator) : entry).trim();
-      return activeManagedDatabaseVariableNames.has(key);
+      return activeManagedLinkVariableNames.has(key);
     };
 
     setEnvVars((current) => {
-      const next = current.filter(
-        (entry) => !activeManagedDatabaseVariableNames.has(entry.key.trim())
-      );
+      const next = current.filter((entry) => !activeManagedLinkVariableNames.has(entry.key.trim()));
       return next.length === current.length ? current : next;
     });
     setOriginalEnv((current) => {
@@ -162,7 +207,7 @@ export function EnvironmentTab({
         .join("\n");
       return next === current ? current : next;
     });
-  }, [activeManagedDatabaseVariableNames]);
+  }, [activeManagedLinkVariableNames]);
 
   const fetchEnv = useCallback(async () => {
     if (envMutationInProgressRef.current || disabled) return;
@@ -321,11 +366,10 @@ export function EnvironmentTab({
     let cancelled = false;
     setDatabaseNodeLoading(true);
     setDatabaseLinksLoading(true);
-    void api
-      .listNodes({ type: "databases", limit: 1 })
+    void listManagedDatabaseCandidateNodes(1)
       .then((result) => {
         if (!cancelled) {
-          const available = result.data.length > 0;
+          const available = result.length > 0;
           setHasDatabaseNode(available);
           if (!available) setDatabaseLinksLoading(false);
         }
@@ -351,11 +395,11 @@ export function EnvironmentTab({
   ]);
 
   useEffect(() => {
-    if (activeManagedDatabaseVariableNames.size === 0) return;
+    if (activeManagedLinkVariableNames.size === 0) return;
     setSecretRows((current) =>
-      current.filter((row) => !activeManagedDatabaseVariableNames.has(row.key.trim()))
+      current.filter((row) => !activeManagedLinkVariableNames.has(row.key.trim()))
     );
-  }, [activeManagedDatabaseVariableNames]);
+  }, [activeManagedLinkVariableNames]);
 
   const existingVariableNames = useMemo(() => {
     const environmentKeys = rawMode
@@ -370,6 +414,9 @@ export function EnvironmentTab({
 
   const handleDatabaseLinkDraftChange = useCallback((draft: ManagedDatabaseLinkDraft) => {
     setDatabaseLinkDraft(draft);
+  }, []);
+  const handleStorageLinkDraftChange = useCallback((draft: ManagedStorageLinkDraft) => {
+    setStorageLinkDraft(draft);
   }, []);
 
   // ── Env handlers ─────────────────────────────────────────────────
@@ -392,7 +439,7 @@ export function EnvironmentTab({
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
           errors.add(i + 1);
         } else {
-          if (managedDatabaseVariableNames.has(key) && !replacementDatabaseVariableNames.has(key)) {
+          if (managedLinkVariableNames.has(key) && !replacementDatabaseVariableNames.has(key)) {
             errors.add(i + 1);
           }
           const existing = keyLines.get(key) ?? [];
@@ -405,7 +452,7 @@ export function EnvironmentTab({
       }
       return Array.from(errors).sort((a, b) => a - b);
     },
-    [managedDatabaseVariableNames, replacementDatabaseVariableNames]
+    [managedLinkVariableNames, replacementDatabaseVariableNames]
   );
 
   useEffect(() => {
@@ -460,10 +507,12 @@ export function EnvironmentTab({
       : visibleEnvRows.map(({ entry }) => entry);
 
     const savingDatabaseLinks = databaseLinkDraft.hasChanges;
+    const savingStorageLinks = storageLinkDraft.hasChanges;
+    const savingManagedLinks = savingDatabaseLinks || savingStorageLinks;
     const ok = await confirm({
       title: onSaveServiceEnv
         ? resolvedServiceSaveLabel
-        : savingDatabaseLinks || recreatesRunningContainer
+        : savingManagedLinks || recreatesRunningContainer
           ? "Save & Recreate"
           : canEdit
             ? "Save"
@@ -473,8 +522,8 @@ export function EnvironmentTab({
           (recreatesRunningContainer
             ? "Environment changes will recreate the running workload and may cause brief downtime. Continue?"
             : "Environment changes will be saved and apply when the workload is started."))
-        : savingDatabaseLinks
-          ? "Managed database links and environment changes will be applied together. The container will be recreated and experience brief downtime. Continue?"
+        : savingManagedLinks
+          ? "Managed links and environment changes will be applied together. The container will be recreated and experience brief downtime. Continue?"
           : canEdit
             ? recreatesRunningContainer
               ? "Updating environment variables will recreate the container. The container will experience brief downtime. Continue?"
@@ -484,7 +533,7 @@ export function EnvironmentTab({
         ? resolvedServiceSaveLabel === "Save & Recreate"
           ? "Recreate"
           : "Save"
-        : savingDatabaseLinks || recreatesRunningContainer
+        : savingManagedLinks || recreatesRunningContainer
           ? "Recreate"
           : "Save",
     });
@@ -493,7 +542,7 @@ export function EnvironmentTab({
     setIsSaving(true);
     envMutationInProgressRef.current = true;
     envRequestGenerationRef.current++;
-    onMutationStart?.(savingDatabaseLinks || recreatesRunningContainer ? "recreating" : "updating");
+    onMutationStart?.(savingManagedLinks || recreatesRunningContainer ? "recreating" : "updating");
     try {
       // 1. Flush secret changes to DB
       if (hasSecretsChanges) {
@@ -564,19 +613,24 @@ export function EnvironmentTab({
       const newEnv: Record<string, string> = {};
       for (const entry of vars) {
         const key = entry.key.trim();
-        if (key && !managedDatabaseVariableNames.has(key)) newEnv[key] = entry.value;
+        if (key && !managedLinkVariableNames.has(key)) newEnv[key] = entry.value;
       }
 
-      if (onSaveServiceEnv && savingDatabaseLinks) {
+      if (onSaveServiceEnv && savingManagedLinks) {
         const replaceExistingEnvironment = databaseLinkDraft.replacementVariableNames.length > 0;
-        await databaseLinksRef.current?.applyChanges({
-          replaceExistingEnvironment,
-          targetEnvironment: newEnv,
-        });
+        if (savingDatabaseLinks) {
+          await databaseLinksRef.current?.applyChanges({
+            replaceExistingEnvironment,
+            targetEnvironment: newEnv,
+          });
+        }
+        if (savingStorageLinks) {
+          await storageLinksRef.current?.applyChanges({ targetEnvironment: newEnv });
+        }
         const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
         setOriginalEnv(entries);
         setRawText(entries.join("\n"));
-        toast.success("Environment and database links updated");
+        toast.success("Environment and managed links updated");
         invalidate("containers", "tasks");
         void Promise.resolve(onRecreating?.()).catch(() => undefined);
         return;
@@ -598,7 +652,10 @@ export function EnvironmentTab({
           replaceExistingEnvironment,
           targetEnvironment: newEnv,
         });
-      } else if (canEdit && (hasEnvChanges || hasSecretsChanges)) {
+      }
+      if (savingStorageLinks) {
+        await storageLinksRef.current?.applyChanges({ targetEnvironment: newEnv });
+      } else if (!savingDatabaseLinks && canEdit && (hasEnvChanges || hasSecretsChanges)) {
         const newKeys = new Set(Object.keys(newEnv));
         const removeEnv = [
           ...originalEnv.map((entry) => entry.split("=")[0]).filter((key) => !newKeys.has(key)),
@@ -612,15 +669,15 @@ export function EnvironmentTab({
         );
       }
 
-      if (canEdit || savingDatabaseLinks) {
+      if (canEdit || savingManagedLinks) {
         const entries = Object.entries(newEnv).map(([key, value]) => `${key}=${value}`);
         setEnvVars(Object.entries(newEnv).map(([key, value]) => ({ key, value })));
         setOriginalEnv(entries);
         setRawText(entries.join("\n"));
         setIsLoading(false);
         toast.success(
-          savingDatabaseLinks || recreatesRunningContainer
-            ? "Environment and database links updated — recreating container"
+          savingManagedLinks || recreatesRunningContainer
+            ? "Environment and managed links updated — recreating container"
             : "Environment updated"
         );
         invalidate("containers", "tasks");
@@ -671,12 +728,12 @@ export function EnvironmentTab({
     });
     for (const [key, lines] of keyLines) {
       if (
-        managedDatabaseVariableNames.has(key) &&
+        managedLinkVariableNames.has(key) &&
         !replacementDatabaseVariableNames.has(key) &&
         lines.length === 1
       ) {
         rawManagedOnlyErrorLines.add(lines[0]!);
-        if (activeManagedDatabaseVariableNames.has(key)) rawActiveManagedErrorLines.add(lines[0]!);
+        if (activeManagedLinkVariableNames.has(key)) rawActiveManagedErrorLines.add(lines[0]!);
       }
     }
   }
@@ -717,15 +774,15 @@ export function EnvironmentTab({
   }
   envVars.forEach((entry, index) => {
     const key = entry.key.trim();
-    if (!managedDatabaseVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
+    if (!managedLinkVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
     managedEnvCollisionIndices.add(index);
-    if (activeManagedDatabaseVariableNames.has(key)) activeManagedEnvCollisionIndices.add(index);
+    if (activeManagedLinkVariableNames.has(key)) activeManagedEnvCollisionIndices.add(index);
   });
   secretRows.forEach((row, index) => {
     const key = row.key.trim();
-    if (!managedDatabaseVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
+    if (!managedLinkVariableNames.has(key) || replacementDatabaseVariableNames.has(key)) return;
     managedSecretCollisionIndices.add(index);
-    if (activeManagedDatabaseVariableNames.has(key)) activeManagedSecretCollisionIndices.add(index);
+    if (activeManagedLinkVariableNames.has(key)) activeManagedSecretCollisionIndices.add(index);
     if (key && !invalidKeyPattern.test(key)) duplicateSecretIndices.add(index);
   });
 
@@ -763,9 +820,13 @@ export function EnvironmentTab({
     deletedSecrets.size > 0 ||
     secretRows.some((row) => !replacementDatabaseVariableNames.has(row.key.trim()) && row.dirty);
   const hasChanges = hasEnvChanges || hasSecretsChanges;
-  const hasCombinedChanges = hasChanges || databaseLinkDraft.hasChanges;
+  const hasCombinedChanges =
+    hasChanges || databaseLinkDraft.hasChanges || storageLinkDraft.hasChanges;
   const initialLoading =
-    isLoading || databaseNodeLoading || (hasDatabaseNode && databaseLinksLoading);
+    isLoading ||
+    databaseNodeLoading ||
+    (hasDatabaseNode && databaseLinksLoading) ||
+    (managedStorageLinksEnabled && canEdit && canManageSecrets && storageLinksLoading);
 
   return (
     <motion.div
@@ -786,13 +847,31 @@ export function EnvironmentTab({
             targetResourceId={resolvedDatabaseTargetResourceId}
             containerName={containerName}
             disabled={disabled || isSaving || hasErrors}
-            existingVariableNames={existingVariableNames}
+            existingVariableNames={[...existingVariableNames, ...managedStorageVariableNames]}
             onInitialLoadingChange={setDatabaseLinksLoading}
             onDraftChange={handleDatabaseLinkDraftChange}
             onSaveRequested={() => void handleSave()}
             recreatesRunningWorkload={recreatesRunningContainer}
           />
         )}
+
+      {managedStorageLinksEnabled && canEdit && canManageSecrets && containerName && (
+        <ManagedStorageLinksSection
+          ref={storageLinksRef}
+          nodeId={nodeId}
+          targetType={storageTargetType!}
+          targetResourceId={resolvedStorageTargetResourceId}
+          containerName={containerName}
+          canManage={canManageManagedStorage}
+          canManageCluster={canManageStorageCluster}
+          disabled={disabled || isSaving || hasErrors}
+          existingVariableNames={[...existingVariableNames, ...managedDatabaseVariableNames]}
+          onInitialLoadingChange={setStorageLinksLoading}
+          onDraftChange={handleStorageLinkDraftChange}
+          onSaveRequested={() => void handleSave()}
+          recreatesRunningWorkload={recreatesRunningContainer}
+        />
+      )}
 
       <div
         className={`${rawMode ? "flex min-h-0 flex-1 flex-col" : "space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
@@ -840,7 +919,9 @@ export function EnvironmentTab({
                     <RotateCcw className="h-3.5 w-3.5" />
                     {onSaveServiceEnv
                       ? resolvedServiceSaveLabel
-                      : databaseLinkDraft.hasChanges || recreatesRunningContainer
+                      : databaseLinkDraft.hasChanges ||
+                          storageLinkDraft.hasChanges ||
+                          recreatesRunningContainer
                         ? "Save & Recreate"
                         : "Save"}
                   </Button>

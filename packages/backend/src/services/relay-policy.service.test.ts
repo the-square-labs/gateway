@@ -8,6 +8,7 @@ import {
   relayPolicyState,
   relayRoutes,
 } from '@/db/schema/index.js';
+import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
 import { managedDatabaseListenerConfigsEqual, RelayPolicyService } from './relay-policy.service.js';
 
 function createService(
@@ -186,6 +187,49 @@ describe('RelayPolicyService route runtime', () => {
 });
 
 describe('RelayPolicyService snapshots', () => {
+  it('serializes snapshot publication and continues after an earlier RPC failure', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const publish = vi
+      .spyOn(service as any, 'syncSnapshotOnce')
+      .mockImplementationOnce(async () => {
+        await blocked;
+        throw new Error('RPC failed');
+      })
+      .mockResolvedValueOnce(12);
+    const first = expect(service.syncSnapshot()).rejects.toThrow('RPC failed');
+    const second = service.syncSnapshot();
+    await Promise.resolve();
+    expect(publish).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    await expect(second).resolves.toBe(12);
+  });
+
+  it('refreshes the durable fence for grant issuance but bounds retries and preserves unrelated errors', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    const sync = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(12);
+    issuer.getNodeGrantBundle = vi
+      .fn()
+      .mockRejectedValueOnce(new RelayPolicyNotAcknowledgedError(11))
+      .mockResolvedValueOnce({ revision: '11', grants: [] });
+    await expect(service.getNodeGrantBundle('node')).resolves.toMatchObject({ revision: '11' });
+    expect(sync).toHaveBeenCalledTimes(1);
+    sync.mockClear();
+    issuer.issueGatewayConnectGrant = vi.fn().mockRejectedValue(new RelayPolicyNotAcknowledgedError(12));
+    await expect(service.issueGatewayConnectGrant('route', 'fingerprint')).rejects.toThrow('revision 12');
+    expect(sync).toHaveBeenCalledTimes(2);
+    expect(issuer.issueGatewayConnectGrant).toHaveBeenCalledTimes(3);
+    sync.mockClear();
+    issuer.getNodeGrantBundle.mockRejectedValue(new Error('identity revoked'));
+    await expect(service.getNodeGrantBundle('node')).rejects.toThrow('identity revoked');
+    expect(sync).not.toHaveBeenCalled();
+  });
+
   it('does not let a delayed pool ACK authorize a newer global projection', async () => {
     let globalRevision = 10;
     let transportRevision = 100;
@@ -271,6 +315,7 @@ describe('RelayPolicyService snapshots', () => {
     );
 
     await expect(service.syncSnapshot()).resolves.toBe(102);
+    issuer.acknowledgeRevision(10); // A late ACK cannot regress the already confirmed fence.
     await expect(issuer.signGrant(claims)).resolves.toMatchObject({ keyId: 'grant-key' });
   });
 

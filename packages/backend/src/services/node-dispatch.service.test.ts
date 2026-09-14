@@ -22,6 +22,16 @@ function createService(
 }
 
 describe('NodeDispatchService', () => {
+  it('forwards a bounded Docker log deadline to the pending-command registry', async () => {
+    const { registry, service } = createService();
+    await service.sendDockerLogsCommand('node-1', 'failed', { tailLines: 30, follow: false }, 1500);
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      { dockerLogs: { containerId: 'failed', tailLines: 30, follow: false } },
+      1500
+    );
+  });
+
   it('forwards per-user session keys for Docker and node consoles', async () => {
     const { registry, service } = createService();
 
@@ -105,6 +115,61 @@ describe('NodeDispatchService', () => {
     expect(registry.sendCommand).toHaveBeenCalledWith(
       'node-1',
       { dockerDatabase: { action: 'create', managedDatabaseId: 'database-1', configJson: '{"operationId":"op-1"}' } },
+      15 * 60 * 1000
+    );
+  });
+
+  it('capability-gates managed storage commands to Storage nodes', async () => {
+    const storage = createService('storage', { capabilities: { capabilities: ['managed_storage_v1'] } });
+
+    await storage.service.sendDockerStorageCommand('node-1', 'create', 'storage-1', '{"version":1}');
+
+    expect(storage.registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      { dockerStorage: { action: 'create', managedStorageId: 'storage-1', configJson: '{"version":1}' } },
+      15 * 60 * 1000
+    );
+
+    const generic = createService('docker', { capabilities: { capabilities: ['managed_storage_v1'] } });
+    await expect(generic.service.sendDockerStorageCommand('node-1', 'inspect', 'storage-1')).rejects.toMatchObject({
+      code: 'NODE_TYPE_MISMATCH',
+    });
+    expect(generic.registry.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it('translates legacy IAM dispatch options into the typed storage command', async () => {
+    const { registry, service } = createService('storage', {
+      capabilities: { capabilities: ['managed_storage_iam_v1'] },
+    });
+
+    await service.sendDockerStorageIamCommand('node-1', 'list_keys', 'storage-1', {
+      publishedPort: 0,
+      useTls: false,
+      rootAccessKey: 'root-access',
+      rootSecretKey: 'root-secret',
+    });
+
+    expect(registry.sendCommand).toHaveBeenCalledWith(
+      'node-1',
+      {
+        dockerStorage: {
+          action: 'iam_list_keys',
+          managedStorageId: 'storage-1',
+          configJson: JSON.stringify({
+            version: 1,
+            rootCredentials: { accessKey: 'root-access', secretKey: 'root-secret' },
+            tls: undefined,
+            iam: {
+              action: 'list_keys',
+              targetAccessKey: '',
+              targetSecretKey: '',
+              name: '',
+              policy: '',
+              expiresAt: '',
+            },
+          }),
+        },
+      },
       15 * 60 * 1000
     );
   });

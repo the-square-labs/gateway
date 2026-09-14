@@ -147,6 +147,7 @@ import { LoggingSearchService } from '@/modules/logging/logging-search.service.j
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { LoggingTokenService } from '@/modules/logging/logging-token.service.js';
 import { LoggingValidationService } from '@/modules/logging/logging-validation.service.js';
+import { ManagedWorkloadLifecycle } from '@/modules/managed-workloads/managed-workload-lifecycle.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { DashboardReadModelService } from '@/modules/monitoring/dashboard-read-model.service.js';
 import { MonitoringService } from '@/modules/monitoring/monitoring.service.js';
@@ -158,6 +159,10 @@ import { NotificationDeliveryService } from '@/modules/notifications/notificatio
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
+import { ManagedStorageMetricsProvider } from '@/modules/object-storage/managed-storage-metrics-provider.js';
+import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
+import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
+import { ObjectStorageMonitoringService } from '@/modules/object-storage/object-storage-monitoring.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import { PageArtifactStore, resolvePageStorageDir } from '@/modules/pages/artifacts/page-artifact-store.js';
 import { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
@@ -198,6 +203,14 @@ import { resolveHttp01Ingress } from '@/modules/ssl/http01-ingress.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
+import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
+import { ManagedStorageBindingsService } from '@/modules/storage/managed-storage-bindings.service.js';
+import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
+import { StorageClusterMemberStore } from '@/modules/storage/storage-cluster-member-store.js';
+import { StorageWorkloadDispatch } from '@/modules/storage/storage-workload-dispatch.js';
+import { STORAGE_WORKLOAD_LABELS } from '@/modules/storage/storage-workload-labels.js';
+import { StorageWorkloadProvider } from '@/modules/storage/storage-workload-provider.js';
+import { StorageWorkloadStore } from '@/modules/storage/storage-workload-store.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { UIBootstrapService } from '@/modules/ui-bootstrap/ui-bootstrap.service.js';
 import { CacheService, createRedisClient } from '@/services/cache.service.js';
@@ -227,6 +240,7 @@ import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SessionService } from '@/services/session.service.js';
+import { StorageCAService } from '@/services/storage-ca.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
@@ -605,6 +619,10 @@ export async function initializeContainer(): Promise<void> {
   databaseCA.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   container.registerInstance(DatabaseCAService, databaseCA);
   await databaseCA.ensureDatabaseCA();
+  const storageCAService = new StorageCAService(db, caService, certService);
+  storageCAService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
+  container.registerInstance(StorageCAService, storageCAService);
+  await storageCAService.ensureStorageCA();
   const systemCertificateReconciliation = await systemCertificateLifecycleService.reconcileExistingSystemLeaves();
   if (systemCertificateReconciliation.adopted || systemCertificateReconciliation.unknown) {
     logger.info('Reconciled existing system certificate lifecycle records', systemCertificateReconciliation);
@@ -971,6 +989,8 @@ export async function initializeContainer(): Promise<void> {
 
   const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy(relayPolicyService, appRelayClientFingerprint);
   container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
+  const managedStorageTunnelProxy = new ManagedStorageTunnelProxy(relayPolicyService, appRelayClientFingerprint);
+  container.registerInstance(ManagedStorageTunnelProxy, managedStorageTunnelProxy);
   const databaseConnectionService = new DatabaseConnectionService(
     db,
     auditService,
@@ -1038,6 +1058,98 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DatabaseMonitoringService, databaseMonitoringService);
   databaseConnectionService.setEventBus(eventBus);
   databaseFolderService.setEventBus(eventBus);
+
+  const objectStorageService = new ObjectStorageService(
+    db,
+    auditService,
+    cryptoService,
+    storageCAService,
+    managedStorageTunnelProxy
+  );
+  container.registerInstance(ObjectStorageService, objectStorageService);
+
+  const objectStorageFolderService = new ObjectStorageFolderService(db, auditService);
+  container.registerInstance(ObjectStorageFolderService, objectStorageFolderService);
+
+  const managedStorageMetricsProvider = new ManagedStorageMetricsProvider(db);
+  const objectStorageMonitoringService = new ObjectStorageMonitoringService(
+    objectStorageService,
+    cacheService,
+    managedStorageMetricsProvider
+  );
+  container.registerInstance(ObjectStorageMonitoringService, objectStorageMonitoringService);
+  objectStorageService.setEventBus(eventBus);
+  objectStorageFolderService.setEventBus(eventBus);
+
+  const storageWorkloadProvider = new StorageWorkloadProvider(db, cryptoService, storageCAService);
+  storageWorkloadProvider.setEventBus(eventBus);
+  container.registerInstance(StorageWorkloadProvider, storageWorkloadProvider);
+
+  const storageWorkloadStore = new StorageWorkloadStore(db);
+  container.registerInstance(StorageWorkloadStore, storageWorkloadStore);
+
+  // Shared across the dispatch and the service so both see the same
+  // cluster-member rows within a request/reconcile cycle.
+  const storageClusterMemberStore = new StorageClusterMemberStore(db);
+
+  const storageWorkloadDispatch = new StorageWorkloadDispatch(
+    nodeDispatch,
+    auditService,
+    cryptoService,
+    storageWorkloadProvider,
+    objectStorageService,
+    db,
+    storageClusterMemberStore,
+    storageCAService,
+    relayPolicyService
+  );
+  storageWorkloadDispatch.setEventBus(eventBus);
+  container.registerInstance(StorageWorkloadDispatch, storageWorkloadDispatch);
+
+  const storageWorkloadLifecycle = new ManagedWorkloadLifecycle(
+    storageWorkloadStore,
+    storageWorkloadDispatch,
+    STORAGE_WORKLOAD_LABELS
+  );
+
+  const managedStorageService = new ManagedStorageService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    storageWorkloadProvider,
+    objectStorageService,
+    storageWorkloadStore,
+    storageWorkloadDispatch,
+    storageWorkloadLifecycle,
+    storageClusterMemberStore,
+    managedStorageTunnelProxy,
+    storageCAService,
+    relayPolicyService
+  );
+  const managedStorageBindingsService = new ManagedStorageBindingsService(
+    db,
+    auditService,
+    cryptoService,
+    nodeDispatch,
+    dockerManagementService,
+    dockerDeploymentService,
+    dockerSecretService,
+    getEnv().SECURE_LINK_CONNECTOR_IMAGE,
+    relayPolicyService,
+    storageCAService
+  );
+  managedStorageBindingsService.setEventBus(eventBus);
+  managedStorageBindingsService.setLicensePolicyService(licensePolicyService);
+  container.registerInstance(ManagedStorageBindingsService, managedStorageBindingsService);
+  // Bindings own containers, networks and relay routes that the cluster's own
+  // delete path knows nothing about; the FK cascade would drop only their rows.
+  managedStorageService.setBindingsTeardown((cluster, userId) =>
+    managedStorageBindingsService.deleteAllForCluster(cluster, userId)
+  );
+  managedStorageService.setEventBus(eventBus);
+  managedStorageService.setLicensePolicyService(licensePolicyService);
+  container.registerInstance(ManagedStorageService, managedStorageService);
 
   const proxyDockerUpstreamService = new ProxyDockerUpstreamService(
     db,
@@ -1483,6 +1595,7 @@ export async function initializeContainer(): Promise<void> {
         try {
           if (await relayControlClient?.reloadIdentity()) {
             managedDatabaseTunnelProxy.setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
+            managedStorageTunnelProxy.setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
             commitRelayTrust();
           }
         } catch (error) {

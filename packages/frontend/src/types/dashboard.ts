@@ -93,6 +93,16 @@ export interface DashboardRelaySnapshot {
     activationError: string | null;
     updatedAt: string;
   }>;
+  attempts?: Array<{
+    id: string;
+    endpointId: string;
+    workload: string;
+    generation: number;
+    state: "active" | "staging" | "failed" | "draining" | "retired";
+    activationError: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }>;
   blockers?: string[];
   automaticRebalancePaused?: boolean;
   automaticRebalanceRetryAt?: string | null;
@@ -121,6 +131,7 @@ export interface DashboardRelayInstance {
   policyExpiresAt: string | null;
   lastSeenAt: string | null;
   activeAssignments: number;
+  retainedAssignments?: number;
   updateStep?: { state: string; error: string | null } | null;
   health?: {
     activeTunnels?: number;
@@ -144,12 +155,14 @@ export interface DashboardBootstrapRequest {
       nodeIds?: string[];
       proxyHostIds?: string[];
       databaseIds?: string[];
+      storageIds?: string[];
       dockerResources?: DashboardPinnedDockerResourceRequest[];
     };
     sidebar?: {
       nodeIds?: string[];
       proxyHostIds?: string[];
       databaseIds?: string[];
+      storageIds?: string[];
       dockerResources?: DashboardPinnedDockerResourceRequest[];
     };
   };
@@ -207,6 +220,13 @@ export interface DashboardBootstrap {
 }
 
 export interface DashboardBootstrapPinnedResources {
+  storages?: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    provider: string;
+    healthStatus?: string | null;
+  }>;
   nodes: Node[];
   proxies: ProxyHost[];
   databases: Array<{

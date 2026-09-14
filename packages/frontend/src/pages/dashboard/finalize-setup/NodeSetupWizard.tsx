@@ -35,6 +35,11 @@ const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }>
   },
   { value: "databases", label: "Databases", description: "Run managed database workloads." },
   {
+    value: "storage",
+    label: "Storage",
+    description: "Run managed MinIO storage and backup workloads.",
+  },
+  {
     value: "monitoring",
     label: "Monitoring",
     description: "Collect infrastructure health and metrics.",
@@ -47,6 +52,7 @@ const DAEMON_INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   docker: "setup-docker-node.sh",
   builder: "setup-docker-node.sh",
   databases: "setup-database-node.sh",
+  storage: "setup-storage-node.sh",
   monitoring: "setup-monitoring-node.sh",
   relay: "setup-relay-node.sh",
 };

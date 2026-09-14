@@ -1,3 +1,5 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { DockerBuildStatus } from '@/db/schema/index.js';
 import { DockerAccessResourceService } from './docker-access-resource.service.js';
@@ -96,15 +98,16 @@ function rolloutProgress(buildId: string, attempt = 1, phase: 'accepted' | 'exec
   };
 }
 
-function claimDatabase(rows: ReturnType<typeof queuedBuild>[]) {
+function claimDatabase(rows: ReturnType<typeof queuedBuild>[], inspectCandidate?: (condition: SQL) => void) {
   let chain = Promise.resolve();
   let candidateId: string | null = null;
   const tx = {
     execute: vi.fn(async () => undefined),
     select: vi.fn((selection?: unknown) => ({
       from: vi.fn(() => ({
-        where: vi.fn(() => {
+        where: vi.fn((condition: SQL) => {
           if (!selection) return Promise.resolve([]);
+          inspectCandidate?.(condition);
           return {
             orderBy: vi.fn(() => ({
               limit: vi.fn(async () => {
@@ -248,6 +251,7 @@ describe('DockerBuildService', () => {
     expect(canTransitionDockerBuild('claimed', 'checking_out')).toBe(true);
     expect(canTransitionDockerBuild('checking_out', 'building')).toBe(true);
     expect(canTransitionDockerBuild('building', 'scanning')).toBe(true);
+    expect(canTransitionDockerBuild('building', 'pushing')).toBe(true);
     expect(canTransitionDockerBuild('scanning', 'pushing')).toBe(true);
     expect(canTransitionDockerBuild('pushing', 'deploying')).toBe(true);
     expect(canTransitionDockerBuild('deploying', 'succeeded')).toBe(true);
@@ -288,6 +292,30 @@ describe('DockerBuildService', () => {
     expect(updateValues).not.toHaveProperty('leaseOwner');
     expect(updateValues).not.toHaveProperty('leaseHeartbeatAt');
     expect(updateValues).not.toHaveProperty('leaseExpiresAt');
+  });
+
+  it.each([false, true])('filters disabled-scan jobs according to worker support (%s)', async (supportsScanDisable) => {
+    let query = '';
+    const service = new DockerBuildService(
+      claimDatabase([], (condition) => {
+        query = new PgDialect().sqlToQuery(condition).sql;
+      }) as never
+    );
+    expect(
+      await service.claimNext({
+        builderNodeId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        leaseOwner: 'worker-a',
+        platform: 'linux/amd64',
+        supportsScanDisable,
+      })
+    ).toBeNull();
+    if (supportsScanDisable) {
+      expect(query).not.toContain('vulnerabilityThreshold');
+    } else {
+      expect(query).toContain("->>'vulnerabilityThreshold' = 'disabled'");
+      expect(query).toContain("<> 'pages_project'");
+      expect(query).toContain('"docker_source_bindings"."id" = "docker_builds"."source_binding_id"');
+    }
   });
 
   it('serializes concurrent claims so one queued build is owned by only one builder', async () => {

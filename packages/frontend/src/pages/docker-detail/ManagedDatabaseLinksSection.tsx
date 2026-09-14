@@ -38,6 +38,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
+import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import type {
@@ -228,7 +229,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
     try {
       const [nextDatabases, nodeResult] = await Promise.all([
         api.listManagedDatabases(),
-        api.listNodes({ type: "databases", limit: 100 }),
+        listManagedDatabaseCandidateNodes(),
       ]);
       const results = await Promise.all(
         nextDatabases.map(async (database) =>
@@ -236,7 +237,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         )
       );
       setDatabases(nextDatabases);
-      setDatabaseNodes(nodeResult.data);
+      setDatabaseNodes(nodeResult);
       setBindings(
         results
           .flat()
@@ -302,9 +303,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
   }, [initialLoading, onInitialLoadingChange]);
 
   useRealtime("node.changed", () => {
-    void api
-      .listNodes({ type: "databases", limit: 100 })
-      .then((result) => setDatabaseNodes(result.data))
+    void listManagedDatabaseCandidateNodes()
+      .then((nodes) => setDatabaseNodes(nodes))
       .catch(() => undefined);
   });
 

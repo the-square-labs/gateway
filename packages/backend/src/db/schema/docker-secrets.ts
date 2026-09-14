@@ -12,6 +12,7 @@ export const dockerSecrets = pgTable(
     key: text('key').notNull(),
     encryptedValue: text('encrypted_value').notNull(),
     managed: boolean('managed').notNull().default(false),
+    managedOwner: text('managed_owner'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

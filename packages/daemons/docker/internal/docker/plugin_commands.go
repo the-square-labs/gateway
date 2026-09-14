@@ -68,6 +68,25 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		}
 		return result
 	}
+	if p.cfg.Docker.Mode == "storage" {
+		switch payload := cmd.Payload.(type) {
+		case *pb.GatewayCommand_DockerDatabase:
+			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
+		case *pb.GatewayCommand_DockerStorage:
+			p.handleManagedStorageCommand(payload.DockerStorage, result)
+		case *pb.GatewayCommand_DockerBackup:
+			if p.backupHandler == nil {
+				result.Success = false
+				result.Error = "backup command handler is not registered"
+			} else {
+				p.backupHandler.handleBackupCommand(payload.DockerBackup, result)
+			}
+		default:
+			result.Success = false
+			result.Error = "storage-profile daemon accepts only docker_database, docker_storage and docker_backup commands"
+		}
+		return result
+	}
 
 	switch payload := cmd.Payload.(type) {
 	case *pb.GatewayCommand_DockerContainer:
@@ -124,6 +143,14 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_DockerDatabase:
 		result.Success = false
 		result.Error = "managed database commands require docker.mode=databases"
+
+	case *pb.GatewayCommand_DockerStorage:
+		result.Success = false
+		result.Error = "managed storage commands require docker.mode=storage"
+
+	case *pb.GatewayCommand_DockerBackup:
+		result.Success = false
+		result.Error = "backup commands require docker.mode=storage"
 
 	case *pb.GatewayCommand_SetDaemonLogStream:
 		stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)

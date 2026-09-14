@@ -213,7 +213,7 @@ jobs:
           fi
           (
             cd scripts
-            sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
+            sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-storage-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
           )
           gh release upload "$GITHUB_REF_NAME" \
             CONTINUITY-MIT-GRANT.md \
@@ -223,6 +223,7 @@ jobs:
             scripts/setup-node.sh \
             scripts/setup-docker-node.sh \
             scripts/setup-database-node.sh \
+            scripts/setup-storage-node.sh \
             scripts/setup-monitoring-node.sh \
             --clobber
 
@@ -248,6 +249,7 @@ jobs:
           grep -Fxq setup-node.sh <<<"$assets"
           grep -Fxq setup-docker-node.sh <<<"$assets"
           grep -Fxq setup-database-node.sh <<<"$assets"
+          grep -Fxq setup-storage-node.sh <<<"$assets"
           grep -Fxq setup-monitoring-node.sh <<<"$assets"
           gh release edit "$GITHUB_REF_NAME" \
             --repo "$GITHUB_REPOSITORY" \

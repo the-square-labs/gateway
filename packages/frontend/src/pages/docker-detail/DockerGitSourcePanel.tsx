@@ -62,7 +62,7 @@ interface DockerGitSourcePanelProps {
   pendingContainer?: boolean;
 }
 
-type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none";
+type VulnerabilityThreshold = "critical" | "high" | "medium" | "low" | "none" | "disabled";
 
 const CONNECT_STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -1159,7 +1159,7 @@ export function DockerGitSourcePanel({
               <SelectTrigger className="sm:w-72" aria-label="Vulnerability policy">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
                 <SelectItem value="critical" description="Block critical findings.">
                   Critical
                 </SelectItem>
@@ -1175,6 +1175,12 @@ export function DockerGitSourcePanel({
                 <SelectItem value="none" description="Report findings without blocking deployment.">
                   Report only
                 </SelectItem>
+                <SelectItem
+                  value="disabled"
+                  description="Skip vulnerability scanning and SBOM generation. Requires an updated Build Worker."
+                >
+                  Disabled
+                </SelectItem>
               </SelectContent>
             </Select>
           </SettingsControlRow>
@@ -1182,7 +1188,7 @@ export function DockerGitSourcePanel({
         {!pagesTarget && (
           <SettingsControlRow
             title="Vulnerability scope"
-            description="Choose which packages can block deployment. The report always includes all findings."
+            description="Choose which packages can block deployment and appear by default in the report."
           >
             <Select
               value={vulnerabilityScope}
@@ -1192,7 +1198,7 @@ export function DockerGitSourcePanel({
               <SelectTrigger className="sm:w-72" aria-label="Vulnerability scope">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="max-w-[min(var(--container-md),var(--radix-select-content-available-width))]">
                 <SelectItem
                   value="all"
                   description="Apply the severity threshold to all packages in the image."

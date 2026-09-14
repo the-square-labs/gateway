@@ -102,6 +102,7 @@ describe("DockerBuilds", () => {
     expect(screen.getByText("main")).toBeInTheDocument();
     expect(screen.queryByText("SHA")).not.toBeInTheDocument();
     expect(screen.queryByText(/sha256:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Deployment completed")).not.toHaveClass("font-mono");
   });
 
   it("opens build details from a pinned build link", async () => {

@@ -63,6 +63,7 @@ import {
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
+import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
@@ -148,6 +149,7 @@ async function refreshActiveGrpcServerIdentity(): Promise<void> {
   try {
     if (await container.resolve(RelayControlClient).reloadIdentity()) {
       container.resolve(ManagedDatabaseTunnelProxy).setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
+      container.resolve(ManagedStorageTunnelProxy).setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
       commitRelayTrust();
     }
   } catch (error) {

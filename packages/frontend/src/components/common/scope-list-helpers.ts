@@ -106,6 +106,7 @@ const folderLookupPermissions: Partial<Record<FolderFamily, string>> = {
   proxy: "proxy:view",
   nodes: "nodes:details",
   databases: "databases:view",
+  storage: "storage:view",
   pages: "pages:view",
   ssl: "ssl:cert:view",
   "logging-environments": "logs:environments:view",
@@ -154,6 +155,20 @@ export async function loadScopeResourceCatalog(
         label: node.displayName || node.hostname,
       }));
   const loads: Promise<void>[] = [];
+  if (families.has("storage"))
+    loads.push(
+      allResourcePages((page) => api.listObjectStorages({ page, limit: 100 }))
+        .then((items) => {
+          catalog.storage = [
+            ...nodeOptions("storage"),
+            ...items.map((item) => ({ id: item.id, label: item.name, folderId: item.folderId })),
+          ];
+        })
+        .catch((error) => {
+          reportScopeLoadError("storage", error);
+          catalog.storage = [];
+        })
+    );
   if (families.has("groups"))
     loads.push(
       api
@@ -340,6 +355,7 @@ export type FolderFamily =
   | "pages"
   | "ssl"
   | "databases"
+  | "storage"
   | "logging-environments"
   | "logging-schemas";
 
@@ -390,6 +406,7 @@ export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (scope.startsWith("docker:images:")) return "docker-image";
   if (scope.startsWith("docker:compose:")) return "docker-compose";
   if (scope.startsWith("databases:")) return "databases";
+  if (scope.startsWith("storage:")) return "storage";
   if (scope.startsWith("logs:schemas:")) return "logging-schemas";
   if (scope.startsWith("logs:environments:") || scope === "logs:read") {
     return "logging-environments";
@@ -443,6 +460,8 @@ export async function loadFolderFamily(family: FolderFamily): Promise<FolderOpti
       return flattenFolderTree(await load(api.listFolders()), family);
     case "nodes":
       return flattenFolderTree(await load(api.listNodeFolders()), family);
+    case "storage":
+      return flattenFolderTree(await load(api.listObjectStorageFolders()), family);
     case "databases":
       return flattenFolderTree(await load(api.listDatabaseFolders()), family);
     case "logging-environments":
@@ -546,6 +565,10 @@ export function getResourceOptions(
       return (nodes ?? [])
         .filter((node) => node.type === "docker")
         .map((node) => ({ id: node.id, label: node.displayName || node.hostname }));
+    if (scope === "storage:create")
+      return (nodes ?? [])
+        .filter((node) => String(node.type) === "storage")
+        .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname }));
     if (scope === "proxy:create" || scope === "pages:create" || scope === "databases:create") {
       return (nodes ?? [])
         .filter((node) => node.type === (scope === "databases:create" ? "databases" : "nginx"))
@@ -578,7 +601,7 @@ export function getResourceOptions(
   if (scope.startsWith("databases:")) {
     return [
       ...(nodes ?? [])
-        .filter((node) => node.type === "databases")
+        .filter((node) => node.type === "databases" || node.type === "storage")
         .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname })),
       ...(databases ?? []).map((database) => ({
         id: database.id,
@@ -664,6 +687,8 @@ export function getResourceLabel(scope: string): string {
   if (scope.startsWith("domains:")) {
     return "Restrict to domain folders or individual domains (leave unchecked for all):";
   }
+  if (scope.startsWith("storage:"))
+    return "Restrict to storage folders or individual storage connections (leave unchecked for all):";
   if (scope.startsWith("databases:")) {
     return "Restrict to database folders or individual databases (leave unchecked for all):";
   }

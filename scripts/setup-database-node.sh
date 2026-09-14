@@ -182,5 +182,9 @@ fi
 # setup-docker-node performs the actual docker installation and enrollment.
 # Force the restricted node's service identity and preserve the caller's flags.
 export GATEWAY_DATABASE_STORAGE_ROOT="$STORAGE_ROOT"
-export GATEWAY_DOCKER_MODE="databases"
+GATEWAY_DOCKER_MODE="${GATEWAY_DOCKER_MODE:-databases}"
+case "$GATEWAY_DOCKER_MODE" in
+    databases|storage) export GATEWAY_DOCKER_MODE ;;
+    *) die "Invalid restricted Docker mode '${GATEWAY_DOCKER_MODE}'" ;;
+esac
 bash "$DOCKER_SCRIPT" "${PASSTHROUGH[@]}" --user "$RUN_USER"

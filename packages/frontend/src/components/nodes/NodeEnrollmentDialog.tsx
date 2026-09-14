@@ -66,6 +66,11 @@ export const NODE_ENROLLMENT_TYPES: Array<{
     description: "Hosts managed PostgreSQL, Redis, and ClickHouse instances.",
   },
   {
+    value: "storage",
+    label: "Storage",
+    description: "Hosts managed private MinIO storage and database backup runners.",
+  },
+  {
     value: "monitoring",
     label: "Monitoring",
     description: "Collects host health and metrics without managing workloads.",
@@ -83,6 +88,7 @@ const INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   docker: "setup-docker-node.sh",
   builder: "setup-docker-node.sh",
   databases: "setup-database-node.sh",
+  storage: "setup-storage-node.sh",
   monitoring: "setup-monitoring-node.sh",
   relay: "setup-relay-node.sh",
 };
@@ -306,9 +312,11 @@ export function NodeEnrollmentDialog({
           ? "Installs the isolated Docker builder profile and enrolls with this Gateway."
           : result?.type === "databases"
             ? "Verifies safe ext4 image storage, then installs the managed database daemon."
-            : result?.type === "monitoring"
-              ? "Installs the monitoring agent and enrolls with this Gateway."
-              : "Installs Nginx and the ingress daemon, then enrolls with this Gateway.";
+            : result?.type === "storage"
+              ? "Verifies safe ext4 image storage, then installs the restricted managed storage daemon."
+              : result?.type === "monitoring"
+                ? "Installs the monitoring agent and enrolls with this Gateway."
+                : "Installs Nginx and the ingress daemon, then enrolls with this Gateway.";
 
   return (
     <>

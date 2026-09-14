@@ -19,6 +19,10 @@ import { useAuthStore } from "@/stores/auth";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
 import { ClickHouseConfigDialog } from "./database-detail/ClickHouseConfigDialog";
+import {
+  type BackupSelectionOption,
+  DatabaseBackupsTab,
+} from "./database-detail/DatabaseBackupsTab";
 import { DatabaseConsoleTab } from "./database-detail/DatabaseConsoleTab";
 import { DatabaseCredentialsDialog } from "./database-detail/DatabaseCredentialsDialog";
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
@@ -98,13 +102,57 @@ export function DatabaseDetail({
   const canWrite = hasDatabaseScope(hasScope, "databases:query:write", id);
   const canAdmin = hasDatabaseScope(hasScope, "databases:query:admin", id);
   const canReveal = hasDatabaseScope(hasScope, "databases:credentials:reveal", id);
+  const canViewBackups = hasDatabaseScope(hasScope, "databases:backups:view", id);
+  const canManageBackups = hasDatabaseScope(hasScope, "databases:backups:manage", id);
+  const canRunBackups = hasDatabaseScope(hasScope, "databases:backups:run", id);
+  const canRestoreBackups = hasDatabaseScope(hasScope, "databases:backups:restore", id);
+  const [backupDestinations, setBackupDestinations] = useState<BackupSelectionOption[]>([]);
+  const [backupExecutors, setBackupExecutors] = useState<BackupSelectionOption[]>([]);
   const canViewMonitoring = hasDatabaseScope(hasScope, "databases:view", id);
 
   const [activeTab, setActiveTab] = useUrlTab(
-    ["overview", "explorer", "console", "logs", "extensions"],
+    ["overview", "explorer", "console", "logs", "extensions", "backups"],
     "overview",
     (tab) => databaseRoute(routeSlug, tab)
   );
+
+  useEffect(() => {
+    if (activeTab !== "backups" || !canViewBackups) return;
+    let current = true;
+    void Promise.all([
+      api.listObjectStorages({ limit: 200 }),
+      api.listNodes({ type: "storage", limit: 200 }),
+    ])
+      .then(([storage, nodes]) => {
+        if (!current) return;
+        setBackupDestinations(
+          storage.data
+            .filter(
+              (item) =>
+                hasScope("storage:objects:write") || hasScope(`storage:objects:write:${item.id}`)
+            )
+            .map((item) => ({ id: item.id, label: item.name, provider: item.provider }))
+        );
+        setBackupExecutors(
+          nodes.data
+            .filter(
+              (node) =>
+                hasScope("nodes:backups:execute") || hasScope(`nodes:backups:execute:${node.id}`)
+            )
+            .map((node) => ({
+              id: node.id,
+              label: node.hostname,
+              disabledReason: node.status === "online" ? undefined : "Node is offline",
+            }))
+        );
+      })
+      .catch((error) =>
+        toast.error(error instanceof Error ? error.message : "Failed to load backup destinations")
+      );
+    return () => {
+      current = false;
+    };
+  }, [activeTab, canViewBackups, hasScope]);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -590,6 +638,7 @@ export function DatabaseDetail({
                   Extensions
                 </TabsTrigger>
               )}
+              {canViewBackups && <TabsTrigger value="backups">Backups</TabsTrigger>}
               {database.managed && canViewMonitoring && (
                 <TabsTrigger value="logs" disabled={!managedNodeAvailable} className="gap-1.5">
                   <ScrollText className="h-3.5 w-3.5" />
@@ -599,6 +648,18 @@ export function DatabaseDetail({
             </TabsList>
           )}
 
+          {canViewBackups && (
+            <TabsContent value="backups">
+              <DatabaseBackupsTab
+                database={database}
+                destinations={backupDestinations}
+                executors={backupExecutors}
+                canManage={canManageBackups}
+                canRun={canRunBackups}
+                canRestore={canRestoreBackups}
+              />
+            </TabsContent>
+          )}
           <TabsContent value="overview" className="space-y-4">
             <DatabaseOverviewTab
               database={database}

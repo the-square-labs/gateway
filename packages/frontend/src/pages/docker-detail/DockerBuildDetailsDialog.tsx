@@ -1,5 +1,6 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import {
   Dialog,
@@ -8,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerBuild, DockerBuildLogChunk, DockerBuildStatus } from "@/types";
@@ -48,6 +50,8 @@ const ACTIVE_LOG_STATUSES = new Set<DockerBuildStatus>([
   "pushing",
   "deploying",
 ]);
+const OS_PACKAGE_TYPES = new Set(["deb", "rpm", "apk", "alpm"]);
+const VULNERABILITY_SEVERITIES = ["critical", "high", "medium", "low", "unknown"] as const;
 
 function MetaRow({
   label,
@@ -91,6 +95,7 @@ export function DockerBuildDetailsDialog({
 }: DockerBuildDetailsDialogProps) {
   const [logs, setLogs] = useState<DockerBuildLogChunk[]>([]);
   const [loadingLogs, setLoadingLogs] = useState(false);
+  const [showSystemFindings, setShowSystemFindings] = useState(false);
   const logRequestId = useRef(0);
   const buildId = build?.id ?? null;
   const refreshLogs = useCallback(async () => {
@@ -105,6 +110,7 @@ export function DockerBuildDetailsDialog({
   }, [buildId]);
 
   useEffect(() => {
+    setShowSystemFindings(false);
     if (!open || !buildId) return;
     setLogs([]);
     setLoadingLogs(true);
@@ -132,16 +138,35 @@ export function DockerBuildDetailsDialog({
   );
 
   const scanSummary = build?.artifact?.scanSummary ?? null;
-  const vulnerabilities = scanSummary?.vulnerabilities ?? [];
   const applicationOnly = scanSummary?.policyScope === "application";
-  const osVulnerabilityTotal = scanSummary?.osPackages
-    ? Object.values(scanSummary.osPackages).reduce((total, count) => total + count, 0)
-    : null;
-  const vulnerabilityCounts = scanSummary
-    ? (["critical", "high", "medium", "low", "unknown"] as const).filter(
-        (severity) => scanSummary[severity] > 0
+  const validOSCounts =
+    scanSummary?.osPackages &&
+    VULNERABILITY_SEVERITIES.every(
+      (severity) =>
+        Number.isSafeInteger(scanSummary.osPackages![severity]) &&
+        scanSummary.osPackages![severity] >= 0 &&
+        Number.isSafeInteger(scanSummary[severity]) &&
+        scanSummary.osPackages![severity] <= scanSummary[severity]
+    );
+  const osVulnerabilityTotal = validOSCounts
+    ? VULNERABILITY_SEVERITIES.reduce(
+        (total, severity) => total + scanSummary!.osPackages![severity],
+        0
       )
-    : [];
+    : null;
+  const applicationView = applicationOnly && osVulnerabilityTotal !== null && !showSystemFindings;
+  const vulnerabilities = (scanSummary?.vulnerabilities ?? []).filter(
+    (finding) => !applicationView || !OS_PACKAGE_TYPES.has(finding.packageType.trim().toLowerCase())
+  );
+  const visibleCount = (severity: (typeof VULNERABILITY_SEVERITIES)[number]) =>
+    (scanSummary?.[severity] ?? 0) - (applicationView ? scanSummary!.osPackages![severity] : 0);
+  const vulnerabilityCounts = VULNERABILITY_SEVERITIES.filter(
+    (severity) => visibleCount(severity) > 0
+  );
+  const visibleTotal = VULNERABILITY_SEVERITIES.reduce(
+    (total, severity) => total + visibleCount(severity),
+    0
+  );
   const vulnerabilityTotal = scanSummary
     ? scanSummary.critical +
       scanSummary.high +
@@ -191,17 +216,22 @@ export function DockerBuildDetailsDialog({
                 </span>
               </MetaRow>
             )}
+            {scanSummary?.skipped && (
+              <MetaRow label="Vulnerability scan">
+                <Badge variant="secondary">Disabled</Badge>
+              </MetaRow>
+            )}
           </div>
         )}
-        {scanSummary && vulnerabilityTotal > 0 && (
+        {scanSummary && !scanSummary.skipped && vulnerabilityTotal > 0 && (
           <PanelShell
             title="Vulnerabilities"
-            description={`${vulnerabilityTotal} detected by ${scanSummary.scanner || "the image scanner"}`}
+            description={`${visibleTotal} ${applicationView ? "application-scope findings" : "findings"} detected by ${scanSummary.scanner || "the image scanner"}`}
             actions={
               <div className="flex flex-wrap justify-end gap-1">
                 {vulnerabilityCounts.map((severity) => (
                   <Badge key={severity} variant={VULNERABILITY_VARIANT[severity]} size="inline">
-                    {scanSummary[severity]} {severity}
+                    {visibleCount(severity)} {severity}
                   </Badge>
                 ))}
               </div>
@@ -212,8 +242,20 @@ export function DockerBuildDetailsDialog({
               <p className="px-4 py-3 text-xs text-muted-foreground">
                 {osVulnerabilityTotal === null
                   ? "Application dependency policy requires complete OS package counts. Rebuild with an updated Build Worker."
-                  : `Application dependency policy: ${osVulnerabilityTotal} system package findings remain visible but do not block deployment. Runtime binaries and unclassified packages still count.`}
+                  : `Application dependency policy: ${osVulnerabilityTotal} system package findings are report-only. Runtime binaries and unclassified packages still count.`}
               </p>
+            )}
+            {applicationOnly && osVulnerabilityTotal !== null && osVulnerabilityTotal > 0 && (
+              <SettingsControlRow
+                title="Include system packages"
+                description="Show report-only findings from the full image scan."
+              >
+                <Switch
+                  ariaLabel="Include system packages"
+                  checked={showSystemFindings}
+                  onChange={setShowSystemFindings}
+                />
+              </SettingsControlRow>
             )}
             {vulnerabilities.length > 0 ? (
               vulnerabilities.map((vulnerability, index) => (
@@ -235,9 +277,7 @@ export function DockerBuildDetailsDialog({
                     </p>
                     {applicationOnly &&
                       osVulnerabilityTotal !== null &&
-                      ["deb", "rpm", "apk", "alpm"].includes(
-                        vulnerability.packageType.trim().toLowerCase()
-                      ) && (
+                      OS_PACKAGE_TYPES.has(vulnerability.packageType.trim().toLowerCase()) && (
                         <p className="mt-0.5 text-xs text-muted-foreground">
                           OS package · Report only
                         </p>
@@ -255,13 +295,15 @@ export function DockerBuildDetailsDialog({
               ))
             ) : (
               <div className="px-4 py-3 text-xs text-muted-foreground">
-                Detailed findings were not retained for this build.
+                {applicationView && visibleTotal === 0
+                  ? "No application-scope vulnerabilities detected."
+                  : "Detailed findings were not retained for this view."}
               </div>
             )}
             {(scanSummary.vulnerabilitiesTruncated ?? 0) > 0 && (
               <div className="px-4 py-3 text-xs text-muted-foreground">
-                {scanSummary.vulnerabilitiesTruncated} additional findings are omitted from this
-                view.
+                {scanSummary.vulnerabilitiesTruncated} additional findings were not retained from
+                the full image report.
               </div>
             )}
           </PanelShell>

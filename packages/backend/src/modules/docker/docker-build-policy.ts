@@ -65,7 +65,7 @@ const BUILD_TRANSITIONS: Record<DockerBuildStatus, readonly DockerBuildStatus[]>
   queued: ['claimed', 'cancelled', 'superseded'],
   claimed: ['checking_out', 'failed', 'cancelled', 'superseded'],
   checking_out: ['building', 'failed', 'cancelled', 'superseded'],
-  building: ['scanning', 'failed', 'cancelled', 'superseded'],
+  building: ['scanning', 'pushing', 'failed', 'cancelled', 'superseded'],
   scanning: ['pushing', 'failed', 'cancelled', 'superseded'],
   pushing: ['deploying', 'succeeded', 'failed', 'cancelled', 'superseded'],
   deploying: ['succeeded', 'failed', 'cancelled', 'superseded'],
@@ -186,6 +186,7 @@ export function parseDockerBuildScanSummary(value: string): DockerBuildScanSumma
           osCounts.negligible >= 0));
     return {
       scanner: typeof parsed.scanner === 'string' ? parsed.scanner : 'grype',
+      ...(parsed.skipped === true ? { skipped: true } : {}),
       critical: count('critical'),
       high: count('high'),
       medium: count('medium'),
@@ -249,6 +250,10 @@ export function evaluateDockerArtifactPolicy(
   }
 ): { decision: DockerArtifactPolicyDecision; reason: string | null } {
   const threshold = policy.vulnerabilityThreshold ?? 'critical';
+  if (threshold === 'disabled') return { decision: 'approved', reason: 'Vulnerability scanning disabled by policy' };
+  if (artifact.scanSummary?.skipped) {
+    return { decision: 'error', reason: 'Build Worker skipped a vulnerability scan required by the source policy' };
+  }
   if (threshold === 'none') return { decision: 'approved', reason: null };
   if (!artifact.scanSummary) {
     return { decision: 'error', reason: 'Vulnerability scan result is required' };

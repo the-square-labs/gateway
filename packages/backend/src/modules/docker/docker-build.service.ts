@@ -357,6 +357,7 @@ export class DockerBuildService {
     platform: string;
     leaseMs?: number;
     now?: Date;
+    supportsScanDisable?: boolean;
   }) {
     const now = input.now ?? new Date();
     const leaseExpiresAt = new Date(now.getTime() + (input.leaseMs ?? DEFAULT_BUILD_LEASE_MS));
@@ -369,6 +370,14 @@ export class DockerBuildService {
         .where(
           and(
             eq(dockerBuilds.status, 'queued'),
+            input.supportsScanDisable === false
+              ? sql`not exists (
+                  select 1 from ${dockerSourceBindings}
+                  where ${dockerSourceBindings.id} = ${dockerBuilds.sourceBindingId}
+                    and ${dockerSourceBindings.targetKind} <> 'pages_project'
+                    and ${dockerSourceBindings.policy}->>'vulnerabilityThreshold' = 'disabled'
+                )`
+              : undefined,
             sql`not exists (
               select 1 from docker_builds active
               where active.source_binding_id = ${dockerBuilds.sourceBindingId}

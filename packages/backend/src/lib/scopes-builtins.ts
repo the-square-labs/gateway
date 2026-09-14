@@ -4,6 +4,21 @@ export const SYSTEM_ADMIN_SCOPES: readonly string[] = [...ALL_SCOPES];
 
 /** Admin group: curated broad access except system protection and high-risk operational defaults. */
 export const ADMIN_SCOPES: readonly string[] = [
+  'storage:view',
+  'storage:create',
+  'storage:edit',
+  'storage:delete',
+  'storage:credentials:reveal',
+  'storage:iam',
+  'storage:objects:read',
+  'storage:objects:write',
+  'storage:objects:admin',
+  'storage:folders:manage',
+  'databases:backups:view',
+  'databases:backups:manage',
+  'databases:backups:run',
+  'databases:backups:restore',
+  'nodes:backups:execute',
   'pki:ca:view:root',
   'pki:ca:view:intermediate',
   'pki:ca:create:root',
@@ -288,6 +303,16 @@ export const DEMO_ADMIN_GROUP = {
 
 /** Operator group: operational + management scopes */
 export const OPERATOR_SCOPES: readonly string[] = [
+  'storage:view',
+  'storage:create',
+  'storage:edit',
+  'storage:objects:read',
+  'storage:objects:write',
+  'storage:folders:manage',
+  'databases:backups:view',
+  'databases:backups:manage',
+  'databases:backups:run',
+  'nodes:backups:execute',
   'pki:ca:view:root',
   'pki:ca:view:intermediate',
   'pki:cert:view',
@@ -387,6 +412,8 @@ export const OPERATOR_SCOPES: readonly string[] = [
 
 /** Viewer group: read-only scopes */
 export const VIEWER_SCOPES: readonly string[] = [
+  'storage:view',
+  'databases:backups:view',
   'pki:ca:view:root',
   'pki:ca:view:intermediate',
   'pki:cert:view',

@@ -19,6 +19,8 @@ const TRAFFIC_STATS_MIN_FRESH_MS = 8_000;
 // controller deadline slightly longer so it always receives the final result
 // instead of marking an operation failed while it still changes disk state.
 const managedDatabaseCommandTimeoutMs = 15 * 60 * 1000;
+const managedStorageCommandTimeoutMs = 15 * 60 * 1000;
+const managedBackupCommandTimeoutMs = 25 * 60 * 1000;
 // SelfUpdate can spend up to five minutes downloading the binary before it
 // acknowledges the command. Leave a small margin for verification and replace.
 const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
@@ -58,8 +60,28 @@ export class NodeDispatchService {
   private async assertDatabaseNode(nodeId: string) {
     const [node] = await this.db.select({ type: nodes.type }).from(nodes).where(eq(nodes.id, nodeId)).limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
-    if (node.type !== 'databases') {
+    if (node.type !== 'databases' && node.type !== 'storage') {
       throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed database operations require a databases node');
+    }
+  }
+
+  private async assertStorageNodeCapability(nodeId: string, capability: string) {
+    const [node] = await this.db
+      .select({ type: nodes.type, capabilities: nodes.capabilities })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
+    if (node.type !== 'storage') {
+      throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed storage operations require a Storage node');
+    }
+    const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;
+    if (!Array.isArray(reported) || !reported.includes(capability)) {
+      throw new AppError(
+        409,
+        'STORAGE_CAPABILITY_UNAVAILABLE',
+        'The connected Storage node does not support this operation'
+      );
     }
   }
 
@@ -425,6 +447,86 @@ export class NodeDispatchService {
       nodeId,
       { dockerDatabase: { action, managedDatabaseId, configJson } as any },
       timeoutMs ?? managedDatabaseCommandTimeoutMs
+    );
+  }
+
+  async sendDockerStorageCommand(
+    nodeId: string,
+    action: string,
+    managedStorageId: string,
+    configJson = '',
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    await this.assertStorageNodeCapability(nodeId, 'managed_storage_v1');
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { dockerStorage: { action, managedStorageId, configJson } as any },
+      timeoutMs ?? managedStorageCommandTimeoutMs
+    );
+  }
+
+  async sendDockerStorageIamCommand(
+    nodeId: string,
+    action: 'create_key' | 'list_keys' | 'remove_key',
+    managedStorageId: string,
+    opts: {
+      publishedPort: number;
+      rootAccessKey: string;
+      rootSecretKey: string;
+      useTls: boolean;
+      caPem?: string;
+      serverName?: string;
+      targetAccessKey?: string;
+      targetSecretKey?: string;
+      name?: string;
+      policy?: string;
+      expiresAt?: string;
+    },
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    const storageAction =
+      action === 'create_key' ? 'iam_create_key' : action === 'list_keys' ? 'iam_list_keys' : 'iam_remove_key';
+    await this.assertStorageNodeCapability(nodeId, 'managed_storage_iam_v1');
+    if (action !== 'list_keys') await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        dockerStorage: {
+          action: storageAction,
+          managedStorageId,
+          configJson: JSON.stringify({
+            version: 1,
+            rootCredentials: { accessKey: opts.rootAccessKey, secretKey: opts.rootSecretKey },
+            tls: opts.useTls ? { caPem: opts.caPem ?? '', serverName: opts.serverName ?? '' } : undefined,
+            iam: {
+              action,
+              targetAccessKey: opts.targetAccessKey ?? '',
+              targetSecretKey: opts.targetSecretKey ?? '',
+              name: opts.name ?? '',
+              policy: opts.policy ?? '',
+              expiresAt: opts.expiresAt ?? '',
+            },
+          }),
+        } as any,
+      },
+      timeoutMs ?? managedStorageCommandTimeoutMs
+    );
+  }
+
+  async sendDockerBackupCommand(
+    nodeId: string,
+    action: string,
+    runId: string,
+    configJson = '',
+    timeoutMs?: number
+  ): Promise<CommandResult> {
+    await this.assertStorageNodeCapability(nodeId, 'database_backups_v1');
+    await this.assertNodeMutable(nodeId);
+    return this.registry.sendCommand(
+      nodeId,
+      { dockerBackup: { action, runId, configJson } as any },
+      timeoutMs ?? managedBackupCommandTimeoutMs
     );
   }
 
@@ -1205,12 +1307,17 @@ export class NodeDispatchService {
       timestamps?: boolean;
       since?: string;
       until?: string;
-    } = {}
+    } = {},
+    timeoutMs?: number
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
-    return this.registry.sendCommand(nodeId, {
-      dockerLogs: { containerId, ...options } as any,
-    });
+    return this.registry.sendCommand(
+      nodeId,
+      {
+        dockerLogs: { containerId, ...options } as any,
+      },
+      timeoutMs
+    );
   }
 
   async sendDockerConfigPush(

@@ -103,6 +103,8 @@ const envSchema = z.object({
   GATEWAY_RELAY_BUILD_VERSION: optionalNonEmptyString,
   GATEWAY_RELAY_PROTOCOL_MAJOR: z.coerce.number().int().positive().default(1),
 
+  BACKUP_RUNNER_IMAGE: optionalNonEmptyString,
+
   // AI sandbox artifacts
   AI_SANDBOX_ARTIFACT_DIR: nonEmptyStringWithDefault('/var/lib/gateway/ai-artifacts'),
 });

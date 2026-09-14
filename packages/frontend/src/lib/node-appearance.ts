@@ -6,6 +6,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   docker: "Docker",
   builder: "Build Worker",
   databases: "Databases",
+  storage: "Storage",
   monitoring: "Monitoring",
   bastion: "Bastion",
   relay: "Relay",
@@ -16,7 +17,7 @@ export function nodeTypeLabel(type: NodeType | string): string {
 }
 
 export function daemonTypeForNode(type: NodeType | string): string {
-  return type === "databases" || type === "builder" ? "docker" : type;
+  return type === "databases" || type === "storage" || type === "builder" ? "docker" : type;
 }
 
 export const NODE_APPEARANCE_COLOR_OPTIONS: Array<{

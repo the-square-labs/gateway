@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
+  managedStorageClusters,
   relayEndpointAssignmentGenerations,
   relayEndpointAssignments,
   relayEndpoints,
@@ -23,7 +24,11 @@ import type { GeneralSettingsService } from '@/modules/settings/general-settings
 import type { CryptoService } from './crypto.service.js';
 import type { EventBusService } from './event-bus.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
-import { type RelayGrantBundle, RelayGrantIssuerService } from './relay-grant-issuer.service.js';
+import {
+  type RelayGrantBundle,
+  RelayGrantIssuerService,
+  RelayPolicyNotAcknowledgedError,
+} from './relay-grant-issuer.service.js';
 import { RelayGrantKeyService } from './relay-grant-key.service.js';
 import {
   backfillRelayNodeFingerprints,
@@ -103,6 +108,7 @@ export class RelayPolicyService {
   private readonly grantKeys: RelayGrantKeyService;
   private readonly policyKeys: RelayPolicySigningKeyService;
   private relaySettingsSync: Promise<void> = Promise.resolve();
+  private snapshotSync: Promise<unknown> = Promise.resolve();
   private readonly nodeGrantSyncs = new Map<
     string,
     Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
@@ -260,7 +266,15 @@ export class RelayPolicyService {
     throw lastError instanceof Error ? lastError : new Error('Managed database binding relay route is unavailable');
   }
 
-  async syncSnapshot(): Promise<number> {
+  syncSnapshot(): Promise<number> {
+    // Publish in build order, and always build after earlier callers finish:
+    // coalescing can hand a policy writer an ACK for a pre-write projection.
+    const sync = this.snapshotSync.then(() => this.syncSnapshotOnce());
+    this.snapshotSync = sync.catch(() => undefined);
+    return sync;
+  }
+
+  private async syncSnapshotOnce(): Promise<number> {
     // A transient health RPC failure must not downgrade a pool-capable Relay
     // to the legacy snapshot shape. Doing so removes assignment generations
     // from the live policy and revokes otherwise healthy endpoint streams.
@@ -422,6 +436,56 @@ export class RelayPolicyService {
       return { id: current.id, active: current.status === 'active' };
     });
     if (!endpoint.active) throw new Error('Managed database relay endpoint is awaiting lifecycle reconciliation');
+    await this.ensureLegacyCompatibleAssignment(endpoint.id);
+    await this.syncSnapshot();
+    return endpoint.id;
+  }
+
+  async ensureManagedStorageEndpoint(clusterId: string, nodeId: string): Promise<string> {
+    const [database] = await this.db
+      .select({ nodeId: managedStorageClusters.nodeId, status: managedStorageClusters.status })
+      .from(managedStorageClusters)
+      .where(eq(managedStorageClusters.id, clusterId))
+      .limit(1);
+    if (!database || database.nodeId !== nodeId || !['creating', 'ready', 'updating'].includes(database.status)) {
+      throw new Error('Managed storage relay endpoint is unavailable');
+    }
+    const node = await this.grantIssuer.requireNodeIdentity(nodeId);
+    const endpoint = await this.db.transaction(async (tx) => {
+      const [current] = await tx
+        .select()
+        .from(relayEndpoints)
+        .where(and(eq(relayEndpoints.ownerKind, 'managed_storage'), eq(relayEndpoints.ownerId, clusterId)))
+        .limit(1);
+      if (!current) {
+        const [created] = await tx
+          .insert(relayEndpoints)
+          .values({
+            ownerKind: 'managed_storage',
+            ownerId: clusterId,
+            subjectKind: 'daemon',
+            subjectId: nodeId,
+            certificateSha256: node.certificateFingerprint,
+          })
+          .returning({ id: relayEndpoints.id });
+        await bumpRelayPolicyRevision(tx);
+        return { id: created.id, active: true };
+      }
+      if (current.subjectId !== nodeId || current.certificateSha256 !== node.certificateFingerprint) {
+        await tx
+          .update(relayEndpoints)
+          .set({
+            subjectId: nodeId,
+            certificateSha256: node.certificateFingerprint,
+            generation: current.generation + 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(relayEndpoints.id, current.id));
+        await bumpRelayPolicyRevision(tx);
+      }
+      return { id: current.id, active: current.status === 'active' };
+    });
+    if (!endpoint.active) throw new Error('Managed storage relay endpoint is awaiting lifecycle reconciliation');
     await this.ensureLegacyCompatibleAssignment(endpoint.id);
     await this.syncSnapshot();
     return endpoint.id;
@@ -658,7 +722,9 @@ export class RelayPolicyService {
       throw new Error('Managed database is unavailable');
     }
     const routeId = await this.ensureGatewayRoute(managedDatabaseId, database.nodeId, appCertificateFingerprint);
-    const assignment = await this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint);
+    const assignment = await this.withAcknowledgedPolicy(() =>
+      this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
+    );
     const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
     let lastError: unknown;
     for (const candidate of activeCandidates) {
@@ -680,7 +746,9 @@ export class RelayPolicyService {
     relayInstanceId: string,
     assignmentGeneration: string
   ): Promise<void> {
-    const assignment = await this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint);
+    const assignment = await this.withAcknowledgedPolicy(() =>
+      this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
+    );
     const candidate = assignment.candidates.find(
       (item) => item.relayInstanceId === relayInstanceId && item.assignmentGeneration === assignmentGeneration
     );
@@ -693,8 +761,115 @@ export class RelayPolicyService {
     await this.relay.probeCandidate(candidate);
   }
 
+  async ensureBackupRoute(
+    runId: string,
+    sourceNodeId: string,
+    target: { kind: 'database' | 'storage'; id: string; nodeId: string },
+    ownerKind: 'database_backup_source' | 'database_backup_restore' | 'storage_backup_target' | 'storage_backup_staging'
+  ): Promise<string> {
+    const endpointId =
+      target.kind === 'database'
+        ? await this.ensureManagedDatabaseEndpoint(target.id, target.nodeId)
+        : await this.ensureManagedStorageEndpoint(target.id, target.nodeId);
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    await this.ensureRoute(ownerKind, runId, 'daemon', sourceNodeId, source.certificateFingerprint, endpointId);
+    await this.syncSnapshot();
+    await this.syncNodeGrants(target.nodeId);
+    await this.syncNodeGrants(sourceNodeId);
+    // The daemon resolves an assignment by owner kind and this per-run owner ID.
+    return runId;
+  }
+
+  async revokeBackupRoutes(runId: string): Promise<void> {
+    for (const kind of [
+      'database_backup_source',
+      'database_backup_restore',
+      'storage_backup_target',
+      'storage_backup_staging',
+    ] as const) {
+      await this.revokeOwner(kind, runId);
+    }
+  }
+
+  async ensureStorageBindingRoute(
+    bindingId: string,
+    clusterId: string,
+    sourceNodeId: string,
+    targetNodeId: string
+  ): Promise<string> {
+    const endpointId = await this.ensureManagedStorageEndpoint(clusterId, targetNodeId);
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    const routeId = await this.ensureRoute(
+      'managed_storage_binding',
+      bindingId,
+      'daemon',
+      sourceNodeId,
+      source.certificateFingerprint,
+      endpointId
+    );
+    await this.syncSnapshot();
+    await this.syncNodeGrants(targetNodeId);
+    await this.syncNodeGrants(sourceNodeId);
+    return routeId;
+  }
+
+  async ensureStorageGatewayRoute(
+    clusterId: string,
+    targetNodeId: string,
+    appCertificateFingerprint: string
+  ): Promise<string> {
+    const endpointId = await this.ensureManagedStorageEndpoint(clusterId, targetNodeId);
+    const state = await this.grantIssuer.requireState();
+    const routeId = await this.ensureRoute(
+      'managed_storage_gateway',
+      clusterId,
+      'gateway',
+      state.gatewayInstanceId,
+      appCertificateFingerprint,
+      endpointId
+    );
+    await this.syncSnapshot();
+    await this.syncNodeGrants(targetNodeId);
+    return routeId;
+  }
+
+  async openStorageGatewayTunnel(clusterId: string, appCertificateFingerprint: string) {
+    const [database] = await this.db
+      .select({ nodeId: managedStorageClusters.nodeId, status: managedStorageClusters.status })
+      .from(managedStorageClusters)
+      .where(eq(managedStorageClusters.id, clusterId))
+      .limit(1);
+    if (!database || (database.status !== 'ready' && database.status !== 'updating')) {
+      throw new Error('Managed storage is unavailable');
+    }
+    const routeId = await this.ensureStorageGatewayRoute(clusterId, database.nodeId, appCertificateFingerprint);
+    const assignment = await this.withAcknowledgedPolicy(() =>
+      this.grantIssuer.issueGatewayConnectAssignment(routeId, appCertificateFingerprint)
+    );
+    const activeCandidates = assignment.candidates.filter(({ assignmentState }) => assignmentState === 'active');
+    let lastError: unknown;
+    for (const candidate of activeCandidates) {
+      try {
+        return candidate.local
+          ? await this.relay.openTunnel(candidate.grant)
+          : await this.relay.openCandidateTunnel(candidate);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    if (!activeCandidates.length) return this.relay.openTunnel(assignment.grant);
+    throw lastError instanceof Error ? lastError : new Error('Relay pool is unavailable');
+  }
+
   async revokeOwner(
     ownerKind:
+      | 'database_backup_source'
+      | 'database_backup_restore'
+      | 'storage_backup_target'
+      | 'storage_backup_staging'
+      | 'managed_storage'
+      | 'managed_storage_binding'
+      | 'managed_storage_gateway'
       | 'managed_database_binding'
       | 'managed_database_gateway'
       | 'managed_database'
@@ -709,7 +884,10 @@ export class RelayPolicyService {
         .select({ nodeId: relayRoutes.sourceId, sourceKind: relayRoutes.sourceKind })
         .from(relayRoutes)
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId))),
-      ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link' || ownerKind === 'internal_registry'
+      ownerKind === 'managed_database' ||
+      ownerKind === 'managed_storage' ||
+      ownerKind === 'proxy_host_secure_link' ||
+      ownerKind === 'internal_registry'
         ? this.db
             .select({ nodeId: relayEndpoints.subjectId })
             .from(relayEndpoints)
@@ -722,7 +900,10 @@ export class RelayPolicyService {
         .where(and(eq(relayRoutes.ownerKind, ownerKind), eq(relayRoutes.ownerId, ownerId)))
         .returning({ id: relayRoutes.id });
       const endpoints =
-        ownerKind === 'managed_database' || ownerKind === 'proxy_host_secure_link' || ownerKind === 'internal_registry'
+        ownerKind === 'managed_database' ||
+        ownerKind === 'managed_storage' ||
+        ownerKind === 'proxy_host_secure_link' ||
+        ownerKind === 'internal_registry'
           ? await tx
               .delete(relayEndpoints)
               .where(and(eq(relayEndpoints.ownerKind, ownerKind), eq(relayEndpoints.ownerId, ownerId)))
@@ -844,14 +1025,27 @@ export class RelayPolicyService {
 
   async getNodeGrantBundle(nodeId: string): Promise<RelayGrantBundle> {
     const [bundle, config] = await Promise.all([
-      this.grantIssuer.getNodeGrantBundle(nodeId),
+      this.withAcknowledgedPolicy(() => this.grantIssuer.getNodeGrantBundle(nodeId)),
       this.settings.getConfig(),
     ]);
     return { ...bundle, dataLanes: config.relay.dataLanes, readChunkBytes: config.relay.readChunkBytes };
   }
 
   async issueGatewayConnectGrant(routeId: string, appCertificateFingerprint: string) {
-    return this.grantIssuer.issueGatewayConnectGrant(routeId, appCertificateFingerprint);
+    return this.withAcknowledgedPolicy(() =>
+      this.grantIssuer.issueGatewayConnectGrant(routeId, appCertificateFingerprint)
+    );
+  }
+
+  private async withAcknowledgedPolicy<T>(issue: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await issue();
+      } catch (error) {
+        if (!(error instanceof RelayPolicyNotAcknowledgedError) || attempt >= 2) throw error;
+        await this.syncSnapshot();
+      }
+    }
   }
 
   private async ensureRoute(

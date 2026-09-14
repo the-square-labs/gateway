@@ -270,3 +270,31 @@ describe('LicensePolicyService', () => {
     expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 4 });
   });
 });
+
+describe('storage entitlement compatibility', () => {
+  it.each([3, 4])('preserves all paid version %s contracts and derives storage access', async (version) => {
+    for (const plan of ['personal', 'business', 'enterprise'] as const) {
+      const entitlements = structuredClone(
+        (version === 3 ? LICENSE_PLAN_ENTITLEMENTS_V3 : LICENSE_PLAN_ENTITLEMENTS)[plan]
+      );
+      expect(entitlements.features).not.toContain('managed-storage');
+      const status = {
+        ...baseStatus(),
+        plan,
+        status: 'valid',
+        licensed: true,
+        entitlementsVersion: version,
+        entitlements,
+      };
+      const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+      await expect(policy.requireFeature('managed-storage')).resolves.toBeUndefined();
+      await expect(policy.requireFeature('managed-databases')).resolves.toBeUndefined();
+    }
+  });
+  it('does not give Community storage access', async () => {
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
+    await expect(policy.requireFeature('managed-storage')).rejects.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+  });
+});

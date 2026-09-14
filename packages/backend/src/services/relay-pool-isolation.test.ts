@@ -29,7 +29,7 @@ function poolFixture(rows: Array<any[] | (() => any[])> = []) {
     if (!rows.length) throw new Error('Unexpected select');
     const next = rows.shift()!;
     const q: any = Promise.resolve(typeof next === 'function' ? next() : next);
-    for (const method of ['from', 'where', 'limit', 'innerJoin', 'orderBy']) q[method] = () => q;
+    for (const method of ['from', 'where', 'limit', 'innerJoin', 'orderBy', 'leftJoin']) q[method] = () => q;
     return q;
   };
   const db: any = {
@@ -61,10 +61,86 @@ function poolFixture(rows: Array<any[] | (() => any[])> = []) {
     { log: vi.fn() } as any,
     { getConfig: async () => ({ relay: { assignmentSpread: { mode: 'fixed', count: 1 } } }) } as any
   );
+  vi.spyOn(pool as any, 'getRecentAttempts').mockResolvedValue([]);
   return { pool, policy, created };
 }
 
 describe('Relay Pool per-workload isolation', () => {
+  it.each([
+    'remote failure',
+    'unenrolled remote',
+    'daemon failure',
+  ])('waits for slow in-flight synchronization before publishing a %s', async (scenario) => {
+    const daemonFailure = scenario === 'daemon failure';
+    const { pool, policy } = poolFixture(
+      daemonFailure
+        ? [[{ id: 'endpoint', subjectId: 'slow' }], [{ sourceKind: 'daemon', sourceId: 'failed' }], [], []]
+        : []
+    );
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let slowFinished = false;
+    const sync = vi.fn(async (nodeId: string) => {
+      if (nodeId === 'failed') throw new Error('disconnected');
+      await blocked;
+      slowFinished = true;
+      return 1;
+    });
+    if (daemonFailure) policy.syncNodeGrants = sync;
+    else policy.syncRemoteInstancePolicy = sync;
+    vi.spyOn(pool as any, 'remoteNodesForGenerations').mockResolvedValue(
+      daemonFailure ? [] : [{ nodeId: 'slow' }, { nodeId: scenario === 'unenrolled remote' ? null : 'failed' }]
+    );
+    const fail = vi.spyOn(pool as any, 'failStaging').mockImplementation(async () => {
+      expect(slowFinished).toBe(true);
+    });
+    let returned = false;
+    const batch = (pool as any).prepareGenerations([{ id: 'new', endpointId: 'endpoint', generation: 2 }]).then(() => {
+      returned = true;
+    });
+    try {
+      await vi.waitFor(() => expect(sync).toHaveBeenCalled());
+      expect(returned).toBe(false);
+      expect(fail).not.toHaveBeenCalled();
+      expect((pool as any).preparingGenerations.has('new')).toBe(true);
+    } finally {
+      release();
+      await batch;
+    }
+    expect(fail).toHaveBeenCalledOnce();
+    expect((pool as any).preparingGenerations.size).toBe(0);
+  });
+
+  it('keeps automatic evacuation enabled during manual drain and counts retained assignments for removal', async () => {
+    const { pool } = poolFixture([
+      relays.map((relay) => ({
+        ...relay,
+        state: relay.id === 'R2' ? 'draining' : 'ready',
+        capabilities: { features: ['relay_pool_v1'] },
+      })),
+      [endpoint(A)],
+      [
+        { id: 'current', endpointId: A, state: 'active' },
+        { id: 'retained', endpointId: A, state: 'draining' },
+      ],
+      [
+        { assignmentGenerationId: 'current', relayInstanceId: 'R2' },
+        { assignmentGenerationId: 'retained', relayInstanceId: 'R2' },
+      ],
+      [],
+      [],
+    ]);
+    const snapshot = await pool.getSnapshot();
+    expect(snapshot.automaticRebalancePaused).toBe(false);
+    expect(snapshot.rebalanceEndpointIds).toEqual([A]);
+    expect(snapshot.instances.find(({ id }) => id === 'R2')).toMatchObject({
+      activeAssignments: 1,
+      retainedAssignments: 2,
+    });
+  });
+
   it('does not block a selected capable relay because an unrelated legacy member is ready', async () => {
     const { pool } = poolFixture([relays, [endpoint(A)], [], [], [], []]);
     const status = await pool.getSnapshot();
@@ -167,6 +243,7 @@ describe('Relay Pool per-workload isolation', () => {
       return 1;
     });
     const prepare = vi.spyOn(pool as any, 'prepareStagedGeneration').mockResolvedValue(undefined);
+    vi.spyOn(pool as any, 'tryActivate').mockResolvedValue(true);
     const fail = vi.spyOn(pool as any, 'failStaging').mockResolvedValue(undefined);
     await (pool as any).prepareGenerations(['A', 'B', 'C'].map((id) => ({ id, endpointId: id, generation: 2 })));
     expect(policy.syncRemoteInstancePolicy).toHaveBeenCalledTimes(2);
@@ -184,6 +261,7 @@ describe('Relay Pool per-workload isolation', () => {
       return 1;
     });
     const prepare = vi.spyOn(pool as any, 'prepareStagedGeneration').mockResolvedValue(undefined);
+    vi.spyOn(pool as any, 'tryActivate').mockResolvedValue(true);
     const fail = vi.spyOn(pool as any, 'failStaging').mockRejectedValue(new Error('DB failure'));
     await expect(
       (pool as any).prepareGenerations(['A', 'B'].map((id) => ({ id, endpointId: id, generation: 2 })))

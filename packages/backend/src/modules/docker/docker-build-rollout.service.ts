@@ -249,6 +249,7 @@ export class DockerBuildRolloutService {
       return `container:${source.nodeId}:${source.containerName}`;
     }
     const previousInspect = await this.docker.inspectContainer(source.nodeId!, containerId);
+    const previousShouldRun = previousInspect?.State?.Running === true || previousInspect?.State?.Restarting === true;
     const previousArtifact = await this.previousArtifactImage(source.id);
     const firstActivation = source.initialConfig && !source.deployedCommitSha && !previousArtifact;
     if (firstActivation && !actorId) {
@@ -281,19 +282,42 @@ export class DockerBuildRolloutService {
       await this.waitForContainerReady(source.nodeId!, source.containerName!, image, 60_000);
     } catch (error) {
       if (!previousImage) throw error;
-      const current = await this.findContainer(source.nodeId!, source.containerName!);
-      await this.docker.recreateWithConfig(
-        source.nodeId!,
-        String(current?.id ?? current?.Id ?? source.containerName),
-        { image: previousImage },
-        actorId,
-        { backgroundImagePull: false, skipImagePull: previousImage.startsWith('sha256:') }
-      );
-      await this.waitForContainerReady(source.nodeId!, source.containerName!, previousImage, 60_000);
+      let cause = error instanceof Error ? error.message.slice(0, 512) : 'Container activation failed';
+      try {
+        const current = await this.findContainer(source.nodeId!, source.containerName!);
+        const currentId = String(current?.id ?? current?.Id ?? source.containerName);
+        // Keep startup evidence in the persisted build error before deleting the
+        // failed runtime. Diagnostic collection has its own short time budget.
+        let diagnostics = '';
+        try {
+          diagnostics = await this.docker.getContainerFailureDiagnostics(source.nodeId!, currentId);
+        } catch {
+          /* Preserve the original failure and continue recovery. */
+        }
+        if (diagnostics) cause += `\n${diagnostics}`;
+        await this.docker.recreateWithConfig(source.nodeId!, currentId, { image: previousImage }, actorId, {
+          backgroundImagePull: false,
+          skipImagePull: previousImage.startsWith('sha256:'),
+          expectedState: previousShouldRun ? 'running' : 'created',
+        });
+        if (previousShouldRun) {
+          await this.waitForContainerReady(source.nodeId!, source.containerName!, previousImage, 60_000);
+        } else {
+          await this.waitForReplacement(source.nodeId!, source.containerName!, currentId, previousImage, 60_000);
+        }
+      } catch (rollbackError) {
+        const rollbackCause =
+          rollbackError instanceof Error ? rollbackError.message.slice(0, 512) : 'Unknown rollback failure';
+        throw new AppError(
+          409,
+          'BUILD_ROLLOUT_ROLLBACK_FAILED',
+          `Container activation failed: ${cause}\nRollback failed: ${rollbackCause}`
+        );
+      }
       throw new AppError(
         409,
         'BUILD_ROLLOUT_ROLLED_BACK',
-        `New container revision failed readiness and the previous image was restored: ${(error as Error).message}`
+        `New container revision failed readiness and the previous image was restored: ${cause}`
       );
     }
     return `container:${source.nodeId}:${source.containerName}`;
@@ -366,7 +390,9 @@ export class DockerBuildRolloutService {
             lastState =
               image !== expectedImage
                 ? `waiting for image ${expectedImage}`
-                : health || (running ? 'running' : String(inspect?.State?.Status ?? 'not running'));
+                : !running
+                  ? `${inspect?.State?.Status ?? 'not running'}, exit code ${inspect?.State?.ExitCode ?? 'unknown'}${health ? `, health ${health}` : ''}`
+                  : health || 'running';
             if (image === expectedImage && running && (!health || health === 'healthy')) return;
             if (image === expectedImage && (health === 'unhealthy' || inspect?.State?.Dead === true)) break;
           }

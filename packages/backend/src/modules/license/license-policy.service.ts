@@ -18,6 +18,7 @@ export const LICENSE_FEATURE_PLANS = {
   'blue-green': 'personal',
   'cross-node-migration': 'personal',
   'managed-databases': 'personal',
+  'managed-storage': 'personal',
   'status-pages': 'personal',
   'registry-discovery': 'personal',
   pages: 'personal',
@@ -34,6 +35,12 @@ export const LICENSE_FEATURE_PLANS = {
 export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type LicenseQuotaResource = 'managedNodes' | 'users' | 'customPermissionGroups';
 export type PaidLicensePlan = Exclude<LicensePlan, 'community'>;
+
+// Storage is included in the existing signed managed-databases entitlement.
+// Never add features retroactively to the canonical v3/v4 signed contracts.
+function entitlementFeature(feature: LicenseFeature): string {
+  return feature === 'managed-storage' ? 'managed-databases' : feature;
+}
 
 const LICENSE_RUNTIME_CONTINUITY_STATUSES = new Set<LicenseStatus>(['expired', 'unreachable_grace_expired']);
 
@@ -117,13 +124,16 @@ export class LicensePolicyService {
     return (
       this.isPolicyStateValid(status) &&
       !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
-      status.entitlements.features.includes(feature)
+      status.entitlements.features.includes(entitlementFeature(feature))
     );
   }
 
   async requireFeature(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) && status.entitlements.features.includes(feature)) {
+    if (
+      !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
+      status.entitlements.features.includes(entitlementFeature(feature))
+    ) {
       return;
     }
 
@@ -139,18 +149,18 @@ export class LicensePolicyService {
   async hasFeatureForExistingRuntime(feature: LicenseFeature): Promise<boolean> {
     const status = await this.licenses.getStatus();
     if (!this.isPolicyStateValid(status)) return false;
-    if (status.entitlements.features.includes(feature)) return true;
+    if (status.entitlements.features.includes(entitlementFeature(feature))) return true;
     if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) return false;
     const retained = await this.licenses.getRuntimeContinuityEntitlements();
-    return retained?.features.includes(feature) ?? false;
+    return retained?.features.includes(entitlementFeature(feature)) ?? false;
   }
 
   async requireFeatureForExistingRuntime(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (status.entitlements.features.includes(feature)) return;
+    if (status.entitlements.features.includes(entitlementFeature(feature))) return;
     if (LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) {
       const retained = await this.licenses.getRuntimeContinuityEntitlements();
-      if (retained?.features.includes(feature)) return;
+      if (retained?.features.includes(entitlementFeature(feature))) return;
     }
 
     throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {

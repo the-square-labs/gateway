@@ -7,6 +7,22 @@
  */
 
 export const ALL_SCOPES = [
+  'storage:view',
+  'storage:create',
+  'storage:edit',
+  'storage:delete',
+  'storage:credentials:reveal',
+  'storage:iam',
+  'storage:objects:read',
+  'storage:objects:write',
+  'storage:objects:admin',
+  'storage:folders:manage',
+  'databases:backups:view',
+  'databases:backups:manage',
+  'databases:backups:run',
+  'databases:backups:restore',
+  'nodes:backups:execute',
+
   // ── PKI: Certificate Authorities ─────────────────────────────────
   'pki:ca:view:root',
   'pki:ca:view:intermediate',

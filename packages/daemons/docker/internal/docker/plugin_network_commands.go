@@ -39,6 +39,21 @@ func (p *DockerPlugin) handleNetworkCommand(cmd *pb.DockerNetworkCommand, result
 		data, _ := json.Marshal(map[string]string{"id": id})
 		result.Detail = string(data)
 
+	case "create_storage_binding":
+		if cmd.NetworkId == "" {
+			result.Success = false
+			result.Error = "network_id (name) is required for managed storage binding network"
+			return
+		}
+		id, err := p.createStorageBindingNetwork(ctx, cmd.NetworkId, cmd.Driver, cmd.Subnet, cmd.GatewayAddr)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+		data, _ := json.Marshal(map[string]string{"id": id})
+		result.Detail = string(data)
+
 	case "create_reserved":
 		if cmd.NetworkId == "" {
 			result.Success = false

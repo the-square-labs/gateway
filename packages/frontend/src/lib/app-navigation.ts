@@ -7,6 +7,7 @@ import {
   FileText,
   Globe,
   Globe2,
+  HardDrive,
   LayoutDashboard,
   Lock,
   PanelsTopLeft,
@@ -34,6 +35,7 @@ export type AppNavigationItemId =
   | "docker"
   | "pages"
   | "databases"
+  | "storage"
   | "logging"
   | "nodes"
   | "templates"
@@ -171,6 +173,13 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         href: "/databases",
         icon: Database,
         keywords: ["postgres", "postgresql", "clickhouse", "redis"],
+      },
+      {
+        id: "storage",
+        name: "Storage",
+        href: "/storage",
+        icon: HardDrive,
+        keywords: ["s3", "minio", "r2", "ftp", "sftp", "backups"],
       },
       {
         id: "logging",
@@ -350,6 +359,8 @@ export function canAccessNavigationItem(
         context.pagesEnabled === true &&
         (hasScopeBase(scopes, "pages:view") || scopeMatches(scopes, "pages:folders:manage"))
       );
+    case "storage":
+      return hasScopeBase(scopes, "storage:view") || scopeMatches(scopes, "storage:folders:manage");
     case "databases":
       return (
         hasScopeBase(scopes, "databases:view") || scopeMatches(scopes, "databases:folders:manage")

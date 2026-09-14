@@ -24,6 +24,7 @@ import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
+import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { FinalizeSetupService, isFinalizeSetupComplete } from '@/modules/onboarding/finalize-setup.service.js';
 import { CAService } from '@/modules/pki/ca.service.js';
 import { CertService } from '@/modules/pki/cert.service.js';
@@ -178,6 +179,7 @@ const DashboardBootstrapRequestSchema = z.object({
           nodeIds: z.array(z.string().uuid()).max(100).optional().default([]),
           proxyHostIds: z.array(z.string().uuid()).max(100).optional().default([]),
           databaseIds: z.array(z.string().uuid()).max(100).optional().default([]),
+          storageIds: z.array(z.string().uuid()).max(100).optional().default([]),
           dockerResources: z
             .array(
               z.object({
@@ -198,6 +200,7 @@ const DashboardBootstrapRequestSchema = z.object({
           nodeIds: z.array(z.string().uuid()).max(100).optional().default([]),
           proxyHostIds: z.array(z.string().uuid()).max(100).optional().default([]),
           databaseIds: z.array(z.string().uuid()).max(100).optional().default([]),
+          storageIds: z.array(z.string().uuid()).max(100).optional().default([]),
           dockerResources: z
             .array(
               z.object({
@@ -520,6 +523,12 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
             .list({ page: 1, limit: Math.min(100, allowedIds.length) } as any, { allowedIds });
         })
       : Promise.resolve({ data: [] as any[] });
+  const sidebarStorageIds = [...new Set(request.pins.sidebar.storageIds ?? [])].filter(
+    (id) => hasScope(scopes, 'storage:view') || hasScope(scopes, `storage:view:${id}`)
+  );
+  const pinnedStoragePromise = sidebarStorageIds.length
+    ? container.resolve(ObjectStorageService).list({ page: 1, limit: 100 }, { allowedIds: sidebarStorageIds })
+    : Promise.resolve({ data: [] });
   const pinnedDockerPromise: Promise<DashboardDockerResource[]> = Promise.all(
     [...new Set(requestedDockerResources.map((resource) => resource.nodeId))].map(
       async (nodeId): Promise<DashboardDockerResource[]> => {
@@ -630,6 +639,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     activity,
     pinnedProxyResponse,
     pinnedDatabaseResponse,
+    pinnedStorageResponse,
     pinnedDockerResources,
     tlsRepairFailures,
     daemonUpdates,
@@ -650,6 +660,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     activityPromise,
     pinnedProxyPromise,
     pinnedDatabasePromise,
+    pinnedStoragePromise,
     pinnedDockerPromise,
     tlsRepairFailuresPromise,
     daemonUpdatesPromise,
@@ -829,6 +840,11 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
           nodes: resolveByIds(sidebarPinNodeIds, visibleNodes),
           proxies: resolveByIds(sidebarPinProxyIds, visibleProxies),
           databases: resolveByIds(sidebarPinDatabaseIds, visibleDatabases),
+          storages: sidebarStorageIds.flatMap((id) =>
+            pinnedStorageResponse.data
+              .filter((row) => row.id === id)
+              .map(({ id, slug, name, provider, healthStatus }) => ({ id, slug, name, provider, healthStatus }))
+          ),
           dockerResources: resolveDockerResources(request.pins.sidebar.dockerResources),
         },
       },

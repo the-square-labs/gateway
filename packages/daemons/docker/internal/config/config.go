@@ -13,7 +13,7 @@ import (
 type DockerConfig struct {
 	Socket    string   `yaml:"socket"`
 	Allowlist []string `yaml:"allowlist"`
-	// Mode is empty for a general Docker node. "databases" and "builder"
+	// Mode is empty for a general Docker node. "databases", "storage" and "builder"
 	// turn the same binary into mutually exclusive, least-privilege profiles.
 	Mode     string         `yaml:"mode"`
 	Database DatabaseConfig `yaml:"database"`
@@ -75,11 +75,11 @@ func Load(path string) (*Config, error) {
 	if cfg.Gateway.Address == "" {
 		return nil, fmt.Errorf("gateway.address is required")
 	}
-	if cfg.Docker.Mode != "" && cfg.Docker.Mode != "databases" && cfg.Docker.Mode != "builder" {
-		return nil, fmt.Errorf("docker.mode must be empty, databases, or builder")
+	if cfg.Docker.Mode != "" && cfg.Docker.Mode != "databases" && cfg.Docker.Mode != "storage" && cfg.Docker.Mode != "builder" {
+		return nil, fmt.Errorf("docker.mode must be empty, databases, storage, or builder")
 	}
-	if cfg.Docker.Mode == "databases" && cfg.Docker.Database.StorageRoot == "" {
-		return nil, fmt.Errorf("docker.database.storage_root is required in databases mode")
+	if (cfg.Docker.Mode == "databases" || cfg.Docker.Mode == "storage") && cfg.Docker.Database.StorageRoot == "" {
+		return nil, fmt.Errorf("docker.database.storage_root is required in databases or storage mode")
 	}
 	if cfg.Docker.Compose.CommandTimeoutSeconds <= 0 {
 		return nil, fmt.Errorf("docker.compose.command_timeout_seconds must be positive")

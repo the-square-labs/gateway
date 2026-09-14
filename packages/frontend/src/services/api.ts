@@ -22,6 +22,7 @@ import type { AIScenario, PageContext } from "@/types/ai";
 import type { FileEntry } from "@/types/docker";
 import { withAIStatusApi } from "./api-ai-status";
 import { withAuthApi } from "./api-auth";
+import { withBackupApi } from "./api-backups";
 import { API_BASE, ApiClientBase } from "./api-base";
 import { withDatabaseApi } from "./api-databases";
 import { withDockerApi } from "./api-docker";
@@ -31,6 +32,7 @@ import { withInferenceCoreApi } from "./api-inference-core";
 import { withIntegrationsApi } from "./api-integrations";
 import { withLoggingApi } from "./api-logging";
 import { withNotificationApi } from "./api-notifications";
+import { withObjectStorageApi } from "./api-object-storage";
 import { withPagesDomainsApi } from "./api-pages-domains";
 import { withPkiApi } from "./api-pki";
 import { withProxyApi } from "./api-proxy";
@@ -47,7 +49,11 @@ class ApiClient extends withPagesDomainsApi(
               withAuthApi(
                 withSystemApi(
                   withDockerApi(
-                    withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                    withBackupApi(
+                      withObjectStorageApi(
+                        withDatabaseApi(withPkiApi(withProxyApi(withHostingApi(ApiClientBase))))
+                      )
+                    )
                   )
                 )
               )

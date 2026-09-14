@@ -92,7 +92,7 @@ function directResourceIdsForScopes(scopes: string[], baseScope: string): string
 }
 
 const SENSITIVE_TOOL_ARG_RE =
-  /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
+  /(?:password|passwd|passphrase|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
 
 function redactToolArgs(value: unknown, depth = 0): unknown {
   if (value === null || typeof value !== 'object') return value;

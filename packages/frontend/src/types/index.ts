@@ -47,6 +47,7 @@ export {
   isNodeUpdating,
 } from "./nodes";
 export type * from "./notifications";
+export * from "./object-storage";
 export type * from "./onboarding";
 export type * from "./pages";
 export type * from "./pki";

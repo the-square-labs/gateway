@@ -341,7 +341,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                     ? "Deployed"
                     : "Approved"}
               </Badge>
-              <span className="mt-1 block truncate font-mono text-xs text-muted-foreground">
+              <span className="mt-1 block truncate text-xs text-muted-foreground">
                 {blocked
                   ? build.artifact.policyReason || "Artifact rejected"
                   : build.status === "succeeded"

@@ -24,3 +24,8 @@ export const dockerComposeRootRoute = () => "/docker/compose";
 export const dockerComposeProjectRoute = (projectId: string, tab?: string) =>
   withTab(`${dockerComposeRootRoute()}/${segment(projectId)}`, tab);
 export const dockerComposeNewRoute = () => `${dockerComposeRootRoute()}/new`;
+
+export function storageRoute(resource: string | { slug?: string; id: string }, tab?: string) {
+  const slug = typeof resource === "string" ? resource : resource.slug || resource.id;
+  return `/storage/${encodeURIComponent(slug)}${tab ? `/${encodeURIComponent(tab)}` : ""}`;
+}

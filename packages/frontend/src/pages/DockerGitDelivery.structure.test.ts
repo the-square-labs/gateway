@@ -239,7 +239,11 @@ describe("Docker Git delivery UI structure", () => {
     expect(fields).toContain('from "@/components/common/AnimatedHeight"');
     expect(deploySurface).toContain('from "@/components/common/Combobox"');
     expect(fields).toContain('from "@/components/ui/tabs"');
-    expect(repository).toContain('from "@/components/ui/switch"');
+    expect(repository).toContain('from "@/components/common/ToggleField"');
+    expect(repository.match(/<ToggleField\b/g)).toHaveLength(2);
+    expect(source("../components/common/ToggleField.tsx")).toContain(
+      'from "@/components/ui/switch"'
+    );
     expect(fields).toContain('<SelectTrigger aria-label="Resource type">');
     expect(fields).toContain("<AnimatedHeight>");
     expect(fields).toContain('mode="popLayout"');

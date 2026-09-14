@@ -16,6 +16,15 @@ export const AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
 ]);
 
 export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
+  manage_database_backups: [
+    'databases:backups:view',
+    'databases:backups:manage',
+    'databases:backups:run',
+    'databases:backups:restore',
+  ],
+  manage_storage_connection: ['storage:create', 'storage:edit', 'storage:delete'],
+  manage_storage_objects: ['storage:objects:read', 'storage:objects:write', 'storage:objects:admin'],
+  manage_managed_storage: ['storage:view', 'storage:create', 'storage:edit', 'storage:delete'],
   read_gateway_documentation: MCP_TOKEN_SCOPES,
   manage_docker_compose: [
     'docker:compose:view',

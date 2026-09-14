@@ -198,7 +198,92 @@ describe('DockerBuildRolloutService', () => {
     expect(docker.recreateWithConfig).toHaveBeenLastCalledWith('node-1', 'runtime-id', { image: previousImage }, null, {
       backgroundImagePull: false,
       skipImagePull: false,
+      expectedState: 'running',
     });
+  });
+
+  it.each([true, false])('restores the pre-rollout run intent (%s) and keeps startup evidence', async (wasRunning) => {
+    let revision = 'old';
+    let recoveredRunning = false;
+    const docker = {
+      getContainerTransition: vi.fn(),
+      listAllContainers: vi.fn(async () => [{ id: revision, name: 'api' }]),
+      inspectContainer: vi.fn(async () => ({
+        Image: 'sha256:old',
+        Config: { Image: revision === 'new' ? 'new-image' : 'sha256:old' },
+        State:
+          revision === 'old'
+            ? { Running: wasRunning }
+            : revision === 'new'
+              ? { Running: false, Restarting: true, Status: 'restarting', ExitCode: 1, Health: { Status: 'unhealthy' } }
+              : { Running: recoveredRunning, Status: recoveredRunning ? 'running' : 'created' },
+      })),
+      getContainerFailureDiagnostics: vi.fn(async () => {
+        expect(revision).toBe('new');
+        return 'Runtime: restarting; exit code 1\nERR_UNSUPPORTED_TYPESCRIPT_SYNTAX';
+      }),
+      recreateWithConfig: vi.fn(async (_node, _id, _config, _actor, options) => {
+        if (revision === 'old') revision = 'new';
+        else {
+          revision = 'restored';
+          recoveredRunning = options.expectedState === 'running';
+        }
+      }),
+    };
+    const service = new DockerBuildRolloutService(
+      {} as never,
+      docker as never,
+      {} as never,
+      { ensureBinding: vi.fn() } as never
+    );
+    vi.spyOn(service as any, 'previousArtifactImage').mockResolvedValue(null);
+    await expect(
+      (service as any).deployTarget(
+        { id: 'source', targetKind: 'container', nodeId: 'node', containerName: 'api' },
+        'new-image',
+        null
+      )
+    ).rejects.toMatchObject({
+      code: 'BUILD_ROLLOUT_ROLLED_BACK',
+      message: expect.stringContaining('ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX'),
+    });
+    expect(recoveredRunning).toBe(wasRunning);
+    expect(docker.getContainerFailureDiagnostics).toHaveBeenCalledWith('node', 'new');
+    expect(docker.recreateWithConfig).toHaveBeenLastCalledWith('node', 'new', { image: 'sha256:old' }, null, {
+      backgroundImagePull: false,
+      skipImagePull: true,
+      expectedState: wasRunning ? 'running' : 'created',
+    });
+  });
+
+  it('reports both the original startup failure and a failed rollback', async () => {
+    const docker = {
+      listAllContainers: vi.fn().mockResolvedValue([{ id: 'runtime', name: 'api' }]),
+      inspectContainer: vi.fn().mockResolvedValue({ Image: 'sha256:old', State: { Running: true } }),
+      getContainerFailureDiagnostics: vi.fn().mockResolvedValue('exit code 1: module missing'),
+      recreateWithConfig: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('new revision failed'))
+        .mockRejectedValueOnce(new Error('old image unavailable')),
+    };
+    const service = new DockerBuildRolloutService(
+      {} as never,
+      docker as never,
+      {} as never,
+      { ensureBinding: vi.fn() } as never
+    );
+    vi.spyOn(service as any, 'previousArtifactImage').mockResolvedValue(null);
+    await expect(
+      (service as any).deployTarget(
+        { targetKind: 'container', nodeId: 'node', containerName: 'api' },
+        'new-image',
+        null
+      )
+    ).rejects.toMatchObject({
+      code: 'BUILD_ROLLOUT_ROLLBACK_FAILED',
+      message: expect.stringMatching(/new revision failed[\s\S]*module missing[\s\S]*old image unavailable/),
+    });
+    expect(docker.recreateWithConfig).toHaveBeenCalledTimes(2);
   });
 
   it.each([

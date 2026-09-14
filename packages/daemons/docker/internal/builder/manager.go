@@ -380,7 +380,11 @@ func (m *Manager) run(ctx context.Context, command *pb.DockerBuildCommand) {
 	} else {
 		m.log(command.GetBuildId(), []byte("artifact size measurement failed: "+measureErr.Error()))
 	}
-	m.status(command, "scanning")
+	if command.GetSkipVulnerabilityScan() && command.GetOutputKind() != "pages_archive" {
+		m.status(command, "pushing")
+	} else {
+		m.status(command, "scanning")
+	}
 	if command.GetOutputKind() == "pages_archive" {
 		m.emitTerminal(&pb.DockerBuildEvent{
 			BuildId: command.GetBuildId(), Status: "succeeded", ArtifactRepository: command.GetOutputRepository(),

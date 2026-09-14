@@ -1,0 +1,1 @@
+ALTER TABLE "backup_runs" ADD COLUMN "encrypted_runtime_payload" text;

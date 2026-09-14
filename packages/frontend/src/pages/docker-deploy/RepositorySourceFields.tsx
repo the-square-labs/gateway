@@ -1,6 +1,6 @@
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { ToggleField } from "@/components/common/ToggleField";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import type { DockerBuildSourceRepository } from "@/types";
 
 interface RepositorySourceFieldsProps {
@@ -138,29 +138,21 @@ export function RepositorySourceFields({
           )}
         </div>
       )}
-      <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-        <div>
-          <p className="text-sm font-medium">Automatic builds</p>
-          <p className="text-xs text-muted-foreground">
-            Build new commits detected by webhook or polling.
-          </p>
-        </div>
-        <Switch checked={autoBuild} onChange={onAutoBuildChange} ariaLabel="Automatic builds" />
-      </div>
+      <ToggleField
+        title="Automatic builds"
+        description="Build new commits detected by webhook or polling."
+        checked={autoBuild}
+        onChange={onAutoBuildChange}
+        ariaLabel="Automatic builds"
+      />
       {!pages && (
-        <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-          <div>
-            <p className="text-sm font-medium">Automatic deployment</p>
-            <p className="text-xs text-muted-foreground">
-              Deploy accepted artifacts after successful builds.
-            </p>
-          </div>
-          <Switch
-            checked={autoDeploy}
-            onChange={onAutoDeployChange}
-            ariaLabel="Automatic deployment"
-          />
-        </div>
+        <ToggleField
+          title="Automatic deployment"
+          description="Deploy accepted artifacts after successful builds."
+          checked={autoDeploy}
+          onChange={onAutoDeployChange}
+          ariaLabel="Automatic deployment"
+        />
       )}
     </div>
   );

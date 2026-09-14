@@ -1,12 +1,42 @@
 package builder
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"google.golang.org/protobuf/proto"
 )
+
+func TestDisabledScanDoesNotInvokeImageScanners(t *testing.T) {
+	calls := 0
+	manager := &Manager{executable: func(name string) (string, error) {
+		calls++
+		return "", errors.New("scanner invoked")
+	}}
+	encoded, err := proto.Marshal(&pb.DockerBuildCommand{SkipVulnerabilityScan: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := &pb.DockerBuildCommand{}
+	if err := proto.Unmarshal(encoded, command); err != nil {
+		t.Fatal(err)
+	}
+	summary, err := manager.scan(context.Background(), command, t.TempDir(), "", "")
+	if err != nil || calls != 0 || summary != `{"scanner":"disabled","skipped":true}` {
+		t.Fatalf("disabled scan executed a tool or lost its marker: calls=%d summary=%s err=%v", calls, summary, err)
+	}
+	// Missing/false flag is the legacy/default and report-only behavior.
+	_, err = manager.scan(context.Background(), &pb.DockerBuildCommand{}, t.TempDir(), "registry/app:tag", "sha256:abc")
+	if err == nil || calls != 1 {
+		t.Fatalf("default scan did not invoke Syft: calls=%d err=%v", calls, err)
+	}
+}
 
 func TestGrypeOSCountsCoverFullReportAndPreserveApplicationFindings(t *testing.T) {
 	matches := make([]map[string]any, 0)

@@ -83,6 +83,13 @@ export interface RelayGrantBundle {
   readChunkBytes?: number;
 }
 
+export class RelayPolicyNotAcknowledgedError extends Error {
+  constructor(readonly revision: number) {
+    super(`Relay policy revision ${revision} has not been durably acknowledged`);
+    this.name = 'RelayPolicyNotAcknowledgedError';
+  }
+}
+
 export class RelayGrantIssuerService {
   private acknowledgedRevision = 0;
   private lastBundleGeneratedAtMs = 0;
@@ -94,7 +101,7 @@ export class RelayGrantIssuerService {
   ) {}
 
   acknowledgeRevision(revision: number): void {
-    this.acknowledgedRevision = revision;
+    this.acknowledgedRevision = Math.max(this.acknowledgedRevision, revision);
   }
 
   async requireState() {
@@ -436,7 +443,7 @@ export class RelayGrantIssuerService {
     if (!active?.encryptedPrivateKey || !active.encryptedDek)
       throw new Error('Active relay signing key is unavailable');
     if (state.revision > this.acknowledgedRevision) {
-      throw new Error(`Relay policy revision ${state.revision} has not been durably acknowledged`);
+      throw new RelayPolicyNotAcknowledgedError(state.revision);
     }
     const now = Math.floor(Date.now() / 1000);
     const claims: RelayGrantClaims = {

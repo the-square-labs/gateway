@@ -424,7 +424,16 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     {
       id: "assignments",
       header: "Assignments",
-      render: (row) => `${row.activeAssignments} active`,
+      render: (row) => (
+        <div>
+          <div>{row.activeAssignments} active</div>
+          {(row.retainedAssignments ?? row.activeAssignments) > row.activeAssignments && (
+            <div className="text-xs text-muted-foreground">
+              {(row.retainedAssignments ?? 0) - row.activeAssignments} staging / draining
+            </div>
+          )}
+        </div>
+      ),
     },
     {
       id: "load",
@@ -456,7 +465,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <div className="flex justify-end gap-2">
             {row.state === "draining" && metric(row.health?.activeTunnels) > 0 && (
               <Button
-                size="sm"
                 variant="destructive"
                 disabled={!canEdit || poolAction}
                 onClick={() => void forceDisconnect(row)}
@@ -473,9 +481,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             </Button>
             {["draining", "offline", "error"].includes(row.state) &&
               metric(row.health?.activeTunnels) === 0 &&
-              row.activeAssignments === 0 && (
+              (row.retainedAssignments ?? row.activeAssignments) === 0 && (
                 <Button
-                  size="sm"
                   variant="destructive"
                   disabled={!canEdit || poolAction}
                   onClick={() => void removeRelay(row)}
@@ -525,6 +532,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         icon={<Server className="h-4 w-4" />}
         title="Relay instances"
         description="One logical Relay Pool; active assignments use separate physical hosts"
+        wrapHeader
         actions={
           <>
             <Button
@@ -569,7 +577,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           )}
         {status?.automaticRebalancePaused && (
           <p className="border-t border-border p-3 text-sm text-muted-foreground">
-            Automatic rebalance is paused during Relay Pool updates or manual drain.
+            Automatic rebalance is paused during the Relay Pool update.
           </p>
         )}
         {status?.blockers?.map((blocker) => (
@@ -579,17 +587,6 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             className="border-t border-border p-3 text-sm text-destructive"
           >
             {blocker}
-          </p>
-        ))}
-        {status?.failures?.map((failure) => (
-          <p
-            key={failure.id}
-            role="alert"
-            className="border-t border-border p-3 text-sm text-destructive"
-          >
-            Rebalance generation {failure.generation} failed:{" "}
-            {failure.activationError ?? "Route verification failed"}. Previous assignments remain
-            active for this workload.
           </p>
         ))}
         {status?.staging && status.staging.length > 0 && (
@@ -604,6 +601,65 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {status.update.error ? ` · ${status.update.error}` : ""}
           </p>
         )}
+      </PanelShell>
+
+      <PanelShell
+        icon={<RefreshCw className="h-4 w-4" />}
+        title="Rebalance attempts"
+        description="Latest 20 attempts, newest first. Failed attempts leave the previous assignments in place."
+      >
+        <SimpleTable
+          rows={status?.attempts ?? []}
+          getRowKey={(row) => row.id}
+          emptyMessage="No rebalance attempts recorded"
+          columns={[
+            {
+              id: "time",
+              header: "Started",
+              render: (row) => (
+                <time dateTime={row.createdAt}>{new Date(row.createdAt).toLocaleString()}</time>
+              ),
+            },
+            {
+              id: "workload",
+              header: "Workload",
+              render: (row) => <span title={row.endpointId}>{row.workload}</span>,
+            },
+            { id: "generation", header: "Generation", render: (row) => row.generation },
+            {
+              id: "state",
+              header: "State",
+              render: (row) => (
+                <Badge
+                  variant={
+                    row.state === "failed"
+                      ? "destructive"
+                      : row.state === "active"
+                        ? "success"
+                        : row.state === "staging"
+                          ? "warning"
+                          : "secondary"
+                  }
+                >
+                  {row.state}
+                </Badge>
+              ),
+            },
+            {
+              id: "reason",
+              header: "Details",
+              render: (row) =>
+                row.activationError ??
+                (row.state === "staging"
+                  ? "Verifying routes"
+                  : row.state === "draining"
+                    ? "Existing connections draining"
+                    : row.state === "retired"
+                      ? "Replaced by a newer assignment"
+                      : "Routes verified"),
+            },
+          ]}
+        />
       </PanelShell>
 
       <div>

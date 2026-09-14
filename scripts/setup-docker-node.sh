@@ -122,6 +122,7 @@ complete_incomplete() {
 show_logo() {
     local subtitle="Docker daemon installer"
     [[ "$DOCKER_MODE" == "databases" ]] && subtitle="Database daemon installer"
+    [[ "$DOCKER_MODE" == "storage" ]] && subtitle="Storage daemon installer"
     [[ "$DOCKER_MODE" == "builder" ]] && subtitle="Builder daemon installer"
     echo -e "${BRAND_MINT}╭───────────────────────────────────╮${NC}"
     printf "${BRAND_MINT}│${NC} ${BOLD}${BRAND_MINT}%-33s${NC} ${BRAND_MINT}│${NC}\n" "Gateway Node Setup"
@@ -200,7 +201,7 @@ cleanup_database_preflight() {
 trap cleanup_database_preflight EXIT
 
 select_database_storage() {
-    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
     if [[ "$NON_INTERACTIVE" -eq 1 ]]; then
         [[ -n "$DATABASE_STORAGE_ROOT" ]] || DATABASE_STORAGE_ROOT="/var/lib/docker-daemon/databases"
         return
@@ -255,7 +256,7 @@ select_database_storage() {
 }
 
 preflight_database_storage() {
-    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
     [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
     if [[ "$DRY_RUN" -eq 1 ]]; then
         log "Dry run: skipping disposable storage preflight for ${DATABASE_STORAGE_ROOT}"
@@ -317,7 +318,7 @@ preflight_database_storage() {
 }
 
 preflight_database_docker() {
-    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
     [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
     docker_run info >>"$LOG_FILE" 2>&1 || die "Docker Engine is not reachable; refusing database-node enrollment."
     [[ "$DOCKER_SOCKET" == unix://* ]] || die "Database nodes require a local Docker Engine socket; refusing remote Docker context '${DOCKER_SOCKET}'."
@@ -1185,7 +1186,7 @@ Options:
   --gateway-cert-sha256 <fp>
                            Gateway gRPC TLS leaf fingerprint from the generated setup command
   --version <ver>          Daemon version to install (default: latest)
-  --mode <profile>         Node profile: docker, builder, or databases (default: docker)
+  --mode <profile>         Node profile: docker, builder, databases, or storage (default: docker)
   --user <user>            Run daemon as this user (default: root)
   --no-logo                Suppress the logo banner
   --dry-run                Validate inputs and show the plan without changing the host
@@ -1238,8 +1239,8 @@ done
 
 [[ -n "$DOCKER_MODE" ]] || DOCKER_MODE="docker"
 case "$DOCKER_MODE" in
-    docker|builder|databases) ;;
-    *) die "Invalid --mode '${DOCKER_MODE}'. Expected docker, builder, or databases." ;;
+    docker|builder|databases|storage) ;;
+    *) die "Invalid --mode '${DOCKER_MODE}'. Expected docker, builder, databases, or storage." ;;
 esac
 case "$BUILDER_EGRESS_PROFILE" in
     internet|offline) ;;
@@ -1342,7 +1343,7 @@ if [[ "$NON_INTERACTIVE" -eq 0 ]]; then
     select_database_storage
     preflight_database_storage
 
-    [[ "$DOCKER_MODE" == "databases" ]] || guide_blank
+    [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || guide_blank
 
     # User selection
     if [[ -z "$RUN_USER" ]]; then
@@ -1448,7 +1449,7 @@ dry_run_preview() {
     fi
     log "Writing config and enrolling with Gateway..."
     ok "Config written to /etc/docker-daemon/config.yaml (dry run)"
-    if [[ "$DOCKER_MODE" == "databases" ]]; then
+    if [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]]; then
         ok "Database docker profile written (root daemon, storage: ${DATABASE_STORAGE_ROOT}; dry run)"
     elif [[ "$DOCKER_MODE" == "builder" ]]; then
         ok "Builder docker profile written (no Docker socket; dry run)"
@@ -1768,7 +1769,7 @@ setup_secure_runtime() {
 }
 
 write_database_profile_config() {
-    [[ "$DOCKER_MODE" == "databases" ]] || return 0
+    [[ "$DOCKER_MODE" == "databases" || "$DOCKER_MODE" == "storage" ]] || return 0
     [[ "$RUN_USER" == "root" ]] || die "Database docker-daemon profile must run as root."
     [[ -n "$DATABASE_STORAGE_ROOT" && "$DATABASE_STORAGE_ROOT" == /* && "$DATABASE_STORAGE_ROOT" != "/" ]] || die "Database storage root is invalid."
     [[ "$DATABASE_STORAGE_ROOT" =~ ^[A-Za-z0-9._/@+-]+$ ]] || die "Database storage root contains unsupported characters."
@@ -1782,7 +1783,7 @@ write_database_profile_config() {
     grep -q '^  mode:' "$config_path" && has_mode=1
     grep -q '^    storage_root:' "$config_path" && has_storage_root=1
     if [[ "$has_mode" -eq 1 || "$has_storage_root" -eq 1 ]]; then
-        grep -q '^  mode: "databases"$' "$config_path" || die "Refusing to overwrite an existing docker profile."
+        grep -q "^  mode: \"${DOCKER_MODE}\"$" "$config_path" || die "Refusing to overwrite an existing docker profile."
         grep -q "^    storage_root: \"${DATABASE_STORAGE_ROOT}\"$" "$config_path" || die "Refusing to overwrite an existing database storage root."
         chmod 600 "$config_path"
         ok "Database docker profile already configured (root daemon, storage: ${DATABASE_STORAGE_ROOT})"
@@ -1793,10 +1794,10 @@ write_database_profile_config() {
         die "Database config section exists without a storage_root."
     else
         local tmp_config="${config_path}.tmp.$$"
-        awk -v root="$DATABASE_STORAGE_ROOT" '
+        awk -v root="$DATABASE_STORAGE_ROOT" -v mode="$DOCKER_MODE" '
             $0 == "docker:" {
                 print
-                print "  mode: \"databases\""
+                print "  mode: \"" mode "\""
                 print "  database:"
                 print "    storage_root: \"" root "\""
                 inserted = 1

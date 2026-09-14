@@ -16,11 +16,13 @@ import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { ToggleField } from "@/components/common/ToggleField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -44,6 +46,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
+import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -517,85 +520,16 @@ export function ManagedDatabaseCreateForm({
           {...MANAGED_DATABASE_FORM_ANIMATION}
           className="space-y-4"
         >
-          <div className="grid gap-4">
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="managed-db-storage">
-                Storage (GB)
-              </label>
-              <Input
-                id="managed-db-storage"
-                type="number"
-                min="0.1"
-                step="0.1"
-                max={capacity.storageSizeGb}
-                value={resourceInputs.storageSizeGb}
-                onChange={(event) => setResourceInput("storageSizeGb", event.target.value)}
-              />
-              {capacity.storageSizeGb !== undefined && (
-                <p className="text-xs text-muted-foreground">
-                  Maximum available now: {capacity.storageSizeGb} GB
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="managed-db-cpu">
-                CPU cores
-              </label>
-              <Input
-                id="managed-db-cpu"
-                type="number"
-                min="0.25"
-                step="0.25"
-                max={capacity.cpuCores}
-                value={resourceInputs.cpuCores}
-                onChange={(event) => setResourceInput("cpuCores", event.target.value)}
-              />
-              {capacity.cpuCores !== undefined && (
-                <p className="text-xs text-muted-foreground">
-                  Maximum available: {capacity.cpuCores} cores
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="managed-db-memory">
-                Memory (MB)
-              </label>
-              <Input
-                id="managed-db-memory"
-                type="number"
-                min={minimumManagedDatabaseMemoryMb(draft.type)}
-                step="128"
-                max={capacity.memoryMb}
-                value={resourceInputs.memoryMb}
-                onChange={(event) => setResourceInput("memoryMb", event.target.value)}
-              />
-              {capacity.memoryMb !== undefined && (
-                <p className="text-xs text-muted-foreground">
-                  {draft.type === "clickhouse" ? "ClickHouse requires at least 512 MB. " : ""}
-                  Maximum available now: {capacity.memoryMb} MB
-                </p>
-              )}
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium" htmlFor="managed-db-swap">
-                Swap (MB)
-              </label>
-              <Input
-                id="managed-db-swap"
-                type="number"
-                min="0"
-                step="128"
-                max={capacity.swapMb}
-                value={resourceInputs.swapMb}
-                onChange={(event) => setResourceInput("swapMb", event.target.value)}
-              />
-              {capacity.swapMb !== undefined && (
-                <p className="text-xs text-muted-foreground">
-                  Maximum available now: {capacity.swapMb} MB
-                </p>
-              )}
-            </div>
-          </div>
+          <ManagedResourceFields
+            idPrefix="managed-db"
+            values={resourceInputs}
+            capacity={capacity}
+            onChange={setResourceInput}
+            minimumMemoryMb={minimumManagedDatabaseMemoryMb(draft.type)}
+            memoryHint={
+              draft.type === "clickhouse" ? "ClickHouse requires at least 512 MB. " : undefined
+            }
+          />
           <PanelShell
             title="Publish TCP port"
             description="Enables direct network connections in addition to secure managed links."
@@ -643,23 +577,19 @@ export function ManagedDatabaseCreateForm({
                   </SettingsControlRow>
                   {draft.type === "clickhouse" && (
                     <>
-                      <SettingsControlRow
+                      <ToggleField
                         title="Publish native TCP port"
                         description="Expose the ClickHouse native protocol for native clients."
-                        controlsClassName="sm:min-w-0"
-                      >
-                        <Switch
-                          checked={draft.publishNativeTcp ?? true}
-                          onChange={(checked) =>
-                            onChange({
-                              ...draft,
-                              publishNativeTcp: checked,
-                              ...(checked ? {} : { publishedNativePort: undefined }),
-                            })
-                          }
-                          ariaLabel="Publish native TCP port"
-                        />
-                      </SettingsControlRow>
+                        checked={draft.publishNativeTcp ?? true}
+                        onChange={(checked) =>
+                          onChange({
+                            ...draft,
+                            publishNativeTcp: checked,
+                            ...(checked ? {} : { publishedNativePort: undefined }),
+                          })
+                        }
+                        ariaLabel="Publish native TCP port"
+                      />
                       {(draft.publishNativeTcp ?? true) && (
                         <SettingsControlRow
                           title="Native TCP port"
@@ -681,17 +611,13 @@ export function ManagedDatabaseCreateForm({
                       )}
                     </>
                   )}
-                  <SettingsControlRow
+                  <ToggleField
                     title="TLS"
                     description="Encrypt direct database traffic. Secure managed links always remain encrypted."
-                    controlsClassName="sm:min-w-0"
-                  >
-                    <Switch
-                      checked={draft.tlsEnabled ?? true}
-                      onChange={(checked) => set("tlsEnabled", checked)}
-                      ariaLabel="Enable TLS"
-                    />
-                  </SettingsControlRow>
+                    checked={draft.tlsEnabled ?? true}
+                    onChange={(checked) => set("tlsEnabled", checked)}
+                    ariaLabel="Enable TLS"
+                  />
                 </motion.div>
               )}
             </AnimatePresence>
@@ -882,10 +808,7 @@ export function Databases({
         setLoading(true);
       }
 
-      const nodesRequest = api
-        .listNodes({ type: "databases", limit: 100 })
-        .then((result) => result.data)
-        .catch(() => null);
+      const nodesRequest = listManagedDatabaseCandidateNodes().catch(() => null);
       if (!embedded) {
         void api
           .listManagedDatabaseCatalog()
@@ -966,11 +889,10 @@ export function Databases({
   });
 
   useRealtime(hasScopedAccess("nodes:details") ? "node.changed" : null, () => {
-    void api
-      .listNodes({ type: "databases", limit: 100 })
-      .then((result) => {
-        api.setCache(DATABASE_NODE_APPEARANCE_CACHE_KEY, result.data);
-        setDatabaseNodes(result.data);
+    void listManagedDatabaseCandidateNodes()
+      .then((nodes) => {
+        api.setCache(DATABASE_NODE_APPEARANCE_CACHE_KEY, nodes);
+        setDatabaseNodes(nodes);
         setDatabaseNodesLoaded(true);
       })
       .catch(() => undefined);

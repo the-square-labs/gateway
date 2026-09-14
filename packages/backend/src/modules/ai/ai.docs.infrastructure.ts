@@ -1,4 +1,10 @@
 export const INFRASTRUCTURE_DOCS: Record<string, string> = {
+  storage: `# Storage and database backups
+Use Storage for external AWS S3, R2, MinIO-compatible, FTP, FTPS or SFTP connections and managed MinIO. Managed storage runs on Storage nodes alongside managed databases. It is private through authenticated relay by default; public S3 and FTP/SFTP listeners require explicit publication. SFTP requires a pinned host-key fingerprint.
+Use list_storage_connections, get_storage_connection, manage_storage_connection, manage_storage_objects and manage_managed_storage for the authorized storage resource operations. Storage credentials and IAM key management have distinct permissions.
+Use a database's Backups tab to choose an existing bucket, prefix, Storage executor, schedule/time zone, retention and resource limits. Native PostgreSQL, Redis and ClickHouse backups use a server-configured immutable BACKUP_RUNNER_IMAGE. ClickHouse file-protocol destinations additionally need server-reachable S3 staging. Restore creates a new managed database by default and refuses a nonempty target. External Redis restore requires the target to reach the executor's configured service address for temporary replication.
+Never claim a queued or running job completed. Inspect the run state and verified artifact manifest. Retention and cancellation retain cleanup ownership; storage referenced by retained backup history cannot be deleted.`,
+
   docker: `# Docker Container Management
 
 ## Overview
@@ -121,9 +127,9 @@ Long-running operations (stop, restart, kill, recreate, update) create tasks vis
 ## Overview
 Gateway supports two database resource models:
 - **External connections** store operator-supplied connection details and are operated directly by the backend.
-- **Managed instances** run curated Postgres, Redis, or ClickHouse images on a dedicated database node. They are private by default and use daemon-managed storage.
+- **Managed instances** run curated Postgres, Redis, or ClickHouse images on a Storage node (or a compatible legacy database node). They are private by default and use daemon-managed storage.
 
-Managed database instances are not generic Docker workloads. The database node only runs Gateway-managed database containers.
+Managed database instances are not generic Docker workloads. Storage nodes run Gateway-managed databases, object storage and bounded backup jobs. Legacy database nodes remain database-only.
 
 ## Managed Instance Access
 - A managed instance has no published host port by default. Application bindings use the private connector and authenticated Gateway tunnel; do not substitute direct TCP for a binding.

@@ -89,6 +89,7 @@ export interface DockerComposeBuildPlan {
 
 export interface DockerBuildScanSummary {
   scanner?: string;
+  skipped?: boolean;
   critical: number;
   high: number;
   medium: number;

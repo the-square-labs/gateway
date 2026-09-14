@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { beforeEach, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
+import { buttonVariants } from "@/components/ui/button";
 import { api } from "@/services/api";
 import type { AuthProvisioningSettings, DashboardRelaySnapshot } from "@/types";
 import { RelaySettingsSection } from "./RelaySettingsSection";
@@ -103,11 +104,14 @@ describe("RelaySettingsSection", () => {
       rebalanceAvailable: true,
       instances: [],
       blockers: ["Local relay: Relay Pool capability is unavailable"],
-      failures: [
+      attempts: [
         {
           id: "new",
           endpointId: "endpoint",
           generation: 2,
+          workload: "notes.example.com",
+          state: "failed",
+          createdAt: "2026-09-11T00:00:00Z",
           activationError: "Pool candidate grant is unavailable",
           updatedAt: "2026-09-11T00:00:00Z",
         },
@@ -117,9 +121,12 @@ describe("RelaySettingsSection", () => {
     expect(
       await screen.findByText(/Local relay: Relay Pool capability is unavailable/)
     ).toBeInTheDocument();
+    expect(screen.getByText("Pool candidate grant is unavailable")).toBeInTheDocument();
+    expect(screen.getByText("notes.example.com")).toBeInTheDocument();
+    expect(screen.getByText("Rebalance attempts")).toBeInTheDocument();
     expect(
-      screen.getByText(/Rebalance generation 2 failed: Pool candidate grant is unavailable/)
-    ).toBeInTheDocument();
+      screen.getByText("Pool candidate grant is unavailable").closest('[role="alert"]')
+    ).toBeNull();
     expect(screen.getByRole("button", { name: "Rebalance" })).toBeDisabled();
   });
 
@@ -339,6 +346,12 @@ describe("RelaySettingsSection", () => {
     expect(screen.getByText("0/1 ready")).toBeInTheDocument();
     expect(screen.getByText("1 fault domain")).toBeInTheDocument();
     expect(screen.getByText("Update: verifying")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Force disconnect" }).className).toBe(
+      buttonVariants({ variant: "destructive" })
+    );
+    expect(screen.getByRole("button", { name: "Resume" }).className).toBe(
+      buttonVariants({ variant: "outline" })
+    );
     await user.click(screen.getByRole("button", { name: "Force disconnect" }));
 
     await waitFor(() =>
@@ -404,7 +417,9 @@ describe("RelaySettingsSection", () => {
     expect(screen.getByText("Local", { exact: true }).closest("div")).toHaveClass("bg-muted");
   });
 
-  it("removes a fully drained and unassigned remote relay after confirmation", async () => {
+  it.each([
+    0, 3,
+  ])("allows removal only after all retained assignments are released (%s)", async (retainedAssignments) => {
     const user = userEvent.setup();
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
     vi.spyOn(api, "getRelayStatus").mockResolvedValue({
@@ -425,6 +440,7 @@ describe("RelaySettingsSection", () => {
           policyExpiresAt: "2099-08-20T20:00:00.000Z",
           lastSeenAt: "2026-08-20T19:59:00.000Z",
           activeAssignments: 0,
+          retainedAssignments,
           health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
         },
       ],
@@ -432,7 +448,15 @@ describe("RelaySettingsSection", () => {
     const remove = vi.spyOn(api, "deleteNode").mockResolvedValue();
 
     renderRelaySettings();
-    await user.click(await screen.findByRole("button", { name: "Remove" }));
+    if (retainedAssignments) {
+      expect(await screen.findByText("3 staging / draining")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+      expect(remove).not.toHaveBeenCalled();
+      return;
+    }
+    const removeButton = await screen.findByRole("button", { name: "Remove" });
+    expect(removeButton.className).toBe(buttonVariants({ variant: "destructive" }));
+    await user.click(removeButton);
 
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Remove relay-eu-2?", variant: "destructive" })

@@ -15,6 +15,19 @@ import (
 )
 
 func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	storageConfig, storageMode, err := storageConnectorConfigFromEnv(storageConnectorEnvironment())
+	if err != nil {
+		log.Fatal(err)
+	}
+	if storageMode {
+		if err := runStorageConnector(ctx, storageConfig); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	socketPath := strings.TrimSpace(os.Getenv("GATEWAY_SECURE_LINK_SOCKET"))
 	if socketPath == "" || !filepath.IsAbs(socketPath) {
 		log.Fatal("GATEWAY_SECURE_LINK_SOCKET must be an absolute path")
@@ -35,8 +48,6 @@ func main() {
 	}
 
 	manager := newBindingManager(0, 0)
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 	go func() {
 		<-ctx.Done()
 		listener.Close()

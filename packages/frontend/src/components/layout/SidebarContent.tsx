@@ -29,6 +29,7 @@ import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
+import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
@@ -107,6 +108,7 @@ export function SidebarContent({
   const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
+  const sidebarPinnedStorageIds = usePinnedStorageStore((s) => s.sidebarStorageIds);
   const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
   const dashboardPinnedNodeIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
   const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
@@ -131,6 +133,7 @@ export function SidebarContent({
           nodeIds: sidebarPinnedIds,
           proxyHostIds: sidebarPinnedProxyIds,
           databaseIds: sidebarPinnedDatabaseIds,
+          storageIds: sidebarPinnedStorageIds,
           dockerIds: sidebarPinnedContainerIds,
         },
       }),
@@ -142,6 +145,7 @@ export function SidebarContent({
       showSystemCertificates,
       showUpdateNotifications,
       sidebarPinnedDatabaseIds,
+      sidebarPinnedStorageIds,
       sidebarPinnedIds,
       sidebarPinnedProxyIds,
       sidebarPinnedContainerIds,
@@ -178,6 +182,7 @@ export function SidebarContent({
           nodeIds: sidebarPinnedIds,
           proxyHostIds: sidebarPinnedProxyIds,
           databaseIds: sidebarPinnedDatabaseIds,
+          storageIds: sidebarPinnedStorageIds,
           dockerResources: sidebarPinnedContainerIds
             .map((id) => {
               const meta = pinnedContainerMeta[id];
@@ -205,6 +210,7 @@ export function SidebarContent({
     showSystemCertificates,
     showUpdateNotifications,
     sidebarPinnedDatabaseIds,
+    sidebarPinnedStorageIds,
     sidebarPinnedIds,
     sidebarPinnedProxyIds,
     sidebarPinnedContainerIds,

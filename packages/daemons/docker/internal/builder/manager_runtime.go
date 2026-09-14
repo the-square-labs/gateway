@@ -17,6 +17,9 @@ import (
 )
 
 func (m *Manager) scan(ctx context.Context, command *pb.DockerBuildCommand, jobDir, imageRef, imageDigest string) (string, error) {
+	if command.GetSkipVulnerabilityScan() {
+		return `{"scanner":"disabled","skipped":true}`, nil
+	}
 	tagSeparator := strings.LastIndex(imageRef, ":")
 	if tagSeparator < 0 {
 		return "", errors.New("built image reference has no tag")

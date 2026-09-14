@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import type { DockerBuild } from "@/types";
@@ -62,9 +62,15 @@ it("polls logs while an active build is open so a missed realtime event cannot l
 });
 
 it.each([
-  "all",
-  "application",
-] as const)("keeps OS and application findings visible under %s scope", async (policyScope) => {
+  { policyScope: "all", osOnly: false, legacy: false },
+  { policyScope: "application", osOnly: false, legacy: false },
+  { policyScope: "application", osOnly: true, legacy: false },
+  { policyScope: "application", osOnly: false, legacy: true },
+] as const)("respects scan report scope $policyScope (osOnly=$osOnly, legacy=$legacy)", async ({
+  policyScope,
+  osOnly,
+  legacy,
+}) => {
   vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
   const item = build("failed");
   item.artifact = {
@@ -82,14 +88,14 @@ it.each([
     verifiedAt: null,
     createdAt: item.createdAt,
     scanSummary: {
-      critical: 2,
+      critical: osOnly ? 1 : 2,
       high: 0,
       medium: 0,
       low: 0,
       unknown: 0,
       policyScope,
-      osPackages: { critical: 1, high: 0, medium: 0, low: 0, unknown: 0 },
-      vulnerabilities: ["deb", "npm"].map((packageType) => ({
+      osPackages: legacy ? undefined : { critical: 1, high: 0, medium: 0, low: 0, unknown: 0 },
+      vulnerabilities: (osOnly ? ["deb"] : ["deb", "npm"]).map((packageType) => ({
         id: `CVE-${packageType}`,
         severity: "critical",
         packageName: `${packageType}-package`,
@@ -102,6 +108,61 @@ it.each([
       })),
     },
   };
+  const view = render(
+    <DockerBuildDetailsDialog
+      open
+      build={item}
+      onOpenChange={() => undefined}
+      onExited={() => undefined}
+    />
+  );
+  await act(async () => undefined);
+  if (!osOnly) expect(screen.getByText("CVE-npm")).toBeInTheDocument();
+  if (policyScope === "application" && !legacy) {
+    expect(screen.queryByText("CVE-deb")).not.toBeInTheDocument();
+    expect(screen.queryByText("2 critical")).not.toBeInTheDocument();
+    if (osOnly)
+      expect(
+        screen.getByText("No application-scope vulnerabilities detected.")
+      ).toBeInTheDocument();
+    else expect(screen.getByText("1 critical")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Include system packages" }));
+    expect(screen.getByText("CVE-deb")).toBeInTheDocument();
+    expect(screen.getAllByText("OS package · Report only")).toHaveLength(1);
+    expect(screen.getByText(/1 system package findings/)).toBeInTheDocument();
+    view.rerender(
+      <DockerBuildDetailsDialog
+        open
+        build={{ ...item, id: "next-build" }}
+        onOpenChange={() => undefined}
+        onExited={() => undefined}
+      />
+    );
+    expect(screen.queryByText("CVE-deb")).not.toBeInTheDocument();
+  } else {
+    expect(screen.getByText("CVE-deb")).toBeInTheDocument();
+    expect(screen.queryByText("OS package · Report only")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Include system packages" })
+    ).not.toBeInTheDocument();
+  }
+});
+
+it("labels a skipped scan as disabled, never as a clean scan", async () => {
+  vi.spyOn(api, "getDockerBuildLogs").mockResolvedValue([]);
+  const item = build("succeeded");
+  item.artifact = {
+    policyDecision: "approved",
+    scanSummary: {
+      scanner: "disabled",
+      skipped: true,
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      unknown: 0,
+    },
+  } as DockerBuild["artifact"];
   render(
     <DockerBuildDetailsDialog
       open
@@ -111,14 +172,12 @@ it.each([
     />
   );
   await act(async () => undefined);
-  expect(screen.getByText("CVE-deb")).toBeInTheDocument();
-  expect(screen.getByText("CVE-npm")).toBeInTheDocument();
-  if (policyScope === "application") {
-    expect(screen.getAllByText("OS package · Report only")).toHaveLength(1);
-    expect(screen.getByText(/1 system package findings/)).toBeInTheDocument();
-  } else {
-    expect(screen.queryByText("OS package · Report only")).not.toBeInTheDocument();
-  }
+  expect(screen.getByText("Vulnerability scan")).toBeInTheDocument();
+  expect(screen.getByText("Disabled")).toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Vulnerabilities" })).not.toBeInTheDocument();
+  expect(
+    screen.queryByText("No application-scope vulnerabilities detected.")
+  ).not.toBeInTheDocument();
 });
 
 function build(status: DockerBuild["status"]): DockerBuild {

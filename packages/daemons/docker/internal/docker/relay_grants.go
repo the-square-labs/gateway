@@ -134,11 +134,13 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		p.registryProxy.reconcileGrants()
 	}
 	detail, err := json.Marshal(struct {
-		SocketPath       string                                       `json:"socketPath"`
-		ListenerStatuses map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
+		SocketPath        string                                       `json:"socketPath"`
+		StorageSocketPath string                                       `json:"storageSocketPath"`
+		ListenerStatuses  map[string]managedDatabaseHostListenerStatus `json:"listenerStatuses"`
 	}{
-		SocketPath:       databaseTunnelSocketPath(p.cfg.StateDir),
-		ListenerStatuses: listenerStatuses,
+		SocketPath:        databaseTunnelSocketPath(p.cfg.StateDir),
+		StorageSocketPath: storageConnectorRelaySocketPath(p.cfg.StateDir),
+		ListenerStatuses:  listenerStatuses,
 	})
 	return string(detail), err
 }

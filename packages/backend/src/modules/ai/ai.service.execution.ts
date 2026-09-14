@@ -6,6 +6,7 @@ import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { ACCESS_LIST_TOOL_NAMES, executeAccessListTool } from './ai.access-list-tools.js';
+import { executeBackupTool } from './ai.backup-tools.js';
 import { DATABASE_TOOL_NAMES, executeDatabaseTool } from './ai.database-tools.js';
 import { DOCKER_TOOL_NAMES, executeDockerTool } from './ai.docker-tools.js';
 import { DOMAIN_TOOL_NAMES, executeDomainTool } from './ai.domain-tools.js';
@@ -37,6 +38,7 @@ import { AIServiceRuntimeSupport } from './ai.service.runtime-support.js';
 import { redactArgsForTool } from './ai.service.tool-helpers.js';
 import { getToolResourceId, hasToolExecutionScope, isMutatingTool } from './ai.service-helpers.js';
 import { executeSshTool, SSH_TOOL_NAMES } from './ai.ssh-tools.js';
+import { executeStorageTool, STORAGE_TOOL_NAMES } from './ai.storage-tools.js';
 import { AI_TOOLS, TOOL_STORE_INVALIDATION_MAP } from './ai.tools.js';
 import type { ToolExecutionOptions, ToolExecutionResult } from './ai.types.js';
 import {
@@ -348,6 +350,8 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       });
     }
 
+    if (toolName === 'manage_database_backups') return executeBackupTool(user, args);
+    if (STORAGE_TOOL_NAMES.has(toolName)) return executeStorageTool(user, toolName, args);
     if (DATABASE_TOOL_NAMES.has(toolName)) {
       return executeDatabaseTool({ databaseService: this.databaseService }, user, toolName, args);
     }

@@ -14,9 +14,11 @@ import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
+import { BackupService } from '@/modules/backups/backups.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
-import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
+import { MANAGED_DATABASE_CATALOG, ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
@@ -49,6 +51,7 @@ import { NotificationDeliveryService } from '@/modules/notifications/notificatio
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
+import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { PageMaintenanceService } from '@/modules/pages/retention/page-maintenance.service.js';
 import { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
@@ -61,7 +64,10 @@ import { GeneralSettingsService } from '@/modules/settings/general-settings.serv
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
+import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
+import { BackupRuntimeIntegration } from '@/services/backup-integration.js';
 import { CacheService } from '@/services/cache.service.js';
+import { CryptoService } from '@/services/crypto.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
@@ -73,6 +79,7 @@ import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
+import { StorageCAService } from '@/services/storage-ca.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
 
@@ -171,6 +178,77 @@ export async function initializeBackgroundServices(): Promise<void> {
   // Background jobs
   const scheduler = new SchedulerService();
   container.registerInstance(SchedulerService, scheduler);
+  const storageTargets = container.resolve(ObjectStorageService);
+  const backupRuntime = new BackupRuntimeIntegration(
+    db,
+    container.resolve(CryptoService),
+    relayPolicyService,
+    container.resolve(StorageCAService),
+    container.resolve(ManagedDatabaseService)
+  );
+  const backupService = new BackupService(
+    db,
+    container.resolve(AuditService),
+    container.resolve(CryptoService),
+    container.resolve(NodeDispatchService),
+    {
+      getBackupTarget: (id) => storageTargets.getBackupTarget(id),
+      deleteOwnedBackupArtifacts: async (target, selection, manifest) => {
+        const prefix = manifest.ownedPrefix.endsWith('/') ? manifest.ownedPrefix : `${manifest.ownedPrefix}/`;
+        if (
+          !prefix ||
+          prefix.startsWith('/') ||
+          prefix.split('/').includes('..') ||
+          manifest.artifactKeys.some((key) => !key.startsWith(prefix))
+        )
+          throw new Error('Invalid backup artifact ownership');
+        await storageTargets.deleteBackupArtifacts(target.connectionId, selection.bucket, [
+          ...manifest.artifactKeys,
+          `${manifest.ownedPrefix}/manifest.json`,
+        ]);
+      },
+    },
+    {
+      assertSource: (user, id, purpose) =>
+        backupRuntime.assertScope(
+          user,
+          purpose === 'restore' ? 'databases:backups:restore' : 'databases:backups:run',
+          id
+        ),
+      assertDestination: async (user, id, purpose) => {
+        await backupRuntime.assertScope(
+          user,
+          purpose === 'read'
+            ? 'storage:objects:read'
+            : purpose === 'delete'
+              ? 'storage:objects:admin'
+              : 'storage:objects:write',
+          id
+        );
+        await backupRuntime.assertScope(user, 'storage:credentials:reveal', id);
+      },
+      assertExecutor: (user, id) => backupRuntime.assertScope(user, 'nodes:backups:execute', id),
+      assertRestoreTarget: async (user, id) => {
+        await backupRuntime.assertScope(user, 'databases:backups:restore', id);
+        await backupRuntime.assertScope(user, 'databases:edit', id);
+      },
+      assertScheduledActor: async (user, source, destination, executor) => {
+        await backupRuntime.assertScope(user, 'databases:backups:run', source);
+        await backupRuntime.assertScope(user, 'storage:objects:write', destination);
+        await backupRuntime.assertScope(user, 'storage:credentials:reveal', destination);
+        await backupRuntime.assertScope(user, 'nodes:backups:execute', executor);
+      },
+    },
+    scheduler,
+    { get: () => env.BACKUP_RUNNER_IMAGE, getRedisStage: () => Object.values(MANAGED_DATABASE_CATALOG.redis)[0] },
+    backupRuntime,
+    backupRuntime,
+    backupRuntime,
+    backupRuntime,
+    backupRuntime
+  );
+  container.registerInstance(BackupService, backupService);
+  backupService.registerScheduler();
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
   });
@@ -245,6 +323,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('docker-internal-registry-health', 10_000, async () => {
     await dockerInternalRegistryService.probeHealth();
   });
+  scheduler.registerInterval('managed-storage-reconcile', 30000, () =>
+    container.resolve(ManagedStorageService).reconcilePendingOperations()
+  );
   scheduler.registerInterval('managed-database-reconcile', 30000, () =>
     managedDatabaseService.reconcilePendingOperations()
   );

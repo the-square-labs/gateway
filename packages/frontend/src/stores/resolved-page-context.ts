@@ -4,6 +4,7 @@ import { create } from "zustand";
 export type ResolvedPageResourceType =
   | "node"
   | "database"
+  | "storage"
   | "proxy-host"
   | "logging-environment"
   | "logging-schema"

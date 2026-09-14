@@ -10,6 +10,7 @@ import {
   dockerDeploymentRoute,
   nodeRoute,
   proxyHostRoute,
+  storageRoute,
 } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth";
@@ -18,6 +19,7 @@ import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
+import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import { useUIStore } from "@/stores/ui";
 import { effectiveNodeStatus } from "@/types";
 
@@ -43,6 +45,7 @@ export function SidebarPinnedResources({
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
   const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
   const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
+  const sidebarPinnedStorageIds = usePinnedStorageStore((s) => s.sidebarStorageIds);
   const pinnedDatabaseMeta = usePinnedDatabasesStore((s) => s.databaseMeta);
   const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
   const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
@@ -80,6 +83,7 @@ export function SidebarPinnedResources({
           nodeIds: sidebarPinnedNodeIds,
           proxyHostIds: sidebarPinnedProxyIds,
           databaseIds: sidebarPinnedDatabaseIds,
+          storageIds: sidebarPinnedStorageIds,
           dockerIds: sidebarPinnedContainerIds,
         },
       }),
@@ -92,6 +96,7 @@ export function SidebarPinnedResources({
       showUpdateNotifications,
       sidebarPinnedContainerIds,
       sidebarPinnedDatabaseIds,
+      sidebarPinnedStorageIds,
       sidebarPinnedNodeIds,
       sidebarPinnedProxyIds,
       user?.id,
@@ -129,6 +134,7 @@ export function SidebarPinnedResources({
           nodeIds: sidebarPinnedNodeIds,
           proxyHostIds: sidebarPinnedProxyIds,
           databaseIds: sidebarPinnedDatabaseIds,
+          storageIds: sidebarPinnedStorageIds,
           dockerResources: dockerResources(sidebarPinnedContainerIds),
         },
       },
@@ -146,6 +152,7 @@ export function SidebarPinnedResources({
     showUpdateNotifications,
     sidebarPinnedContainerIds,
     sidebarPinnedDatabaseIds,
+    sidebarPinnedStorageIds,
     sidebarPinnedNodeIds,
     sidebarPinnedProxyIds,
     user?.id,
@@ -171,6 +178,7 @@ export function SidebarPinnedResources({
     sidebarPinnedNodeIds.length +
     sidebarPinnedProxyIds.length +
     sidebarPinnedDatabaseIds.length +
+    sidebarPinnedStorageIds.length +
     sidebarPinnedContainerIds.length;
   const canPotentiallyViewPinned =
     sidebarPinnedNodeIds.some(
@@ -178,6 +186,7 @@ export function SidebarPinnedResources({
     ) ||
     sidebarPinnedProxyIds.some((id) => hasScope("proxy:view") || hasScope(`proxy:view:${id}`)) ||
     sidebarPinnedDatabaseIds.some((id) => canViewDatabaseDetails(id)) ||
+    sidebarPinnedStorageIds.some((id) => hasScope(`storage:view:${id}`)) ||
     sidebarPinnedContainerIds.some((id) => {
       const meta = pinnedContainerMeta[id];
       return meta
@@ -216,6 +225,7 @@ export function SidebarPinnedResources({
     pinnedNodes.length > 0 ||
     pinnedProxies.length > 0 ||
     sidebarPinnedDatabaseIds.length > 0 ||
+    (dashboardBootstrap?.pinned.sidebar.storages?.length ?? 0) > 0 ||
     sidebarPinnedContainerIds.length > 0;
 
   if (!hasPinnedResources) return null;
@@ -351,6 +361,24 @@ export function SidebarPinnedResources({
               <Database className="h-4 w-4 shrink-0" />
               <span className="truncate">{meta.name}</span>
               <span className={statusDot(meta.healthStatus, "database")} />
+            </Link>
+          );
+        })}
+        {(dashboardBootstrap.pinned.sidebar.storages ?? []).map((storage) => {
+          const path = storageRoute(storage);
+          if (!hasScope(`storage:view:${storage.id}`)) return null;
+          return (
+            <Link
+              key={`storage:${storage.id}`}
+              to={path}
+              onClick={onNavigate}
+              className={linkClass(
+                location.pathname === path || location.pathname.startsWith(`${path}/`)
+              )}
+            >
+              <Database className="h-4 w-4 shrink-0" />
+              <span className="truncate">{storage.name}</span>
+              <span className={statusDot(storage.healthStatus, "database")} />
             </Link>
           );
         })}

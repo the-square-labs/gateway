@@ -13,6 +13,66 @@ function serviceWithBuilders(builders: Array<{ capabilities: unknown }>) {
 }
 
 describe('DockerBuildRunnerService admission', () => {
+  it.each([
+    { threshold: 'disabled', supported: true, skip: true },
+    { threshold: 'none', supported: false, skip: false },
+    { threshold: 'critical', supported: false, skip: false },
+    { threshold: 'disabled', supported: false, skip: null },
+  ])('dispatches scan policy $threshold only with required worker support ($supported)', async ({
+    threshold,
+    supported,
+    skip,
+  }) => {
+    const source = {
+      id: 'source',
+      targetKind: 'container',
+      configGeneration: 1,
+      policy: { vulnerabilityThreshold: threshold },
+    };
+    const db: any = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [source] }) }) }) };
+    const builds: any = {
+      claimNext: vi.fn(async () => ({ id: 'build', sourceBindingId: 'source', sourceConfigGeneration: 1, attempt: 1 })),
+      appendLog: vi.fn(),
+      transition: vi.fn(),
+    };
+    builds.appendLog.mockResolvedValue(undefined);
+    const dispatch: any = {
+      dispatchDockerBuildCommand: vi.fn(async () => ({
+        accepted: Promise.resolve(),
+        result: Promise.resolve({ success: true }),
+      })),
+    };
+    const registry: any = { ensureBinding: vi.fn() };
+    const service: any = new DockerBuildRunnerService(
+      db,
+      builds,
+      dispatch,
+      { resolveDockerBuildCheckoutCredential: async () => ({}) } as any,
+      registry
+    );
+    service.setSourceService({ getDecryptedBuildSecrets: async () => ({}) });
+    await service.claimAndDispatch('worker', 'linux/amd64', undefined, {
+      capabilities: supported ? ['docker_builder_scan_disable_v1'] : [],
+    });
+    expect(builds.claimNext).toHaveBeenCalledWith(expect.objectContaining({ supportsScanDisable: supported }));
+    if (skip === null) {
+      expect(dispatch.dispatchDockerBuildCommand).not.toHaveBeenCalled();
+      expect(registry.ensureBinding).not.toHaveBeenCalled();
+      expect(builds.transition).toHaveBeenCalledWith(
+        'build',
+        expect.any(String),
+        'failed',
+        expect.objectContaining({ errorMessage: expect.stringContaining('Update this Build Worker') })
+      );
+    } else {
+      expect(dispatch.dispatchDockerBuildCommand).toHaveBeenCalledWith(
+        'worker',
+        expect.objectContaining({ skipVulnerabilityScan: skip })
+      );
+      expect(builds.transition).not.toHaveBeenCalled();
+    }
+  });
+
   it('recovers expired backend-owned rollout leases even when no Build Worker is online', async () => {
     const db = {
       select: vi.fn(() => ({

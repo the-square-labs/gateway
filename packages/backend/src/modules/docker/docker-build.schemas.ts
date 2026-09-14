@@ -80,7 +80,7 @@ export const DockerSourceBindingConfigSchema = z.object({
   publishTag: PageTagNameSchema.optional(),
   policy: z
     .object({
-      vulnerabilityThreshold: z.enum(['critical', 'high', 'medium', 'low', 'none']).optional(),
+      vulnerabilityThreshold: z.enum(['critical', 'high', 'medium', 'low', 'none', 'disabled']).optional(),
       vulnerabilityScope: z.enum(['all', 'application']).optional(),
     })
     .passthrough()

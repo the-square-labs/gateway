@@ -979,6 +979,42 @@ export class DockerDeploymentService {
     if (!/^gateway-db-[a-z0-9-]{8,64}$/.test(networkName)) {
       throw new AppError(400, 'INVALID_MANAGED_DATABASE_NETWORK', 'Invalid managed database network');
     }
+    return this.setManagedBindingNetwork(nodeId, deploymentId, networkName, enabled, userId, forceRollout, 'database');
+  }
+
+  async setManagedStorageBindingNetwork(
+    nodeId: string,
+    deploymentId: string,
+    networkName: string,
+    enabled: boolean,
+    userId: string | null,
+    targetEnvironment?: Record<string, string>
+  ) {
+    if (!/^gateway-storage-[a-f0-9]{16}$/.test(networkName)) {
+      throw new AppError(400, 'INVALID_MANAGED_STORAGE_NETWORK', 'Invalid managed storage network');
+    }
+    return this.setManagedBindingNetwork(
+      nodeId,
+      deploymentId,
+      networkName,
+      enabled,
+      userId,
+      false,
+      'storage',
+      targetEnvironment
+    );
+  }
+
+  private async setManagedBindingNetwork(
+    nodeId: string,
+    deploymentId: string,
+    networkName: string,
+    enabled: boolean,
+    userId: string | null,
+    forceRollout: boolean,
+    kind: 'database' | 'storage',
+    targetEnvironment?: Record<string, string>
+  ) {
     await this.validateDockerNode(nodeId);
     const current = await this.loadDeployment(nodeId, deploymentId);
     const currentNetworks = current.desiredConfig.networks ?? [];
@@ -987,17 +1023,27 @@ export class DockerDeploymentService {
       : currentNetworks.filter((name) => name !== networkName);
     const unchanged =
       networks.length === currentNetworks.length && currentNetworks.every((name, index) => name === networks[index]);
-    if (unchanged && !forceRollout) {
+    if (unchanged && !forceRollout && targetEnvironment === undefined) {
       return current;
     }
-    if (!unchanged) {
+    if (!unchanged || targetEnvironment !== undefined) {
       await this.db
         .update(dockerDeployments)
-        .set({ desiredConfig: { ...current.desiredConfig, networks }, updatedById: userId, updatedAt: new Date() })
+        .set({
+          desiredConfig: {
+            ...current.desiredConfig,
+            networks,
+            ...(targetEnvironment !== undefined ? { env: targetEnvironment } : {}),
+          },
+          updatedById: userId,
+          updatedAt: new Date(),
+        })
         .where(eq(dockerDeployments.id, deploymentId));
     }
-    this.emit('updated', deploymentId, nodeId, { managedDatabaseNetwork: enabled ? 'attached' : 'detached' });
-    return this.deploy(nodeId, deploymentId, {}, userId, 'managed_database_binding');
+    this.emit('updated', deploymentId, nodeId, {
+      [kind === 'storage' ? 'managedStorageNetwork' : 'managedDatabaseNetwork']: enabled ? 'attached' : 'detached',
+    });
+    return this.deploy(nodeId, deploymentId, {}, userId, `managed_${kind}_binding`);
   }
 
   async deploy(

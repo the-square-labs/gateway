@@ -34,6 +34,7 @@ import {
   loggingSchemaRoute,
   nodeRoute,
   proxyHostRoute,
+  storageRoute,
 } from "@/lib/resource-routes";
 import { AccessLists } from "@/pages/AccessLists";
 import { Administration } from "@/pages/Administration";
@@ -78,6 +79,8 @@ import { Settings } from "@/pages/Settings";
 import { SetupWizardPage } from "@/pages/SetupWizard";
 import { SSLCertificates } from "@/pages/SSLCertificates";
 import { StatusPage } from "@/pages/StatusPage";
+import { Storage } from "@/pages/Storage";
+import { StorageDetail } from "@/pages/StorageDetail";
 import { TemplatesPage } from "@/pages/TemplatesPage";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -710,6 +713,43 @@ function DatabaseDetailGuard() {
   );
 }
 
+function StoragePageGuard() {
+  const hasScope = useAuthStore((s) => s.hasScope);
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
+
+  const canAccessStorage = hasScopedAccess("storage:view") || hasScope("storage:folders:manage");
+
+  if (!canAccessStorage) {
+    return <Navigate to="/" replace />;
+  }
+
+  return <Storage />;
+}
+
+function StorageDetailGuard() {
+  const { storageSlug } = useParams<{ storageSlug: string }>();
+  const canAccess = useAuthStore((s) => s.hasScopedAccess("storage:view"));
+  const resolved = useResolvedPageRoute(
+    canAccess && storageSlug ? storageRoute(storageSlug) : undefined,
+    () => api.getObjectStorageBySlug(storageSlug!),
+    (database) => ({
+      resourceType: "storage",
+      resourceId: database.id,
+      label: database.name,
+    })
+  );
+
+  if (!canAccess) return <Navigate to="/" replace />;
+  if (resolved.loading) return <DetailRouteLoading />;
+  if (resolved.error) {
+    return <DetailRouteFailure error={resolved.error} fallbackPath="/storage" />;
+  }
+  if (!resolved.data) return <Navigate to="/storage" replace />;
+  return (
+    <StorageDetail resolvedStorageId={resolved.data.id} resolvedStorageSlug={resolved.data.slug} />
+  );
+}
+
 export function NotificationsPageGuard() {
   const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
   const siemEnabled = useSystemConfigStore((s) => s.config.features.siemEnabled);
@@ -869,6 +909,7 @@ export function RealtimeBridge() {
   );
   const canViewProxy = useAuthStore((s) => s.hasScopedAccess("proxy:view"));
   const canViewDatabases = useAuthStore((s) => s.hasScopedAccess("databases:view"));
+  const canViewStorage = useAuthStore((s) => s.hasScopedAccess("storage:view"));
   const canViewDockerContainers = useAuthStore((s) => s.hasScopedAccess("docker:containers:view"));
   const canViewPkiCertificates = useAuthStore((s) => s.hasScopedAccess("pki:cert:view"));
   const canViewSslCertificates = useAuthStore((s) => s.hasScopedAccess("ssl:cert:view"));
@@ -1071,12 +1112,19 @@ export function RealtimeBridge() {
   }, [canViewProxy, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
-    if (!user || !canViewDatabases) return;
-    return eventStream.subscribe("database.changed", (payload) => {
-      if ((payload as { action?: string } | null)?.action === "health.sampled") return;
-      invalidateDashboardBootstrap();
-    });
-  }, [canViewDatabases, invalidateDashboardBootstrap, user]);
+    if (!user || (!canViewDatabases && !canViewStorage)) return;
+    const channels = [
+      ...(canViewDatabases ? ["database.changed"] : []),
+      ...(canViewStorage ? ["storage.changed", "managed-storage.changed"] : []),
+    ];
+    const subscriptions = channels.map((channel) =>
+      eventStream.subscribe(channel, (payload) => {
+        if ((payload as { action?: string } | null)?.action === "health.sampled") return;
+        invalidateDashboardBootstrap();
+      })
+    );
+    return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  }, [canViewDatabases, canViewStorage, invalidateDashboardBootstrap, user]);
 
   useEffect(() => {
     if (!user || !canViewDockerContainers) return;
@@ -1392,6 +1440,14 @@ function GatewayApp() {
               }
             />
             <Route
+              path="/storage/file/:storageId"
+              element={
+                <PopoutAuthGate>
+                  <DockerFilePopout />
+                </PopoutAuthGate>
+              }
+            />
+            <Route
               path="/docker/file/:nodeId/:containerId"
               element={
                 <PopoutAuthGate>
@@ -1473,6 +1529,8 @@ function GatewayApp() {
                 element={scoped("status-page:view", <StatusPage />)}
               />
               <Route path="/databases" element={<DatabasesPageGuard />} />
+              <Route path="/storage" element={<StoragePageGuard />} />
+              <Route path="/storage/:storageSlug/:tab?" element={<StorageDetailGuard />} />
               <Route path="/databases/:databaseSlug/:tab?" element={<DatabaseDetailGuard />} />
               <Route path="/logging" element={<LoggingPageGuard />} />
               <Route path="/logging/:section" element={<LoggingPageGuard />} />

@@ -6,6 +6,25 @@ const zero = { critical: 0, high: 0, medium: 0, low: 0, unknown: 0 };
 const policy = { vulnerabilityThreshold: 'critical', vulnerabilityScope: 'application' as const };
 
 describe('application vulnerability policy', () => {
+  it('allows explicitly disabled scanning without inventing a clean scan', () => {
+    const scanSummary = parseDockerBuildScanSummary('{"scanner":"disabled","skipped":true}');
+    expect(scanSummary).toMatchObject({ scanner: 'disabled', skipped: true });
+    expect(evaluateDockerArtifactPolicy({ vulnerabilityThreshold: 'disabled' }, { scanSummary })).toMatchObject({
+      decision: 'approved',
+    });
+    expect(evaluateDockerArtifactPolicy({ vulnerabilityThreshold: 'disabled' }, {})).toMatchObject({
+      decision: 'approved',
+    });
+    for (const threshold of ['critical', 'high', 'none']) {
+      expect(evaluateDockerArtifactPolicy({ vulnerabilityThreshold: threshold }, { scanSummary })).toMatchObject({
+        decision: 'error',
+        reason: expect.stringContaining('skipped'),
+      });
+    }
+    expect(DockerSourceBindingConfigSchema.shape.policy.parse({ vulnerabilityThreshold: 'disabled' })).toEqual({
+      vulnerabilityThreshold: 'disabled',
+    });
+  });
   it('keeps the default blocking OS findings and allows explicit report-only OS packages', () => {
     const artifact = { scanSummary: { ...zero, critical: 10, osPackages: { ...zero, critical: 10 } } };
     expect(evaluateDockerArtifactPolicy({}, artifact).decision).toBe('rejected');

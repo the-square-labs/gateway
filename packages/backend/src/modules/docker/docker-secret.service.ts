@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerSecrets } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -59,7 +59,7 @@ export class DockerSecretService {
     key: string,
     value: string,
     userId: string,
-    options: { managed?: boolean } = {}
+    options: { managed?: boolean; managedOwner?: string } = {}
   ) {
     await this.migrationGuard?.assertContainerAllowed(nodeId, containerName);
     const encrypted = this.cryptoService.encryptString(value);
@@ -67,12 +67,26 @@ export class DockerSecretService {
 
     const [row] = await this.db
       .insert(dockerSecrets)
-      .values({ nodeId, containerName, key, encryptedValue, managed: options.managed ?? false })
+      .values({
+        nodeId,
+        containerName,
+        key,
+        encryptedValue,
+        managed: options.managed ?? false,
+        managedOwner: options.managedOwner ?? null,
+      })
       .onConflictDoUpdate({
         target: [dockerSecrets.nodeId, dockerSecrets.containerName, dockerSecrets.key],
         set: { encryptedValue, managed: options.managed ?? false, updatedAt: new Date() },
+        // A new binding cannot claim an existing user or managed secret.
+        setWhere: options.managedOwner
+          ? eq(dockerSecrets.managedOwner, options.managedOwner)
+          : isNull(dockerSecrets.managedOwner),
       })
       .returning();
+
+    if (!row)
+      throw new AppError(409, 'MANAGED_SECRET_CONFLICT', 'An environment secret already belongs to another owner');
 
     await this.auditService.log({
       action: 'docker.secret.create',
@@ -96,6 +110,8 @@ export class DockerSecretService {
     if (existing.nodeId !== nodeId || (expectedContainerName && existing.containerName !== expectedContainerName)) {
       throw new AppError(404, 'NOT_FOUND', 'Secret not found');
     }
+    if (existing.managedOwner)
+      throw new AppError(409, 'MANAGED_SECRET_OWNED', 'Manage this secret through its storage link');
     await this.migrationGuard?.assertContainerAllowed(existing.nodeId, existing.containerName);
 
     const encrypted = this.cryptoService.encryptString(value);
@@ -128,6 +144,8 @@ export class DockerSecretService {
     if (existing.nodeId !== nodeId || (expectedContainerName && existing.containerName !== expectedContainerName)) {
       throw new AppError(404, 'NOT_FOUND', 'Secret not found');
     }
+    if (existing.managedOwner)
+      throw new AppError(409, 'MANAGED_SECRET_OWNED', 'Manage this secret through its storage link');
     await this.migrationGuard?.assertContainerAllowed(existing.nodeId, existing.containerName);
 
     await this.db.delete(dockerSecrets).where(eq(dockerSecrets.id, id));
@@ -140,6 +158,31 @@ export class DockerSecretService {
       details: { nodeId: existing.nodeId, containerName: existing.containerName, key: existing.key },
     });
     this.publishChanged(existing.nodeId, existing.containerName, 'secret_delete', id);
+  }
+
+  /** Remove only secrets explicitly owned by this managed resource. Idempotent for compensation. */
+  async deleteOwned(nodeId: string, containerName: string, managedOwner: string, userId: string) {
+    await this.migrationGuard?.assertContainerAllowed(nodeId, containerName);
+    const rows = await this.db
+      .delete(dockerSecrets)
+      .where(
+        and(
+          eq(dockerSecrets.nodeId, nodeId),
+          eq(dockerSecrets.containerName, containerName),
+          eq(dockerSecrets.managedOwner, managedOwner)
+        )
+      )
+      .returning({ id: dockerSecrets.id });
+    for (const row of rows) {
+      await this.auditService.log({
+        action: 'docker.secret.delete',
+        userId,
+        resourceType: 'docker-secret',
+        resourceId: row.id,
+        details: { nodeId, containerName, managedOwner },
+      });
+    }
+    if (rows.length) this.publishChanged(nodeId, containerName, 'secret_delete', rows[0]!.id);
   }
 
   /**

@@ -20,18 +20,19 @@ import (
 )
 
 type ContainerCreateConfig struct {
-	Name        string            `json:"name"`
-	Image       string            `json:"image"`
-	Cmd         []string          `json:"cmd,omitempty"`
-	Entrypoint  []string          `json:"entrypoint,omitempty"`
-	Env         []string          `json:"env,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	WorkingDir  string            `json:"working_dir,omitempty"`
-	User        string            `json:"user,omitempty"`
-	Hostname    string            `json:"hostname,omitempty"`
-	StopTimeout *int              `json:"stopTimeout,omitempty"`
-	Tty         bool              `json:"tty,omitempty"`
-	OpenStdin   bool              `json:"open_stdin,omitempty"`
+	InternalWorkload string            `json:"internal_workload,omitempty"`
+	Name             string            `json:"name"`
+	Image            string            `json:"image"`
+	Cmd              []string          `json:"cmd,omitempty"`
+	Entrypoint       []string          `json:"entrypoint,omitempty"`
+	Env              []string          `json:"env,omitempty"`
+	Labels           map[string]string `json:"labels,omitempty"`
+	WorkingDir       string            `json:"working_dir,omitempty"`
+	User             string            `json:"user,omitempty"`
+	Hostname         string            `json:"hostname,omitempty"`
+	StopTimeout      *int              `json:"stopTimeout,omitempty"`
+	Tty              bool              `json:"tty,omitempty"`
+	OpenStdin        bool              `json:"open_stdin,omitempty"`
 
 	// Host config
 	Binds        []string               `json:"binds,omitempty"`
@@ -375,6 +376,9 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		return "", "", fmt.Errorf("parse container config: %w", err)
 	}
 
+	if cfg.InternalWorkload != "" {
+		return "", "", fmt.Errorf("internal workloads require the daemon-owned create path")
+	}
 	if cfg.Image == "" {
 		return "", "", fmt.Errorf("image is required")
 	}

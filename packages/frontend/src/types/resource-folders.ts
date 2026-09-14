@@ -4,6 +4,7 @@ export type ResourceFolderType =
   | "domain"
   | "ssl-certificate"
   | "database"
+  | "storage"
   | "logging-environment"
   | "logging-schema"
   | "admin-user"

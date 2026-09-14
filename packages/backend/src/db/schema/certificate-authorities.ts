@@ -17,7 +17,7 @@ export const caStatusEnum = pgEnum('ca_status', ['active', 'revoked', 'expired']
 export const keyAlgorithmEnum = pgEnum('key_algorithm', ['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384']);
 // System-managed CAs are purpose-scoped. Node mTLS and published database TLS
 // must never share a trust anchor.
-export const systemCAPurposeEnum = pgEnum('system_ca_purpose', ['node-mtls', 'database-tls']);
+export const systemCAPurposeEnum = pgEnum('system_ca_purpose', ['node-mtls', 'database-tls', 'storage-tls']);
 
 export const certificateAuthorities = pgTable(
   'certificate_authorities',

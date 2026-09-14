@@ -211,6 +211,38 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   string,
   { arguments: string[]; operations: Record<string, AIToolOperationPolicy> }
 > = {
+  manage_database_backups: {
+    arguments: ['action'],
+    operations: operationPolicies({
+      read: ['list_policies', 'list_runs'],
+      create: ['create_policy'],
+      update: ['update_policy'],
+      delete: ['delete_policy'],
+      destructive: ['run', 'cancel', 'restore'],
+    }),
+  },
+  manage_storage_connection: {
+    arguments: ['action'],
+    operations: operationPolicies({ create: ['create'], update: ['update'], delete: ['delete'], external: ['test'] }),
+  },
+  manage_storage_objects: {
+    arguments: ['action'],
+    operations: operationPolicies({
+      read: ['list_buckets', 'list_objects', 'head', 'presign'],
+      create: ['create_bucket', 'create_prefix'],
+      delete: ['delete_objects'],
+    }),
+  },
+  manage_managed_storage: {
+    arguments: ['action'],
+    operations: operationPolicies({
+      read: ['catalog', 'get'],
+      create: ['create'],
+      update: ['update'],
+      execute: ['restart'],
+      delete: ['delete'],
+    }),
+  },
   manage_logging: {
     arguments: ['resource', 'operation'],
     operations: operationPolicies({
@@ -320,6 +352,8 @@ const PLANNING_SAFE_TOOL_NAMES = new Set([
   'list_certificates',
   'list_chat_projects',
   'list_databases',
+  'list_storage_connections',
+  'get_storage_connection',
   'list_docker_containers',
   'list_docker_deployments',
   'list_docker_images',
@@ -399,6 +433,8 @@ export function getAIToolResourceId(
     'containerId',
     'deploymentId',
     'databaseId',
+    'storageId',
+    'managedStorageId',
     'ruleId',
     'webhookId',
     'registryId',
@@ -438,6 +474,8 @@ function inferToolTargetIdentity(tool: AIToolDefinition): AIToolDefinition['targ
                 'containerId',
                 'deploymentId',
                 'databaseId',
+                'storageId',
+                'managedStorageId',
                 'ruleId',
                 'webhookId',
                 'nodeId',

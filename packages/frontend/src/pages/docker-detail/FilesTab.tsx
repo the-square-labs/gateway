@@ -290,6 +290,7 @@ export function FilesTab({
   realtimeEvent = "docker.file.changed",
   realtimeMatches,
   headerActions,
+  description = "Browse and manage files in the selected container instance",
 }: {
   nodeId: string;
   containerId?: string;
@@ -302,6 +303,7 @@ export function FilesTab({
   realtimeEvent?: string | null;
   realtimeMatches?: (payload: DockerFileChangedPayload) => boolean;
   headerActions?: ReactNode;
+  description?: string;
 }) {
   const { hasScope } = useAuthStore();
   const canBrowseFiles =
@@ -372,8 +374,7 @@ export function FilesTab({
   const canMutateFiles = !!(
     fileOperations?.createFile &&
     fileOperations.createDirectory &&
-    fileOperations.deletePath &&
-    fileOperations.movePath
+    fileOperations.deletePath
   );
   const [roots, setRoots] = useState<TreeNode[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -983,7 +984,7 @@ export function FilesTab({
       />
       <PanelShell
         title="Files"
-        description="Browse and manage files in the selected container instance"
+        description={description}
         actions={headerActions}
         bodyClassName="min-w-0"
       >
@@ -1043,7 +1044,7 @@ export function FilesTab({
                         key={node.path}
                         node={node}
                         depth={0}
-                        canDrag={canMutateFiles}
+                        canDrag={canMutateFiles && !!fileOperations?.movePath}
                         pendingMovePaths={pendingMovePaths}
                         openMaxBytes={openMaxBytes}
                         onToggle={toggleDir}

@@ -400,6 +400,9 @@ describe('canonical scope definitions', () => {
 
   it('keeps OAuth manual approval scopes focused on high-risk delegated access', () => {
     expect(MANUAL_APPROVAL_SCOPES).toEqual([
+      'storage:credentials:reveal',
+      'storage:iam',
+      'databases:backups:restore',
       'pki:ca:create:root',
       'pki:ca:create:intermediate',
       'pki:ca:revoke:root',

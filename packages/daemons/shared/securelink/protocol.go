@@ -40,6 +40,20 @@ type SyncResponse struct {
 	Error    string          `json:"error,omitempty"`
 }
 
+// RelayRequest switches a connector into a single server-authorized raw TCP
+// relay stream. It intentionally contains an owner kind and opaque binding ID,
+// never a target address, port, Docker bind, or command.
+type RelayRequest struct {
+	Version   int    `json:"version"`
+	OwnerKind string `json:"ownerKind"`
+	BindingID string `json:"bindingId"`
+}
+
+type RelayResponse struct {
+	Version int    `json:"version"`
+	Error   string `json:"error,omitempty"`
+}
+
 func ReadJSON(r io.Reader, target any) error {
 	var size [4]byte
 	if _, err := io.ReadFull(r, size[:]); err != nil {
