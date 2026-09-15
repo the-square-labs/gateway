@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { toInternalCredits, toPublicCredits } from './inference-credit-units.js';
 import { __testOnly, InferenceUsageService } from './inference-usage.service.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from './inference-usage-events.js';
@@ -15,6 +16,94 @@ const LIMIT_INPUT = {
   apiMonthlyMicrodollars: 10_000_000,
   billingTimezone: 'UTC',
 };
+
+describe('inference limit-save critical path', () => {
+  it.each([
+    'default',
+    'user',
+  ] as const)('saves %s limits in 3s, not 6s, with concurrent 3s audit/read and without awaiting downstream refresh', async (scope) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T10:00:00Z'));
+    // A limit save must not add an HTTP/core refresh to its own critical path.
+    const fetch = vi.fn().mockRejectedValue(new Error('Unexpected core/network call during limit save'));
+    vi.stubGlobal('fetch', fetch);
+    const eventBus = new EventBusService();
+    let refreshCompleted = false;
+    // Model slow downstream work, not a real core transport/enforcement test.
+    const refresh = vi.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 30_000));
+      refreshCompleted = true;
+    });
+    const unsubscribe = eventBus.subscribe(INFERENCE_USAGE_CHANGED_CHANNEL, refresh);
+    try {
+      let committed = false;
+      const onConflictDoUpdate = vi.fn(async () => {
+        committed = true;
+      });
+      const starts: number[] = [];
+      const delayed = <T>(value: T) => {
+        expect(committed).toBe(true);
+        starts.push(Date.now());
+        return new Promise<T>((resolve) => setTimeout(() => resolve(value), 3_000));
+      };
+      const orderBy = vi.fn(() => delayed([]));
+      const audit = { log: vi.fn(() => delayed(undefined)) };
+      const db = {
+        query: { users: { findFirst: vi.fn().mockResolvedValue({ id: 'user-1' }) } },
+        insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
+        select: vi.fn(() => ({ from: vi.fn(() => ({ orderBy })) })),
+      };
+      const policies = { effective: vi.fn(), usage: vi.fn() };
+      const service = new InferenceUsageService(
+        db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
+        policies as unknown as ConstructorParameters<typeof InferenceUsageService>[1],
+        audit as unknown as ConstructorParameters<typeof InferenceUsageService>[2],
+        eventBus
+      );
+      const started = Date.now();
+      let settledAt: number | undefined;
+      const saved = (
+        scope === 'default'
+          ? service.setDefault('admin-1', LIMIT_INPUT)
+          : service.setUser('admin-1', 'user-1', LIMIT_INPUT)
+      ).then((result) => {
+        settledAt = Date.now();
+        return result;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onConflictDoUpdate).toHaveBeenCalledOnce();
+      expect(audit.log).toHaveBeenCalledOnce();
+      expect(orderBy).toHaveBeenCalledOnce();
+      expect(starts).toEqual([started, started]);
+      await vi.advanceTimersByTimeAsync(2_999);
+      expect(settledAt).toBeUndefined();
+      expect(refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settledAt).toBe(started + 3_000);
+      await expect(saved).resolves.toEqual([]);
+      expect(refresh).toHaveBeenCalledExactlyOnceWith({
+        targetUserId: scope === 'default' ? null : 'user-1',
+        reason: 'limits',
+      });
+      expect(refreshCompleted).toBe(false);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(policies.effective).not.toHaveBeenCalled();
+      expect(policies.usage).not.toHaveBeenCalled();
+
+      // Finish the synthetic observer too; the finite test leaves no timers.
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(refreshCompleted).toBe(true);
+      expect(settledAt).toBe(started + 3_000);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      unsubscribe();
+      vi.clearAllTimers();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 function policyDb() {
   const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
