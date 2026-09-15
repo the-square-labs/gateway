@@ -20,7 +20,6 @@ import {
   errorCode,
   hash,
   latestPricing,
-  latestQuota,
   reservationAmounts,
   stringExtension,
   unitCharge,
@@ -29,7 +28,6 @@ import {
 import type { InferenceBudgetLockService } from './inference-budget-lock.service.js';
 import {
   apiMicrodollars,
-  dynamicBurnMultiplier,
   type EffectiveInferenceLimits,
   type InferenceBudgetPolicyService,
   subscriptionCreditsForUsage,
@@ -39,6 +37,7 @@ import type {
   BudgetReservationAmounts,
   InferenceBudgetReservationService,
 } from './inference-budget-reservation.service.js';
+import { modelPoolBurnMultiplier } from './inference-pool-budget.js';
 import { assertProviderApiBudget } from './inference-provider-budget.js';
 import { normalizeServiceTier, serviceTierCreditMultiplier } from './inference-service-tier.js';
 import { publishInferenceUsageChanged } from './inference-usage-events.js';
@@ -94,8 +93,10 @@ export class InferenceAccountingService {
         startSubscriptionWindows: input.source.sourceType === 'subscription',
       });
       const pricing = input.source.sourceType === 'api' ? await latestPricing(database, input.source.id) : null;
-      const quota = input.source.sourceType === 'subscription' ? await latestQuota(database, input.connection.id) : [];
-      const burnMultiplier = dynamicBurnMultiplier(quota, new Date(), input.request.isCompaction);
+      const burnMultiplier =
+        input.source.sourceType === 'subscription'
+          ? await modelPoolBurnMultiplier(database, input.model.id, admittedAt, input.request.isCompaction)
+          : 1;
       const modelMultiplier = Number(input.source.subscriptionMultiplierOverride ?? input.model.subscriptionMultiplier);
       const serviceTier = normalizeServiceTier(input.request.extensions.service_tier);
       const serviceTierMultiplier = serviceTierCreditMultiplier(

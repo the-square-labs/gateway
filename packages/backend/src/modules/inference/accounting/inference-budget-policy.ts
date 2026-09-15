@@ -433,7 +433,7 @@ function shiftedLocalMonth(parts: ReturnType<typeof localParts>, offset: number,
   return zonedDateToUtc(year, month, day, timezone, parts.hour, parts.minute, parts.second);
 }
 
-function quotaWindowDuration(dimension: string): number {
+export function quotaWindowDuration(dimension: string): number {
   if (dimension.startsWith('5h')) return SUBSCRIPTION_WINDOWS['5h'];
   if (dimension.startsWith('7d')) return SUBSCRIPTION_WINDOWS['7d'];
   if (dimension.startsWith('30d')) return SUBSCRIPTION_WINDOWS['30d'];

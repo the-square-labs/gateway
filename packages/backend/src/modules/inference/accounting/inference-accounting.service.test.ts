@@ -2,6 +2,14 @@ import 'reflect-metadata';
 import { expect, it, vi } from 'vitest';
 import { InferenceAccountingService } from './inference-accounting.service.js';
 
+function selectPoolRows(results: unknown[][] = [[]]) {
+  return () => {
+    const chain = Promise.resolve(results.shift() ?? []) as Promise<unknown[]> & Record<string, unknown>;
+    for (const method of ['from', 'innerJoin', 'where', 'orderBy']) chain[method] = () => chain;
+    return chain;
+  };
+}
+
 it('preserves the admission window through delayed dispatch and settlement', async () => {
   const anchor = new Date('2026-09-09T13:24:04.591Z');
   vi.useFakeTimers();
@@ -9,7 +17,7 @@ it('preserves the admission window through delayed dispatch and settlement', asy
   try {
     const writes: Array<Record<string, unknown>> = [];
     const db = {
-      select: () => ({ from: () => ({ where: () => ({ orderBy: async () => [] }) }) }),
+      select: selectPoolRows(),
       insert: () => ({
         values: async (row: Record<string, unknown>) => {
           writes.push(row);
@@ -90,10 +98,98 @@ it('preserves the admission window through delayed dispatch and settlement', asy
   }
 });
 
+it.each([
+  'a',
+  'b',
+])('direct admission freezes the common pool multiplier for selected account %s', async (connectionId) => {
+  const now = new Date('2026-09-15T14:00:00Z');
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+  try {
+    const members = ['a', 'b'].map((id) => ({ connectionId: id, providerId: 'openai' }));
+    const quotas = members.map((member, i) => ({
+      ...member,
+      dimension: '7d',
+      modelBucket: null,
+      remainingFraction: i === 0 ? '0.03' : '0.19',
+      limitValue: null,
+      fetchedAt: now,
+      validUntil: new Date(now.getTime() + 60_000),
+      resetAt: new Date(now.getTime() + 7 * 86_400_000 * 0.55),
+    }));
+    const writes: Record<string, unknown>[] = [];
+    const db = {
+      select: selectPoolRows([members, quotas]),
+      insert: () => ({
+        values: async (row: Record<string, unknown>) => {
+          writes.push(row);
+        },
+      }),
+      update: () => ({
+        set: (row: Record<string, unknown>) => {
+          writes.push(row);
+          return { where: () => ({ returning: async () => [{ id: 'request' }] }) };
+        },
+      }),
+    };
+    const policies = {
+      effective: async () => ({
+        enabled: true,
+        credits5hEnabled: false,
+        credits7dEnabled: false,
+        credits30dEnabled: false,
+      }),
+      usage: async () => ({ credits5h: 0, credits7d: 0, credits30d: 0, apiMonthlyMicrodollars: 0 }),
+    };
+    const reservations = {
+      reserve: vi.fn(async (input) => ({
+        id: input.reservationId,
+        userId: input.userId,
+        amounts: input.amounts,
+        admittedAmounts: input.amounts,
+      })),
+    };
+    const service = new InferenceAccountingService(
+      policies as never,
+      reservations as never,
+      { withUserLock: async (_user: string, run: (database: unknown) => Promise<unknown>) => run(db) } as never
+    );
+    const admission = await service.admit({
+      userId: 'user',
+      tokenId: null,
+      protocol: 'responses',
+      request: {
+        protocol: 'responses',
+        model: 'astra',
+        messages: [],
+        tools: [],
+        stream: false,
+        isCompaction: false,
+        extensions: {},
+      },
+      model: {
+        id: 'astra',
+        publicId: 'astra',
+        subscriptionMultiplier: '10',
+        maxInputTokens: 1000,
+        maxOutputTokens: 100,
+      } as never,
+      source: { id: 'source', sourceType: 'subscription', upstreamModelId: 'astra' } as never,
+      connection: { id: connectionId, providerId: 'openai' } as never,
+    });
+    expect(admission.burnMultiplier).toBe(5);
+    expect(writes.filter((row) => row.burnMultiplier !== undefined).every((row) => row.burnMultiplier === '5')).toBe(
+      true
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it('settles a tail admission at the bounded one-credit overage without reopening quota for a second turn', async () => {
   const writes: Array<Record<string, unknown>> = [];
   const db = {
-    select: () => ({ from: () => ({ where: () => ({ orderBy: async () => [] }) }) }),
+    select: selectPoolRows(),
     query: { inferenceRequests: { findFirst: async () => null } },
     insert: () => ({
       values: async (row: Record<string, unknown>) => {

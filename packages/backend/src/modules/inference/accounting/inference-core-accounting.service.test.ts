@@ -93,6 +93,7 @@ function createHarness(
     claimEmpty?: boolean;
     selectRows?: unknown[][];
     connection?: unknown;
+    source?: unknown;
     quotaRows?: unknown[];
     cooldownActive?: boolean;
   } = {}
@@ -112,7 +113,7 @@ function createHarness(
         findMany: vi.fn().mockResolvedValue(options.attempts ?? (options.attempt ? [options.attempt] : [])),
       },
       inferenceModels: { findFirst: vi.fn().mockResolvedValue(MODEL) },
-      inferenceModelSources: { findFirst: vi.fn().mockResolvedValue(SOURCE) },
+      inferenceModelSources: { findFirst: vi.fn().mockResolvedValue(options.source ?? SOURCE) },
       inferenceProviderConnections: { findFirst: vi.fn().mockResolvedValue(options.connection ?? CONNECTION) },
       inferenceQuotaSnapshots: { findMany: vi.fn().mockResolvedValue(options.quotaRows ?? []) },
       inferencePricingSnapshots: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -211,6 +212,34 @@ function createHarness(
 }
 
 describe('inference core accounting', () => {
+  it.each(['conn-1', 'conn-2'])('uses the same pool price when core dispatches through %s', async (connectionId) => {
+    const now = new Date('2026-09-15T14:00:00Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    try {
+      const members = ['conn-1', 'conn-2'].map((id) => ({ connectionId: id, providerId: 'openai' }));
+      const quotas = members.map((member, i) => ({
+        ...member,
+        dimension: '7d',
+        modelBucket: null,
+        remainingFraction: i === 0 ? '0.03' : '0.19',
+        limitValue: null,
+        fetchedAt: now,
+        validUntil: new Date(now.getTime() + 60_000),
+        resetAt: new Date(now.getTime() + 7 * 86_400_000 * 0.55),
+      }));
+      const { service, insertedAttempts } = createHarness({
+        request: { ...REQUEST, connectionId },
+        connection: { ...CONNECTION, id: connectionId },
+        source: { ...SOURCE, connectionId },
+        selectRows: [members, quotas],
+      });
+      expect(await service.admitCoreAttempt(ADMISSION)).toEqual({ decision: 'allow' });
+      expect(insertedAttempts[0]).toMatchObject({ burnMultiplier: '5', connectionId });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('pins the first attempt and its settlement to the same Gateway instant as the new window', async () => {
     const admittedAt = new Date('2026-09-09T13:24:04.591Z');
     const earlierCoreTime = '2026-09-09T13:24:04.483Z';
