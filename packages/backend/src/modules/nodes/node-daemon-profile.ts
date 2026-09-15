@@ -1,6 +1,8 @@
 export function validateEnrollmentDaemonProfile(nodeType: string, daemonType: string): string | null {
   if (['builder', 'storage', 'databases'].includes(nodeType) && daemonType !== 'docker') {
-    return 'Restricted node enrollment requires docker-daemon identity';
+    return nodeType === 'builder'
+      ? 'Builder node enrollment requires docker-daemon identity'
+      : 'Storage node enrollment requires docker-daemon identity';
   }
   return null;
 }
