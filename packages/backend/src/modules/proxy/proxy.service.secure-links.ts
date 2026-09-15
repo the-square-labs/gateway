@@ -225,6 +225,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
 
   protected async collectSecureLinkRuntimeSnapshotsOnce(): Promise<void> {
     if (!this.secureLinks) return;
+    const epoch = this.secureLinkRuntimeCollectionEpoch;
     const [hosts, additionalBindings] = await Promise.all([
       this.db.query.proxyHosts.findMany({
         where: and(
@@ -249,6 +250,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
     // Secure Links. A slow route cannot create overlapping background rounds.
     const concurrency = 4;
     for (let offset = 0; offset < hosts.length; offset += concurrency) {
+      if (this.secureLinkRuntimeCollectionEpoch !== epoch) return;
       const batch = hosts.slice(offset, offset + concurrency);
       const results = await Promise.allSettled(
         batch.map((host) => this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES))
@@ -264,6 +266,7 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
     }
 
     for (let offset = 0; offset < additionalBindings.length; offset += concurrency) {
+      if (this.secureLinkRuntimeCollectionEpoch !== epoch) return;
       const batch = additionalBindings.slice(offset, offset + concurrency);
       const results = await Promise.allSettled(batch.map((binding) => this.sampleAdditionalSecureLinkRuntime(binding)));
       results.forEach((result, index) => {

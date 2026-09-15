@@ -199,7 +199,101 @@ describe('nodesRoutes list access', () => {
     const body = (await response.json()) as { data: Array<Record<string, any>> };
 
     expect(response.status).toBe(200);
-    expect(body.data[0].capabilities).toEqual({ nginx_pages_v1: true, nginx_pages_config_v1: true });
+    expect(body.data[0].capabilities).toEqual({
+      nginx_pages_v1: true,
+      nginx_pages_config_v1: true,
+    });
+  });
+
+  it('discovers only the exact backup executor node and exposes allowlisted capabilities', async () => {
+    mocks.scopes = ['nodes:backups:execute:storage-node'];
+    mocks.nodesService.list.mockResolvedValue({
+      data: [
+        {
+          id: 'storage-node',
+          type: 'storage',
+          hostname: 'storage-1.internal',
+          displayName: 'Storage 1',
+          status: 'online',
+          serviceCreationLocked: false,
+          daemonVersion: '1.2.3',
+          osInfo: 'linux',
+          configVersionHash: 'private-hash',
+          capabilities: {
+            capabilities: [
+              'managed_databases_v1',
+              'managed_storage_v1',
+              'database_backups_v1',
+              'private_daemon_capability',
+            ],
+          },
+          metadata: { privateValue: 'must-not-leak' },
+          lastHealthReport: null,
+          lastStatsReport: { privateValue: 'must-not-leak' },
+          isConnected: true,
+          createdAt: '',
+          updatedAt: '',
+        },
+      ],
+      page: 1,
+      limit: 100,
+      total: 1,
+      totalPages: 1,
+    });
+
+    const response = await createApp().request('/?type=storage&limit=100');
+    const body = (await response.json()) as { data: Array<Record<string, any>> };
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'storage' }), {
+      allowedIds: ['storage-node'],
+    });
+    expect(body.data[0]).toMatchObject({
+      id: 'storage-node',
+      osInfo: null,
+      configVersionHash: null,
+      metadata: {},
+      lastStatsReport: null,
+      capabilities: {
+        managedDatabasesV1: true,
+        managedStorageV1: true,
+        databaseBackupsV1: true,
+      },
+    });
+    expect(body.data[0].capabilities).not.toHaveProperty('capabilities');
+    expect(body.data[0].capabilities).not.toHaveProperty('private_daemon_capability');
+    expect(body.data[0].metadata).not.toHaveProperty('privateValue');
+  });
+
+  it('does not let a backup executor grant list Docker or untyped inventory', async () => {
+    mocks.scopes = ['nodes:backups:execute:storage-node'];
+
+    const dockerResponse = await createApp().request('/?type=docker&limit=100');
+    const untypedResponse = await createApp().request('/?limit=100');
+
+    expect(dockerResponse.status).toBe(403);
+    expect(untypedResponse.status).toBe(403);
+    expect(mocks.nodesService.list).not.toHaveBeenCalled();
+  });
+
+  it('allows a global backup executor grant to discover both stateful node query types', async () => {
+    mocks.scopes = ['nodes:backups:execute'];
+
+    const databasesResponse = await createApp().request('/?type=databases&limit=100');
+    const storageResponse = await createApp().request('/?type=storage&limit=100');
+
+    expect(databasesResponse.status).toBe(200);
+    expect(storageResponse.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ type: 'databases', limit: 100 }),
+      undefined
+    );
+    expect(mocks.nodesService.list).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ type: 'storage', limit: 100 }),
+      undefined
+    );
   });
 
   it('keeps safe Docker runtime metadata in compact node discovery rows', async () => {
@@ -252,7 +346,9 @@ describe('nodesRoutes list access', () => {
     expect(body.data[0]).toMatchObject({
       id: 'node-1',
       appearanceColor: 'blue',
-      capabilities: { dockerPortBindIpV1: true },
+      capabilities: {
+        dockerPortBindIpV1: true,
+      },
       lastHealthReport: {
         systemMemoryTotalBytes: 1024,
         swapTotalBytes: 512,

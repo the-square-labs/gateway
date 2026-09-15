@@ -110,16 +110,54 @@ describe('RelayPolicyService bundle cache lifecycle', () => {
       })
     );
     const successor = service.syncNodeGrantBundle('node');
-    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+    await Promise.resolve();
+    expect(dispatch).toHaveBeenCalledOnce();
     const owner = state.nodeGrantSyncs.get('node');
     releaseOld({ success: true });
     await Promise.all([first, queued]);
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
     expect(state.nodeGrantSyncs.get('node')).toBe(owner);
     expect(state.lastNodeGrantBundles.size).toBe(0);
     releaseNew({ success: true });
     await successor;
     expect(state.lastNodeGrantBundles.size).toBe(1);
     expect(state.nodeGrantSyncs.size).toBe(0);
+    expect(state.nodeGrantEpochs.size).toBe(0);
+  });
+
+  it.each(['reject', 'unsuccessful'] as const)('keeps acknowledged A when queued B is %s', async (failure) => {
+    const { service, state, dispatch, generate, bundle } = fixture();
+    let release!: (value: any) => void;
+    dispatch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve;
+      })
+    );
+    if (failure === 'reject') dispatch.mockRejectedValueOnce(new Error('B failed'));
+    else dispatch.mockResolvedValueOnce({ success: false, error: 'B failed' });
+    generate.mockResolvedValueOnce(bundle).mockResolvedValueOnce({ ...bundle, generatedAtUnixMs: '200' });
+    const first = service.syncNodeGrantBundle('node');
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    const second = service.syncNodeGrantBundle('node');
+    const results = Promise.allSettled([first, second]);
+    release({ success: true });
+    await results;
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(state.lastNodeGrantBundles.get('node')).toEqual(bundle);
+    expect(state.nodeGrantSyncs.size).toBe(0);
+    expect(state.nodeGrantEpochs.size).toBe(0);
+  });
+
+  it('releases epoch keys through repeated successful, failed and revoked lifecycles', async () => {
+    const { service, state, dispatch } = fixture();
+    for (let i = 0; i < 100; i++) {
+      dispatch.mockResolvedValueOnce({ success: i % 2 === 0 });
+      await service.syncNodeGrantBundle(`node-${i}`);
+      await service.revokeNode(`node-${i}`);
+    }
+    expect(state.lastNodeGrantBundles.size).toBe(0);
+    expect(state.nodeGrantSyncs.size).toBe(0);
+    expect(state.nodeGrantEpochs.size).toBe(0);
   });
 });
 

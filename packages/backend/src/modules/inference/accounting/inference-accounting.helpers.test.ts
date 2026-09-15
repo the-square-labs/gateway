@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { describe, expect, it } from 'vitest';
 import type { InferenceRequest } from '../protocol/inference-protocol.types.js';
 import { __testOnly } from './inference-accounting.helpers.js';
-import { dynamicBurnMultiplier, subscriptionCredits } from './inference-budget-policy.js';
+import { dynamicBurnMultiplier, subscriptionCredits, subscriptionCreditsForUsage } from './inference-budget-policy.js';
 
 describe('inference accounting estimates', () => {
   it('uses a bounded conservative reservation ceiling when maximum output is unknown', () => {
@@ -64,8 +64,33 @@ describe('inference accounting estimates', () => {
       isCompaction: false,
     });
 
-    expect(capped).toMatchObject({ outputTokens: 1_400_000, totalTokens: 1_500_000 });
-    expect(subscriptionCredits(capped!.totalTokens, 1, 1)).toBeLessThanOrEqual(1_500);
+    expect(capped).toMatchObject({ outputTokens: 1_375_000, totalTokens: 1_475_000 });
+    expect(
+      subscriptionCreditsForUsage({ ...capped!, cacheWriteTokens: capped!.inputTokens }, 1, 1)
+    ).toBeLessThanOrEqual(1_500);
+  });
+
+  it('uses settlement cache-write pricing for both admission and the output cap', () => {
+    const estimate = {
+      inputTokens: 1_000_000,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 1_000_000,
+      reasoningTokens: 0,
+      totalTokens: 2_000_000,
+      estimated: true,
+    };
+    const capped = __testOnly.capSubscriptionEstimateToCredits({
+      estimate,
+      maximumCredits: 1_500,
+      modelMultiplier: 1,
+      burnMultiplier: 1,
+      serviceTierMultiplier: 1,
+    });
+    expect(capped?.outputTokens).toBe(250_000);
+    const charge = subscriptionCreditsForUsage({ ...capped!, cacheWriteTokens: estimate.inputTokens }, 1, 1);
+    expect(charge).toBe(1_500);
+    expect(__testOnly.reservationAmounts('subscription', capped!, 1, 1, 1, null).credits5h).toBe(charge);
   });
 
   it('does not cap requests that fit, disabled windows, or compaction requests', () => {

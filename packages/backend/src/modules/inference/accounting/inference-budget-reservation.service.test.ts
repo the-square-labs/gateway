@@ -126,6 +126,38 @@ describe('inference live reservation policy', () => {
   });
 
   const redisUrl = process.env.INFERENCE_REDIS_INTEGRATION_URL;
+
+  it('stops renewal without deleting the live reservation while awaiting late settlement', async () => {
+    vi.useFakeTimers();
+    const evalMock = vi.fn().mockResolvedValue([0, '500', '500', '500', '0', '1000', '1000', '1000', '0']);
+    const service = new InferenceBudgetReservationService({ eval: evalMock } as never);
+    try {
+      const reservation = await service.reserve({
+        reservationId: 'late-settlement',
+        userId: 'user-late',
+        limits,
+        isCompaction: false,
+        amounts: { credits5h: 1500, credits7d: 1500, credits30d: 1500, apiMonthlyMicrodollars: 0 },
+        usage: {
+          credits5h: 500,
+          credits7d: 500,
+          credits30d: 500,
+          apiMonthlyMicrodollars: 0,
+          recoveryAt: { credits5h: new Date(), credits7d: new Date(), credits30d: new Date(), apiMonthly: new Date() },
+        },
+      });
+      expect(vi.getTimerCount()).toBe(1);
+      service.awaitSettlement(reservation);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(evalMock).toHaveBeenCalledTimes(1);
+      await service.release(reservation);
+      expect(evalMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
   (redisUrl ? it : it.skip)(
     'atomically preserves a visible half-credit tail and one visible-credit overage in Redis',
     async () => {
@@ -173,6 +205,11 @@ describe('inference live reservation policy', () => {
         expect(Number(stored!.slice(stored!.indexOf(':') + 1))).toBe(1_500);
         await (service as unknown as { renew(value: unknown): Promise<void> }).renew(admitted[0]!.value);
         expect(await redis.hget(__testOnly.reservationKeys(input.userId)[1]!, admitted[0]!.value.id)).toBe(stored);
+        service.awaitSettlement(admitted[0]!.value);
+        expect(await service.isActive(admitted[0]!.value)).toBe(true);
+        await expect(
+          service.reserve({ ...input, reservationId: 'after-transport-before-settlement' })
+        ).rejects.toMatchObject({ code: 'subscription_budget_exhausted' });
         await service.release(admitted[0]!.value);
         await expect(
           service.reserve({

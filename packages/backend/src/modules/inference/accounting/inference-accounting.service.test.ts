@@ -163,23 +163,23 @@ it('settles a tail admission at the bounded one-credit overage without reopening
     connection: { id: 'connection', providerId: 'openai-apikey' } as never,
   });
 
-  expect(admission.admittedMaxOutputTokens).toBe(1_499_999);
+  expect(admission.admittedMaxOutputTokens).toBe(1_499_998);
   expect(reservations.reserve).toHaveBeenCalledWith(
-    expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 2_000 }) })
+    expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 1_999.99925 }) })
   );
   await service.settle(
     admission,
     {
       inputTokens: 1,
       cachedInputTokens: 0,
-      cacheWriteTokens: 0,
-      outputTokens: 1_499_999,
+      cacheWriteTokens: 1,
+      outputTokens: admission.admittedMaxOutputTokens!,
       reasoningTokens: 0,
-      totalTokens: 1_500_000,
+      totalTokens: 1 + admission.admittedMaxOutputTokens!,
       estimated: false,
     },
     true
   );
-  expect(writes.find((row) => row.entryType === 'settlement')).toMatchObject({ credits: '1500' });
+  expect(writes.find((row) => row.entryType === 'settlement')).toMatchObject({ credits: '1499.99925' });
   expect(reservations.release).toHaveBeenCalledOnce();
 });

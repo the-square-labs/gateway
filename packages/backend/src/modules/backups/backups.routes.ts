@@ -110,7 +110,9 @@ const cancelRoute = appRoute({
 
 /** BackupService rechecks source, destination, and executor authority for every operation. */
 export const backupRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
-backupRoutes.use('*', authMiddleware);
+// This router is mounted at /api: a wildcard here would intercept unrelated
+// MCP, webhook, logging-ingest and Pages-deploy authentication.
+backupRoutes.use('/databases/:id/backups/*', authMiddleware);
 export function assertBackupOperationScopes(
   c: any,
   input: {

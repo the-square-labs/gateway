@@ -175,7 +175,9 @@ function hasBroadDockerNodeListAccess(scopes: string[]) {
 function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
   const capabilities = node.capabilities as Record<string, unknown> | null | undefined;
   const health = node.lastHealthReport as Record<string, unknown> | null | undefined;
-  const advertisedCapabilities = Array.isArray(capabilities?.capabilities) ? capabilities.capabilities : [];
+  const advertisedCapabilities = Array.isArray(capabilities?.capabilities)
+    ? capabilities.capabilities.filter((value): value is string => typeof value === 'string')
+    : [];
   const networkInterfaces = Array.isArray(health?.networkInterfaces) ? health.networkInterfaces : [];
   return {
     id: node.id,
@@ -203,6 +205,9 @@ function compactDockerNodeForDockerAccess(node: Record<string, unknown>) {
         : {}),
       ...(advertisedCapabilities.includes('nginx_pages_v1') ? { nginx_pages_v1: true } : {}),
       ...(advertisedCapabilities.includes('nginx_pages_config_v1') ? { nginx_pages_config_v1: true } : {}),
+      ...(advertisedCapabilities.includes('managed_databases_v1') ? { managedDatabasesV1: true } : {}),
+      ...(advertisedCapabilities.includes('managed_storage_v1') ? { managedStorageV1: true } : {}),
+      ...(advertisedCapabilities.includes('database_backups_v1') ? { databaseBackupsV1: true } : {}),
     },
     lastSeenAt: node.lastSeenAt,
     lastHealthReport: health
@@ -249,6 +254,10 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
       : query.type === 'databases' || query.type === 'storage'
         ? ['databases:create', 'storage:create']
         : [];
+  const isStatefulNodeQuery = query.type === 'databases' || query.type === 'storage';
+  const allowedBackupExecutorNodeIds = isStatefulNodeQuery ? getResourceScopedIds(scopes, 'nodes:backups:execute') : [];
+  const canListAllBackupExecutorNodes = isStatefulNodeQuery && hasScope(scopes, 'nodes:backups:execute');
+  const canListBackupExecutorNodes = canListAllBackupExecutorNodes || allowedBackupExecutorNodeIds.length > 0;
   const allowedIngressNodeIds = [
     ...new Set(
       creationBases.flatMap((base) =>
@@ -272,13 +281,15 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     !canManageFolders &&
     allowedNodeIds.length === 0 &&
     !canListDockerNodes &&
-    !canListIngressNodes
+    !canListIngressNodes &&
+    !canListBackupExecutorNodes
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Missing permission for the requested node inventory', {
       requiredScopes: [
         'nodes:details',
         'nodes:folders:manage',
         ...creationBases,
+        ...(isStatefulNodeQuery ? ['nodes:backups:execute'] : []),
         ...(query.type === 'docker' ? RESOURCE_SCOPED_DOCKER_NODE_SCOPES : []),
       ],
       scopeMatch: 'any',
@@ -287,19 +298,28 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   const scopedNodeIds =
     query.type === 'docker' && !canListAllDockerNodes
       ? [...new Set([...allowedNodeIds, ...allowedDockerNodeIds])]
-      : creationBases.length > 0 && !canListAllIngressNodes
-        ? [...new Set([...allowedNodeIds, ...allowedIngressNodeIds])]
+      : creationBases.length > 0 && !canListAllIngressNodes && !canListAllBackupExecutorNodes
+        ? [...new Set([...allowedNodeIds, ...allowedIngressNodeIds, ...allowedBackupExecutorNodeIds])]
         : allowedNodeIds;
   const result = await service.list(
     query,
-    hasNodeDetails || canManageFolders || canListAllDockerNodes || canListAllIngressNodes
+    hasNodeDetails ||
+      canManageFolders ||
+      canListAllDockerNodes ||
+      canListAllIngressNodes ||
+      canListAllBackupExecutorNodes
       ? undefined
       : { allowedIds: scopedNodeIds }
   );
   if (query.type === 'docker' && canListDockerNodes && !hasNodeDetails) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
-  if (creationBases.length > 0 && canListIngressNodes && !hasNodeDetails && !canManageFolders) {
+  if (
+    creationBases.length > 0 &&
+    (canListIngressNodes || canListBackupExecutorNodes) &&
+    !hasNodeDetails &&
+    !canManageFolders
+  ) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
   return c.json(result);

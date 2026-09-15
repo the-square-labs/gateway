@@ -14,6 +14,10 @@ import { logger } from './proxy.service.core.js';
 import { ProxyServiceMutations } from './proxy.service.mutations.js';
 
 export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
+  // One replaceable token fences stale collection snapshots, without retaining
+  // deleted resource IDs. Already-started samples have their own write leases.
+  protected secureLinkRuntimeCollectionEpoch: object = {};
+
   async deleteProxyHost(id: string, userId: string, options: { abandonOfflineNode?: boolean } = {}) {
     // 1. Get existing host
     const existing = await this.db.query.proxyHosts.findFirst({
@@ -236,6 +240,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
   }
 
   protected forgetSecureLinkRuntime(key: string): void {
+    this.secureLinkRuntimeCollectionEpoch = {};
     this.secureLinkRuntimeHistory.delete(key);
     // The promise itself is the write lease: removing it fences late samples
     // without retaining a tombstone for every deleted host/binding.

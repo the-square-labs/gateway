@@ -179,6 +179,7 @@ function createHarness(
           expiresAt: new Date(),
         })),
     release: vi.fn().mockResolvedValue(undefined),
+    awaitSettlement: vi.fn(),
   };
   const locks = {
     withUserLock: vi.fn(async (_userId: string, work: (tx: never) => Promise<unknown>) => work(tx as never)),
@@ -293,7 +294,7 @@ describe('inference core accounting', () => {
       estimate: { inputTokens: 1_000, maxOutputTokens: 2_000_000 },
     });
 
-    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 1_499_000 });
+    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 1_498_750 });
     expect(reservations.reserve).toHaveBeenCalledWith(
       expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 2_000 }) })
     );
@@ -353,7 +354,7 @@ describe('inference core accounting', () => {
     expect(reservations.reserve).toHaveBeenCalledWith(
       expect.objectContaining({
         amounts: expect.objectContaining({
-          credits5h: 1.5,
+          credits5h: 1.75,
           apiMonthlyMicrodollars: 0,
         }),
       })
@@ -510,8 +511,11 @@ describe('inference core accounting', () => {
     expect(insertedAttempts[0]).toMatchObject({ attemptKind: 'subagent', coreAttemptId: 'att_1' });
   });
 
-  it('settles a completed attempt with a ledger row and publishes usage', async () => {
-    const { service, ledgerRows, eventBus, reservations, requestUpdates } = createHarness({
+  it.each([
+    false,
+    true,
+  ])('settles an attempt and releases only after ledger commit (transport ended: %s)', async (transportEnded) => {
+    const { service, ledgerRows, eventBus, reservations, requestUpdates, locks, tx } = createHarness({
       attempt: ATTEMPT,
       selectRows: [
         [
@@ -525,6 +529,22 @@ describe('inference core accounting', () => {
         ],
         [{ credits: '1.385', apiMicrodollars: 0, estimatedUsage: false }],
       ],
+    });
+    if (transportEnded) {
+      await service.finalizeCoreRequest(REQUEST.id, 'completed');
+      expect(reservations.release).not.toHaveBeenCalled();
+      expect(reservations.awaitSettlement).toHaveBeenCalledWith({ id: ATTEMPT.reservationId, userId: 'user-1' });
+    }
+    let transactionCommitted = false;
+    locks.withUserLock.mockImplementation(async (_userId, work) => {
+      const result = await work(tx as never);
+      expect(reservations.release).not.toHaveBeenCalled();
+      transactionCommitted = true;
+      return result;
+    });
+    reservations.release.mockImplementation(async () => {
+      expect(ledgerRows).toHaveLength(1);
+      expect(transactionCommitted).toBe(true);
     });
     await service.settleCoreAttempt({
       contractId: 'wiolett-core/v1',
@@ -560,7 +580,7 @@ describe('inference core accounting', () => {
       credits: '1.385',
       snapshot: expect.objectContaining({ coreAttemptId: 'att_1', attemptKind: 'root' }),
     });
-    expect(requestUpdates).toContainEqual(expect.objectContaining({ estimatedUsage: false }));
+    if (!transportEnded) expect(requestUpdates).toContainEqual(expect.objectContaining({ estimatedUsage: false }));
     expect(eventBus.publish).toHaveBeenCalled();
     expect(reservations.release).toHaveBeenCalledWith({ id: `${REQUEST.id}:att_1`, userId: 'user-1' });
   });
@@ -792,6 +812,18 @@ describe('inference core accounting', () => {
     await service.finalizeCoreRequest(REQUEST.id, 'completed');
     expect(requestUpdates[0]).toMatchObject({ status: 'completed' });
     expect(reservations.release).toHaveBeenCalledWith({ id: REQUEST.id, userId: 'user-1' });
+  });
+
+  it.each([
+    'completed',
+    'failed',
+    'cancelled',
+  ] as const)('keeps unsettled attempt and legacy reservations held after transport %s', async (outcome) => {
+    const { service, reservations } = createHarness({ attempts: [ATTEMPT] });
+    await service.finalizeCoreRequest(REQUEST.id, outcome);
+    expect(reservations.release).not.toHaveBeenCalled();
+    expect(reservations.awaitSettlement).toHaveBeenCalledWith({ id: ATTEMPT.reservationId, userId: 'user-1' });
+    expect(reservations.awaitSettlement).toHaveBeenCalledWith({ id: REQUEST.id, userId: 'user-1' });
   });
 
   it('does not overwrite a settled failed root attempt with transport completion', async () => {

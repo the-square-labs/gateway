@@ -114,6 +114,7 @@ export class RelayPolicyService {
     Promise<Awaited<ReturnType<NodeDispatchService['sendRelayGrantBundle']>>>
   >();
   private readonly lastNodeGrantBundles = new Map<string, RelayGrantBundle>();
+  private readonly nodeGrantEpochs = new Map<string, { valid: boolean; pending: number }>();
 
   constructor(
     private readonly db: DrizzleClient,
@@ -977,7 +978,9 @@ export class RelayPolicyService {
       if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
     });
     this.lastNodeGrantBundles.delete(nodeId);
-    this.nodeGrantSyncs.delete(nodeId);
+    const epoch = this.nodeGrantEpochs.get(nodeId);
+    if (epoch) epoch.valid = false;
+    this.nodeGrantEpochs.delete(nodeId);
     await this.syncSnapshot();
     await Promise.allSettled(
       affectedRoutes
@@ -988,15 +991,36 @@ export class RelayPolicyService {
 
   async syncNodeGrantBundle(nodeId: string) {
     if (!this.dispatch) throw new Error('Relay node dispatch is not configured');
+    const epoch = this.nodeGrantEpochs.get(nodeId) ?? { valid: true, pending: 0 };
+    epoch.pending += 1;
+    this.nodeGrantEpochs.set(nodeId, epoch);
     const previous = this.nodeGrantSyncs.get(nodeId) ?? Promise.resolve(undefined);
     const current = previous
       .catch(() => undefined)
       .then(async () => {
+        if (!epoch.valid) {
+          return {
+            commandId: '',
+            success: false,
+            error: 'Relay grant sync was revoked',
+            detail: '',
+            data: Buffer.alloc(0),
+          };
+        }
         const bundle = await this.getNodeGrantBundle(nodeId);
+        if (!epoch.valid) {
+          return {
+            commandId: '',
+            success: false,
+            error: 'Relay grant sync was revoked',
+            detail: '',
+            data: Buffer.alloc(0),
+          };
+        }
         const result = await this.dispatch!.sendRelayGrantBundle(nodeId, bundle);
-        // Revocation invalidates the in-flight write lease after its DB commit.
-        // A replaced/queued operation must not resurrect the revoked bundle.
-        if (result.success && this.nodeGrantSyncs.get(nodeId) === current) {
+        // Queue ownership is not write validity: A's acknowledged bundle stays
+        // authoritative even when B is queued and subsequently fails.
+        if (result.success && epoch.valid) {
           this.lastNodeGrantBundles.set(nodeId, bundle);
         }
         return result;
@@ -1006,6 +1030,8 @@ export class RelayPolicyService {
       return await current;
     } finally {
       if (this.nodeGrantSyncs.get(nodeId) === current) this.nodeGrantSyncs.delete(nodeId);
+      epoch.pending -= 1;
+      if (epoch.pending === 0 && this.nodeGrantEpochs.get(nodeId) === epoch) this.nodeGrantEpochs.delete(nodeId);
     }
   }
 

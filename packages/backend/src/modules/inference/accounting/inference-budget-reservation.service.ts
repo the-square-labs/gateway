@@ -212,6 +212,11 @@ export class InferenceBudgetReservationService {
     }
   }
 
+  /** Keep the debit held for late settlement, but bound an abandoned lease by its Redis TTL. */
+  awaitSettlement(reservation: Pick<BudgetReservation, 'id' | 'userId'>): void {
+    this.stopRenewal(reservation);
+  }
+
   async isActive(reservation: Pick<BudgetReservation, 'id' | 'userId'>): Promise<boolean> {
     const keys = reservationKeys(reservation.userId);
     const values = await Promise.all([1, 3, 5, 7].map((index) => this.redis.hexists(keys[index]!, reservation.id)));

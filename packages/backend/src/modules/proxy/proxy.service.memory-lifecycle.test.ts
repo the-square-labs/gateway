@@ -44,6 +44,50 @@ function fixture() {
 const snapshot = { timestamp: '2026-09-15T10:00:00Z', runtime: {}, traffic: {} };
 
 describe('ProxyService memory lifecycle', () => {
+  it.each(['host', 'child'] as const)('does not start deleted %s from a stale later background batch', async (kind) => {
+    const { service } = fixture();
+    const pending = deferred<void>();
+    const hosts = [1, 2, 3, 4, 5].map((i) => ({ id: i === 5 ? 'host' : `h${i}`, nodeId: 'node' }));
+    service.db.query.proxyHosts.findMany = vi.fn().mockResolvedValue(hosts);
+    service.db.query.proxyAdditionalSecureLinks = { findMany: vi.fn().mockResolvedValue([{ id: 'child' }]) };
+    service.collectSecureLinkRuntimeSnapshot = vi.fn(async () => {
+      await pending.promise;
+      return snapshot;
+    });
+    const collecting = service.collectSecureLinkRuntimeSnapshots();
+    await vi.waitFor(() => expect(service.collectSecureLinkRuntimeSnapshot).toHaveBeenCalledTimes(4));
+    if (kind === 'host') await service.deleteProxyHost('host', 'user');
+    else await service.deleteAdditionalSecureLink('host', 'child', 'user');
+    pending.resolve();
+    await collecting;
+    expect(service.collectSecureLinkRuntimeSnapshot).toHaveBeenCalledTimes(4);
+    expect(service.secureLinks.getRuntime).not.toHaveBeenCalled();
+    expect(service.secureLinkRuntimeHistory.has('host')).toBe(false);
+    expect(service.secureLinkRuntimeHistory.has('additional:child')).toBe(false);
+    expect(service.secureLinkRuntimeSamplesInFlight.size).toBe(0);
+    expect(service.secureLinkRuntimeBackgroundInFlight).toBeNull();
+
+    // A fresh round must still collect unaffected live resources.
+    service.db.query.proxyHosts.findMany.mockResolvedValue([{ id: 'survivor', nodeId: 'node' }]);
+    service.db.query.proxyAdditionalSecureLinks.findMany.mockResolvedValue([]);
+    await service.collectSecureLinkRuntimeSnapshots();
+    expect(service.secureLinkRuntimeHistory.get('survivor')).toEqual([snapshot]);
+  });
+
+  it('invalidates a collection whose database snapshot returns after deletion', async () => {
+    const { service } = fixture();
+    const read = deferred<any[]>();
+    service.db.query.proxyHosts.findMany = vi.fn().mockReturnValue(read.promise);
+    service.collectSecureLinkRuntimeSnapshot = vi.fn().mockResolvedValue(snapshot);
+    const collecting = service.collectSecureLinkRuntimeSnapshots();
+    await service.deleteProxyHost('host', 'user');
+    read.resolve([{ id: 'host', nodeId: 'node' }]);
+    await collecting;
+    expect(service.collectSecureLinkRuntimeSnapshot).not.toHaveBeenCalled();
+    expect(service.secureLinkRuntimeHistory.size).toBe(0);
+    expect(service.secureLinkRuntimeBackgroundInFlight).toBeNull();
+  });
+
   it.each([
     false,
     true,

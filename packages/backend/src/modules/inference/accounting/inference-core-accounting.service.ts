@@ -643,9 +643,9 @@ export class InferenceCoreAccountingService {
 
   /**
    * Terminal request state from the proxy's point of view: the proxied
-   * response ended, errored, or the client went away. Releases the budget
-   * reservation exactly once; attempt-level accounting continues to arrive
-   * through settlement callbacks independently.
+   * response ended, errored, or the client went away. Attempt-level accounting
+   * arrives independently: unsettled reservations must remain held until the
+   * ledger commits (or the bounded abandoned-reservation TTL expires).
    */
   async finalizeCoreRequest(
     requestId: string,
@@ -692,20 +692,13 @@ export class InferenceCoreAccountingService {
         .returning({ id: inferenceRequests.id });
       if (!claimed) return;
       await this.refreshRequestAggregates(database, requestId);
-      const attempts = await database
-        .select({ reservationId: inferenceRequestAttempts.reservationId })
-        .from(inferenceRequestAttempts)
-        .where(
-          and(
-            eq(inferenceRequestAttempts.requestId, requestId),
-            inArray(inferenceRequestAttempts.status, ['pending', 'running'])
-          )
-        );
+      const attempts = priorAttempts.filter((attempt) => attempt.status === 'pending' || attempt.status === 'running');
       for (const attempt of attempts) {
-        if (attempt.reservationId) await this.reservations.release({ id: attempt.reservationId, userId });
+        if (attempt.reservationId) this.reservations.awaitSettlement({ id: attempt.reservationId, userId });
       }
       // Compatibility with reservations created before attempt-scoped ids.
-      await this.reservations.release({ id: requestId, userId });
+      if (attempts.length > 0) this.reservations.awaitSettlement({ id: requestId, userId });
+      else await this.reservations.release({ id: requestId, userId });
     });
   }
 

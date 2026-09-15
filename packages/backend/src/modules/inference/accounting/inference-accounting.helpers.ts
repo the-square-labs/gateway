@@ -11,11 +11,27 @@ import {
   type InferenceBudgetUsage,
   SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS,
   SUBSCRIPTION_CHAT_BUDGET_FRACTION,
-  subscriptionCredits,
+  subscriptionCreditsForUsage,
 } from './inference-budget-policy.js';
 import type { BudgetReservationAmounts } from './inference-budget-reservation.service.js';
 
 const DEFAULT_UNKNOWN_MAX_OUTPUT_TOKENS = 8_192;
+
+// Cache disposition is unknown at admission. Reserve the most expensive
+// input class using the same tariff as settlement, without inflating token counts.
+function subscriptionEstimateCredits(
+  usage: InferenceUsage,
+  modelMultiplier: number,
+  burnMultiplier: number,
+  serviceTierMultiplier: number
+): number {
+  return subscriptionCreditsForUsage(
+    { ...usage, cachedInputTokens: 0, cacheWriteTokens: usage.inputTokens },
+    modelMultiplier,
+    burnMultiplier,
+    serviceTierMultiplier
+  );
+}
 
 export function conservativeEstimate(
   request: InferenceRequest,
@@ -58,7 +74,7 @@ export function reservationAmounts(
   fixedApiMicrodollars = 0
 ): BudgetReservationAmounts {
   if (sourceType === 'subscription') {
-    const credits = subscriptionCredits(usage.totalTokens, modelMultiplier, burnMultiplier, serviceTierMultiplier);
+    const credits = subscriptionEstimateCredits(usage, modelMultiplier, burnMultiplier, serviceTierMultiplier);
     return { credits5h: credits, credits7d: credits, credits30d: credits, apiMonthlyMicrodollars: 0 };
   }
   if (!pricing) throw new InferenceProtocolError(503, 'pricing_unavailable', 'API pricing is unavailable');
@@ -116,15 +132,12 @@ export function capSubscriptionEstimateToCredits(input: {
   serviceTierMultiplier: number;
 }): InferenceUsage | null {
   const multiplier = input.modelMultiplier * input.burnMultiplier * input.serviceTierMultiplier;
-  const desiredCredits = subscriptionCredits(input.estimate.totalTokens, multiplier, 1);
+  const desiredCredits = subscriptionEstimateCredits(input.estimate, multiplier, 1, 1);
   if (desiredCredits <= input.maximumCredits || multiplier <= 0) return input.estimate;
 
-  const totalTokenCapacity = Math.floor((input.maximumCredits * 1_000) / multiplier);
-  if (totalTokenCapacity < input.estimate.inputTokens) return null;
-  const outputTokens = Math.min(
-    input.estimate.outputTokens,
-    Math.max(0, totalTokenCapacity - input.estimate.inputTokens)
-  );
+  const inputCredits = subscriptionEstimateCredits({ ...input.estimate, outputTokens: 0 }, multiplier, 1, 1);
+  const outputTokenCapacity = Math.floor(((input.maximumCredits - inputCredits) * 1_000) / multiplier);
+  const outputTokens = Math.min(input.estimate.outputTokens, Math.max(0, outputTokenCapacity));
   if (outputTokens < 1) return null;
 
   return {
