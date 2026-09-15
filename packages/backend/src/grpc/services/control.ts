@@ -787,7 +787,11 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               await deps.db
                 .update(relayInstances)
                 .set({
-                  state: nextState,
+                  // Runtime restarts must not silently resume a manually drained member.
+                  state:
+                    nextState === 'ready'
+                      ? sql`case when ${relayInstances.manualDrainStartedAt} is not null then 'draining'::relay_instance_state else 'ready'::relay_instance_state end`
+                      : nextState,
                   buildVersion: runtime.buildVersion || null,
                   protocolMajor: runtime.protocolMajor || null,
                   capabilities: {

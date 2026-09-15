@@ -1359,6 +1359,13 @@
       "when": 1789323009234,
       "tag": "0193_storage_secret_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 194,
+      "version": "7",
+      "when": 1789435084635,
+      "tag": "0194_relay_manual_drain_deadline",
+      "breakpoints": true
     }
   ]
 }

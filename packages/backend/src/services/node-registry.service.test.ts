@@ -42,7 +42,9 @@ describe('NodeRegistryService', () => {
       })),
       update: vi.fn(() => ({
         set: () => ({
-          where: () => Promise.resolve(),
+          where: () => ({
+            returning: () => Promise.resolve([{ metadata: null }]),
+          }),
         }),
       })),
     };
@@ -102,7 +104,9 @@ describe('NodeRegistryService', () => {
     const db = makeDb();
     db.update.mockReturnValueOnce({
       set: () => ({
-        where: () => Promise.reject(new Error('db failed')),
+        where: () => ({
+          returning: () => Promise.reject(new Error('db failed')),
+        }),
       }),
     } as never);
     const registry = new NodeRegistryService(db as never);
@@ -112,6 +116,25 @@ describe('NodeRegistryService', () => {
       'db failed'
     );
 
+    expect(registry.getNode('node-1')).toBeUndefined();
+  });
+
+  it('closes the stream when the node is deleted before the online update resumes', async () => {
+    const db = makeDb();
+    db.update.mockReturnValueOnce({
+      set: () => ({
+        where: () => ({ returning: () => Promise.resolve([]) }),
+      }),
+    } as never);
+    const registry = new NodeRegistryService(db as never);
+    const commandStream = { end: vi.fn(), destroy: vi.fn() };
+
+    await expect(registry.register('node-1', 'relay', 'worker-1', 'hash-1', commandStream as never)).rejects.toThrow(
+      'Node no longer exists'
+    );
+
+    expect(commandStream.end).toHaveBeenCalledOnce();
+    expect(commandStream.destroy).toHaveBeenCalledOnce();
     expect(registry.getNode('node-1')).toBeUndefined();
   });
 

@@ -271,21 +271,20 @@ export class NodeRegistryService {
       throw new Error('Registration superseded');
     }
 
-    await this.db
+    const [registeredNode] = await this.db
       .update(nodes)
       .set({
         status: 'online',
         lastSeenAt: new Date(),
         updatedAt: new Date(),
       })
-      .where(eq(nodes.id, nodeId));
-
-    const [registeredNode] = await this.db
-      .select({ metadata: nodes.metadata })
-      .from(nodes)
       .where(eq(nodes.id, nodeId))
-      .limit(1);
-    this.setNodeUpdateInProgress(nodeId, hasUpdateInProgress(registeredNode?.metadata));
+      .returning({ metadata: nodes.metadata });
+    if (!registeredNode) {
+      closeStream(commandStream);
+      throw new Error('Node no longer exists');
+    }
+    this.setNodeUpdateInProgress(nodeId, hasUpdateInProgress(registeredNode.metadata));
 
     if (options.isCurrentRegistration && !options.isCurrentRegistration()) {
       throw new Error('Registration superseded');

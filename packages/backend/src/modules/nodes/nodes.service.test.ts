@@ -5,6 +5,14 @@ vi.mock('@/lib/created-resource-permissions.js', () => ({
   grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
 }));
 
+import {
+  nodes,
+  relayAssignmentSourceProbes,
+  relayEndpointAssignments,
+  relayInstances,
+  relayPolicyState,
+  relayPoolUpdateSteps,
+} from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { NodesService } from './nodes.service.js';
 
@@ -748,6 +756,120 @@ describe('NodesService enrollment token creation', () => {
     expect(proxyService.deleteProxyHost).not.toHaveBeenCalled();
   });
 
+  it.each([
+    'success',
+    'uncovered',
+    'reconnected',
+    'updating',
+    'revocation-failed',
+  ])('safely removes an expired offline Relay through the full service path: %s', async (scenario) => {
+    const now = Date.now();
+    const existing = { id: 'relay-node-1', type: 'relay', hostname: 'dead', status: 'offline' };
+    const dead = {
+      id: 'dead',
+      poolId: 'system',
+      state: 'offline',
+      lastSeenAt: new Date(now - 120_000),
+      policyExpiresAt: new Date(now - 60_000),
+      health: { activeTunnels: 99 },
+    };
+    const live = {
+      id: 'live',
+      poolId: 'system',
+      state: 'ready',
+      lastSeenAt: new Date(now),
+      policyExpiresAt: new Date(now + 60_000),
+    };
+    const generations = [{ id: 'g', endpointId: 'endpoint', state: 'active' }];
+    const assignments = [
+      { id: 'a', relayInstanceId: 'dead', assignmentGenerationId: 'g', targetRegistrationState: 'ready' },
+      ...(scenario === 'uncovered'
+        ? []
+        : [{ id: 'b', relayInstanceId: 'live', assignmentGenerationId: 'g', targetRegistrationState: 'ready' }]),
+    ];
+    const query = (rows: unknown) => {
+      const result = Promise.resolve(rows) as any;
+      for (const method of ['from', 'where', 'limit', 'innerJoin', 'leftJoin', 'orderBy', 'for'])
+        result[method] = () => result;
+      return result;
+    };
+    const selections = [[existing], [], [dead], [assignments[0]], [], [{ count: 0 }], [{ count: 0 }], []];
+    const lockedSelections = [
+      [existing],
+      [],
+      [],
+      [dead, live],
+      scenario === 'updating' ? [{ id: 'run' }] : [],
+      assignments,
+      generations,
+    ];
+    const deletedTables: unknown[] = [];
+    const tx = {
+      execute: vi.fn(async () => undefined),
+      select: vi.fn(() => query(lockedSelections.shift())),
+      delete: vi.fn((table: unknown) => {
+        deletedTables.push(table);
+        return { where: vi.fn(async () => undefined) };
+      }),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
+    };
+    let inTransaction = false;
+    const db = {
+      select: vi.fn(() => query(selections.shift())),
+      transaction: vi.fn(async (callback) => {
+        inTransaction = true;
+        return callback(tx);
+      }),
+    } as any;
+    const lifecycle = {
+      retireOwner: vi.fn(async () => {
+        if (scenario === 'revocation-failed') throw new Error('revocation failed');
+      }),
+      retryPendingCRLs: vi.fn(async () => undefined),
+    };
+    const registry = {
+      getNode: vi.fn(() => (inTransaction && scenario === 'reconnected' ? {} : undefined)),
+      deregister: vi.fn(),
+    };
+    const service = new NodesService(db, { log: vi.fn() } as any, registry as any, {} as any, {} as any);
+    service.setSystemCertificateLifecycleService(lifecycle as any);
+    if (scenario !== 'success') {
+      const errors: Record<string, string> = {
+        uncovered: 'ready remaining relay',
+        reconnected: 'reconnected',
+        updating: 'active relay pool update',
+        'revocation-failed': 'revocation failed',
+      };
+      await expect(service.remove(existing.id, 'user-1')).rejects.toThrow(errors[scenario]);
+      expect(deletedTables).toHaveLength(0);
+      expect(registry.deregister).not.toHaveBeenCalled();
+      return;
+    }
+    await expect(service.remove(existing.id, 'user-1')).resolves.toBeUndefined();
+    expect(tx.execute).toHaveBeenCalledOnce();
+    expect(lifecycle.retireOwner).toHaveBeenNthCalledWith(
+      1,
+      { type: 'node', id: existing.id },
+      'cessationOfOperation',
+      tx
+    );
+    expect(lifecycle.retireOwner).toHaveBeenNthCalledWith(
+      2,
+      { type: 'relay_node_server', id: dead.id },
+      'cessationOfOperation',
+      tx
+    );
+    expect(deletedTables).toEqual([
+      relayPoolUpdateSteps,
+      relayAssignmentSourceProbes,
+      relayEndpointAssignments,
+      relayInstances,
+      nodes,
+    ]);
+    expect(tx.update).toHaveBeenCalledWith(relayPolicyState);
+    expect(lifecycle.retryPendingCRLs).toHaveBeenCalledOnce();
+  });
+
   it('removes a legacy pending Relay without requiring drain', async () => {
     const existing = {
       id: 'relay-node-1',
@@ -813,7 +935,7 @@ describe('NodesService enrollment token creation', () => {
 
     await expect(service.remove(existing.id, 'user-1')).resolves.toBeUndefined();
 
-    expect(deletedTables).toHaveLength(4);
+    expect(deletedTables).toHaveLength(5);
     expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'node.remove' }));
   });
 

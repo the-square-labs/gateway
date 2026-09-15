@@ -251,6 +251,8 @@ export const relayInstances = pgTable(
     advertisedAddresses: text('advertised_addresses').array().notNull().default([]),
     servicePort: integer('service_port').notNull().default(9443),
     state: relayInstanceStateEnum('state').notNull().default('joining'),
+    manualDrainStartedAt: timestamp('manual_drain_started_at', { withTimezone: true }),
+    drainForcedAt: timestamp('drain_forced_at', { withTimezone: true }),
     certificateIdentity: varchar('certificate_identity', { length: 255 }),
     certificateFingerprint: varchar('certificate_fingerprint', { length: 71 }),
     certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),

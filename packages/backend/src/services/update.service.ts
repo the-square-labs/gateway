@@ -1,6 +1,6 @@
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { nodes, relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import { settings } from '@/db/schema/settings.js';
 import { DEFAULT_SANDBOX_WORKSPACE_DIR } from '@/foundation/foundation-migrator.js';
@@ -939,7 +939,18 @@ exit 1`,
   }
 
   private async ensureRelayPoolUpdateRun(targetVersion: string, artifact: TrustedRelayUpdateArtifact) {
-    const [existing] = await this.db
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
+      return this.ensureRelayPoolUpdateRunLocked(tx, targetVersion, artifact);
+    });
+  }
+
+  private async ensureRelayPoolUpdateRunLocked(
+    tx: DrizzleTransaction,
+    targetVersion: string,
+    artifact: TrustedRelayUpdateArtifact
+  ) {
+    const [existing] = await tx
       .select()
       .from(relayPoolUpdateRuns)
       .where(
@@ -963,7 +974,7 @@ exit 1`,
       }
       return existing;
     }
-    const instances = await this.db
+    const instances = await tx
       .select()
       .from(relayInstances)
       .where(
@@ -979,7 +990,7 @@ exit 1`,
     if (instances.length > 1 && readyFaultDomains.size < 2) {
       throw new AppError(409, 'RELAY_UPDATE_CAPACITY_UNAVAILABLE', 'Two ready relay fault domains are required');
     }
-    const [run] = await this.db
+    const [run] = await tx
       .insert(relayPoolUpdateRuns)
       .values({
         poolId: 'system',
@@ -995,7 +1006,7 @@ exit 1`,
     const ordered = [...instances].sort(
       (left, right) => Number(left.kind === 'local') - Number(right.kind === 'local')
     );
-    await this.db.insert(relayPoolUpdateSteps).values(
+    await tx.insert(relayPoolUpdateSteps).values(
       ordered.map((instance, sequence) => ({
         runId: run.id,
         relayInstanceId: instance.id,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
@@ -26,6 +26,7 @@ type RelayInstanceRow = typeof relayInstances.$inferSelect;
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
 const STAGING_RECOVERY_MS = 2 * 60_000;
+const MANUAL_DRAIN_TIMEOUT_MS = 10 * 60_000;
 
 function poolBlockers(instances: RelayInstanceRow[]): string[] {
   return instances.flatMap((instance) =>
@@ -80,6 +81,7 @@ export class RelayPoolService {
   private reconciliationFlight: Promise<void> | null = null;
   private rebalanceFlight = false;
   private readonly preparingGenerations = new Set<string>();
+  private readonly drainActions = new Set<string>();
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
   constructor(
@@ -117,6 +119,7 @@ export class RelayPoolService {
   }
 
   private async reconcileOnce(): Promise<void> {
+    await this.reconcileManualDrains();
     await this.retireDrainedGenerations();
     if (this.rebalanceFlight) return;
     const snapshot = await this.getSnapshot();
@@ -162,6 +165,58 @@ export class RelayPoolService {
     this.stablePlan = null;
   }
 
+  async reconcileManualDrains(): Promise<void> {
+    const instances = await this.db
+      .select()
+      .from(relayInstances)
+      .where(and(eq(relayInstances.poolId, 'system'), isNotNull(relayInstances.manualDrainStartedAt)));
+    for (const candidate of instances) {
+      if (this.drainActions.has(candidate.id)) continue;
+      await this.withDrainAction(candidate.id, async () => {
+        // A resume may have completed while another member was being processed.
+        const [instance] = await this.db
+          .select()
+          .from(relayInstances)
+          .where(eq(relayInstances.id, candidate.id))
+          .limit(1);
+        if (!instance) return;
+        if (!instance.nodeId || instance.kind !== 'remote' || !instance.manualDrainStartedAt) return;
+        const expired = Date.now() - instance.manualDrainStartedAt.getTime() >= MANUAL_DRAIN_TIMEOUT_MS;
+        // Reassert admission after a worker restart; an acknowledged forced drain
+        // need not repeat unless the worker resumed admission or reports live streams.
+        const resumed = instance.health?.admissionState !== 'draining';
+        const force = expired && (!instance.drainForcedAt || (instance.health?.activeTunnels ?? 0) > 0 || resumed);
+        if (!force && !resumed) return;
+        try {
+          await this.policy.setRemoteInstanceDrain(instance.nodeId, true, force);
+          if (force)
+            await this.db
+              .update(relayInstances)
+              .set({ drainForcedAt: new Date() })
+              .where(
+                and(
+                  eq(relayInstances.id, instance.id),
+                  eq(relayInstances.manualDrainStartedAt, instance.manualDrainStartedAt)
+                )
+              );
+        } catch (error) {
+          logger.warn('Relay manual drain enforcement deferred', { instanceId: instance.id, error: String(error) });
+        }
+      });
+    }
+  }
+
+  private async withDrainAction<T>(instanceId: string, action: () => Promise<T>): Promise<T> {
+    if (this.drainActions.has(instanceId))
+      throw new AppError(409, 'RELAY_DRAIN_IN_PROGRESS', 'A relay drain action is already running');
+    this.drainActions.add(instanceId);
+    try {
+      return await action();
+    } finally {
+      this.drainActions.delete(instanceId);
+    }
+  }
+
   async retireDrainedGenerations(): Promise<number> {
     const generations = await this.db
       .select()
@@ -175,6 +230,7 @@ export class RelayPoolService {
           id: relayEndpointAssignments.id,
           state: relayInstances.state,
           lastSeenAt: relayInstances.lastSeenAt,
+          policyExpiresAt: relayInstances.policyExpiresAt,
           health: relayInstances.health,
         })
         .from(relayEndpointAssignments)
@@ -190,7 +246,14 @@ export class RelayPoolService {
             count.activeTunnels > 0
         );
       };
-      const fullyObservedAndIdle = assignments.every(isIdle);
+      // An offline member with an expired signed policy is fenced even without
+      // a final heartbeat. Only old generations with a completed handover qualify.
+      const isFencedOffline = (row: (typeof assignments)[number]) =>
+        row.state === 'offline' &&
+        row.policyExpiresAt &&
+        row.policyExpiresAt.getTime() <= Date.now() &&
+        (!row.lastSeenAt || row.lastSeenAt.getTime() <= Date.now() - 90_000);
+      const fullyObservedAndIdle = assignments.every((row) => isIdle(row) || isFencedOffline(row));
       if (!fullyObservedAndIdle) {
         // A live tunnel on another relay must not pin an idle, drained member.
         // Only touch old generations and require an observation after handover.
@@ -227,6 +290,7 @@ export class RelayPoolService {
             id: relayEndpointAssignments.id,
             state: relayInstances.state,
             lastSeenAt: relayInstances.lastSeenAt,
+            policyExpiresAt: relayInstances.policyExpiresAt,
             health: relayInstances.health,
           })
           .from(relayEndpointAssignments)
@@ -234,7 +298,7 @@ export class RelayPoolService {
           .where(eq(relayEndpointAssignments.assignmentGenerationId, generation.id))
           .orderBy(relayInstances.id, relayEndpointAssignments.id)
           .for('update');
-        if (!currentAssignments.every(isIdle)) return [];
+        if (!currentAssignments.every((row) => isIdle(row) || isFencedOffline(row))) return [];
         const changed = await tx
           .update(relayEndpointAssignmentGenerations)
           .set({ state: 'retired', retiredAt: new Date(), updatedAt: new Date() })
@@ -934,17 +998,40 @@ export class RelayPoolService {
     return probe ? this.tryActivate(probe.generationId) : false;
   }
 
-  async drainInstance(instanceId: string, userId: string, enabled = true) {
+  async drainInstance(instanceId: string, userId: string, enabled = true, options: { manual?: boolean } = {}) {
+    return this.withDrainAction(instanceId, () =>
+      this.setInstanceDrain(instanceId, userId, enabled, options.manual !== false)
+    );
+  }
+
+  private async setInstanceDrain(instanceId: string, userId: string, enabled: boolean, manual: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
     if (instance.kind === 'local')
       throw new AppError(409, 'LOCAL_RELAY_DRAIN_UNSUPPORTED', 'Use pool maintenance for local relay');
     if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
+    // Completing an update cannot cancel a separate operator-owned drain.
+    if (!manual && !enabled && instance.manualDrainStartedAt) enabled = true;
+    // Persist user intent before remote I/O so a crash or failed delivery cannot
+    // lose the deadline. Update-owned drains retain their separate rollout policy.
+    const persist = () =>
+      this.db
+        .update(relayInstances)
+        .set({
+          state: enabled ? 'draining' : 'ready',
+          manualDrainStartedAt: enabled
+            ? manual
+              ? sql`coalesce(${relayInstances.manualDrainStartedAt}, now())`
+              : instance.manualDrainStartedAt
+            : null,
+          drainForcedAt: enabled ? instance.drainForcedAt : null,
+          updatedAt: new Date(),
+        })
+        .where(eq(relayInstances.id, instance.id));
+    if (enabled && manual) await persist();
     await this.policy.setRemoteInstanceDrain(instance.nodeId, enabled);
-    await this.db
-      .update(relayInstances)
-      .set({ state: enabled ? 'draining' : 'ready', updatedAt: new Date() })
-      .where(eq(relayInstances.id, instance.id));
+    // Resume is command-first: failure must not erase the durable drain intent.
+    if (!enabled || !manual) await persist();
     await this.policy.reconcileAndSync();
     await this.audit.log({
       userId,
@@ -958,6 +1045,10 @@ export class RelayPoolService {
   }
 
   async forceDisconnectInstance(instanceId: string, userId: string) {
+    return this.withDrainAction(instanceId, () => this.forceDisconnectDrainingInstance(instanceId, userId));
+  }
+
+  private async forceDisconnectDrainingInstance(instanceId: string, userId: string) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
     if (instance.kind === 'local')
@@ -967,6 +1058,10 @@ export class RelayPoolService {
       throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINING', 'Relay instance must be draining first');
     }
     await this.policy.setRemoteInstanceDrain(instance.nodeId, true, true);
+    await this.db
+      .update(relayInstances)
+      .set({ drainForcedAt: new Date() })
+      .where(and(eq(relayInstances.id, instance.id), eq(relayInstances.state, 'draining')));
     await this.audit.log({
       userId,
       action: 'relay.instance.force_disconnect',

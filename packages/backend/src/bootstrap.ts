@@ -1779,7 +1779,8 @@ export async function initializeContainer(): Promise<void> {
   nodesService.setDaemonUpdateService(daemonUpdateService);
   if (relayPoolService) {
     updateService.setRelayPoolUpdateRuntime({
-      drainInstance: (instanceId, userId, enabled) => relayPoolService.drainInstance(instanceId, userId, enabled),
+      drainInstance: (instanceId, userId, enabled) =>
+        relayPoolService.drainInstance(instanceId, userId, enabled, { manual: false }),
       prepareWorkerUpdate: (version, arch) =>
         daemonUpdateService.prepareTrustedDaemonUpdate('relay-worker', `${version}-relay`, version, arch),
       dispatchWorkerUpdate: async (nodeId, artifact) => {

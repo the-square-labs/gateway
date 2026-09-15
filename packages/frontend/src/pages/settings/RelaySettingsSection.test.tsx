@@ -418,8 +418,15 @@ describe("RelaySettingsSection", () => {
   });
 
   it.each([
-    0, 3,
-  ])("allows removal only after all retained assignments are released (%s)", async (retainedAssignments) => {
+    { state: "draining" as const, retainedAssignments: 0, activeTunnels: 0, removable: true },
+    { state: "draining" as const, retainedAssignments: 3, activeTunnels: 0, removable: false },
+    { state: "offline" as const, retainedAssignments: 12, activeTunnels: 99, removable: true },
+  ])("handles removal of $state relay with $retainedAssignments retained assignments", async ({
+    state,
+    retainedAssignments,
+    activeTunnels,
+    removable,
+  }) => {
     const user = userEvent.setup();
     vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
     vi.spyOn(api, "getRelayStatus").mockResolvedValue({
@@ -433,7 +440,7 @@ describe("RelaySettingsSection", () => {
           displayName: "relay-eu-2",
           advertisedAddresses: ["10.0.0.22"],
           servicePort: 9443,
-          state: "draining",
+          state,
           buildVersion: "v2.7.0",
           protocolMajor: 1,
           appliedPolicyRevision: 12,
@@ -441,14 +448,14 @@ describe("RelaySettingsSection", () => {
           lastSeenAt: "2026-08-20T19:59:00.000Z",
           activeAssignments: 0,
           retainedAssignments,
-          health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+          health: { activeTunnels, registeredEndpoints: 0, pressurePercent: 0 },
         },
       ],
     });
     const remove = vi.spyOn(api, "deleteNode").mockResolvedValue();
 
     renderRelaySettings();
-    if (retainedAssignments) {
+    if (!removable) {
       expect(await screen.findByText("3 staging / draining")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
       expect(remove).not.toHaveBeenCalled();
@@ -461,6 +468,15 @@ describe("RelaySettingsSection", () => {
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Remove relay-eu-2?", variant: "destructive" })
     );
+    if (state === "offline") {
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          description: expect.stringContaining(
+            "every affected workload has a ready remaining relay"
+          ),
+        })
+      );
+    }
     expect(remove).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222");
   });
 });

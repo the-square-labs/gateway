@@ -218,6 +218,7 @@ describe('Relay Pool per-workload isolation', () => {
     let now = 1_800_000_000_000;
     vi.spyOn(Date, 'now').mockImplementation(() => now);
     vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
+    vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
     vi.spyOn(pool, 'getSnapshot').mockResolvedValue({
       rebalanceAvailable: true,
       rebalancePlanKey: 'stable',

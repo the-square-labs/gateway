@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it, vi } from 'vitest';
+import { relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import type { TrustedGatewayUpdateArtifact, TrustedRelayUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
   DOCKER_COMPOSE_CLI_IMAGE_REF,
@@ -419,6 +420,79 @@ describe('UpdateService foundation migration', () => {
     );
     expect(relayRuntime.updateSecureLinkConnectorImage).toHaveBeenCalledWith(relay.secureLinkConnectorImage);
     expect(relayRuntime.probeNow).toHaveBeenCalled();
+  });
+
+  it('creates the Relay Pool update run and steps atomically under the rebalance lock', async () => {
+    const events: string[] = [];
+    const poolInstances = [
+      { id: 'remote', kind: 'remote', state: 'ready', faultDomainId: 'remote-host', buildVersion: 'v2.4.2' },
+      { id: 'local', kind: 'local', state: 'ready', faultDomainId: 'gateway', buildVersion: 'v2.4.2' },
+    ];
+    const selections = [[], poolInstances];
+    const selectedTables: unknown[] = [];
+    const query = (rows: unknown[]) => {
+      const result = Promise.resolve(rows) as Promise<unknown[]> & Record<string, () => unknown>;
+      result.from = (table?: unknown) => {
+        selectedTables.push(table);
+        return result;
+      };
+      for (const method of ['where', 'orderBy', 'limit']) result[method] = () => result;
+      return result;
+    };
+    const steps: unknown[] = [];
+    const tx = {
+      execute: vi.fn(async () => {
+        events.push('lock');
+      }),
+      select: vi.fn(() => {
+        events.push(selections.length === 2 ? 'read-runs' : 'read-instances');
+        return query(selections.shift() ?? []);
+      }),
+      insert: vi.fn((table: unknown) => {
+        if (table === relayPoolUpdateRuns) {
+          events.push('insert-run');
+          return {
+            values: () => ({ returning: async () => [{ id: 'run-1', targetArtifact: { version: 'v2.4.3' } }] }),
+          };
+        }
+        expect(table).toBe(relayPoolUpdateSteps);
+        events.push('insert-steps');
+        return {
+          values: async (values: unknown[]) => {
+            steps.push(...values);
+          },
+        };
+      }),
+    };
+    const db = {
+      transaction: vi.fn(async (write: (executor: typeof tx) => Promise<unknown>) => write(tx)),
+    };
+    const service = new UpdateService(
+      db as never,
+      makeDockerService() as never,
+      {
+        APP_VERSION: 'v2.4.2',
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      } as never
+    );
+
+    const run = await (
+      service as unknown as {
+        ensureRelayPoolUpdateRun: (version: string, artifact: TrustedRelayUpdateArtifact) => Promise<{ id: string }>;
+      }
+    ).ensureRelayPoolUpdateRun('v2.4.3', makeRelayArtifact());
+
+    expect(run.id).toBe('run-1');
+    expect(db.transaction).toHaveBeenCalledOnce();
+    expect(events).toEqual(['lock', 'read-runs', 'read-instances', 'insert-run', 'insert-steps']);
+    expect(steps).toMatchObject([
+      { runId: 'run-1', relayInstanceId: 'remote', sequence: 0 },
+      { runId: 'run-1', relayInstanceId: 'local', sequence: 1 },
+    ]);
+    expect(tx.select).toHaveBeenCalledTimes(2);
+    expect(selectedTables).toEqual([relayPoolUpdateRuns, relayInstances]);
+    expect(tx.insert).toHaveBeenNthCalledWith(1, relayPoolUpdateRuns);
+    expect(tx.insert).toHaveBeenNthCalledWith(2, relayPoolUpdateSteps);
   });
 
   it('allows a signed Relay migration from the running registry to an allow-listed GHCR repository', async () => {

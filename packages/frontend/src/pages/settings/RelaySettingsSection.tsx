@@ -271,7 +271,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       !(await confirm({
         title: `Drain ${instance.displayName}?`,
         description:
-          "New tunnels will stop using this relay. Existing streams are allowed to finish.",
+          "New tunnels will move to other relays. Existing streams can finish for up to 10 minutes, then they are disconnected. Force disconnect ends the wait immediately.",
         confirmLabel: "Drain relay",
         variant: "destructive",
       }))
@@ -316,7 +316,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       !(await confirm({
         title: `Remove ${instance.displayName}?`,
         description:
-          "This removes the drained relay identity and its retired assignment records. The supervisor must be uninstalled separately on the host.",
+          instance.state === "offline"
+            ? "Remove this offline relay and revoke its identity. Gateway will verify that its policy has expired and every affected workload has a ready remaining relay. The supervisor must be uninstalled separately on the host."
+            : "This removes the drained relay identity and its retired assignment records. The supervisor must be uninstalled separately on the host.",
         confirmLabel: "Remove relay",
         variant: "destructive",
       }))
@@ -480,8 +482,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
               {row.state === "draining" ? "Resume" : "Drain"}
             </Button>
             {["draining", "offline", "error"].includes(row.state) &&
-              metric(row.health?.activeTunnels) === 0 &&
-              (row.retainedAssignments ?? row.activeAssignments) === 0 && (
+              (row.state === "offline" ||
+                (metric(row.health?.activeTunnels) === 0 &&
+                  (row.retainedAssignments ?? row.activeAssignments) === 0)) && (
                 <Button
                   variant="destructive"
                   disabled={!canEdit || poolAction}

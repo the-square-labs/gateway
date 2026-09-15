@@ -15,6 +15,7 @@ import {
   relayEndpointAssignmentGenerations,
   relayEndpointAssignments,
   relayInstances,
+  relayPoolUpdateSteps,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -31,6 +32,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
+import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import type { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { createNodeEnrollmentToken } from './node-enrollment-token.js';
 import {
@@ -66,6 +68,7 @@ import type {
   UpdateNodeInput,
   UpdateNodeServiceCreationLockInput,
 } from './nodes.schemas.js';
+import { validateRelayRemoval } from './relay-removal.js';
 
 const logger = createChildLogger('NodesService');
 
@@ -663,14 +666,15 @@ export class NodesService {
               inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining'])
             )
           );
-        if (activeAssignments.length) {
+        const disconnectedOfflineRelay =
+          node.status === 'offline' && relayInstance.state === 'offline' && !this.registry.getNode(id);
+        if (activeAssignments.length && !disconnectedOfflineRelay) {
           throw new AppError(
             409,
             'RELAY_INSTANCE_ASSIGNED',
             'Rebalance relay endpoints away from this instance before removal'
           );
         }
-        const disconnectedOfflineRelay = node.status === 'offline' && !this.registry.getNode(id);
         const pendingRelayEnrollment = node.status === 'pending' && !node.certificateSerial;
         if (
           !pendingRelayEnrollment &&
@@ -679,7 +683,7 @@ export class NodesService {
         ) {
           throw new AppError(409, 'RELAY_INSTANCE_NOT_DRAINED', 'Drain the relay instance before removal');
         }
-        if ((relayInstance.health?.activeTunnels ?? 0) > 0) {
+        if (!disconnectedOfflineRelay && (relayInstance.health?.activeTunnels ?? 0) > 0) {
           throw new AppError(409, 'RELAY_INSTANCE_HAS_ACTIVE_TUNNELS', 'Relay instance still has active tunnels');
         }
       }
@@ -816,6 +820,19 @@ export class NodesService {
           )
           .returning({ connectorId: hostingOperations.connectorId });
       }
+      if (relayInstance && lockedNode.status !== 'pending') {
+        if (!this.systemCertificateLifecycle)
+          throw new AppError(
+            503,
+            'CERTIFICATE_REVOCATION_UNAVAILABLE',
+            'Certificate revocation is required for relay removal'
+          );
+        relayInstance = await validateRelayRemoval(
+          tx,
+          relayInstance.id,
+          () => lockedNode.status === 'offline' && !this.registry.getNode(id)
+        );
+      }
       if (this.systemCertificateLifecycle) {
         await this.systemCertificateLifecycle.retireOwner({ type: 'node', id }, 'cessationOfOperation', tx);
         if (relayInstance) {
@@ -827,11 +844,13 @@ export class NodesService {
         }
       }
       if (relayInstance) {
+        await tx.delete(relayPoolUpdateSteps).where(eq(relayPoolUpdateSteps.relayInstanceId, relayInstance.id));
         await tx
           .delete(relayAssignmentSourceProbes)
           .where(eq(relayAssignmentSourceProbes.relayInstanceId, relayInstance.id));
         await tx.delete(relayEndpointAssignments).where(eq(relayEndpointAssignments.relayInstanceId, relayInstance.id));
         await tx.delete(relayInstances).where(eq(relayInstances.id, relayInstance.id));
+        await bumpRelayPolicyRevision(tx);
       }
       await tx.delete(nodes).where(eq(nodes.id, id));
     });

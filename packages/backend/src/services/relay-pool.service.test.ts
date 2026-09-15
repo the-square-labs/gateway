@@ -88,6 +88,7 @@ function reconciliationHarness() {
     automaticRebalancePaused: false,
   };
   vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
+  vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
   vi.spyOn(pool, 'getSnapshot').mockImplementation(async () => snapshot);
   const stage = vi.spyOn(pool, 'stageRebalance').mockResolvedValue([]);
   return { pool, snapshot, stage };
@@ -171,6 +172,7 @@ describe('RelayPoolService automatic reconciliation', () => {
     );
     const first = pool.reconcile();
     expect(pool.reconcile()).toBe(first);
+    await Promise.resolve();
     expect(pool.retireDrainedGenerations).toHaveBeenCalledOnce();
     release(0);
     await first;
@@ -199,6 +201,7 @@ describe('RelayPoolService automatic reconciliation', () => {
       })
     );
     vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
+    vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
     const snapshot = vi.spyOn(pool, 'getSnapshot');
     const first = pool.stageRebalance('user');
     await expect(pool.stageRebalance('user')).rejects.toMatchObject({
@@ -212,6 +215,83 @@ describe('RelayPoolService automatic reconciliation', () => {
 });
 
 describe('RelayPoolService activation safety and outcomes', () => {
+  it.each([
+    { elapsed: 599_000, admissionState: 'draining', forced: false, expected: null },
+    { elapsed: 600_000, admissionState: 'draining', forced: false, expected: true },
+    { elapsed: 600_000, admissionState: 'draining', forced: true, expected: null },
+    { elapsed: 1_000, admissionState: 'ready', forced: false, expected: false },
+    { elapsed: 600_000, admissionState: 'ready', forced: true, expected: true },
+  ])('enforces the persisted manual drain deadline: %j', async ({ elapsed, admissionState, forced, expected }) => {
+    const now = Date.now();
+    const row = {
+      ...instance('remote', 'host'),
+      manualDrainStartedAt: new Date(now - elapsed),
+      drainForcedAt: forced ? new Date(now) : null,
+      health: { activeTunnels: 0, admissionState },
+    };
+    const { db } = queuedDb([[row], [row]]);
+    const { pool, policy } = service(db);
+    await pool.reconcileManualDrains();
+    if (expected === null) expect(policy.setRemoteInstanceDrain).not.toHaveBeenCalled();
+    else expect(policy.setRemoteInstanceDrain).toHaveBeenCalledExactlyOnceWith('remote', true, expected);
+  });
+
+  it('continues enforcing other drain deadlines when a remote is disconnected', async () => {
+    const rows = ['dead', 'live'].map((id) => ({
+      ...instance(id, id),
+      manualDrainStartedAt: new Date(1),
+      health: { activeTunnels: 1 },
+    }));
+    const { db } = queuedDb([rows, [rows[0]], [rows[1]]]);
+    const { pool, policy } = service(db);
+    policy.setRemoteInstanceDrain.mockRejectedValueOnce(new Error('offline'));
+    await expect(pool.reconcileManualDrains()).resolves.toBeUndefined();
+    expect(policy.setRemoteInstanceDrain).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not re-drain a member resumed after the timer snapshot', async () => {
+    const row = { ...instance('remote', 'host'), manualDrainStartedAt: new Date(1) };
+    const { db } = queuedDb([[row], [{ ...row, manualDrainStartedAt: null }]]);
+    const { pool, policy } = service(db);
+    await pool.reconcileManualDrains();
+    expect(policy.setRemoteInstanceDrain).not.toHaveBeenCalled();
+  });
+
+  it('serializes a timeout force disconnect with manual resume', async () => {
+    const row = { ...instance('remote', 'host'), manualDrainStartedAt: new Date(1) };
+    const { db } = queuedDb([[row], [row]]);
+    const { pool, policy } = service(db);
+    let finish!: () => void;
+    policy.setRemoteInstanceDrain.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+    );
+    const enforcement = pool.reconcileManualDrains();
+    await vi.waitFor(() => expect(policy.setRemoteInstanceDrain).toHaveBeenCalled());
+    await expect(pool.drainInstance('remote', 'user', false)).rejects.toMatchObject({
+      code: 'RELAY_DRAIN_IN_PROGRESS',
+    });
+    finish();
+    await enforcement;
+  });
+
+  it('retires an old generation after an offline participant policy expired', async () => {
+    const row = {
+      id: 'dead',
+      state: 'offline',
+      lastSeenAt: new Date(1),
+      policyExpiresAt: new Date(2),
+      health: { activeTunnels: 99 },
+    };
+    const { db } = queuedDb([
+      [{ id: 'old', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(3) }],
+      [row],
+      [row],
+    ]);
+    expect(await service(db).pool.retireDrainedGenerations()).toBe(1);
+  });
+
   it('invalidates grants in the same transaction when a drained generation retires', async () => {
     const { db, writes, locks } = queuedDb([
       [{ id: 'new', endpointId: 'endpoint', generation: 1, state: 'draining', drainStartedAt: new Date(1000) }],
@@ -306,6 +386,51 @@ describe('RelayPoolService activation safety and outcomes', () => {
       automatic: true,
       allowNoop: true,
       endpointIds: ['affected'],
+    });
+  });
+  it('persists manual drain before sending the command and retains it on delivery failure', async () => {
+    const { db, writes } = queuedDb([[instance('remote', 'host')]]);
+    const { pool, policy } = service(db);
+    policy.setRemoteInstanceDrain.mockImplementation(async () => {
+      expect(writes[0].values).toMatchObject({ state: 'draining' });
+      expect(writes[0].values.manualDrainStartedAt).toBeDefined();
+      throw new Error('disconnected');
+    });
+    await expect(pool.drainInstance('remote', 'user')).rejects.toThrow('disconnected');
+    expect(writes).toHaveLength(1);
+  });
+
+  it('does not erase manual drain intent when resume delivery fails', async () => {
+    const { db, writes } = queuedDb([
+      [{ ...instance('remote', 'host'), state: 'draining', manualDrainStartedAt: new Date(1) }],
+    ]);
+    const { pool, policy } = service(db);
+    policy.setRemoteInstanceDrain.mockRejectedValue(new Error('disconnected'));
+    await expect(pool.drainInstance('remote', 'user', false)).rejects.toThrow('disconnected');
+    expect(writes).toHaveLength(0);
+  });
+
+  it('does not enroll update-owned drains in the manual ten-minute deadline', async () => {
+    const { db, writes } = queuedDb([[{ ...instance('remote', 'host'), manualDrainStartedAt: null }], []]);
+    const { pool } = service(db);
+    await pool.drainInstance('remote', 'user', true, { manual: false });
+    expect(writes[0].values).toMatchObject({ state: 'draining', manualDrainStartedAt: null });
+  });
+
+  it.each([true, false])('preserves existing manual drain through update-owned action enabled=%s', async (enabled) => {
+    const startedAt = new Date(1);
+    const forcedAt = new Date(2);
+    const { db, writes } = queuedDb([
+      [{ ...instance('remote', 'host'), state: 'draining', manualDrainStartedAt: startedAt, drainForcedAt: forcedAt }],
+      [],
+    ]);
+    const { pool, policy } = service(db);
+    await pool.drainInstance('remote', 'user', enabled, { manual: false });
+    expect(policy.setRemoteInstanceDrain).toHaveBeenCalledExactlyOnceWith('remote', true);
+    expect(writes[0].values).toMatchObject({
+      state: 'draining',
+      manualDrainStartedAt: startedAt,
+      drainForcedAt: forcedAt,
     });
   });
   it('rechecks maintenance after policy synchronization before automatic staging', async () => {
