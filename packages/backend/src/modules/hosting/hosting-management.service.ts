@@ -27,6 +27,7 @@ const SERVICES: Record<string, string> = {
   docker: 'docker-daemon',
   builder: 'docker-daemon',
   databases: 'docker-daemon',
+  storage: 'docker-daemon',
   monitoring: 'monitoring-daemon',
   relay: 'gateway-relay-supervisor',
 };

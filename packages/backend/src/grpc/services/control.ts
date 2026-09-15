@@ -538,6 +538,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               | 'docker'
               | 'builder'
               | 'databases'
+              | 'storage'
               | 'relay';
             const profileError = validateRegisteredDaemonProfile(
               nodeType,

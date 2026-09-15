@@ -8,17 +8,19 @@ const INSTALLERS: Record<HostingRole, string> = {
   docker: 'setup-docker-node.sh',
   builder: 'setup-docker-node.sh',
   databases: 'setup-database-node.sh',
+  storage: 'setup-storage-node.sh',
   monitoring: 'setup-monitoring-node.sh',
   relay: 'setup-relay-node.sh',
 };
-// Published revision containing self-sufficient Relay dependency installation.
+// Published revision containing the Storage wrapper and self-sufficient Relay installation.
 // Update revision and hashes together after publishing installer changes.
-export const HOSTING_INSTALLER_REVISION = 'd7e7198034e949a70d70ec7fa3b456f8a4f4d340';
+export const HOSTING_INSTALLER_REVISION = '04d2c19739cb5e5c16d1a8281d8ef16ec34bcdc6';
 export const HOSTING_INSTALLER_BASE = `https://raw.githubusercontent.com/the-square-labs/gateway/${HOSTING_INSTALLER_REVISION}/scripts`;
 const INSTALLER_SHA256: Record<string, string> = {
-  'setup-node.sh': '1ba3ecaedcc8b12aefca499e9765d946e2362bbbd112042f9572b65f3d41c1ba',
-  'setup-docker-node.sh': '5211a68240e72e27cd442dd52a876b0e91f78f2f918777d765c89f3c8a92783c',
-  'setup-database-node.sh': '533a8030d0ee352acb1c049f45e449f7324ec0868344acfd31b3beee90bbbd78',
+  'setup-node.sh': '22412b365d163ce761cce1d70ab4de1f212b92b04e4c6f0849906ea050b69883',
+  'setup-docker-node.sh': '8613d6916c3d8f715ee32cbbeec3a01410fad738b10ac028fa02852366e7c3a7',
+  'setup-database-node.sh': '025a97b1603922535184c0211e877915307dbd3f9f608f2dab3862dc050fb20b',
+  'setup-storage-node.sh': '150195af603ca9e25ce357211767a5ee48f89d212afa1ab90fdbf6971968741b',
   'setup-monitoring-node.sh': '3aa42d21c3898e0ec83eba9b4416c6e689aaaf3ebdee04d75ff6e3ee16dad602',
   'setup-relay-node.sh': '6b5d2b3429b7dfe36c6270cbf4b02f0aea582d609b72b7221cd7eef8e314bf8d',
 };
@@ -126,7 +128,8 @@ fi
 printf '%s  %s\\n' "$expected" "$installer" | sha256sum -c - >/dev/null || { echo 'Installer integrity check failed' >&2; exit 47; }
 chmod 0700 "$installer"
 }
-${input.role === 'databases' ? `fetch_installer 'setup-docker-node.sh' '${INSTALLER_SHA256['setup-docker-node.sh']}'` : ''}
+${input.role === 'databases' || input.role === 'storage' ? `fetch_installer 'setup-docker-node.sh' '${INSTALLER_SHA256['setup-docker-node.sh']}'` : ''}
+${input.role === 'storage' ? `fetch_installer 'setup-database-node.sh' '${INSTALLER_SHA256['setup-database-node.sh']}'` : ''}
 fetch_installer '${INSTALLERS[input.role]}' '${INSTALLER_SHA256[INSTALLERS[input.role]]}'
 installer="$installer_dir/${INSTALLERS[input.role]}"
 bash "$installer" ${args.map(shellArgument).join(' ')}

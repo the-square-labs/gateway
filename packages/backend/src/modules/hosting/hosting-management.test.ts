@@ -543,6 +543,8 @@ describe('hosting management semantics', () => {
     } as Parameters<typeof isHostedNodeReady>[0];
     expect(isHostedNodeReady(node, false)).toBe(false);
     expect(isHostedNodeReady(node, true)).toBe(true);
+    expect(isHostedNodeReady({ ...node, type: 'storage' }, true)).toBe(true);
+    expect(isHostedNodeReady({ ...node, type: 'storage', capabilities: {} }, true)).toBe(false);
     expect(isHostedNodeReady({ ...node, capabilities: {} }, true)).toBe(false);
     expect(isHostedNodeReady({ ...node, status: 'offline' }, true)).toBe(false);
     expect(isHostedNodeReady({ ...node, type: 'nginx' }, true)).toBe(false);
@@ -556,7 +558,7 @@ describe('hosting management semantics', () => {
     expect(hostingActionFinished('shutdown', { ...vm, powerState: 'stopped' })).toBe(true);
   });
   it('restarts known daemon services only, never the whole VM or OS', () => {
-    const script = hostingRecoveryScript(['docker', 'databases', 'nginx']);
+    const script = hostingRecoveryScript(['docker', 'databases', 'storage', 'nginx']);
     expect(script).toContain("'docker-daemon' 'nginx-daemon'");
     expect(script).not.toMatch(/^\s*(?:sudo\s+)?reboot\b/m);
     expect(script).not.toContain('curl');

@@ -37,6 +37,25 @@ const managedRow = {
   updatedAt: new Date(),
 };
 
+describe('unified Storage node database eligibility', () => {
+  it.each(['storage', 'databases'])('accepts %s without rewriting the node identity', async (type) => {
+    const node = { id: managedRow.nodeId, type, status: 'online' };
+    const db = { select: () => ({ from: () => ({ where: () => ({ limit: async () => [node] }) }) }) };
+    const service = new ManagedDatabaseService(db as never, {} as never, {} as never, {} as never);
+    await expect((service as any).assertDatabaseNode(node.id)).resolves.toBe(node);
+    expect(node.type).toBe(type);
+  });
+  it('does not admit a general Docker node', async () => {
+    const db = {
+      select: () => ({
+        from: () => ({ where: () => ({ limit: async () => [{ id: 'node', type: 'docker', status: 'online' }] }) }),
+      }),
+    };
+    const service = new ManagedDatabaseService(db as never, {} as never, {} as never, {} as never);
+    await expect((service as any).assertDatabaseNode('node')).rejects.toMatchObject({ code: 'INVALID_DATABASE_NODE' });
+  });
+});
+
 function reconciliationService(row: Record<string, unknown>, result: { success: boolean; detail?: string }) {
   const returning = vi.fn().mockResolvedValue([{ ...row, status: 'ready', pendingOperation: null, lastError: null }]);
   const set = vi.fn(() => ({ where: vi.fn(() => ({ returning })) }));

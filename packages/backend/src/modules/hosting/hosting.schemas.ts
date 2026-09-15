@@ -266,7 +266,7 @@ export const HostingProvisionSchema = z
     idempotencyKey: z.string().uuid(),
     name: hostName,
     displayName: z.string().trim().min(1).max(255).optional(),
-    role: z.enum(['nginx', 'docker', 'builder', 'databases', 'monitoring', 'relay']),
+    role: z.enum(['nginx', 'docker', 'builder', 'databases', 'storage', 'monitoring', 'relay']),
     location: identifier,
     size: identifier,
     image: identifier,

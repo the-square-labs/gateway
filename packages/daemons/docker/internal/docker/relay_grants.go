@@ -123,9 +123,6 @@ func (p *DockerPlugin) SyncRelayGrants(command *pb.SyncRelayGrantsCommand) (stri
 		return "", err
 	}
 	p.reconcileRelayRegistrations()
-	if p.cfg.Docker.Mode == "databases" {
-		return "", nil
-	}
 	listenerStatuses := map[string]managedDatabaseHostListenerStatus{}
 	if p.databaseListeners != nil {
 		listenerStatuses = p.databaseListeners.reconcile(context.Background(), p.relayGrants.get())

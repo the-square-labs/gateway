@@ -3,6 +3,8 @@ package docker
 import (
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -37,6 +39,63 @@ func TestStorageProfileAdvertisesOnlyTypedStorageCapabilities(t *testing.T) {
 		if strings.Contains(joined, forbidden) {
 			t.Fatalf("storage profile advertised forbidden capability %s: %s", forbidden, joined)
 		}
+	}
+}
+
+func TestLegacyDatabaseProfileIsUnifiedStorageWithoutChangingPaths(t *testing.T) {
+	plugin := storagePluginForTest()
+	plugin.cfg.Docker.Mode = "databases"
+	plugin.cfg.Docker.Database.StorageRoot = "/existing/database-volume"
+	plugin.RegisterBackupCommandHandler(fakeBackupCommandHandler{})
+	joined := strings.Join(plugin.BuildRegisterMessage("existing-node").Capabilities, ",")
+	for _, capability := range []string{"managed_databases_v1", "managed_storage_v1", "database_backups_v1"} {
+		if !strings.Contains(joined, capability) {
+			t.Fatalf("legacy profile lacks %s", capability)
+		}
+	}
+	for _, command := range []*pb.GatewayCommand{
+		{Payload: &pb.GatewayCommand_DockerContainer{DockerContainer: &pb.DockerContainerCommand{Action: "list"}}},
+		{Payload: &pb.GatewayCommand_DockerCompose{DockerCompose: &pb.DockerComposeCommand{}}},
+	} {
+		if plugin.HandleCommand(command).Success {
+			t.Fatal("legacy stateful node accepted generic Docker command")
+		}
+	}
+	storage := plugin.HandleCommand(&pb.GatewayCommand{Payload: &pb.GatewayCommand_DockerStorage{DockerStorage: &pb.DockerStorageCommand{Action: "inspect"}}})
+	if storage.Error != "managed storage runtime is not initialized" {
+		t.Fatalf("storage command not routed: %#v", storage)
+	}
+	if plugin.cfg.Docker.Database.StorageRoot != "/existing/database-volume" || plugin.cfg.Docker.Mode != "databases" {
+		t.Fatal("legacy config was rewritten")
+	}
+}
+
+func TestUnifiedStorageManagersPreserveExistingDatabaseRoot(t *testing.T) {
+	for _, mode := range []string{"storage", "databases"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			cfg := &config.Config{Docker: config.DockerConfig{Mode: mode, Database: config.DatabaseConfig{StorageRoot: root}}}
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			if _, err := newManagedDatabaseManager(cfg, nil, logger); err != nil {
+				t.Fatal(err)
+			}
+			legacyFile := filepath.Join(root, "records", "existing.json")
+			if err := os.WriteFile(legacyFile, []byte("existing-database-record"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := newManagedStorageManager(cfg, nil, logger); err != nil {
+				t.Fatal(err)
+			}
+			for _, directory := range []string{"images", "mounts", "records", "tls", "storage/images", "storage/mounts", "storage/records"} {
+				if info, err := os.Stat(filepath.Join(root, directory)); err != nil || !info.IsDir() {
+					t.Fatalf("missing manager directory %s: %v", directory, err)
+				}
+			}
+			data, err := os.ReadFile(legacyFile)
+			if err != nil || string(data) != "existing-database-record" {
+				t.Fatalf("database record changed: %s %v", data, err)
+			}
+		})
 	}
 }
 

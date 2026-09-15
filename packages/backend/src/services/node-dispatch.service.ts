@@ -72,7 +72,7 @@ export class NodeDispatchService {
       .where(eq(nodes.id, nodeId))
       .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
-    if (node.type !== 'storage') {
+    if (node.type !== 'storage' && node.type !== 'databases') {
       throw new AppError(409, 'NODE_TYPE_MISMATCH', 'Managed storage operations require a Storage node');
     }
     const reported = (node.capabilities as Record<string, unknown> | null)?.capabilities;

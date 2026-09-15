@@ -59,7 +59,7 @@ func (p *DockerPlugin) RunMigrationStream(ctx context.Context, conn *grpc.Client
 }
 
 func migrationStreamEnabled(mode string) bool {
-	return mode != "databases" && mode != "builder"
+	return mode != "databases" && mode != "storage" && mode != "builder"
 }
 
 func (p *DockerPlugin) runMigrationStream(ctx context.Context, conn *grpc.ClientConn, nodeID string) error {

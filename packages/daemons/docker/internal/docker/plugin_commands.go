@@ -58,17 +58,7 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		}
 		return result
 	}
-	if p.cfg.Docker.Mode == "databases" {
-		switch payload := cmd.Payload.(type) {
-		case *pb.GatewayCommand_DockerDatabase:
-			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
-		default:
-			result.Success = false
-			result.Error = "database-profile daemon accepts only docker_database commands"
-		}
-		return result
-	}
-	if p.cfg.Docker.Mode == "storage" {
+	if p.cfg.Docker.IsStorageProfile() {
 		switch payload := cmd.Payload.(type) {
 		case *pb.GatewayCommand_DockerDatabase:
 			p.handleManagedDatabaseCommand(payload.DockerDatabase, result)
@@ -142,7 +132,7 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 
 	case *pb.GatewayCommand_DockerDatabase:
 		result.Success = false
-		result.Error = "managed database commands require docker.mode=databases"
+		result.Error = "managed database commands require the Storage profile"
 
 	case *pb.GatewayCommand_DockerStorage:
 		result.Success = false

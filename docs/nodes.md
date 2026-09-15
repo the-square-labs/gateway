@@ -10,10 +10,12 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 |------|--------|---------|
 | nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, configuration, logs, and stats for host-native nginx. |
 | docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, portable and registry-backed `.gwca` archives, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
-| databases | `docker-daemon` | Gateway-managed Postgres, Redis, and ClickHouse instances only; generic workloads are rejected. |
+| storage | `docker-daemon` | Managed Postgres, Redis, ClickHouse, object storage, and native backup jobs; generic workloads are rejected. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway ingress or Docker management on that host.
+
+Existing `databases` nodes are compatible with the Storage profile. Updating their daemon enables the unified capabilities without changing their identity, enrollment, or database storage root. Older daemons remain limited to the capabilities they advertise.
 
 ## Host Resource Sizing
 
@@ -21,7 +23,7 @@ Gateway daemons have a small resource footprint compared with the services they 
 
 - nginx nodes for nginx traffic, TLS termination, and log volume;
 - Docker nodes for the containers and deployments running on them;
-- database nodes for the CPU, memory, swap, and storage allocated to managed databases;
+- Storage nodes for the CPU, memory, swap, and storage allocated to managed databases, object storage, and backup jobs;
 - monitoring nodes according to the existing host workload being observed.
 
 ## Quick Setup
@@ -147,7 +149,7 @@ Common daemon setup options:
 | `--gateway-cert-sha256 <sha256:hex>` | Gateway gRPC TLS leaf certificate fingerprint generated with the token. Required for first enrollment. |
 | `--host <host>` / `--port <port>` | Alternative to `--gateway` when specifying the Gateway address in separate parts. |
 | `--version <tag>` | Install a specific daemon version. |
-| `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Database nodes accept only `--user root`. |
+| `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Storage nodes (including legacy database nodes) accept only `--user root`. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |

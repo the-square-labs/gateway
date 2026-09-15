@@ -128,6 +128,9 @@ describe('nodesRoutes list access', () => {
   it.each([
     ['pages:create:node/ingress-1', 'nginx', ['ingress-1']],
     ['databases:create:node/db-node', 'databases', ['db-node']],
+    ['databases:create:node/db-node', 'storage', ['db-node']],
+    ['storage:create:node/storage-node', 'storage', ['storage-node']],
+    ['storage:create:node/storage-node', 'databases', ['storage-node']],
   ])('discovers explicit creation nodes for %s', async (scope, type, ids) => {
     mocks.scopes = [scope as string];
     const response = await createApp().request(`/?type=${type}&limit=100`);

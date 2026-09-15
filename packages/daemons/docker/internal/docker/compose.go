@@ -81,8 +81,8 @@ type composeExecutor struct {
 }
 
 func newComposeExecutor(cfg *config.Config, dockerClient *Client, logger *slog.Logger) (*composeExecutor, error) {
-	if cfg.Docker.Mode == "databases" {
-		return nil, errors.New("database profile does not support docker compose")
+	if cfg.Docker.IsStorageProfile() {
+		return nil, errors.New("storage profile does not support docker compose")
 	}
 	if cfg.Docker.Compose.SidecarImage == "" {
 		return nil, errors.New("compose sidecar image is not configured")

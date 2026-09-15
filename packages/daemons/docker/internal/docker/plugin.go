@@ -224,21 +224,10 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 			return fmt.Errorf("initialize docker registry proxy: %w", err)
 		}
 	}
-	if p.cfg.Docker.Mode == "databases" {
-		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
-		if err != nil {
-			return fmt.Errorf("initialize managed database storage: %w", err)
-		}
-		if err := p.databaseManager.reconcile(ctx); err != nil {
-			return fmt.Errorf("reconcile managed database storage: %w", err)
-		}
+	if err := p.startStorageConnectorRelay(); err != nil {
+		return err
 	}
-	if p.cfg.Docker.Mode != "databases" {
-		if err := p.startStorageConnectorRelay(); err != nil {
-			return err
-		}
-	}
-	if p.cfg.Docker.Mode == "storage" {
+	if p.cfg.Docker.IsStorageProfile() {
 		p.databaseManager, err = newManagedDatabaseManager(p.cfg, p.client, p.logger)
 		if err != nil {
 			return fmt.Errorf("initialize managed database storage for storage profile: %w", err)
@@ -392,17 +381,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			}
 			return values
 		}
-		if p.cfg.Docker.Mode == "databases" {
-			return []string{
-				"managed_databases_v1",
-				"managed_database_storage_images_v1",
-				"generic_relay_tunnel_v1",
-				"managed_clickhouse_principals_v1",
-				"managed_database_binding_principals_v2",
-				"relay_pool_v1",
-			}
-		}
-		if p.cfg.Docker.Mode == "storage" {
+		if p.cfg.Docker.IsStorageProfile() {
 			values := []string{
 				"managed_databases_v1",
 				"managed_database_storage_images_v1",

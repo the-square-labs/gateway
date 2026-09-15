@@ -4,7 +4,7 @@ import type { HostingSnapshotAction, HostingSnapshotAdapter } from './hosting-sn
 export const HOSTING_PROVIDERS = ['hostkey', 'digitalocean', 'hetzner', 'proxmox'] as const;
 export type HostingProvider = (typeof HOSTING_PROVIDERS)[number];
 export type HostingResourceKind = 'vm' | 'ct';
-export type HostingRole = 'nginx' | 'docker' | 'builder' | 'databases' | 'monitoring' | 'relay';
+export type HostingRole = 'nginx' | 'docker' | 'builder' | 'databases' | 'storage' | 'monitoring' | 'relay';
 export type HostingPowerState = 'running' | 'stopped' | 'starting' | 'stopping' | 'unknown';
 export type HostingAction = 'start' | 'shutdown' | 'reboot' | 'resize' | 'delete' | 'recover';
 export type HostingOperationAction = HostingAction | HostingSnapshotAction | 'create' | 'install' | 'topup';

@@ -129,15 +129,7 @@ func (p *DockerPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 func (r *relayTunnelRouter) reconcileRegistrations() {
 	bundle := r.plugin.relayGrants.get()
 	desired := map[string]*pb.RelayGrantAssignment{}
-	if r.plugin.cfg.Docker.Mode == "databases" {
-		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && isManagedDatabaseRelayOwnerKind(assignment.OwnerKind) && assignment.EndpointId != "" {
-				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
-					desired[relayRegistrationKey(projected)] = projected
-				}
-			}
-		}
-	} else if r.plugin.cfg.Docker.Mode == "storage" {
+	if r.plugin.cfg.Docker.IsStorageProfile() {
 		for _, assignment := range bundle.Grants {
 			if assignment.Role == "endpoint" && (isManagedStorageRelayOwnerKind(assignment.OwnerKind) || isManagedDatabaseRelayOwnerKind(assignment.OwnerKind)) && assignment.EndpointId != "" {
 				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {

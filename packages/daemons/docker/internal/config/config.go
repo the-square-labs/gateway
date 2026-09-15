@@ -13,12 +13,16 @@ import (
 type DockerConfig struct {
 	Socket    string   `yaml:"socket"`
 	Allowlist []string `yaml:"allowlist"`
-	// Mode is empty for a general Docker node. "databases", "storage" and "builder"
-	// turn the same binary into mutually exclusive, least-privilege profiles.
+	// Mode is empty for a general Docker node. "storage" owns stateful workloads;
+	// "databases" is its legacy identity alias and keeps existing paths unchanged.
 	Mode     string         `yaml:"mode"`
 	Database DatabaseConfig `yaml:"database"`
 	Compose  ComposeConfig  `yaml:"compose"`
 	Builder  BuilderConfig  `yaml:"builder"`
+}
+
+func (c DockerConfig) IsStorageProfile() bool {
+	return c.Mode == "storage" || c.Mode == "databases"
 }
 
 type BuilderConfig struct {

@@ -70,7 +70,7 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
             const [node] = await db.select().from(nodesTable).where(eq(nodesTable.id, nodeId)).limit(1);
             if (!node) throw new Error('Node not found');
 
-            const daemonType = node.type === 'databases' ? 'docker' : node.type;
+            const daemonType = node.type === 'databases' || node.type === 'storage' ? 'docker' : node.type;
             if (daemonType !== 'nginx' && daemonType !== 'docker' && daemonType !== 'monitoring') {
               throw new Error('This node does not run an updatable daemon');
             }

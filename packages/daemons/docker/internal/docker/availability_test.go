@@ -576,7 +576,7 @@ func TestAvailabilityCapabilityAndCommandRoutingAreProfileScoped(t *testing.T) {
 		error string
 	}{
 		{name: "builder", mode: "builder", error: "builder-profile daemon accepts only"},
-		{name: "database", mode: "databases", error: "database-profile daemon accepts only"},
+		{name: "database", mode: "databases", error: "storage-profile daemon accepts only"},
 	} {
 		plugin := &DockerPlugin{cfg: &dockerconfig.Config{Docker: dockerconfig.DockerConfig{Mode: profile.mode}}}
 		if containsCapability(plugin.BuildRegisterMessage("node-1").Capabilities, dockerAvailabilityCapability) {

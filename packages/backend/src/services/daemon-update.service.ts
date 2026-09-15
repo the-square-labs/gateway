@@ -57,9 +57,9 @@ export const NODE_TYPE_MAP: Record<string, DaemonType> = {
   docker: 'docker',
   // Builder nodes run the same docker-daemon binary in its builder-only profile.
   builder: 'docker',
-  // Database nodes run the same docker-daemon binary in its database-only profile.
+  // Legacy database identities use the same unified Storage profile and binary.
   databases: 'docker',
-  // Storage nodes run the same docker-daemon binary in its storage-only profile.
+  // Storage nodes use docker-daemon's restricted stateful profile.
   storage: 'docker',
   monitoring: 'monitoring',
   relay: 'relay',

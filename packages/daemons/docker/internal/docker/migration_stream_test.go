@@ -10,6 +10,7 @@ func TestMigrationStreamEnabled(t *testing.T) {
 	}{
 		{name: "runtime", mode: "docker", enabled: true},
 		{name: "database profile", mode: "databases", enabled: false},
+		{name: "storage profile", mode: "storage", enabled: false},
 		{name: "builder profile", mode: "builder", enabled: false},
 	}
 

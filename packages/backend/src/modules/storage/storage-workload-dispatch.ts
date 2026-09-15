@@ -141,8 +141,7 @@ function parseEncryptedCredentials(
 
 /**
  * `ManagedWorkloadDispatch` for managed object storage (MinIO), provisioned
- * as a single-node container via the GENERIC docker container RPC
- * (`NodeDispatchService.sendDockerContainerCommand`) rather than the
+ * through the restricted `sendDockerStorageCommand` RPC, alongside the
  * DB-typed `sendDockerDatabaseCommand` path `DatabaseWorkloadDispatch` uses.
  * Structurally mirrors `DatabaseWorkloadDispatch`
  * (`modules/databases/database-workload-dispatch.ts`); the storage-specific
@@ -681,7 +680,7 @@ export class StorageWorkloadDispatch
       .where(eq(nodes.id, nodeId))
       .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Managed storage node not found');
-    if (String(node.type) !== 'storage')
+    if (node.type !== 'storage' && node.type !== 'databases')
       throw new AppError(409, 'MANAGED_STORAGE_NODE_UNAVAILABLE', 'Managed storage requires a Storage node');
     if (node.status !== 'online')
       throw new AppError(409, 'MANAGED_STORAGE_NODE_UNAVAILABLE', 'Managed storage node is offline');

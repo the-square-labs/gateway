@@ -6,7 +6,7 @@ type HostedNodeReadiness = Pick<typeof nodes.$inferSelect, 'type' | 'status' | '
 export function isHostedNodeReady(node: HostedNodeReadiness, connected: boolean): boolean {
   if (!connected || node.status !== 'online') return false;
   if (node.type === 'nginx') return node.lastHealthReport?.nginxRunning === true;
-  if (node.type === 'docker' || node.type === 'databases')
+  if (node.type === 'docker' || node.type === 'databases' || node.type === 'storage')
     return node.capabilities?.dockerRuntimeStatus?.state === 'healthy';
   if (node.type === 'builder') {
     const capabilities = node.capabilities?.capabilities;

@@ -159,7 +159,11 @@ export class NodesService {
       conditions.push(ilike(nodes.hostname, `%${query.search}%`));
     }
     if (query.type) {
-      conditions.push(eq(nodes.type, query.type));
+      conditions.push(
+        query.type === 'storage' || query.type === 'databases'
+          ? inArray(nodes.type, ['storage', 'databases'])
+          : eq(nodes.type, query.type)
+      );
     }
     if (query.status) {
       conditions.push(eq(nodes.status, query.status));

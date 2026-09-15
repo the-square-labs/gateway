@@ -62,8 +62,8 @@ export abstract class ManagedDatabaseIdentityService extends ManagedDatabaseServ
       .where(eq(nodes.id, nodeId))
       .limit(1);
     if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Database node not found');
-    if (node.type !== 'databases')
-      throw new AppError(400, 'INVALID_DATABASE_NODE', 'Managed databases require a database node');
+    if (node.type !== 'databases' && node.type !== 'storage')
+      throw new AppError(400, 'INVALID_DATABASE_NODE', 'Managed databases require a Storage node');
     if (node.status !== 'online') throw new AppError(409, 'NODE_OFFLINE', 'Database node is offline');
     return node;
   }

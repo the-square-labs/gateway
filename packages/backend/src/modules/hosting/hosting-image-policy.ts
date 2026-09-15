@@ -11,7 +11,7 @@ export const HOSTING_INSTALLER_OS_VERSIONS: Record<'ubuntu' | 'debian' | 'fedora
   debian: ['11', '12', '13'],
   fedora: ['43', '44'],
 };
-const baseRoles: HostingRole[] = ['nginx', 'docker', 'builder', 'databases', 'monitoring', 'relay'];
+const baseRoles: HostingRole[] = ['nginx', 'docker', 'builder', 'databases', 'storage', 'monitoring', 'relay'];
 
 export function hostingImageRoles(image: HostingCatalogOption, _provider: HostingProvider): HostingRole[] {
   const os = image.operatingSystem;

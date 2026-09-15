@@ -107,8 +107,11 @@ describe('NodeDispatchService', () => {
     });
   });
 
-  it('uses a bounded long timeout for durable managed database operations', async () => {
-    const { registry, service } = createService('databases');
+  it.each([
+    'storage',
+    'databases',
+  ])('uses a bounded long timeout for managed database operations on %s', async (role) => {
+    const { registry, service } = createService(role);
 
     await service.sendDockerDatabaseCommand('node-1', 'create', 'database-1', '{"operationId":"op-1"}');
 
@@ -119,8 +122,8 @@ describe('NodeDispatchService', () => {
     );
   });
 
-  it('capability-gates managed storage commands to Storage nodes', async () => {
-    const storage = createService('storage', { capabilities: { capabilities: ['managed_storage_v1'] } });
+  it.each(['storage', 'databases'])('capability-gates managed storage commands on %s', async (role) => {
+    const storage = createService(role, { capabilities: { capabilities: ['managed_storage_v1'] } });
 
     await storage.service.sendDockerStorageCommand('node-1', 'create', 'storage-1', '{"version":1}');
 
@@ -135,6 +138,11 @@ describe('NodeDispatchService', () => {
       code: 'NODE_TYPE_MISMATCH',
     });
     expect(generic.registry.sendCommand).not.toHaveBeenCalled();
+    const oldWorker = createService(role);
+    await expect(oldWorker.service.sendDockerStorageCommand('node-1', 'create', 'storage-1')).rejects.toMatchObject({
+      code: 'STORAGE_CAPABILITY_UNAVAILABLE',
+    });
+    expect(oldWorker.registry.sendCommand).not.toHaveBeenCalled();
   });
 
   it('translates legacy IAM dispatch options into the typed storage command', async () => {

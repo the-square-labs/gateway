@@ -25,6 +25,7 @@ describe('hosting bootstrap reuses released role installers', () => {
     ['docker', 'setup-docker-node.sh'],
     ['builder', 'setup-docker-node.sh'],
     ['databases', 'setup-database-node.sh'],
+    ['storage', 'setup-storage-node.sh'],
     ['monitoring', 'setup-monitoring-node.sh'],
     ['relay', 'setup-relay-node.sh'],
   ])('renders %s without inventing another install engine', (role, installer) => {
@@ -37,7 +38,11 @@ describe('hosting bootstrap reuses released role installers', () => {
     expect(script).toContain(`fetch_installer '${installer}'`);
     expect(script).not.toContain('/main/');
     expect(script.indexOf('sha256sum -c')).toBeLessThan(script.indexOf('bash "$installer"'));
-    if (role === 'databases') expect(script).toContain("fetch_installer 'setup-docker-node.sh'");
+    if (role === 'databases' || role === 'storage') expect(script).toContain("fetch_installer 'setup-docker-node.sh'");
+    if (role === 'storage') {
+      expect(script).toContain("fetch_installer 'setup-database-node.sh'");
+      expect(script).not.toContain("'undefined'");
+    }
     expect(script).toContain("'--gateway' 'gateway.example.test:9443'");
     expect(script).toContain("'--gateway-cert-sha256'");
     if (role === 'builder') expect(script).toContain("'--mode' 'builder'");

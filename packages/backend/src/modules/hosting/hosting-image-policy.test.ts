@@ -45,6 +45,7 @@ describe('shared hosting OS admission policy', () => {
         'docker',
         'builder',
         'databases',
+        'storage',
         'monitoring',
         'relay',
       ]);

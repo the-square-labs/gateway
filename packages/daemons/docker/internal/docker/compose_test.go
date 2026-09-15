@@ -310,7 +310,7 @@ func TestComposeCapabilityRequiresInitializedExecutorAndGeneralProfile(t *testin
 		t.Fatal("database profile advertised compose capability")
 	}
 	result := plugin.HandleCommand(&pb.GatewayCommand{CommandId: "command-1", Payload: &pb.GatewayCommand_DockerCompose{DockerCompose: validComposeCommand("apply", "operation-1")}})
-	if result.Success || !strings.Contains(result.Error, "database-profile") {
+	if result.Success || !strings.Contains(result.Error, "storage-profile") {
 		t.Fatalf("database profile compose result = %#v", result)
 	}
 }

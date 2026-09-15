@@ -12,7 +12,7 @@ export interface HostingCloudImage {
   diskGb: number;
   supportedRoles: HostingRole[];
 }
-const roles: HostingRole[] = ['nginx', 'docker', 'builder', 'databases', 'monitoring', 'relay'];
+const roles: HostingRole[] = ['nginx', 'docker', 'builder', 'databases', 'storage', 'monitoring', 'relay'];
 /** Reviewed immutable upstream builds, not mutable latest URLs or user-supplied downloads.
  * Alpine is deliberately not advertised until its image/role smoke tests pass; Arch is out of scope.
  */

@@ -244,7 +244,11 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
   const canListDockerNodes = canListAllDockerNodes || allowedDockerNodeIds.length > 0;
   const creationBases =
-    query.type === 'nginx' ? ['proxy:create', 'pages:create'] : query.type === 'databases' ? ['databases:create'] : [];
+    query.type === 'nginx'
+      ? ['proxy:create', 'pages:create']
+      : query.type === 'databases' || query.type === 'storage'
+        ? ['databases:create', 'storage:create']
+        : [];
   const allowedIngressNodeIds = [
     ...new Set(
       creationBases.flatMap((base) =>
@@ -605,7 +609,12 @@ nodesRoutes.openapi({ ...updateNodeRoute, middleware: sessionOnly }, async (c) =
     if (current.type === 'nginx' && input.confirmDomainDnsUpdate && !hasScope(scopes, 'domains:edit')) {
       throw new AppError(403, 'FORBIDDEN', 'Updating assigned domain DNS targets requires domain edit access');
     }
-    if (current.type !== 'docker' && current.type !== 'databases' && current.type !== 'nginx') {
+    if (
+      current.type !== 'docker' &&
+      current.type !== 'databases' &&
+      current.type !== 'storage' &&
+      current.type !== 'nginx'
+    ) {
       throw new AppError(
         400,
         'INVALID_SERVICE_ADDRESS_NODE',
