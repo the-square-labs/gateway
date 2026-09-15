@@ -15,6 +15,7 @@ import { InferenceProtocolError } from '../protocol/inference-protocol.error.js'
 import type { InferenceRequest, InferenceUsage } from '../protocol/inference-protocol.types.js';
 import {
   capSubscriptionEstimateToBudget,
+  capSubscriptionEstimateToCredits,
   conservativeEstimate,
   errorCode,
   hash,
@@ -29,6 +30,7 @@ import type { InferenceBudgetLockService } from './inference-budget-lock.service
 import {
   apiMicrodollars,
   dynamicBurnMultiplier,
+  type EffectiveInferenceLimits,
   type InferenceBudgetPolicyService,
   subscriptionCreditsForUsage,
 } from './inference-budget-policy.js';
@@ -106,7 +108,7 @@ export class InferenceAccountingService {
         input.model.maxOutputTokens,
         input.model.maxInputTokens
       );
-      const estimatedUsage =
+      const preliminaryEstimatedUsage =
         input.source.sourceType === 'subscription'
           ? capSubscriptionEstimateToBudget({
               estimate: conservativeUsage,
@@ -118,17 +120,15 @@ export class InferenceAccountingService {
               isCompaction: input.request.isCompaction,
             })
           : conservativeUsage;
-      if (!estimatedUsage) {
+      if (!preliminaryEstimatedUsage) {
         throw new InferenceProtocolError(429, 'subscription_budget_exhausted', 'Inference budget exhausted');
       }
-      const admittedMaxOutputTokens =
-        estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : undefined;
       const fixedApiMicrodollars = input.apiUnitCharge
         ? unitCharge(pricing, input.apiUnitCharge.priceKey, input.apiUnitCharge.units)
         : 0;
       const amounts = reservationAmounts(
         input.source.sourceType,
-        estimatedUsage,
+        preliminaryEstimatedUsage,
         modelMultiplier,
         burnMultiplier,
         serviceTierMultiplier,
@@ -190,11 +190,11 @@ export class InferenceAccountingService {
           serviceTierMultiplier: String(serviceTierMultiplier),
           creditsCharged: String(amounts.credits5h),
           apiMicrodollarsCharged: amounts.apiMonthlyMicrodollars,
-          uncachedInputTokens: estimatedUsage.inputTokens,
-          cachedInputTokens: estimatedUsage.cachedInputTokens,
-          cacheWriteTokens: estimatedUsage.cacheWriteTokens,
-          outputTokens: estimatedUsage.outputTokens,
-          reasoningTokens: estimatedUsage.reasoningTokens,
+          uncachedInputTokens: preliminaryEstimatedUsage.inputTokens,
+          cachedInputTokens: preliminaryEstimatedUsage.cachedInputTokens,
+          cacheWriteTokens: preliminaryEstimatedUsage.cacheWriteTokens,
+          outputTokens: preliminaryEstimatedUsage.outputTokens,
+          reasoningTokens: preliminaryEstimatedUsage.reasoningTokens,
         });
       }
 
@@ -212,6 +212,32 @@ export class InferenceAccountingService {
         if (!input.retryOf) await database.delete(inferenceRequests).where(eq(inferenceRequests.id, requestId));
         throw error;
       }
+      const estimatedUsage =
+        input.source.sourceType === 'subscription'
+          ? capSubscriptionEstimateToCredits({
+              estimate: conservativeUsage,
+              maximumCredits: subscriptionReservationAllowance(limits, reservation.admittedAmounts),
+              modelMultiplier,
+              burnMultiplier,
+              serviceTierMultiplier,
+            })
+          : preliminaryEstimatedUsage;
+      if (!estimatedUsage) {
+        await this.reservations.release(reservation);
+        if (!input.retryOf) await database.delete(inferenceRequests).where(eq(inferenceRequests.id, requestId));
+        throw new InferenceProtocolError(429, 'subscription_budget_exhausted', 'Inference budget exhausted');
+      }
+      const committedAmounts = reservationAmounts(
+        input.source.sourceType,
+        estimatedUsage,
+        modelMultiplier,
+        burnMultiplier,
+        serviceTierMultiplier,
+        pricing,
+        fixedApiMicrodollars
+      );
+      const admittedMaxOutputTokens =
+        estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : undefined;
       try {
         const [claimed] = await database
           .update(inferenceRequests)
@@ -229,8 +255,8 @@ export class InferenceAccountingService {
             modelMultiplier: String(modelMultiplier),
             burnMultiplier: String(burnMultiplier),
             serviceTierMultiplier: String(serviceTierMultiplier),
-            creditsCharged: String(amounts.credits5h),
-            apiMicrodollarsCharged: amounts.apiMonthlyMicrodollars,
+            creditsCharged: String(committedAmounts.credits5h),
+            apiMicrodollarsCharged: committedAmounts.apiMonthlyMicrodollars,
             uncachedInputTokens: estimatedUsage.inputTokens,
             cachedInputTokens: estimatedUsage.cachedInputTokens,
             cacheWriteTokens: estimatedUsage.cacheWriteTokens,
@@ -550,6 +576,18 @@ export class InferenceAccountingService {
         .where(and(eq(inferenceRequests.id, admission.requestId), eq(inferenceRequests.status, 'reserved')));
     });
   }
+}
+
+function subscriptionReservationAllowance(
+  limits: EffectiveInferenceLimits,
+  amounts: BudgetReservation['admittedAmounts']
+): number {
+  const admitted = [
+    limits.credits5hEnabled ? amounts.credits5h : null,
+    limits.credits7dEnabled ? amounts.credits7d : null,
+    limits.credits30dEnabled ? amounts.credits30d : null,
+  ].filter((amount): amount is number => amount !== null);
+  return admitted.length === 0 ? Number.MAX_SAFE_INTEGER : Math.min(...admitted);
 }
 
 export { __testOnly } from './inference-accounting.helpers.js';

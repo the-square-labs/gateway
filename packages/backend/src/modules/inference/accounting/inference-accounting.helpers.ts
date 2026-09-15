@@ -94,17 +94,38 @@ export function capSubscriptionEstimateToBudget(input: {
   if (enabledHeadroom.length === 0) return input.estimate;
   const headroomCredits = Math.max(0, Math.min(...enabledHeadroom));
   if (headroomCredits <= 0) return null;
+  return capSubscriptionEstimateToCredits({
+    estimate: input.estimate,
+    maximumCredits: headroomCredits + SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS,
+    modelMultiplier: input.modelMultiplier,
+    burnMultiplier: input.burnMultiplier,
+    serviceTierMultiplier: input.serviceTierMultiplier,
+  });
+}
+
+/**
+ * Reapply the output cap after Redis atomically allocated the live tail.
+ * The reservation covers real remaining credits; this adds the one-credit
+ * already-admitted-turn allowance without creating a second reservation.
+ */
+export function capSubscriptionEstimateToCredits(input: {
+  estimate: InferenceUsage;
+  maximumCredits: number;
+  modelMultiplier: number;
+  burnMultiplier: number;
+  serviceTierMultiplier: number;
+}): InferenceUsage | null {
   const multiplier = input.modelMultiplier * input.burnMultiplier * input.serviceTierMultiplier;
   const desiredCredits = subscriptionCredits(input.estimate.totalTokens, multiplier, 1);
-  const maximumAdmittedCredits = headroomCredits + SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS;
-  if (desiredCredits <= maximumAdmittedCredits || multiplier <= 0) return input.estimate;
+  if (desiredCredits <= input.maximumCredits || multiplier <= 0) return input.estimate;
 
-  const totalTokenCapacity = Math.floor((maximumAdmittedCredits * 1_000) / multiplier);
+  const totalTokenCapacity = Math.floor((input.maximumCredits * 1_000) / multiplier);
   if (totalTokenCapacity < input.estimate.inputTokens) return null;
   const outputTokens = Math.min(
     input.estimate.outputTokens,
     Math.max(0, totalTokenCapacity - input.estimate.inputTokens)
   );
+  if (outputTokens < 1) return null;
 
   return {
     ...input.estimate,
@@ -199,6 +220,7 @@ function latestQuotaRows(rows: Array<typeof inferenceQuotaSnapshots.$inferSelect
 }
 
 export const __testOnly = {
+  capSubscriptionEstimateToCredits,
   capSubscriptionEstimateToBudget,
   conservativeEstimate,
   hasSpendableSubscriptionBudget,

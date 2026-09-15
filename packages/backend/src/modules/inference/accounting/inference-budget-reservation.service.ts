@@ -3,6 +3,7 @@ import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { EffectiveInferenceLimits, InferenceBudgetUsage } from './inference-budget-policy.js';
+import { SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS } from './inference-budget-policy.js';
 
 const RESERVATION_TTL_MS = 15 * 60_000;
 const RESERVATION_HEARTBEAT_MS = 60_000;
@@ -20,21 +21,29 @@ export interface BudgetReservationAmounts {
 export interface BudgetReservation {
   id: string;
   userId: string;
+  /** Credits held against the real configured window balance. */
   amounts: BudgetReservationAmounts;
+  /** Principal plus the atomically allocated terminal overage allowance. */
+  admittedAmounts: BudgetReservationAmounts;
   expiresAt: Date;
 }
 
 const RESERVE_SCRIPT = `
-local function amount_for_window(value, window)
-  if not value then return 0 end
+local function amounts_for_window(value, window)
+  if not value then return 0, 0 end
   local separator = string.find(value, ':', 1, true)
-  if not separator then return tonumber(value) or 0 end
-  if string.sub(value, 1, separator - 1) ~= window then return 0 end
-  return tonumber(string.sub(value, separator + 1)) or 0
+  if not separator then return tonumber(value) or 0, 0 end
+  if string.sub(value, 1, separator - 1) ~= window then return 0, 0 end
+  local body = string.sub(value, separator + 1)
+  local overage_separator = string.find(body, ':', 1, true)
+  if not overage_separator then return tonumber(body) or 0, 0 end
+  return tonumber(string.sub(body, 1, overage_separator - 1)) or 0, tonumber(string.sub(body, overage_separator + 1)) or 0
 end
 local now = tonumber(ARGV[1])
 local reservation = ARGV[2]
+local max_overage = tonumber(ARGV[20])
 local reserved = {}
+local overages = {}
 for i = 1, 4 do
   local zkey = KEYS[(i - 1) * 2 + 1]
   local hkey = KEYS[(i - 1) * 2 + 2]
@@ -44,21 +53,27 @@ for i = 1, 4 do
   local values = redis.call('HVALS', hkey)
   local window = ARGV[14 + i]
   local live = 0
-  for _, value in ipairs(values) do live = live + amount_for_window(value, window) end
-  local existing = amount_for_window(redis.call('HGET', hkey, reservation), window)
-  local amount = tonumber(ARGV[2 + i])
+  for _, value in ipairs(values) do
+    local principal, overage = amounts_for_window(value, window)
+    live = live + principal + overage
+  end
+  local existing, existing_overage = amounts_for_window(redis.call('HGET', hkey, reservation), window)
+  local requested = tonumber(ARGV[2 + i])
   local spent = tonumber(ARGV[6 + i])
   local limit = tonumber(ARGV[10 + i])
-  local available = limit - spent - live + existing
-  if i <= 3 and amount > 0 then
-    -- Subscription turns may start with a positive balance, but live Redis
-    -- reservations consume that tail atomically so parallel turns cannot.
-    if available <= 0 then return {i, 0, 0, 0, 0} end
-    amount = math.min(amount, available)
-  elseif spent + live - existing + amount > limit then
-    return {i, 0, 0, 0, 0}
+  local available = limit - spent - live + existing + existing_overage
+  if i <= 3 and requested > 0 then
+    if available <= 0 then return {i} end
+    reserved[i] = math.min(requested, available)
+    -- Counting the full admitted cost in live makes a terminal allowance
+    -- consume the entire tail, so a parallel turn cannot take another one.
+    overages[i] = math.min(requested - reserved[i], max_overage)
+  elseif spent + live - existing + requested > limit then
+    return {i}
+  else
+    reserved[i] = requested
+    overages[i] = 0
   end
-  reserved[i] = amount
 end
 local expiry = tonumber(ARGV[19])
 for i = 1, 4 do
@@ -68,12 +83,19 @@ for i = 1, 4 do
   if amount > 0 then
     local window = ARGV[14 + i]
     redis.call('ZADD', zkey, expiry, reservation)
-    redis.call('HSET', hkey, reservation, window .. ':' .. amount)
+    -- Keep the existing window:amount format readable after Gateway rollback.
+    redis.call('HSET', hkey, reservation, window .. ':' .. (amount + overages[i]))
     redis.call('PEXPIRE', zkey, expiry - now + 60000)
     redis.call('PEXPIRE', hkey, expiry - now + 60000)
   end
 end
-return {0, reserved[1], reserved[2], reserved[3], reserved[4]}
+-- RESP integers truncate Lua numbers. Return credits as bulk strings so a
+-- sub-credit tail reservation (for example 0.5) survives the round trip.
+return {
+  0,
+  tostring(reserved[1]), tostring(reserved[2]), tostring(reserved[3]), tostring(reserved[4]),
+  tostring(overages[1]), tostring(overages[2]), tostring(overages[3]), tostring(overages[4])
+}
 `;
 
 const RELEASE_SCRIPT = `
@@ -131,7 +153,8 @@ export class InferenceBudgetReservationService {
         ...dimensions.map((dimension) => input.usage[dimension]),
         ...limits,
         ...reservationWindowIds(input.usage),
-        expiresAt.getTime()
+        expiresAt.getTime(),
+        SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS
       );
     } catch (error) {
       throw new InferenceProtocolError(503, 'reservation_unavailable', 'Budget admission is temporarily unavailable', {
@@ -139,9 +162,18 @@ export class InferenceBudgetReservationService {
       });
     }
     const values = Array.isArray(result) ? result.map(Number) : [Number(result)];
-    const rejected = values[0] ?? 0;
-    if (rejected > 0) {
-      const dimension = dimensions[rejected - 1]!;
+    const rejected = values[0];
+    if (
+      !Array.isArray(result) ||
+      !Number.isInteger(rejected) ||
+      rejected! < 0 ||
+      rejected! > dimensions.length ||
+      (rejected === 0 && (values.length !== 9 || values.some((value) => !Number.isFinite(value) || value < 0)))
+    ) {
+      throw new InferenceProtocolError(503, 'reservation_unavailable', 'Invalid budget reservation response');
+    }
+    if (rejected! > 0) {
+      const dimension = dimensions[rejected! - 1]!;
       const recoveryAt = recoveryFor(dimension, input.usage);
       throw new InferenceProtocolError(
         429,
@@ -151,13 +183,20 @@ export class InferenceBudgetReservationService {
       );
     }
     const amounts =
-      values.length === dimensions.length + 1
+      values.length === dimensions.length * 2 + 1
         ? Object.fromEntries(dimensions.map((dimension, index) => [dimension, values[index + 1] ?? 0]))
         : input.amounts;
+    const admittedAmounts =
+      values.length === dimensions.length * 2 + 1
+        ? Object.fromEntries(
+            dimensions.map((dimension, index) => [dimension, (values[index + 1] ?? 0) + (values[index + 5] ?? 0)])
+          )
+        : amounts;
     const reservation = {
       id: input.reservationId,
       userId: input.userId,
       amounts: amounts as BudgetReservationAmounts,
+      admittedAmounts: admittedAmounts as BudgetReservationAmounts,
       expiresAt,
     };
     this.startRenewal(reservation);

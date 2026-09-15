@@ -6,6 +6,7 @@ import { inferenceLimitPolicies, inferenceLimitUsageResets, inferenceUsageLedger
 import type { InferenceLimitPolicy } from '@/db/schema/inference-models.js';
 import { tokenPricingForInputTokens } from '../inference-pricing.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
+import { toInternalCredits } from './inference-credit-units.js';
 
 export const SUBSCRIPTION_WINDOWS = {
   '5h': 5 * 60 * 60_000,
@@ -21,8 +22,8 @@ const SUBSCRIPTION_LIMIT_WINDOWS = [
 
 /** Personal subscription credit limits are spendable through their full configured value. */
 export const SUBSCRIPTION_CHAT_BUDGET_FRACTION = 1;
-/** A turn admitted with a positive balance may settle at most one credit over its window limit. */
-export const SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS = 1;
+/** A turn admitted with a positive balance may settle at most one visible credit over its window limit. */
+export const SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS = toInternalCredits(1);
 
 export interface EffectiveInferenceLimits {
   enabled: boolean;

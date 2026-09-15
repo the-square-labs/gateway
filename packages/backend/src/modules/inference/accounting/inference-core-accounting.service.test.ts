@@ -88,6 +88,7 @@ function createHarness(
     attempts?: unknown[];
     limits?: Record<string, unknown>;
     usage?: Record<string, unknown>;
+    reservation?: { amounts: Record<string, number>; admittedAmounts: Record<string, number> };
     reserveError?: unknown;
     claimEmpty?: boolean;
     selectRows?: unknown[][];
@@ -170,7 +171,13 @@ function createHarness(
   const reservations = {
     reserve: options.reserveError
       ? vi.fn().mockRejectedValue(options.reserveError)
-      : vi.fn().mockResolvedValue({ id: REQUEST.id, userId: 'user-1' }),
+      : vi.fn(async (input) => ({
+          id: input.reservationId,
+          userId: 'user-1',
+          amounts: options.reservation?.amounts ?? input.amounts,
+          admittedAmounts: options.reservation?.admittedAmounts ?? input.amounts,
+          expiresAt: new Date(),
+        })),
     release: vi.fn().mockResolvedValue(undefined),
   };
   const locks = {
@@ -269,22 +276,26 @@ describe('inference core accounting', () => {
     const { service, reservations } = createHarness({
       limits: {
         credits5hEnabled: true,
-        credits5h: 100,
+        credits5h: 1_000,
         credits7dEnabled: true,
-        credits7d: 100,
+        credits7d: 1_000,
         credits30dEnabled: true,
-        credits30d: 100,
+        credits30d: 1_000,
       },
-      usage: { credits5h: 99.5, credits7d: 99.5, credits30d: 99.5 },
+      usage: { credits5h: 0, credits7d: 0, credits30d: 0 },
+      reservation: {
+        amounts: { credits5h: 500, credits7d: 500, credits30d: 500, apiMonthlyMicrodollars: 0 },
+        admittedAmounts: { credits5h: 1_500, credits7d: 1_500, credits30d: 1_500, apiMonthlyMicrodollars: 0 },
+      },
     });
     const decision = await service.admitCoreAttempt({
       ...ADMISSION,
-      estimate: { inputTokens: 1_000, maxOutputTokens: 5_000 },
+      estimate: { inputTokens: 1_000, maxOutputTokens: 2_000_000 },
     });
 
-    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 500 });
+    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 1_499_000 });
     expect(reservations.reserve).toHaveBeenCalledWith(
-      expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 1.5 }) })
+      expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 2_000 }) })
     );
   });
 
@@ -292,15 +303,38 @@ describe('inference core accounting', () => {
     const { service, reservations } = createHarness({
       limits: {
         credits5hEnabled: true,
-        credits5h: 100,
+        credits5h: 1_000,
         credits7dEnabled: false,
         credits30dEnabled: false,
       },
-      usage: { credits5h: 100 },
+      usage: { credits5h: 1_000 },
     });
 
     await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'deny', reason: 'budget_exceeded' });
     expect(reservations.reserve).not.toHaveBeenCalled();
+  });
+
+  it('releases an atomically reserved tail that cannot leave one valid output token', async () => {
+    const { service, reservations } = createHarness({
+      limits: {
+        credits5hEnabled: true,
+        credits5h: 1_000,
+        credits7dEnabled: true,
+        credits7d: 1_000,
+        credits30dEnabled: true,
+        credits30d: 1_000,
+      },
+      usage: { credits5h: 0, credits7d: 0, credits30d: 0 },
+      reservation: {
+        amounts: { credits5h: 500, credits7d: 500, credits30d: 500, apiMonthlyMicrodollars: 0 },
+        admittedAmounts: { credits5h: 1_500, credits7d: 1_500, credits30d: 1_500, apiMonthlyMicrodollars: 0 },
+      },
+    });
+
+    await expect(
+      service.admitCoreAttempt({ ...ADMISSION, estimate: { inputTokens: 1_500_000, maxOutputTokens: 1 } })
+    ).resolves.toEqual({ decision: 'deny', reason: 'budget_exceeded' });
+    expect(reservations.release).toHaveBeenCalledWith(expect.objectContaining({ id: `${REQUEST.id}:att_1` }));
   });
 
   it('does not cap core admission through disabled subscription windows', async () => {

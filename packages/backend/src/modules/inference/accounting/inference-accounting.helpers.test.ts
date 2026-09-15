@@ -25,12 +25,12 @@ describe('inference accounting estimates', () => {
 
   it('admits a positive tail balance and caps only its maximum terminal overage', () => {
     const estimate = {
-      inputTokens: 100,
+      inputTokens: 100_000,
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
-      outputTokens: 2_000,
+      outputTokens: 2_000_000,
       reasoningTokens: 0,
-      totalTokens: 2_100,
+      totalTokens: 2_100_000,
       estimated: true,
     };
     const capped = __testOnly.capSubscriptionEstimateToBudget({
@@ -38,16 +38,16 @@ describe('inference accounting estimates', () => {
       limits: {
         enabled: true,
         credits5hEnabled: true,
-        credits5h: 100,
+        credits5h: 1_000,
         credits7dEnabled: false,
-        credits7d: 100,
+        credits7d: 1_000,
         credits30dEnabled: false,
         credits30d: 1_000,
         apiMonthlyMicrodollars: 0,
         billingTimezone: 'UTC',
       },
       usage: {
-        credits5h: 99.5,
+        credits5h: 500,
         credits7d: 0,
         credits30d: 0,
         apiMonthlyMicrodollars: 0,
@@ -64,8 +64,8 @@ describe('inference accounting estimates', () => {
       isCompaction: false,
     });
 
-    expect(capped).toMatchObject({ outputTokens: 1_400, totalTokens: 1_500 });
-    expect(subscriptionCredits(capped!.totalTokens, 1, 1)).toBeLessThanOrEqual(1.5);
+    expect(capped).toMatchObject({ outputTokens: 1_400_000, totalTokens: 1_500_000 });
+    expect(subscriptionCredits(capped!.totalTokens, 1, 1)).toBeLessThanOrEqual(1_500);
   });
 
   it('does not cap requests that fit, disabled windows, or compaction requests', () => {
@@ -83,11 +83,11 @@ describe('inference accounting estimates', () => {
       limits: {
         enabled: true,
         credits5hEnabled: true,
-        credits5h: 100,
+        credits5h: 1_000,
         credits7dEnabled: false,
-        credits7d: 100,
+        credits7d: 1_000,
         credits30dEnabled: false,
-        credits30d: 100,
+        credits30d: 1_000,
         apiMonthlyMicrodollars: 0,
         billingTimezone: 'UTC',
       },
@@ -113,7 +113,7 @@ describe('inference accounting estimates', () => {
     expect(
       __testOnly.capSubscriptionEstimateToBudget({
         ...input,
-        usage: { ...input.usage, credits5h: 95 },
+        usage: { ...input.usage, credits5h: 950 },
         isCompaction: true,
       })
     ).toBe(estimate);
@@ -130,16 +130,16 @@ describe('inference accounting estimates', () => {
     const limits = {
       enabled: true,
       credits5hEnabled: true,
-      credits5h: 100,
+      credits5h: 1_000,
       credits7dEnabled: false,
-      credits7d: 100,
+      credits7d: 1_000,
       credits30dEnabled: false,
-      credits30d: 100,
+      credits30d: 1_000,
       apiMonthlyMicrodollars: 0,
       billingTimezone: 'UTC',
     };
     const usage = {
-      credits5h: 99.5,
+      credits5h: 500,
       credits7d: 0,
       credits30d: 0,
       apiMonthlyMicrodollars: 0,
@@ -152,24 +152,44 @@ describe('inference accounting estimates', () => {
     };
 
     expect(__testOnly.hasSpendableSubscriptionBudget(limits, usage)).toBe(true);
-    expect(__testOnly.hasSpendableSubscriptionBudget(limits, { ...usage, credits5h: 100 })).toBe(false);
+    expect(__testOnly.hasSpendableSubscriptionBudget(limits, { ...usage, credits5h: 1_000 })).toBe(false);
     expect(
       __testOnly.capSubscriptionEstimateToBudget({
         estimate: {
-          inputTokens: 100,
+          inputTokens: 100_000,
           cachedInputTokens: 0,
           cacheWriteTokens: 0,
-          outputTokens: 100,
+          outputTokens: 100_000,
           reasoningTokens: 0,
-          totalTokens: 200,
+          totalTokens: 200_000,
           estimated: true,
         },
         limits,
-        usage: { ...usage, credits5h: 100 },
+        usage: { ...usage, credits5h: 1_000 },
         modelMultiplier: 1,
         burnMultiplier: 1,
         serviceTierMultiplier: 1,
         isCompaction: false,
+      })
+    ).toBeNull();
+  });
+
+  it('rejects a tail reservation that cannot leave at least one output token', () => {
+    expect(
+      __testOnly.capSubscriptionEstimateToCredits({
+        estimate: {
+          inputTokens: 1_500_000,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 1,
+          reasoningTokens: 0,
+          totalTokens: 1_500_001,
+          estimated: true,
+        },
+        maximumCredits: 1_500,
+        modelMultiplier: 1,
+        burnMultiplier: 1,
+        serviceTierMultiplier: 1,
       })
     ).toBeNull();
   });

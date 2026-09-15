@@ -26,6 +26,7 @@ import type { InferenceUsage } from '../protocol/inference-protocol.types.js';
 import { latestValidQuota } from '../providers/inference-provider.service.helpers.js';
 import {
   capSubscriptionEstimateToBudget,
+  capSubscriptionEstimateToCredits,
   errorCode,
   hash,
   latestPricing,
@@ -40,7 +41,10 @@ import {
   type InferenceBudgetPolicyService,
   subscriptionCreditsForUsage,
 } from './inference-budget-policy.js';
-import type { InferenceBudgetReservationService } from './inference-budget-reservation.service.js';
+import type {
+  BudgetReservationAmounts,
+  InferenceBudgetReservationService,
+} from './inference-budget-reservation.service.js';
 import { assertProviderApiBudget } from './inference-provider-budget.js';
 import { normalizeServiceTier, serviceTierCreditMultiplier } from './inference-service-tier.js';
 import { publishInferenceUsageChanged } from './inference-usage-events.js';
@@ -330,7 +334,7 @@ export class InferenceCoreAccountingService {
     const serviceTier = normalizeServiceTier(request.serviceTier);
     const serviceTierMultiplier = serviceTierCreditMultiplier(source.sourceType, connection.providerId, serviceTier);
     const conservativeUsage = coreEstimateUsage(input.estimate);
-    const estimatedUsage =
+    let estimatedUsage =
       source.sourceType === 'subscription'
         ? capSubscriptionEstimateToBudget({
             estimate: conservativeUsage,
@@ -343,10 +347,10 @@ export class InferenceCoreAccountingService {
           })
         : conservativeUsage;
     if (!estimatedUsage) return deny('budget_exceeded');
-    const admittedMaxOutputTokens =
+    let admittedMaxOutputTokens =
       estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : null;
     const fixedApiMicrodollars = Number(request.fixedApiMicrodollars ?? 0);
-    const amounts = reservationAmounts(
+    let amounts = reservationAmounts(
       source.sourceType,
       estimatedUsage,
       modelMultiplier,
@@ -361,7 +365,7 @@ export class InferenceCoreAccountingService {
         await assertProviderApiBudget(database, connection, amounts.apiMonthlyMicrodollars);
       }
       const reservationId = `${request.id}:${input.attemptId}`;
-      await this.reservations.reserve({
+      const reservation = await this.reservations.reserve({
         reservationId,
         userId,
         amounts,
@@ -369,6 +373,31 @@ export class InferenceCoreAccountingService {
         limits,
         isCompaction: request.isCompaction,
       });
+      if (source.sourceType === 'subscription') {
+        const committedUsage = capSubscriptionEstimateToCredits({
+          estimate: conservativeUsage,
+          maximumCredits: subscriptionReservationAllowance(limits, reservation.admittedAmounts),
+          modelMultiplier,
+          burnMultiplier,
+          serviceTierMultiplier,
+        });
+        if (!committedUsage) {
+          await this.reservations.release(reservation);
+          return deny('budget_exceeded');
+        }
+        estimatedUsage = committedUsage;
+        amounts = reservationAmounts(
+          source.sourceType,
+          committedUsage,
+          modelMultiplier,
+          burnMultiplier,
+          serviceTierMultiplier,
+          pricing,
+          fixedApiMicrodollars
+        );
+        admittedMaxOutputTokens =
+          committedUsage.outputTokens < conservativeUsage.outputTokens ? committedUsage.outputTokens : null;
+      }
     } catch (error) {
       const denied = budgetDeny(error);
       if (denied) return denied;
@@ -719,6 +748,15 @@ export class InferenceCoreAccountingService {
       })
       .where(eq(inferenceRequests.id, requestId));
   }
+}
+
+function subscriptionReservationAllowance(limits: EffectiveInferenceLimits, amounts: BudgetReservationAmounts): number {
+  const admitted = [
+    limits.credits5hEnabled ? amounts.credits5h : null,
+    limits.credits7dEnabled ? amounts.credits7d : null,
+    limits.credits30dEnabled ? amounts.credits30d : null,
+  ].filter((amount): amount is number => amount !== null);
+  return admitted.length === 0 ? Number.MAX_SAFE_INTEGER : Math.min(...admitted);
 }
 
 function assertPinnedRoute(

@@ -1,23 +1,25 @@
 import 'reflect-metadata';
-import { describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import Redis from 'ioredis';
+import { describe, expect, it, vi } from 'vitest';
 import { __testOnly, InferenceBudgetReservationService } from './inference-budget-reservation.service.js';
 
 describe('inference live reservation policy', () => {
   const limits = {
     enabled: true,
     credits5hEnabled: true,
-    credits5h: 100,
+    credits5h: 1_000,
     credits7dEnabled: true,
-    credits7d: 200,
+    credits7d: 2_000,
     credits30dEnabled: true,
-    credits30d: 300,
+    credits30d: 3_000,
     apiMonthlyMicrodollars: 400,
     billingTimezone: 'UTC',
   };
 
   it('reserves against the full configured personal limit without a hidden percentage reserve', () => {
-    expect(__testOnly.reservationLimit('credits5h', limits, false)).toBe(100);
-    expect(__testOnly.reservationLimit('credits5h', limits, true)).toBe(100);
+    expect(__testOnly.reservationLimit('credits5h', limits, false)).toBe(1_000);
+    expect(__testOnly.reservationLimit('credits5h', limits, true)).toBe(1_000);
     expect(__testOnly.reservationLimit('apiMonthlyMicrodollars', limits, false)).toBe(400);
   });
 
@@ -88,15 +90,18 @@ describe('inference live reservation policy', () => {
   });
 
   it('keeps the tail reservation atomic: the admitted turn holds the remaining credits and the next one rejects', async () => {
-    const evalMock = vi.fn().mockResolvedValueOnce([0, 0.5, 0.5, 0.5, 0]).mockResolvedValueOnce([1, 0, 0, 0, 0]);
+    const evalMock = vi
+      .fn()
+      .mockResolvedValueOnce([0, '500', '500', '500', '0', '1000', '1000', '1000', '0'])
+      .mockResolvedValueOnce([1]);
     const service = new InferenceBudgetReservationService({ eval: evalMock } as never);
     const input = {
       userId: 'user-1',
-      amounts: { credits5h: 5, credits7d: 5, credits30d: 5, apiMonthlyMicrodollars: 0 },
+      amounts: { credits5h: 5_000, credits7d: 5_000, credits30d: 5_000, apiMonthlyMicrodollars: 0 },
       usage: {
-        credits5h: 99.5,
-        credits7d: 199.5,
-        credits30d: 299.5,
+        credits5h: 500,
+        credits7d: 1_500,
+        credits30d: 2_500,
         apiMonthlyMicrodollars: 0,
         recoveryAt: {
           credits5h: new Date('2026-09-16T00:00:00.000Z'),
@@ -110,7 +115,8 @@ describe('inference live reservation policy', () => {
     };
 
     await expect(service.reserve({ ...input, reservationId: 'request-1' })).resolves.toMatchObject({
-      amounts: { credits5h: 0.5, credits7d: 0.5, credits30d: 0.5 },
+      amounts: { credits5h: 500, credits7d: 500, credits30d: 500 },
+      admittedAmounts: { credits5h: 1_500, credits7d: 1_500, credits30d: 1_500 },
     });
     await expect(service.reserve({ ...input, reservationId: 'request-2' })).rejects.toMatchObject({
       status: 429,
@@ -118,4 +124,108 @@ describe('inference live reservation policy', () => {
     });
     expect(evalMock).toHaveBeenCalledTimes(2);
   });
+
+  const redisUrl = process.env.INFERENCE_REDIS_INTEGRATION_URL;
+  (redisUrl ? it : it.skip)(
+    'atomically preserves a visible half-credit tail and one visible-credit overage in Redis',
+    async () => {
+      const redis = new Redis(redisUrl!);
+      const service = new InferenceBudgetReservationService(redis as never);
+      const input = {
+        userId: `quota-proof-${randomUUID()}`,
+        amounts: { credits5h: 5_000, credits7d: 5_000, credits30d: 5_000, apiMonthlyMicrodollars: 0 },
+        usage: {
+          credits5h: 500,
+          credits7d: 1_500,
+          credits30d: 2_500,
+          apiMonthlyMicrodollars: 0,
+          recoveryAt: {
+            credits5h: new Date('2026-09-16T00:00:00.000Z'),
+            credits7d: new Date('2026-09-17T00:00:00.000Z'),
+            credits30d: new Date('2026-10-15T00:00:00.000Z'),
+            apiMonthly: new Date('2026-10-01T00:00:00.000Z'),
+          },
+        },
+        limits,
+        isCompaction: false,
+      };
+      try {
+        const results = await Promise.allSettled(
+          Array.from({ length: 16 }, (_, index) =>
+            service.reserve({ ...input, reservationId: `request-live-${index}` })
+          )
+        );
+        const admitted = results.filter(
+          (result): result is PromiseFulfilledResult<Awaited<ReturnType<typeof service.reserve>>> =>
+            result.status === 'fulfilled'
+        );
+        const rejected = results.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
+
+        expect(admitted).toHaveLength(1);
+        expect(rejected).toHaveLength(15);
+        expect(admitted[0]!.value).toMatchObject({
+          amounts: { credits5h: 500, credits7d: 500, credits30d: 500 },
+          admittedAmounts: { credits5h: 1_500, credits7d: 1_500, credits30d: 1_500 },
+        });
+        expect(rejected[0]!.reason).toMatchObject({ code: 'subscription_budget_exhausted' });
+        const stored = await redis.hget(__testOnly.reservationKeys(input.userId)[1]!, admitted[0]!.value.id);
+        // The pre-update reader still sees the entire admitted cost after rollback.
+        expect(Number(stored!.slice(stored!.indexOf(':') + 1))).toBe(1_500);
+        await (service as unknown as { renew(value: unknown): Promise<void> }).renew(admitted[0]!.value);
+        expect(await redis.hget(__testOnly.reservationKeys(input.userId)[1]!, admitted[0]!.value.id)).toBe(stored);
+        await service.release(admitted[0]!.value);
+        await expect(
+          service.reserve({
+            ...input,
+            reservationId: 'after-settlement',
+            usage: {
+              ...input.usage,
+              credits5h: 2_000,
+              credits7d: 3_000,
+              credits30d: 4_000,
+            },
+          })
+        ).rejects.toMatchObject({ code: 'subscription_budget_exhausted' });
+      } finally {
+        await redis.quit();
+      }
+    }
+  );
+
+  (redisUrl ? it : it.skip)(
+    'preserves fractional internal reservation amounts through the Lua RESP result',
+    async () => {
+      const redis = new Redis(redisUrl!);
+      const service = new InferenceBudgetReservationService(redis as never);
+      try {
+        const reservation = await service.reserve({
+          reservationId: 'request-fraction',
+          userId: `quota-proof-${randomUUID()}`,
+          amounts: { credits5h: 5_000, credits7d: 5_000, credits30d: 5_000, apiMonthlyMicrodollars: 0 },
+          usage: {
+            credits5h: 999.5,
+            credits7d: 1_999.5,
+            credits30d: 2_999.5,
+            apiMonthlyMicrodollars: 0,
+            recoveryAt: {
+              credits5h: new Date('2026-09-16T00:00:00.000Z'),
+              credits7d: new Date('2026-09-17T00:00:00.000Z'),
+              credits30d: new Date('2026-10-15T00:00:00.000Z'),
+              apiMonthly: new Date('2026-10-01T00:00:00.000Z'),
+            },
+          },
+          limits,
+          isCompaction: false,
+        });
+
+        expect(reservation).toMatchObject({
+          amounts: { credits5h: 0.5, credits7d: 0.5, credits30d: 0.5 },
+          admittedAmounts: { credits5h: 1_000.5, credits7d: 1_000.5, credits30d: 1_000.5 },
+        });
+        await service.release(reservation);
+      } finally {
+        await redis.quit();
+      }
+    }
+  );
 });

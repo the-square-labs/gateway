@@ -110,18 +110,18 @@ it('settles a tail admission at the bounded one-credit overage without reopening
   const limits = {
     enabled: true,
     credits5hEnabled: true,
-    credits5h: 100,
+    credits5h: 1_000,
     credits7dEnabled: true,
-    credits7d: 100,
+    credits7d: 1_000,
     credits30dEnabled: true,
-    credits30d: 100,
+    credits30d: 1_000,
     apiMonthlyMicrodollars: 0,
     billingTimezone: 'UTC',
   };
   const usage = {
-    credits5h: 99.5,
-    credits7d: 99.5,
-    credits30d: 99.5,
+    credits5h: 0,
+    credits7d: 0,
+    credits30d: 0,
     apiMonthlyMicrodollars: 0,
     recoveryAt: { credits5h: new Date(), credits7d: new Date(), credits30d: new Date(), apiMonthly: new Date() },
   };
@@ -130,7 +130,8 @@ it('settles a tail admission at the bounded one-credit overage without reopening
     reserve: vi.fn(async (input) => ({
       id: input.reservationId,
       userId: input.userId,
-      amounts: { credits5h: 0.5, credits7d: 0.5, credits30d: 0.5, apiMonthlyMicrodollars: 0 },
+      amounts: { credits5h: 500, credits7d: 500, credits30d: 500, apiMonthlyMicrodollars: 0 },
+      admittedAmounts: { credits5h: 1_500, credits7d: 1_500, credits30d: 1_500, apiMonthlyMicrodollars: 0 },
       expiresAt: new Date(),
     })),
     release: vi.fn(),
@@ -147,7 +148,7 @@ it('settles a tail admission at the bounded one-credit overage without reopening
       messages: [],
       tools: [],
       stream: false,
-      maxOutputTokens: 5_000,
+      maxOutputTokens: 2_000_000,
       isCompaction: false,
       extensions: {},
     },
@@ -156,15 +157,15 @@ it('settles a tail admission at the bounded one-credit overage without reopening
       publicId: 'model',
       subscriptionMultiplier: '1',
       maxInputTokens: 8_000,
-      maxOutputTokens: 5_000,
+      maxOutputTokens: 2_000_000,
     } as never,
     source: { id: 'source', sourceType: 'subscription', upstreamModelId: 'model' } as never,
     connection: { id: 'connection', providerId: 'openai-apikey' } as never,
   });
 
-  expect(admission.admittedMaxOutputTokens).toBe(1_499);
+  expect(admission.admittedMaxOutputTokens).toBe(1_499_999);
   expect(reservations.reserve).toHaveBeenCalledWith(
-    expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 1.5 }) })
+    expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 2_000 }) })
   );
   await service.settle(
     admission,
@@ -172,13 +173,13 @@ it('settles a tail admission at the bounded one-credit overage without reopening
       inputTokens: 1,
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
-      outputTokens: 1_499,
+      outputTokens: 1_499_999,
       reasoningTokens: 0,
-      totalTokens: 1_500,
+      totalTokens: 1_500_000,
       estimated: false,
     },
     true
   );
-  expect(writes.find((row) => row.entryType === 'settlement')).toMatchObject({ credits: '1.5' });
+  expect(writes.find((row) => row.entryType === 'settlement')).toMatchObject({ credits: '1500' });
   expect(reservations.release).toHaveBeenCalledOnce();
 });
