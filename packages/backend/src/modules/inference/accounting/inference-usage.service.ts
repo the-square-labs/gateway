@@ -366,9 +366,9 @@ export class InferenceUsageService {
         targetWhere: sql`${inferenceLimitPolicies.policyType} = 'default'`,
         set: { ...dbPolicy(input), updatedAt: new Date() },
       });
-    await this.changed(userId, 'default', input);
+    const [policies] = await Promise.all([this.listPolicies(), this.changed(userId, 'default', input)]);
     publishInferenceUsageChanged(this.eventBus, { targetUserId: null, reason: 'limits' });
-    return this.listPolicies();
+    return policies;
   }
 
   async setUser(userId: string, targetUserId: string, input: InferenceLimitPolicyInput) {
@@ -385,9 +385,9 @@ export class InferenceUsageService {
         targetWhere: sql`${inferenceLimitPolicies.userId} IS NOT NULL`,
         set: { ...dbPolicy(input), updatedAt: new Date() },
       });
-    await this.changed(userId, targetUserId, input);
+    const [policies] = await Promise.all([this.listPolicies(), this.changed(userId, targetUserId, input)]);
     publishInferenceUsageChanged(this.eventBus, { targetUserId, reason: 'limits' });
-    return this.listPolicies();
+    return policies;
   }
 
   async removeUser(userId: string, targetUserId: string): Promise<void> {

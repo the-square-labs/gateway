@@ -18,7 +18,6 @@ import {
   conservativeEstimate,
   errorCode,
   hash,
-  hasSpendableSubscriptionBudget,
   latestPricing,
   latestQuota,
   reservationAmounts,
@@ -107,10 +106,6 @@ export class InferenceAccountingService {
         input.model.maxOutputTokens,
         input.model.maxInputTokens
       );
-      const allowLastRequestGrace =
-        input.source.sourceType === 'subscription' &&
-        !input.request.isCompaction &&
-        hasSpendableSubscriptionBudget(limits, usage);
       const estimatedUsage =
         input.source.sourceType === 'subscription'
           ? capSubscriptionEstimateToBudget({
@@ -121,9 +116,11 @@ export class InferenceAccountingService {
               burnMultiplier,
               serviceTierMultiplier,
               isCompaction: input.request.isCompaction,
-              allowLastRequestGrace,
             })
           : conservativeUsage;
+      if (!estimatedUsage) {
+        throw new InferenceProtocolError(429, 'subscription_budget_exhausted', 'Inference budget exhausted');
+      }
       const admittedMaxOutputTokens =
         estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : undefined;
       const fixedApiMicrodollars = input.apiUnitCharge
@@ -210,7 +207,6 @@ export class InferenceAccountingService {
           usage,
           limits,
           isCompaction: input.request.isCompaction,
-          allowLastRequestGrace,
         });
       } catch (error) {
         if (!input.retryOf) await database.delete(inferenceRequests).where(eq(inferenceRequests.id, requestId));

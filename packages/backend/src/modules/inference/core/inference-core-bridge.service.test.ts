@@ -50,6 +50,7 @@ describe('managed core availability and request limits', () => {
     const { service, settings, fetch } = harness(true);
     expect(await service.coreReady()).toBe(true);
     const first = await service.dataPlaneTarget();
+    expect(first.requestLimitsCapability).toBe('negotiated-v1');
     expect(first.requestLimits?.webSocketMaxPayloadBytes).toBe(256 * 1024 * 1024);
     settings.requestLimits.inferenceWebSocketMaxPayloadBytes = 128 * 1024 * 1024;
     const next = await service.dataPlaneTarget();
@@ -70,7 +71,9 @@ describe('managed core availability and request limits', () => {
   });
   it('keeps legacy strict contexts compatible', async () => {
     const { service } = harness(false);
-    expect((await service.dataPlaneTarget()).requestLimits).toBeUndefined();
+    const target = await service.dataPlaneTarget();
+    expect(target).toMatchObject({ requestLimitsCapability: 'legacy' });
+    expect(target).not.toHaveProperty('requestLimits');
   });
   it('still fences an actual cutover', async () => {
     const { service, fetch } = harness(true, 'updating');

@@ -87,6 +87,7 @@ function createHarness(
     attemptLookups?: unknown[];
     attempts?: unknown[];
     limits?: Record<string, unknown>;
+    usage?: Record<string, unknown>;
     reserveError?: unknown;
     claimEmpty?: boolean;
     selectRows?: unknown[][];
@@ -163,6 +164,7 @@ function createHarness(
       credits30d: 0,
       apiMonthlyMicrodollars: 0,
       recoveryAt: {},
+      ...options.usage,
     }),
   };
   const reservations = {
@@ -261,6 +263,52 @@ describe('inference core accounting', () => {
       status: 'running',
     });
     expect(requestUpdates[0]).toMatchObject({ status: 'running' });
+  });
+
+  it('admits the final half-credit turn with a bounded one-credit terminal overage', async () => {
+    const { service, reservations } = createHarness({
+      limits: {
+        credits5hEnabled: true,
+        credits5h: 100,
+        credits7dEnabled: true,
+        credits7d: 100,
+        credits30dEnabled: true,
+        credits30d: 100,
+      },
+      usage: { credits5h: 99.5, credits7d: 99.5, credits30d: 99.5 },
+    });
+    const decision = await service.admitCoreAttempt({
+      ...ADMISSION,
+      estimate: { inputTokens: 1_000, maxOutputTokens: 5_000 },
+    });
+
+    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 500 });
+    expect(reservations.reserve).toHaveBeenCalledWith(
+      expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 1.5 }) })
+    );
+  });
+
+  it('rejects a subsequent core attempt when the full personal window is exhausted', async () => {
+    const { service, reservations } = createHarness({
+      limits: {
+        credits5hEnabled: true,
+        credits5h: 100,
+        credits7dEnabled: false,
+        credits30dEnabled: false,
+      },
+      usage: { credits5h: 100 },
+    });
+
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'deny', reason: 'budget_exceeded' });
+    expect(reservations.reserve).not.toHaveBeenCalled();
+  });
+
+  it('does not cap core admission through disabled subscription windows', async () => {
+    const { service } = createHarness({
+      usage: { credits5h: 100_000, credits7d: 100_000, credits30d: 100_000 },
+    });
+
+    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'allow' });
   });
 
   it('uses the Gateway source billing type when API-key auth backs a subscription plan', async () => {

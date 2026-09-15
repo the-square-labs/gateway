@@ -15,9 +15,8 @@ describe('inference live reservation policy', () => {
     billingTimezone: 'UTC',
   };
 
-  it('allows one percent bounded grace while retaining the compaction reserve', () => {
-    expect(__testOnly.reservationLimit('credits5h', limits, false)).toBe(95);
-    expect(__testOnly.reservationLimit('credits5h', limits, false, true)).toBe(96);
+  it('reserves against the full configured personal limit without a hidden percentage reserve', () => {
+    expect(__testOnly.reservationLimit('credits5h', limits, false)).toBe(100);
     expect(__testOnly.reservationLimit('credits5h', limits, true)).toBe(100);
     expect(__testOnly.reservationLimit('apiMonthlyMicrodollars', limits, false)).toBe(400);
   });
@@ -86,5 +85,37 @@ describe('inference live reservation policy', () => {
         isCompaction: false,
       })
     ).rejects.toMatchObject({ status: 503, code: 'reservation_unavailable' });
+  });
+
+  it('keeps the tail reservation atomic: the admitted turn holds the remaining credits and the next one rejects', async () => {
+    const evalMock = vi.fn().mockResolvedValueOnce([0, 0.5, 0.5, 0.5, 0]).mockResolvedValueOnce([1, 0, 0, 0, 0]);
+    const service = new InferenceBudgetReservationService({ eval: evalMock } as never);
+    const input = {
+      userId: 'user-1',
+      amounts: { credits5h: 5, credits7d: 5, credits30d: 5, apiMonthlyMicrodollars: 0 },
+      usage: {
+        credits5h: 99.5,
+        credits7d: 199.5,
+        credits30d: 299.5,
+        apiMonthlyMicrodollars: 0,
+        recoveryAt: {
+          credits5h: new Date('2026-09-16T00:00:00.000Z'),
+          credits7d: new Date('2026-09-17T00:00:00.000Z'),
+          credits30d: new Date('2026-10-15T00:00:00.000Z'),
+          apiMonthly: new Date('2026-10-01T00:00:00.000Z'),
+        },
+      },
+      limits,
+      isCompaction: false,
+    };
+
+    await expect(service.reserve({ ...input, reservationId: 'request-1' })).resolves.toMatchObject({
+      amounts: { credits5h: 0.5, credits7d: 0.5, credits30d: 0.5 },
+    });
+    await expect(service.reserve({ ...input, reservationId: 'request-2' })).rejects.toMatchObject({
+      status: 429,
+      code: 'subscription_budget_exhausted',
+    });
+    expect(evalMock).toHaveBeenCalledTimes(2);
   });
 });

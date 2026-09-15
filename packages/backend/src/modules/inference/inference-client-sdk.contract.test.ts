@@ -175,7 +175,11 @@ function buildApp() {
     beginAffinityTurn: vi.fn().mockResolvedValue(vi.fn().mockResolvedValue(undefined)),
   };
   const bridge = {
-    dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
+    dataPlaneTarget: vi.fn().mockResolvedValue({
+      baseUrl: 'http://inference-core:10100',
+      credential: 'ocx_data',
+      requestLimitsCapability: 'legacy',
+    }),
   };
   const coreAccounting = {
     createCoreRequest: vi.fn().mockResolvedValue({ requestId: '3fa85f64-5717-4562-b3fc-2c963f66afa6' }),

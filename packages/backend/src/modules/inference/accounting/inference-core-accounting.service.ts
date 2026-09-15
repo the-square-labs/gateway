@@ -28,7 +28,6 @@ import {
   capSubscriptionEstimateToBudget,
   errorCode,
   hash,
-  hasSpendableSubscriptionBudget,
   latestPricing,
   latestQuota,
   reservationAmounts,
@@ -331,8 +330,6 @@ export class InferenceCoreAccountingService {
     const serviceTier = normalizeServiceTier(request.serviceTier);
     const serviceTierMultiplier = serviceTierCreditMultiplier(source.sourceType, connection.providerId, serviceTier);
     const conservativeUsage = coreEstimateUsage(input.estimate);
-    const allowLastRequestGrace =
-      source.sourceType === 'subscription' && !request.isCompaction && hasSpendableSubscriptionBudget(limits, usage);
     const estimatedUsage =
       source.sourceType === 'subscription'
         ? capSubscriptionEstimateToBudget({
@@ -343,9 +340,9 @@ export class InferenceCoreAccountingService {
             burnMultiplier,
             serviceTierMultiplier,
             isCompaction: request.isCompaction,
-            allowLastRequestGrace,
           })
         : conservativeUsage;
+    if (!estimatedUsage) return deny('budget_exceeded');
     const admittedMaxOutputTokens =
       estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : null;
     const fixedApiMicrodollars = Number(request.fixedApiMicrodollars ?? 0);
@@ -371,7 +368,6 @@ export class InferenceCoreAccountingService {
         usage,
         limits,
         isCompaction: request.isCompaction,
-        allowLastRequestGrace,
       });
     } catch (error) {
       const denied = budgetDeny(error);

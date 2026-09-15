@@ -71,6 +71,7 @@ function makeDocker() {
     images,
     failNextReplace: false,
     failBackup: false,
+    stateBytes: 1024,
     inspectSelf: async (): Promise<DockerContainerFullInspect> => ({
       Id: 'self',
       Name: '/gw-app-1',
@@ -183,7 +184,8 @@ function makeDocker() {
     },
     runOneShot: async (config: DockerCreateContainerConfig) => {
       if (config.Cmd?.join(' ').includes('find /state')) calls.push('clearStateVolume');
-      return { exitCode: 0, output: '1024\n' };
+      if (config.Cmd?.join(' ').includes('du -sb /state')) calls.push('measureStateVolume');
+      return { exitCode: 0, output: `${docker.stateBytes}\n` };
     },
     removeImageTag: async (ref: string) => {
       calls.push(`removeImage:${ref}`);
@@ -515,9 +517,12 @@ describe('update', () => {
     expect(store.row?.installedVersion).toBe(NEW_VERSION);
     // Pull strictly before the old container stops (old core serves during download).
     const pullAt = docker.calls.indexOf('pull');
+    const measureAt = docker.calls.indexOf('measureStateVolume');
     const stopAt = docker.calls.indexOf('stopContainer');
     expect(pullAt).toBeGreaterThanOrEqual(0);
     expect(stopAt).toBeGreaterThan(pullAt);
+    expect(measureAt).toBeGreaterThan(pullAt);
+    expect(measureAt).toBeLessThan(stopAt);
     // The state backup is streamed out before the old container is replaced.
     const backupAt = docker.calls.indexOf('backupArchive');
     expect(backupAt).toBeGreaterThan(pullAt);
@@ -558,6 +563,19 @@ describe('update', () => {
     expect(store.row?.state).toBe('ready');
     expect(docker.containers.get('core-old')?.running).toBe(true);
     expect(docker.calls).not.toContain('stopContainer');
+  });
+
+  it('rejects an already oversized state volume before fencing the serving core', async () => {
+    docker.stateBytes = 2 * 1024 * 1024 * 1024 + 1;
+
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+
+    expect(store.row?.state).toBe('ready');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
+    expect(docker.calls).toContain('measureStateVolume');
+    expect(docker.calls).not.toContain('stopContainer');
+    expect(docker.calls).not.toContain('backupArchive');
   });
 
   it('rolls back if activation fails after removing the old container', async () => {

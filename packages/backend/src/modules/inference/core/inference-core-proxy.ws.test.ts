@@ -108,7 +108,11 @@ function registerCommon(candidateConnectionIds = ['conn-1']) {
       coreAccountId: 'core-conn-1',
       candidateConnectionIds,
     }),
-    dataPlaneTarget: vi.fn().mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data' }),
+    dataPlaneTarget: vi.fn().mockResolvedValue({
+      baseUrl: 'http://inference-core:10100',
+      credential: 'ocx_data',
+      requestLimitsCapability: 'legacy',
+    }),
     markAffinityActive: vi.fn().mockResolvedValue(undefined),
     beginAffinityTurn: vi.fn().mockResolvedValue(releaseAffinityTurn),
   };
@@ -386,6 +390,26 @@ describe('core responses websocket proxy', () => {
     upstream.handlers.message?.(JSON.stringify({ type: 'response.completed', response: { id: 'resp_1' } }));
     upstream.handlers.close?.();
     expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith('3fa85f64-5717-4562-b3fc-2c963f66afa6', 'completed');
+  });
+
+  it('closes an unread client before core output queues beyond the bounded send buffer', async () => {
+    const { accounting } = registerCommon();
+    const ws = { ...clientSocket(), raw: { bufferedAmount: 1024 * 1024 + 1 } };
+    const handlers = createCoreResponsesWSHandlers(AUTH);
+    handlers.onOpen?.({} as never, ws as never);
+    await handlers.onMessage?.(
+      { data: JSON.stringify({ type: 'response.create', response: { model: 'gpt-5.5', input: 'hi' } }) } as never,
+      ws as never
+    );
+    const upstream = upstreamInstances[0]!;
+    upstream.handlers.open?.();
+
+    upstream.handlers.message?.(JSON.stringify({ type: 'response.output_text.delta', delta: 'too late' }));
+
+    expect(ws.send).not.toHaveBeenCalled();
+    expect(ws.close).toHaveBeenCalledWith(1013, 'Inference client backpressure');
+    expect(accounting.finalizeCoreRequest).toHaveBeenCalledWith(expect.any(String), 'failed');
+    expect(upstream.handlers.message).toBeUndefined();
   });
 
   it('refreshes thread affinity activity when a WebSocket turn finishes', async () => {

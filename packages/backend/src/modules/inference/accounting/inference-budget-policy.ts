@@ -19,8 +19,10 @@ const SUBSCRIPTION_LIMIT_WINDOWS = [
   { dimension: 'credits30d', enabled: 'credits30dEnabled', durationMs: SUBSCRIPTION_WINDOWS['30d'] },
 ] as const;
 
-export const SUBSCRIPTION_CHAT_BUDGET_FRACTION = 0.95;
-export const SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION = 0.96;
+/** Personal subscription credit limits are spendable through their full configured value. */
+export const SUBSCRIPTION_CHAT_BUDGET_FRACTION = 1;
+/** A turn admitted with a positive balance may settle at most one credit over its window limit. */
+export const SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS = 1;
 
 export interface EffectiveInferenceLimits {
   enabled: boolean;

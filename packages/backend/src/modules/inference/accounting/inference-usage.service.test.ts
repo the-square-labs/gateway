@@ -29,6 +29,16 @@ function policyDb() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 describe('inference usage presentation', () => {
   it('converts between internal accounting units and public credits', () => {
     expect(toPublicCredits(2_000_000)).toBe(2_000);
@@ -156,6 +166,34 @@ describe('inference usage presentation', () => {
     );
   });
 
+  it('starts audit and policy read together after a confirmed limit write', async () => {
+    const auditWrite = deferred<void>();
+    const policyRead = deferred<unknown[]>();
+    const onConflictDoUpdate = vi.fn().mockResolvedValue(undefined);
+    const values = vi.fn(() => ({ onConflictDoUpdate }));
+    const orderBy = vi.fn(() => policyRead.promise);
+    const db = {
+      insert: vi.fn(() => ({ values })),
+      select: vi.fn(() => ({ from: vi.fn(() => ({ orderBy })) })),
+    };
+    const audit = { log: vi.fn(() => auditWrite.promise) };
+    const service = new InferenceUsageService(
+      db as unknown as ConstructorParameters<typeof InferenceUsageService>[0],
+      {} as ConstructorParameters<typeof InferenceUsageService>[1],
+      audit as unknown as ConstructorParameters<typeof InferenceUsageService>[2]
+    );
+
+    const saved = service.setDefault('admin-1', LIMIT_INPUT);
+    await vi.waitFor(() => {
+      expect(audit.log).toHaveBeenCalledOnce();
+      expect(orderBy).toHaveBeenCalledOnce();
+    });
+
+    auditWrite.resolve();
+    policyRead.resolve([]);
+    await expect(saved).resolves.toEqual([]);
+  });
+
   it('presents internal limits and usage in public credits', () => {
     expect(
       __testOnly.publicLimits({
@@ -269,10 +307,10 @@ describe('inference usage presentation', () => {
     expect(__testOnly.percentage(0, 0)).toBe(0);
   });
 
-  it('presents the spendable chat budget as exhausted before the protected compaction reserve', () => {
-    expect(__testOnly.subscriptionPercentage(47.5, 100)).toBe(50);
-    expect(__testOnly.subscriptionPercentage(95, 100)).toBe(100);
-    expect(__testOnly.subscriptionPercentage(96, 100)).toBe(100);
+  it('presents the full configured personal credit limit without a hidden reserve', () => {
+    expect(__testOnly.subscriptionPercentage(47.5, 100)).toBe(47.5);
+    expect(__testOnly.subscriptionPercentage(95, 100)).toBe(95);
+    expect(__testOnly.subscriptionPercentage(100, 100)).toBe(100);
   });
 
   it.each([

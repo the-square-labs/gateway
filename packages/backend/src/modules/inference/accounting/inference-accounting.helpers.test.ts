@@ -23,32 +23,32 @@ describe('inference accounting estimates', () => {
     );
   });
 
-  it('shrinks the final subscription response to fit the bounded last-request grace', () => {
+  it('admits a positive tail balance and caps only its maximum terminal overage', () => {
     const estimate = {
-      inputTokens: 7_808,
+      inputTokens: 100,
       cachedInputTokens: 0,
       cacheWriteTokens: 0,
-      outputTokens: 8_192,
+      outputTokens: 2_000,
       reasoningTokens: 0,
-      totalTokens: 16_000,
+      totalTokens: 2_100,
       estimated: true,
     };
     const capped = __testOnly.capSubscriptionEstimateToBudget({
       estimate,
       limits: {
         enabled: true,
-        credits5hEnabled: false,
+        credits5hEnabled: true,
         credits5h: 100,
-        credits7dEnabled: true,
-        credits7d: 2_950,
+        credits7dEnabled: false,
+        credits7d: 100,
         credits30dEnabled: false,
         credits30d: 1_000,
         apiMonthlyMicrodollars: 0,
         billingTimezone: 'UTC',
       },
       usage: {
-        credits5h: 0,
-        credits7d: 2_741.657456,
+        credits5h: 99.5,
+        credits7d: 0,
         credits30d: 0,
         apiMonthlyMicrodollars: 0,
         recoveryAt: {
@@ -58,19 +58,17 @@ describe('inference accounting estimates', () => {
           apiMonthly: new Date(),
         },
       },
-      modelMultiplier: 10,
+      modelMultiplier: 1,
       burnMultiplier: 1,
       serviceTierMultiplier: 1,
       isCompaction: false,
-      allowLastRequestGrace: true,
     });
 
-    expect(capped.outputTokens).toBe(774);
-    expect(capped.totalTokens).toBe(8_582);
-    expect(subscriptionCredits(capped.totalTokens, 10, 1)).toBeLessThan(90.342544);
+    expect(capped).toMatchObject({ outputTokens: 1_400, totalTokens: 1_500 });
+    expect(subscriptionCredits(capped!.totalTokens, 1, 1)).toBeLessThanOrEqual(1.5);
   });
 
-  it('does not cap requests that fit or protected compaction requests', () => {
+  it('does not cap requests that fit, disabled windows, or compaction requests', () => {
     const estimate = {
       inputTokens: 100,
       cachedInputTokens: 0,
@@ -109,7 +107,6 @@ describe('inference accounting estimates', () => {
       burnMultiplier: 1,
       serviceTierMultiplier: 1,
       isCompaction: false,
-      allowLastRequestGrace: true,
     };
 
     expect(__testOnly.capSubscriptionEstimateToBudget(input)).toBe(estimate);
@@ -123,13 +120,13 @@ describe('inference accounting estimates', () => {
     expect(
       __testOnly.capSubscriptionEstimateToBudget({
         ...input,
-        usage: { ...input.usage, credits5h: 95 },
-        allowLastRequestGrace: false,
+        limits: { ...input.limits, credits5hEnabled: false },
+        usage: { ...input.usage, credits5h: 10_000 },
       })
     ).toBe(estimate);
   });
 
-  it('allows last-request grace only while the visible chat budget remains positive', () => {
+  it('allows admission only while a real full-window balance remains', () => {
     const limits = {
       enabled: true,
       credits5hEnabled: true,
@@ -142,7 +139,7 @@ describe('inference accounting estimates', () => {
       billingTimezone: 'UTC',
     };
     const usage = {
-      credits5h: 94.999,
+      credits5h: 99.5,
       credits7d: 0,
       credits30d: 0,
       apiMonthlyMicrodollars: 0,
@@ -155,7 +152,26 @@ describe('inference accounting estimates', () => {
     };
 
     expect(__testOnly.hasSpendableSubscriptionBudget(limits, usage)).toBe(true);
-    expect(__testOnly.hasSpendableSubscriptionBudget(limits, { ...usage, credits5h: 95 })).toBe(false);
+    expect(__testOnly.hasSpendableSubscriptionBudget(limits, { ...usage, credits5h: 100 })).toBe(false);
+    expect(
+      __testOnly.capSubscriptionEstimateToBudget({
+        estimate: {
+          inputTokens: 100,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 100,
+          reasoningTokens: 0,
+          totalTokens: 200,
+          estimated: true,
+        },
+        limits,
+        usage: { ...usage, credits5h: 100 },
+        modelMultiplier: 1,
+        burnMultiplier: 1,
+        serviceTierMultiplier: 1,
+        isCompaction: false,
+      })
+    ).toBeNull();
   });
 
   it('composes model, dynamic-burn, and Fast multipliers for subscription credits', () => {

@@ -80,6 +80,7 @@ interface ActiveTurn {
 const TERMINAL_EVENTS = new Set(['response.completed', 'response.failed', 'response.incomplete', 'error']);
 const MAX_PENDING_PRELUDE_FRAMES = 4;
 const MAX_PENDING_PRELUDE_BYTES = 1024 * 1024;
+const MAX_CLIENT_BUFFERED_BYTES = 1024 * 1024;
 const UPSTREAM_CLOSE_BEFORE_RETRY_MS = 1_000;
 
 /**
@@ -417,7 +418,7 @@ async function connectTurnAttempt(input: {
     throw new InferenceProtocolError(
       413,
       'request_too_large',
-      input.target.requestLimits
+      input.target.requestLimitsCapability === 'negotiated-v1'
         ? 'WebSocket message exceeds the configured inference limit'
         : 'WebSocket message exceeds the legacy core limit; update the inference core to apply Gateway limits'
     );
@@ -579,8 +580,10 @@ async function connectTurnAttempt(input: {
         // Never discard an ordered protocol frame. Once the bounded prelude
         // buffer is full, expose the buffered prefix plus the current frame
         // and permanently cross the replay boundary for this turn.
-        flushPreludeFrames(input.ws, input.turn);
-        sendRaw(input.ws, text);
+        if (!flushPreludeFrames(input.ws, input.turn) || !sendRaw(input.ws, text)) {
+          failTurn(input.state, input.ws, input.accounting, input.turn);
+          return;
+        }
         input.turn.emittedOutput = true;
         input.message = {};
         input.envelope = {};
@@ -588,10 +591,13 @@ async function connectTurnAttempt(input: {
       return;
     }
     if (!terminal && !isSubstantiveOutputEvent(eventType)) {
-      sendRaw(input.ws, text);
+      if (!sendRaw(input.ws, text)) failTurn(input.state, input.ws, input.accounting, input.turn);
       return;
     }
-    flushPreludeFrames(input.ws, input.turn);
+    if (!flushPreludeFrames(input.ws, input.turn)) {
+      failTurn(input.state, input.ws, input.accounting, input.turn);
+      return;
+    }
     if (!terminal) {
       input.turn.emittedOutput = true;
       // Crossing the output boundary permanently forbids replay. Release the
@@ -599,7 +605,10 @@ async function connectTurnAttempt(input: {
       input.message = {};
       input.envelope = {};
     }
-    sendRaw(input.ws, text);
+    if (!sendRaw(input.ws, text)) {
+      failTurn(input.state, input.ws, input.accounting, input.turn);
+      return;
+    }
     if (terminal) {
       ended = true;
       try {
@@ -816,6 +825,7 @@ function sendError(ws: WSContext, status: number, code: string, message: string)
 }
 
 function send(ws: WSContext, message: Record<string, unknown>): void {
+  if (clientBackpressured(ws)) return;
   try {
     ws.send(JSON.stringify(message));
   } catch {
@@ -865,17 +875,34 @@ function isSubstantiveOutputEvent(type: string): boolean {
   return type.startsWith('response.') && !isPreludeEvent(type) && !TERMINAL_EVENTS.has(type);
 }
 
-function flushPreludeFrames(ws: WSContext, turn: ActiveTurn): void {
-  for (const frame of turn.pendingPreludeFrames) sendRaw(ws, frame);
+function flushPreludeFrames(ws: WSContext, turn: ActiveTurn): boolean {
+  for (const frame of turn.pendingPreludeFrames) {
+    if (!sendRaw(ws, frame)) return false;
+  }
   turn.pendingPreludeFrames = [];
+  return true;
 }
 
-function sendRaw(ws: WSContext, frame: string): void {
+function sendRaw(ws: WSContext, frame: string): boolean {
+  if (clientBackpressured(ws)) return false;
   try {
     ws.send(frame);
+    return true;
   } catch {
     // The peer may have closed while the upstream frame was in flight.
+    return false;
   }
+}
+
+function clientBackpressured(ws: WSContext): boolean {
+  const bufferedAmount = (ws as unknown as { raw?: { bufferedAmount?: unknown } }).raw?.bufferedAmount;
+  if (typeof bufferedAmount !== 'number' || bufferedAmount <= MAX_CLIENT_BUFFERED_BYTES) return false;
+  try {
+    ws.close(1013, 'Inference client backpressure');
+  } catch {
+    // The peer may have closed while its send buffer was inspected.
+  }
+  return true;
 }
 
 function shouldFailOverWsEvent(event: Record<string, unknown>): boolean {

@@ -148,9 +148,11 @@ function createService(
   const bridge = options.coreError
     ? { dataPlaneTarget: vi.fn().mockRejectedValue(options.coreError) }
     : {
-        dataPlaneTarget: vi
-          .fn()
-          .mockResolvedValue({ baseUrl: 'http://inference-core:10100', credential: 'ocx_data cred' }),
+        dataPlaneTarget: vi.fn().mockResolvedValue({
+          baseUrl: 'http://inference-core:10100',
+          credential: 'ocx_data cred',
+          requestLimitsCapability: 'legacy',
+        }),
       };
   const coreAccounting = {
     createCoreRequest: vi.fn().mockResolvedValue({ requestId: '3fa85f64-5717-4562-b3fc-2c963f66afa6' }),

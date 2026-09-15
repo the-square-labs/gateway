@@ -2,12 +2,7 @@ import type { Redis } from 'ioredis';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
-import {
-  type EffectiveInferenceLimits,
-  type InferenceBudgetUsage,
-  SUBSCRIPTION_CHAT_BUDGET_FRACTION,
-  SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION,
-} from './inference-budget-policy.js';
+import type { EffectiveInferenceLimits, InferenceBudgetUsage } from './inference-budget-policy.js';
 
 const RESERVATION_TTL_MS = 15 * 60_000;
 const RESERVATION_HEARTBEAT_MS = 60_000;
@@ -39,6 +34,7 @@ local function amount_for_window(value, window)
 end
 local now = tonumber(ARGV[1])
 local reservation = ARGV[2]
+local reserved = {}
 for i = 1, 4 do
   local zkey = KEYS[(i - 1) * 2 + 1]
   local hkey = KEYS[(i - 1) * 2 + 2]
@@ -53,13 +49,22 @@ for i = 1, 4 do
   local amount = tonumber(ARGV[2 + i])
   local spent = tonumber(ARGV[6 + i])
   local limit = tonumber(ARGV[10 + i])
-  if spent + live - existing + amount > limit then return i end
+  local available = limit - spent - live + existing
+  if i <= 3 and amount > 0 then
+    -- Subscription turns may start with a positive balance, but live Redis
+    -- reservations consume that tail atomically so parallel turns cannot.
+    if available <= 0 then return {i, 0, 0, 0, 0} end
+    amount = math.min(amount, available)
+  elseif spent + live - existing + amount > limit then
+    return {i, 0, 0, 0, 0}
+  end
+  reserved[i] = amount
 end
 local expiry = tonumber(ARGV[19])
 for i = 1, 4 do
   local zkey = KEYS[(i - 1) * 2 + 1]
   local hkey = KEYS[(i - 1) * 2 + 2]
-  local amount = tonumber(ARGV[2 + i])
+  local amount = reserved[i]
   if amount > 0 then
     local window = ARGV[14 + i]
     redis.call('ZADD', zkey, expiry, reservation)
@@ -68,7 +73,7 @@ for i = 1, 4 do
     redis.call('PEXPIRE', hkey, expiry - now + 60000)
   end
 end
-return 0
+return {0, reserved[1], reserved[2], reserved[3], reserved[4]}
 `;
 
 const RELEASE_SCRIPT = `
@@ -109,14 +114,11 @@ export class InferenceBudgetReservationService {
     usage: InferenceBudgetUsage;
     limits: EffectiveInferenceLimits;
     isCompaction: boolean;
-    allowLastRequestGrace?: boolean;
   }): Promise<BudgetReservation> {
     const now = Date.now();
     const expiresAt = new Date(now + RESERVATION_TTL_MS);
     const dimensions: InferenceBudgetDimension[] = ['credits5h', 'credits7d', 'credits30d', 'apiMonthlyMicrodollars'];
-    const limits = dimensions.map((dimension) =>
-      reservationLimit(dimension, input.limits, input.isCompaction, input.allowLastRequestGrace === true)
-    );
+    const limits = dimensions.map((dimension) => reservationLimit(dimension, input.limits, input.isCompaction));
     let result: unknown;
     try {
       result = await this.redis.eval(
@@ -136,7 +138,8 @@ export class InferenceBudgetReservationService {
         cause: error,
       });
     }
-    const rejected = Number(result);
+    const values = Array.isArray(result) ? result.map(Number) : [Number(result)];
+    const rejected = values[0] ?? 0;
     if (rejected > 0) {
       const dimension = dimensions[rejected - 1]!;
       const recoveryAt = recoveryFor(dimension, input.usage);
@@ -147,7 +150,16 @@ export class InferenceBudgetReservationService {
         { recoveryAt: recoveryAt.toISOString(), dimension: publicDimension(dimension) }
       );
     }
-    const reservation = { id: input.reservationId, userId: input.userId, amounts: input.amounts, expiresAt };
+    const amounts =
+      values.length === dimensions.length + 1
+        ? Object.fromEntries(dimensions.map((dimension, index) => [dimension, values[index + 1] ?? 0]))
+        : input.amounts;
+    const reservation = {
+      id: input.reservationId,
+      userId: input.userId,
+      amounts: amounts as BudgetReservationAmounts,
+      expiresAt,
+    };
     this.startRenewal(reservation);
     return reservation;
   }
@@ -214,17 +226,13 @@ function reservationKeys(userId: string): string[] {
 function reservationLimit(
   dimension: InferenceBudgetDimension,
   limits: EffectiveInferenceLimits,
-  isCompaction: boolean,
-  allowLastRequestGrace = false
+  _isCompaction: boolean
 ): number {
   const value = limits[dimension];
   if (dimension === 'credits5h' && !limits.credits5hEnabled) return UNLIMITED_RESERVATION_LIMIT;
   if (dimension === 'credits7d' && !limits.credits7dEnabled) return UNLIMITED_RESERVATION_LIMIT;
   if (dimension === 'credits30d' && !limits.credits30dEnabled) return UNLIMITED_RESERVATION_LIMIT;
-  if (dimension === 'apiMonthlyMicrodollars' || isCompaction) return value;
-  return (
-    value * (allowLastRequestGrace ? SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION : SUBSCRIPTION_CHAT_BUDGET_FRACTION)
-  );
+  return value;
 }
 
 function recoveryFor(dimension: InferenceBudgetDimension, usage: InferenceBudgetUsage): Date {

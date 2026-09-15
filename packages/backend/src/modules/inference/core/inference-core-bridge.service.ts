@@ -11,9 +11,18 @@ import type { InferenceCoreStore } from './inference-core-store.js';
 const CORE_CONTAINER_ALIAS = 'inference-core';
 const CORE_PORT = 10100;
 
+export type CoreRequestLimitsCapability = 'legacy' | 'negotiated-v1';
+
 export interface CoreDataPlaneTarget {
   baseUrl: string;
   credential: string;
+  /**
+   * Whether this core understands the additive signed request-limit claim.
+   * `legacy` is deliberate compatibility, never an implicit negotiation
+   * failure: callers can provide an actionable limit error before the old
+   * core's built-in transport ceiling closes a socket.
+   */
+  requestLimitsCapability: CoreRequestLimitsCapability;
   requestLimits?: { httpBodyMaxBytes: number; webSocketMaxPayloadBytes: number };
 }
 
@@ -107,6 +116,7 @@ export class InferenceCoreBridgeService {
     return {
       baseUrl,
       credential: await this.dataPlaneCredential(),
+      requestLimitsCapability: this.limitsCapability.supported ? 'negotiated-v1' : 'legacy',
       ...(this.limitsCapability.supported
         ? {
             requestLimits: {

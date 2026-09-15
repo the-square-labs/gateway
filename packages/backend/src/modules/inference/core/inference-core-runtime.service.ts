@@ -671,6 +671,10 @@ export class InferenceCoreRuntimeService {
     const initialStatus = await client.wiolettStatus();
     if (!initialStatus) throw new Error('Cannot verify core shutdown capabilities; update cancelled');
     const supportsDrainCompletion = typeof initialStatus.drained === 'boolean';
+    // The size preflight is deliberately while the old core still serves. The
+    // actual archive remains after its sole writer stops, and its streaming
+    // byte ceiling still catches growth between this observation and cutover.
+    await this.assertStateVolumeFitsBackupLimit(layout, previous.imageRef);
     // Docker creation/preparation does not start a second core or change the
     // active endpoint. Creation failures therefore leave the old core serving.
     const candidateId = await this.createCoreContainer(
@@ -896,17 +900,6 @@ export class InferenceCoreRuntimeService {
    * streamed out of a stopped helper that only mounts the volume.
    */
   private async backupStateVolume(layout: CoreLayout, imageRef: string): Promise<string | null> {
-    const sizeProbe = await this.docker.runOneShot({
-      Image: imageRef,
-      User: '0',
-      HostConfig: { Binds: [`${layout.stateVolume}:/state:ro`] },
-      Cmd: ['sh', '-c', 'du -sb /state | cut -f1'],
-    });
-    const bytes = Number(sizeProbe.output.trim().split('\n').pop());
-    if (Number.isFinite(bytes) && bytes > CORE_BACKUP_MAX_BYTES) {
-      throw new AppError(409, 'CORE_STATE_TOO_LARGE', 'The core state volume exceeds the backup limit');
-    }
-
     const helper = await this.docker.createContainer({
       Image: imageRef,
       Labels: { [LABEL_OWNED]: 'true', [LABEL_PROJECT]: layout.project, [LABEL_ROLE]: ROLE_HELPER },
@@ -926,6 +919,20 @@ export class InferenceCoreRuntimeService {
       }
     } finally {
       await this.docker.removeContainer(helper, { removeAnonymousVolumes: true }).catch(() => {});
+    }
+  }
+
+  /** Reject an already oversized state volume before the serving core is fenced. */
+  private async assertStateVolumeFitsBackupLimit(layout: CoreLayout, imageRef: string): Promise<void> {
+    const sizeProbe = await this.docker.runOneShot({
+      Image: imageRef,
+      User: '0',
+      HostConfig: { Binds: [`${layout.stateVolume}:/state:ro`] },
+      Cmd: ['sh', '-c', 'du -sb /state | cut -f1'],
+    });
+    const bytes = Number(sizeProbe.output.trim().split('\n').pop());
+    if (Number.isFinite(bytes) && bytes > CORE_BACKUP_MAX_BYTES) {
+      throw new AppError(409, 'CORE_STATE_TOO_LARGE', 'The core state volume exceeds the backup limit');
     }
   }
 

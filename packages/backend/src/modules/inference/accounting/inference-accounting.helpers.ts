@@ -9,15 +9,13 @@ import {
   apiMicrodollars,
   type EffectiveInferenceLimits,
   type InferenceBudgetUsage,
+  SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS,
   SUBSCRIPTION_CHAT_BUDGET_FRACTION,
-  SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION,
   subscriptionCredits,
 } from './inference-budget-policy.js';
 import type { BudgetReservationAmounts } from './inference-budget-reservation.service.js';
 
 const DEFAULT_UNKNOWN_MAX_OUTPUT_TOKENS = 8_192;
-const MINIMUM_CAPPED_OUTPUT_TOKENS = 128;
-const CAPPED_REQUEST_SAFETY_FRACTION = 0.95;
 
 export function conservativeEstimate(
   request: InferenceRequest,
@@ -80,36 +78,32 @@ export function capSubscriptionEstimateToBudget(input: {
   burnMultiplier: number;
   serviceTierMultiplier: number;
   isCompaction: boolean;
-  allowLastRequestGrace: boolean;
-}): InferenceUsage {
-  if (input.isCompaction || !input.allowLastRequestGrace) return input.estimate;
-
+}): InferenceUsage | null {
   const enabledHeadroom = [
     input.limits.credits5hEnabled
-      ? input.limits.credits5h * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits5h
+      ? input.limits.credits5h * SUBSCRIPTION_CHAT_BUDGET_FRACTION - input.usage.credits5h
       : null,
     input.limits.credits7dEnabled
-      ? input.limits.credits7d * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits7d
+      ? input.limits.credits7d * SUBSCRIPTION_CHAT_BUDGET_FRACTION - input.usage.credits7d
       : null,
     input.limits.credits30dEnabled
-      ? input.limits.credits30d * SUBSCRIPTION_LAST_REQUEST_BUDGET_FRACTION - input.usage.credits30d
+      ? input.limits.credits30d * SUBSCRIPTION_CHAT_BUDGET_FRACTION - input.usage.credits30d
       : null,
   ].filter((value): value is number => value !== null);
 
   if (enabledHeadroom.length === 0) return input.estimate;
   const headroomCredits = Math.max(0, Math.min(...enabledHeadroom));
+  if (headroomCredits <= 0) return null;
   const multiplier = input.modelMultiplier * input.burnMultiplier * input.serviceTierMultiplier;
   const desiredCredits = subscriptionCredits(input.estimate.totalTokens, multiplier, 1);
-  if (desiredCredits <= headroomCredits || multiplier <= 0) return input.estimate;
+  const maximumAdmittedCredits = headroomCredits + SUBSCRIPTION_ADMISSION_OVERAGE_CREDITS;
+  if (desiredCredits <= maximumAdmittedCredits || multiplier <= 0) return input.estimate;
 
-  const minimumCredits = subscriptionCredits(input.estimate.inputTokens + MINIMUM_CAPPED_OUTPUT_TOKENS, multiplier, 1);
-  if (minimumCredits > headroomCredits) return input.estimate;
-
-  const targetCredits = Math.max(minimumCredits, headroomCredits * CAPPED_REQUEST_SAFETY_FRACTION);
-  const totalTokenCapacity = Math.floor((targetCredits * 1_000) / multiplier);
+  const totalTokenCapacity = Math.floor((maximumAdmittedCredits * 1_000) / multiplier);
+  if (totalTokenCapacity < input.estimate.inputTokens) return null;
   const outputTokens = Math.min(
     input.estimate.outputTokens,
-    Math.max(MINIMUM_CAPPED_OUTPUT_TOKENS, totalTokenCapacity - input.estimate.inputTokens)
+    Math.max(0, totalTokenCapacity - input.estimate.inputTokens)
   );
 
   return {
