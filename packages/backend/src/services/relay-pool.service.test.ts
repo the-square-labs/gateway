@@ -527,6 +527,9 @@ describe('RelayPoolService activation safety and outcomes', () => {
     ]);
     const { pool, policy } = service(db);
     const activated = await (pool as any).tryActivate('new');
+    const poolFence = new PgDialect().sqlToQuery(db.execute.mock.calls[0][0]);
+    expect(poolFence.sql).toContain('gateway-relay-pool-rebalance');
+    expect(db.execute).toHaveBeenCalledTimes(2);
     expect(activated).toBe(state === 'ready');
     if (state === 'ready') {
       expect(writes.map(({ values }) => values.state).filter(Boolean)).toEqual(['draining', 'active']);

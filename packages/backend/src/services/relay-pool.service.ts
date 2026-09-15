@@ -1107,6 +1107,9 @@ export class RelayPoolService {
     if (this.preparingGenerations.has(generationId)) return false;
     let failed = false;
     const activated = await this.db.transaction(async (tx) => {
+      // Removal must not delete a staged assignment between this readiness read
+      // and activation. Use the same pool fence as placement and member removal.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`relay-assignment-generation:${generationId}`}))`);
       const [generation] = await tx
         .select()
