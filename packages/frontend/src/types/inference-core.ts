@@ -54,6 +54,7 @@ export interface InferenceCoreOperation {
 }
 
 export type InferenceCoreCompatibility = "compatible" | "update_required" | "unknown";
+export type InferenceCoreRequestLimitsCapability = "negotiated-v1" | "legacy" | "unknown";
 
 export interface InferenceCoreHealth {
   status: "healthy" | "unhealthy" | "unknown";
@@ -61,6 +62,7 @@ export interface InferenceCoreHealth {
   coreProtocolMajor: number | null;
   stateSchemaVersion: number | null;
   checkedAt: string | null;
+  requestLimitsCapability?: InferenceCoreRequestLimitsCapability;
 }
 
 export interface InferenceCoreInstalled {

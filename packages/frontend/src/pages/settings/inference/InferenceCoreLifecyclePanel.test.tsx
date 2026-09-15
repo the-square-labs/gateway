@@ -155,6 +155,21 @@ describe("InferenceCoreLifecyclePanel", () => {
     expect(screen.getByRole("button", { name: /Check for updates/ })).toBeInTheDocument();
   });
 
+  it.each([
+    ["negotiated-v1", "Supported"],
+    ["legacy", "Gateway request limits require a core update"],
+    ["unknown", "Gateway request limits are unverified"],
+  ] as const)("renders request-limit capability status for %s", (capability, message) => {
+    renderPanel({
+      status: makeStatus({
+        ...readyStatus,
+        health: { ...readyStatus.health, requestLimitsCapability: capability },
+      }),
+    });
+
+    expect(screen.getByText(message)).toBeInTheDocument();
+  });
+
   it("confirms an available update and explains interruption and rollback", async () => {
     const update = vi
       .spyOn(api, "updateInferenceCore")

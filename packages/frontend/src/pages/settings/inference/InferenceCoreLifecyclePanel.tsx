@@ -148,6 +148,17 @@ function healthBadge(health: InferenceCoreStatus["health"]) {
   }
 }
 
+function requestLimitsStatus(capability: InferenceCoreStatus["health"]["requestLimitsCapability"]) {
+  switch (capability) {
+    case "negotiated-v1":
+      return <Badge variant="success">Supported</Badge>;
+    case "legacy":
+      return <span className="text-warning">Gateway request limits require a core update</span>;
+    default:
+      return <span className="text-warning">Gateway request limits are unverified</span>;
+  }
+}
+
 function OperationProgress({ status }: { status: InferenceCoreStatus }) {
   const operation = status.operation;
   if (!operation) return null;
@@ -506,6 +517,10 @@ export function InferenceCoreLifecyclePanel({
             <>
               <DetailRow label="Version" value={status.installed.version} />
               <DetailRow label="Health" value={healthBadge(status.health)} />
+              <DetailRow
+                label="Request limits"
+                value={requestLimitsStatus(status.health.requestLimitsCapability)}
+              />
               <DetailRow
                 label="Last check"
                 value={status.health.checkedAt ? formatDateTime(status.health.checkedAt) : "Never"}
