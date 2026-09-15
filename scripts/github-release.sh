@@ -98,6 +98,7 @@ publish_gateway() {
     scripts/setup-node.sh
     scripts/setup-docker-node.sh
     scripts/setup-database-node.sh
+    scripts/setup-storage-node.sh
     scripts/setup-monitoring-node.sh
   )
   prepare_release "Gateway ${tag}" "Gateway release ${tag}"
@@ -136,7 +137,7 @@ publish_gateway() {
   fi
   (
     cd scripts
-    sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
+    sha256sum setup-daemon.sh setup-node.sh setup-docker-node.sh setup-database-node.sh setup-storage-node.sh setup-monitoring-node.sh > ../gateway-daemon-installers.sha256
   )
   complete_release "${assets[@]}"
 }

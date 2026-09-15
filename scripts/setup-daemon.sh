@@ -150,10 +150,10 @@ show_help() {
 Gateway Daemon Setup — downloads and runs the appropriate setup script
 
 Usage:
-  setup-daemon.sh --type <nginx|docker|databases|monitoring> [options...]
+  setup-daemon.sh --type <nginx|docker|storage|monitoring> [options...]
 
 Options:
-  --type <type>            Daemon type: nginx, docker, databases, or monitoring
+  --type <type>            Node type: nginx, docker, storage, or monitoring (databases is a legacy alias)
   --version <tag>          Gateway release tag containing the installers (default: latest stable)
   --script-dir <path>      Run a daemon-specific installer from a local directory
   -h, --help               Show this help
@@ -195,11 +195,12 @@ if [[ -z "$DAEMON_TYPE" ]]; then
     fi
     show_logo "Gateway Daemon Setup" "Choose a node installer"
     selector_title "Select daemon type to install:"
-    choice=$(prompt_menu "1" "nginx       — Reverse proxy node (nginx + nginx-daemon)" "docker      — Docker container management node" "databases   — Restricted Docker database node" "monitoring  — System metrics agent (no nginx/docker)")
+    choice=$(prompt_menu "1" "nginx       — Reverse proxy node (nginx + nginx-daemon)" "docker      — Docker container management node" "storage     — Managed databases, object storage and backups" "monitoring  — System metrics agent (no nginx/docker)")
     case "$choice" in
         1|nginx)      DAEMON_TYPE="nginx" ;;
         2|docker)     DAEMON_TYPE="docker" ;;
-        3|databases)   DAEMON_TYPE="databases" ;;
+        3|storage)    DAEMON_TYPE="storage" ;;
+        databases)   DAEMON_TYPE="databases" ;;
         4|monitoring) DAEMON_TYPE="monitoring" ;;
         *) die "Invalid choice: $choice" ;;
     esac
@@ -207,8 +208,8 @@ fi
 
 # ── Validate type ───────────────────────────────────────────────────
 case "$DAEMON_TYPE" in
-    nginx|docker|databases|monitoring) ;;
-    *) die "Unknown daemon type: $DAEMON_TYPE. Use: nginx, docker, databases, or monitoring" ;;
+    nginx|docker|storage|databases|monitoring) ;;
+    *) die "Unknown daemon type: $DAEMON_TYPE. Use: nginx, docker, storage, or monitoring" ;;
 esac
 
 # ── Map type to script name ─────────────────────────────────────────
@@ -216,6 +217,7 @@ case "$DAEMON_TYPE" in
     nginx)      SCRIPT_NAME="setup-node.sh" ;;
     docker)     SCRIPT_NAME="setup-docker-node.sh" ;;
     databases)  SCRIPT_NAME="setup-database-node.sh" ;;
+    storage)    SCRIPT_NAME="setup-storage-node.sh" ;;
     monitoring) SCRIPT_NAME="setup-monitoring-node.sh" ;;
 esac
 
@@ -249,8 +251,11 @@ else
     }
 
     fetch_verified "$SCRIPT_NAME"
-    if [[ "$DAEMON_TYPE" == "databases" ]]; then
+    if [[ "$DAEMON_TYPE" == "databases" || "$DAEMON_TYPE" == "storage" ]]; then
         fetch_verified setup-docker-node.sh
+    fi
+    if [[ "$DAEMON_TYPE" == "storage" ]]; then
+        fetch_verified setup-database-node.sh
     fi
     TMPSCRIPT="${TMPDIR}/${SCRIPT_NAME}"
     log "Running ${SCRIPT_NAME}..."
