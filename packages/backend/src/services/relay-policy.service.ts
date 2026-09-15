@@ -976,6 +976,8 @@ export class RelayPolicyService {
         .returning({ id: relayEndpoints.id });
       if (routes.length || endpoints.length) await bumpRelayPolicyRevision(tx);
     });
+    this.lastNodeGrantBundles.delete(nodeId);
+    this.nodeGrantSyncs.delete(nodeId);
     await this.syncSnapshot();
     await Promise.allSettled(
       affectedRoutes
@@ -992,7 +994,11 @@ export class RelayPolicyService {
       .then(async () => {
         const bundle = await this.getNodeGrantBundle(nodeId);
         const result = await this.dispatch!.sendRelayGrantBundle(nodeId, bundle);
-        if (result.success) this.lastNodeGrantBundles.set(nodeId, bundle);
+        // Revocation invalidates the in-flight write lease after its DB commit.
+        // A replaced/queued operation must not resurrect the revoked bundle.
+        if (result.success && this.nodeGrantSyncs.get(nodeId) === current) {
+          this.lastNodeGrantBundles.set(nodeId, bundle);
+        }
         return result;
       });
     this.nodeGrantSyncs.set(nodeId, current);

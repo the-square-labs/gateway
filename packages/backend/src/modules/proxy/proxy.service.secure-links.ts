@@ -286,11 +286,14 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
 
     const task = this.collectSecureLinkRuntimeSnapshot(host, trafficTailLines)
       .then(async (snapshot) => {
+        if (this.secureLinkRuntimeSamplesInFlight.get(host.id) !== task) return { snapshot, history: [] };
         const current = await this.getSecureLinkRuntimeHistory(host.id);
+        if (this.secureLinkRuntimeSamplesInFlight.get(host.id) !== task) return { snapshot, history: [] };
         const previous = current.at(-1);
         if (previous && (snapshot.runtime == null || snapshot.traffic == null)) {
           return { snapshot: previous, history: current };
         }
+        this.secureLinkRuntimeHistory.set(host.id, current);
         const history = this.recordSecureLinkRuntimeSnapshot(host.id, snapshot);
         await this.persistSecureLinkRuntimeHistory(host.id, history);
         return { snapshot, history };
@@ -322,7 +325,10 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
           runtime,
           traffic: null,
         };
-        await this.getSecureLinkRuntimeHistory(historyKey);
+        if (this.secureLinkRuntimeSamplesInFlight.get(historyKey) !== task) return { snapshot, history: [] };
+        const current = await this.getSecureLinkRuntimeHistory(historyKey);
+        if (this.secureLinkRuntimeSamplesInFlight.get(historyKey) !== task) return { snapshot, history: [] };
+        this.secureLinkRuntimeHistory.set(historyKey, current);
         const history = this.recordSecureLinkRuntimeSnapshot(historyKey, snapshot);
         await this.persistSecureLinkRuntimeHistory(historyKey, history);
         return { snapshot, history };
@@ -435,7 +441,8 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
             )
             .slice(-60)
         : [];
-      this.secureLinkRuntimeHistory.set(hostId, history);
+      // Only the owning sample may populate process-local history. A Redis read
+      // started by a status request can otherwise resurrect a deleted host.
       return [...history];
     } catch (error) {
       logger.debug('Proxy Secure Link runtime history cache is unavailable', {

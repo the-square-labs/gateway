@@ -33,6 +33,7 @@ export class SchedulerService {
   }
 
   start(): void {
+    if (this.running) return;
     this.running = true;
     for (const job of this.jobs) {
       logger.info(`Starting scheduled job: ${job.name} (${job.schedule})`);
@@ -51,22 +52,25 @@ export class SchedulerService {
   updateSchedule(name: string, newCron: string): void {
     const job = this.jobs.find((j) => j.name === name);
     if (!job) return;
-    job.handle?.stop();
+    job.handle?.destroy();
+    job.handle = undefined;
     job.schedule = newCron;
-    job.handle = cron.schedule(newCron, () => this.runTask('Job', job.name, job.task));
+    if (this.running) job.handle = cron.schedule(newCron, () => this.runTask('Job', job.name, job.task));
     logger.info(`Updated schedule for ${name}: ${newCron}`);
   }
 
   async stop(): Promise<void> {
     this.running = false;
     for (const job of this.jobs) {
-      job.handle?.stop();
+      job.handle?.destroy();
+      job.handle = undefined;
       logger.info(`Stopped job: ${job.name}`);
     }
 
     for (const interval of this.intervals) {
       if (interval.handle) {
         clearInterval(interval.handle);
+        interval.handle = undefined;
       }
       logger.info(`Stopped interval job: ${interval.name}`);
     }

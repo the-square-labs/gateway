@@ -23,6 +23,8 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     if (existing.isSystem && !options.abandonOfflineNode) {
       throw new AppError(403, 'SYSTEM_HOST', 'System proxy hosts cannot be deleted');
     }
+    // Capture child keys before cleanup removes the bindings from persistence.
+    const additionalLinks = (await this.secureLinks?.listAdditional?.(id)) ?? [];
 
     const abandoningOfflineNode = options.abandonOfflineNode === true;
     if (abandoningOfflineNode) {
@@ -65,6 +67,9 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       }
       throw error;
     }
+
+    this.forgetSecureLinkRuntime(id);
+    for (const binding of additionalLinks) this.forgetSecureLinkRuntime(`additional:${binding.id}`);
 
     // 5. Audit log
     await this.auditService.log({
@@ -219,6 +224,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     const host = await this.requireManagedProxyHost(id);
     if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
     await this.secureLinks.deleteAdditional(host, bindingId);
+    this.forgetSecureLinkRuntime(`additional:${bindingId}`);
     this.queueDockerReconciliation(true);
     await this.auditService.log({
       userId,
@@ -227,5 +233,12 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
       resourceId: id,
       details: { bindingId },
     });
+  }
+
+  protected forgetSecureLinkRuntime(key: string): void {
+    this.secureLinkRuntimeHistory.delete(key);
+    // The promise itself is the write lease: removing it fences late samples
+    // without retaining a tombstone for every deleted host/binding.
+    this.secureLinkRuntimeSamplesInFlight.delete(key);
   }
 }

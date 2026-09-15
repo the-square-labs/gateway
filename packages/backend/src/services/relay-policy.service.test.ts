@@ -41,6 +41,88 @@ function createService(
   );
 }
 
+describe('RelayPolicyService bundle cache lifecycle', () => {
+  function fixture() {
+    const db: any = {
+      select: () => ({ from: () => ({ where: async () => [] }) }),
+      delete: () => ({ where: () => ({ returning: async () => [] }) }),
+    };
+    db.transaction = vi.fn(async (fn: (tx: any) => unknown) => fn(db));
+    const service = createService(db, { applySnapshot: vi.fn() });
+    vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
+    const bundle = { revision: '1', generatedAtUnixMs: '100', grants: [] };
+    const generate = vi.spyOn(service, 'getNodeGrantBundle').mockResolvedValue(bundle);
+    const dispatch = vi.fn().mockResolvedValue({ success: true });
+    service.setNodeDispatch({ sendRelayGrantBundle: dispatch } as never);
+    return { db, service, bundle, generate, dispatch, state: service as any };
+  }
+
+  it('clears completed bundles after commit, including when snapshot publication fails', async () => {
+    const { service, state } = fixture();
+    await service.syncNodeGrantBundle('node');
+    expect(state.lastNodeGrantBundles.size).toBe(1);
+    vi.mocked(service.syncSnapshot).mockRejectedValue(new Error('publication failed'));
+    await expect(service.revokeNode('node')).rejects.toThrow('publication failed');
+    expect(state.lastNodeGrantBundles.size).toBe(0);
+    expect(state.nodeGrantSyncs.size).toBe(0);
+  });
+
+  it('keeps bundles when revocation transaction fails', async () => {
+    const { db, service, state } = fixture();
+    await service.syncNodeGrantBundle('node');
+    db.transaction.mockRejectedValue(new Error('transaction failed'));
+    await expect(service.revokeNode('node')).rejects.toThrow('transaction failed');
+    expect(state.lastNodeGrantBundles.size).toBe(1);
+  });
+
+  it.each(['generation', 'dispatch'] as const)('does not reinsert after revocation during %s', async (stage) => {
+    const { service, state, generate, dispatch, bundle } = fixture();
+    let resolve!: (value: any) => void;
+    const pending = new Promise<any>((done) => {
+      resolve = done;
+    });
+    (stage === 'generation' ? generate : dispatch).mockReturnValueOnce(pending);
+    const syncing = service.syncNodeGrantBundle('node');
+    await vi.waitFor(() => expect(stage === 'generation' ? generate : dispatch).toHaveBeenCalledOnce());
+    await service.revokeNode('node');
+    resolve(stage === 'generation' ? bundle : { success: true });
+    await syncing;
+    expect(state.lastNodeGrantBundles.size).toBe(0);
+    expect(state.nodeGrantSyncs.size).toBe(0);
+  });
+
+  it('invalidates queued old syncs and preserves a new owner when old work settles', async () => {
+    const { service, state, dispatch } = fixture();
+    let releaseOld!: (value: any) => void;
+    let releaseNew!: (value: any) => void;
+    dispatch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseOld = resolve;
+      })
+    );
+    const first = service.syncNodeGrantBundle('node');
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
+    const queued = service.syncNodeGrantBundle('node');
+    await service.revokeNode('node');
+    dispatch.mockReturnValueOnce(
+      new Promise((resolve) => {
+        releaseNew = resolve;
+      })
+    );
+    const successor = service.syncNodeGrantBundle('node');
+    await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+    const owner = state.nodeGrantSyncs.get('node');
+    releaseOld({ success: true });
+    await Promise.all([first, queued]);
+    expect(state.nodeGrantSyncs.get('node')).toBe(owner);
+    expect(state.lastNodeGrantBundles.size).toBe(0);
+    releaseNew({ success: true });
+    await successor;
+    expect(state.lastNodeGrantBundles.size).toBe(1);
+    expect(state.nodeGrantSyncs.size).toBe(0);
+  });
+});
+
 describe('managed database listener equality', () => {
   it('treats JSONB key and source ordering as semantically unchanged', () => {
     const persisted = {

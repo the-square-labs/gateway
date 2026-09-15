@@ -1,5 +1,74 @@
-import { describe, expect, it, vi } from 'vitest';
+import cron from 'node-cron';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SchedulerService } from './scheduler.service.js';
+
+vi.mock('@/lib/logger.js', () => ({ createChildLogger: () => ({ info: vi.fn(), debug: vi.fn(), error: vi.fn() }) }));
+
+afterEach(() => {
+  for (const task of [...cron.getTasks().values()]) task.destroy();
+  vi.useRealTimers();
+});
+
+describe('SchedulerService cron lifecycle', () => {
+  it('destroys replaced cron tasks and removes the final task on stop', async () => {
+    const scheduler = new SchedulerService();
+    scheduler.register('cron', '0 0 1 1 *', async () => undefined);
+    scheduler.start();
+    for (let index = 0; index < 50; index++) {
+      const previous = [...cron.getTasks().values()][0]!;
+      scheduler.updateSchedule('cron', '0 0 1 1 *');
+      expect(previous.getStatus()).toBe('destroyed');
+      expect(cron.getTasks().size).toBe(1);
+    }
+    await scheduler.stop();
+    expect(cron.getTasks().size).toBe(0);
+  });
+
+  it('defers stopped schedule changes and restarts once with the updated cron', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-15T10:00:00Z'));
+    const scheduler = new SchedulerService();
+    const run = vi.fn().mockResolvedValue(undefined);
+    scheduler.register('cron', '* * * * *', run);
+    scheduler.updateSchedule('cron', '*/2 * * * *');
+    expect(cron.getTasks().size).toBe(0);
+    scheduler.start();
+    scheduler.start();
+    expect(cron.getTasks().size).toBe(1);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(run).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    await scheduler.stop();
+    scheduler.updateSchedule('cron', '* * * * *');
+    expect(cron.getTasks().size).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).toHaveBeenCalledTimes(1);
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+    expect(cron.getTasks().size).toBe(0);
+  });
+
+  it('does not duplicate interval handles on start and can restart after stop', async () => {
+    vi.useFakeTimers();
+    const scheduler = new SchedulerService();
+    const run = vi.fn().mockResolvedValue(undefined);
+    scheduler.registerInterval('interval', 100, run);
+    scheduler.start();
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(run).toHaveBeenCalledTimes(1);
+    await scheduler.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(100);
+    expect(run).toHaveBeenCalledTimes(2);
+    await scheduler.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe('SchedulerService shutdown', () => {
   it('waits for an active interval and prevents new callbacks after stop', async () => {
