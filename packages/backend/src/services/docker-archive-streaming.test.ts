@@ -1,8 +1,8 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DockerService } from './docker.service.js';
 
 let scratch = '';
@@ -89,5 +89,26 @@ describe('Docker archive streaming', () => {
 
     await docker.putContainerArchiveFromFile('core', '/', source);
     expect(received).toEqual(payload);
+  });
+
+  it('bounds total archive time even while bytes keep arriving and closes the output before rejecting', async () => {
+    let disconnected = false;
+    const socket = await listen((_req, res) => {
+      res.write(Buffer.alloc(64));
+      const trickle = setInterval(() => res.write(Buffer.alloc(64)), 5);
+      res.once('close', () => {
+        clearInterval(trickle);
+        disconnected = true;
+      });
+    });
+    const destination = join(scratch, 'slow.tar');
+    const started = Date.now();
+    await expect(
+      new DockerService(socket, '').getContainerArchiveToFile('core', '/state', destination, 1024 * 1024, 100)
+    ).rejects.toThrow();
+    expect(Date.now() - started).toBeLessThan(2000);
+    const size = statSync(destination).size;
+    await vi.waitFor(() => expect(disconnected).toBe(true));
+    expect(statSync(destination).size).toBe(size);
   });
 });

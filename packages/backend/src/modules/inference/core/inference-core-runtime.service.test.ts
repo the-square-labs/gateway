@@ -72,6 +72,7 @@ function makeDocker() {
     failNextReplace: false,
     failBackup: false,
     stateBytes: 1024,
+    requestLimitsVersion: undefined as number | undefined,
     inspectSelf: async (): Promise<DockerContainerFullInspect> => ({
       Id: 'self',
       Name: '/gw-app-1',
@@ -175,8 +176,15 @@ function makeDocker() {
       calls.push('backupArchive');
       return Buffer.from('tar-bytes');
     },
-    getContainerArchiveToFile: async (_id: string, _path: string, destination: string) => {
+    getContainerArchiveToFile: async (
+      _id: string,
+      _path: string,
+      destination: string,
+      _maxBytes: number,
+      timeoutMs: number
+    ) => {
       calls.push('backupArchive');
+      expect(timeoutMs).toBe(15_000);
       if (docker.failBackup) throw new Error('injected backup failure');
       const { writeFile } = await import('node:fs/promises');
       await writeFile(destination, 'tar-bytes');
@@ -309,6 +317,7 @@ function stubCoreFetch(docker: ReturnType<typeof makeDocker>): void {
           contractId: 'wiolett-core/v1',
           coreProtocolMajor: 1,
           stateSchemaVersion: 1,
+          ...(docker.requestLimitsVersion ? { requestLimitsVersion: docker.requestLimitsVersion } : {}),
           instanceId: 'ocx-inst-test',
           startedAt: new Date().toISOString(),
         });
@@ -394,6 +403,19 @@ afterEach(async () => {
 });
 
 describe('install', () => {
+  it.each([
+    undefined,
+    1,
+  ])('reports observed request-limit support without assuming old cores support it: %s', async (version) => {
+    expect((await service.getStatus()).health.requestLimitsCapability).toBe('unknown');
+    docker.requestLimitsVersion = version;
+    await service.install();
+    await waitFor(() => operations.ops[0]?.status === 'succeeded');
+    expect((await service.getStatus()).health.requestLimitsCapability).toBe(version === 1 ? 'negotiated-v1' : 'legacy');
+    store.row!.installedDigest = OLD_DIGEST;
+    expect((await service.getStatus()).health.requestLimitsCapability).toBe('unknown');
+  });
+
   it('installs a hardened container and reaches ready', async () => {
     await service.install();
     await waitFor(() => operations.ops[0]?.status === 'succeeded');
@@ -574,6 +596,20 @@ describe('update', () => {
     expect(store.row?.state).toBe('ready');
     expect(docker.containers.get('core-old')?.running).toBe(true);
     expect(docker.calls).toContain('measureStateVolume');
+    expect(docker.calls).not.toContain('stopContainer');
+    expect(docker.calls).not.toContain('backupArchive');
+  });
+
+  it.each([
+    { exitCode: 1, output: '0' },
+    { exitCode: 0, output: '' },
+    { exitCode: 0, output: 'not-a-size' },
+  ])('keeps serving when the state size cannot be verified: %j', async (probe) => {
+    docker.runOneShot = async () => probe;
+    await service.update(NEW_VERSION);
+    await waitFor(() => operations.ops[0]?.status === 'failed');
+    expect(store.row?.state).toBe('ready');
+    expect(docker.containers.get('core-old')?.running).toBe(true);
     expect(docker.calls).not.toContain('stopContainer');
     expect(docker.calls).not.toContain('backupArchive');
   });

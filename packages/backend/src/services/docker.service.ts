@@ -809,43 +809,58 @@ export class DockerService {
     id: string,
     containerPath: string,
     destinationPath: string,
-    maxBytes: number
+    maxBytes: number,
+    timeoutMs = 300_000
   ): Promise<number> {
     const params = new URLSearchParams({ path: containerPath });
-    return new Promise((resolve, reject) => {
-      const req = http.request(
-        {
-          socketPath: this.socketPath,
-          method: 'GET',
-          path: `${API_VERSION}/containers/${encodeURIComponent(id)}/archive?${params}`,
-          timeout: 300_000,
-        },
-        (res) => {
-          if (res.statusCode !== 200) {
-            res.resume();
-            reject(new Error(`Docker get archive failed (${res.statusCode ?? 0})`));
-            return;
-          }
+    const controller = new AbortController();
+    const deadline = setTimeout(() => controller.abort(new Error('Docker archive deadline exceeded')), timeoutMs);
+    deadline.unref();
+    try {
+      return await new Promise((resolve, reject) => {
+        let streaming = false;
+        const req = http.request(
+          {
+            socketPath: this.socketPath,
+            method: 'GET',
+            path: `${API_VERSION}/containers/${encodeURIComponent(id)}/archive?${params}`,
+            timeout: 300_000,
+            signal: controller.signal,
+          },
+          (res) => {
+            if (res.statusCode !== 200) {
+              res.destroy();
+              reject(new Error(`Docker get archive failed (${res.statusCode ?? 0})`));
+              return;
+            }
 
-          let received = 0;
-          const limiter = new Transform({
-            transform(chunk: Buffer, _encoding, callback) {
-              received += chunk.byteLength;
-              if (received > maxBytes) {
-                callback(new Error(`Docker archive exceeds the ${maxBytes}-byte limit`));
-                return;
-              }
-              callback(null, chunk);
-            },
-          });
-          const output = createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 });
-          void pipeline(res, limiter, output).then(() => resolve(received), reject);
-        }
-      );
-      req.on('timeout', () => req.destroy(new Error('Docker API request timed out after 300000ms')));
-      req.on('error', reject);
-      req.end();
-    });
+            let received = 0;
+            const limiter = new Transform({
+              transform(chunk: Buffer, _encoding, callback) {
+                received += chunk.byteLength;
+                if (received > maxBytes) {
+                  callback(new Error(`Docker archive exceeds the ${maxBytes}-byte limit`));
+                  return;
+                }
+                callback(null, chunk);
+              },
+            });
+            const output = createWriteStream(destinationPath, { flags: 'wx', mode: 0o600 });
+            streaming = true;
+            void pipeline(res, limiter, output, { signal: controller.signal }).then(() => resolve(received), reject);
+          }
+        );
+        req.on('timeout', () => req.destroy(new Error('Docker API request timed out after 300000ms')));
+        req.on('error', (error) => {
+          // Once streaming, wait for pipeline to close the file before callers
+          // remove the partial backup and restart the old core.
+          if (!streaming) reject(error);
+        });
+        req.end();
+      });
+    } finally {
+      clearTimeout(deadline);
+    }
   }
 
   /** Stream a host tar file into a container without materializing it as a Buffer. */

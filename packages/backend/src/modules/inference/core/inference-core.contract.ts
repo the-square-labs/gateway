@@ -142,6 +142,7 @@ export const inferenceCoreStatusSchema = z
         coreProtocolMajor: z.number().int().positive().nullable(),
         stateSchemaVersion: z.number().int().positive().nullable(),
         checkedAt: isoDateTime.nullable(),
+        requestLimitsCapability: z.enum(['negotiated-v1', 'legacy', 'unknown']).optional(),
       })
       .strict(),
     operation: inferenceCoreOperationSchema.nullable(),

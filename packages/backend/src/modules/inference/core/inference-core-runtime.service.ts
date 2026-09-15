@@ -43,6 +43,7 @@ const CORE_READY_TIMEOUT_MS = 120_000;
 const CORE_STABILITY_WINDOW_MS = 20_000;
 const CORE_DRAIN_TIMEOUT_MS = 8_000;
 const CORE_BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+const CORE_BACKUP_TIMEOUT_MS = 15_000;
 const CORE_BACKUP_KEEP = 3;
 const HEALTH_PROBE_INTERVAL_MS = 60_000;
 
@@ -142,6 +143,7 @@ export function redactedCoreError(error: unknown): string {
 @injectable()
 export class InferenceCoreRuntimeService {
   private healthProbeTimer: NodeJS.Timeout | null = null;
+  private observedRequestLimits: { digest: string; supported: boolean } | null = null;
 
   constructor(
     private readonly store: InferenceCoreStore,
@@ -189,6 +191,12 @@ export class InferenceCoreRuntimeService {
         coreProtocolMajor: row?.coreProtocolMajor ?? null,
         stateSchemaVersion: row?.coreStateSchemaVersion ?? null,
         checkedAt: row?.healthCheckedAt?.toISOString() ?? null,
+        requestLimitsCapability:
+          this.observedRequestLimits && this.observedRequestLimits.digest === row?.installedDigest
+            ? this.observedRequestLimits.supported
+              ? 'negotiated-v1'
+              : 'legacy'
+            : 'unknown',
       },
       operation: operation ? this.toOperationDto(operation) : null,
       lastError: row?.lastError ?? null,
@@ -599,7 +607,7 @@ export class InferenceCoreRuntimeService {
     if (!row.containerId) throw new Error('core container was not created');
     await this.docker.startContainer(row.containerId);
     const layout = await this.discoverLayout();
-    await this.awaitReadyIdentity(layout, artifact.version);
+    const requestLimitsSupported = await this.awaitReadyIdentity(layout, artifact.version);
     await this.upsertStateRow({
       installedVersion: artifact.version,
       installedDigest: artifact.digest,
@@ -613,10 +621,11 @@ export class InferenceCoreRuntimeService {
       lastReadyAt: new Date(),
       lastError: null,
     });
+    this.observedRequestLimits = { digest: artifact.digest, supported: requestLimitsSupported };
   }
 
   /** Poll readiness until the identity matches the contract and the version. */
-  private async awaitReadyIdentity(layout: CoreLayout, expectedVersion: string): Promise<void> {
+  private async awaitReadyIdentity(layout: CoreLayout, expectedVersion: string): Promise<boolean> {
     const row = await this.requireStateRow();
     const credentials = this.openCredentials(row);
     const client = new InferenceCoreClient(this.coreBaseUrl(), credentials.managementCredential);
@@ -641,7 +650,7 @@ export class InferenceCoreRuntimeService {
         if (normalizeReleaseVersion(identity.version) !== normalizeReleaseVersion(expectedVersion)) {
           throw new Error(`core readiness version mismatch: expected ${expectedVersion}, received ${identity.version}`);
         }
-        return;
+        return identity.requestLimitsVersion === 1;
       }
       if (Date.now() > deadline) {
         throw new Error('core did not become ready with the expected identity in time');
@@ -686,6 +695,7 @@ export class InferenceCoreRuntimeService {
     let stopped = false;
     let accepted = false;
     let backupFile: string | null = null;
+    const cutoverStartedAt = Date.now();
     try {
       await this.transition(await this.requireStateRow(), 'updating', null);
       await this.publishNow();
@@ -708,6 +718,7 @@ export class InferenceCoreRuntimeService {
       await this.startAndAwaitReady(artifact);
       await this.transition(await this.requireStateRow(), 'ready', null);
       accepted = true;
+      logger.info('Core update cutover completed', { operationId, cutoverMs: Date.now() - cutoverStartedAt });
       await this.publishNow();
       // Readiness is the acceptance boundary. Subsequent health probes observe
       // stability; never restore a pre-update snapshot after serving new work.
@@ -726,6 +737,7 @@ export class InferenceCoreRuntimeService {
       }
       await this.operations.updatePhase(operationId, 'rolling_back', { stage: STAGE.rollingBack }).catch(() => {});
       await this.rollbackToPrevious(layout, row, previous, backupFile, error);
+      logger.info('Core update rollback completed', { operationId, recoveryMs: Date.now() - cutoverStartedAt });
       // The update failed even when the rollback restored the previous version;
       // the operation must close as failed so the UI never reports a success.
       throw error;
@@ -910,7 +922,13 @@ export class InferenceCoreRuntimeService {
       const file = `${this.backupDir}/state-${Date.now()}.tar`;
       const temporaryFile = `${file}.tmp`;
       try {
-        await this.docker.getContainerArchiveToFile(helper, '/state', temporaryFile, CORE_BACKUP_MAX_BYTES);
+        await this.docker.getContainerArchiveToFile(
+          helper,
+          '/state',
+          temporaryFile,
+          CORE_BACKUP_MAX_BYTES,
+          CORE_BACKUP_TIMEOUT_MS
+        );
         await rename(temporaryFile, file);
         return file;
       } catch (error) {
@@ -931,6 +949,9 @@ export class InferenceCoreRuntimeService {
       Cmd: ['sh', '-c', 'du -sb /state | cut -f1'],
     });
     const bytes = Number(sizeProbe.output.trim().split('\n').pop());
+    if (sizeProbe.exitCode !== 0 || !Number.isFinite(bytes) || bytes < 0 || !sizeProbe.output.trim()) {
+      throw new AppError(409, 'CORE_STATE_SIZE_UNKNOWN', 'Cannot verify core state size; update cancelled');
+    }
     if (Number.isFinite(bytes) && bytes > CORE_BACKUP_MAX_BYTES) {
       throw new AppError(409, 'CORE_STATE_TOO_LARGE', 'The core state volume exceeds the backup limit');
     }
@@ -1132,6 +1153,10 @@ export class InferenceCoreRuntimeService {
       identity !== null &&
       identity.contractId === WIOLETT_CORE_CONTRACT_ID &&
       identity.coreProtocolMajor === INFERENCE_CORE_PROTOCOL_MAJOR;
+    // A health probe from a superseded installation must not describe its replacement.
+    if ((await this.loadStateRow())?.installedDigest !== row.installedDigest) return;
+    this.observedRequestLimits =
+      healthy && identity ? { digest: row.installedDigest, supported: identity.requestLimitsVersion === 1 } : null;
     await this.upsertStateRow({
       healthStatus: healthy ? 'healthy' : 'unhealthy',
       healthCheckedAt: new Date(),
