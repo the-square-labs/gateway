@@ -5,7 +5,7 @@ export const NODE_TYPE_LABELS: Record<NodeType, string> = {
   nginx: "Ingress",
   docker: "Docker",
   builder: "Build Worker",
-  databases: "Databases",
+  databases: "Storage",
   storage: "Storage",
   monitoring: "Monitoring",
   bastion: "Bastion",

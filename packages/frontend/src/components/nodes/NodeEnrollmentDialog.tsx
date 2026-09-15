@@ -61,14 +61,9 @@ export const NODE_ENROLLMENT_TYPES: Array<{
     description: "Builds Git revisions and scans artifacts on an isolated Docker worker.",
   },
   {
-    value: "databases",
-    label: "Databases",
-    description: "Hosts managed PostgreSQL, Redis, and ClickHouse instances.",
-  },
-  {
     value: "storage",
     label: "Storage",
-    description: "Hosts managed private MinIO storage and database backup runners.",
+    description: "Hosts managed databases, private MinIO storage, and database backup runners.",
   },
   {
     value: "monitoring",
@@ -92,6 +87,10 @@ const INSTALLER_BY_TYPE: Partial<Record<NodeType, string>> = {
   monitoring: "setup-monitoring-node.sh",
   relay: "setup-relay-node.sh",
 };
+
+function canonicalEnrollmentType(type: NodeType): NodeType {
+  return type === "databases" ? "storage" : type;
+}
 
 type EnrollmentResult = {
   nodeId: string;
@@ -133,7 +132,7 @@ export function NodeEnrollmentDialog({
 }) {
   const user = useAuthStore((state) => state.user);
   const [mode, setMode] = useState<"external" | "hosting">(initialMode);
-  const [type, setType] = useState<NodeType>(initialType);
+  const [type, setType] = useState<NodeType>(() => canonicalEnrollmentType(initialType));
   const [displayName, setDisplayName] = useState("");
   const [folderId, setFolderId] = useState("");
   const [relayAddress, setRelayAddress] = useState("");
@@ -160,7 +159,7 @@ export function NodeEnrollmentDialog({
   useEffect(() => {
     if (!open) return;
     setMode(initialMode);
-    setType(initialType);
+    setType(canonicalEnrollmentType(initialType));
     setDisplayName("");
     setFolderId("");
     setRelayAddress("");
@@ -313,7 +312,7 @@ export function NodeEnrollmentDialog({
           : result?.type === "databases"
             ? "Verifies safe ext4 image storage, then installs the managed database daemon."
             : result?.type === "storage"
-              ? "Verifies safe ext4 image storage, then installs the restricted managed storage daemon."
+              ? "Verifies safe ext4 image storage, then installs the managed Storage daemon."
               : result?.type === "monitoring"
                 ? "Installs the monitoring agent and enrolls with this Gateway."
                 : "Installs Nginx and the ingress daemon, then enrolls with this Gateway.";

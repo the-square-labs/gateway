@@ -12,6 +12,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import {
+  isDatabaseBackupCandidateNode,
+  listManagedDatabaseCandidateNodes,
+} from "@/lib/managed-database-nodes";
 import { databaseRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -121,7 +125,7 @@ export function DatabaseDetail({
     let current = true;
     void Promise.all([
       api.listObjectStorages({ limit: 200 }),
-      api.listNodes({ type: "storage", limit: 200 }),
+      listManagedDatabaseCandidateNodes(200),
     ])
       .then(([storage, nodes]) => {
         if (!current) return;
@@ -134,10 +138,11 @@ export function DatabaseDetail({
             .map((item) => ({ id: item.id, label: item.name, provider: item.provider }))
         );
         setBackupExecutors(
-          nodes.data
+          nodes
             .filter(
               (node) =>
-                hasScope("nodes:backups:execute") || hasScope(`nodes:backups:execute:${node.id}`)
+                isDatabaseBackupCandidateNode(node) &&
+                (hasScope("nodes:backups:execute") || hasScope(`nodes:backups:execute:${node.id}`))
             )
             .map((node) => ({
               id: node.id,

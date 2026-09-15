@@ -461,7 +461,7 @@ export function ManagedDatabaseCreateForm({
             </div>
             <div className="space-y-1.5">
               <label className="text-sm font-medium" htmlFor="managed-db-node">
-                Databases node
+                Storage node
               </label>
               <Select value={draft.nodeId} onValueChange={(value) => set("nodeId", value)}>
                 <SelectTrigger id="managed-db-node">

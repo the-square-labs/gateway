@@ -1,5 +1,12 @@
 export type HostingProvider = "hostkey" | "digitalocean" | "hetzner" | "proxmox";
-export type HostingRole = "nginx" | "docker" | "builder" | "databases" | "monitoring" | "relay";
+export type HostingRole =
+  | "nginx"
+  | "docker"
+  | "builder"
+  | "databases"
+  | "storage"
+  | "monitoring"
+  | "relay";
 export type HostingAction = "start" | "shutdown" | "reboot" | "resize" | "delete" | "recover";
 export type HostingSnapshotAction = "snapshot_create" | "snapshot_delete" | "snapshot_restore";
 export type HostingVmSnapshotStatus = "pending" | "ready" | "failed" | "deleting" | "deleted";

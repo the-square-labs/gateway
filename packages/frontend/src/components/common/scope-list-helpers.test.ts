@@ -202,6 +202,39 @@ describe("resource restriction mappings", () => {
     ).toEqual([]);
   });
 
+  it("keeps storage creation capability-aware while accepting legacy database nodes for databases", () => {
+    const nodes = [
+      {
+        id: "legacy",
+        hostname: "legacy",
+        type: "databases",
+        capabilities: { capabilities: ["managed_databases_v1"] },
+      },
+      {
+        id: "upgraded-legacy",
+        hostname: "upgraded-legacy",
+        type: "databases",
+        capabilities: { capabilities: ["managed_databases_v1", "managed_storage_v1"] },
+      },
+      {
+        id: "canonical",
+        hostname: "canonical",
+        type: "storage",
+        capabilities: { capabilities: ["managed_databases_v1", "managed_storage_v1"] },
+      },
+    ];
+
+    expect(getResourceOptions("storage:create", [], nodes as never)).toEqual([
+      { id: "node/upgraded-legacy", label: "upgraded-legacy" },
+      { id: "node/canonical", label: "canonical" },
+    ]);
+    expect(getResourceOptions("databases:create", [], nodes as never)).toEqual([
+      { id: "node/legacy", label: "legacy" },
+      { id: "node/upgraded-legacy", label: "upgraded-legacy" },
+      { id: "node/canonical", label: "canonical" },
+    ]);
+  });
+
   it("roundtrips folder, provider, account and node targets without changing bases", () => {
     const scopes = [
       "databases:create:folder/f1",

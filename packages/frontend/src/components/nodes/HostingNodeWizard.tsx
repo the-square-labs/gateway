@@ -41,7 +41,7 @@ export function hostingHostnameError(value: string) {
   return null;
 }
 
-const ROLES: HostingRole[] = ["nginx", "docker", "builder", "databases", "monitoring", "relay"];
+const ROLES: HostingRole[] = ["nginx", "docker", "builder", "storage", "monitoring", "relay"];
 type Draft = { input: HostingProvisionInput };
 
 function imageSupportsRole(image: HostingCatalog["images"][number], role: HostingRole) {

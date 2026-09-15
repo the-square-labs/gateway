@@ -1,7 +1,10 @@
 import { api } from "@/services/api";
 import type { Node } from "@/types";
 
-/** Nodes allowed to host the existing managed-database runtime. */
+export const MANAGED_STORAGE_CAPABILITY = "managed_storage_v1";
+export const DATABASE_BACKUPS_CAPABILITY = "database_backups_v1";
+
+/** Nodes allowed to host managed database and storage runtimes. */
 export async function listManagedDatabaseCandidateNodes(limit = 100): Promise<Node[]> {
   const [databaseResult, storageResult] = await Promise.all([
     api.listNodes({ type: "databases", limit }),
@@ -16,4 +19,29 @@ export function isManagedDatabaseCandidateNode(
   node: Pick<Node, "type"> | null | undefined
 ): boolean {
   return node?.type === "databases" || node?.type === "storage";
+}
+
+export function nodeSupportsCapability(
+  node: Pick<Node, "capabilities"> | null | undefined,
+  capability: string
+): boolean {
+  const advertised = node?.capabilities?.capabilities;
+  return Array.isArray(advertised) && advertised.includes(capability);
+}
+
+export function isManagedStorageCandidateNode(
+  node: Pick<Node, "type" | "capabilities"> | null | undefined
+): boolean {
+  return (
+    isManagedDatabaseCandidateNode(node) && nodeSupportsCapability(node, MANAGED_STORAGE_CAPABILITY)
+  );
+}
+
+export function isDatabaseBackupCandidateNode(
+  node: Pick<Node, "type" | "capabilities"> | null | undefined
+): boolean {
+  return (
+    isManagedDatabaseCandidateNode(node) &&
+    nodeSupportsCapability(node, DATABASE_BACKUPS_CAPABILITY)
+  );
 }

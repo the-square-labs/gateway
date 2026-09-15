@@ -5,7 +5,13 @@ export const DEV_FORCE_UPDATES_STORAGE_KEY = "gateway-dev-force-updates";
 const FORCED_GATEWAY_VERSION = "v9.9.9";
 const FORCED_RELAY_VERSION = "v9.9.9";
 const FORCED_DAEMON_VERSION = "9.9.9";
-const DAEMON_NODE_TYPES = new Set<NodeType>(["nginx", "docker", "databases", "monitoring"]);
+const DAEMON_NODE_TYPES = new Set<NodeType>([
+  "nginx",
+  "docker",
+  "databases",
+  "storage",
+  "monitoring",
+]);
 
 export type DevForcedUpdateMode = "gateway" | "relay" | "both";
 

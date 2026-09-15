@@ -41,6 +41,10 @@ import {
 } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import {
+  isManagedStorageCandidateNode,
+  listManagedDatabaseCandidateNodes,
+} from "@/lib/managed-database-nodes";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { storageRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
@@ -391,7 +395,8 @@ function ManagedObjectStorageCreateForm({
               </Select>
               {nodes.length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  No Storage nodes available — enroll a Storage node first, then it appears here.
+                  No Storage-capable nodes available — enroll or update a Storage node first, then
+                  it appears here.
                 </p>
               )}
             </div>
@@ -698,10 +703,11 @@ export function Storage() {
       }
       setRows(result.data);
       const [nodes, catalog] = await Promise.allSettled([
-        api.listNodes({ type: "storage", limit: 100 }),
+        listManagedDatabaseCandidateNodes(100),
         api.listManagedObjectStorageCatalog(),
       ]);
-      if (nodes.status === "fulfilled") setStorageNodes(nodes.value.data);
+      if (nodes.status === "fulfilled")
+        setStorageNodes(nodes.value.filter(isManagedStorageCandidateNode));
       if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load storage");

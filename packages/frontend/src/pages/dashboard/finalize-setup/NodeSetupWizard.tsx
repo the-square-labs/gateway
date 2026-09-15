@@ -33,11 +33,10 @@ const NODE_TYPES: Array<{ value: NodeType; label: string; description: string }>
     label: "Build Worker",
     description: "Build untrusted Git sources with the isolated BuildKit and runsc profile.",
   },
-  { value: "databases", label: "Databases", description: "Run managed database workloads." },
   {
     value: "storage",
     label: "Storage",
-    description: "Run managed MinIO storage and backup workloads.",
+    description: "Run managed database, object storage, and backup workloads.",
   },
   {
     value: "monitoring",
@@ -204,9 +203,9 @@ export function NodeSetupWizard({
           </p>
           <p>
             Choose Ingress to serve public domains and routes, Docker for runtime containers, Build
-            Worker for isolated Git builds, Databases for managed database workloads, or Monitoring
-            for health and metrics. A host can run more than one node type when it has more than one
-            job.
+            Worker for isolated Git builds, Storage for managed database, object storage, and backup
+            workloads, or Monitoring for health and metrics. A host can run more than one node type
+            when it has more than one job.
           </p>
           <p>
             This step creates a one-time enrollment command. Run it on the target host and keep this

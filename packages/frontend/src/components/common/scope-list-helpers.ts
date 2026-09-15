@@ -1,4 +1,8 @@
 import { toast } from "sonner";
+import {
+  isManagedDatabaseCandidateNode,
+  isManagedStorageCandidateNode,
+} from "@/lib/managed-database-nodes";
 import { extractBaseScope, hasScopeBase, scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -567,11 +571,15 @@ export function getResourceOptions(
         .map((node) => ({ id: node.id, label: node.displayName || node.hostname }));
     if (scope === "storage:create")
       return (nodes ?? [])
-        .filter((node) => String(node.type) === "storage")
+        .filter(isManagedStorageCandidateNode)
         .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname }));
     if (scope === "proxy:create" || scope === "pages:create" || scope === "databases:create") {
       return (nodes ?? [])
-        .filter((node) => node.type === (scope === "databases:create" ? "databases" : "nginx"))
+        .filter((node) =>
+          scope === "databases:create"
+            ? isManagedDatabaseCandidateNode(node)
+            : node.type === "nginx"
+        )
         .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname }));
     }
     return [];
@@ -601,7 +609,7 @@ export function getResourceOptions(
   if (scope.startsWith("databases:")) {
     return [
       ...(nodes ?? [])
-        .filter((node) => node.type === "databases" || node.type === "storage")
+        .filter(isManagedDatabaseCandidateNode)
         .map((node) => ({ id: `node/${node.id}`, label: node.displayName || node.hostname })),
       ...(databases ?? []).map((database) => ({
         id: database.id,
