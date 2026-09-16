@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { backupPolicies, backupRuns, objectStorageConnections } from '@/db/schema/index.js';
+import { backupPolicies, backupRuns, objectStorageConnections, proxyAdditionalSecureLinks } from '@/db/schema/index.js';
 import { managedStorageAccessKeys, managedStorageClusters } from '@/db/schema/managed-storage.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -75,6 +75,7 @@ function fakeDb(
     // has no `.limit()` — defaults to [] (no siblings) so every pre-existing create/update
     // test, which never sets this, sees no conflicting clusters and is unaffected.
     siblingRows?: Record<string, unknown>[];
+    secureLinkRows?: Record<string, unknown>[][];
   } = {}
 ) {
   const nodeLimit = vi.fn(async () => (options.nodeRow ? [options.nodeRow] : []));
@@ -87,18 +88,22 @@ function fakeDb(
   // one mock; `.limit()` callers are unaffected since they never reach the `then` branch.
   const existingWhere = vi.fn(() => ({
     limit: existingLimit,
+    for: vi.fn(async () => (options.existingRow ? [options.existingRow] : [])),
     // biome-ignore lint/suspicious/noThenProperty: the fake mirrors drizzle's awaitable query builder, whose `then` is exactly what the code under test uses.
     then: (resolve: (value: Record<string, unknown>[]) => void, reject: (reason?: unknown) => void) =>
       Promise.resolve(options.siblingRows ?? []).then(resolve, reject),
   }));
+  let secureLinkReads = 0;
   const from = vi.fn((table: unknown) =>
-    table === objectStorageConnections
-      ? { where: vi.fn(() => ({ for: vi.fn().mockResolvedValue([{ id: 'connection-1' }]) })) }
-      : table === backupPolicies || table === backupRuns
-        ? { where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) }
-        : table === nodes
-          ? { where: nodeWhere }
-          : { where: existingWhere }
+    table === proxyAdditionalSecureLinks
+      ? { where: vi.fn(() => ({ limit: vi.fn(async () => options.secureLinkRows?.[secureLinkReads++] ?? []) })) }
+      : table === objectStorageConnections
+        ? { where: vi.fn(() => ({ for: vi.fn().mockResolvedValue([{ id: 'connection-1' }]) })) }
+        : table === backupPolicies || table === backupRuns
+          ? { where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) }
+          : table === nodes
+            ? { where: nodeWhere }
+            : { where: existingWhere }
   );
   const select = vi.fn(() => ({ from }));
   const returning = vi.fn(async () => [options.insertedRow]);
@@ -1554,6 +1559,32 @@ describe('ManagedStorageService.delete', () => {
     updatedById: null,
     relayEnabled: false,
   };
+
+  it.each([
+    [[{ id: 'binding-1' }]],
+    [[], [{ id: 'new-binding' }]],
+  ])('blocks deletion before external teardown when a link exists or appears before the lock', async (...reads) => {
+    const { db } = fakeDb({ existingRow, secureLinkRows: reads });
+    const lifecycle = fakeLifecycle();
+    const service = licensedStorageService(
+      db as never,
+      audit as never,
+      cryptoService as never,
+      fakeNodeDispatch() as never,
+      fakeProvider(),
+      {} as never,
+      fakeStore(),
+      fakeDispatch(),
+      lifecycle,
+      fakeMemberStore(),
+      fakeTunnelProxy() as never
+    );
+    await expect(service.delete(existingRow.id, 'user-1')).rejects.toMatchObject({
+      code: 'MANAGED_STORAGE_SECURE_LINK_IN_USE',
+    });
+    expect(lifecycle.dispatchDelete).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
+  });
 
   it('relayEnabled:true dispatches remove-target and disposes the tunnel proxy BEFORE dispatchDelete', async () => {
     const relayRow = { ...existingRow, relayEnabled: true };

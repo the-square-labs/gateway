@@ -172,6 +172,13 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     update: ['chunk'],
     execute: ['finalize'],
   }),
+  upload_storage_object: operationPolicies({
+    create: ['begin'],
+    update: ['chunk'],
+    read: ['status'],
+    execute: ['finalize'],
+    delete: ['abort'],
+  }),
   manage_additional_route: operationPolicies({
     read: ['list', 'get'],
     create: ['create'],
@@ -236,11 +243,11 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_managed_storage: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['catalog', 'get'],
-      create: ['create'],
-      update: ['update'],
+      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys'],
+      create: ['create', 'create_binding', 'create_access_key'],
+      update: ['update', 'retry'],
       execute: ['restart'],
-      delete: ['delete'],
+      delete: ['delete', 'delete_binding', 'remove_access_key'],
     }),
   },
   manage_logging: {

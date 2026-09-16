@@ -18,8 +18,10 @@ import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { ToggleField } from "@/components/common/ToggleField";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -39,6 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import {
@@ -63,7 +66,7 @@ import type {
 import {
   canDeployManagedStorage,
   type ManagedStorageCapacity,
-  managedStorageCapacity,
+  managedStorageClusterCapacity,
 } from "./storage-detail/managed-storage-capacity";
 import {
   buildStoragePayload,
@@ -308,7 +311,7 @@ function StorageTagSummary({
   );
 }
 
-function ManagedObjectStorageCreateForm({
+export function ManagedObjectStorageCreateForm({
   draft,
   nodes,
   catalog,
@@ -486,7 +489,7 @@ function ManagedObjectStorageCreateForm({
             idPrefix="managed-storage"
             values={resourceInputs}
             capacity={{
-              storageSizeGb: capacity.maxStorageGb || undefined,
+              storageSizeGb: capacity.maxStorageGb,
               cpuCores: capacity.maxCpuCores || undefined,
               memoryMb: capacity.maxMemoryMb || undefined,
               swapMb: capacity.maxSwapMb || undefined,
@@ -495,6 +498,12 @@ function ManagedObjectStorageCreateForm({
             minimumStorageGb={1}
             minimumMemoryMb={256}
           />
+          {capacity.maxStorageGb === undefined && (
+            <p role="status" className="text-sm text-muted-foreground">
+              Storage-root capacity is unavailable. Update the Storage node daemon, wait for its
+              next health report, then reopen this wizard.
+            </p>
+          )}
         </motion.div>
       )}
       {step === 3 && (
@@ -503,28 +512,33 @@ function ManagedObjectStorageCreateForm({
           {...MANAGED_STORAGE_FORM_ANIMATION}
           className="space-y-4"
         >
-          <ToggleField
+          <PanelShell
             title="Publish S3 endpoint"
             description="Expose a host port in addition to private access."
-            checked={draft.publishS3 ?? false}
-            onChange={(enabled) => set("publishS3", enabled)}
-            ariaLabel="Publish S3 endpoint"
-          />
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="managed-storage-publishedPort">
-              S3 API port
-            </label>
-            <Input
-              id="managed-storage-publishedPort"
-              aria-label="S3 API port"
-              type="number"
-              min="1"
-              max={65535}
-              disabled={!draft.publishS3}
-              value={resourceInputs.publishedPort}
-              onChange={(event) => setResourceInput("publishedPort", event.target.value)}
-            />
-          </div>
+            headerBorder={draft.publishS3 ?? false}
+            actions={
+              <Switch
+                checked={draft.publishS3 ?? false}
+                onChange={(enabled) => set("publishS3", enabled)}
+                ariaLabel="Publish S3 endpoint"
+              />
+            }
+          >
+            {draft.publishS3 && (
+              <SettingsControlRow title="S3 API port">
+                <Input
+                  id="managed-storage-publishedPort"
+                  aria-label="S3 API port"
+                  type="number"
+                  min="1"
+                  max={65535}
+                  disabled={!draft.publishS3}
+                  value={resourceInputs.publishedPort}
+                  onChange={(event) => setResourceInput("publishedPort", event.target.value)}
+                />
+              </SettingsControlRow>
+            )}
+          </PanelShell>
           <ToggleField
             title="TLS"
             description="Encrypt S3 and enable FTPS using the Gateway Storage CA."
@@ -532,78 +546,90 @@ function ManagedObjectStorageCreateForm({
             onChange={(enabled) => set("tlsEnabled", enabled)}
             ariaLabel="TLS"
           />
-          <ToggleField
+          <PanelShell
             title="SFTP access"
-            checked={draft.sftpEnabled ?? false}
-            onChange={(enabled) => set("sftpEnabled", enabled)}
-            ariaLabel="SFTP access"
-          />
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="managed-storage-sftpPort">
-              SFTP port
-            </label>
-            <Input
-              id="managed-storage-sftpPort"
-              aria-label="SFTP port"
-              type="number"
-              min="1"
-              max={65535}
-              disabled={!draft.sftpEnabled}
-              value={resourceInputs.sftpPort}
-              onChange={(event) => setResourceInput("sftpPort", event.target.value)}
-            />
-          </div>
-          <ToggleField
+            description="Enable encrypted file access over SSH."
+            headerBorder={draft.sftpEnabled ?? false}
+            actions={
+              <Switch
+                checked={draft.sftpEnabled ?? false}
+                onChange={(enabled) => set("sftpEnabled", enabled)}
+                ariaLabel="SFTP access"
+              />
+            }
+          >
+            {draft.sftpEnabled && (
+              <SettingsControlRow title="SFTP port">
+                <Input
+                  id="managed-storage-sftpPort"
+                  aria-label="SFTP port"
+                  type="number"
+                  min="1"
+                  max={65535}
+                  disabled={!draft.sftpEnabled}
+                  value={resourceInputs.sftpPort}
+                  onChange={(event) => setResourceInput("sftpPort", event.target.value)}
+                />
+              </SettingsControlRow>
+            )}
+          </PanelShell>
+          <PanelShell
             title="FTP access"
-            checked={draft.ftpEnabled ?? false}
-            onChange={(enabled) => set("ftpEnabled", enabled)}
-            ariaLabel="FTP access"
-          />
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="managed-storage-ftpPort">
-              FTP port
-            </label>
-            <Input
-              id="managed-storage-ftpPort"
-              aria-label="FTP port"
-              type="number"
-              min="1"
-              max={65535}
-              disabled={!draft.ftpEnabled}
-              value={resourceInputs.ftpPort}
-              onChange={(event) => setResourceInput("ftpPort", event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="managed-storage-ftpPassivePortStart">
-              FTP passive port range start
-            </label>
-            <Input
-              id="managed-storage-ftpPassivePortStart"
-              aria-label="FTP passive port range start"
-              type="number"
-              min="1"
-              max={65526}
-              disabled={!draft.ftpEnabled}
-              value={resourceInputs.ftpPassivePortStart}
-              onChange={(event) => setResourceInput("ftpPassivePortStart", event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium" htmlFor="managed-storage-ftpPassivePortCount">
-              FTP passive port count
-            </label>
-            <Input
-              id="managed-storage-ftpPassivePortCount"
-              aria-label="FTP passive port count"
-              type="number"
-              min="1"
-              max={64}
-              disabled={!draft.ftpEnabled}
-              value={resourceInputs.ftpPassivePortCount}
-              onChange={(event) => setResourceInput("ftpPassivePortCount", event.target.value)}
-            />
-          </div>
+            description="Enable FTP file access. Turn on TLS to use FTPS."
+            headerBorder={draft.ftpEnabled ?? false}
+            actions={
+              <Switch
+                checked={draft.ftpEnabled ?? false}
+                onChange={(enabled) => set("ftpEnabled", enabled)}
+                ariaLabel="FTP access"
+              />
+            }
+          >
+            {draft.ftpEnabled && (
+              <>
+                <SettingsControlRow title="FTP port">
+                  <Input
+                    id="managed-storage-ftpPort"
+                    aria-label="FTP port"
+                    type="number"
+                    min="1"
+                    max={65535}
+                    disabled={!draft.ftpEnabled}
+                    value={resourceInputs.ftpPort}
+                    onChange={(event) => setResourceInput("ftpPort", event.target.value)}
+                  />
+                </SettingsControlRow>
+                <SettingsControlRow title="FTP passive port range start">
+                  <Input
+                    id="managed-storage-ftpPassivePortStart"
+                    aria-label="FTP passive port range start"
+                    type="number"
+                    min="1"
+                    max={65526}
+                    disabled={!draft.ftpEnabled}
+                    value={resourceInputs.ftpPassivePortStart}
+                    onChange={(event) =>
+                      setResourceInput("ftpPassivePortStart", event.target.value)
+                    }
+                  />
+                </SettingsControlRow>
+                <SettingsControlRow title="FTP passive port count">
+                  <Input
+                    id="managed-storage-ftpPassivePortCount"
+                    aria-label="FTP passive port count"
+                    type="number"
+                    min="1"
+                    max={64}
+                    disabled={!draft.ftpEnabled}
+                    value={resourceInputs.ftpPassivePortCount}
+                    onChange={(event) =>
+                      setResourceInput("ftpPassivePortCount", event.target.value)
+                    }
+                  />
+                </SettingsControlRow>
+              </>
+            )}
+          </PanelShell>
         </motion.div>
       )}
     </AnimatePresence>
@@ -747,8 +773,12 @@ export function Storage() {
     [deployableStorageNodes, managedDraft.nodeId]
   );
   const managedCapacity = useMemo(
-    () => managedStorageCapacity(selectedDeployableStorageNode),
-    [selectedDeployableStorageNode]
+    () =>
+      managedStorageClusterCapacity(
+        { nodeId: managedDraft.nodeId, memberNodeIds: managedDraft.memberNodeIds },
+        deployableStorageNodes
+      ),
+    [managedDraft.nodeId, managedDraft.memberNodeIds, deployableStorageNodes]
   );
   const canDeployManaged = useMemo(
     () =>

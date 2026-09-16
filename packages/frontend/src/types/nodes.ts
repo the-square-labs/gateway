@@ -97,6 +97,10 @@ export interface NodeHealthReport {
     freeBytes: number;
     usagePercent: number;
   }>;
+  managedStorageCapacity?: {
+    storageRoot: string;
+    availableBytes: number;
+  };
   diskReadBytes: number;
   diskWriteBytes: number;
   // Network

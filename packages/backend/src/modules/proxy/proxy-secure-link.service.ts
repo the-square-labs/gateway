@@ -4,11 +4,13 @@ import type { DrizzleClient } from '@/db/client.js';
 import {
   dockerDeploymentRoutes,
   dockerDeployments,
+  managedStorageClusters,
   nodes,
   proxyAdditionalSecureLinks,
   proxyHosts,
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -22,14 +24,15 @@ export type ProxyAdditionalSecureLinkPurpose = 'user_managed' | 'additional_rout
 
 export interface CreateProxyAdditionalSecureLinkInput {
   name: string;
-  upstreamKind: 'docker_container' | 'docker_deployment';
-  forwardScheme: 'http' | 'https';
+  upstreamKind: 'docker_container' | 'docker_deployment' | 'managed_storage';
+  forwardScheme?: 'http' | 'https';
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
   dockerComposeProjectId?: string | null;
   dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
-  dockerContainerPort: number;
+  dockerContainerPort?: number;
+  managedStorageId?: string | null;
 }
 
 interface BindingDetail {
@@ -63,6 +66,10 @@ const DOCKER_UPSTREAM_KINDS = ['docker_container', 'docker_deployment'] as const
 
 function isDockerUpstream(kind: string): kind is (typeof DOCKER_UPSTREAM_KINDS)[number] {
   return (DOCKER_UPSTREAM_KINDS as readonly string[]).includes(kind);
+}
+
+function isManagedStorageUpstream(kind: string): kind is 'managed_storage' {
+  return kind === 'managed_storage';
 }
 
 export class ProxySecureLinkService {
@@ -108,8 +115,8 @@ export class ProxySecureLinkService {
       for (const host of hosts) {
         if (host.dockerNodeId) targetNodeIds.add(host.dockerNodeId);
       }
-      for (const binding of additional as Array<{ dockerNodeId: string }>) {
-        targetNodeIds.add(binding.dockerNodeId);
+      for (const binding of additional as Array<{ dockerNodeId: string; upstreamKind: string }>) {
+        if (isDockerUpstream(binding.upstreamKind)) targetNodeIds.add(binding.dockerNodeId);
       }
 
       const nodesToSync = [...targetNodeIds];
@@ -216,7 +223,7 @@ export class ProxySecureLinkService {
         .set({
           dockerNodeId: input.dockerNodeId,
           upstreamKind: input.upstreamKind,
-          forwardScheme: input.forwardScheme,
+          forwardScheme: input.forwardScheme ?? 'http',
           dockerContainerName: input.dockerContainerName ?? null,
           dockerComposeProjectId: input.dockerComposeProjectId ?? null,
           dockerComposeServiceName: input.dockerComposeServiceName ?? null,
@@ -358,19 +365,27 @@ export class ProxySecureLinkService {
         'Binding name must start with a letter and contain only letters, numbers, and underscores'
       );
     }
-    if (input.dockerContainerPort < 1 || input.dockerContainerPort > 65535) {
+    if (
+      isDockerUpstream(input.upstreamKind) &&
+      (!input.dockerContainerPort || input.dockerContainerPort < 1 || input.dockerContainerPort > 65535)
+    ) {
       throw new AppError(400, 'INVALID_DOCKER_PORT', 'Container port must be between 1 and 65535');
     }
 
     const target = await this.resolveAdditionalTarget(input, actorScopes);
-    if (!(await this.nodesSupportSecureLinks([host.nodeId, target.nodeId], host.nodeId))) {
+    if (
+      !(await this.nodesSupportSecureLinks(
+        isManagedStorageUpstream(input.upstreamKind) ? [host.nodeId] : [host.nodeId, target.nodeId],
+        host.nodeId
+      ))
+    ) {
       throw new AppError(
         409,
         'PROXY_SECURE_LINK_UPDATE_REQUIRED',
         'Update both Nginx and Docker daemons before provisioning this binding'
       );
     }
-    if (!this.connectorImage) {
+    if (isDockerUpstream(input.upstreamKind) && !this.connectorImage) {
       throw new AppError(503, 'SECURE_LINK_CONNECTOR_UNAVAILABLE', 'Secure Link connector image is not configured');
     }
     const existing = await this.db.query.proxyAdditionalSecureLinks.findFirst({
@@ -382,27 +397,43 @@ export class ProxySecureLinkService {
     });
     if (existing) throw new AppError(409, 'SECURE_LINK_NAME_EXISTS', 'A binding with this name already exists');
 
-    const [created] = await this.db
-      .insert(proxyAdditionalSecureLinks)
-      .values({
-        proxyHostId: host.id,
-        name: input.name,
-        purpose: 'user_managed',
-        referenceId: null,
-        upstreamKind: input.upstreamKind,
-        forwardScheme: input.forwardScheme,
-        sourceNodeId: host.nodeId,
-        dockerNodeId: target.nodeId,
-        dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
-        dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
-        dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
-        dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
-        dockerContainerPort: input.dockerContainerPort,
-        dockerHostPort: target.targetPort,
-        targetNetwork: target.network,
-        targetContainer: target.container,
-      })
-      .returning();
+    const persist = async (db: Pick<DrizzleClient, 'insert'>, resolved: typeof target) =>
+      (
+        await db
+          .insert(proxyAdditionalSecureLinks)
+          .values({
+            proxyHostId: host.id,
+            name: input.name,
+            purpose: 'user_managed',
+            referenceId: null,
+            upstreamKind: input.upstreamKind,
+            forwardScheme: resolved.forwardScheme,
+            sourceNodeId: host.nodeId!,
+            dockerNodeId: resolved.nodeId,
+            dockerContainerName: input.upstreamKind === 'docker_container' ? resolved.container : null,
+            dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
+            dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
+            dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
+            managedStorageId: resolved.managedStorageId ?? null,
+            dockerContainerPort: resolved.applicationPort,
+            dockerHostPort: resolved.targetPort,
+            targetNetwork: resolved.network,
+            targetContainer: resolved.container,
+          })
+          .returning()
+      )[0]!;
+    const created = target.managedStorageId
+      ? await this.db.transaction(async (tx) => {
+          // Match storage deletion's row lock before it claims external teardown.
+          await tx
+            .select({ id: managedStorageClusters.id })
+            .from(managedStorageClusters)
+            .where(eq(managedStorageClusters.id, target.managedStorageId!))
+            .for('update');
+          const currentTarget = await this.resolveAdditionalTarget(input, actorScopes, true, tx);
+          return persist(tx, currentTarget);
+        })
+      : await persist(this.db, target);
 
     this.emitAdditionalState(host, created, 'provisioning');
     void this.createAdditionalFromExisting(host, created.id).catch((error) => {
@@ -473,14 +504,14 @@ export class ProxySecureLinkService {
             purpose: 'additional_route',
             referenceId: routeId,
             upstreamKind: input.upstreamKind,
-            forwardScheme: input.forwardScheme,
+            forwardScheme: input.forwardScheme ?? 'http',
             sourceNodeId: host.nodeId,
             dockerNodeId: target.nodeId,
             dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
             dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
             dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
             dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
-            dockerContainerPort: input.dockerContainerPort,
+            dockerContainerPort: input.dockerContainerPort!,
             dockerHostPort: target.targetPort,
             targetNetwork: target.network,
             targetContainer: target.container,
@@ -512,13 +543,13 @@ export class ProxySecureLinkService {
           generation: existing.generation + 1,
           sourceNodeId: host.nodeId,
           upstreamKind: input.upstreamKind,
-          forwardScheme: input.forwardScheme,
+          forwardScheme: input.forwardScheme ?? 'http',
           dockerNodeId: target.nodeId,
           dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
           dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
           dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
           dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
-          dockerContainerPort: input.dockerContainerPort,
+          dockerContainerPort: input.dockerContainerPort!,
           dockerHostPort: target.targetPort,
           targetNetwork: target.network,
           targetContainer: target.container,
@@ -536,14 +567,14 @@ export class ProxySecureLinkService {
         purpose: 'additional_route',
         referenceId: routeId,
         upstreamKind: input.upstreamKind,
-        forwardScheme: input.forwardScheme,
+        forwardScheme: input.forwardScheme ?? 'http',
         sourceNodeId: host.nodeId,
         dockerNodeId: target.nodeId,
         dockerContainerName: input.upstreamKind === 'docker_container' ? target.container : null,
         dockerComposeProjectId: input.upstreamKind === 'docker_container' ? input.dockerComposeProjectId : null,
         dockerComposeServiceName: input.upstreamKind === 'docker_container' ? input.dockerComposeServiceName : null,
         dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? input.dockerDeploymentId : null,
-        dockerContainerPort: input.dockerContainerPort,
+        dockerContainerPort: input.dockerContainerPort!,
         dockerHostPort: target.targetPort,
         targetNetwork: target.network,
         targetContainer: target.container,
@@ -663,8 +694,8 @@ export class ProxySecureLinkService {
     actorScopes?: string[]
   ): Promise<ProxyAdditionalSecureLinkRow> {
     const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
-    if (!isDockerUpstream(binding.upstreamKind)) {
-      throw new AppError(409, 'INVALID_DOCKER_TARGET', 'Secure Link target is not a Docker workload');
+    if (!isDockerUpstream(binding.upstreamKind) && !isManagedStorageUpstream(binding.upstreamKind)) {
+      throw new AppError(409, 'INVALID_SECURE_LINK_TARGET', 'Secure Link target is not supported');
     }
     const target = await this.resolveAdditionalTarget({ ...binding, upstreamKind: binding.upstreamKind }, actorScopes);
     await this.db
@@ -679,7 +710,10 @@ export class ProxySecureLinkService {
         status: 'provisioning',
         dockerNodeId: target.nodeId,
         dockerContainerName: binding.upstreamKind === 'docker_container' ? target.container : null,
+        managedStorageId: target.managedStorageId ?? null,
+        dockerContainerPort: target.applicationPort,
         dockerHostPort: target.targetPort,
+        forwardScheme: target.forwardScheme,
         targetNetwork: target.network,
         targetContainer: target.container,
         lastError: null,
@@ -726,7 +760,31 @@ export class ProxySecureLinkService {
         // logical Compose/Deployment target would incorrectly move them back
         // to the origin node.
         if (binding.purpose === 'availability_member') continue;
-        if (!binding.dockerComposeProjectId || !binding.dockerComposeServiceName) continue;
+        if (isManagedStorageUpstream(binding.upstreamKind)) {
+          try {
+            const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, binding.proxyHostId) });
+            if (!host) continue;
+            await this.reconcileActiveAdditional(host, binding);
+          } catch (error) {
+            logger.debug('Managed storage Secure Link reconciliation is still pending', {
+              bindingId: binding.id,
+              error,
+            });
+            retryNeeded = true;
+          }
+          continue;
+        }
+        if (!binding.dockerComposeProjectId || !binding.dockerComposeServiceName) {
+          try {
+            const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, binding.proxyHostId) });
+            if (!host) continue;
+            await this.reconcileActiveAdditional(host, binding);
+          } catch (error) {
+            logger.debug('Standalone Secure Link reconciliation is still pending', { bindingId: binding.id, error });
+            retryNeeded = true;
+          }
+          continue;
+        }
         try {
           if (!isDockerUpstream(binding.upstreamKind)) continue;
           const target = await this.resolveAdditionalTarget({ ...binding, upstreamKind: binding.upstreamKind });
@@ -806,7 +864,11 @@ export class ProxySecureLinkService {
       await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id);
     }
     const sourceNodes = [...new Set(bindings.map((binding) => binding.sourceNodeId))];
-    const targetNodes = [...new Set(bindings.map((binding) => binding.dockerNodeId))];
+    const targetNodes = [
+      ...new Set(
+        bindings.filter((binding) => isDockerUpstream(binding.upstreamKind)).map((binding) => binding.dockerNodeId)
+      ),
+    ];
     await Promise.all([
       ...sourceNodes.map((nodeId) => this.syncSourceNode(nodeId)),
       ...targetNodes.map((nodeId) => this.syncTargetNode(nodeId)),
@@ -843,7 +905,7 @@ export class ProxySecureLinkService {
 
     const targetNodes = [
       ...(host.dockerNodeId ? [host.dockerNodeId] : []),
-      ...bindings.map((binding) => binding.dockerNodeId),
+      ...bindings.filter((binding) => isDockerUpstream(binding.upstreamKind)).map((binding) => binding.dockerNodeId),
     ];
     const targetResults = await Promise.allSettled(
       [...new Set(targetNodes)].map((nodeId) => this.syncTargetNode(nodeId))
@@ -884,8 +946,18 @@ export class ProxySecureLinkService {
       const binding = await this.requireAdditional(host.id, bindingId);
       if (binding.status !== 'provisioning') return binding;
       try {
-        await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
-        await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
+        if (isManagedStorageUpstream(binding.upstreamKind)) {
+          if (!binding.managedStorageId) throw new Error('Managed storage Secure Link is missing its storage identity');
+          await this.relayPolicy.ensureManagedStorageProxySecureLink(
+            binding.id,
+            binding.managedStorageId,
+            binding.sourceNodeId,
+            binding.dockerNodeId
+          );
+        } else {
+          await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
+          await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
+        }
         await this.syncSourceNode(binding.sourceNodeId);
         await this.probeSecureLink(binding.sourceNodeId, {
           linkId: binding.id,
@@ -897,7 +969,11 @@ export class ProxySecureLinkService {
           .update(proxyAdditionalSecureLinks)
           .set({ status: 'active', lastError: null, updatedAt: new Date() })
           .where(
-            and(eq(proxyAdditionalSecureLinks.id, binding.id), eq(proxyAdditionalSecureLinks.status, 'provisioning'))
+            and(
+              eq(proxyAdditionalSecureLinks.id, binding.id),
+              eq(proxyAdditionalSecureLinks.status, 'provisioning'),
+              eq(proxyAdditionalSecureLinks.generation, binding.generation)
+            )
           )
           .returning();
         if (active) {
@@ -906,6 +982,8 @@ export class ProxySecureLinkService {
         }
         return this.requireAdditional(host.id, binding.id);
       } catch (error) {
+        const current = await this.requireAdditional(host.id, binding.id);
+        if (current.generation !== binding.generation || current.status !== 'provisioning') return current;
         await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id).catch(() => undefined);
         const [failed] = await this.db
           .update(proxyAdditionalSecureLinks)
@@ -915,12 +993,16 @@ export class ProxySecureLinkService {
             updatedAt: new Date(),
           })
           .where(
-            and(eq(proxyAdditionalSecureLinks.id, binding.id), eq(proxyAdditionalSecureLinks.status, 'provisioning'))
+            and(
+              eq(proxyAdditionalSecureLinks.id, binding.id),
+              eq(proxyAdditionalSecureLinks.status, 'provisioning'),
+              eq(proxyAdditionalSecureLinks.generation, binding.generation)
+            )
           )
           .returning();
         await Promise.allSettled([
           this.syncSourceNode(binding.sourceNodeId),
-          this.syncTargetNode(binding.dockerNodeId),
+          ...(isManagedStorageUpstream(binding.upstreamKind) ? [] : [this.syncTargetNode(binding.dockerNodeId)]),
         ]);
         if (failed) {
           this.emitAdditionalState(host, failed, 'failed');
@@ -929,6 +1011,54 @@ export class ProxySecureLinkService {
         return this.requireAdditional(host.id, binding.id);
       }
     });
+  }
+
+  private async reconcileActiveAdditional(host: ProxyHostRow, binding: ProxyAdditionalSecureLinkRow): Promise<void> {
+    if (isManagedStorageUpstream(binding.upstreamKind)) {
+      if (!binding.managedStorageId) throw new Error('Managed storage Secure Link is missing its storage identity');
+      const target = await this.resolveAdditionalTarget(
+        { name: binding.name, upstreamKind: 'managed_storage', managedStorageId: binding.managedStorageId },
+        undefined,
+        false
+      );
+      if (binding.dockerNodeId !== target.nodeId || binding.forwardScheme !== target.forwardScheme) {
+        const [staged] = await this.db
+          .update(proxyAdditionalSecureLinks)
+          .set({
+            generation: binding.generation + 1,
+            status: 'provisioning',
+            dockerNodeId: target.nodeId,
+            dockerContainerPort: target.applicationPort,
+            dockerHostPort: target.targetPort,
+            forwardScheme: target.forwardScheme,
+            targetNetwork: target.network,
+            targetContainer: target.container,
+            lastError: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(proxyAdditionalSecureLinks.id, binding.id),
+              eq(proxyAdditionalSecureLinks.generation, binding.generation),
+              eq(proxyAdditionalSecureLinks.status, 'active')
+            )
+          )
+          .returning();
+        if (staged) await this.createAdditionalFromExisting(host, staged.id);
+        return;
+      }
+      await this.relayPolicy.ensureManagedStorageProxySecureLink(
+        binding.id,
+        binding.managedStorageId,
+        binding.sourceNodeId,
+        binding.dockerNodeId
+      );
+      await this.syncSourceNode(binding.sourceNodeId);
+      return;
+    }
+    await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
+    await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
+    await this.syncSourceNode(binding.sourceNodeId);
   }
 
   private async finishAdditionalDeletion(host: ProxyHostRow, binding: ProxyAdditionalSecureLinkRow): Promise<void> {
@@ -960,7 +1090,10 @@ export class ProxySecureLinkService {
 
   private async deprovisionAdditionalRuntime(binding: ProxyAdditionalSecureLinkRow): Promise<void> {
     await this.relayPolicy.revokeOwner('proxy_host_secure_link', binding.id, { allowDeferredSnapshot: true });
-    await Promise.allSettled([this.syncSourceNode(binding.sourceNodeId), this.syncTargetNode(binding.dockerNodeId)]);
+    await Promise.allSettled([
+      this.syncSourceNode(binding.sourceNodeId),
+      ...(isManagedStorageUpstream(binding.upstreamKind) ? [] : [this.syncTargetNode(binding.dockerNodeId)]),
+    ]);
   }
 
   private async requireAdditional(
@@ -1417,13 +1550,55 @@ export class ProxySecureLinkService {
 
   private async resolveAdditionalTarget(
     input: CreateProxyAdditionalSecureLinkInput,
-    actorScopes?: string[]
+    actorScopes?: string[],
+    enforceStorageScope = true,
+    db: Pick<DrizzleClient, 'select'> = this.db
   ): Promise<{
     nodeId: string;
     network: string;
     container: string;
+    applicationPort: number;
     targetPort: number;
+    forwardScheme: 'http' | 'https';
+    managedStorageId?: string;
   }> {
+    if (input.upstreamKind === 'managed_storage') {
+      if (!input.managedStorageId) {
+        throw new AppError(400, 'INVALID_MANAGED_STORAGE_TARGET', 'Managed storage is required');
+      }
+      const [storage] = await db
+        .select({
+          id: managedStorageClusters.id,
+          nodeId: managedStorageClusters.nodeId,
+          status: managedStorageClusters.status,
+          pendingOperation: managedStorageClusters.pendingOperation,
+          tlsEnabled: managedStorageClusters.tlsEnabled,
+          objectStorageConnectionId: managedStorageClusters.objectStorageConnectionId,
+        })
+        .from(managedStorageClusters)
+        .where(eq(managedStorageClusters.id, input.managedStorageId))
+        .limit(1);
+      if (!storage) throw new AppError(404, 'MANAGED_STORAGE_NOT_FOUND', 'Managed storage cluster not found');
+      if (
+        enforceStorageScope &&
+        (!storage.objectStorageConnectionId ||
+          !hasScope(actorScopes ?? [], `storage:view:${storage.objectStorageConnectionId}`))
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Viewing the selected managed storage is required');
+      }
+      if (storage.status !== 'ready' || storage.pendingOperation) {
+        throw new AppError(409, 'MANAGED_STORAGE_NOT_READY', 'Managed storage is not ready for Secure Links');
+      }
+      return {
+        nodeId: storage.nodeId,
+        network: '',
+        container: `managed-storage-${storage.id}`,
+        applicationPort: 9000,
+        targetPort: 9000,
+        forwardScheme: storage.tlsEnabled ? 'https' : 'http',
+        managedStorageId: storage.id,
+      };
+    }
     if (input.upstreamKind === 'docker_container') {
       if (!input.dockerNodeId) {
         throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and container are required');
@@ -1439,7 +1614,7 @@ export class ProxySecureLinkService {
             dockerContainerName: input.dockerContainerName,
             dockerComposeProjectId: input.dockerComposeProjectId,
             dockerComposeServiceName: input.dockerComposeServiceName,
-            dockerContainerPort: input.dockerContainerPort,
+            dockerContainerPort: input.dockerContainerPort!,
             dockerProtocol: 'tcp',
           },
           { actorScopes, requireAvailable: true }
@@ -1448,7 +1623,9 @@ export class ProxySecureLinkService {
           nodeId: resolved.dockerNodeId!,
           network: '',
           container: resolved.dockerContainerName!,
+          applicationPort: input.dockerContainerPort!,
           targetPort: resolved.dockerContainerPort,
+          forwardScheme: input.forwardScheme ?? 'http',
         };
       }
       if (!input.dockerContainerName) {
@@ -1458,7 +1635,9 @@ export class ProxySecureLinkService {
         nodeId: input.dockerNodeId,
         network: '',
         container: input.dockerContainerName,
-        targetPort: input.dockerContainerPort,
+        applicationPort: input.dockerContainerPort!,
+        targetPort: input.dockerContainerPort!,
+        forwardScheme: input.forwardScheme ?? 'http',
       };
     }
     if (!input.dockerDeploymentId) {
@@ -1480,7 +1659,7 @@ export class ProxySecureLinkService {
       .where(
         and(
           eq(dockerDeploymentRoutes.deploymentId, input.dockerDeploymentId),
-          eq(dockerDeploymentRoutes.containerPort, input.dockerContainerPort)
+          eq(dockerDeploymentRoutes.containerPort, input.dockerContainerPort!)
         )
       );
     if (routes.length !== 1) {
@@ -1490,7 +1669,9 @@ export class ProxySecureLinkService {
       nodeId: deployment.nodeId,
       network: deployment.networkName,
       container: deployment.routerName,
+      applicationPort: input.dockerContainerPort!,
       targetPort: routes[0]!.hostPort,
+      forwardScheme: input.forwardScheme ?? 'http',
     };
   }
 
@@ -1521,6 +1702,7 @@ export class ProxySecureLinkService {
         ? await (this.db.query as any).proxyAdditionalSecureLinks.findMany({
             where: and(
               eq(proxyAdditionalSecureLinks.dockerNodeId, nodeId),
+              inArray(proxyAdditionalSecureLinks.upstreamKind, [...DOCKER_UPSTREAM_KINDS]),
               inArray(proxyAdditionalSecureLinks.status, ['provisioning', 'active'])
             ),
           })

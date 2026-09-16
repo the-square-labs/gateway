@@ -1,19 +1,19 @@
 export const GUIDE_DOCS: Record<string, string> = {
   overview: `# Gateway Overview
 
-Gateway is an infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, databases, observability, and integrations.
+Gateway is an infrastructure control plane. It combines secure access management with operations for reverse proxies, Pages, certificates, compute, storage, databases, observability, and integrations.
 
 ## Main Capabilities
 - **Access and administration**: groups, scopes, resource-scoped permissions, audit logs, OIDC/password/email-code sign-in, passkeys, API tokens, OAuth, and MCP.
 - **Traffic, Pages, and certificates**: nginx ingress nodes, proxy/redirect/404 routes, Pages Projects/Deployments/Tags, access lists, PKI, uploaded/internal/ACME certificates, and external or Cloudflare-managed domains.
 - **Compute**: Docker nodes, containers, Compose projects, images, volumes, networks, private registries, webhooks, blue/green deployments, exports/imports, and migrations.
-- **Databases and logging**: saved PostgreSQL, Redis, and ClickHouse connections; dedicated nodes for Gateway-managed database instances; optional structured logging in managed or external ClickHouse.
+- **Storage, databases, and logging**: external and managed S3-compatible storage plus FTP/FTPS/SFTP connections; unified Storage nodes for managed object storage and databases; saved PostgreSQL, Redis, and ClickHouse connections; optional structured logging in managed or external ClickHouse.
 - **Operations**: daemon and Relay Pool health, notifications, housekeeping, status pages, updates, licensing, GitLab/GitHub/generic Git/external SSH/Cloudflare integrations, and a separate Gateway Inference service.
 
 ## Availability Boundaries
 Single-node first-class Compose Projects provide read-only discovery, monitoring, and logs on Community and every paid plan; deployment and lifecycle management require Personal or higher. Workload Availability (HA) is available on Business and Enterprise for mount-free Containers, Deployments, and whole Compose Projects: 2–32 replicas or one serving placement with failover across independent Docker nodes, without Swarm or an overlay. It does not provide HA for Gateway itself, nginx, registry storage, or shared volumes. Metric autoscaling and multiple instances on the same node remain in development.
 
-Storage connections and managed storages with Secure Links are expected in 2.11; managed-database backup/restore and Gateway configuration export for transfer to another instance are expected in 2.12. These are roadmap targets, not available operations. Storage connections and Gateway configuration export are planned for every plan; managed storages and managed-database backup/restore are planned for Personal, Business, and Enterprise.
+Storage connections, managed object storage, managed-database backup/restore, and their private workload links are implemented operations. They remain subject to the configured license, feature entitlement, and the current user storage or database scopes. Gateway configuration export for transfer to another instance remains a separate roadmap item expected in 2.12.
 
 The general Gateway CLI (distinct from the existing Gateway Inference CLI) is expected in 2.13 on every plan. The Bastion / SSH management daemon is expected in 2.14 on Business and Enterprise. The plugin system is unimplemented core infrastructure, not a plan feature; its tentative timing is no earlier than 2.20 and is uncertain.
 

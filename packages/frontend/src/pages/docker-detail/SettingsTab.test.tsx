@@ -127,6 +127,30 @@ describe("docker detail SettingsTab", () => {
     });
   });
 
+  it("keeps settings readable but blocks keyboard mutations during a lifecycle transition", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["docker:containers:edit", "docker:containers:mounts"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    render(
+      <SettingsTab
+        nodeId="node-1"
+        containerId="container-1"
+        transition="stopping"
+        data={{
+          Id: "container-1",
+          Name: "/app",
+          State: { Status: "running", Running: true },
+          Config: { Image: "nginx:latest", Entrypoint: [], Cmd: [] },
+          HostConfig: { PortBindings: {} },
+          Mounts: [],
+        }}
+      />
+    );
+    expect(await screen.findByRole("button", { name: "Attach volume" })).toBeDisabled();
+  });
+
   it("clears mount changes only after the saved mount arrives in the container snapshot", async () => {
     vi.spyOn(api, "recreateWithConfig").mockResolvedValue({});
     vi.spyOn(api, "listManagedVolumeOptions").mockResolvedValue([{ name: "data" }] as never);

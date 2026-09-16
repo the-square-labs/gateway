@@ -158,6 +158,7 @@ describe('managed database binding target runtime', () => {
     const inspect = vi
       .fn()
       .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: true, Status: 'running' } })
+      .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: true, Status: 'running' } })
       .mockResolvedValueOnce({ Id: 'container-new', Name: '/api', State: { Running: true, Status: 'running' } });
     const test = harness({ inspect });
 
@@ -174,12 +175,13 @@ describe('managed database binding target runtime', () => {
     const inspect = vi
       .fn()
       .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: false, Status: 'created' } })
+      .mockResolvedValueOnce({ Id: 'container-old', Name: '/api', State: { Running: false, Status: 'created' } })
       .mockResolvedValueOnce({ Id: 'container-new', Name: '/api', State: { Running: false, Status: 'created' } });
     const test = harness({ inspect });
 
     await expect(test.runtime.remove(database, { ...binding }, credentials, 'user-1')).resolves.toBeUndefined();
 
     expect(test.order.indexOf('network:disconnect')).toBeLessThan(test.order.indexOf('container:update-env'));
-    expect(inspect).toHaveBeenCalledTimes(2);
+    expect(inspect).toHaveBeenCalledTimes(3);
   });
 });

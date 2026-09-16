@@ -943,7 +943,8 @@ export function SettingsTab({
     "h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
   return (
-    <div
+    <fieldset
+      disabled={recreateLoading || !!transition}
       className={`space-y-6 pb-6 ${recreateLoading || !!transition ? "pointer-events-none opacity-60" : ""}`}
     >
       {/* ─── Runtime Settings + Execution (side by side) ────────── */}
@@ -1256,6 +1257,6 @@ export function SettingsTab({
           />
         );
       })()}
-    </div>
+    </fieldset>
   );
 }

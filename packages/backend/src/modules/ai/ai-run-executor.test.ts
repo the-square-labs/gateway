@@ -901,6 +901,38 @@ describe('AIRunExecutor live assistant draft streaming', () => {
     expect(harness.publishClientAction).not.toHaveBeenCalled();
   });
 
+  it('never persists a one-time managed Storage secret in a tool-call record or run progress', async () => {
+    const harness = createExecutorHarness([
+      {
+        type: 'tool_call_start',
+        requestId: 'request-1',
+        id: 'call-1',
+        name: 'manage_managed_storage',
+        arguments: { action: 'create_access_key', managedStorageId: 'storage-1' },
+      },
+      {
+        type: 'tool_result',
+        requestId: 'request-1',
+        id: 'call-1',
+        name: 'manage_managed_storage',
+        result: { accessKey: 'AK', secretKey: 'one-time-storage-secret' },
+      },
+      { type: 'done', requestId: 'request-1' },
+    ]);
+    await executeRun(harness.executor);
+    expect(harness.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'completed',
+        result: { accessKey: 'AK', secretKey: '[REDACTED_ONE_TIME_SECRET]', secretKeyRedacted: true },
+      })
+    );
+    expect(harness.updateSet.mock.calls).not.toEqual(
+      expect.arrayContaining([
+        [expect.objectContaining({ result: expect.objectContaining({ secretKey: 'one-time-storage-secret' }) })],
+      ])
+    );
+  });
+
   it('persists a redacted copy of one-time API token tool results', async () => {
     const harness = createExecutorHarness([
       {

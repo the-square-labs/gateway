@@ -4,7 +4,7 @@ const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * MEBIBYTE;
 
 export interface ManagedStorageCapacity {
-  maxStorageGb: number;
+  maxStorageGb?: number;
   maxCpuCores: number;
   maxMemoryMb: number;
   maxSwapMb: number;
@@ -26,16 +26,16 @@ function tenthsOfUnits(bytes: unknown, unit: number): number {
 
 export function managedStorageCapacity(node: Node | undefined): ManagedStorageCapacity {
   const health = node?.lastHealthReport;
-  const diskFreeBytes = finiteNumber(health?.diskFreeBytes);
-  const mountFreeBytes = health?.diskMounts
-    ?.map((mount) => finiteNumber(mount.freeBytes) ?? 0)
-    .reduce((largest, freeBytes) => Math.max(largest, freeBytes), 0);
+  const storageRootFreeBytes = finiteNumber(health?.managedStorageCapacity?.availableBytes);
   const swapTotalBytes = finiteNumber(health?.swapTotalBytes);
   const swapUsedBytes = finiteNumber(health?.swapUsedBytes);
   const cpuCores = finiteNumber(node?.capabilities.cpuCores);
 
   return {
-    maxStorageGb: tenthsOfUnits(diskFreeBytes ?? mountFreeBytes, GIBIBYTE),
+    maxStorageGb:
+      storageRootFreeBytes === undefined
+        ? undefined
+        : tenthsOfUnits(storageRootFreeBytes, GIBIBYTE),
     maxCpuCores: cpuCores !== undefined && cpuCores > 0 ? cpuCores : 0,
     maxMemoryMb: wholeUnits(health?.systemMemoryAvailableBytes, MEBIBYTE),
     maxSwapMb:
@@ -45,8 +45,28 @@ export function managedStorageCapacity(node: Node | undefined): ManagedStorageCa
   };
 }
 
+/** The same disk size is allocated on every member, so the smallest one is the limit. */
+export function managedStorageClusterCapacity(
+  draft: Pick<ManagedObjectStorageCreateInput, "nodeId" | "memberNodeIds">,
+  nodes: Node[]
+): ManagedStorageCapacity {
+  const ids = draft.memberNodeIds ?? [draft.nodeId];
+  const capacities = ids.map((id) => managedStorageCapacity(nodes.find((node) => node.id === id)));
+  if (capacities.length === 0) return managedStorageCapacity(undefined);
+  return {
+    ...managedStorageCapacity(nodes.find((node) => node.id === draft.nodeId)),
+    maxStorageGb: capacities.every((capacity) => capacity.maxStorageGb !== undefined)
+      ? Math.min(...capacities.map((capacity) => capacity.maxStorageGb!))
+      : undefined,
+  };
+}
+
 function withinLimit(value: number, maximum: number) {
   return maximum <= 0 || value <= maximum;
+}
+
+function withinKnownStorageLimit(value: number, maximum: number | undefined) {
+  return maximum !== undefined && value <= maximum;
 }
 
 export function canDeployManagedStorage(
@@ -63,7 +83,7 @@ export function canDeployManagedStorage(
         new Set(draft.memberNodeIds).size === draft.memberNodeIds.length)) &&
     Number.isFinite(draft.storageSizeGb) &&
     draft.storageSizeGb >= 1 &&
-    withinLimit(draft.storageSizeGb, capacity.maxStorageGb) &&
+    withinKnownStorageLimit(draft.storageSizeGb, capacity.maxStorageGb) &&
     Number.isFinite(draft.cpuCores) &&
     draft.cpuCores >= 0.1 &&
     withinLimit(draft.cpuCores, capacity.maxCpuCores) &&

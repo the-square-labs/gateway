@@ -20,6 +20,10 @@ export class ManagedStorageMetricsProvider {
   constructor(private readonly db: DrizzleClient) {}
 
   async getMetrics(clusterId: string): Promise<ManagedStorageMetrics | null> {
+    return (await this.getSnapshot(clusterId))?.metrics ?? null;
+  }
+
+  async getSnapshot(clusterId: string): Promise<{ timestamp: string | null; metrics: ManagedStorageMetrics } | null> {
     const members = await this.db
       .select({ nodeId: managedStorageClusterMembers.nodeId, memberIndex: managedStorageClusterMembers.memberIndex })
       .from(managedStorageClusterMembers)
@@ -33,15 +37,29 @@ export class ManagedStorageMetricsProvider {
       .from(nodes)
       .where(inArray(nodes.id, nodeIds));
 
-    return buildManagedStorageMetrics(
-      nodeRows.map((row) => ({
-        id: row.id,
-        healthReport: (row.lastHealthReport as MetricsHealthReport | null) ?? null,
-      })),
-      members.map((member) => ({
-        nodeId: member.nodeId,
-        containerName: memberContainerName(clusterId, member.memberIndex),
-      }))
-    );
+    const timestamps = nodeRows.map((row) => row.lastHealthReport?.timestamp);
+    const timestamp =
+      nodeRows.length === nodeIds.length &&
+      timestamps.every(
+        (value): value is number =>
+          typeof value === 'number' && Number.isFinite(value) && value > 0 && value <= Date.now() / 1000 + 60
+      )
+        ? new Date(Math.min(...timestamps) * 1000).toISOString()
+        : null;
+
+    return {
+      timestamp,
+      metrics: buildManagedStorageMetrics(
+        nodeRows.map((row) => ({
+          id: row.id,
+          healthReport: (row.lastHealthReport as MetricsHealthReport | null) ?? null,
+        })),
+        members.map((member) => ({
+          nodeId: member.nodeId,
+          containerName: memberContainerName(clusterId, member.memberIndex),
+          storageMountPathSuffix: `/storage/mounts/${clusterId}-${member.memberIndex}`,
+        }))
+      ),
+    };
   }
 }

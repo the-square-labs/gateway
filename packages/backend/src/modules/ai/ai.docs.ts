@@ -45,6 +45,7 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   sandbox: 'ai:sandbox:use',
   conversations: ['ai:workspace:use', 'mcp:use'],
   databases: 'databases:view',
+  storage: 'storage:view',
   postgres: 'databases:view',
   redis: 'databases:view',
   logging: ['logs:environments:view', 'logs:schemas:view', 'logs:read', 'logs:manage'],

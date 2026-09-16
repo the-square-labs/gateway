@@ -111,6 +111,7 @@ function makeService(dispatchOverrides: Record<string, unknown> = {}, dbOverride
     list: vi.fn().mockResolvedValue([]),
     delete: vi.fn(),
     deleteOwned: vi.fn(),
+    getDecryptedMap: vi.fn(async () => ({ S3_ENDPOINT: 'http://storage-abc:9000', S3_KEY: 'AK', S3_SECRET: 'SK' })),
     getSecretKeys: vi.fn(async () => new Set<string>()),
   };
   let runtime = 0;
@@ -253,6 +254,61 @@ describe('storage binding ownership and target mutations', () => {
     });
     expect(nodeDispatch.sendDockerStorageIamCommand).not.toHaveBeenCalled();
   });
+  it('uses the submitted final Environment draft when replacing an ordinary variable with a secure link', async () => {
+    const { service, dockerManagement } = makeService();
+    dockerManagement.getContainerEnv.mockResolvedValue(['KEEP=value', 'S3_ENDPOINT=legacy-endpoint']);
+    await expect(
+      service.create(CLUSTER_ID, { ...input, targetEnvironment: { KEEP: 'value' } }, 'user-1')
+    ).resolves.toBeDefined();
+    expect(dockerManagement.updateContainerEnv).toHaveBeenCalledWith(
+      TARGET_NODE_ID,
+      'app-container',
+      { KEEP: 'value' },
+      expect.arrayContaining(['S3_ENDPOINT']),
+      'user-1'
+    );
+  });
+  it('restores the previous ordinary Environment after a late storage-link failure', async () => {
+    const { service, dockerManagement } = makeService();
+    dockerManagement.getContainerEnv.mockResolvedValue(['KEEP=old', 'S3_ENDPOINT=legacy-endpoint']);
+    const subject = service as unknown as {
+      setStatus: (
+        id: string,
+        status: string,
+        error: string | null,
+        userId: string,
+        accessKeyId?: string
+      ) => Promise<unknown>;
+    };
+    const originalSetStatus = subject.setStatus.bind(service);
+    subject.setStatus = vi.fn(async (id, status, error, userId, accessKeyId) => {
+      if (status === 'ready') throw new Error('status persistence failed');
+      return originalSetStatus(id, status, error, userId, accessKeyId);
+    });
+
+    await expect(
+      service.create(CLUSTER_ID, { ...input, targetEnvironment: { KEEP: 'new' } }, 'user-1')
+    ).rejects.toMatchObject({
+      code: 'MANAGED_STORAGE_BINDING_FAILED',
+    });
+
+    expect(dockerManagement.updateContainerEnv).toHaveBeenNthCalledWith(
+      1,
+      TARGET_NODE_ID,
+      'app-container',
+      { KEEP: 'new' },
+      expect.arrayContaining(['S3_ENDPOINT']),
+      'user-1'
+    );
+    expect(dockerManagement.updateContainerEnv).toHaveBeenNthCalledWith(
+      2,
+      TARGET_NODE_ID,
+      'app-container',
+      { KEEP: 'old' },
+      expect.arrayContaining(['S3_ENDPOINT', 'S3_KEY', 'S3_SECRET']),
+      'user-1'
+    );
+  });
   it('uses the storage-specific deployment network path and compensates owned secrets on rollout failure', async () => {
     const { service, dockerSecrets, dockerDeployments } = makeService();
     dockerDeployments.setManagedStorageBindingNetwork.mockRejectedValueOnce(new Error('rollout failed'));
@@ -282,6 +338,177 @@ describe('storage binding ownership and target mutations', () => {
       'user-1'
     );
     expect(dockerSecrets.delete).not.toHaveBeenCalled();
+  });
+  it('restores deployment secrets and network without revoking route or IAM when rollback cannot remove the target', async () => {
+    const { service, dockerSecrets, dockerDeployments, nodeDispatch, relayPolicy } = makeService();
+    dockerDeployments.setManagedStorageBindingNetwork.mockImplementation(async (_node, _target, _network, attached) => {
+      if (!attached) throw new Error('rollback rollout failed');
+    });
+    const subject = service as unknown as { setStatus: (...args: unknown[]) => Promise<unknown> };
+    const originalSetStatus = subject.setStatus.bind(service);
+    subject.setStatus = vi.fn(async (_id, status, ...rest) => {
+      if (status === 'ready') throw new Error('late status persistence failed');
+      return originalSetStatus(_id, status, ...rest);
+    });
+
+    await expect(service.create(CLUSTER_ID, { ...input, targetType: 'deployment' }, 'user-1')).rejects.toMatchObject({
+      code: 'MANAGED_STORAGE_BINDING_FAILED',
+    });
+
+    expect(dockerSecrets.getDecryptedMap.mock.invocationCallOrder[0]).toBeLessThan(
+      dockerSecrets.deleteOwned.mock.invocationCallOrder[0]!
+    );
+    expect(dockerSecrets.create).toHaveBeenCalledWith(
+      TARGET_NODE_ID,
+      'deployment:app-container',
+      'S3_KEY',
+      'AK',
+      'user-1',
+      expect.objectContaining({ managedOwner: expect.stringMatching(/^storage-binding:/) })
+    );
+    expect(dockerDeployments.setManagedStorageBindingNetwork).toHaveBeenLastCalledWith(
+      TARGET_NODE_ID,
+      'app-container',
+      expect.any(String),
+      true,
+      'user-1',
+      {}
+    );
+    expect(relayPolicy.revokeOwner).not.toHaveBeenCalled();
+    expect(nodeDispatch.sendDockerStorageIamCommand.mock.calls.some(([, action]) => action === 'remove_key')).toBe(
+      false
+    );
+  });
+  it('restores standalone secrets and network when target disconnect fails', async () => {
+    const { service, dockerSecrets, nodeDispatch, relayPolicy } = makeService({
+      sendDockerNetworkCommand: vi.fn(async (_node, action) =>
+        action === 'disconnect' ? { success: false, error: 'disconnect failed', detail: '' } : ok
+      ),
+    });
+    const subject = service as unknown as { setStatus: (...args: unknown[]) => Promise<unknown> };
+    const originalSetStatus = subject.setStatus.bind(service);
+    subject.setStatus = vi.fn(async (_id, status, ...rest) => {
+      if (status === 'ready') throw new Error('late status persistence failed');
+      return originalSetStatus(_id, status, ...rest);
+    });
+    const dockerManagement = (
+      service as unknown as { dockerManagement: { inspectUserContainer: ReturnType<typeof vi.fn> } }
+    ).dockerManagement;
+    vi.spyOn(service as any, 'updateTargetEnvironment').mockResolvedValue(undefined);
+    dockerManagement.inspectUserContainer.mockResolvedValue({
+      Name: '/app-container',
+      Id: 'runtime',
+      State: { Status: 'running' },
+      NetworkSettings: { Networks: { 'gateway-storage-abc': {} } },
+    });
+
+    await expect(service.create(CLUSTER_ID, input, 'user-1')).rejects.toMatchObject({
+      code: 'MANAGED_STORAGE_BINDING_FAILED',
+    });
+
+    expect(nodeDispatch.sendDockerNetworkCommand).toHaveBeenCalledWith(TARGET_NODE_ID, 'connect', {
+      networkId: expect.any(String),
+      containerId: 'app-container',
+    });
+    expect(dockerSecrets.create.mock.calls.filter(([, , key]) => key === 'S3_SECRET')).toHaveLength(2);
+    expect(relayPolicy.revokeOwner).not.toHaveBeenCalled();
+    expect(nodeDispatch.sendDockerStorageIamCommand.mock.calls.some(([, action]) => action === 'remove_key')).toBe(
+      false
+    );
+  });
+  it('runs every restore step after a late container recreation convergence failure', async () => {
+    const { service, dockerSecrets, nodeDispatch } = makeService();
+    const inner = service as unknown as {
+      removeTargetBinding: (binding: unknown, user: string) => Promise<void>;
+      updateTargetEnvironment: ReturnType<typeof vi.fn>;
+      dockerManagement: { inspectUserContainer: ReturnType<typeof vi.fn> };
+    };
+    inner.dockerManagement.inspectUserContainer.mockResolvedValue({
+      Name: '/app-container',
+      Id: 'runtime',
+      State: { Status: 'running' },
+      NetworkSettings: { Networks: { 'gateway-storage-test': {} } },
+    });
+    vi.spyOn(inner, 'updateTargetEnvironment')
+      .mockRejectedValueOnce(new Error('late convergence failed'))
+      .mockResolvedValueOnce(undefined);
+
+    await expect(
+      inner.removeTargetBinding(
+        {
+          id: 'binding',
+          targetType: 'container',
+          targetNodeId: TARGET_NODE_ID,
+          targetResourceId: 'app-container',
+          networkName: 'gateway-storage-test',
+          environment: input.environment,
+        },
+        'user'
+      )
+    ).rejects.toThrow('late convergence failed');
+
+    expect(nodeDispatch.sendDockerNetworkCommand).toHaveBeenLastCalledWith(TARGET_NODE_ID, 'connect', {
+      networkId: 'gateway-storage-test',
+      containerId: 'app-container',
+    });
+    expect(dockerSecrets.create).toHaveBeenCalledWith(
+      TARGET_NODE_ID,
+      'app-container',
+      'S3_SECRET',
+      'SK',
+      'user',
+      expect.objectContaining({ managedOwner: 'storage-binding:binding' })
+    );
+    expect(inner.updateTargetEnvironment).toHaveBeenCalledTimes(2);
+  });
+  it('restores the original running state when the failed replacement is only created', async () => {
+    const { service, nodeDispatch } = makeService();
+    const inner = service as unknown as {
+      removeTargetBinding: (binding: unknown, user: string) => Promise<void>;
+      updateTargetEnvironment: (...args: unknown[]) => Promise<void>;
+      dockerManagement: { inspectUserContainer: ReturnType<typeof vi.fn> };
+    };
+    const originalUpdate = inner.updateTargetEnvironment.bind(service);
+    const update = vi
+      .spyOn(inner, 'updateTargetEnvironment')
+      .mockRejectedValueOnce(new Error('late convergence failed'))
+      .mockImplementationOnce(originalUpdate);
+    inner.dockerManagement.inspectUserContainer
+      .mockResolvedValueOnce({
+        Name: '/app-container',
+        Id: 'old-running',
+        State: { Status: 'running' },
+        NetworkSettings: { Networks: { 'gateway-storage-test': {} } },
+      })
+      .mockResolvedValueOnce({ Name: '/app-container', Id: 'replacement', State: { Status: 'created' } })
+      .mockResolvedValueOnce({ Name: '/app-container', Id: 'replacement', State: { Status: 'created' } })
+      .mockResolvedValueOnce({ Name: '/app-container', Id: 'replacement', State: { Status: 'running' } });
+
+    await expect(
+      inner.removeTargetBinding(
+        {
+          id: 'binding',
+          targetType: 'container',
+          targetNodeId: TARGET_NODE_ID,
+          targetResourceId: 'app-container',
+          networkName: 'gateway-storage-test',
+          environment: input.environment,
+        },
+        'user'
+      )
+    ).rejects.toThrow('late convergence failed');
+
+    expect(update).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.anything(),
+      'user',
+      expect.anything(),
+      'running'
+    );
+    expect(nodeDispatch.sendDockerContainerCommand).toHaveBeenCalledWith(TARGET_NODE_ID, 'start', {
+      containerId: 'replacement',
+    });
   });
   it('applies the ordinary Environment draft while protecting managed names', async () => {
     const { service, dockerManagement } = makeService();

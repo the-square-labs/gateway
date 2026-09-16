@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     deleteProxyHost: vi.fn(),
     create: vi.fn(),
     present: vi.fn(),
+    createAdditionalSecureLink: vi.fn(),
   },
   licensePolicy: {
     requireFeature: vi.fn(),
@@ -133,6 +134,46 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(detailBody.data).not.toHaveProperty('rawConfig');
     expect(detailBody.data).not.toHaveProperty('rawConfigEnabled');
     expectNoRawFields(detailBody);
+  });
+
+  it('accepts a managed S3 destination without Docker fields and forwards effective scopes', async () => {
+    const managedStorageId = '11111111-1111-4111-8111-111111111111';
+    mocks.proxyService.createAdditionalSecureLink.mockResolvedValue({ id: 'binding-1' });
+    const response = await jsonRequest('POST', '/host-1/additional-secure-links', {
+      name: 'storage',
+      upstreamKind: 'managed_storage',
+      managedStorageId,
+    });
+    expect(response.status).toBe(201);
+    expect(mocks.proxyService.createAdditionalSecureLink).toHaveBeenCalledWith(
+      'host-1',
+      {
+        name: 'storage',
+        upstreamKind: 'managed_storage',
+        managedStorageId,
+        forwardScheme: 'http',
+      },
+      'user-1',
+      mocks.scopes
+    );
+  });
+
+  it.each([
+    { name: 'storage', upstreamKind: 'managed_storage' },
+    {
+      name: 'docker',
+      upstreamKind: 'docker_container',
+      dockerNodeId: '11111111-1111-4111-8111-111111111111',
+      dockerContainerName: 'api',
+    },
+  ])('rejects incomplete additional Secure Link inputs %j', async (body) => {
+    const response = await createApp().request('/host-1/additional-secure-links', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    expect(response.status).toBe(400);
+    expect(mocks.proxyService.createAdditionalSecureLink).not.toHaveBeenCalled();
   });
 
   it('requires advanced scope when creating an Additional Route with advanced config', async () => {

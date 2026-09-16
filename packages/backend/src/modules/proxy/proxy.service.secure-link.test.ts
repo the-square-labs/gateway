@@ -23,6 +23,16 @@ vi.mock('@/db/schema/index.js', () => ({
   },
   proxyAdditionalSecureLinks: {
     status: 'proxy_additional_secure_links.status',
+    upstreamKind: 'proxy_additional_secure_links.upstream_kind',
+    dockerNodeId: 'proxy_additional_secure_links.docker_node_id',
+    dockerContainerName: 'proxy_additional_secure_links.docker_container_name',
+    targetContainer: 'proxy_additional_secure_links.target_container',
+    generation: 'proxy_additional_secure_links.generation',
+  },
+  proxyAdditionalRoutes: {
+    targetKind: 'proxy_additional_routes.target_kind',
+    dockerNodeId: 'proxy_additional_routes.docker_node_id',
+    dockerContainerName: 'proxy_additional_routes.docker_container_name',
   },
 }));
 
@@ -125,6 +135,34 @@ describe('ProxyService Nginx template reconciliation', () => {
         isBuiltin: false,
       })
     );
+  });
+
+  it('durably stages every renamed Docker reference before forced reconciliation', async () => {
+    const host = { id: 'host-1', domainNames: ['example.com'] };
+    const writes: Array<Record<string, unknown>> = [];
+    const update = vi.fn(() => ({
+      set: vi.fn((values: Record<string, unknown>) => {
+        writes.push(values);
+        return {
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([host]) })),
+        };
+      }),
+    }));
+    const db = {
+      transaction: vi.fn((callback: (tx: unknown) => unknown) => callback({ update })),
+    } as any;
+    const service = new ProxyService(db, {} as any, {} as any, {} as any, {} as any, {} as any);
+    const queue = vi.spyOn(service as any, 'queueDockerReconciliation').mockImplementation(() => undefined);
+
+    await (service as any).updateRenamedContainerReferences('docker-node', 'old-app', 'new-app');
+
+    expect(writes[0]).toEqual(
+      expect.objectContaining({ dockerContainerName: 'new-app', secureLinkStatus: expect.anything() })
+    );
+    expect(writes[2]).toEqual(
+      expect.objectContaining({ dockerContainerName: 'new-app', status: 'provisioning', generation: expect.anything() })
+    );
+    expect(queue).toHaveBeenCalledWith(true);
   });
 });
 

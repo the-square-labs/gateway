@@ -658,6 +658,27 @@ export class RelayPolicyService {
     return routeId;
   }
 
+  async ensureManagedStorageProxySecureLink(
+    linkId: string,
+    clusterId: string,
+    sourceNodeId: string,
+    targetNodeId: string
+  ): Promise<string> {
+    const endpointId = await this.ensureManagedStorageEndpoint(clusterId, targetNodeId);
+    const source = await this.grantIssuer.requireNodeIdentity(sourceNodeId);
+    const routeId = await this.ensureRoute(
+      'proxy_host_secure_link',
+      linkId,
+      'daemon',
+      sourceNodeId,
+      source.certificateFingerprint,
+      endpointId
+    );
+    await this.syncSnapshot();
+    await Promise.all([this.syncNodeGrants(sourceNodeId), this.syncNodeGrants(targetNodeId)]);
+    return routeId;
+  }
+
   private async getOwnedRouteRuntime(ownerKind: string, ownerId: string): Promise<RelayRouteRuntime | null> {
     const [route] = await this.db
       .select({ id: relayRoutes.id })

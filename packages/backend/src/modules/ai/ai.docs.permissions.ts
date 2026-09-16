@@ -233,6 +233,20 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | databases:credentials:reveal | Reveal explicitly requested external or managed owner/published credentials (resource-scopable); does not reveal per-binding injected secrets by default |
 | databases:folders:manage | Manage database folders and placement |
 
+### Storage
+| Scope | Description |
+|-------|-------------|
+| storage:view | List and view external or managed storage connections (resource-scopable) |
+| storage:create | Create external connections or managed object storage on an allowed folder/node |
+| storage:edit | Edit/test connections and manage managed-storage lifecycle (resource-scopable) |
+| storage:delete | Delete external or managed storage resources (resource-scopable) |
+| storage:credentials:reveal | Reveal explicitly requested stored storage credentials or managed-storage root credentials (resource-scopable) |
+| storage:iam | Create/remove scoped IAM keys and create/delete managed-storage workload links (resource-scopable); target workload scopes are also required for links |
+| storage:objects:read | List buckets/objects, read metadata or objects, and create signed GET URLs (resource-scopable) |
+| storage:objects:write | Upload objects, create prefixes, and delete objects (resource-scopable) |
+| storage:objects:admin | Create or delete buckets (resource-scopable) |
+| storage:folders:manage | Manage storage folders and placement |
+
 ### Logging
 | Scope | Description |
 |-------|-------------|

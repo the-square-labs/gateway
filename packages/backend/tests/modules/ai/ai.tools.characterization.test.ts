@@ -42,8 +42,8 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 255,
-      digest: 'b099e840bb693cf01e96c51feee3284d624d7116fe2733263352154f2e274adb',
+      count: 256,
+      digest: '0ce003875d0e3ba7c22f12e22763718d472bedc04109d96976014d305cd48463',
       categoryCounts: {
         Discovery: 6,
         Artifact: 2,
@@ -70,7 +70,7 @@ describe('AI tool registry characterization', () => {
         Documentation: 2,
         Docker: 38,
         Databases: 12,
-        Storage: 5,
+        Storage: 6,
         GitLab: 26,
         GitHub: 12,
         Git: 6,
@@ -89,8 +89,8 @@ describe('AI tool registry characterization', () => {
         Planning: 9,
       },
       destructive: {
-        count: 137,
-        digest: '4780f1f9c12629c169c86f07425a3c528b98994219ad3775ec5b95ad9fd91fd8',
+        count: 138,
+        digest: 'ddb467bccbc5c05ef4ff0f90139117871f41dc9f264f1bac95c1235a2068f37f',
       },
       invalidationMapDigest: '8e085cf6d990249d5a3b196675af430bc20e8fed576341f4b601bc5f64ea974d',
     });

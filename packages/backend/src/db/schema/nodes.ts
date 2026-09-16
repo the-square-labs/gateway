@@ -84,6 +84,7 @@ export interface NodeHealthReport {
   cpuPercent: number;
   memoryBytes: number;
   diskFreeBytes: number;
+  managedStorageCapacity?: { storageRoot: string; availableBytes: number };
   timestamp: number;
   // System
   loadAverage1m: number;

@@ -974,12 +974,22 @@ export class DockerDeploymentService {
     networkName: string,
     enabled: boolean,
     userId: string | null,
-    forceRollout = false
+    forceRollout = false,
+    targetEnvironment?: Record<string, string>
   ) {
     if (!/^gateway-db-[a-z0-9-]{8,64}$/.test(networkName)) {
       throw new AppError(400, 'INVALID_MANAGED_DATABASE_NETWORK', 'Invalid managed database network');
     }
-    return this.setManagedBindingNetwork(nodeId, deploymentId, networkName, enabled, userId, forceRollout, 'database');
+    return this.setManagedBindingNetwork(
+      nodeId,
+      deploymentId,
+      networkName,
+      enabled,
+      userId,
+      forceRollout,
+      'database',
+      targetEnvironment
+    );
   }
 
   async setManagedStorageBindingNetwork(
@@ -1026,15 +1036,17 @@ export class DockerDeploymentService {
     if (unchanged && !forceRollout && targetEnvironment === undefined) {
       return current;
     }
-    if (!unchanged || targetEnvironment !== undefined) {
+    const desiredConfig = {
+      ...current.desiredConfig,
+      networks,
+      ...(targetEnvironment !== undefined ? { env: targetEnvironment } : {}),
+    };
+    const persisted = !unchanged || targetEnvironment !== undefined;
+    if (persisted) {
       await this.db
         .update(dockerDeployments)
         .set({
-          desiredConfig: {
-            ...current.desiredConfig,
-            networks,
-            ...(targetEnvironment !== undefined ? { env: targetEnvironment } : {}),
-          },
+          desiredConfig,
           updatedById: userId,
           updatedAt: new Date(),
         })
@@ -1043,7 +1055,17 @@ export class DockerDeploymentService {
     this.emit('updated', deploymentId, nodeId, {
       [kind === 'storage' ? 'managedStorageNetwork' : 'managedDatabaseNetwork']: enabled ? 'attached' : 'detached',
     });
-    return this.deploy(nodeId, deploymentId, {}, userId, `managed_${kind}_binding`);
+    try {
+      return await this.deploy(nodeId, deploymentId, {}, userId, `managed_${kind}_binding`);
+    } catch (error) {
+      if (persisted) {
+        await this.db
+          .update(dockerDeployments)
+          .set({ desiredConfig: current.desiredConfig, updatedById: userId, updatedAt: new Date() })
+          .where(and(eq(dockerDeployments.id, deploymentId), eq(dockerDeployments.desiredConfig, desiredConfig)));
+      }
+      throw error;
+    }
   }
 
   async deploy(

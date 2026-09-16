@@ -167,7 +167,8 @@ Ordinary list_routes and get_route responses omit rawConfig and rawConfigEnabled
 ## Additional Routes And Secure Links
 - Use \`manage_additional_route\` for managed literal path-prefix locations inside a Route. Pass the parent \`routeId\`; use \`additionalRouteId\` for get/update/retry/delete. Targets may be manual, standalone Docker containers, Compose services, Docker deployments, or a ready Pages Tag. Compose targets use \`dockerComposeProjectId\` plus \`dockerComposeServiceName\` and are re-resolved after container recreation. Docker targets automatically create a route-owned Secure Link binding; edit or delete that binding through the Additional Route.
 - Custom proxy templates support Additional Routes when the template includes \`{{{renderAdditionalRoutes additionalRoutes id accessList rateLimitEnabled rateLimitBurst connectionsPerIp}}}\` inside the intended \`server\` block.
-- Use \`manage_additional_secure_link\` for independent Docker bindings referenced by advanced nginx config and pass the parent \`routeId\`. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
+- Use \`manage_additional_secure_link\` for independent bindings referenced by a Route advanced nginx configuration and pass the parent \`routeId\`. Docker bindings use \`upstreamKind: "docker_container"\` or \`"docker_deployment"\`; a managed S3 destination uses \`upstreamKind: "managed_storage"\` plus the stable \`managedStorageId\`. The managed-storage destination reaches S3 through the private relay and does not use a shared Docker network, a published storage port, or the cluster root key. The main Route upstream picker is a separate contract and does not select this destination.
+- Do not confuse ingress Route Secure Links with private database or storage workload links. Ingress Secure Links connect nginx Route traffic to a selected destination and are managed through the Route/Additional Secure Link tools. Database and managed-storage links provision private workload connectivity and scoped injected credentials; managed-storage link creation/deletion requires \`storage:iam\` plus the target workload scopes. Its list also reports route-owned bindings for visibility, but those cannot be deleted independently.
 
 ## Nginx Config
 Each route generates an nginx server block on its selected ingress node. Changes are applied by reloading nginx.
@@ -434,13 +435,14 @@ Nodes are remote servers running Gateway daemons. Each daemon type manages diffe
 - **monitoring**: Lightweight system monitoring agent — reports CPU, memory, disk, load, network. No nginx required. Useful for any server you want to monitor.
 - **docker**: Container runtime node — manages Docker containers, deployments, images, volumes, and networks. Requires Docker Engine. Provides console, files, logs, environment, and secret management.
 - **builder**: Restricted Build Worker profile of the existing \`docker-daemon\`. It has no Docker Engine socket and accepts only Git build, cancellation, and registry-binding commands. It supervises dedicated BuildKit and containerd services on a separate worker host or outer unprivileged container and must advertise execution, dedicated-runtime, and enforced-resource-profile capabilities before Repository mode is admitted.
-- **databases**: Restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse only. It runs as root, validates ext4 image storage before enrollment, and rejects generic Docker workloads.
+- **storage**: Unified restricted docker-daemon profile for Gateway-managed Postgres, Redis, ClickHouse, MinIO/object storage, and bounded backup jobs. It runs as root, validates ext4 image storage before enrollment, advertises both managed-database and managed-storage capabilities, and rejects generic Docker workloads.
+- **databases**: Legacy restricted docker-daemon profile for Gateway-managed Postgres, Redis, and ClickHouse. It remains database-only; new unified stateful capacity belongs on a Storage node.
 - **relay**: Secure Link Relay Pool node — runs the signed relay supervisor and worker on a separate physical host. It uses the standard node enrollment lifecycle, requires an advertised address reachable by participating managed hosts, and appears in the Relay Pool only after enrollment succeeds.
 
 ## How to Enroll a New Node (Step by Step)
 
 ### Step 1: Create the node in Gateway UI
-Go to **Nodes** page → click **Add Node** → select the node type (nginx, docker, builder, databases, monitoring, or relay) → set a display name → click **Create Node**. Relay nodes also require the address advertised to participating hosts. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands. **Settings → Relay → Add relay node** opens the same flow with Relay preselected.
+Go to **Nodes** page → click **Add Node** → select the node type (nginx, docker, builder, storage, databases, monitoring, or relay) → set a display name → click **Create Node**. Relay nodes also require the address advertised to participating hosts. This generates a **one-time enrollment token**, the Gateway gRPC certificate fingerprint, and setup commands. **Settings → Relay → Add relay node** opens the same flow with Relay preselected.
 
 ### Step 2: Run the setup script on the target server
 The UI shows ready-to-copy commands. Run one of these on the target server as root:
@@ -459,7 +461,7 @@ curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download
 
 For **builder** nodes, use the same installer with \`--mode builder\`. The host must use systemd. The installer downloads pinned upstream releases of \`containerd\`, \`buildkitd\`, \`buildctl\`, \`runc\`, CNI plugins, \`syft\`, and \`grype\`, verifies their embedded SHA-256 checksums, and installs required system packages such as \`git\` and \`iptables\`. It fails closed when the runtime is incomplete; do not add a Docker socket or convert it to a generic Docker profile as a workaround.
 
-For **database** nodes, run setup-database-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. The interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; database nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
+For **storage** nodes, run setup-storage-node.sh with the generated Gateway address, enrollment token, and certificate fingerprint. It uses the same fixed-size ext4 storage preflight as the database installer, but enrolls the unified Storage profile with managed-database and managed-storage capabilities. For legacy **database** nodes, run setup-database-node.sh; they remain database-only. In either case, the interactive installer selects an eligible local storage root before enrollment. For automation, pass --storage-root <path> and --yes; stateful nodes always run the restricted docker-daemon profile as root. Before enrollment, the installer verifies the local Docker Engine and the complete fixed-size ext4 image lifecycle, including loop attach, mount/write, growth, resize, unmount, and detach. An LXC host must receive loop-control, a loop-device pool, and mount permission from its outer host; there is no unbounded-volume fallback.
 
 For **monitoring** nodes:
 \`\`\`bash
@@ -486,7 +488,7 @@ The node status changes from **pending** to **online** in the Nodes list once th
 - manage_node_file: manage node filesystem paths. This tool is browser-session-only and is not available to MCP tokens.
 
 ### Alternative: Manual installation
-If you cannot use the setup script, you can install manually. Database nodes are the exception: they use docker-daemon in its databases profile and require the database installer storage preflight.
+If you cannot use the setup script, you can install manually. Storage and database nodes are the stateful exceptions: they use the restricted docker-daemon profiles and require the verified storage preflight.
 1. Download the daemon binary and place it at \`/usr/local/bin/<type>-daemon\`
 2. Run: \`<type>-daemon install --gateway <host>:9443 --token <token> --gateway-cert-sha256 sha256:<gateway-cert-fingerprint>\`
    This creates the config file and systemd service automatically.

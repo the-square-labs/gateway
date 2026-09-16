@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/moby/moby/api/types/container"
@@ -140,14 +139,6 @@ type managedStorageRecord struct {
 	DesiredRunning  bool   `json:"desiredRunning"`
 	Removed         bool   `json:"removed"`
 	OperationID     string `json:"operationId"`
-}
-
-type managedStorageManager struct {
-	client  *Client
-	logger  *slog.Logger
-	root    string
-	reserve int64
-	mu      sync.Mutex
 }
 
 func newManagedStorageManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedStorageManager, error) {

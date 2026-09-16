@@ -1,7 +1,48 @@
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import { ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 describe('ProxySecureLinkService migration rollback', () => {
+  it.each([
+    false,
+    true,
+  ])('does not settle or revoke a newer generation after rename during provisioning (%s)', async (fail) => {
+    const host = { id: 'host' } as any;
+    const binding = {
+      id: 'binding',
+      proxyHostId: 'host',
+      generation: 3,
+      status: 'provisioning',
+      upstreamKind: 'docker_container',
+      sourceNodeId: 'nginx',
+      dockerNodeId: 'docker',
+      forwardScheme: 'http',
+    };
+    let current = binding;
+    const where = vi.fn((condition) => {
+      const sql = new PgDialect().sqlToQuery(condition);
+      expect(sql.sql).toContain('"generation" =');
+      expect(sql.params).toContain(3);
+      return { returning: vi.fn().mockResolvedValue([]) };
+    });
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn(async () => current) } },
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where })) })),
+    };
+    const relay = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() };
+    const service = new ProxySecureLinkService(db as never, {} as never, relay as never, 'image');
+    vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'probeSecureLink').mockImplementation(async () => {
+      current = { ...binding, generation: 4 };
+      if (fail) throw new Error('old target disappeared');
+      return { httpStatus: 200 };
+    });
+    expect(await (service as any).createAdditionalFromExisting(host, binding.id)).toEqual(current);
+    expect(relay.revokeOwner).not.toHaveBeenCalled();
+    if (fail) expect(db.update).not.toHaveBeenCalled();
+    else expect(where).toHaveBeenCalledOnce();
+  });
   it('removes an Availability member runtime only after the proxy config excludes it', async () => {
     const order: string[] = [];
     const host = { id: '11111111-1111-4111-8111-111111111111' } as any;
@@ -1358,5 +1399,171 @@ describe('ProxySecureLinkService migration rollback', () => {
     expect(updatedValues.at(-1)).toEqual(
       expect.objectContaining({ dockerNodeId: null, secureLinkGeneration: 0, secureLinkStatus: 'legacy' })
     );
+  });
+
+  it.each([false, true])('rechecks managed Storage admission under the deletion lock (%s)', async (deleting) => {
+    const order: string[] = [];
+    const target = {
+      managedStorageId: 'storage-cluster',
+      nodeId: 'storage-node',
+      container: 'storage',
+      network: '',
+      applicationPort: 9000,
+      targetPort: 9000,
+      forwardScheme: 'http',
+    };
+    const values = vi.fn((value) => ({ returning: vi.fn(async () => [{ id: 'binding-1', ...value }]) }));
+    const tx = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            for: vi.fn(async () => {
+              order.push('locked');
+              return [{ id: 'storage-cluster' }];
+            }),
+          })),
+        })),
+      })),
+      insert: vi.fn(() => ({ values })),
+    };
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(null) } },
+      transaction: vi.fn(async (run) => run(tx)),
+    };
+    const service = new ProxySecureLinkService(db as never, {} as never, {} as never, '');
+    vi.spyOn(service as any, 'nodesSupportSecureLinks').mockResolvedValue(true);
+    vi.spyOn(service as any, 'emitAdditionalState').mockReturnValue(undefined);
+    vi.spyOn(service as any, 'createAdditionalFromExisting').mockResolvedValue({});
+    const resolve = vi
+      .spyOn(service as any, 'resolveAdditionalTarget')
+      .mockResolvedValueOnce(target)
+      .mockImplementationOnce(async () => {
+        expect(order).toEqual(['locked']);
+        if (deleting) throw new Error('Storage deletion already claimed');
+        return { ...target, forwardScheme: 'https' };
+      });
+    const input = { name: 'assets', upstreamKind: 'managed_storage' as const, managedStorageId: 'storage-cluster' };
+    const run = service.createAdditional({ id: 'host', type: 'proxy', nodeId: 'nginx' } as any, input, [
+      'storage:view',
+    ]);
+    if (deleting) {
+      await expect(run).rejects.toThrow('Storage deletion already claimed');
+      expect(values).not.toHaveBeenCalled();
+    } else {
+      await expect(run).resolves.toMatchObject({ managedStorageId: 'storage-cluster', forwardScheme: 'https' });
+    }
+    expect(resolve).toHaveBeenLastCalledWith(input, ['storage:view'], true, tx);
+  });
+
+  it('derives a managed-storage Additional Secure Link from the ready canonical storage identity', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([
+              {
+                id: 'storage-cluster',
+                nodeId: 'storage-node',
+                status: 'ready',
+                tlsEnabled: true,
+                objectStorageConnectionId: 'canonical-storage',
+              },
+            ]),
+          })),
+        })),
+      })),
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+
+    await expect(
+      (service as any).resolveAdditionalTarget(
+        { name: 'assets', upstreamKind: 'managed_storage', managedStorageId: 'storage-cluster' },
+        ['storage:view:canonical-storage']
+      )
+    ).resolves.toEqual({
+      nodeId: 'storage-node',
+      network: '',
+      container: 'managed-storage-storage-cluster',
+      applicationPort: 9000,
+      targetPort: 9000,
+      forwardScheme: 'https',
+      managedStorageId: 'storage-cluster',
+    });
+
+    await expect(
+      (service as any).resolveAdditionalTarget({
+        name: 'assets',
+        upstreamKind: 'managed_storage',
+        managedStorageId: 'storage-cluster',
+      })
+    ).rejects.toThrow('Viewing the selected managed storage is required');
+  });
+
+  it('reconciles an active standalone Additional Secure Link instead of skipping it', async () => {
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: '11111111-1111-4111-8111-111111111111',
+      purpose: 'user_managed',
+      upstreamKind: 'docker_container',
+      status: 'active',
+      dockerNodeId: 'docker-node',
+      sourceNodeId: 'nginx-node',
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
+    } as any;
+    const db = {
+      query: {
+        proxyAdditionalSecureLinks: { findMany: vi.fn().mockResolvedValue([binding]) },
+        proxyHosts: { findFirst: vi.fn().mockResolvedValue({ id: binding.proxyHostId }) },
+      },
+    } as any;
+    const service = new ProxySecureLinkService(db, {} as any, {} as any, 'connector@sha256:test');
+    const reconcile = vi.spyOn(service as any, 'reconcileActiveAdditional').mockResolvedValue(undefined);
+
+    await expect(service.reconcileAdditionalLifecycle()).resolves.toBe(false);
+
+    expect(reconcile).toHaveBeenCalledWith({ id: binding.proxyHostId }, binding);
+  });
+
+  it('uses the relay storage endpoint and never dispatches a Docker target for a storage binding', async () => {
+    const host = { id: '11111111-1111-4111-8111-111111111111' } as any;
+    const binding = {
+      id: '22222222-2222-4222-8222-222222222222',
+      proxyHostId: host.id,
+      status: 'provisioning',
+      upstreamKind: 'managed_storage',
+      managedStorageId: 'storage-cluster',
+      sourceNodeId: 'nginx-node',
+      dockerNodeId: 'storage-node',
+      forwardScheme: 'https',
+    } as any;
+    const active = { ...binding, status: 'active' };
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn().mockResolvedValue(binding) } },
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([active]) })),
+        })),
+      })),
+    } as any;
+    const dispatch = {
+      sendProxySecureLinks: vi.fn(),
+      probeProxySecureLink: vi.fn().mockResolvedValue({ httpStatus: 200 }),
+    } as any;
+    const relayPolicy = { ensureManagedStorageProxySecureLink: vi.fn().mockResolvedValue('route-id') } as any;
+    const service = new ProxySecureLinkService(db, dispatch, relayPolicy, 'connector@sha256:test');
+    const syncSource = vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    const syncTarget = vi.spyOn(service as any, 'syncTargetNode').mockResolvedValue(undefined);
+
+    await expect((service as any).createAdditionalFromExisting(host, binding.id)).resolves.toEqual(active);
+
+    expect(relayPolicy.ensureManagedStorageProxySecureLink).toHaveBeenCalledWith(
+      binding.id,
+      binding.managedStorageId,
+      binding.sourceNodeId,
+      binding.dockerNodeId
+    );
+    expect(syncSource).toHaveBeenCalledWith(binding.sourceNodeId);
+    expect(syncTarget).not.toHaveBeenCalled();
   });
 });

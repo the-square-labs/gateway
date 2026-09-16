@@ -13,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
+import { managedStorageClusters } from './managed-storage.js';
 import { nodes } from './nodes.js';
 import { forwardSchemeEnum, proxyHosts, proxyUpstreamKindEnum } from './proxy-hosts.js';
 
@@ -49,6 +50,9 @@ export const proxyAdditionalSecureLinks = pgTable(
     }),
     dockerComposeServiceName: varchar('docker_compose_service_name', { length: 255 }),
     dockerDeploymentId: uuid('docker_deployment_id').references(() => dockerDeployments.id, {
+      onDelete: 'restrict',
+    }),
+    managedStorageId: uuid('managed_storage_id').references(() => managedStorageClusters.id, {
       onDelete: 'restrict',
     }),
     dockerContainerPort: integer('docker_container_port').notNull(),

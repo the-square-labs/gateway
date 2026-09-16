@@ -203,7 +203,8 @@ export interface ProxyAdditionalSecureLink {
   purpose: "user_managed" | "additional_route";
   referenceId: string | null;
   managedRoutePath?: string | null;
-  upstreamKind: "docker_container" | "docker_deployment";
+  upstreamKind: "docker_container" | "docker_deployment" | "managed_storage";
+  managedStorageId?: string | null;
   forwardScheme: ForwardScheme;
   sourceNodeId: string;
   dockerNodeId: string;
@@ -225,14 +226,15 @@ export interface ProxyAdditionalSecureLink {
 
 export interface CreateProxyAdditionalSecureLinkRequest {
   name: string;
-  upstreamKind: "docker_container" | "docker_deployment";
+  upstreamKind: "docker_container" | "docker_deployment" | "managed_storage";
+  managedStorageId?: string | null;
   forwardScheme: ForwardScheme;
   dockerNodeId?: string | null;
   dockerContainerName?: string | null;
   dockerComposeProjectId?: string | null;
   dockerComposeServiceName?: string | null;
   dockerDeploymentId?: string | null;
-  dockerContainerPort: number;
+  dockerContainerPort?: number;
 }
 
 export type ProxyAdditionalRouteTargetKind =

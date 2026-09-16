@@ -76,20 +76,7 @@ func GetDiskMounts() []*pb.DiskMount {
 		mountPoint := fields[1]
 		fsType := fields[2]
 
-		if virtualFilesystems[fsType] {
-			// Exception: include overlay on "/" as the root filesystem
-			if !(fsType == "overlay" && mountPoint == "/") {
-				continue
-			}
-		}
-
-		// Include mounts backed by real block devices OR well-known real filesystem types
-		realFS := map[string]bool{
-			"ext2": true, "ext3": true, "ext4": true, "xfs": true,
-			"btrfs": true, "zfs": true, "ntfs": true, "vfat": true,
-			"overlay": true, // root overlay represents the container's disk
-		}
-		if !strings.HasPrefix(device, "/dev/") && !realFS[fsType] {
+		if !includeDiskMount(device, mountPoint, fsType) {
 			continue
 		}
 
@@ -130,6 +117,18 @@ func GetDiskMounts() []*pb.DiskMount {
 	}
 
 	return mounts
+}
+
+func includeDiskMount(device, mountPoint, filesystem string) bool {
+	if virtualFilesystems[filesystem] && !(filesystem == "overlay" && mountPoint == "/") {
+		return false
+	}
+	realFilesystem := map[string]bool{
+		"ext2": true, "ext3": true, "ext4": true, "xfs": true,
+		"btrfs": true, "zfs": true, "ntfs": true, "vfat": true,
+		"overlay": true, // root overlay represents the container's disk
+	}
+	return strings.HasPrefix(device, "/dev/") || realFilesystem[filesystem]
 }
 
 // GetDiskIO reads /proc/diskstats, sums sectors read/written (*512 for bytes),

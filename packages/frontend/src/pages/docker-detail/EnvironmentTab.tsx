@@ -494,6 +494,7 @@ export function EnvironmentTab({
   // ── Save handler ─────────────────────────────────────────────────
 
   const handleSave = async () => {
+    if (disabled || isSaving) return;
     const vars = rawMode
       ? rawText
           .split("\n")
@@ -873,7 +874,8 @@ export function EnvironmentTab({
         />
       )}
 
-      <div
+      <fieldset
+        disabled={disabled || isSaving}
         className={`${rawMode ? "flex min-h-0 flex-1 flex-col" : "space-y-4"} ${disabled || isSaving ? "pointer-events-none opacity-60" : ""}`}
       >
         {canEdit && (
@@ -1037,7 +1039,7 @@ export function EnvironmentTab({
             description={secretsDescription}
           />
         )}
-      </div>
+      </fieldset>
     </motion.div>
   );
 }

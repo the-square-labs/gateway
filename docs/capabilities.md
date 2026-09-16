@@ -62,7 +62,7 @@ Managed Routes can contain Additional Routes for literal path prefixes such as `
 
 The AI Workspace and remote MCP Ingress route tools use the same managed-upstream contract as the Console and REST API: root Routes can target manual addresses, standalone Docker containers, Compose services, Docker deployments, or ready Pages Tags, and `set_route_maintenance` uses the canonical maintenance lifecycle instead of disabling or rewriting a Route.
 
-Additional Secure Link Bindings are separate user-managed Docker bindings intended for upstreams referenced from advanced nginx config. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
+Additional Secure Link Bindings are separate user-managed bindings to Docker workloads or ready managed Object Storage, intended for upstreams referenced from advanced nginx config. Managed S3 destinations use the stable storage identity and private relay without a shared Docker network or published S3 port; creating or retrying one requires Route edit and canonical Storage view access. S3 authentication remains the caller's responsibility. Remove these bindings before deleting their storage. Route-owned bindings remain visible in the binding list but cannot be deleted independently. Both lifecycles are available through the scoped Operations Console, AI Workspace, REST/OAuth, and remote MCP Ingress toolset.
 
 ## Relay And Secure Links
 
@@ -212,18 +212,17 @@ Credential reveal and query execution are intentionally separate permissions. Us
 
 ## Storage
 
-Storage connections and managed storages with Secure Links are **expected in 2.11** and are not currently available.
+Gateway supports external storage connections and managed MinIO on Storage nodes. Managed storage is private by default; workload links use a private connector with bucket-scoped credentials, and public S3, FTP, or SFTP listeners require explicit publication.
 
-Planned connection types:
+Supported connection types:
 
 - S3-compatible object storage.
 - Cloudflare R2.
 - MinIO.
 - FTP and FTPS.
 - SFTP.
-- SMB.
 
-Managed-database backup and restore is **expected in 2.12**, after the Storage foundation. These versions are roadmap estimates, not availability guarantees.
+Managed database backups and restores use configured Storage resources. Gateway keeps credentials and link-injected secrets masked outside their dedicated reveal flows.
 
 ## Planned Host Access And CLI
 

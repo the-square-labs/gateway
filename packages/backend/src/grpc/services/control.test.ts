@@ -10,6 +10,7 @@ import {
   mapGpuHealthDevices,
   preserveDockerContainerStateReport,
 } from './control.js';
+import { decodeHealthDiskMounts } from './health-report.js';
 
 vi.mock('@/config/env.js', () => ({
   getEnv: () => ({ APP_VERSION: 'dev' }),
@@ -31,6 +32,42 @@ vi.mock('@/services/daemon-update.service.js', () => ({
 }));
 
 const nodeId = '11111111-1111-4111-8111-111111111111';
+
+describe('decodeHealthDiskMounts', () => {
+  it('extracts the managed storage capacity marker and excludes it from physical mounts', () => {
+    const decoded = decodeHealthDiskMounts([
+      {
+        mountPoint: '/',
+        filesystem: 'ext4',
+        device: '/dev/vda1',
+        totalBytes: '500',
+        usedBytes: '200',
+        freeBytes: '300',
+      },
+      {
+        mountPoint: '/data',
+        filesystem: 'gateway-managed-storage-root',
+        totalBytes: '64',
+        usedBytes: '32',
+        freeBytes: '32',
+      },
+      {
+        mountPoint: '/data/storage/mounts/cluster-0',
+        filesystem: 'ext4',
+        device: '/dev/loop7',
+        totalBytes: '32',
+        usedBytes: '4',
+        freeBytes: '28',
+      },
+    ]);
+
+    expect(decoded.managedStorageCapacity).toEqual({ storageRoot: '/data', availableBytes: 32 });
+    expect(decoded.diskMounts).toEqual([
+      expect.objectContaining({ mountPoint: '/', filesystem: 'ext4' }),
+      expect.objectContaining({ mountPoint: '/data/storage/mounts/cluster-0', device: '/dev/loop7' }),
+    ]);
+  });
+});
 
 function makeDbNode(
   node: null | { type?: string; configVersionHash?: string | null; certificateSerial?: string | null; status?: string }

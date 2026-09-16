@@ -416,20 +416,23 @@ async function manageAdditionalSecureLink(user: User, args: Record<string, unkno
       routeId,
       {
         name: requiredString(args.name),
-        upstreamKind: requiredEnum(args.upstreamKind, ['docker_container', 'docker_deployment']),
-        forwardScheme: requiredEnum(args.forwardScheme, ['http', 'https']),
+        upstreamKind: requiredEnum(args.upstreamKind, ['docker_container', 'docker_deployment', 'managed_storage']),
+        managedStorageId: optionalString(args.managedStorageId),
+        forwardScheme:
+          args.upstreamKind === 'managed_storage' ? 'http' : requiredEnum(args.forwardScheme, ['http', 'https']),
         dockerNodeId: optionalString(args.dockerNodeId),
         dockerContainerName: optionalString(args.dockerContainerName),
         dockerComposeProjectId: optionalString(args.dockerComposeProjectId),
         dockerComposeServiceName: optionalString(args.dockerComposeServiceName),
         dockerDeploymentId: optionalString(args.dockerDeploymentId),
-        dockerContainerPort: requiredNumber(args.dockerContainerPort),
+        dockerContainerPort: args.upstreamKind === 'managed_storage' ? 9000 : requiredNumber(args.dockerContainerPort),
       },
-      user.id
+      user.id,
+      user.scopes
     );
   }
   const bindingId = requiredString(args.bindingId);
-  if (operation === 'retry') return service.retryAdditionalSecureLink(routeId, bindingId, user.id);
+  if (operation === 'retry') return service.retryAdditionalSecureLink(routeId, bindingId, user.id, user.scopes);
   if (operation === 'delete') {
     await service.deleteAdditionalSecureLink(routeId, bindingId, user.id);
     return { success: true };

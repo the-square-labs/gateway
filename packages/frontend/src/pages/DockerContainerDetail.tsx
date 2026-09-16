@@ -111,6 +111,32 @@ export {
   shouldSettleMutationTransition,
 } from "./docker-detail/mutation-transition";
 
+export function isContainerTabDisabled(
+  tab: string,
+  {
+    unavailable,
+    availabilityManaged,
+    transition,
+    stopped,
+  }: {
+    unavailable: boolean;
+    availabilityManaged: boolean;
+    transition: boolean;
+    stopped: boolean;
+  }
+) {
+  if (
+    unavailable &&
+    !availabilityManaged &&
+    ["logs", "console", "files", "stats", "environment", "settings"].includes(tab)
+  )
+    return true;
+  // Only interactive runtime tools require an idle, running container.
+  // Logs, monitoring and configuration remain inspectable during mutations;
+  // configuration controls enforce their own mutation locks.
+  return (tab === "console" || tab === "files") && (transition || stopped);
+}
+
 export async function inspectContainerAfterMutation(
   nodeId: string,
   containerId: string,
@@ -1305,7 +1331,19 @@ export function DockerContainerDetail({
           ? "Container is unavailable or changing state"
           : undefined;
   const currentTransition = runtimeReplacing ? "replacing" : effectiveTransition;
-  const currentBaseState = baseState;
+  const isStopped = availabilityManaged
+    ? !availabilityPolicy?.shouldRun || availabilityServing === 0
+    : baseState !== "running";
+  const isTabDisabled = useCallback(
+    (tab: string) =>
+      isContainerTabDisabled(tab, {
+        unavailable,
+        availabilityManaged,
+        transition: !!currentTransition,
+        stopped: isStopped,
+      }),
+    [unavailable, availabilityManaged, currentTransition, isStopped]
+  );
 
   useEffect(() => {
     if (!composeManaged || composeProjectId || !composeProjectName || !nodeId) {
@@ -1329,49 +1367,22 @@ export function DockerContainerDetail({
     };
   }, [composeManaged, composeProjectId, composeProjectName, nodeId]);
 
-  // Auto-navigate to overview and close popouts when container stops or enters transition
+  // Leave read-only diagnostics open while lifecycle actions run. Only console
+  // and filesystem tools require a stable running process.
   useEffect(() => {
     if (isLoading || !container) return;
-    const needsRunning = unavailable
-      ? new Set([
-          "logs",
-          "console",
-          "files",
-          "stats",
-          "environment",
-          ...(availabilityManaged ? [] : ["settings"]),
-        ])
-      : new Set(["console", "files", "stats", ...(currentTransition ? ["logs"] : [])]);
-    const shouldDisable = unavailable || currentBaseState !== "running" || !!currentTransition;
-    if (!shouldDisable) return;
-
-    if (needsRunning.has(activeTab)) {
+    if (isTabDisabled(activeTab)) {
       setActiveTab("overview");
     }
 
-    if (containerId) {
+    if (containerId && isTabDisabled("console")) {
       try {
         const consoleChannel = new BroadcastChannel(`docker-console:${containerId}`);
         consoleChannel.postMessage({ type: "request-close" });
         consoleChannel.close();
       } catch {}
-      try {
-        const logsChannel = new BroadcastChannel(`docker-logs:${containerId}`);
-        logsChannel.postMessage({ type: "request-close" });
-        logsChannel.close();
-      } catch {}
     }
-  }, [
-    activeTab,
-    container,
-    containerId,
-    currentBaseState,
-    currentTransition,
-    isLoading,
-    setActiveTab,
-    unavailable,
-    availabilityManaged,
-  ]);
+  }, [activeTab, container, containerId, isTabDisabled, isLoading, setActiveTab]);
 
   if (isLoading) return <DetailPageSkeleton label="Loading container" tabs={6} />;
   if (!container)
@@ -1535,28 +1546,6 @@ export function DockerContainerDetail({
       : []),
   ];
   const isTerminalTab = activeTab === "console" || activeTab === "logs";
-  const isStopped = availabilityManaged
-    ? !availabilityPolicy?.shouldRun || availabilityServing === 0
-    : baseState !== "running";
-  const isTabDisabled = (tab: string) => {
-    if (
-      (runtimeReplacing || effectiveTransition) &&
-      ["console", "files", "logs", "stats"].includes(tab)
-    )
-      return true;
-    if (
-      unavailable &&
-      !availabilityManaged &&
-      new Set(["logs", "console", "files", "stats", "environment", "settings"]).has(tab)
-    ) {
-      return true;
-    }
-    const needsRunning = new Set(["console", "files", "stats"]);
-    if (tab === "environment" || tab === "settings") {
-      return availabilityManaged ? false : !!effectiveTransition;
-    }
-    return needsRunning.has(tab) && ((!availabilityManaged && !!effectiveTransition) || isStopped);
-  };
 
   return (
     <PageTransition>
@@ -1744,7 +1733,7 @@ export function DockerContainerDetail({
               view="builds"
             />
           </TabsContent>
-          {canViewContainer && !currentTransition && (!unavailable || availabilityManaged) && (
+          {canViewContainer && !isTabDisabled("logs") && (
             <TabsContent value="logs" className="flex flex-col flex-1 min-h-0 pb-0">
               {availabilityManaged && servingPlacements.length > 1 ? (
                 <LogsTab
@@ -1770,7 +1759,7 @@ export function DockerContainerDetail({
                 <LogsTab
                   nodeId={runtimeNodeId}
                   containerId={runtimeContainerId}
-                  containerState={state}
+                  containerState={baseState}
                   inspectData={container}
                 />
               )}
@@ -1832,7 +1821,7 @@ export function DockerContainerDetail({
                   containerName={name}
                   scopeResourceId={scopeResourceId}
                   containerState={environmentWorkloadState}
-                  disabled={!!effectiveTransition}
+                  disabled={!!currentTransition}
                   onMutationStart={beginMutationTransition}
                   onMutationEnd={clearMutationTransition}
                   onRecreating={refreshAfterMutation}
@@ -1852,7 +1841,7 @@ export function DockerContainerDetail({
                   onRecreating={refreshAfterMutation}
                   onRefresh={refreshAfterMutation}
                   onHealthCheckSaved={setHealthCheck}
-                  transition={effectiveTransition}
+                  transition={currentTransition}
                   readOnly={composeManaged}
                   availabilityManaged={availabilityManaged}
                   logicalContainerName={availabilityManaged ? routeContainerName : undefined}

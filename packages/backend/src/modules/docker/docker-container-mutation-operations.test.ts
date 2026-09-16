@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import {
   createContainer,
   daemonContainerCreateConfig,
@@ -80,7 +81,20 @@ function unlockedDockerNodeDb() {
   const innerJoin = vi.fn(() => ({ where: routeWhere }));
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where, innerJoin }));
-  return { select: vi.fn(() => ({ from })) };
+  const updates: Array<{ table: unknown; values: Record<string, unknown> }> = [];
+  const db: Record<string, any> = {
+    select: vi.fn(() => ({ from })),
+    update: vi.fn((table: unknown) => ({
+      set: vi.fn((values: Record<string, unknown>) => ({
+        where: vi.fn().mockImplementation(async () => {
+          updates.push({ table, values });
+        }),
+      })),
+    })),
+  };
+  db.transaction = vi.fn(async (callback: (tx: typeof db) => Promise<unknown>) => callback(db));
+  db.updates = updates;
+  return db;
 }
 
 describe('daemonContainerCreateConfig', () => {
@@ -375,14 +389,106 @@ describe('container name-keyed metadata lifecycle', () => {
     );
   });
 
-  it('rolls the runtime and completed metadata back when metadata rename fails', async () => {
+  it('renames PostgreSQL and managed Storage link targets with the container metadata', async () => {
+    const bindingDb = unlockedDockerNodeDb();
+    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const ctx = {
+      db: bindingDb,
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('orders-api'),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      emitContainer: vi.fn(),
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+
+    await renameContainer(ctx as never, 'node-1', 'container-1', 'orders-v2', 'user-1');
+
+    expect(bindingDb.transaction).toHaveBeenCalledOnce();
+    expect(bindingDb.update).toHaveBeenNthCalledWith(1, managedDatabaseBindings);
+    expect(bindingDb.update).toHaveBeenNthCalledWith(2, managedStorageBindings);
+    expect(bindingDb.updates).toEqual([
+      { table: managedDatabaseBindings, values: expect.objectContaining({ targetResourceId: 'orders-v2' }) },
+      { table: managedStorageBindings, values: expect.objectContaining({ targetResourceId: 'orders-v2' }) },
+    ]);
+    expect(
+      bindingDb.updates.map(({ values }: { values: Record<string, unknown> }) => Object.keys(values).sort())
+    ).toEqual([
+      ['targetResourceId', 'updatedAt'],
+      ['targetResourceId', 'updatedAt'],
+    ]);
+    expect(renameRuntime).toHaveBeenCalledOnce();
+  });
+
+  it('rolls the runtime back when managed link target persistence fails', async () => {
+    const bindingDb = unlockedDockerNodeDb();
+    bindingDb.update.mockImplementationOnce(() => ({
+      set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+    }));
+    bindingDb.update.mockImplementationOnce(() => ({
+      set: vi.fn(() => ({ where: vi.fn().mockRejectedValue(new Error('storage link target unavailable')) })),
+    }));
+    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const ctx = {
+      db: bindingDb,
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('orders-api'),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      emitContainer: vi.fn(),
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+
+    await expect(renameContainer(ctx as never, 'node-1', 'container-1', 'orders-v2', 'user-1')).rejects.toThrow(
+      'storage link target unavailable'
+    );
+
+    expect(renameRuntime).toHaveBeenNthCalledWith(1, 'node-1', 'rename', {
+      containerId: 'container-1',
+      newName: 'orders-v2',
+    });
+    expect(renameRuntime).toHaveBeenNthCalledWith(2, 'node-1', 'rename', {
+      containerId: 'container-1',
+      newName: 'orders-api',
+    });
+    expect(bindingDb.transaction).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    false,
+    true,
+  ])('attempts every metadata rollback even with an intermediate failure (%s)', async (rollbackFails) => {
     const environmentService = {
       deleteImported: vi.fn().mockResolvedValue(undefined),
       rename: vi.fn().mockResolvedValue(undefined),
     };
     const runtimeSettingsService = {
       delete: vi.fn().mockResolvedValue(undefined),
-      rename: vi.fn().mockRejectedValueOnce(new Error('runtime metadata unavailable')),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    if (rollbackFails)
+      runtimeSettingsService.rename
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error('runtime rollback unavailable'));
+    const accessResourceService = {
+      removeContainer: vi.fn().mockResolvedValue(undefined),
+      renameContainer: vi.fn().mockRejectedValueOnce(new Error('access metadata unavailable')),
     };
     const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
     const clearTransition = vi.fn();
@@ -393,6 +499,7 @@ describe('container name-keyed metadata lifecycle', () => {
       nodeDispatch: { sendDockerContainerCommand: renameRuntime },
       environmentService,
       runtimeSettingsService,
+      accessResourceService,
       validateDockerNode: vi.fn().mockResolvedValue(undefined),
       assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
       resolveContainerName: vi.fn().mockResolvedValue('current-name'),
@@ -408,7 +515,7 @@ describe('container name-keyed metadata lifecycle', () => {
     };
 
     await expect(renameContainer(ctx as never, 'node-1', 'container-1', 'new-name', 'user-1')).rejects.toThrow(
-      'runtime metadata unavailable'
+      'access metadata unavailable'
     );
 
     expect(renameRuntime).toHaveBeenNthCalledWith(1, 'node-1', 'rename', {
@@ -421,6 +528,15 @@ describe('container name-keyed metadata lifecycle', () => {
     });
     expect(environmentService.rename).toHaveBeenNthCalledWith(1, 'node-1', 'current-name', 'new-name');
     expect(environmentService.rename).toHaveBeenNthCalledWith(2, 'node-1', 'new-name', 'current-name');
+    expect(runtimeSettingsService.rename).toHaveBeenNthCalledWith(1, 'node-1', 'current-name', 'new-name');
+    expect(runtimeSettingsService.rename).toHaveBeenNthCalledWith(2, 'node-1', 'new-name', 'current-name');
+    expect(ctx.db.transaction).toHaveBeenCalledTimes(2);
+    expect(ctx.db.updates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ values: expect.objectContaining({ targetResourceId: 'new-name' }) }),
+        expect.objectContaining({ values: expect.objectContaining({ targetResourceId: 'current-name' }) }),
+      ])
+    );
     expect(clearTransition).toHaveBeenCalledWith('node-1', 'new-name');
     expect(emitContainer).not.toHaveBeenCalled();
   });

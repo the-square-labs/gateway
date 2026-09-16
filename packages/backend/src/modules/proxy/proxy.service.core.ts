@@ -54,7 +54,7 @@ export function sameDomainNames(left: string[], right: string[]): boolean {
   return normalizedLeft.every((domain, index) => domain === normalizedRight[index]);
 }
 
-export function isDockerUpstream(kind: string): boolean {
+export function isDockerUpstream(kind: string): kind is 'docker_container' | 'docker_deployment' {
   return kind === 'docker_container' || kind === 'docker_deployment';
 }
 
@@ -470,6 +470,13 @@ export abstract class ProxyServiceCore {
         throw new AppError(400, 'MANUAL_UPSTREAM_REQUIRED', 'Forward host and port are required for a manual upstream');
       }
       return { upstreamKind: 'manual', forwardHost, forwardPort, ...clearDockerUpstreamFields() };
+    }
+    if (effectiveKind === 'managed_storage') {
+      throw new AppError(
+        409,
+        'MANAGED_STORAGE_MAIN_UPSTREAM_UNSUPPORTED',
+        'Managed storage is available only through Additional Secure Links'
+      );
     }
 
     const reference: DockerUpstreamReference = {

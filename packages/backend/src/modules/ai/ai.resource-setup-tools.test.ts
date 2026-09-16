@@ -217,8 +217,38 @@ describe('resource setup AI tools', () => {
         dockerComposeProjectId: '22222222-2222-4222-8222-222222222222',
         dockerComposeServiceName: 'api',
       }),
-      'user-1'
+      'user-1',
+      user.scopes
     );
+  });
+
+  it('passes delegated storage scopes and canonical managed target for Route S3 links', async () => {
+    const createAdditionalSecureLink = vi.fn().mockResolvedValue({ id: 'link-1' });
+    const retryAdditionalSecureLink = vi.fn().mockResolvedValue({ id: 'link-1' });
+    container.registerInstance(ProxyService, {
+      createAdditionalSecureLink,
+      retryAdditionalSecureLink,
+    } as unknown as ProxyService);
+    const user = { ...USER, scopes: ['proxy:edit:route-1', 'storage:view:connection-1'] };
+    await executeResourceSetupTool(user, 'manage_additional_secure_link', {
+      operation: 'create',
+      routeId: 'route-1',
+      name: 'assets',
+      upstreamKind: 'managed_storage',
+      managedStorageId: 'storage-1',
+    });
+    expect(createAdditionalSecureLink).toHaveBeenCalledWith(
+      'route-1',
+      expect.objectContaining({ upstreamKind: 'managed_storage', managedStorageId: 'storage-1' }),
+      user.id,
+      user.scopes
+    );
+    await executeResourceSetupTool(user, 'manage_additional_secure_link', {
+      operation: 'retry',
+      routeId: 'route-1',
+      bindingId: 'link-1',
+    });
+    expect(retryAdditionalSecureLink).toHaveBeenCalledWith('route-1', 'link-1', user.id, user.scopes);
   });
 
   it('dispatches safe managed-database lifecycle operations', async () => {

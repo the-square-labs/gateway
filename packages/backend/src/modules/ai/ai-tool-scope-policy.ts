@@ -24,7 +24,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   ],
   manage_storage_connection: ['storage:create', 'storage:edit', 'storage:delete'],
   manage_storage_objects: ['storage:objects:read', 'storage:objects:write', 'storage:objects:admin'],
-  manage_managed_storage: ['storage:view', 'storage:create', 'storage:edit', 'storage:delete'],
+  manage_managed_storage: ['storage:view', 'storage:create', 'storage:edit', 'storage:delete', 'storage:iam'],
   read_gateway_documentation: MCP_TOKEN_SCOPES,
   manage_docker_compose: [
     'docker:compose:view',

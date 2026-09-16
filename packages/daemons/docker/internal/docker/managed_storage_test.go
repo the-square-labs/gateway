@@ -15,6 +15,7 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
+	"golang.org/x/sys/unix"
 )
 
 func validManagedStorageCommand() managedStorageCommand {
@@ -52,6 +53,41 @@ func TestManagedStorageCommandAcceptsFractionalCPUAndPinnedImage(t *testing.T) {
 	}
 	if input.Resources.NanoCPUs != 100_000_000 {
 		t.Fatalf("nanoCPUs = %d, want 100000000", input.Resources.NanoCPUs)
+	}
+}
+
+func TestManagedStorageCapacityAndHealthUseConfiguredStorageRoot(t *testing.T) {
+	manager := &managedStorageManager{
+		root:    "/data",
+		reserve: 10,
+		statFilesystem: func(path string, result *unix.Statfs_t) error {
+			if path != "/data" {
+				t.Fatalf("stat path = %q, want configured storage root", path)
+			}
+			result.Blocks = 100
+			result.Bfree = 20
+			result.Bavail = 16
+			result.Bsize = 1
+			return nil
+		},
+	}
+
+	if err := manager.ensureCapacity(6); err != nil {
+		t.Fatalf("configured storage root capacity: %v", err)
+	}
+	if err := manager.ensureCapacity(7); err == nil {
+		t.Fatal("capacity check ignored the configured root reserve")
+	}
+
+	mount, err := manager.storageRootHealthMount()
+	if err != nil {
+		t.Fatalf("storage root health mount: %v", err)
+	}
+	if mount.MountPoint != "/data" || mount.Filesystem != managedStorageRootFilesystem {
+		t.Fatalf("unexpected storage health mount: %#v", mount)
+	}
+	if mount.TotalBytes != 100 || mount.UsedBytes != 94 || mount.FreeBytes != 6 {
+		t.Fatalf("unexpected storage health capacity: %#v", mount)
 	}
 }
 

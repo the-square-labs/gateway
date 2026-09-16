@@ -41,7 +41,17 @@ export function StorageOverviewTab({
   >(() => {
     if (!latest) return [];
 
-    const seriesFor = (key: string) => history.map((item) => item.metrics[key] ?? 0);
+    const seriesFor = (key: string) => {
+      // Missing/stale samples are gaps, not zero usage. Sparkline accepts only
+      // numbers, so show the latest continuous run without bridging a gap.
+      const series: number[] = [];
+      for (const item of history) {
+        const value = item.metrics[key];
+        if (typeof value !== "number" || !Number.isFinite(value)) series.length = 0;
+        else series.push(value);
+      }
+      return series;
+    };
     const card = (key: string, label: string, value?: string) => ({
       key,
       label,

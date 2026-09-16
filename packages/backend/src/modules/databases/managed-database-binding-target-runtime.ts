@@ -34,6 +34,14 @@ interface BindingNetworkState {
   gateway?: string;
 }
 
+interface ContainerTargetSnapshot {
+  environment: Record<string, string>;
+  networkAttached: boolean;
+  name: string;
+  runtimeId: string;
+  expectedState: 'running' | 'created';
+}
+
 function enginePort(type: ManagedDatabaseRow['type']): number {
   switch (type) {
     case 'postgres':
@@ -114,12 +122,13 @@ export class ManagedDatabaseBindingTargetRuntime {
   async reconcile(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    credentials: ManagedDatabaseBindingCredentials
+    credentials: ManagedDatabaseBindingCredentials,
+    options: { targetEnvironment?: Record<string, string> } = {}
   ): Promise<void> {
     if (!this.relayPolicy) return;
     const existing = this.reconciliations.get(binding.id);
     if (existing) return existing;
-    const reconciliation = this.performReconciliation(database, binding, credentials);
+    const reconciliation = this.performReconciliation(database, binding, credentials, options);
     this.reconciliations.set(binding.id, reconciliation);
     try {
       await reconciliation;
@@ -260,7 +269,8 @@ export class ManagedDatabaseBindingTargetRuntime {
   private async performReconciliation(
     database: ManagedDatabaseRow,
     binding: ManagedDatabaseBindingRow,
-    credentials: ManagedDatabaseBindingCredentials
+    credentials: ManagedDatabaseBindingCredentials,
+    options: { targetEnvironment?: Record<string, string> }
   ) {
     let listenerAddress = await this.ensureHostListener(database, binding);
     try {
@@ -268,6 +278,7 @@ export class ManagedDatabaseBindingTargetRuntime {
     } catch {
       await this.apply(database, binding, credentials, '00000000-0000-0000-0000-000000000000', {
         forceDeploymentRollout: true,
+        targetEnvironment: options.targetEnvironment,
       });
       await this.reconciler?.reconcileTargetNode(binding.targetNodeId);
       listenerAddress = await this.ensureHostListener(database, binding);
@@ -453,7 +464,8 @@ export class ManagedDatabaseBindingTargetRuntime {
           binding.networkName,
           true,
           userId,
-          options.forceDeploymentRollout === true
+          options.forceDeploymentRollout === true,
+          options.targetEnvironment
         );
       } catch (error) {
         await this.removeDeploymentSecrets(binding, Object.keys(values), userId);
@@ -464,39 +476,54 @@ export class ManagedDatabaseBindingTargetRuntime {
 
     const targetBefore = await this.dockerManagement.inspectContainer(binding.targetNodeId, binding.targetResourceId);
     assertUserBindingTarget(targetBefore);
-    const targetName = String(targetBefore?.Name ?? '').replace(/^\/+/, '');
-    const targetRuntimeId = String(targetBefore?.Id ?? '');
-    const expectedState = targetBefore?.State?.Status === 'running' ? 'running' : 'created';
-    requireNetworkConnectSuccess(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
-        networkId: binding.networkName,
-        containerId: binding.targetResourceId,
-      })
-    );
-    const current = environmentMap(
-      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
-    );
-    const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
+    const snapshot = await this.containerTargetSnapshot(binding, targetBefore);
     const managedNames = Object.keys(values);
-    for (const name of managedNames) {
-      await this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, name, values[name]!, userId, {
-        managed: true,
-      });
-      delete ordinaryEnvironment[name];
+    const priorSecrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
+    const priorSecretsByKey = new Map(priorSecrets.map((secret) => [secret.key, secret]));
+    const createdSecretIds: string[] = [];
+    const updatedSecrets: Array<{ key: string; value: string }> = [];
+    let networkConnected = false;
+    let environmentMutationStarted = false;
+    try {
+      requireNetworkConnectSuccess(
+        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
+          networkId: binding.networkName,
+          containerId: binding.targetResourceId,
+        })
+      );
+      networkConnected = true;
+      const ordinaryEnvironment = { ...(options.targetEnvironment ?? snapshot.environment) };
+      for (const name of managedNames) {
+        const secret = await this.dockerSecrets.create(
+          binding.targetNodeId,
+          binding.targetResourceId,
+          name,
+          values[name]!,
+          userId,
+          {
+            managed: true,
+          }
+        );
+        const priorSecret = priorSecretsByKey.get(name);
+        if (!priorSecret || priorSecret.id !== secret.id) createdSecretIds.push(secret.id);
+        else if (priorSecret.value !== values[name])
+          updatedSecrets.push({ key: priorSecret.key, value: priorSecret.value });
+        delete ordinaryEnvironment[name];
+      }
+      environmentMutationStarted = true;
+      await this.updateContainerEnvironment(binding, snapshot, ordinaryEnvironment, managedNames, userId);
+    } catch (error) {
+      await this.restoreAfterApplyFailure(
+        binding,
+        snapshot,
+        createdSecretIds,
+        updatedSecrets,
+        networkConnected && !snapshot.networkAttached,
+        environmentMutationStarted,
+        userId,
+        error
+      );
     }
-    const removeEnv = Object.keys(current).filter(
-      (name) => !Object.hasOwn(ordinaryEnvironment, name) || managedNames.includes(name)
-    );
-    const updated = await this.dockerManagement.updateContainerEnv(
-      binding.targetNodeId,
-      binding.targetResourceId,
-      ordinaryEnvironment,
-      removeEnv,
-      userId
-    );
-    const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
-    if (updatedName && targetRuntimeId)
-      await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId, expectedState);
   }
 
   async remove(
@@ -535,7 +562,9 @@ export class ManagedDatabaseBindingTargetRuntime {
           binding.targetResourceId,
           binding.networkName,
           false,
-          userId
+          userId,
+          false,
+          options.targetEnvironment
         );
       } catch (error) {
         for (const [key, value] of Object.entries(values)) {
@@ -557,48 +586,189 @@ export class ManagedDatabaseBindingTargetRuntime {
       return;
     }
 
-    // Disconnect before recreating the container to remove managed env/secrets.
-    // Otherwise Docker preserves the binding network as HostConfig.NetworkMode;
-    // deleting that network afterwards leaves a stale primary network mode and
-    // prevents a future binding network from being attached to the workload.
-    requireNetworkDisconnectSuccess(
-      await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-        networkId: binding.networkName,
-        containerId: binding.targetResourceId,
-      })
+    const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
+    const managedSecrets = secrets.filter(
+      (secret) => variableNames.includes(secret.key) && secret.value === expected[secret.key]
     );
-    try {
-      const secrets = await this.dockerSecrets.list(binding.targetNodeId, binding.targetResourceId, true, true);
-      for (const secret of secrets) {
-        if (variableNames.includes(secret.key) && secret.value === expected[secret.key]) {
-          await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
-        }
+    const removedSecrets: Array<{ key: string; value: string }> = [];
+    const removeManagedSecrets = async () => {
+      for (const secret of managedSecrets) {
+        if (removedSecrets.some((removed) => removed.key === secret.key && removed.value === secret.value)) continue;
+        await this.dockerSecrets.delete(secret.id, binding.targetNodeId, userId, binding.targetResourceId);
+        removedSecrets.push({ key: secret.key, value: secret.value });
       }
-      const current = environmentMap(
-        await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
-      );
-      const ordinaryEnvironment = { ...(options.targetEnvironment ?? current) };
-      for (const name of variableNames) delete ordinaryEnvironment[name];
-      const removeEnv = Array.from(
-        new Set([...variableNames, ...Object.keys(current).filter((name) => !Object.hasOwn(ordinaryEnvironment, name))])
-      );
+    };
+    let snapshot: ContainerTargetSnapshot | undefined;
+    try {
       const targetBefore = await this.dockerManagement.inspectContainer(binding.targetNodeId, binding.targetResourceId);
-      const targetName = String(targetBefore?.Name ?? '').replace(/^\/+/, '');
-      const targetRuntimeId = String(targetBefore?.Id ?? '');
-      const expectedState = targetBefore?.State?.Status === 'running' ? 'running' : 'created';
-      const updated = await this.dockerManagement.updateContainerEnv(
-        binding.targetNodeId,
-        binding.targetResourceId,
-        ordinaryEnvironment,
-        removeEnv,
-        userId
+      if (!targetBefore) {
+        await removeManagedSecrets();
+        return;
+      }
+      snapshot = await this.containerTargetSnapshot(binding, targetBefore);
+      // Disconnect before recreating the container to remove managed env/secrets.
+      // Otherwise Docker preserves the binding network as HostConfig.NetworkMode;
+      // deleting that network afterwards leaves a stale primary network mode and
+      // prevents a future binding network from being attached to the workload.
+      requireNetworkDisconnectSuccess(
+        await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
+          networkId: binding.networkName,
+          containerId: binding.targetResourceId,
+        })
       );
-      const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : targetName;
-      if (updatedName && targetRuntimeId)
-        await this.waitForConvergence(binding.targetNodeId, updatedName, targetRuntimeId, expectedState);
+      await removeManagedSecrets();
+      const ordinaryEnvironment = { ...(options.targetEnvironment ?? snapshot.environment) };
+      for (const name of variableNames) delete ordinaryEnvironment[name];
+      await this.updateContainerEnvironment(binding, snapshot, ordinaryEnvironment, variableNames, userId);
     } catch (error) {
-      if (!isMissingContainerError(error)) throw error;
+      if (isMissingContainerError(error)) {
+        await removeManagedSecrets();
+        return;
+      }
+      if (!snapshot) throw error;
+      await this.restoreAfterRemoveFailure(binding, snapshot, removedSecrets, userId, error);
     }
+  }
+
+  private async containerTargetSnapshot(
+    binding: ManagedDatabaseBindingRow,
+    inspect: Record<string, any> | null | undefined
+  ): Promise<ContainerTargetSnapshot> {
+    const networks = inspect?.NetworkSettings?.Networks;
+    return {
+      environment: environmentMap(
+        await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+      ),
+      networkAttached: !!networks && Object.hasOwn(networks, binding.networkName),
+      name: String(inspect?.Name ?? '').replace(/^\/+/, ''),
+      runtimeId: String(inspect?.Id ?? ''),
+      expectedState: inspect?.State?.Status === 'running' ? 'running' : 'created',
+    };
+  }
+
+  private async updateContainerEnvironment(
+    binding: ManagedDatabaseBindingRow,
+    snapshot: ContainerTargetSnapshot,
+    environment: Record<string, string>,
+    managedNames: string[],
+    userId: string
+  ) {
+    const beforeUpdate = await this.dockerManagement.inspectContainer(binding.targetNodeId, binding.targetResourceId);
+    const previousId = String(beforeUpdate?.Id ?? snapshot.runtimeId);
+    const recreateExpectedState = beforeUpdate?.State?.Status === 'running' ? 'running' : 'created';
+    const current = environmentMap(
+      await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)
+    );
+    const removeEnv = Array.from(
+      new Set([...managedNames, ...Object.keys(current).filter((name) => !Object.hasOwn(environment, name))])
+    );
+    const updated = await this.dockerManagement.updateContainerEnv(
+      binding.targetNodeId,
+      binding.targetResourceId,
+      environment,
+      removeEnv,
+      userId
+    );
+    const updatedName = typeof (updated as any)?.name === 'string' ? (updated as any).name : snapshot.name;
+    if (!updatedName || !previousId) return;
+    await this.waitForConvergence(binding.targetNodeId, updatedName, previousId, recreateExpectedState);
+    if (snapshot.expectedState !== 'running' || recreateExpectedState === 'running') return;
+
+    const recreated = await this.dockerManagement.inspectContainer(binding.targetNodeId, updatedName);
+    const recreatedId = String(recreated?.Id ?? '');
+    if (!recreatedId) throw new Error(`managed database binding target ${updatedName} disappeared during rollback`);
+    await this.dockerManagement.startContainer(binding.targetNodeId, recreatedId, userId);
+    await this.waitForRuntimeState(binding.targetNodeId, updatedName, recreatedId, 'running');
+  }
+
+  private async restoreAfterApplyFailure(
+    binding: ManagedDatabaseBindingRow,
+    snapshot: ContainerTargetSnapshot,
+    createdSecretIds: string[],
+    updatedSecrets: Array<{ key: string; value: string }>,
+    detachNetwork: boolean,
+    restoreEnvironment: boolean,
+    userId: string,
+    originalError: unknown
+  ): Promise<never> {
+    const rollbackErrors = await this.runRollbackSteps([
+      ...createdSecretIds.map(
+        (secretId) => () => this.dockerSecrets.delete(secretId, binding.targetNodeId, userId, binding.targetResourceId)
+      ),
+      ...updatedSecrets.map(
+        (secret) => () =>
+          this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, secret.key, secret.value, userId, {
+            managed: true,
+          })
+      ),
+      ...(detachNetwork
+        ? [
+            async () =>
+              requireNetworkDisconnectSuccess(
+                await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
+                  networkId: binding.networkName,
+                  containerId: binding.targetResourceId,
+                })
+              ),
+          ]
+        : []),
+      ...(restoreEnvironment
+        ? [() => this.updateContainerEnvironment(binding, snapshot, snapshot.environment, [], userId)]
+        : []),
+    ]);
+    if (rollbackErrors.length) throw this.withRollbackFailure(originalError, rollbackErrors);
+    throw originalError;
+  }
+
+  private async restoreAfterRemoveFailure(
+    binding: ManagedDatabaseBindingRow,
+    snapshot: ContainerTargetSnapshot,
+    secrets: Array<{ key: string; value: string }>,
+    userId: string,
+    originalError: unknown
+  ): Promise<never> {
+    const rollbackErrors = await this.runRollbackSteps([
+      ...secrets.map(
+        (secret) => () =>
+          this.dockerSecrets.create(binding.targetNodeId, binding.targetResourceId, secret.key, secret.value, userId, {
+            managed: true,
+          })
+      ),
+      ...(snapshot.networkAttached
+        ? [
+            async () =>
+              requireNetworkConnectSuccess(
+                await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
+                  networkId: binding.networkName,
+                  containerId: binding.targetResourceId,
+                })
+              ),
+          ]
+        : []),
+      () => this.updateContainerEnvironment(binding, snapshot, snapshot.environment, [], userId),
+    ]);
+    if (rollbackErrors.length) throw this.withRollbackFailure(originalError, rollbackErrors);
+    throw originalError;
+  }
+
+  private async runRollbackSteps(steps: Array<() => Promise<unknown>>): Promise<unknown[]> {
+    const errors: unknown[] = [];
+    for (const step of steps) {
+      try {
+        await step();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    return errors;
+  }
+
+  private withRollbackFailure(originalError: unknown, rollbackErrors: unknown[]): Error {
+    const original = originalError instanceof Error ? originalError.message : String(originalError);
+    const rollback = rollbackErrors
+      .map((rollbackError) => (rollbackError instanceof Error ? rollbackError.message : String(rollbackError)))
+      .join('; ');
+    return new Error(`${original} (managed database binding rollback failed: ${rollback})`);
   }
 
   async verifyValues(
@@ -685,6 +855,32 @@ export class ManagedDatabaseBindingTargetRuntime {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     throw new Error(`managed database binding target ${containerName} did not finish recreating`);
+  }
+
+  private async waitForRuntimeState(
+    nodeId: string,
+    containerName: string,
+    runtimeId: string,
+    expectedState: 'running' | 'created'
+  ) {
+    const deadline = Date.now() + 120_000;
+    while (Date.now() < deadline) {
+      try {
+        const inspect = await this.dockerManagement.inspectContainer(nodeId, containerName);
+        const currentId = String(inspect?.Id ?? '');
+        const state = String(inspect?.State?.Status ?? '').toLowerCase();
+        const reachedExpectedState = state
+          ? state === expectedState
+          : expectedState === 'running'
+            ? inspect?.State?.Running === true
+            : inspect?.State?.Running === false;
+        if (currentId === runtimeId && reachedExpectedState && !inspect?._transition) return;
+      } catch {
+        // The stable name is briefly absent while the daemon starts the replacement.
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    throw new Error(`managed database binding target ${containerName} did not return to ${expectedState}`);
   }
 
   private async matchingDeploymentSecretValues(binding: ManagedDatabaseBindingRow, expected: Record<string, string>) {

@@ -19,6 +19,8 @@ const SLOW_THRESHOLD_MS = 2_000;
 // polled far more frequently via registerClient()/ACTIVE_POLL_MS.
 const BACKGROUND_POLL_MS = 60_000;
 const ACTIVE_POLL_MS = 5_000;
+// A responsive S3 endpoint does not prove that the daemon is still reporting.
+const RESOURCE_METRICS_MAX_AGE_MS = 60_000;
 
 export interface StorageMetricSnapshot {
   timestamp: string;
@@ -33,6 +35,7 @@ export interface StorageMetricSnapshot {
 export class ObjectStorageMonitoringService extends EventEmitter {
   private readonly clientCounts = new Map<string, number>();
   private readonly pollIntervals = new Map<string, ReturnType<typeof setInterval>>();
+  private readonly pollsInFlight = new Set<string>();
   private backgroundStart: ReturnType<typeof setTimeout> | null = null;
   private backgroundInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -56,7 +59,14 @@ export class ObjectStorageMonitoringService extends EventEmitter {
   private async resourceMetrics(connection: ObjectStorageConnectionView): Promise<Record<string, number | null>> {
     if (!this.managedMetrics || !connection.managed) return {};
     try {
-      return (await this.managedMetrics.getMetrics(connection.managed.id)) ?? {};
+      const report = await this.managedMetrics.getSnapshot(connection.managed.id);
+      if (!report) return {};
+      const sampledAt = report.timestamp ? Date.parse(report.timestamp) : NaN;
+      const age = Date.now() - sampledAt;
+      if (!Number.isFinite(age) || age < 0 || age > RESOURCE_METRICS_MAX_AGE_MS) {
+        return Object.fromEntries(Object.keys(report.metrics).map((key) => [key, null]));
+      }
+      return report.metrics;
     } catch (error) {
       logger.debug('Managed storage metrics unavailable', {
         storageId: connection.id,
@@ -76,6 +86,27 @@ export class ObjectStorageMonitoringService extends EventEmitter {
     }
   }
 
+  async getInitialHistory(connection: ObjectStorageConnectionView): Promise<StorageMetricSnapshot[]> {
+    const history = await this.getHistory(connection.id);
+    if (history.length > 0 || !connection.managed) return history;
+
+    // Node reports are already persisted by the control stream. Do not make the
+    // first dashboard render wait for an S3/relay round trip on a cold cache.
+    const report = await this.managedMetrics?.getSnapshot(connection.managed.id).catch(() => null);
+    if (!report?.timestamp || !Object.values(report.metrics).some((value) => value !== null)) return [];
+    return [
+      {
+        timestamp: report.timestamp,
+        storageId: connection.id,
+        provider: connection.provider,
+        name: connection.name,
+        status: connection.healthStatus,
+        responseMs: 0,
+        metrics: { ...report.metrics, latency_ms: null, bucket_count: null },
+      },
+    ];
+  }
+
   registerClient(storageId: string): void {
     const count = (this.clientCounts.get(storageId) ?? 0) + 1;
     this.clientCounts.set(storageId, count);
@@ -84,8 +115,12 @@ export class ObjectStorageMonitoringService extends EventEmitter {
 
   unregisterClient(storageId: string): void {
     const count = Math.max(0, (this.clientCounts.get(storageId) ?? 0) - 1);
-    this.clientCounts.set(storageId, count);
-    if (count === 0) this.stopPolling(storageId);
+    if (count === 0) {
+      this.clientCounts.delete(storageId);
+      this.stopPolling(storageId);
+    } else {
+      this.clientCounts.set(storageId, count);
+    }
   }
 
   destroy(): void {
@@ -93,25 +128,28 @@ export class ObjectStorageMonitoringService extends EventEmitter {
     if (this.backgroundInterval) clearInterval(this.backgroundInterval);
     for (const interval of this.pollIntervals.values()) clearInterval(interval);
     this.pollIntervals.clear();
+    this.clientCounts.clear();
   }
 
   private startBackgroundPolling() {
-    this.backgroundStart = setTimeout(() => {
-      this.backgroundInterval = setInterval(() => {
-        this.storageService
-          .listAllRows()
-          .then((rows) => {
-            for (const row of rows) {
-              if (this.pollIntervals.has(row.id)) continue;
-              void this.pollOnce(row.id);
-            }
-          })
-          .catch((error) => {
-            logger.warn('Background storage polling failed', {
-              error: error instanceof Error ? error.message : String(error),
-            });
+    const sweep = () => {
+      this.storageService
+        .listAllRows()
+        .then((rows) => {
+          for (const row of rows) {
+            if (this.pollIntervals.has(row.id)) continue;
+            void this.pollOnce(row.id);
+          }
+        })
+        .catch((error) => {
+          logger.warn('Background storage polling failed', {
+            error: error instanceof Error ? error.message : String(error),
           });
-      }, BACKGROUND_POLL_MS);
+        });
+    };
+    this.backgroundStart = setTimeout(() => {
+      sweep();
+      this.backgroundInterval = setInterval(sweep, BACKGROUND_POLL_MS);
     }, 5000);
   }
 
@@ -132,6 +170,8 @@ export class ObjectStorageMonitoringService extends EventEmitter {
   }
 
   private async pollOnce(storageId: string) {
+    if (this.pollsInFlight.has(storageId)) return;
+    this.pollsInFlight.add(storageId);
     let connection: ObjectStorageConnectionView | null = null;
     try {
       connection = await this.storageService.get(storageId);
@@ -172,6 +212,8 @@ export class ObjectStorageMonitoringService extends EventEmitter {
       };
       await this.pushHistory(snapshot).catch(() => {});
       this.emit('snapshot', { storageId, snapshot });
+    } finally {
+      this.pollsInFlight.delete(storageId);
     }
   }
 

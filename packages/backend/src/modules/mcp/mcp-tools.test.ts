@@ -10,6 +10,14 @@ function toolByName(scopes: string[], name: string) {
 }
 
 describe('MCP tool scope filtering', () => {
+  it('exposes object streaming only to storage writers through MCP with bounded chunks', () => {
+    const tool = toolByName(['storage:objects:write:storage-1'], 'upload_storage_object');
+    expect(tool?.mcpOnly).toBe(true);
+    expect(tool?.historyRetention).toEqual({ mode: 'never_full' });
+    expect(tool?.parameters.properties).toHaveProperty('contentBase64');
+    expect(tool?.parameters.properties).not.toHaveProperty('token');
+    expect(toolNames(['storage:objects:read:storage-1'])).not.toContain('upload_storage_object');
+  });
   it('requires direct database view before advertising database query tools', () => {
     expect(toolNames(['databases:query:read:db-1'])).not.toContain('query_postgres_read');
     expect(toolNames(['databases:query:read:db-1'])).not.toContain('manage_postgres_data');
@@ -201,6 +209,13 @@ describe('MCP tool scope filtering', () => {
       expect.arrayContaining(['manage_docker_migration', 'manage_logging_backend'])
     );
     expect(toolNames(['pages:view'])).toContain('manage_pages');
+    const managedStorage = toolByName(['storage:iam:storage-1'], 'manage_managed_storage');
+    expect(managedStorage).toBeDefined();
+    expect(managedStorage?.parameters).toMatchObject({
+      properties: {
+        action: { enum: expect.arrayContaining(['list_access_keys', 'create_access_key', 'remove_access_key']) },
+      },
+    });
     expect(toolNames(['proxy:view'])).toEqual(
       expect.arrayContaining(['manage_additional_route', 'manage_additional_secure_link'])
     );

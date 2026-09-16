@@ -150,16 +150,30 @@ proxyRoutes.post(
 const AdditionalSecureLinkSchema = z
   .object({
     name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
-    upstreamKind: z.enum(['docker_container', 'docker_deployment']),
+    upstreamKind: z.enum(['docker_container', 'docker_deployment', 'managed_storage']),
+    managedStorageId: z.string().uuid().nullable().optional(),
     forwardScheme: z.enum(['http', 'https']).default('http'),
     dockerNodeId: z.string().uuid().nullable().optional(),
     dockerContainerName: z.string().min(1).max(255).nullable().optional(),
     dockerComposeProjectId: z.string().uuid().nullable().optional(),
     dockerComposeServiceName: z.string().min(1).max(255).nullable().optional(),
     dockerDeploymentId: z.string().uuid().nullable().optional(),
-    dockerContainerPort: z.number().int().min(1).max(65535),
+    dockerContainerPort: z.number().int().min(1).max(65535).optional(),
   })
   .superRefine((data, ctx) => {
+    if (data.upstreamKind === 'managed_storage') {
+      if (!data.managedStorageId)
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['managedStorageId'], message: 'Select managed storage' });
+      return;
+    }
+    if (!data.dockerContainerPort)
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dockerContainerPort'],
+        message: 'Select the application port',
+      });
+    if (data.upstreamKind === 'docker_deployment' && !data.dockerDeploymentId)
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dockerDeploymentId'], message: 'Select a deployment' });
     if (data.upstreamKind !== 'docker_container') return;
     const hasContainer = Boolean(data.dockerContainerName);
     const hasCompose = Boolean(data.dockerComposeProjectId && data.dockerComposeServiceName);

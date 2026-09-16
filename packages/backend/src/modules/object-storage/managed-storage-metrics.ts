@@ -29,6 +29,7 @@ export interface DiskMountEntry {
 }
 
 export interface MetricsHealthReport {
+  timestamp?: number;
   containerStats?: ContainerStatsEntry[];
   diskMounts?: DiskMountEntry[];
   diskFreeBytes?: number;
@@ -44,6 +45,7 @@ export interface MetricsNode {
 export interface MetricsMember {
   nodeId: string;
   containerName: string;
+  storageMountPathSuffix: string;
 }
 
 export type ManagedStorageMetrics = Record<string, number | null>;
@@ -54,15 +56,24 @@ function sumOrNull(values: Array<number | null | undefined>): number | null {
   return present.length === 0 ? null : present.reduce((total, value) => total + value, 0);
 }
 
-/**
- * The mount a cluster's data most likely lives on: the largest by capacity.
- * Reports do not say which mount backs the storage volume, and the biggest
- * disk is the closest available proxy on a typical storage host.
- */
-function primaryMount(report: MetricsHealthReport): DiskMountEntry | null {
-  const mounts = (report.diskMounts ?? []).filter((mount) => (mount.totalBytes ?? 0) > 0);
-  if (mounts.length === 0) return null;
-  return mounts.reduce((largest, mount) => ((mount.totalBytes ?? 0) > (largest.totalBytes ?? 0) ? mount : largest));
+function storageMount(report: MetricsHealthReport, member: MetricsMember): DiskMountEntry | null {
+  return report.diskMounts?.find((mount) => mount.mountPoint?.endsWith(member.storageMountPathSuffix)) ?? null;
+}
+
+function mountedStorageMetric(
+  nodes: Map<string, MetricsNode>,
+  members: MetricsMember[],
+  metric: keyof Pick<DiskMountEntry, 'totalBytes' | 'usedBytes' | 'freeBytes'>
+): number | null {
+  if (members.length === 0) return null;
+  const values: number[] = [];
+  for (const member of members) {
+    const report = nodes.get(member.nodeId)?.healthReport;
+    const value = storageMount(report ?? {}, member)?.[metric];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+    values.push(value);
+  }
+  return values.reduce((total, value) => total + value, 0);
 }
 
 export function buildManagedStorageMetrics(nodes: MetricsNode[], members: MetricsMember[]): ManagedStorageMetrics {
@@ -87,27 +98,22 @@ export function buildManagedStorageMetrics(nodes: MetricsNode[], members: Metric
     tx.push(stats.networkTxBytes ?? null);
   }
 
-  // Disk and swap are host-wide, so each node counts once no matter how many
+  // Disk belongs to each managed-storage ext4 image, not the host's largest
+  // filesystem. Legacy daemons do not expose those exact mounts, so report an
+  // unknown disk value instead of using an unrelated host-level fallback.
+  const diskUsed = mountedStorageMetric(nodeById, members, 'usedBytes');
+  const diskFree = mountedStorageMetric(nodeById, members, 'freeBytes');
+  const diskTotal = mountedStorageMetric(nodeById, members, 'totalBytes');
+
+  // Swap remains host-wide, so each node counts once no matter how many
   // members it hosts.
   const distinctNodeIds = [...new Set(members.map((member) => member.nodeId))];
-  const diskUsed: Array<number | null> = [];
-  const diskFree: Array<number | null> = [];
-  const diskTotal: Array<number | null> = [];
   const swapUsed: Array<number | null> = [];
   const swapTotal: Array<number | null> = [];
 
   for (const nodeId of distinctNodeIds) {
     const report = nodeById.get(nodeId)?.healthReport;
     if (!report) continue;
-    const mount = primaryMount(report);
-    if (mount) {
-      diskUsed.push(mount.usedBytes ?? null);
-      diskFree.push(mount.freeBytes ?? null);
-      diskTotal.push(mount.totalBytes ?? null);
-    } else if (report.diskFreeBytes) {
-      // No per-mount breakdown: free space is still known, used space is not.
-      diskFree.push(report.diskFreeBytes);
-    }
     // A zero swap total means "no reading", not "no swap configured" — the
     // daemon reports 0 for both, and reporting 0 B as fact would mislead.
     if (report.swapTotalBytes) {
@@ -122,9 +128,9 @@ export function buildManagedStorageMetrics(nodes: MetricsNode[], members: Metric
     memory_limit_bytes: sumOrNull(memoryLimit),
     network_rx_bytes: sumOrNull(rx),
     network_tx_bytes: sumOrNull(tx),
-    disk_used_bytes: sumOrNull(diskUsed),
-    disk_free_bytes: sumOrNull(diskFree),
-    disk_total_bytes: sumOrNull(diskTotal),
+    disk_used_bytes: diskUsed,
+    disk_free_bytes: diskFree,
+    disk_total_bytes: diskTotal,
     swap_used_bytes: sumOrNull(swapUsed),
     swap_total_bytes: sumOrNull(swapTotal),
   };

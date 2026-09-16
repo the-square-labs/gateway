@@ -58,7 +58,8 @@ export class ManagedDatabaseBindingAdmission {
     targetType: ManagedDatabaseBindingRow['targetType'],
     targetResourceId: string,
     environment: ManagedDatabaseBindingRow['environment'],
-    replaceExistingEnvironment = false
+    replaceExistingEnvironment = false,
+    targetEnvironment?: Record<string, string>
   ) {
     const requested = new Set(Object.values(environment).filter((value): value is string => Boolean(value)));
     if (requested.size === 0) {
@@ -91,7 +92,10 @@ export class ManagedDatabaseBindingAdmission {
     if (targetType === 'deployment') {
       const deployment = await this.dockerDeployments.get(targetNodeId, targetResourceId);
       const secretKeys = await this.dockerSecrets.getSecretKeys(targetNodeId, `deployment:${targetResourceId}`);
-      const existing = new Set([...Object.keys(deployment.desiredConfig.env ?? {}), ...secretKeys]);
+      const existing = new Set([
+        ...Object.keys(targetEnvironment ?? deployment.desiredConfig.env ?? {}),
+        ...secretKeys,
+      ]);
       if ([...requested].some((name) => existing.has(name))) {
         throw new AppError(
           409,
@@ -118,9 +122,11 @@ export class ManagedDatabaseBindingAdmission {
     assertUserTarget(inspect);
     const name = typeof inspect?.Name === 'string' ? inspect.Name.replace(/^\/+/, '') : '';
     const envKeys = new Set(
-      (Array.isArray(inspect?.Config?.Env) ? (inspect.Config.Env as unknown[]) : [])
-        .filter((entry): entry is string => typeof entry === 'string')
-        .map((entry) => entry.split('=', 1)[0]!)
+      targetEnvironment
+        ? Object.keys(targetEnvironment)
+        : (Array.isArray(inspect?.Config?.Env) ? (inspect.Config.Env as unknown[]) : [])
+            .filter((entry): entry is string => typeof entry === 'string')
+            .map((entry) => entry.split('=', 1)[0]!)
     );
     if (name) {
       for (const key of await this.dockerSecrets.getSecretKeys(targetNodeId, name)) envKeys.add(key);

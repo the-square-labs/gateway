@@ -11,6 +11,14 @@ func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 		return base
 	}
 	base.DockerVersion = p.version
+	if p.storageManager != nil {
+		mount, err := p.storageManager.storageRootHealthMount()
+		if err != nil {
+			p.logger.Warn("failed to collect managed storage root health", "error", err)
+		} else {
+			base.DiskMounts = append(base.DiskMounts, mount)
+		}
+	}
 
 	ctx := context.Background()
 	running, stopped, total, err := p.client.CountContainers(ctx)

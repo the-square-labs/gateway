@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import type { ManagedObjectStorage, ManagedStorageBindingEnvironment } from "@/types";
 
 const ENVIRONMENT_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -127,10 +128,12 @@ export function ManagedStorageLinkDialog({
             <span className="text-sm font-medium">Managed secret names</span>
             <div className="grid gap-2 md:grid-cols-2">
               {ENVIRONMENT_FIELDS.map(({ field, label }) => (
-                <label key={field} className="space-y-1.5">
-                  <span className="text-xs text-muted-foreground">{label}</span>
+                <label
+                  key={field}
+                  className={cn("block space-y-1.5", field === "region" && "md:col-span-2")}
+                >
+                  <span className="text-sm font-medium">{label}</span>
                   <Input
-                    className="font-mono text-xs"
                     value={environment[field] ?? ""}
                     onChange={(event) =>
                       setEnvironment((current) => ({ ...current, [field]: event.target.value }))

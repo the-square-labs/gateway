@@ -11,6 +11,7 @@ import type {
 import { managedStorageAccessKeys, managedStorageClusters } from '@/db/schema/managed-storage.js';
 import { nodes } from '@/db/schema/nodes.js';
 import { objectStorageConnections } from '@/db/schema/object-storage.js';
+import { proxyAdditionalSecureLinks } from '@/db/schema/proxy-additional-secure-links.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -700,6 +701,18 @@ export class ManagedStorageService {
 
   async delete(id: string, userId: string) {
     const existing = await this.getRow(id);
+    const [secureLinkReference] = await this.db
+      .select({ id: proxyAdditionalSecureLinks.id })
+      .from(proxyAdditionalSecureLinks)
+      .where(eq(proxyAdditionalSecureLinks.managedStorageId, id))
+      .limit(1);
+    if (secureLinkReference) {
+      throw new AppError(
+        409,
+        'MANAGED_STORAGE_SECURE_LINK_IN_USE',
+        'Remove Route Secure Link bindings before deleting managed storage'
+      );
+    }
     if (existing.objectStorageConnectionId)
       await assertStorageHasNoBackupReferences(this.db, existing.objectStorageConnectionId);
     this.assertClaimable(existing);
@@ -714,6 +727,22 @@ export class ManagedStorageService {
           .for('update');
         await assertStorageHasNoBackupReferences(tx, existing.objectStorageConnectionId);
       }
+      await tx
+        .select({ id: managedStorageClusters.id })
+        .from(managedStorageClusters)
+        .where(eq(managedStorageClusters.id, id))
+        .for('update');
+      const [reference] = await tx
+        .select({ id: proxyAdditionalSecureLinks.id })
+        .from(proxyAdditionalSecureLinks)
+        .where(eq(proxyAdditionalSecureLinks.managedStorageId, id))
+        .limit(1);
+      if (reference)
+        throw new AppError(
+          409,
+          'MANAGED_STORAGE_SECURE_LINK_IN_USE',
+          'Remove Route Secure Link bindings before deleting managed storage'
+        );
       const [row] = await tx
         .update(managedStorageClusters)
         .set({ status: 'deleting', pendingOperation, updatedById: userId, updatedAt: new Date() })

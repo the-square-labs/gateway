@@ -1,4 +1,6 @@
+import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import { managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -152,6 +154,38 @@ export function daemonContainerCreateConfig(config: Record<string, unknown>): Re
     ...(primaryNetwork ? { network_mode: primaryNetwork } : {}),
     ...(legacyPortBindings && Object.keys(legacyPortBindings).length > 0 ? { port_bindings: legacyPortBindings } : {}),
   };
+}
+
+async function renameManagedBindingTargets(
+  db: DrizzleClient,
+  nodeId: string,
+  oldName: string,
+  newName: string
+): Promise<void> {
+  if (oldName === newName) return;
+  const updatedAt = new Date();
+  await db.transaction(async (tx) => {
+    await tx
+      .update(managedDatabaseBindings)
+      .set({ targetResourceId: newName, updatedAt })
+      .where(
+        and(
+          eq(managedDatabaseBindings.targetNodeId, nodeId),
+          eq(managedDatabaseBindings.targetType, 'container'),
+          eq(managedDatabaseBindings.targetResourceId, oldName)
+        )
+      );
+    await tx
+      .update(managedStorageBindings)
+      .set({ targetResourceId: newName, updatedAt })
+      .where(
+        and(
+          eq(managedStorageBindings.targetNodeId, nodeId),
+          eq(managedStorageBindings.targetType, 'container'),
+          eq(managedStorageBindings.targetResourceId, oldName)
+        )
+      );
+  });
 }
 
 function asyncDaemonTaskId(data: any, expectedType: string): string | undefined {
@@ -603,6 +637,8 @@ export async function renameContainer(
         await ctx.folderService.renameContainerAssignment(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.folderService!.renameContainerAssignment(nodeId, newName, oldName));
       }
+      await renameManagedBindingTargets(ctx.db, nodeId, oldName, newName);
+      metadataRollbacks.unshift(() => renameManagedBindingTargets(ctx.db, nodeId, newName, oldName));
       if (ctx.accessResourceService) {
         await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
@@ -614,7 +650,20 @@ export async function renameContainer(
           newName: oldName,
         });
         ctx.parseResult(rollbackResult);
-        for (const rollback of metadataRollbacks) await rollback();
+        const failures: unknown[] = [];
+        for (const rollback of metadataRollbacks) {
+          try {
+            await rollback();
+          } catch (error) {
+            failures.push(error);
+          }
+        }
+        if (failures.length) {
+          throw new AggregateError(
+            failures,
+            failures.map((error) => (error instanceof Error ? error.message : String(error))).join('; ')
+          );
+        }
       } catch (rollbackError) {
         const primaryMessage = metadataError instanceof Error ? metadataError.message : String(metadataError);
         const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);

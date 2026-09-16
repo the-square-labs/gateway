@@ -188,7 +188,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_additional_secure_link',
     description:
-      'List, create, retry, or delete user-managed Additional Secure Link Bindings for a managed ingress Route. Route-owned bindings are managed only through manage_additional_route and cannot be deleted here.',
+      'List, create, retry, or delete Additional Secure Links from a Route to Docker workloads or managed S3 storage. For managed_storage pass managedStorageId; the private relay needs no shared network or published S3 port, and S3 authentication remains required. Route-owned bindings are managed only through manage_additional_route.',
     parameters: {
       type: 'object',
       properties: {
@@ -196,7 +196,8 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         routeId: { type: 'string', description: 'Parent Route UUID' },
         bindingId: { type: 'string' },
         name: { type: 'string' },
-        upstreamKind: { type: 'string', enum: ['docker_container', 'docker_deployment'] },
+        upstreamKind: { type: 'string', enum: ['docker_container', 'docker_deployment', 'managed_storage'] },
+        managedStorageId: { type: 'string', description: 'Managed storage UUID for managed_storage target.' },
         forwardScheme: { type: 'string', enum: ['http', 'https'] },
         dockerNodeId: { type: 'string' },
         dockerContainerName: { type: 'string' },

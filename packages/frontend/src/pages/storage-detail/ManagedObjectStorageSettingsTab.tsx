@@ -2,11 +2,10 @@ import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
-import { SettingsControlRow } from "@/components/common/SettingsControlRow";
+import { ToggleField } from "@/components/common/ToggleField";
 import { Button } from "@/components/ui/button";
 import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import type { ObjectStorageConnection } from "@/types";
 
@@ -48,6 +47,7 @@ export function ManagedObjectStorageSettingsTab({
     setCpuCores(String(managed.runtimeConfig.cpuCores || 1));
     setMemoryMb(String(Math.max(MINIMUM_MEMORY_MB, managed.runtimeConfig.memoryMb)));
     setSwapMb(String(Math.max(0, managed.runtimeConfig.swapMb)));
+    setPublishS3(managed.publishS3 ?? false);
     setPublishedPort(String(managed.publishedPort));
   }, [storage.name, storage.tags, managed]);
 
@@ -169,12 +169,14 @@ export function ManagedObjectStorageSettingsTab({
           </div>
         </div>
 
-        <SettingsControlRow
+        <ToggleField
           title="Publish S3 endpoint"
           description="Private access remains available through Gateway relay."
-        >
-          <Switch checked={publishS3} onChange={setPublishS3} disabled={saving} />
-        </SettingsControlRow>
+          checked={publishS3}
+          onChange={setPublishS3}
+          disabled={saving}
+          ariaLabel="Publish S3 endpoint"
+        />
         <div className="space-y-1.5">
           <label htmlFor="managed-storage-published-port" className="text-sm font-medium">
             Published S3 API port

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
@@ -163,6 +164,7 @@ import { ManagedStorageMetricsProvider } from '@/modules/object-storage/managed-
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
 import { ObjectStorageMonitoringService } from '@/modules/object-storage/object-storage-monitoring.service.js';
+import { ObjectStorageUploadService } from '@/modules/object-storage/object-storage-upload.service.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import { PageArtifactStore, resolvePageStorageDir } from '@/modules/pages/artifacts/page-artifact-store.js';
 import { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
@@ -1067,6 +1069,14 @@ export async function initializeContainer(): Promise<void> {
     managedStorageTunnelProxy
   );
   container.registerInstance(ObjectStorageService, objectStorageService);
+  container.registerInstance(
+    ObjectStorageUploadService,
+    new ObjectStorageUploadService(
+      objectStorageService,
+      generalSettingsService,
+      join(resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV), 'object-uploads')
+    )
+  );
 
   const objectStorageFolderService = new ObjectStorageFolderService(db, auditService);
   container.registerInstance(ObjectStorageFolderService, objectStorageFolderService);

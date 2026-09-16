@@ -1,5 +1,5 @@
 import { Activity, FolderOpen, Key } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -19,7 +19,6 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { storageRoute } from "@/lib/resource-routes";
-import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
@@ -45,6 +44,8 @@ export function StorageDetail({
   const navigate = useStableNavigate();
   const { hasScope } = useAuthStore();
   const [storage, setStorage] = useState<ObjectStorageConnection | null>(null);
+  const loadGeneration = useRef(0);
+  const loadedStorageId = storage && storage.id === id ? storage.id : null;
   const [loading, setLoading] = useState(true);
   const [liveHealthHistory, setLiveHealthHistory] = useState<
     ObjectStorageConnection["healthHistory"]
@@ -90,25 +91,31 @@ export function StorageDetail({
 
   const load = useCallback(async () => {
     if (!id) return;
+    const generation = ++loadGeneration.current;
     setLoading(true);
     try {
       const [storage, healthHistory] = await Promise.all([
         api.getObjectStorage(id),
         api.getObjectStorageHealthHistory(id),
       ]);
+      if (generation !== loadGeneration.current) return;
       setStorage(storage);
       setLiveHealthHistory(healthHistory);
       setLiveHealthStatus(storage.healthStatus);
     } catch (error) {
+      if (generation !== loadGeneration.current) return;
       toast.error(error instanceof Error ? error.message : "Failed to load storage");
       navigate("/storage");
     } finally {
-      setLoading(false);
+      if (generation === loadGeneration.current) setLoading(false);
     }
   }, [id, navigate]);
 
   useEffect(() => {
     void load();
+    return () => {
+      loadGeneration.current++;
+    };
   }, [load]);
 
   useEffect(() => {
@@ -118,38 +125,44 @@ export function StorageDetail({
   }, [activeTab, liveHealthStatus, setActiveTab]);
 
   useEffect(() => {
-    if (!storage) return;
-    setLiveHealthStatus(storage.healthStatus);
     setMonitoringHistory([]);
-    setMonitoringLoading(canViewMonitoring && storage.healthStatus !== "offline");
-  }, [canViewMonitoring, storage]);
+    setMonitoringLoading(canViewMonitoring && !!loadedStorageId);
+  }, [canViewMonitoring, loadedStorageId]);
 
   useEffect(() => {
-    if (!storage || !canViewMonitoring) {
+    if (!loadedStorageId || !canViewMonitoring) {
       setMonitoringLoading(false);
       return;
     }
-    const es = api.createObjectStorageMonitoringStream(storage.id);
+    let current = true;
+    const es = api.createObjectStorageMonitoringStream(loadedStorageId);
     es.addEventListener("connected", (event: MessageEvent) => {
+      if (!current) return;
       const message = JSON.parse(event.data);
-      setLiveHealthHistory(message.healthHistory ?? storage.healthHistory ?? []);
-      setLiveHealthStatus(message.healthStatus ?? storage.healthStatus);
-      setMonitoringLoading(false);
+      if (message.healthHistory) setLiveHealthHistory(message.healthHistory);
+      if (message.healthStatus) setLiveHealthStatus(message.healthStatus);
     });
     es.addEventListener("history", (event: MessageEvent) => {
+      if (!current) return;
       const message = JSON.parse(event.data);
       setMonitoringHistory(message.history ?? []);
       setMonitoringLoading(false);
     });
     es.addEventListener("snapshot", (event: MessageEvent) => {
+      if (!current) return;
       const snapshot = JSON.parse(event.data) as ObjectStorageMetricSnapshot;
       setMonitoringHistory((prev) => [...prev, snapshot].slice(-60));
       setLiveHealthStatus(snapshot.status);
       setMonitoringLoading(false);
     });
-    es.onerror = () => setMonitoringLoading(false);
-    return () => es.close();
-  }, [canViewMonitoring, storage]);
+    es.onerror = () => {
+      if (current) setMonitoringLoading(false);
+    };
+    return () => {
+      current = false;
+      es.close();
+    };
+  }, [canViewMonitoring, loadedStorageId]);
 
   useRealtime(id ? "storage.changed" : null, (payload) => {
     const event = payload as {
@@ -278,18 +291,11 @@ export function StorageDetail({
     );
   }
 
-  const isFullHeightTab = activeTab === "browser";
   const browserDisabled = liveHealthStatus === "offline";
 
   return (
     <PageTransition>
-      <div
-        className={cn(
-          isFullHeightTab
-            ? "h-full flex flex-col overflow-hidden gap-4 p-6"
-            : "h-full overflow-y-auto p-6 space-y-4"
-        )}
-      >
+      <div className="h-full overflow-y-auto p-6 space-y-4">
         <StorageHeader
           storage={storage}
           healthStatus={liveHealthStatus}
@@ -310,11 +316,7 @@ export function StorageDetail({
 
         <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
 
-        <Tabs
-          value={activeTab}
-          onValueChange={setActiveTab}
-          className={cn("flex flex-col", isFullHeightTab && "flex-1 min-h-0")}
-        >
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col">
           <TabsList className="shrink-0">
             <TabsTrigger value="overview" className="gap-1.5">
               <Activity className="h-3.5 w-3.5" />
@@ -345,7 +347,7 @@ export function StorageDetail({
           </TabsContent>
 
           {canRead && (
-            <TabsContent value="browser" className="flex flex-col flex-1 min-h-0">
+            <TabsContent value="browser" className="space-y-4">
               {browserDisabled ? (
                 <div className="border border-border bg-card p-8 text-center text-sm text-muted-foreground">
                   Object browser is unavailable while the storage is offline.

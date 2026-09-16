@@ -429,6 +429,33 @@ describe('MCP tools', () => {
     );
   });
 
+  it('redacts S3 upload bytes from denied MCP audit records', async () => {
+    registerToken(['storage:objects:read']);
+    const executeTool = vi.fn();
+    const log = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AIService, { executeTool } as unknown as AIService);
+    container.registerInstance(AuditService, { log } as unknown as AuditService);
+    const { body } = await mcpRequest('tools/call', {
+      name: 'upload_storage_object',
+      arguments: {
+        operation: 'chunk',
+        storageId: 'storage-1',
+        uploadId: 'upload-1',
+        offset: 0,
+        contentBase64: 'c2VjcmV0',
+      },
+    });
+    expect(body.result.isError).toBe(true);
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        details: expect.objectContaining({
+          arguments: expect.objectContaining({ contentBase64: '[REDACTED]' }),
+        }),
+      })
+    );
+  });
+
   it('passes effective token scopes and token metadata to AI tool execution', async () => {
     registerToken(['nodes:details']);
     const executeTool = vi.fn().mockResolvedValue({ result: { data: [] }, invalidateStores: [] });
@@ -549,17 +576,19 @@ describe('MCP tools', () => {
     expect(names).toContain('list_docker_deployments');
   });
 
-  it('discovers Pages and managed database lifecycle tools by domain', async () => {
-    registerToken(['pages:view', 'pages:deploy', 'databases:view']);
+  it('discovers Pages, storage, and managed database lifecycle tools by domain', async () => {
+    registerToken(['pages:view', 'pages:deploy', 'databases:view', 'storage:view']);
 
     await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'pages' } });
     await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'databases' } });
+    await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'storage' } });
 
     const refreshed = await mcpRequest('tools/list');
     const names = refreshed.body.result.tools.map((tool: { name: string }) => tool.name);
     expect(names).toContain('manage_pages');
     expect(names).toContain('upload_pages_artifact');
     expect(names).toContain('manage_managed_database');
+    expect(names).toContain('manage_managed_storage');
   });
 
   it('emits tools/list_changed after activating a toolset', async () => {
@@ -605,6 +634,7 @@ describe('MCP tools', () => {
       'certificates',
       'docker',
       'databases',
+      'storage',
       'logging',
       'status_page',
       'notifications',

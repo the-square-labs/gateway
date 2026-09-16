@@ -19,17 +19,19 @@ import { dockerComposeProjects } from './docker-compose.js';
 import { dockerDeployments } from './docker-deployments.js';
 import { nginxTemplates } from './nginx-templates.js';
 import { nodes } from './nodes.js';
+import { proxyHostTypeEnum } from './proxy-enums.js';
 import { proxyHostFolders } from './proxy-host-folders.js';
 import { sslCertificates } from './ssl-certificates.js';
 import { users } from './users.js';
 
-export const proxyHostTypeEnum = pgEnum('proxy_host_type', ['proxy', 'redirect', '404', 'raw']);
+export { proxyHostTypeEnum } from './proxy-enums.js';
 export const forwardSchemeEnum = pgEnum('forward_scheme', ['http', 'https']);
 export const proxyUpstreamKindEnum = pgEnum('proxy_upstream_kind', [
   'manual',
   'docker_container',
   'docker_deployment',
   'pages',
+  'managed_storage',
 ]);
 export const healthStatusEnum = pgEnum('health_status', ['online', 'offline', 'degraded', 'unknown', 'disabled']);
 export const healthCheckBodyMatchModeEnum = pgEnum('health_check_body_match_mode', [

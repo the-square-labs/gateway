@@ -461,6 +461,8 @@ describe("EnvironmentTab managed database links", () => {
     );
 
     expect(await screen.findByRole("button", { name: "Add" })).toBeDisabled();
+    expect(screen.getByTitle("Add variable")).toBeDisabled();
+    expect(screen.getByTitle("Raw view")).toBeDisabled();
   });
 
   it("does not re-fetch the old container after saving a managed database link", async () => {

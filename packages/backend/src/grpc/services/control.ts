@@ -17,6 +17,7 @@ import { NginxCertificateDistributionService } from '@/services/nginx-certificat
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import type { GrpcServerDeps } from '../server.js';
+import { decodeHealthDiskMounts } from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
 const pendingCommandRegistrations = new Map<string, { token: symbol; sequence: number }>();
@@ -904,6 +905,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 deps.registry.handleCommandResult(activeNodeId, msg.commandResult);
               }
             } else if (msg.healthReport) {
+              const diskHealth = decodeHealthDiskMounts(msg.healthReport.diskMounts);
               const healthData = {
                 nginxRunning: msg.healthReport.nginxRunning,
                 configValid: msg.healthReport.configValid,
@@ -925,15 +927,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 systemUptimeSeconds: Number(msg.healthReport.systemUptimeSeconds ?? 0),
                 openFileDescriptors: Number(msg.healthReport.openFileDescriptors ?? 0),
                 maxFileDescriptors: Number(msg.healthReport.maxFileDescriptors ?? 0),
-                diskMounts: (msg.healthReport.diskMounts ?? []).map((m: any) => ({
-                  mountPoint: m.mountPoint,
-                  filesystem: m.filesystem,
-                  device: m.device,
-                  totalBytes: Number(m.totalBytes ?? 0),
-                  usedBytes: Number(m.usedBytes ?? 0),
-                  freeBytes: Number(m.freeBytes ?? 0),
-                  usagePercent: m.usagePercent ?? 0,
-                })),
+                diskMounts: diskHealth.diskMounts,
+                ...(diskHealth.managedStorageCapacity
+                  ? { managedStorageCapacity: diskHealth.managedStorageCapacity }
+                  : {}),
                 diskReadBytes: Number(msg.healthReport.diskReadBytes ?? 0),
                 diskWriteBytes: Number(msg.healthReport.diskWriteBytes ?? 0),
                 networkInterfaces: (msg.healthReport.networkInterfaces ?? []).map((n: any) => ({

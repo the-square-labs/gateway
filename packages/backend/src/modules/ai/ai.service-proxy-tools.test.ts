@@ -70,6 +70,18 @@ function createService(proxyService: Record<string, unknown>, folderService: Rec
 describe('AIService proxy tool routing', () => {
   afterEach(() => container.reset());
 
+  it('keeps object upload bytes out of embedded AI execution', async () => {
+    await expect(
+      createService({}).executeTool({ ...BASE_USER, scopes: ['storage:objects:write'] }, 'upload_storage_object', {
+        operation: 'begin',
+        storageId: 'storage-1',
+      })
+    ).resolves.toEqual({
+      error: 'Tool upload_storage_object is available only through remote MCP',
+      invalidateStores: [],
+    });
+  });
+
   it('keeps binary Pages upload out of the embedded AI execution surface', async () => {
     const service = createService({});
 

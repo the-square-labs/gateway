@@ -7,16 +7,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	mobyclient "github.com/moby/moby/client"
+	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"golang.org/x/sys/unix"
 )
+
+const managedStorageRootFilesystem = "gateway-managed-storage-root"
+
+type managedStorageManager struct {
+	client         *Client
+	logger         *slog.Logger
+	root           string
+	reserve        int64
+	statFilesystem func(string, *unix.Statfs_t) error
+	mu             sync.Mutex
+}
 
 func (m *managedStorageManager) stageTLS(record managedStorageRecord, tlsConfig managedStorageTLS) (string, error) {
 	directory := filepath.Join(m.root, "storage", "tls", fmt.Sprintf("%s-%d", record.ID, record.MemberIndex))
@@ -49,7 +63,7 @@ func (m *managedStorageManager) stageSFTPHostKey(record managedStorageRecord, ho
 
 func (m *managedStorageManager) ensureCapacity(bytes int64) error {
 	var stat unix.Statfs_t
-	if err := unix.Statfs(m.root, &stat); err != nil {
+	if err := m.filesystemStats(m.root, &stat); err != nil {
 		return fmt.Errorf("stat storage root: %w", err)
 	}
 	free := int64(stat.Bavail) * int64(stat.Bsize)
@@ -57,6 +71,40 @@ func (m *managedStorageManager) ensureCapacity(bytes int64) error {
 		return errors.New("insufficient managed storage capacity after reserve")
 	}
 	return nil
+}
+
+func (m *managedStorageManager) filesystemStats(path string, stat *unix.Statfs_t) error {
+	if m.statFilesystem != nil {
+		return m.statFilesystem(path, stat)
+	}
+	return unix.Statfs(path, stat)
+}
+
+func (m *managedStorageManager) storageRootHealthMount() (*pb.DiskMount, error) {
+	var stat unix.Statfs_t
+	if err := m.filesystemStats(m.root, &stat); err != nil {
+		return nil, fmt.Errorf("stat managed storage root for health: %w", err)
+	}
+	blockSize := int64(stat.Bsize)
+	total := int64(stat.Blocks) * blockSize
+	free := int64(stat.Bavail) * blockSize
+	// The wizard must not advertise bytes reserved for recovery and other
+	// storage-manager work. This marker is explicitly allocatable capacity;
+	// managed workload mounts below remain raw ext4 filesystem metrics.
+	allocatable := max(int64(0), free-m.reserve)
+	used := total - allocatable
+	usagePercent := 0.0
+	if total > 0 {
+		usagePercent = float64(used) / float64(total) * 100
+	}
+	return &pb.DiskMount{
+		MountPoint:   m.root,
+		Filesystem:   managedStorageRootFilesystem,
+		TotalBytes:   total,
+		UsedBytes:    used,
+		FreeBytes:    allocatable,
+		UsagePercent: usagePercent,
+	}, nil
 }
 
 func (m *managedStorageManager) createImage(ctx context.Context, record managedStorageRecord) error {

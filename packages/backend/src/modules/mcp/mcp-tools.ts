@@ -156,6 +156,13 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     toolNames: toolNamesForCategories(['Databases', 'Managed Databases']),
   },
   {
+    id: 'storage',
+    title: 'Storage',
+    description:
+      'External storage connections, object operations, managed MinIO lifecycle, and private workload links.',
+    toolNames: toolNamesForCategories(['Storage']),
+  },
+  {
     id: 'pages',
     title: 'Pages',
     description: 'Static Page Projects, Deployments, Tags, runtime configuration, and Pages profile operations.',

@@ -1,5 +1,5 @@
-import { and, eq, inArray, ne, or } from 'drizzle-orm';
-import { proxyHosts } from '@/db/schema/index.js';
+import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { proxyAdditionalRoutes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
 
@@ -80,20 +80,69 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
   }
 
   protected async updateRenamedContainerReferences(nodeId: string, oldName: string, newName: string): Promise<void> {
-    const updated = await this.db
-      .update(proxyHosts)
-      .set({ dockerContainerName: newName, updatedAt: new Date() })
-      .where(
-        and(
-          eq(proxyHosts.upstreamKind, 'docker_container'),
-          eq(proxyHosts.dockerNodeId, nodeId),
-          eq(proxyHosts.dockerContainerName, oldName)
+    const updated = await this.db.transaction(async (tx) => {
+      const hosts = await tx
+        .update(proxyHosts)
+        .set({
+          dockerContainerName: newName,
+          secureLinkTargetContainer: sql`case
+            when ${proxyHosts.secureLinkTargetContainer} = ${oldName} then ${newName}
+            else ${proxyHosts.secureLinkTargetContainer}
+          end`,
+          // An active primary link needs a new relay/daemon generation after
+          // its container name changes. Keeping this durable state makes a
+          // failed immediate reconciliation recoverable after restart.
+          secureLinkStatus: sql`case
+            when ${proxyHosts.secureLinkGeneration} > 0 and ${proxyHosts.secureLinkStatus} = 'active' then 'updating'
+            else ${proxyHosts.secureLinkStatus}
+          end`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proxyHosts.upstreamKind, 'docker_container'),
+            eq(proxyHosts.dockerNodeId, nodeId),
+            eq(proxyHosts.dockerContainerName, oldName)
+          )
         )
-      )
-      .returning();
+        .returning();
+
+      await tx
+        .update(proxyAdditionalRoutes)
+        .set({ dockerContainerName: newName, updatedAt: new Date() })
+        .where(
+          and(
+            eq(proxyAdditionalRoutes.targetKind, 'docker_container'),
+            eq(proxyAdditionalRoutes.dockerNodeId, nodeId),
+            eq(proxyAdditionalRoutes.dockerContainerName, oldName)
+          )
+        );
+
+      await tx
+        .update(proxyAdditionalSecureLinks)
+        .set({
+          dockerContainerName: newName,
+          targetContainer: sql`case
+            when ${proxyAdditionalSecureLinks.targetContainer} = ${oldName} then ${newName}
+            else ${proxyAdditionalSecureLinks.targetContainer}
+          end`,
+          generation: sql`${proxyAdditionalSecureLinks.generation} + 1`,
+          status: 'provisioning',
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proxyAdditionalSecureLinks.upstreamKind, 'docker_container'),
+            eq(proxyAdditionalSecureLinks.dockerNodeId, nodeId),
+            eq(proxyAdditionalSecureLinks.dockerContainerName, oldName),
+            ne(proxyAdditionalSecureLinks.status, 'cleanup_pending')
+          )
+        );
+      return hosts;
+    });
     for (const host of updated) this.emitHost(host.id, 'updated', host.domainNames?.[0]);
-    await this.additionalRoutes?.updateRenamedContainerReferences(nodeId, oldName, newName);
-    this.queueDockerReconciliation();
+    this.queueDockerReconciliation(true);
   }
 
   protected async resolveStoredDockerUpstream(host: ProxyHostRow, force = false): Promise<ProxyHostRow> {
@@ -106,7 +155,8 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       host.dockerContainerName !== resolved.dockerContainerName ||
       host.dockerComposeProjectId !== resolved.dockerComposeProjectId ||
       host.dockerComposeServiceName !== resolved.dockerComposeServiceName ||
-      host.dockerDeploymentId !== resolved.dockerDeploymentId;
+      host.dockerDeploymentId !== resolved.dockerDeploymentId ||
+      (host.secureLinkGeneration > 0 && host.secureLinkTargetContainer !== resolved.dockerContainerName);
     if (!changed && host.secureLinkStatus === 'active' && !force) return host;
     let updated = host;
     if (changed) {

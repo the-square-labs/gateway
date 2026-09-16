@@ -8,6 +8,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function redactOneTimeSecretToolResult(toolName: string, value: unknown): unknown {
+  if (toolName === 'manage_managed_storage' && isRecord(value) && typeof value.secretKey === 'string') {
+    return { ...value, secretKey: ONE_TIME_SECRET_REDACTION, secretKeyRedacted: true };
+  }
   if (
     (toolName === 'manage_api_token' || toolName === 'manage_inference_token') &&
     isRecord(value) &&

@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { redactOneTimeSecretToolResult } from './ai-secret-result-redaction.js';
 
 describe('redactOneTimeSecretToolResult', () => {
+  it('redacts a one-time Storage IAM key without modifying the immediate result', () => {
+    const result = { accessKey: 'AK', secretKey: 'storage-secret' };
+    expect(redactOneTimeSecretToolResult('manage_managed_storage', result)).toEqual({
+      accessKey: 'AK',
+      secretKey: '[REDACTED_ONE_TIME_SECRET]',
+      secretKeyRedacted: true,
+    });
+    expect(result.secretKey).toBe('storage-secret');
+  });
   it('redacts one-time API token secrets from persistence/model copies', () => {
     expect(
       redactOneTimeSecretToolResult('manage_api_token', {

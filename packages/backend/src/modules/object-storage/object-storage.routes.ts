@@ -259,17 +259,18 @@ objectStorageRoutes.openapi(
 
     return streamSSE(c, async (stream) => {
       const details = await connections.get(storageId);
-      const healthHistory = await connections.getHealthHistory(storageId);
-      const history = await monitoring.getHistory(storageId);
+      const [healthHistory, history] = await Promise.all([
+        connections.getHealthHistory(storageId),
+        monitoring.getInitialHistory(details),
+      ]);
       await stream.writeSSE({
         data: JSON.stringify({ connected: true, storageId, healthHistory, healthStatus: details.healthStatus }),
         event: 'connected',
       });
       await stream.sleep(0);
 
-      if (history.length > 0) {
-        await stream.writeSSE({ data: JSON.stringify({ storageId, history }), event: 'history' });
-      }
+      await stream.writeSSE({ data: JSON.stringify({ storageId, history }), event: 'history' });
+      if (stream.aborted) return;
 
       const onSnapshot = (payload: { storageId: string; snapshot: unknown }) => {
         if (payload.storageId !== storageId) return;
@@ -282,13 +283,19 @@ objectStorageRoutes.openapi(
         stream.writeSSE({ data: '', event: 'ping' }).catch(() => clearInterval(keepalive));
       }, 30_000);
 
-      stream.onAbort(() => {
-        clearInterval(keepalive);
-        monitoring.off('snapshot', onSnapshot);
-        monitoring.unregisterClient(storageId);
+      await new Promise<void>((resolve) => {
+        let closed = false;
+        const cleanup = () => {
+          if (closed) return;
+          closed = true;
+          clearInterval(keepalive);
+          monitoring.off('snapshot', onSnapshot);
+          monitoring.unregisterClient(storageId);
+          resolve();
+        };
+        stream.onAbort(cleanup);
+        if (stream.aborted) cleanup();
       });
-
-      await new Promise(() => {});
     });
   }
 );

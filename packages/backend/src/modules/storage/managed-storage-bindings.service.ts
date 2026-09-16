@@ -39,6 +39,13 @@ interface BindingCredentials {
   secretAccessKey: string;
 }
 
+interface TargetBindingSnapshot {
+  environment: Record<string, string>;
+  ownedSecrets: Record<string, string>;
+  networkAttached: boolean;
+  wasRunning: boolean;
+}
+
 /**
  * Private routes from application workloads to a managed storage cluster.
  *
@@ -223,6 +230,7 @@ export class ManagedStorageBindingsService {
     let connectorCreated = false;
     let credentials: BindingCredentials | null = null;
     let targetStarted = false;
+    let targetEnvironmentBefore: Record<string, string> | undefined;
     try {
       credentials = await this.createScopedKey(cluster, binding);
       keyCreated = true;
@@ -291,6 +299,7 @@ export class ManagedStorageBindingsService {
         })
       );
 
+      targetEnvironmentBefore = await this.targetEnvironmentSnapshot(binding);
       targetStarted = true;
       await this.applyTargetBinding(binding, credentials, userId, targetEnvironment);
       const ready = await this.setStatus(binding.id, 'ready', null, userId, credentials.accessKeyId);
@@ -309,6 +318,7 @@ export class ManagedStorageBindingsService {
           connectorCreated,
           targetStarted,
         },
+        targetEnvironmentBefore,
         userId
       );
       const failed = await this.setStatus(binding.id, 'error', message, userId);
@@ -329,6 +339,7 @@ export class ManagedStorageBindingsService {
       connectorCreated: boolean;
       targetStarted: boolean;
     },
+    targetEnvironmentBefore: Record<string, string> | undefined,
     userId: string
   ) {
     const swallow = async (label: string, run: () => Promise<unknown>) => {
@@ -341,7 +352,21 @@ export class ManagedStorageBindingsService {
         });
       }
     };
-    if (done.targetStarted) await swallow('remove target binding', () => this.removeTargetBinding(binding, userId));
+    let targetRemoved = !done.targetStarted;
+    if (done.targetStarted) {
+      try {
+        await this.removeTargetBinding(binding, userId, targetEnvironmentBefore);
+        targetRemoved = true;
+      } catch (error) {
+        logger.warn('Managed storage binding compensation step failed: remove target binding', {
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    // The target may still be using the binding-owned one-time credentials.
+    // Do not revoke its route or IAM key until target removal has completed.
+    if (!targetRemoved) return;
     if (done.connectorCreated) {
       await swallow('remove connector', () =>
         this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'remove', {
@@ -411,12 +436,16 @@ export class ManagedStorageBindingsService {
     const existing = await this.dockerSecrets.getSecretKeys(input.targetNodeId, target);
     if (input.targetType === 'deployment') {
       const deployment = await this.dockerDeployments.get(input.targetNodeId, input.targetResourceId);
-      for (const name of Object.keys(deployment.desiredConfig.env ?? {})) existing.add(name);
+      for (const name of Object.keys(input.targetEnvironment ?? deployment.desiredConfig.env ?? {})) existing.add(name);
     } else {
-      const env = await this.dockerManagement.getContainerEnv(input.targetNodeId, input.targetResourceId);
-      for (const entry of env) existing.add(entry.split('=', 1)[0]!);
+      const environment = input.targetEnvironment
+        ? Object.keys(input.targetEnvironment)
+        : (await this.dockerManagement.getContainerEnv(input.targetNodeId, input.targetResourceId)).map(
+            (entry) => entry.split('=', 1)[0]!
+          );
+      for (const name of environment) existing.add(name);
     }
-    if (names.some((name) => existing.has(name) || Object.hasOwn(input.targetEnvironment ?? {}, name))) {
+    if (names.some((name) => existing.has(name))) {
       throw new AppError(
         409,
         'MANAGED_STORAGE_BINDING_ENV_CONFLICT',
@@ -489,49 +518,145 @@ export class ManagedStorageBindingsService {
     const names = new Set(Object.values(binding.environment).filter((name): name is string => Boolean(name)));
     const secretContainer =
       binding.targetType === 'deployment' ? `deployment:${binding.targetResourceId}` : binding.targetResourceId;
-    await this.dockerSecrets.deleteOwned(
-      binding.targetNodeId,
-      secretContainer,
-      `storage-binding:${binding.id}`,
-      userId
-    );
-    if (binding.targetType === 'deployment') {
-      await this.dockerDeployments.setManagedStorageBindingNetwork(
+    const snapshot = await this.snapshotTargetBinding(binding, secretContainer, names);
+    try {
+      await this.dockerSecrets.deleteOwned(
         binding.targetNodeId,
-        binding.targetResourceId,
-        binding.networkName,
-        false,
-        userId,
-        targetEnvironment
+        secretContainer,
+        `storage-binding:${binding.id}`,
+        userId
       );
-      // The drained blue/green slot can outlive the rollout; detach both
-      // known slots before removing the binding-owned network.
-      const deployment = await this.dockerDeployments.get(binding.targetNodeId, binding.targetResourceId);
-      for (const slot of deployment.slots) {
-        if (!slot.containerName) continue;
-        const result = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-          networkId: binding.networkName,
-          containerId: slot.containerName,
+      if (binding.targetType === 'deployment') {
+        await this.dockerDeployments.setManagedStorageBindingNetwork(
+          binding.targetNodeId,
+          binding.targetResourceId,
+          binding.networkName,
+          false,
+          userId,
+          targetEnvironment
+        );
+        // The drained blue/green slot can outlive the rollout; detach both
+        // known slots before removing the binding-owned network.
+        const deployment = await this.dockerDeployments.get(binding.targetNodeId, binding.targetResourceId);
+        for (const slot of deployment.slots) {
+          if (!slot.containerName) continue;
+          const result = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
+            networkId: binding.networkName,
+            containerId: slot.containerName,
+          });
+          if (!result.success && !/not found|not connected|no such/i.test(result.error ?? ''))
+            this.requireSuccess(result);
+        }
+        return;
+      }
+      const disconnected = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
+        networkId: binding.networkName,
+        containerId: binding.targetResourceId,
+      });
+      if (!disconnected.success && !/not found|not connected|no such/i.test(disconnected.error ?? ''))
+        this.requireSuccess(disconnected);
+      await this.updateTargetEnvironment(binding, [...names], userId, targetEnvironment);
+    } catch (error) {
+      await this.restoreTargetBinding(binding, secretContainer, names, snapshot, userId);
+      throw error;
+    }
+  }
+
+  private async snapshotTargetBinding(
+    binding: ManagedStorageBindingRow,
+    secretContainer: string,
+    names: ReadonlySet<string>
+  ): Promise<TargetBindingSnapshot> {
+    const secrets = await this.dockerSecrets.getDecryptedMap(binding.targetNodeId, secretContainer);
+    // The internal map deliberately excludes ownership metadata. Restrict the
+    // snapshot to this binding's reserved names; restore uses the same owner
+    // and DockerSecretService rejects another owner's row rather than replacing it.
+    const ownedSecrets = Object.fromEntries(
+      [...names].flatMap((name) => (secrets[name] === undefined ? [] : [[name, secrets[name]]]))
+    );
+    const environment = await this.targetEnvironmentSnapshot(binding);
+    if (binding.targetType === 'deployment') {
+      // A persisted binding is the deployment-level declaration that this
+      // network is attached; the deployment service owns its slot topology.
+      return { environment, ownedSecrets, networkAttached: true, wasRunning: false };
+    }
+    const target = await this.dockerManagement.inspectUserContainer(binding.targetNodeId, binding.targetResourceId);
+    return {
+      environment,
+      ownedSecrets,
+      networkAttached: Boolean(target?.NetworkSettings?.Networks?.[binding.networkName]),
+      wasRunning: target?.State?.Status === 'running',
+    };
+  }
+
+  private async restoreTargetBinding(
+    binding: ManagedStorageBindingRow,
+    secretContainer: string,
+    names: ReadonlySet<string>,
+    snapshot: TargetBindingSnapshot,
+    userId: string
+  ): Promise<void> {
+    const attempt = async (label: string, operation: () => Promise<unknown>) => {
+      try {
+        await operation();
+      } catch (error) {
+        logger.warn(`Managed storage binding target restore failed: ${label}`, {
+          bindingId: binding.id,
+          error: error instanceof Error ? error.message : String(error),
         });
-        if (!result.success && !/not found|not connected|no such/i.test(result.error ?? ''))
-          this.requireSuccess(result);
+      }
+    };
+
+    if (binding.targetType === 'container' && snapshot.networkAttached) {
+      await attempt('reconnect network', async () => {
+        this.requireSuccess(
+          await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'connect', {
+            networkId: binding.networkName,
+            containerId: binding.targetResourceId,
+          })
+        );
+      });
+    }
+    for (const [key, value] of Object.entries(snapshot.ownedSecrets)) {
+      await attempt(`restore secret ${key}`, () =>
+        this.dockerSecrets.create(binding.targetNodeId, secretContainer, key, value, userId, {
+          managed: true,
+          managedOwner: `storage-binding:${binding.id}`,
+        })
+      );
+    }
+    if (binding.targetType === 'deployment') {
+      if (snapshot.networkAttached) {
+        await attempt('restore deployment network', () =>
+          this.dockerDeployments.setManagedStorageBindingNetwork(
+            binding.targetNodeId,
+            binding.targetResourceId,
+            binding.networkName,
+            true,
+            userId,
+            snapshot.environment
+          )
+        );
       }
       return;
     }
-    const disconnected = await this.nodeDispatch.sendDockerNetworkCommand(binding.targetNodeId, 'disconnect', {
-      networkId: binding.networkName,
-      containerId: binding.targetResourceId,
-    });
-    if (!disconnected.success && !/not found|not connected|no such/i.test(disconnected.error ?? ''))
-      this.requireSuccess(disconnected);
-    await this.updateTargetEnvironment(binding, [...names], userId, targetEnvironment);
+    await attempt('restore environment', () =>
+      this.updateTargetEnvironment(
+        binding,
+        [...names],
+        userId,
+        snapshot.environment,
+        snapshot.wasRunning ? 'running' : 'created'
+      )
+    );
   }
 
   private async updateTargetEnvironment(
     binding: ManagedStorageBindingRow,
     managedNames: string[],
     userId: string,
-    targetEnvironment?: Record<string, string>
+    targetEnvironment?: Record<string, string>,
+    expectedState?: 'running' | 'created'
   ) {
     const before = await this.dockerManagement.inspectUserContainer(binding.targetNodeId, binding.targetResourceId);
     const current = Object.fromEntries(
@@ -554,14 +679,29 @@ export class ManagedStorageBindingsService {
       remove,
       userId
     );
-    const expected = before.State?.Status === 'running' ? 'running' : 'created';
+    const expected = expectedState ?? (before.State?.Status === 'running' ? 'running' : 'created');
     const deadline = Date.now() + 120_000;
+    let startRequestedForId: string | null = null;
     while (Date.now() < deadline) {
       try {
         const inspect = await this.dockerManagement.inspectUserContainer(
           binding.targetNodeId,
           binding.targetResourceId
         );
+        if (
+          expected === 'running' &&
+          inspect?.Id &&
+          inspect.State?.Status === 'created' &&
+          startRequestedForId !== inspect.Id
+        ) {
+          this.requireSuccess(
+            await this.nodeDispatch.sendDockerContainerCommand(binding.targetNodeId, 'start', {
+              containerId: inspect.Id,
+            })
+          );
+          startRequestedForId = inspect.Id;
+          continue;
+        }
         if (inspect?.Id && inspect.Id !== before.Id && inspect.State?.Status === expected && !inspect._transition)
           return;
       } catch {
@@ -570,6 +710,21 @@ export class ManagedStorageBindingsService {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     throw new Error('Storage link target did not finish recreating');
+  }
+
+  private async targetEnvironmentSnapshot(binding: ManagedStorageBindingRow): Promise<Record<string, string>> {
+    if (binding.targetType === 'deployment') {
+      const deployment = await this.dockerDeployments.get(binding.targetNodeId, binding.targetResourceId);
+      return { ...(deployment.desiredConfig.env ?? {}) };
+    }
+    return Object.fromEntries(
+      (await this.dockerManagement.getContainerEnv(binding.targetNodeId, binding.targetResourceId)).map(
+        (entry: string) => {
+          const index = entry.indexOf('=');
+          return index < 0 ? [entry, ''] : [entry.slice(0, index), entry.slice(index + 1)];
+        }
+      )
+    );
   }
 
   // ── Scoped IAM key ────────────────────────────────────────────────

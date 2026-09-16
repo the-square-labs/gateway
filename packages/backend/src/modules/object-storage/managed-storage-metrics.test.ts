@@ -16,8 +16,9 @@ const node = (id: string, overrides: Partial<NonNullable<MetricsNode['healthRepo
       },
     ],
     diskMounts: [
-      { mountPoint: '/', totalBytes: 100, usedBytes: 40, freeBytes: 60 },
+      { mountPoint: '/', totalBytes: 500, usedBytes: 200, freeBytes: 300 },
       { mountPoint: '/data', totalBytes: 1000, usedBytes: 400, freeBytes: 600 },
+      { mountPoint: '/data/storage/mounts/c1-0', totalBytes: 32, usedBytes: 4, freeBytes: 28 },
     ],
     diskFreeBytes: 600,
     swapTotalBytes: 2048,
@@ -26,7 +27,11 @@ const node = (id: string, overrides: Partial<NonNullable<MetricsNode['healthRepo
   },
 });
 
-const member = (nodeId: string, containerName: string) => ({ nodeId, containerName });
+const member = (nodeId: string, containerName: string) => ({
+  nodeId,
+  containerName,
+  storageMountPathSuffix: `/storage/mounts/${containerName.replace('gateway-storage-', '')}`,
+});
 
 describe('buildManagedStorageMetrics', () => {
   it('reads container metrics for the member container', () => {
@@ -38,11 +43,11 @@ describe('buildManagedStorageMetrics', () => {
     expect(metrics.network_tx_bytes).toBe(2000);
   });
 
-  it('uses the largest mount as the cluster disk', () => {
+  it('uses the managed ext4 image instead of a host filesystem', () => {
     const metrics = buildManagedStorageMetrics([node('n1')], [member('n1', 'gateway-storage-c1-0')]);
-    expect(metrics.disk_used_bytes).toBe(400);
-    expect(metrics.disk_free_bytes).toBe(600);
-    expect(metrics.disk_total_bytes).toBe(1000);
+    expect(metrics.disk_used_bytes).toBe(4);
+    expect(metrics.disk_free_bytes).toBe(28);
+    expect(metrics.disk_total_bytes).toBe(32);
   });
 
   it('reports swap from the node', () => {
@@ -51,7 +56,7 @@ describe('buildManagedStorageMetrics', () => {
     expect(metrics.swap_used_bytes).toBe(512);
   });
 
-  it('sums container metrics across members but counts each node disk once', () => {
+  it('sums resource metrics across managed-storage members', () => {
     const multi = node('n1', {
       containerStats: [
         {
@@ -73,6 +78,10 @@ describe('buildManagedStorageMetrics', () => {
           metricsAvailable: true,
         },
       ],
+      diskMounts: [
+        { mountPoint: '/data/storage/mounts/c1-0', totalBytes: 32, usedBytes: 4, freeBytes: 28 },
+        { mountPoint: '/data/storage/mounts/c1-1', totalBytes: 64, usedBytes: 6, freeBytes: 58 },
+      ],
     });
     const metrics = buildManagedStorageMetrics(
       [multi],
@@ -81,8 +90,8 @@ describe('buildManagedStorageMetrics', () => {
     expect(metrics.cpu_pct).toBe(15);
     expect(metrics.memory_used_bytes).toBe(150);
     expect(metrics.network_rx_bytes).toBe(4);
-    // One node hosts both members, so its disk must not be double counted.
-    expect(metrics.disk_used_bytes).toBe(400);
+    expect(metrics.disk_used_bytes).toBe(10);
+    expect(metrics.disk_total_bytes).toBe(96);
   });
 
   // A daemon that cannot sample a metric reports 0. Rendering that as a real
@@ -120,10 +129,10 @@ describe('buildManagedStorageMetrics', () => {
     expect(metrics.disk_free_bytes).toBeNull();
   });
 
-  it('falls back to node-level free space when no mounts are reported', () => {
+  it('reports disk metrics as unknown for legacy host-only health data', () => {
     const noMounts = node('n1', { diskMounts: [], diskFreeBytes: 777 });
     const metrics = buildManagedStorageMetrics([noMounts], [member('n1', 'gateway-storage-c1-0')]);
-    expect(metrics.disk_free_bytes).toBe(777);
+    expect(metrics.disk_free_bytes).toBeNull();
     expect(metrics.disk_used_bytes).toBeNull();
     expect(metrics.disk_total_bytes).toBeNull();
   });

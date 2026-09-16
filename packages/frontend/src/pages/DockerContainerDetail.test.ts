@@ -4,6 +4,7 @@ import {
   buildContainerMutationSnapshot,
   hasContainerRuntimeIdentityChanged,
   inspectContainerAfterMutation,
+  isContainerTabDisabled,
   resolveComposeOwnerName,
   resolveContainerNameFromPathname,
   resolveContainerRouteName,
@@ -45,6 +46,78 @@ function makeContainer(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
+
+describe("container tab availability during lifecycle operations", () => {
+  it.each([
+    false,
+    true,
+  ])("keeps diagnostic/configuration tabs available while stopped=%s", (stopped) => {
+    for (const tab of [
+      "logs",
+      "stats",
+      "environment",
+      "settings",
+      "overview",
+      "source",
+      "builds",
+    ]) {
+      expect(
+        isContainerTabDisabled(tab, {
+          unavailable: false,
+          availabilityManaged: false,
+          transition: true,
+          stopped,
+        })
+      ).toBe(false);
+    }
+  });
+  it("still blocks console and filesystem access while runtime changes", () => {
+    for (const tab of ["console", "files"]) {
+      expect(
+        isContainerTabDisabled(tab, {
+          unavailable: false,
+          availabilityManaged: false,
+          transition: true,
+          stopped: false,
+        })
+      ).toBe(true);
+      expect(
+        isContainerTabDisabled(tab, {
+          unavailable: false,
+          availabilityManaged: false,
+          transition: false,
+          stopped: true,
+        })
+      ).toBe(true);
+      expect(
+        isContainerTabDisabled(tab, {
+          unavailable: false,
+          availabilityManaged: false,
+          transition: false,
+          stopped: false,
+        })
+      ).toBe(false);
+    }
+  });
+  it("preserves unavailable-node guards and managed runtime routing", () => {
+    expect(
+      isContainerTabDisabled("logs", {
+        unavailable: true,
+        availabilityManaged: false,
+        transition: false,
+        stopped: false,
+      })
+    ).toBe(true);
+    expect(
+      isContainerTabDisabled("logs", {
+        unavailable: true,
+        availabilityManaged: true,
+        transition: true,
+        stopped: true,
+      })
+    ).toBe(false);
+  });
+});
 
 describe("DockerContainerDetail mutation snapshot helpers", () => {
   it("keeps the canonical Compose owner name when switching to a replica", () => {

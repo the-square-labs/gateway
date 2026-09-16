@@ -1,7 +1,7 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
-import type { ProxyAdditionalSecureLink } from "@/types";
+import type { ManagedObjectStorage, ProxyAdditionalSecureLink } from "@/types";
 import { AdditionalSecureLinkBindings } from "./AdditionalSecureLinkBindings";
 
 const realtime = vi.hoisted(
@@ -32,6 +32,45 @@ const binding = {
   forwardScheme: "http",
   status: "active",
 } as ProxyAdditionalSecureLink;
+
+it("creates a private managed S3 destination without Docker network or port arguments", async () => {
+  vi.spyOn(api, "listProxyAdditionalSecureLinks").mockResolvedValue([]);
+  vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+  vi.spyOn(api, "listDockerComposeProjects").mockResolvedValue([]);
+  vi.spyOn(api, "listManagedObjectStorages").mockResolvedValue([
+    { id: "storage-1", name: "Assets S3", status: "ready", publishS3: false },
+    { id: "storage-2", name: "Broken S3", status: "failed" },
+  ] as ManagedObjectStorage[]);
+  const create = vi.spyOn(api, "createProxyAdditionalSecureLink").mockResolvedValue({
+    ...binding,
+    purpose: "user_managed",
+    upstreamKind: "managed_storage",
+    managedStorageId: "storage-1",
+    name: "assets",
+  });
+  render(<AdditionalSecureLinkBindings hostId="host-1" canManage />);
+  fireEvent.click(screen.getByRole("button", { name: "Add binding" }));
+  fireEvent.change(screen.getByPlaceholderText("api"), { target: { value: "assets" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Target" }));
+  fireEvent.click(await screen.findByRole("option", { name: "Managed S3 storage" }));
+  const storage = await screen.findByRole("combobox", { name: "Managed S3 storage" });
+  await waitFor(() => expect(storage).not.toBeDisabled());
+  fireEvent.focus(storage);
+  fireEvent.change(storage, { target: { value: "Assets" } });
+  fireEvent.keyDown(storage, { key: "ArrowDown" });
+  fireEvent.keyDown(storage, { key: "Enter" });
+  expect(screen.queryByText("Broken S3")).not.toBeInTheDocument();
+  expect(screen.queryByText("Application port")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Provision" }));
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith("host-1", {
+      name: "assets",
+      upstreamKind: "managed_storage",
+      managedStorageId: "storage-1",
+      forwardScheme: "http",
+    })
+  );
+});
 
 it("refreshes bindings after route creation, modification and deletion without reloading the page", async () => {
   const list = vi.spyOn(api, "listProxyAdditionalSecureLinks").mockResolvedValue([]);

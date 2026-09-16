@@ -1,6 +1,7 @@
 import { Link2, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { Combobox } from "@/components/common/Combobox";
 import { confirmAction } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -21,9 +22,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
-import type { DockerContainer, ProxyAdditionalSecureLink } from "@/types";
+import type { DockerContainer, ManagedObjectStorage, ProxyAdditionalSecureLink } from "@/types";
 
 const EMPTY_SELECTION: ProxyUpstreamSelection = {
   ...DEFAULT_PROXY_UPSTREAM,
@@ -42,6 +50,11 @@ export function AdditionalSecureLinkBindings({
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState("");
   const [selection, setSelection] = useState<ProxyUpstreamSelection>(EMPTY_SELECTION);
+  const [storageTarget, setStorageTarget] = useState(false);
+  const [managedStorageId, setManagedStorageId] = useState("");
+  const [storages, setStorages] = useState<ManagedObjectStorage[]>([]);
+  const [storagesLoading, setStoragesLoading] = useState(false);
+  const [storagesError, setStoragesError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const hiddenBindingIds = useRef(new Set<string>());
@@ -86,11 +99,36 @@ export function AdditionalSecureLinkBindings({
   useRealtime("docker.snapshot.changed", load);
   useRealtime("docker.deployment.changed", load);
 
+  useEffect(() => {
+    if (!adding || !storageTarget) return;
+    let cancelled = false;
+    setStoragesLoading(true);
+    setStoragesError(null);
+    setStorages([]);
+    void api
+      .listManagedObjectStorages()
+      .then((rows) => {
+        if (!cancelled) setStorages(rows.filter((storage) => storage.status === "ready"));
+      })
+      .catch((error) => {
+        if (!cancelled)
+          setStoragesError(error instanceof Error ? error.message : "Failed to load storages");
+      })
+      .finally(() => {
+        if (!cancelled) setStoragesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [adding, storageTarget]);
+
   const validName = /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(name);
   const canProvision =
     validName &&
-    (selection.kind === "docker_container" || selection.kind === "docker_deployment") &&
-    isProxyUpstreamValid(selection);
+    (storageTarget
+      ? !storagesLoading && storages.some((storage) => storage.id === managedStorageId)
+      : (selection.kind === "docker_container" || selection.kind === "docker_deployment") &&
+        isProxyUpstreamValid(selection));
   const variableFor = (binding: ProxyAdditionalSecureLink) =>
     `{{additionalSecureLinks.${binding.name}}}`;
   const actionColumnCount = bindings?.some(
@@ -108,27 +146,41 @@ export function AdditionalSecureLinkBindings({
     setAdding(false);
     setName("");
     setSelection(EMPTY_SELECTION);
+    setStorageTarget(false);
+    setManagedStorageId("");
   };
 
   const provision = async () => {
     if (
       !canProvision ||
-      (selection.kind !== "docker_container" && selection.kind !== "docker_deployment")
+      (!storageTarget &&
+        selection.kind !== "docker_container" &&
+        selection.kind !== "docker_deployment")
     )
       return;
     setPending(true);
     try {
-      const binding = await api.createProxyAdditionalSecureLink(hostId, {
-        name,
-        upstreamKind: selection.kind,
-        forwardScheme: selection.scheme,
-        dockerNodeId: selection.dockerNodeId,
-        dockerContainerName: selection.containerName,
-        dockerComposeProjectId: selection.composeProjectId,
-        dockerComposeServiceName: selection.composeServiceName,
-        dockerDeploymentId: selection.deploymentId,
-        dockerContainerPort: selection.containerPort!,
-      });
+      const binding = await api.createProxyAdditionalSecureLink(
+        hostId,
+        storageTarget
+          ? {
+              name,
+              upstreamKind: "managed_storage",
+              managedStorageId,
+              forwardScheme: "http",
+            }
+          : {
+              name,
+              upstreamKind: selection.kind as "docker_container" | "docker_deployment",
+              forwardScheme: selection.scheme,
+              dockerNodeId: selection.dockerNodeId,
+              dockerContainerName: selection.containerName,
+              dockerComposeProjectId: selection.composeProjectId,
+              dockerComposeServiceName: selection.composeServiceName,
+              dockerDeploymentId: selection.deploymentId,
+              dockerContainerPort: selection.containerPort!,
+            }
+      );
       setBindings((current) => {
         const existing = current?.findIndex((item) => item.id === binding.id) ?? -1;
         if (existing < 0) return [...(current ?? []), binding];
@@ -253,15 +305,19 @@ export function AdditionalSecureLinkBindings({
                   className="flex min-w-0 items-center border-l border-border px-3 py-2"
                   title={
                     binding.lastError ??
-                    (binding.dockerComposeServiceName
-                      ? `Compose / ${binding.dockerComposeServiceName}`
-                      : binding.targetContainer)
+                    (binding.upstreamKind === "managed_storage"
+                      ? `Managed S3 / ${binding.managedStorageId}`
+                      : binding.dockerComposeServiceName
+                        ? `Compose / ${binding.dockerComposeServiceName}`
+                        : binding.targetContainer)
                   }
                 >
                   <p className="truncate text-sm">
-                    {binding.dockerComposeServiceName
-                      ? `Compose / ${binding.dockerComposeServiceName}`
-                      : binding.targetContainer}
+                    {binding.upstreamKind === "managed_storage"
+                      ? "Managed S3 storage"
+                      : binding.dockerComposeServiceName
+                        ? `Compose / ${binding.dockerComposeServiceName}`
+                        : binding.targetContainer}
                   </p>
                 </div>
                 <div className="flex min-w-0 items-center border-l border-border px-3 py-2 text-sm">
@@ -350,7 +406,8 @@ export function AdditionalSecureLinkBindings({
           <DialogHeader>
             <DialogTitle>Add binding</DialogTitle>
             <DialogDescription>
-              Provision another Docker upstream for use in this proxy host's Advanced config.
+              Connect a Docker workload or managed S3 storage through Relay for use in this Route's
+              Advanced config.
             </DialogDescription>
           </DialogHeader>
           <div className="border border-border">
@@ -367,13 +424,56 @@ export function AdditionalSecureLinkBindings({
                 disabled={pending}
               />
             </SettingsControlRow>
-            <ProxyUpstreamFields
-              value={selection}
-              onChange={setSelection}
-              containers={containers}
-              disabled={pending}
-              allowManual={false}
-            />
+            <SettingsControlRow title="Target" description="Choose how requests reach the upstream">
+              <Select
+                value={storageTarget ? "managed_storage" : selection.kind}
+                onValueChange={(kind) => {
+                  setStorageTarget(kind === "managed_storage");
+                  if (kind !== "managed_storage")
+                    setSelection({
+                      ...EMPTY_SELECTION,
+                      kind: kind as "docker_container" | "docker_deployment",
+                    });
+                }}
+                disabled={pending}
+              >
+                <SelectTrigger aria-label="Target">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="docker_container">Docker container</SelectItem>
+                  <SelectItem value="docker_deployment">Docker deployment</SelectItem>
+                  <SelectItem value="managed_storage">Managed S3 storage</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsControlRow>
+            {storageTarget ? (
+              <SettingsControlRow
+                title="Storage"
+                description={
+                  storagesError ??
+                  "Private S3 via Relay. No shared network or published port; S3 credentials are still required."
+                }
+              >
+                <Combobox
+                  value={managedStorageId}
+                  ariaLabel="Managed S3 storage"
+                  onValueChange={(value) => setManagedStorageId(value ?? "")}
+                  options={storages.map((storage) => ({ value: storage.id, label: storage.name }))}
+                  placeholder={storagesLoading ? "Loading storages..." : "Select storage"}
+                  disabled={pending || storagesLoading}
+                />
+              </SettingsControlRow>
+            ) : (
+              <ProxyUpstreamFields
+                value={selection}
+                onChange={setSelection}
+                containers={containers}
+                disabled={pending}
+                allowManual={false}
+                showTargetSelect={false}
+              />
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={resetDraft} disabled={pending}>

@@ -712,7 +712,7 @@ export class ManagedDatabaseBindingService {
       },
       ensureRuntime: async (row) => {
         if (availabilityPolicyId) return;
-        await this.reconcileBindingRuntime(database, row);
+        await this.reconcileBindingRuntime(database, row, options);
       },
       markReady: async (row) => {
         const [ready] = await this.db
@@ -735,8 +735,12 @@ export class ManagedDatabaseBindingService {
     return result;
   }
 
-  private async reconcileBindingRuntime(database: ManagedDatabaseRow, binding: ManagedDatabaseBindingRow) {
-    return this.targetRuntime.reconcile(database, binding, this.bindingCredentials(binding));
+  private async reconcileBindingRuntime(
+    database: ManagedDatabaseRow,
+    binding: ManagedDatabaseBindingRow,
+    options: { targetEnvironment?: Record<string, string> } = {}
+  ) {
+    return this.targetRuntime.reconcile(database, binding, this.bindingCredentials(binding), options);
   }
 
   async create(managedDatabaseId: string, input: CreateManagedDatabaseBindingInput, userId: string) {
@@ -765,7 +769,8 @@ export class ManagedDatabaseBindingService {
       input.targetType,
       targetResourceId,
       input.environment,
-      input.replaceExistingEnvironment === true
+      input.replaceExistingEnvironment === true,
+      input.targetEnvironment
     );
     const id = crypto.randomUUID();
     const shortId = id.replaceAll('-', '').slice(0, 16);

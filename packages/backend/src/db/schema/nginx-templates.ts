@@ -1,5 +1,5 @@
 import { boolean, jsonb, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
-import { proxyHostTypeEnum } from './proxy-hosts.js';
+import { proxyHostTypeEnum } from './proxy-enums.js';
 import { users } from './users.js';
 
 export interface TemplateVariableDef {

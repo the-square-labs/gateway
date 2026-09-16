@@ -1,6 +1,7 @@
 import { container } from '@/container.js';
 import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import {
   CreateBucketSchema,
   CreateObjectStorageConnectionSchema,
@@ -13,8 +14,17 @@ import {
   UpdateObjectStorageConnectionSchema,
 } from '@/modules/object-storage/object-storage.schemas.js';
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
-import { CreateManagedStorageSchema, UpdateManagedStorageSchema } from '@/modules/storage/managed-storage.schemas.js';
+import { ObjectStorageUploadService } from '@/modules/object-storage/object-storage-upload.service.js';
+import {
+  CreateManagedStorageAccessKeySchema,
+  CreateManagedStorageBindingSchema,
+  CreateManagedStorageSchema,
+  DeleteManagedStorageBindingSchema,
+  ManagedStorageListQuerySchema,
+  UpdateManagedStorageSchema,
+} from '@/modules/storage/managed-storage.schemas.js';
 import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
+import { ManagedStorageBindingsService } from '@/modules/storage/managed-storage-bindings.service.js';
 import type { User } from '@/types.js';
 import { directResourceIdsForScopes } from './ai.service-helpers.js';
 import type { AIToolDefinition } from './ai.types.js';
@@ -22,6 +32,34 @@ import type { AIToolDefinition } from './ai.types.js';
 const id = { type: 'string', description: 'Canonical storage connection UUID' };
 const object = { type: 'object', additionalProperties: true };
 export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
+  {
+    name: 'upload_storage_object',
+    description:
+      'Upload an object through authenticated MCP using begin/chunk/status/finalize/abort, like Pages artifact uploads. Send exact size and SHA-256, then ordered base64 chunks of at most 1 MiB decoded. Finalization streams the verified private spool into storage. Sessions expire after one hour and do not survive Gateway restart. Never pass credentials. An existing key is overwritten on successful finalization.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['begin', 'chunk', 'status', 'finalize', 'abort'] },
+        storageId: id,
+        uploadId: { type: 'string', description: 'Upload UUID returned by begin, required for other operations.' },
+        bucket: { type: 'string' },
+        key: { type: 'string' },
+        declaredSizeBytes: { type: 'number', description: 'Exact total bytes for begin.' },
+        sha256: { type: 'string', description: 'Lowercase complete object SHA-256 for begin.' },
+        contentType: { type: 'string' },
+        offset: { type: 'number', description: 'Expected current byte offset for chunk.' },
+        contentBase64: { type: 'string', maxLength: 1_398_104 },
+      },
+      required: ['operation', 'storageId'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Storage',
+    requiredScope: 'storage:objects:write',
+    mcpOnly: true,
+    historyRetention: { mode: 'never_full' },
+    invalidateStores: [],
+  },
   {
     name: 'list_storage_connections',
     description: 'List authorized external and managed S3, FTP, FTPS and SFTP connections.',
@@ -81,13 +119,34 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'manage_managed_storage',
+    historyRetention: { mode: 'never_full' },
     description:
-      'Provision, inspect, update, restart or delete MinIO on a Storage node. Private access is the default; external port publication is explicit.',
+      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; no read action reveals root or key secrets.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['catalog', 'create', 'get', 'update', 'restart', 'delete'] },
+        action: {
+          type: 'string',
+          enum: [
+            'catalog',
+            'list',
+            'get',
+            'create',
+            'update',
+            'retry',
+            'restart',
+            'delete',
+            'list_bindings',
+            'create_binding',
+            'delete_binding',
+            'list_access_keys',
+            'create_access_key',
+            'remove_access_key',
+          ],
+        },
         managedStorageId: { type: 'string' },
+        bindingId: { type: 'string' },
+        accessKeyId: { type: 'string' },
         config: object,
       },
       required: ['action'],
@@ -106,7 +165,7 @@ function requireStorageScope(user: User, scope: string, resourceId?: string) {
 }
 
 export async function executeStorageTool(user: User, name: string, args: Record<string, unknown>) {
-  const service = container.resolve(ObjectStorageService);
+  if (name === 'upload_storage_object') return container.resolve(ObjectStorageUploadService).execute(user, args);
   const storageId = typeof args.storageId === 'string' ? args.storageId : '';
   const action = String(args.action ?? '');
   const config =
@@ -114,15 +173,18 @@ export async function executeStorageTool(user: User, name: string, args: Record<
       ? (args.config as Record<string, unknown>)
       : {};
   if (name === 'list_storage_connections') {
+    const service = container.resolve(ObjectStorageService);
     const allowedIds = directResourceIdsForScopes(user.scopes, 'storage:view');
     if (allowedIds?.length === 0) throw new AppError(403, 'FORBIDDEN', 'Missing storage:view permission');
     return service.list(ObjectStorageListQuerySchema.parse(args), { allowedIds });
   }
   if (name === 'get_storage_connection') {
+    const service = container.resolve(ObjectStorageService);
     requireStorageScope(user, 'storage:view', storageId);
     return service.get(storageId);
   }
   if (name === 'manage_storage_connection') {
+    const service = container.resolve(ObjectStorageService);
     requireStorageScope(
       user,
       action === 'create' ? 'storage:create' : action === 'delete' ? 'storage:delete' : 'storage:edit',
@@ -144,6 +206,7 @@ export async function executeStorageTool(user: User, name: string, args: Record<
     }
   }
   if (name === 'manage_storage_objects') {
+    const service = container.resolve(ObjectStorageService);
     requireStorageScope(
       user,
       action === 'create_bucket'
@@ -183,6 +246,12 @@ export async function executeStorageTool(user: User, name: string, args: Record<
       if (allowed?.length === 0) throw new AppError(403, 'FORBIDDEN', 'Missing storage:view');
       return managed.listCatalog();
     }
+    if (action === 'list') {
+      const allowedIds = directResourceIdsForScopes(user.scopes, 'storage:view');
+      if (allowedIds?.length === 0) throw new AppError(403, 'FORBIDDEN', 'Missing storage:view permission');
+      const rows = await managed.list(ManagedStorageListQuerySchema.parse(config));
+      return allowedIds ? rows.filter((row) => allowedIds.includes(row.objectStorageConnectionId ?? '')) : rows;
+    }
     if (action === 'create') {
       const input = CreateManagedStorageSchema.parse(config);
       for (const nodeId of input.memberNodeIds ?? [input.nodeId])
@@ -195,7 +264,16 @@ export async function executeStorageTool(user: User, name: string, args: Record<
     if (!canonical) throw new AppError(404, 'STORAGE_NOT_FOUND', 'Storage connection not found');
     requireStorageScope(
       user,
-      action === 'get' ? 'storage:view' : action === 'delete' ? 'storage:delete' : 'storage:edit',
+      action === 'get' || action === 'list_bindings' || action === 'list_access_keys'
+        ? 'storage:view'
+        : action === 'delete'
+          ? 'storage:delete'
+          : action === 'create_binding' ||
+              action === 'delete_binding' ||
+              action === 'create_access_key' ||
+              action === 'remove_access_key'
+            ? 'storage:iam'
+            : 'storage:edit',
       canonical
     );
     switch (action) {
@@ -203,11 +281,56 @@ export async function executeStorageTool(user: User, name: string, args: Record<
         return managed.get(managedId);
       case 'update':
         return managed.update(managedId, UpdateManagedStorageSchema.parse(config), user.id);
+      case 'retry':
+        return managed.retryProvisioning(managedId, user.id);
       case 'restart':
         return managed.restart(managedId, user.id);
       case 'delete':
         return managed.delete(managedId, user.id);
+      case 'list_bindings':
+        return container.resolve(ManagedStorageBindingsService).list(managedId);
+      case 'create_binding': {
+        const input = CreateManagedStorageBindingSchema.parse(config);
+        ensureManagedStorageBindingTargetScopes(user, input);
+        return container.resolve(ManagedStorageBindingsService).create(managedId, input, user.id);
+      }
+      case 'delete_binding': {
+        const bindingId = String(args.bindingId ?? '');
+        const bindings = container.resolve(ManagedStorageBindingsService);
+        ensureManagedStorageBindingTargetScopes(user, await bindings.getTarget(managedId, bindingId));
+        return bindings.delete(
+          managedId,
+          bindingId,
+          user.id,
+          DeleteManagedStorageBindingSchema.parse(config).targetEnvironment
+        );
+      }
+      case 'list_access_keys':
+        return managed.listAccessKeys(managedId);
+      case 'create_access_key':
+        return managed.createAccessKey(managedId, CreateManagedStorageAccessKeySchema.parse(config), user.id);
+      case 'remove_access_key':
+        return managed.removeAccessKey(managedId, String(args.accessKeyId ?? ''), user.id);
     }
   }
   throw new AppError(400, 'INVALID_STORAGE_ACTION', 'Unknown storage operation');
+}
+
+function ensureManagedStorageBindingTargetScopes(
+  user: User,
+  target: { targetType: 'container' | 'deployment'; targetNodeId: string; targetResourceId: string }
+) {
+  const scopes =
+    target.targetType === 'deployment'
+      ? ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']
+      : ['docker:containers:environment', 'docker:containers:secrets'];
+  for (const scope of scopes) {
+    if (!hasDockerResourceScope(user.scopes, scope, target.targetNodeId, target.targetResourceId)) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        `Missing required scope: ${scope}:${target.targetNodeId}/${target.targetResourceId}`
+      );
+    }
+  }
 }
