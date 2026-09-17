@@ -172,6 +172,16 @@ export function IntegrationsSection() {
 
 function GitLabIntegrationsSection() {
   const { hasScope } = useAuthStore();
+  if (!hasScope("integrations:gitlab:manage") && !hasScope("integrations:gitlab:view")) return null;
+  return (
+    <LicenseFeatureBoundary feature="gitlab" capability="GitLab integration">
+      <GitLabIntegrationsContent />
+    </LicenseFeatureBoundary>
+  );
+}
+
+function GitLabIntegrationsContent() {
+  const { hasScope } = useAuthStore();
   const canManage = hasScope("integrations:gitlab:manage");
   const canView = canManage || hasScope("integrations:gitlab:view");
   const [connectors, setConnectors] = useState<GitLabConnector[]>(
@@ -1187,4 +1197,5 @@ function CapabilityBadges({
   );
 }
 
+import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";
 import { requireLicenseFeature } from "@/stores/license-paywall";

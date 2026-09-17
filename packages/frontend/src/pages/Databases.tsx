@@ -648,7 +648,18 @@ export function ManagedDatabaseCreateForm({
   );
 }
 
-export function Databases({
+export function Databases(props: Parameters<typeof DatabasesContent>[0] = {}) {
+  return (
+    <LicenseFeatureBoundary
+      feature="external-database-connections"
+      capability="Database connections"
+    >
+      <DatabasesContent {...props} />
+    </LicenseFeatureBoundary>
+  );
+}
+
+function DatabasesContent({
   embedded = false,
   managedNodeId,
 }: {
@@ -1426,3 +1437,5 @@ export function Databases({
 function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
   return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }
+
+import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

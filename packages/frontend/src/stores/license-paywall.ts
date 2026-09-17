@@ -66,8 +66,16 @@ function currentPlan(): LicensePlan {
 export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
   const license = useUIBootstrapStore.getState().snapshot?.license;
   if (!license) return null;
-  return license.entitlements.features.includes(
-    feature === "managed-storage" ? "managed-databases" : feature
+  if (
+    license.entitlements.features.includes(
+      feature === "managed-storage" ? "managed-databases" : feature
+    )
+  )
+    return true;
+  return (
+    license.entitlementsVersion < 5 &&
+    (feature === "storage-connections" || feature === "external-database-connections") &&
+    license.entitlements.features.includes("managed-databases")
   );
 }
 
@@ -103,9 +111,12 @@ function requireCommercialModule(capability: string, requiredPlan: PaidLicensePl
   const state = useUIBootstrapStore.getState().snapshot?.commercialModule;
   // Older backends do not expose module state; retain their existing behavior.
   if (!state || state === "ready") return true;
-  useLicensePaywallStore
-    .getState()
-    .open({ capability, requiredPlan, currentPlan: currentPlan(), reason: "module-unavailable" });
+  useLicensePaywallStore.getState().open({
+    capability,
+    requiredPlan,
+    currentPlan: currentPlan(),
+    ...(currentPlan() === "community" ? {} : { reason: "module-unavailable" as const }),
+  });
   return false;
 }
 

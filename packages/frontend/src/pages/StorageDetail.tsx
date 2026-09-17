@@ -31,7 +31,15 @@ import { StorageIamKeysTab } from "./storage-detail/StorageIamKeysTab";
 import { StorageOverviewTab } from "./storage-detail/StorageOverviewTab";
 import { StorageSettingsTab } from "./storage-detail/StorageSettingsTab";
 
-export function StorageDetail({
+export function StorageDetail(props: Parameters<typeof StorageDetailContent>[0] = {}) {
+  return (
+    <LicenseFeatureBoundary feature="storage-connections" capability="Storage connections">
+      <StorageDetailContent {...props} />
+    </LicenseFeatureBoundary>
+  );
+}
+
+function StorageDetailContent({
   resolvedStorageId,
   resolvedStorageSlug,
 }: {
@@ -465,3 +473,5 @@ export function StorageDetail({
     </PageTransition>
   );
 }
+
+import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

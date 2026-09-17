@@ -637,6 +637,14 @@ export function ManagedObjectStorageCreateForm({
 }
 
 export function Storage() {
+  return (
+    <LicenseFeatureBoundary feature="storage-connections" capability="Storage connections">
+      <StorageContent />
+    </LicenseFeatureBoundary>
+  );
+}
+
+function StorageContent() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess, isLoading: authLoading } = useAuthStore();
   const [search, setSearch] = useState("");
@@ -1223,3 +1231,5 @@ export function Storage() {
     </PageTransition>
   );
 }
+
+import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

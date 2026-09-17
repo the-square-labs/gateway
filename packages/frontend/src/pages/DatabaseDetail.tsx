@@ -51,7 +51,18 @@ import { SqlExplorer } from "./database-detail/SqlExplorer";
 import { databaseDeleteConfirmation } from "./database-detail/shared";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 
-export function DatabaseDetail({
+export function DatabaseDetail(props: Parameters<typeof DatabaseDetailContent>[0] = {}) {
+  return (
+    <LicenseFeatureBoundary
+      feature="external-database-connections"
+      capability="Database connections"
+    >
+      <DatabaseDetailContent {...props} />
+    </LicenseFeatureBoundary>
+  );
+}
+
+function DatabaseDetailContent({
   resolvedDatabaseId,
   resolvedDatabaseSlug,
 }: {
@@ -856,3 +867,5 @@ export function DatabaseDetail({
     </PageTransition>
   );
 }
+
+import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";
