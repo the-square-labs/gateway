@@ -5,6 +5,7 @@ export const TOKENS = {
   DrizzleClient: Symbol('DrizzleClient'),
   RedisClient: Symbol('RedisClient'),
   Env: Symbol('Env'),
+  CommercialEdition: Symbol('CommercialEdition'),
 } as const;
 
 export { container };

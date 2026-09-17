@@ -5,7 +5,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { getEnv } from '@/config/env.js';
 import { createDrizzleClient } from '@/db/client.js';
+import { prepareCommercialUpdate } from '@/edition/prepare-update.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
+import { LicenseService } from '@/modules/license/license.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { EnvironmentSettingsService } from '@/modules/settings/environment-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -19,6 +21,19 @@ async function main() {
   const db = createDrizzleClient(env.DATABASE_URL);
   try {
     const crypto = new CryptoService(env.PKI_MASTER_KEY);
+    // Existing updaters run this target-image command before foundation changes
+    // and before replacing app. Keep that entry point for the first transition.
+    if (process.argv[3] !== '--settings-only') {
+      await prepareCommercialUpdate({
+        hostDir,
+        hostVersion: env.APP_VERSION,
+        authorize: (version) => new LicenseService(db, crypto, env).authorizeCommercialUpdate(version),
+      });
+      if (process.argv[3] === '--prepare-only') {
+        process.stdout.write(`${JSON.stringify({ ok: true, commercialPrepared: true })}\n`);
+        return;
+      }
+    }
     const hostEnv = parseLegacySettingsEnv(await fs.readFile(path.join(hostDir, '.env'), 'utf8'));
     const oidcValues = [
       hostEnv.env.OIDC_ISSUER,

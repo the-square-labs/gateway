@@ -5,6 +5,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { RATE_LIMIT_REDIS_TIMEOUT_MS } from '@/lib/rate-limit-timeout.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { User } from '@/types.js';
@@ -304,6 +305,62 @@ describe('AI websocket authentication', () => {
 });
 
 describe('AI websocket backend runtime commands', () => {
+  it('rejects Plan Mode before creating a conversation or starting a run when the license denies it', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as never);
+    const startUserRun = vi.fn();
+    container.registerInstance(AIRunService, { startUserRun } as unknown as AIRunService);
+    const requireFeature = vi
+      .fn()
+      .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Plan Mode requires Personal'));
+    container.registerInstance(LicensePolicyService, { requireFeature } as unknown as LicensePolicyService);
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.send_message',
+          clientCommandId: 'plan-denied',
+          content: 'deploy',
+          workMode: 'plan',
+        }),
+      }),
+      ws as any
+    );
+    handlers.onClose(new Event('close'), ws as any);
+    expect(requireFeature).toHaveBeenCalledWith('ai-plan-mode');
+    expect(startUserRun).not.toHaveBeenCalled();
+    expect(container.resolve(AIProviderRuntimeService).generateConversationTitle).not.toHaveBeenCalled();
+    expect(ws.send.mock.calls.map(([data]) => JSON.parse(data))).toContainEqual(
+      expect.objectContaining({
+        type: 'command.error',
+        code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      })
+    );
+  });
+
+  it('rejects a direct scenario command without a commercial package before starting work', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    const startUserRun = vi.fn();
+    container.registerInstance(AIRunService, { startUserRun } as unknown as AIRunService);
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.start_scenario',
+          clientCommandId: 'scenario-denied',
+          scenarioId: 'prepare-production-server',
+        }),
+      }),
+      ws as any
+    );
+    handlers.onClose(new Event('close'), ws as any);
+    expect(startUserRun).not.toHaveBeenCalled();
+    expect(ws.send.mock.calls.map(([data]) => JSON.parse(data))).toContainEqual(
+      expect.objectContaining({
+        type: 'command.error',
+        code: 'AI_SCENARIO_NOT_FOUND',
+      })
+    );
+  });
+
   it('fails closed when the runtime send-message rate limiter cannot reach Redis', async () => {
     const { ws, handlers } = await openAuthenticatedWs();
     container.registerInstance(TOKENS.RedisClient, throwingRedis() as any);

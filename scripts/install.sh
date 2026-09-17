@@ -993,6 +993,28 @@ COMPOSE
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
+  # Run the target image's compatibility entry point with the existing app's
+  # network and environment while that app is still serving traffic. Keep
+  # credentials in a mode-0600 temporary file, not Docker command arguments.
+  current_app_id="$("${DOCKER[@]}" compose ps -q app)"
+  [[ -n "$current_app_id" ]] || die "Start the existing Gateway before preparing its licensed update"
+  current_network="$("${DOCKER[@]}" inspect --format '{{.HostConfig.NetworkMode}}' "$current_app_id")"
+  preparation_env="$(mktemp "$INSTALL_DIR/.gateway-update-env.XXXXXX")"
+  chmod 600 "$preparation_env"
+  trap 'rm -f "${preparation_env:-}"' EXIT
+  if ! "${DOCKER[@]}" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$current_app_id" \
+      | awk '/^(NODE_ENV|DATABASE_URL|REDIS_URL|PKI_MASTER_KEY)=/' > "$preparation_env"; then
+    rm -f "$preparation_env"
+    die "Cannot read the existing Gateway update environment"
+  fi
+  if ! run_quiet "License and private core preparation" "${DOCKER[@]}" run --rm \
+      --network "$current_network" --env-file "$preparation_env" -v "$INSTALL_DIR:/host" "$IMAGE_REF" \
+      node dist/cli/migrate-legacy-settings.js /host --prepare-only; then
+    rm -f "$preparation_env"
+    die "Private core preparation failed; the current Gateway remains running"
+  fi
+  rm -f "$preparation_env"
+  trap - EXIT
   foundation_args=(node dist/foundation-migrator.js --host-dir /host --target-version "$VERSION" --image-ref "$IMAGE_REF")
   if [[ "$RELAY_BOOTSTRAP" == 1 ]]; then
     foundation_args+=(--relay-build-version "$RELAY_BUILD_VERSION" --relay-protocol-major "$RELAY_PROTOCOL_MAJOR" --relay-image-ref "$RELAY_IMAGE_REF")
@@ -1043,7 +1065,7 @@ done
 if grep -Eq '^(OIDC_|CLICKHOUSE_|APP_URL=|SETUP_TOKEN=)' .env; then
   info "Finalizing legacy settings migration"
   run_quiet "Legacy settings migration" "${DOCKER[@]}" compose run --rm -T -v "$INSTALL_DIR:/host" app \
-    node dist/cli/migrate-legacy-settings.js /host
+    node dist/cli/migrate-legacy-settings.js /host --settings-only
   run_quiet "Gateway restart after legacy migration" "${DOCKER[@]}" compose up -d --force-recreate app
 fi
 

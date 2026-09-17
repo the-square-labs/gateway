@@ -353,7 +353,10 @@ export function normalizeGitLabApiUrl(value: string): string {
   return value.replace(/\/+$/, '');
 }
 
-function verifySignedPayload<T>(signedManifest: string, publicKey: string | Buffer = UPDATE_SIGNING_PUBLIC_KEY_PEM): T {
+export function verifySignedPayload<T>(
+  signedManifest: string,
+  publicKey: string | Buffer = UPDATE_SIGNING_PUBLIC_KEY_PEM
+): T {
   let envelope: SignedUpdateEnvelope;
   try {
     envelope = JSON.parse(signedManifest) as SignedUpdateEnvelope;
@@ -406,6 +409,7 @@ function loadSigningPublicKey(fileName: string): string {
   // Docker copies canonical update trust anchors next to this module.
   const candidates = [
     join(moduleDir, fileName),
+    join(moduleDir, '../../../../config/update-trust', fileName),
     join(process.cwd(), 'config/update-trust', fileName),
     join(process.cwd(), '../../config/update-trust', fileName),
   ];

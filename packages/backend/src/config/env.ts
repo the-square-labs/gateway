@@ -35,6 +35,7 @@ const envSchema = z.object({
   // App
   APP_URL: z.string().url().default('http://localhost:3000'),
   APP_VERSION: z.string().default('dev'),
+  GATEWAY_COMMERCIAL_DIR: z.string().min(1).default('/var/lib/gateway/commercial'),
   GATEWAY_DEPLOYMENT_MODE: deploymentModeSchema,
   BIND_HOST: z.string().default('0.0.0.0'),
   GATEWAY_LOCAL_HOSTS: z.string().optional(),

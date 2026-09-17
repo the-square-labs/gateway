@@ -131,6 +131,8 @@ function LicenseSummary({ status }: { status: LicenseStatusView }) {
 }
 
 export function LicenseSection({ canManage }: LicenseSectionProps) {
+  const moduleState = useUIBootstrapStore((state) => state.snapshot?.commercialModule);
+  const [activatingModule, setActivatingModule] = useState(false);
   const [status, setStatus] = useState<LicenseStatusView | null>(
     () => api.getCached<LicenseStatusView>("settings:license-status") ?? null
   );
@@ -183,14 +185,35 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
       setLicenseKey("");
       setDialogOpen(false);
       if (updated.status === "valid") {
-        toast.success("License activated");
+        toast.success(
+          updated.moduleRestarting
+            ? "License activated. Gateway is preparing paid features and will restart when ready."
+            : "License activated"
+        );
       } else {
         toast.error(updated.errorMessage ?? "License was not accepted");
       }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to activate license");
+      void loadStatus();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleModuleActivation = async () => {
+    setActivatingModule(true);
+    try {
+      const result = await api.activateLicenseModule();
+      toast.success(
+        result.restarting
+          ? "Gateway is preparing paid features and will restart when ready."
+          : "Paid features are ready"
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to enable paid features");
+    } finally {
+      setActivatingModule(false);
     }
   };
 
@@ -246,6 +269,28 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
         }
       >
         <LicenseSummary status={status} />
+
+        {status.licensed &&
+        status.plan !== "community" &&
+        moduleState &&
+        moduleState !== "ready" ? (
+          <div className="border-t border-border p-4 space-y-3">
+            <p className="text-sm text-muted-foreground">
+              Your license is active, but paid features are not ready. Enabling them prepares the
+              required files before restarting Gateway.
+            </p>
+            {canManage ? (
+              <Button onClick={handleModuleActivation} disabled={activatingModule}>
+                {activatingModule && <Loader2 className="h-4 w-4 animate-spin" />}
+                Enable paid features
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Contact your administrator to enable paid features.
+              </p>
+            )}
+          </div>
+        ) : null}
 
         <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
           <DetailRow
@@ -321,6 +366,12 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
           )}
           {!status.hasKey && (
             <div className="space-y-1.5">
+              {moduleState && moduleState !== "ready" ? (
+                <p className="text-sm text-muted-foreground">
+                  Activation will prepare paid features, then restart Gateway. It stays available
+                  while files are downloaded and verified.
+                </p>
+              ) : null}
               <label className="text-sm font-medium" htmlFor="license-key">
                 License key
               </label>
@@ -349,3 +400,5 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
     </>
   );
 }
+
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";

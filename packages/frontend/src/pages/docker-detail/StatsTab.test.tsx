@@ -5,8 +5,23 @@ import { api } from "@/services/api";
 import { isMonitoringSampleForRuntime, StatsTab } from "./StatsTab";
 
 vi.mock("@/components/ui/stat-card", () => ({
-  StatCard: ({ label, value }: { label: string; value: string }) => (
-    <div>{`${label}: ${value}`}</div>
+  StatCard: ({
+    label,
+    value,
+    subtitle,
+    progress,
+    sparklineMax,
+  }: {
+    label: string;
+    value: string;
+    subtitle?: string;
+    progress?: { percent: number };
+    sparklineMax?: number;
+  }) => (
+    <div data-testid={`stat-${label}`} data-progress={progress?.percent} data-max={sparklineMax}>
+      {`${label}: ${value}`}
+      {subtitle && <span>{subtitle}</span>}
+    </div>
   ),
 }));
 vi.mock("@/components/docker/GpuMonitoringSection", () => ({
@@ -40,6 +55,70 @@ afterEach(() => {
 });
 
 describe("StatsTab runtime identity", () => {
+  it("uses configured container memory and PID limits instead of node memory", async () => {
+    vi.spyOn(api, "createNodeMonitoringStream").mockImplementation(
+      () => new FakeMonitoringStream() as unknown as EventSource
+    );
+    vi.spyOn(api, "getContainerStatsHistory").mockResolvedValue([
+      {
+        memoryUsageBytes: 64 * 1024 ** 2,
+        memoryLimitBytes: 16 * 1024 ** 3,
+        pids: 32,
+      },
+    ]);
+    const data = {
+      State: { Running: true },
+      HostConfig: { Memory: 256 * 1024 ** 2, PidsLimit: 128 },
+    };
+    const { rerender } = render(
+      <StatsTab nodeId="node" containerId="container" data={data} showProcesses={false} />
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("stat-Memory")).toHaveAttribute("data-progress", "25")
+    );
+    expect(screen.getByTestId("stat-Memory")).toHaveTextContent("25% of 256.0 MB");
+    expect(screen.getByTestId("stat-PIDs")).toHaveAttribute("data-progress", "25");
+    expect(screen.getByTestId("stat-PIDs")).toHaveAttribute("data-max", "128");
+    expect(screen.getByTestId("stat-PIDs")).toHaveTextContent("25% of 128");
+    rerender(
+      <StatsTab
+        nodeId="node"
+        containerId="container"
+        data={{ ...data, HostConfig: { Memory: 128 * 1024 ** 2, PidsLimit: 64 } }}
+        showProcesses={false}
+      />
+    );
+    expect(screen.getByTestId("stat-Memory")).toHaveAttribute("data-progress", "50");
+    expect(screen.getByTestId("stat-PIDs")).toHaveAttribute("data-progress", "50");
+  });
+
+  it.each([
+    undefined,
+    null,
+    0,
+    -1,
+    "invalid",
+  ])("does not invent a PID quota for %s", async (limit) => {
+    vi.spyOn(api, "createNodeMonitoringStream").mockImplementation(
+      () => new FakeMonitoringStream() as unknown as EventSource
+    );
+    vi.spyOn(api, "getContainerStatsHistory").mockResolvedValue([
+      { memoryUsageBytes: 1024, memoryLimitBytes: 0, pids: 3 },
+    ]);
+    render(
+      <StatsTab
+        nodeId="node"
+        containerId="container"
+        data={{ State: { Running: true }, HostConfig: { PidsLimit: limit } }}
+        showProcesses={false}
+      />
+    );
+    await screen.findByText("PIDs: 3");
+    expect(screen.getByTestId("stat-PIDs")).not.toHaveAttribute("data-progress");
+    expect(screen.getByTestId("stat-PIDs")).not.toHaveAttribute("data-max");
+    expect(screen.getByTestId("stat-Memory")).not.toHaveAttribute("data-progress");
+    expect(screen.getByTestId("stat-Memory")).not.toHaveTextContent("of 0");
+  });
   it("reveals a stable first frame after HTTP bootstrap without waiting for SSE", async () => {
     const history = deferred<Record<string, unknown>[]>();
     const processes = deferred<any>();

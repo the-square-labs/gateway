@@ -1,7 +1,35 @@
 import type { Readable } from 'node:stream';
-import type { S3BucketInfo, S3ObjectListing, S3ObjectMetadata } from './s3-object-operations.js';
+import type { StorageConnectionConfig } from './object-storage-connection-view.js';
 
-export type { S3BucketInfo, S3ObjectInfo, S3ObjectListing, S3ObjectMetadata } from './s3-object-operations.js';
+export interface S3BucketInfo {
+  name: string;
+  creationDate: string | null;
+}
+export interface S3ObjectInfo {
+  key: string;
+  size: number;
+  lastModified: string | null;
+  etag: string | null;
+  storageClass: string | null;
+}
+export interface S3ObjectListing {
+  prefixes: string[];
+  objects: S3ObjectInfo[];
+  nextContinuationToken: string | null;
+  isTruncated: boolean;
+}
+export interface S3ObjectMetadata {
+  contentType: string | null;
+  contentLength: number;
+  lastModified: string | null;
+  etag: string | null;
+  metadata: Record<string, string>;
+}
+
+export type StorageBackendFactory = (
+  config: StorageConnectionConfig,
+  options?: { internalCaPem?: string }
+) => StorageBackend;
 
 export interface ListObjectsParams {
   bucket: string;

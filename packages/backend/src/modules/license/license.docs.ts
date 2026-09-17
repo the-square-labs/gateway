@@ -30,6 +30,14 @@ export const checkLicenseRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const activateLicenseModuleRoute = appRoute({
+  method: 'post',
+  path: '/module/activate',
+  tags: ['License'],
+  summary: 'Prepare and activate paid features for the current Gateway version',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const clearLicenseRoute = appRoute({
   method: 'delete',
   path: '/key',

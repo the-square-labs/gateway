@@ -14,6 +14,7 @@ import { HTTPException } from 'hono/http-exception';
 import { requestId } from 'hono/request-id';
 import { getEnv, isDevelopment } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
 import { injectLoginAuthMethods } from '@/lib/login-page.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
@@ -39,6 +40,8 @@ import { aiRoutes } from '@/modules/ai/ai.routes.js';
 import { authenticateWSConnection, createWSHandlers } from '@/modules/ai/ai.ws.js';
 import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
+import { auditExportRouteRuntime } from '@/modules/audit/audit-export-route-runtime.js';
+import { siemRouteRuntime } from '@/modules/audit/siem-route-runtime.js';
 import {
   authMiddleware,
   isAdmittedSetupPurposeRequest,
@@ -49,7 +52,8 @@ import { authRoutes } from '@/modules/auth/auth.routes.js';
 import { AVATAR_UPLOAD_BODY_MAX_BYTES } from '@/modules/auth/avatar-storage.service.js';
 import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { getProgrammaticWebSocketCredential, getSessionWebSocketCredential } from '@/modules/auth/websocket-auth.js';
-import { backupRoutes } from '@/modules/backups/backups.routes.js';
+import { backupRuntime } from '@/modules/backups/backup-runtime.js';
+import { databaseRouteRuntime } from '@/modules/databases/database-route-runtime.js';
 import { databaseRoutes } from '@/modules/databases/databases.routes.js';
 import { createManagedDatabaseLogStreamWSHandlers } from '@/modules/databases/managed-database-logs.ws.js';
 import { isDemoMode } from '@/modules/demo/demo-mode.js';
@@ -74,7 +78,7 @@ import { inferenceDiscoveryRoutes } from '@/modules/inference/inference-discover
 import { inferenceSetupRoutes } from '@/modules/inference/inference-setup.routes.js';
 import { integrationsRoutes } from '@/modules/integrations/integrations.routes.js';
 import { licenseRoutes } from '@/modules/license/license.routes.js';
-import { loggingRoutes } from '@/modules/logging/logging.routes.js';
+import { loggingRouteRuntime } from '@/modules/logging/logging-route-runtime.js';
 import { mcpRoutes } from '@/modules/mcp/mcp.routes.js';
 import { monitoringRoutes } from '@/modules/monitoring/monitoring.routes.js';
 import { createProxyLogStreamWSHandlers } from '@/modules/monitoring/proxy-logs.ws.js';
@@ -84,16 +88,11 @@ import { nodesRoutes } from '@/modules/nodes/nodes.routes.js';
 import { notificationRoutes } from '@/modules/notifications/notification.routes.js';
 import { oauthMetadataRoutes, oauthRoutes } from '@/modules/oauth/oauth.routes.js';
 import { objectStorageRoutes } from '@/modules/object-storage/object-storage.routes.js';
+import { storageRouteRuntime } from '@/modules/object-storage/storage-route-runtime.js';
 import { finalizeSetupRoutes } from '@/modules/onboarding/finalize-setup.routes.js';
 import { PAGE_UPLOAD_CHUNK_MAX_BYTES } from '@/modules/pages/deployments/page-deployment.service.js';
-import { pageDeployRoutes } from '@/modules/pages/page-deploy.routes.js';
-import { pageManagementRoutes } from '@/modules/pages/page-management.routes.js';
-import { pageProjectRoutes } from '@/modules/pages/page-project.routes.js';
-import { pageProfileRoutes } from '@/modules/pages/profile/page-profile.routes.js';
-import { caRoutes } from '@/modules/pki/ca.routes.js';
-import { certRoutes } from '@/modules/pki/cert.routes.js';
-import { publicPkiRoutes } from '@/modules/pki/public.routes.js';
-import { templateRoutes } from '@/modules/pki/templates.routes.js';
+import { pagesRouteRuntime } from '@/modules/pages/pages-route-runtime.js';
+import { pkiRouteRuntime } from '@/modules/pki/pki-route-runtime.js';
 import { folderRoutes } from '@/modules/proxy/folder.routes.js';
 import { nginxTemplateRoutes } from '@/modules/proxy/nginx-template.routes.js';
 import { proxyRoutes } from '@/modules/proxy/proxy.routes.js';
@@ -108,9 +107,10 @@ import {
 import { setupApiDisabledMiddleware, setupRoutes } from '@/modules/setup/setup.routes.js';
 import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { sslRoutes } from '@/modules/ssl/ssl.routes.js';
-import { publicStatusPageRoutes, statusPageRoutes } from '@/modules/status-page/status-page.routes.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
+import { statusPageRouteRuntime } from '@/modules/status-page/status-page-route-runtime.js';
 import { managedStorageRoutes } from '@/modules/storage/managed-storage.routes.js';
+import { managedStorageRouteRuntime } from '@/modules/storage/managed-storage-route-runtime.js';
 import { systemRoutes } from '@/modules/system/system.routes.js';
 import { tokensRoutes } from '@/modules/tokens/tokens.routes.js';
 import { uiBootstrapRoutes } from '@/modules/ui-bootstrap/ui-bootstrap.routes.js';
@@ -494,14 +494,14 @@ export function createApp(): GatewayAppRuntime {
   app.use('*', async (c, next) => {
     const lifecycle = container.resolve(GatewayLifecycleService);
     if (lifecycle.getState() === 'running') {
-      await next();
+      await acceptedOperations.run(next);
       return;
     }
     const path = new URL(c.req.url).pathname;
     const statusHost = await container.resolve(StatusPageService).isStatusHost(c.req.header('host'));
     const trafficClass = lifecycle.classifyRequest(c.req.method, path, statusHost);
     if (lifecycle.shouldAdmit(trafficClass)) {
-      await next();
+      await acceptedOperations.run(next);
       return;
     }
     c.header('Retry-After', '1');
@@ -725,8 +725,6 @@ export function createApp(): GatewayAppRuntime {
   });
 
   // Public PKI endpoints (no auth) — CRL, OCSP, CA cert download
-  app.route('/pki', publicPkiRoutes);
-  app.route('/api/public/status-page', publicStatusPageRoutes);
 
   // Auth routes
   app.route('/auth', authRoutes);
@@ -755,9 +753,6 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/inference/core', inferenceCoreLifecycleRoutes);
   app.route('/api/inference', inferenceManagementRoutes);
   app.route('/api/mcp/.well-known', oauthMetadataRoutes);
-  app.route('/api/cas', caRoutes);
-  app.route('/api/certificates', certRoutes);
-  app.route('/api/templates', templateRoutes);
   app.route('/api/audit', auditRoutes);
   app.route('/api/alerts', alertRoutes);
   app.route('/api/tokens', tokensRoutes);
@@ -765,10 +760,6 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/admin', adminRoutes);
   app.route('/api/docker/registry', dockerRegistryAuthRoutes);
   app.route('/api/docker', dockerRoutes);
-  app.route('/api/databases', databaseRoutes);
-  app.route('/api', backupRoutes);
-  app.route('/api/object-storage', objectStorageRoutes);
-  app.route('/api/managed-storage', managedStorageRoutes);
   app.route('/api/webhooks/docker', dockerWebhookTriggerRoutes);
   app.route('/api/webhooks/docker-source', dockerSourceWebhookRoutes);
   app.route('/api/nodes', nodesRoutes);
@@ -778,15 +769,10 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/nginx-templates', nginxTemplateRoutes);
   app.route('/api/ssl-certificates', sslRoutes);
   app.route('/api/domains', domainRoutes);
-  app.route('/api/pages/settings', pageProfileRoutes);
-  app.route('/api/pages', pageProjectRoutes);
-  app.route('/api/pages', pageManagementRoutes);
-  app.route('/api/pages-deploy', pageDeployRoutes);
   app.route('/api/access-lists', accessListRoutes);
   app.route('/api/monitoring', monitoringRoutes);
   app.route('/api/setup', setupRoutes);
   app.route('/api/finalize-setup', finalizeSetupRoutes);
-  app.route('/api/status-page', statusPageRoutes);
   app.route('/api/system/license', licenseRoutes);
   app.route('/api/system', systemRoutes);
   app.route('/api/ui', uiBootstrapRoutes);
@@ -796,9 +782,28 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/hosting', hostingRoutes);
   app.route('/api/integrations', integrationsRoutes);
   app.route('/api/notifications', notificationRoutes);
-  app.route('/api/logging', loggingRoutes);
   app.route('/api/ai', aiRoutes);
   app.route('/api/mcp', mcpRoutes);
+
+  if (container.isRegistered(TOKENS.CommercialEdition)) {
+    container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerRoutes({
+      app,
+      upgradeWebSocket,
+      pki: pkiRouteRuntime,
+      siem: siemRouteRuntime,
+      auditExport: auditExportRouteRuntime,
+      pages: pagesRouteRuntime,
+      logging: loggingRouteRuntime,
+      statusPage: statusPageRouteRuntime,
+      backups: backupRuntime,
+      storage: storageRouteRuntime,
+      databases: databaseRouteRuntime,
+      managedStorage: managedStorageRouteRuntime,
+    });
+  }
+  app.route('/api/object-storage', objectStorageRoutes);
+  app.route('/api/databases', databaseRoutes);
+  app.route('/api/managed-storage', managedStorageRoutes);
 
   // AI WebSocket endpoint
   const wsHandlers = createWSHandlers();
@@ -1118,3 +1123,5 @@ export function createApp(): GatewayAppRuntime {
 
   return { app, injectWebSocket, wss };
 }
+
+import { acceptedOperations } from '@/edition/accepted-operations.js';

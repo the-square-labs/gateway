@@ -336,58 +336,6 @@ describe('DockerInternalRegistryService', () => {
     expect(store.run).toMatchObject({ status: 'failed', phase: 'failed' });
   });
 
-  it('applies external ingress before publishing enabled state and publishes disabled state before teardown', async () => {
-    const store = new FakeStore();
-    const { service } = createService(store, createExecutor(store));
-    const observations: Array<{ enabled: boolean; stored: boolean }> = [];
-    service.setExternalAccessReconciler(async (next) => {
-      observations.push({ enabled: next.externalAccessEnabled, stored: store.state.externalAccessEnabled });
-    });
-
-    await service.updateSettings(
-      {
-        externalAccessEnabled: true,
-        externalHostname: 'registry.example.com',
-        externalNginxNodeId: '11111111-1111-4111-8111-111111111111',
-        externalCertificateId: '22222222-2222-4222-8222-222222222222',
-      },
-      'user-1'
-    );
-    await service.updateSettings({ externalAccessEnabled: false }, 'user-1');
-
-    expect(observations).toEqual([
-      { enabled: true, stored: false },
-      { enabled: false, stored: false },
-    ]);
-    expect(store.state.externalAccessEnabled).toBe(false);
-  });
-
-  it('requires Business only when external access is enabled', async () => {
-    const store = new FakeStore();
-    const requireFeature = vi
-      .fn()
-      .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Business required'));
-    const { service } = createService(store, createExecutor(store), undefined, requireFeature);
-    service.setExternalAccessReconciler(vi.fn());
-
-    await expect(
-      service.updateSettings(
-        {
-          externalAccessEnabled: true,
-          externalHostname: 'registry.example.com',
-          externalNginxNodeId: '11111111-1111-4111-8111-111111111111',
-          externalCertificateId: '22222222-2222-4222-8222-222222222222',
-        },
-        'user-1'
-      )
-    ).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
-    await expect(service.updateSettings({ externalAccessEnabled: false }, 'user-1')).resolves.toMatchObject({
-      externalAccessEnabled: false,
-    });
-    expect(requireFeature).toHaveBeenCalledTimes(1);
-    expect(requireFeature).toHaveBeenCalledWith('git-push-to-deploy');
-  });
-
   it('blocks external token issuance when Business is unavailable without affecting internal pulls', async () => {
     const store = new FakeStore();
     store.state = { ...store.state, externalAccessEnabled: true };
@@ -404,7 +352,7 @@ describe('DockerInternalRegistryService', () => {
         allowed: [{ repository: 'tenant/app', actions: ['pull'] }],
         externalAccess: true,
       })
-    ).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+    ).rejects.toMatchObject({ code: 'COMMERCIAL_MODULE_UNAVAILABLE' });
     await expect(
       service.issueToken({
         subject: 'runtime:node-1',
@@ -442,23 +390,6 @@ describe('DockerInternalRegistryService', () => {
     expect(audit.log).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'docker.internal-registry.external-access.disabled-by-license' })
     );
-  });
-
-  it('refuses to publish external access when ingress reconciliation is unavailable', async () => {
-    const store = new FakeStore();
-    const { service } = createService(store, createExecutor(store));
-    await expect(
-      service.updateSettings(
-        {
-          externalAccessEnabled: true,
-          externalHostname: 'registry.example.com',
-          externalNginxNodeId: '11111111-1111-4111-8111-111111111111',
-          externalCertificateId: '22222222-2222-4222-8222-222222222222',
-        },
-        'user-1'
-      )
-    ).rejects.toMatchObject({ code: 'REGISTRY_INGRESS_UNAVAILABLE' });
-    expect(store.state.externalAccessEnabled).toBe(false);
   });
 
   it('persists every maintenance phase before invoking its external side effect', async () => {

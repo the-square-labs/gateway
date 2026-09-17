@@ -1,6 +1,8 @@
 import { eq } from 'drizzle-orm';
 import { container, TOKENS } from '@/container.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
@@ -180,64 +182,20 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
       case 'ask_question':
         return { _askQuestion: true, question: a.question, options: a.options, allowFreeText: a.allowFreeText };
 
-      case 'enter_plan_mode': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.enterPlan({
-          userId: user.id,
-          conversationId: runtimeContext.conversationId,
-          title: a.title,
-        });
-      }
-      case 'submit_plan': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.submitPlan(user.id, runtimeContext.conversationId, a as any);
-      }
-      case 'submit_plan_review': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.submitPlanReview({
-          userId: user.id,
-          conversationId: runtimeContext.conversationId,
-          intentReview: a.intentReview,
-          securityReview: a.securityReview,
-        });
-      }
-      case 'start_plan_execution': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.startExecution(user.id, runtimeContext.conversationId);
-      }
-      case 'update_plan_step': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.updateStep({
-          userId: user.id,
-          conversationId: runtimeContext.conversationId,
-          status: a.status,
-          evidence: a.evidence,
-          skipReason: a.skipReason,
-        });
-      }
-      case 'pause_plan_execution': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.pause(user.id, runtimeContext.conversationId, a.reason, {
-          requiresRevision: a.requiresRevision === true,
-        });
-      }
-      case 'resume_plan_execution': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.resume(user.id, runtimeContext.conversationId);
-      }
-      case 'finalize_plan_execution': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.requestFinalVerification(user.id, runtimeContext.conversationId);
-      }
+      case 'enter_plan_mode':
+      case 'submit_plan':
+      case 'submit_plan_review':
+      case 'start_plan_execution':
+      case 'update_plan_step':
+      case 'pause_plan_execution':
+      case 'resume_plan_execution':
+      case 'finalize_plan_execution':
       case 'submit_plan_verification': {
-        if (!runtimeContext.conversationId || !this.planService) throw new Error('Plan runtime is unavailable');
-        return this.planService.submitFinalVerification({
-          userId: user.id,
-          conversationId: runtimeContext.conversationId,
-          verdict: a.verdict,
-          summary: a.summary,
-          findings: a.findings,
-        });
+        const planning = container.isRegistered(TOKENS.CommercialEdition)
+          ? container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).planning
+          : undefined;
+        if (!planning) return commercialModuleUnavailable();
+        return planning.executeTool(this.planService, user, toolName, args, runtimeContext.conversationId);
       }
 
       // ── Documentation ──

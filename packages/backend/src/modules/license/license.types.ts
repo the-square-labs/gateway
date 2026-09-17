@@ -1,6 +1,8 @@
 export const LICENSE_SERVER_URL = 'https://license.thesqlabs.com';
 export const LICENSE_LEGACY_ENTITLEMENTS_VERSION = 3;
-export const LICENSE_ENTITLEMENTS_VERSION = 4;
+export const LICENSE_PREVIOUS_ENTITLEMENTS_VERSION = 4;
+export const LICENSE_ENTITLEMENTS_VERSION = 5;
+export const LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS: readonly number[] = [3, 4, 5];
 export const LICENSE_OFFLINE_GRACE_DAYS = 100;
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
@@ -184,7 +186,8 @@ const ENTERPRISE_FEATURES_V3 = [
   'assisted-migration',
 ] as const;
 
-export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
+// Published v3/v4 contracts must remain unchanged when the current plan changes.
+export const COMMUNITY_ENTITLEMENTS_V4: LicenseEntitlements = {
   managedNodes: 100,
   users: 10,
   customPermissionGroups: 5,
@@ -192,8 +195,8 @@ export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
   features: [...SHARED_FEATURES],
 };
 
-export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements> = {
-  community: COMMUNITY_ENTITLEMENTS,
+export const LICENSE_PLAN_ENTITLEMENTS_V4: Record<LicensePlan, LicenseEntitlements> = {
+  community: COMMUNITY_ENTITLEMENTS_V4,
   personal: {
     managedNodes: null,
     users: null,
@@ -226,7 +229,7 @@ export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements>
 };
 
 export const LICENSE_PLAN_ENTITLEMENTS_V3: Record<LicensePlan, LicenseEntitlements> = {
-  community: COMMUNITY_ENTITLEMENTS,
+  community: COMMUNITY_ENTITLEMENTS_V4,
   personal: {
     managedNodes: null,
     users: null,
@@ -250,16 +253,60 @@ export const LICENSE_PLAN_ENTITLEMENTS_V3: Record<LicensePlan, LicenseEntitlemen
   },
 };
 
+const PERSONAL_FEATURES_V5 = [
+  'storage-connections',
+  'external-database-connections',
+  'managed-storage',
+  'ai-plan-mode',
+  'ai-scenarios',
+  'ai-sandboxes',
+] as const;
+
+export const COMMUNITY_ENTITLEMENTS: LicenseEntitlements = {
+  managedNodes: 25,
+  users: 3,
+  customPermissionGroups: 1,
+  supportLevel: 'community',
+  features: SHARED_FEATURES.filter((feature) => feature !== 'gitlab'),
+};
+
+export const LICENSE_PLAN_ENTITLEMENTS: Record<LicensePlan, LicenseEntitlements> = {
+  community: COMMUNITY_ENTITLEMENTS,
+  personal: {
+    ...LICENSE_PLAN_ENTITLEMENTS_V4.personal,
+    features: [...LICENSE_PLAN_ENTITLEMENTS_V4.personal.features, ...PERSONAL_FEATURES_V5],
+  },
+  business: {
+    ...LICENSE_PLAN_ENTITLEMENTS_V4.business,
+    features: [...LICENSE_PLAN_ENTITLEMENTS_V4.business.features, ...PERSONAL_FEATURES_V5],
+  },
+  enterprise: {
+    ...LICENSE_PLAN_ENTITLEMENTS_V4.enterprise,
+    features: [...LICENSE_PLAN_ENTITLEMENTS_V4.enterprise.features, ...PERSONAL_FEATURES_V5],
+  },
+};
+
+export function licensePlanEntitlementsForVersion(
+  version: number
+): Record<LicensePlan, LicenseEntitlements> | undefined {
+  switch (version) {
+    case LICENSE_LEGACY_ENTITLEMENTS_VERSION:
+      return LICENSE_PLAN_ENTITLEMENTS_V3;
+    case LICENSE_PREVIOUS_ENTITLEMENTS_VERSION:
+      return LICENSE_PLAN_ENTITLEMENTS_V4;
+    case LICENSE_ENTITLEMENTS_VERSION:
+      return LICENSE_PLAN_ENTITLEMENTS;
+    default:
+      return undefined;
+  }
+}
+
 export function isCanonicalEntitlements(
   plan: LicensePlan,
   value: unknown,
   version = LICENSE_ENTITLEMENTS_VERSION
 ): value is LicenseEntitlements {
-  const contracts: Partial<Record<number, Record<LicensePlan, LicenseEntitlements>>> = {
-    [LICENSE_LEGACY_ENTITLEMENTS_VERSION]: LICENSE_PLAN_ENTITLEMENTS_V3,
-    [LICENSE_ENTITLEMENTS_VERSION]: LICENSE_PLAN_ENTITLEMENTS,
-  };
-  const expected = contracts[version]?.[plan];
+  const expected = licensePlanEntitlementsForVersion(version)?.[plan];
   if (
     !expected ||
     !value ||

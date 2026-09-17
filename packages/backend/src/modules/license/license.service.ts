@@ -4,6 +4,7 @@ import { eq } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/settings.js';
+import { type CommercialUpdateGrant, commercialVersionKey } from '@/edition/prepare-update.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -15,11 +16,8 @@ import {
   isCanonicalEntitlements,
   LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS,
   LICENSE_ENTITLEMENTS_VERSION,
-  LICENSE_LEGACY_ENTITLEMENTS_VERSION,
   LICENSE_OFFLINE_GRACE_DAYS,
   LICENSE_PAID_HEARTBEAT_INTERVAL_MS,
-  LICENSE_PLAN_ENTITLEMENTS,
-  LICENSE_PLAN_ENTITLEMENTS_V3,
   LICENSE_SERVER_URL,
   type LicensePlan,
   type LicenseServerEnvelope,
@@ -28,6 +26,7 @@ import {
   type LicenseServerState,
   type LicenseStatus,
   type LicenseStatusView,
+  licensePlanEntitlementsForVersion,
 } from './license.types.js';
 
 const logger = createChildLogger('LicenseService');
@@ -94,12 +93,7 @@ export class LicenseService {
   async getRuntimeContinuityEntitlements(): Promise<LicenseStatusView['entitlements'] | null> {
     const cached = await this.getCachedState();
     if (!cached?.paidPlan || !cached.lastValidAt) return null;
-    const contracts =
-      cached.entitlementsVersion === LICENSE_LEGACY_ENTITLEMENTS_VERSION
-        ? LICENSE_PLAN_ENTITLEMENTS_V3
-        : cached.entitlementsVersion === LICENSE_ENTITLEMENTS_VERSION
-          ? LICENSE_PLAN_ENTITLEMENTS
-          : null;
+    const contracts = licensePlanEntitlementsForVersion(cached.entitlementsVersion);
     return contracts?.[cached.paidPlan] ?? null;
   }
 
@@ -168,6 +162,66 @@ export class LicenseService {
 
   async checkNow(): Promise<LicenseStatusView> {
     return this.runSerialized(() => this.checkNowUnlocked());
+  }
+
+  /** Update admission is online and strict; an offline cache must not authorize a new private download. */
+  async authorizeCommercialUpdate(hostVersion: string): Promise<CommercialUpdateGrant> {
+    commercialVersionKey(hostVersion);
+    return this.runSerialized(async () => {
+      const cached = await this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null);
+      if (cached && !Object.hasOwn(cached, 'registrationStatus')) await this.checkNowUnlocked();
+      const credential = await this.ensureRegistered(true);
+      if (!credential)
+        throw new LicenseServerRequestError(
+          503,
+          'LICENSE_SERVER_UNAVAILABLE',
+          'Installation registration is required for update'
+        );
+      const result = await this.post<{ state: LicenseServerState; signedManifest?: string }>(
+        '/api/v1/releases/authorize',
+        { installationToken: credential.token, hostVersion, entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION }
+      );
+      this.assertServerState(result.state);
+      if (result.state.effectivePlan === 'community') {
+        if (result.state.paidLicense || (await this.getSetting(SETTINGS_KEYS.keyEncrypted, null))) {
+          throw new LicenseServerRequestError(
+            409,
+            'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
+            'Update cannot silently replace a paid installation with Community'
+          );
+        }
+        await this.saveServerState(result.state);
+        return { edition: 'community' };
+      }
+      if (
+        !['valid', 'expired_grace'].includes(result.state.paidLicenseStatus) ||
+        typeof result.signedManifest !== 'string'
+      )
+        throw new LicenseServerRequestError(
+          403,
+          'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
+          'A current paid entitlement and signed core release are required'
+        );
+      await this.saveServerState(result.state);
+      return {
+        edition: 'commercial',
+        signedManifest: result.signedManifest,
+        readFile: (path, releaseId) =>
+          this.fetcher(`${LICENSE_SERVER_URL}/api/v1/releases/file`, {
+            method: 'POST',
+            redirect: 'error',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              installationToken: credential.token,
+              hostVersion,
+              releaseId,
+              path,
+              entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+            }),
+            signal: AbortSignal.timeout(10 * 60_000),
+          }),
+      };
+    });
   }
 
   private async checkNowUnlocked(): Promise<LicenseStatusView> {
@@ -443,6 +497,7 @@ export class LicenseService {
     let status = cached.status;
     let plan = cached.plan;
     let entitlements = cached.entitlements;
+    let entitlementsVersion = cached.entitlementsVersion;
     let licensed = status === 'community' || status === 'valid' || status === 'expired_grace';
     const authoritativeLoss = ['revoked', 'replaced', 'deactivated', 'invalid'].includes(cached.status);
 
@@ -478,6 +533,13 @@ export class LicenseService {
       }
     }
 
+    // Community policy is local to this release. Keep the cached paid grant
+    // untouched so legacy runtime continuity can still use its original contract.
+    if (plan === 'community' && isCanonicalEntitlements(cached.plan, cached.entitlements, cached.entitlementsVersion)) {
+      entitlements = COMMUNITY_ENTITLEMENTS;
+      entitlementsVersion = LICENSE_ENTITLEMENTS_VERSION;
+    }
+
     return {
       status,
       plan,
@@ -491,7 +553,7 @@ export class LicenseService {
       installationId,
       installationName,
       expiresAt: cached.expiresAt,
-      entitlementsVersion: cached.entitlementsVersion,
+      entitlementsVersion,
       entitlements,
       lastCheckedAt: cached.lastCheckedAt,
       lastValidAt,

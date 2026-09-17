@@ -99,6 +99,13 @@ afterEach(() => {
 });
 
 describe('AI routes session-only authentication', () => {
+  it('returns an empty scenario catalog for Community without exposing private prompts', async () => {
+    registerServices();
+    const response = await createApp().request('/api/ai/scenarios', { headers: { Cookie: 'session_id=session-1' } });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: [] });
+  });
+
   it('allows browser session users to query AI status', async () => {
     registerServices();
 

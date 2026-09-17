@@ -77,6 +77,7 @@ export interface UIBootstrapShell {
   aiStatus: unknown | null;
   aiWorkspace: { configured: boolean; installationOwner: boolean };
   license: SafeLicenseSummary;
+  commercialModule: 'community' | 'unavailable' | 'ready';
 }
 
 /**
@@ -97,7 +98,8 @@ export class UIBootstrapService {
     private readonly aiSettings: AISettingsService,
     private readonly finalizeSetup: FinalizeSetupService,
     private readonly licensePolicy: LicensePolicyService,
-    private readonly pageProfile?: PageProfileService
+    private readonly pageProfile?: PageProfileService,
+    private readonly commercialEdition?: CommercialEditionRuntime
   ) {
     this.coordinator.register({
       id: 'ui-shell:nodes',
@@ -198,6 +200,7 @@ export class UIBootstrapService {
         installationOwner,
       },
       license,
+      commercialModule: this.commercialEdition?.status.state ?? 'community',
     };
   }
 
@@ -399,3 +402,5 @@ export class UIBootstrapService {
     );
   }
 }
+
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';

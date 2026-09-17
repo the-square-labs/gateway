@@ -1,0 +1,1116 @@
+{
+  "schemaVersion": 1,
+  "complete": true,
+  "privateSourceRepository": "gateway-commercial",
+  "removedBackendSources": [
+    "modules/integrations/gitlab-client.ts",
+    "modules/integrations/gitlab-provider.ts",
+    "modules/integrations/gitlab-provider.types.ts",
+    "modules/integrations/gitlab-client.test.ts",
+    "modules/integrations/gitlab-provider.test.ts",
+    "modules/object-storage/ftp-storage-backend.ts",
+    "modules/object-storage/sftp-storage-backend.ts",
+    "modules/object-storage/s3-storage-backend.ts",
+    "modules/object-storage/s3-object-operations.ts",
+    "modules/object-storage/file-protocol-shared.ts",
+    "modules/object-storage/storage-backends.integration.test.ts",
+    "modules/object-storage/object-storage.service.test.ts",
+    "modules/object-storage/object-storage-monitoring.service.test.ts",
+    "modules/object-storage/object-storage-upload.service.test.ts",
+    "modules/object-storage/object-storage-monitoring-stream.test.ts",
+    "modules/ai/ai.storage-tools.test.ts",
+    "modules/databases/clickhouse-connection.ts",
+    "modules/databases/database-query-execution.ts",
+    "modules/databases/database-result-compaction.ts",
+    "modules/databases/databases.service.runtime.ts",
+    "modules/databases/clickhouse-sql-adapter.ts",
+    "modules/databases/clickhouse-row-operations.ts",
+    "modules/databases/clickhouse-sql.ts",
+    "modules/databases/postgres-sql-adapter.ts",
+    "modules/databases/postgres-column-operations.ts",
+    "modules/databases/postgres-row-sql.ts",
+    "modules/databases/postgres-schema-operations.ts",
+    "modules/databases/clickhouse-connection.test.ts",
+    "modules/databases/clickhouse-sql-adapter.test.ts",
+    "modules/databases/database-connection-view.test.ts",
+    "modules/databases/database-query-execution.test.ts",
+    "modules/databases/databases.service-postgres-columns.test.ts",
+    "modules/databases/databases.service-postgres-extensions.test.ts",
+    "modules/databases/databases.service-postgres-pool.test.ts",
+    "modules/databases/databases.service-redis-keys.test.ts",
+    "modules/databases/databases.service.test.ts",
+    "modules/databases/database-query-intent.ts",
+    "modules/databases/database-monitoring.service.test.ts",
+    "modules/databases/databases.routes.test.ts",
+    "modules/databases/databases.create-auth.test.ts",
+    "modules/databases/databases.binding-reveal.routes.test.ts",
+    "modules/storage/managed-storage.routes.test.ts",
+    "modules/storage/managed-storage-bindings.service.test.ts",
+    "modules/storage/managed-storage-iam-policy.test.ts",
+    "modules/storage/managed-storage-tunnel-proxy.test.ts",
+    "modules/storage/managed-storage.service.test.ts",
+    "modules/storage/storage-cluster-member-store.test.ts",
+    "modules/storage/storage-workload-dispatch.test.ts",
+    "modules/storage/storage-workload-labels.test.ts",
+    "modules/storage/storage-workload-provider.test.ts",
+    "modules/storage/storage-workload-store.test.ts",
+    "modules/databases/managed-databases.service.identity.ts",
+    "modules/databases/managed-databases.service.lifecycle.ts",
+    "modules/databases/managed-databases.service.read.ts",
+    "modules/databases/managed-databases.service.mutations.ts",
+    "modules/databases/managed-database-binding-admission.test.ts",
+    "modules/databases/managed-database-binding-identity-runtime.test.ts",
+    "modules/databases/managed-database-binding-target-runtime.test.ts",
+    "modules/databases/managed-databases.service.test.ts",
+    "modules/databases/managed-database-bindings.availability.test.ts",
+    "modules/object-storage/managed-storage-metrics-provider.test.ts",
+    "modules/object-storage/managed-storage-metrics.test.ts",
+    "modules/databases/managed-database-tunnel-proxy.test.ts",
+    "modules/backups/backups.routes.ts",
+    "modules/backups/backups.integration.test.ts",
+    "modules/backups/backups-route-isolation.test.ts",
+    "modules/backups/backups-cleanup.test.ts",
+    "services/backup-integration.ts",
+    "services/backup-integration.test.ts",
+    "modules/databases/managed-database-catalog.ts",
+    "modules/ai/ai-plan-input.ts",
+    "modules/ai/ai-plan-revision.ts",
+    "modules/ai/ai-plan.service.test.ts",
+    "modules/ai/ai-scenarios.test.ts",
+    "modules/ai/ai.sandbox.service.test.ts",
+    "modules/ai/ai.sandbox-jobs.service.test.ts",
+    "modules/ai/ai.sandbox-policy.test.ts",
+    "modules/ai/ai.tools.planning.ts",
+    "modules/ai/ai.tools.sandbox.ts",
+    "modules/ai/ai-plan-runtime.test.ts",
+    "modules/ai/ai.service-database-tools.test.ts",
+    "modules/storage/managed-storage-catalog.ts",
+    "modules/mcp/mcp-ai-audit.database.test.ts",
+    "modules/docker/docker-source.service.test.ts",
+    "modules/docker/docker-source-pending.service.test.ts",
+    "modules/docker/docker-build-artifact.ts",
+    "modules/docker/docker-build-activation-access.ts",
+    "modules/docker/docker-compose-build-rollout.service.ts",
+    "modules/docker/docker-build.service.test.ts",
+    "modules/docker/docker-build-rollout.service.test.ts",
+    "modules/docker/docker-build-rollout.same-commit.test.ts",
+    "modules/docker/docker-build-query.test.ts",
+    "modules/docker/docker-build-activation-access.test.ts",
+    "modules/docker/docker-build-runner.admission.test.ts",
+    "modules/docker/docker-build-first-activation.test.ts",
+    "modules/docker/docker-deployment-operations.ts",
+    "modules/docker/docker-deployment-registry.ts",
+    "modules/docker/docker-deployment-synthetic.ts",
+    "modules/docker/docker-deployment-operations.test.ts",
+    "modules/docker/docker-deployment.ha-deploy.test.ts",
+    "modules/docker/docker-deployment.service-managed-mounts.test.ts",
+    "modules/docker/docker-deployment-registry.test.ts",
+    "modules/docker/docker-deployment.service-creation-lock.test.ts",
+    "modules/docker/docker-deployment.source-activation.test.ts",
+    "modules/docker/docker-deployment-managed-bindings.test.ts",
+    "modules/docker/compose/compose.service.test.ts",
+    "modules/docker/docker-migration-availability.ts",
+    "modules/docker/docker-migration-deployment-runtime.ts",
+    "modules/docker/docker-migration-lease.ts",
+    "modules/docker/docker-migration-preflight-rules.ts",
+    "modules/docker/docker-migration-source-restore.ts",
+    "modules/docker/docker-migration-preflight.test.ts",
+    "modules/docker/docker-migration-records.test.ts",
+    "modules/docker/docker-migration-permissions.test.ts",
+    "modules/docker/docker-migration-runtime.test.ts",
+    "modules/docker/docker-migration-preflight-rules.test.ts",
+    "modules/docker/docker-migration-coordinator.test.ts",
+    "modules/docker/docker-migration-availability.test.ts",
+    "modules/docker/docker-migration-dispatch.test.ts",
+    "modules/docker/docker-migration.service.test.ts",
+    "modules/docker/docker-migration-executor.test.ts",
+    "modules/docker/availability/docker-availability-artifact.service.test.ts",
+    "modules/docker/availability/docker-availability-ingress.test.ts",
+    "modules/docker/availability/docker-availability.adapters.test.ts",
+    "modules/docker/availability/docker-availability.deploy.test.ts",
+    "modules/docker/availability/docker-availability.lifecycle.test.ts",
+    "modules/docker/availability/docker-availability.secure-runtime.test.ts",
+    "modules/docker/availability/docker-availability.service.test.ts",
+    "modules/docker/compose/compose-policy.test.ts",
+    "modules/docker/compose/compose-managed-bindings.test.ts",
+    "modules/docker/docker-container-archive.test.ts",
+    "modules/docker/docker-container-archive.routes.test.ts",
+    "modules/docker/docker.service-runtime-status.test.ts",
+    "modules/status-page/status-incident-evaluator.service.ts",
+    "modules/status-page/status-page.service.test.ts",
+    "modules/status-page/status-incident-evaluator.service.test.ts",
+    "modules/status-page/status-page.routes.ts",
+    "modules/license/license-personal-gates.test.ts",
+    "modules/logging/local-clickhouse.service.test.ts",
+    "modules/logging/logging-environment.service.test.ts",
+    "modules/logging/logging-maintenance.service.test.ts",
+    "modules/logging/logging-validation.test.ts",
+    "modules/logging/logging-metadata.service.test.ts",
+    "modules/logging/logging-rate-limit.service.test.ts",
+    "modules/logging/logging-clickhouse.service.test.ts",
+    "modules/logging/logging.routes.ts",
+    "modules/logging/logging.routes.test.ts",
+    "modules/license/license-business-gates.test.ts",
+    "modules/pages/profile/page-domain-isolation.ts",
+    "modules/pages/profile/page-node-capability.ts",
+    "modules/pages/page-project.contract.test.ts",
+    "modules/pages/artifacts/page-artifact-store.test.ts",
+    "modules/pages/artifacts/page-archive-validator.test.ts",
+    "modules/pages/deployments/page-deployment.service.test.ts",
+    "modules/pages/deployments/page-build-rollout.service.test.ts",
+    "modules/pages/tags/page-tag.service.test.ts",
+    "modules/pages/tags/page-publication.service.test.ts",
+    "modules/pages/runtime-config/page-runtime-config.service.test.ts",
+    "modules/pages/routes/page-route.service.test.ts",
+    "modules/pages/runtime/page-node-runtime.service.test.ts",
+    "modules/pages/retention/page-retention.service.test.ts",
+    "modules/pages/retention/page-maintenance.service.test.ts",
+    "modules/pages/tokens/page-deploy-token.service.test.ts",
+    "modules/pages/profile/page-domain-isolation.test.ts",
+    "modules/pages/profile/page-node-capability.test.ts",
+    "modules/pages/profile/page-profile.service.test.ts",
+    "modules/pages/page-project.routes.ts",
+    "modules/pages/page-project.routes.test.ts",
+    "modules/pages/page-management.routes.ts",
+    "modules/pages/page-management.routes.test.ts",
+    "modules/pages/page-deploy.routes.ts",
+    "modules/pages/page-deploy.routes.test.ts",
+    "modules/pages/profile/page-profile.routes.ts",
+    "modules/pages/profile/page-profile.routes.test.ts",
+    "modules/audit/siem-outbox.service.test.ts",
+    "modules/audit/siem-transport.service.test.ts",
+    "modules/audit/siem-delivery.service.test.ts",
+    "modules/audit/siem.routes.ts",
+    "modules/pki/ca.routes.ts",
+    "modules/pki/ca.routes.test.ts",
+    "modules/pki/cert.routes.ts",
+    "modules/pki/cert.routes.test.ts",
+    "modules/pki/templates.routes.ts",
+    "modules/pki/templates.routes.test.ts",
+    "modules/pki/public.routes.ts",
+    "modules/pki/export.service.test.ts"
+  ],
+  "backendContracts": [
+    {
+      "path": "modules/object-storage/object-storage.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setBackendFactory",
+        "disposeClient",
+        "shutdown"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/object-storage/object-storage-monitoring.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "destroy",
+        "unregisterClient"
+      ],
+      "eventEmitterConstructor": true
+    },
+    {
+      "path": "modules/object-storage/object-storage-upload.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "cleanup",
+        "destroy"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/integrations/integrations.service.gitlab-support.ts",
+      "sharedMethods": [
+        "toProviderProject"
+      ]
+    },
+    {
+      "path": "modules/integrations/integrations.service.gitlab-connectors.ts",
+      "sharedMethods": [
+        "runDueGitHubHealthChecks"
+      ]
+    },
+    {
+      "path": "modules/integrations/integrations.service.gitlab-tools.ts",
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/integrations/integrations.service.gitlab-operations.ts",
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/integrations/integrations.service.gitlab-sandbox.ts",
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/integrations/integrations.service.sources.ts",
+      "sharedMethods": [],
+      "onlyMethods": [
+        "getGitLabUserCredentialStatus",
+        "authorizeGitLabUserCredential",
+        "disconnectGitLabUserCredential",
+        "resolvePersonalGitLabAuth",
+        "invalidateGitLabUserCredential"
+      ]
+    },
+    {
+      "path": "modules/integrations/integrations.service.git-repositories.ts",
+      "sharedMethods": [],
+      "onlyMethods": [
+        "listGitLabConnectors"
+      ]
+    },
+    {
+      "path": "modules/databases/databases.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "disposeClient"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/databases/database-monitoring.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEvaluator",
+        "setEventBus",
+        "start",
+        "destroy",
+        "unregisterClient"
+      ],
+      "eventEmitterConstructor": true
+    },
+    {
+      "path": "modules/storage/managed-storage.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/managed-storage-tunnel-proxy.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/storage-cluster-member-store.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/managed-storage-bindings.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/storage-workload-provider.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/storage-workload-store.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/storage/storage-workload-dispatch.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setBindingsTeardown",
+        "setAppCertificateFingerprint",
+        "shutdown",
+        "disposeCluster"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/databases/managed-databases.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/databases/managed-database-bindings.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "setTargetRuntimeReconciler",
+        "setAvailabilityCoordinator"
+      ],
+      "emptyConstructor": true,
+      "typeOnlyProperties": true
+    },
+    {
+      "path": "modules/object-storage/managed-storage-metrics-provider.ts",
+      "sharedMethods": [],
+      "emptyMethods": [],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/databases/managed-database-tunnel-proxy.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "setAppCertificateFingerprint",
+        "disposeDatabase",
+        "shutdown"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/backups/backups.service.ts",
+      "sharedMethods": [],
+      "emptyMethods": [
+        "registerScheduler"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/ai/ai-plan.service.ts",
+      "sharedMethods": [
+        "getActivePlanSnapshot",
+        "getLatestPlanSnapshot",
+        "listPlanSnapshots",
+        "listRecoverablePlans",
+        "isPlanning"
+      ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/ai/ai.sandbox.service.ts",
+      "sharedMethods": [
+        "status",
+        "killConversationJobs",
+        "revokeUserAccess",
+        "listJobs",
+        "reconcileActiveJobs"
+      ],
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "startPolicyReconciliation",
+        "stopPolicyReconciliation"
+      ]
+    },
+    {
+      "path": "modules/ai/ai.sandbox-jobs.service.ts",
+      "sharedMethods": [],
+      "emptyConstructor": true,
+      "emptyMethods": []
+    },
+    {
+      "path": "modules/ai/ai-run.service.ts",
+      "onlyMethods": [
+        "attachRunToPlan",
+        "startPlanRun"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/ai/ai-run.service.runtime.ts",
+      "onlyMethods": [
+        "abandonPlanning",
+        "handleCompletedRun",
+        "handleFailedRun",
+        "pausePlanAfterFailedRun",
+        "schedulePlanStateRun"
+      ],
+      "sharedMethods": [
+        "handleCompletedRun",
+        "handleFailedRun",
+        "pausePlanAfterFailedRun",
+        "schedulePlanStateRun"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-source.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setBuildService",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": [
+        "get",
+        "getPendingContainer",
+        "listPendingContainers",
+        "pollDue",
+        "reconcileWebhooks"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-build.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setAdmissionGuard",
+        "setLicenseGuard",
+        "setArtifactRollout",
+        "setBuildReleaseHandler"
+      ],
+      "sharedMethods": [
+        "admissionStatus",
+        "recoverExpiredLeases",
+        "listLogs",
+        "listInternalRegistryRepositories",
+        "list"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-build-runner.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setSourceService",
+        "reconcile"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/docker-build-rollout.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setPagesRollout"
+      ],
+      "sharedMethods": [
+        "recoverInterruptedComposeRollouts"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-build-query.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [],
+      "sharedMethods": [
+        "listInternalRegistryRepositories",
+        "list"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-deployment.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus",
+        "setHealthCheckService",
+        "setImageCleanupService",
+        "setMigrationGuard",
+        "setAccessResourceService",
+        "setAvailabilityCoordinator"
+      ],
+      "sharedMethods": [
+        "list",
+        "listSummary",
+        "syntheticRows"
+      ]
+    },
+    {
+      "path": "modules/docker/compose/compose.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setDispatcher",
+        "setEventBus",
+        "setSnapshotReconciler",
+        "setAvailabilityCoordinator"
+      ],
+      "sharedMethods": [
+        "list",
+        "recoverInterruptedOperations"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-migration.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "start",
+        "stop"
+      ],
+      "sharedMethods": [
+        "list",
+        "recoverOnStartup"
+      ]
+    },
+    {
+      "path": "modules/docker/docker-migration-preflight.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/docker-migration-coordinator.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/docker-migration-executor.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/docker-migration-dispatch.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/availability/docker-availability.service.ts",
+      "onlyMethods": [
+        "registerAdapter",
+        "resolveRuntimeAccessIdentity",
+        "start",
+        "stop",
+        "preflight",
+        "enable",
+        "getByResource",
+        "resolveManagedDatabaseBindingPolicyId",
+        "queueDependencyRollout",
+        "removeManagedDatabaseBinding",
+        "updateContainerConfiguration",
+        "updateContainerEnvironment",
+        "getContainerEnvironment",
+        "getContainerConfiguration",
+        "deployDeployment",
+        "setContainerRunning",
+        "isContainerManaged",
+        "isDeploymentManaged",
+        "updateDeploymentConfiguration",
+        "setDeploymentRunning",
+        "switchDeploymentSlot",
+        "isComposeManaged",
+        "containerRemoved",
+        "removeComposeManaged",
+        "applyComposeRevision",
+        "setComposeRunning",
+        "get",
+        "listContainerSurfaceStates",
+        "listComposeSurfaceStates",
+        "listOperations",
+        "listOperationsPage",
+        "update",
+        "disable",
+        "retryOperation",
+        "recoverInterruptedOperations",
+        "processPendingOperations",
+        "reconcileNode",
+        "assertContainerMutationAllowed"
+      ],
+      "emptyMethods": [
+        "registerAdapter",
+        "start",
+        "stop",
+        "recoverInterruptedOperations",
+        "processPendingOperations",
+        "reconcileNode",
+        "containerRemoved"
+      ],
+      "sharedMethods": [
+        "resolveRuntimeAccessIdentity",
+        "assertContainerMutationAllowed",
+        "getByResource",
+        "resolveManagedDatabaseBindingPolicyId",
+        "getContainerEnvironment",
+        "getContainerConfiguration",
+        "isContainerManaged",
+        "isDeploymentManaged",
+        "isComposeManaged",
+        "listContainerSurfaceStates",
+        "listComposeSurfaceStates",
+        "listOperations",
+        "listOperationsPage",
+        "updateContainerConfiguration",
+        "updateContainerEnvironment",
+        "setContainerRunning"
+      ]
+    },
+    {
+      "path": "modules/docker/docker.service.ts",
+      "onlyMethods": [
+        "manageRunsc",
+        "resizeVolume"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/docker/docker-registry-internal.service.ts",
+      "onlyMethods": [
+        "assertExternalAccessEntitled"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/status-page/status-page.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "primePublicHost",
+        "freezePublicSnapshot"
+      ],
+      "sharedMethods": [
+        "isCachedStatusHost",
+        "isStatusHost",
+        "listProxyTemplates",
+        "listServices",
+        "listIncidents",
+        "getPublicDto",
+        "resolveSources",
+        "getConfig"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-clickhouse.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "close",
+        "configure",
+        "ensureSchema"
+      ],
+      "sharedMethods": [
+        "isConfigured",
+        "ping",
+        "structuredTableExists",
+        "listStructuredPartitions",
+        "listInternalLogTables"
+      ]
+    },
+    {
+      "path": "modules/logging/local-clickhouse.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "reconcile"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/logging/logging-runtime.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "initialize",
+        "restore"
+      ],
+      "sharedMethods": [
+        "snapshot"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-maintenance.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": [
+        "getSnapshot",
+        "runGuard"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-environment.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": [
+        "list"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-token.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": [
+        "validate",
+        "list"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-schema.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": [
+        "list"
+      ]
+    },
+    {
+      "path": "modules/logging/logging-validation.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/logging/logging-rate-limit.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/logging/logging-metadata.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService",
+        "close"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/logging/logging-ingest.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/logging/logging-search.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setLicensePolicyService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/page-project.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setRetentionService",
+        "setRuntimeAdapter",
+        "setRouteRuntimeAdapter"
+      ],
+      "sharedMethods": [
+        "list",
+        "placementOptions",
+        "reconcileMigrations"
+      ]
+    },
+    {
+      "path": "modules/pages/artifacts/page-artifact-store.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "initialize"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/deployments/page-build-rollout.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/deployments/page-deployment.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setRetentionService"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/tags/page-tag.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus"
+      ],
+      "sharedMethods": [
+        "list"
+      ]
+    },
+    {
+      "path": "modules/pages/tags/page-publication.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setRuntimeAdapter"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/runtime-config/page-runtime-config.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setPublicationAdapter"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/routes/page-route.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setAdditionalRoutePublicationAdapter",
+        "reconcile"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/runtime/page-node-runtime.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "reconcileDisabledProjectPreviews"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pages/retention/page-retention.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setRuntimeAdapter"
+      ],
+      "sharedMethods": [
+        "runAll"
+      ]
+    },
+    {
+      "path": "modules/pages/retention/page-maintenance.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setMigrationReconciler"
+      ],
+      "sharedMethods": [
+        "run"
+      ]
+    },
+    {
+      "path": "modules/pages/tokens/page-deploy-token.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus"
+      ],
+      "sharedMethods": [
+        "list",
+        "validate"
+      ]
+    },
+    {
+      "path": "modules/pages/profile/page-profile.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setEventBus",
+        "setRuntimeAdapter",
+        "setLicensePolicyService",
+        "disableForEntitlementLoss",
+        "reconcile"
+      ],
+      "sharedMethods": [
+        "isEnabled",
+        "get",
+        "assignImmutableHostname"
+      ]
+    },
+    {
+      "path": "modules/audit/siem-outbox.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus",
+        "enqueue"
+      ],
+      "sharedMethods": [
+        "isEnabled"
+      ]
+    },
+    {
+      "path": "modules/audit/siem-transport.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/audit/siem-destination.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus"
+      ],
+      "sharedMethods": [
+        "list"
+      ]
+    },
+    {
+      "path": "modules/audit/siem-delivery.service.ts",
+      "emptyConstructor": true,
+      "emptyMethods": [
+        "setLicensePolicyService",
+        "setEventBus",
+        "runDueDeliveries"
+      ],
+      "sharedMethods": [
+        "list",
+        "cleanOldEntries"
+      ]
+    },
+    {
+      "path": "modules/audit/audit.service.ts",
+      "onlyMethods": [
+        "getAuditExport"
+      ],
+      "sharedMethods": []
+    },
+    {
+      "path": "modules/pki/templates.service.ts",
+      "emptyConstructor": true,
+      "typeOnlyProperties": true,
+      "emptyMethods": [
+        "setEventBus",
+        "seedBuiltinTemplates"
+      ],
+      "sharedMethods": [
+        "listTemplates",
+        "getTemplate"
+      ]
+    },
+    {
+      "path": "modules/pki/export.service.ts",
+      "emptyConstructor": true,
+      "typeOnlyProperties": true,
+      "emptyMethods": [],
+      "sharedMethods": []
+    }
+  ],
+  "pendingDomains": [],
+  "typeOnlyBackendSources": [
+    "modules/databases/postgres-row-operations.ts",
+    "modules/databases/redis-key-operations.ts",
+    "modules/databases/database-connection-view.ts",
+    "modules/databases/database-error-mapping.ts",
+    "modules/databases/databases.service.shared.ts",
+    "modules/storage/managed-storage-iam-dispatch.ts",
+    "modules/storage/managed-storage-iam-policy.ts",
+    "modules/storage/managed-storage-view.ts",
+    "modules/databases/managed-databases.service.core.ts",
+    "modules/databases/managed-database-binding-admission.ts",
+    "modules/databases/managed-database-binding-identity-runtime.ts",
+    "modules/databases/managed-database-binding-lifecycle.ts",
+    "modules/databases/managed-database-binding-model.ts",
+    "modules/databases/managed-database-binding-target-runtime.ts",
+    "modules/databases/managed-database-binding-host-listener.ts",
+    "modules/object-storage/managed-storage-metrics.ts",
+    "modules/ai/ai-scenarios.ts",
+    "modules/ai/ai.sandbox-policy.ts",
+    "modules/docker/docker-source-webhook.service.ts",
+    "modules/docker/docker-source-mappers.ts",
+    "modules/docker/docker-migration-capabilities.ts",
+    "modules/docker/docker-migration-environment.ts",
+    "modules/docker/docker-migration-permissions.ts",
+    "modules/docker/docker-migration-records.ts",
+    "modules/docker/docker-migration-runtime.ts",
+    "modules/docker/availability/docker-availability.adapters.ts",
+    "modules/docker/availability/docker-availability-artifact.service.ts",
+    "modules/docker/availability/docker-availability-ingress.ts",
+    "modules/docker/compose/compose-policy.ts",
+    "modules/docker/docker-container-archive.ts",
+    "modules/pages/artifacts/page-archive-validator.ts",
+    "modules/pages/runtime/page-binding-inspection.ts"
+  ],
+  "removedBackendTests": [
+    "modules/databases/managed-database-bindings.service.contract.test.ts",
+    "modules/databases/managed-database-binding-identity-runtime.test.ts",
+    "modules/databases/managed-database-bindings.reconciliation.test.ts",
+    "modules/databases/managed-database-binding-target-runtime.test.ts",
+    "modules/databases/managed-database-binding-host-listener.test.ts",
+    "modules/databases/managed-database-binding-lifecycle.test.ts",
+    "modules/integrations/gitlab-provider.requests.characterization.test.ts",
+    "modules/integrations/gitlab-provider.characterization.test.ts",
+    "modules/integrations/gitlab-provider.read-mappings.characterization.test.ts",
+    "modules/integrations/integrations.service.gitlab-access.test.ts",
+    "modules/integrations/integrations.service.gitlab-credentials.test.ts",
+    "modules/docker/compose/compose-managed-bindings.listener.test.ts"
+  ],
+  "sharedRuntimeBoundaries": [
+    "Frontend source and builds and all daemon roles remain common and open by explicit scope decision.",
+    "Common contracts, schemas, permission adapters, MCP dispatch, and transport primitives delegate paid business operations to the private host registration.",
+    "CA/certificate primitives remain common for SystemCA, DatabaseCA, StorageCA and daemon mTLS; user PKI routes, templates and exports are private and user PKI MCP entrypoints require the module.",
+    "Generic VCS credential persistence and GitHub/generic Git integration remain common; GitLab provider, sync, client and orchestration implementations are private.",
+    "Ordinary Docker workloads, networks, volumes and registry maintenance remain common; paid controllers and new secure-runtime/disk-image/external-ingress activation require private implementations.",
+    "Feature labels without an implemented product capability do not create additional private implementations."
+  ]
+}

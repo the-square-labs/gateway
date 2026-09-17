@@ -54,4 +54,5 @@ export interface UIBootstrapShell {
     entitlementsVersion: number;
     entitlements: LicenseEntitlements;
   };
+  commercialModule?: "community" | "unavailable" | "ready";
 }

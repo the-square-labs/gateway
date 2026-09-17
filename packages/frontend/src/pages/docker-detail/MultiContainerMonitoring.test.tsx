@@ -9,13 +9,19 @@ const statsReady = vi.hoisted(() => new Map<string, () => void>());
 vi.mock("./StatsTab", () => ({
   StatsTab: ({
     containerId,
+    data,
     onInitialLoadComplete,
   }: {
     containerId: string;
+    data: { HostConfig?: { Memory?: number } };
     onInitialLoadComplete: () => void;
   }) => {
     statsReady.set(containerId, onInitialLoadComplete);
-    return <div data-testid="stats-runtime">{containerId}</div>;
+    return (
+      <div data-testid="stats-runtime" data-memory={data.HostConfig?.Memory}>
+        {containerId}
+      </div>
+    );
   },
 }));
 
@@ -96,5 +102,27 @@ describe("MultiContainerMonitoring", () => {
 
     expect(api.inspectContainer).toHaveBeenCalledTimes(2);
     expect(api.getContainerTop).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes refreshed inspect limits through for an unchanged container identity", async () => {
+    const instance = {
+      id: "runtime",
+      title: "app",
+      nodeId: "node",
+      containerId: "container",
+      data: { State: { Running: true }, HostConfig: { Memory: 256 } },
+    };
+    const { rerender } = render(<MultiContainerMonitoring instances={[instance]} />);
+    await waitFor(() =>
+      expect(screen.getByTestId("stats-runtime")).toHaveAttribute("data-memory", "256")
+    );
+    await screen.findByText("nginx");
+    rerender(
+      <MultiContainerMonitoring
+        instances={[{ ...instance, data: { ...instance.data, HostConfig: { Memory: 512 } } }]}
+      />
+    );
+    expect(screen.getByTestId("stats-runtime")).toHaveAttribute("data-memory", "512");
+    expect(api.inspectContainer).not.toHaveBeenCalled();
   });
 });

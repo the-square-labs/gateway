@@ -4,12 +4,12 @@ import {
   integrationConnectorProjects,
   integrationConnectors,
 } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
-import { GITLAB_AUDIT_ACTIONS } from './integration-audit.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
-import type { VcsConnectorProvider, VcsUserTokenIdentity } from './integration-provider.types.js';
+import type { VcsConnectorProvider } from './integration-provider.types.js';
 import type { GitLabUserCredentialAuthorizeInput } from './integrations.schemas.js';
 import {
   type DockerBuildCheckoutCredential,
@@ -96,93 +96,62 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     };
   }
 
-  async getGitLabUserCredentialStatus(connectorId: string, userId: string) {
-    const connector = await this.getConnectorRow(connectorId, 'gitlab');
-    const credential = await this.gitLabUserCredentials.getStatus(userId, connectorId);
-    return {
-      connectorId: connector.id,
-      connectorName: connector.name,
-      baseUrl: connector.baseUrl,
-      patCreationUrl: this.gitLabPatCreationUrl(connector.baseUrl),
-      ...credential,
-    };
+  async getGitLabUserCredentialStatus(
+    _connectorId: string,
+    _userId: string
+  ): Promise<{
+    authorized: boolean;
+    status: 'missing' | 'valid' | 'invalid';
+    tokenMasked: string | null;
+    gitlabUserId: string | null;
+    gitlabUsername: string | null;
+    tokenScopes: string[];
+    tokenExpiresAt: Date | null;
+    lastValidatedAt: Date | null;
+    connectorId: string;
+    connectorName: string;
+    baseUrl: string;
+    patCreationUrl: string;
+  }> {
+    return commercialModuleUnavailable();
   }
 
-  async authorizeGitLabUserCredential(connectorId: string, input: GitLabUserCredentialAuthorizeInput, userId: string) {
-    const connector = await this.getConnectorRow(connectorId, 'gitlab');
-    if (!connector.enabled) {
-      throw new AppError(409, 'CONNECTOR_DISABLED', 'GitLab connector is disabled');
-    }
-
-    let identity: VcsUserTokenIdentity;
-    try {
-      identity = await this.getVcsProvider('gitlab').validateUserToken({
-        baseUrl: connector.baseUrl,
-        token: input.token,
-      });
-    } catch (error) {
-      if (error instanceof AppError && (error.statusCode === 401 || error.statusCode === 403)) {
-        throw new AppError(400, 'GITLAB_AUTHORIZATION_INVALID', 'GitLab rejected this personal access token');
-      }
-      throw error;
-    }
-
-    const credential = await this.gitLabUserCredentials.replace(userId, connectorId, input.token, {
-      gitlabUserId: identity.userId,
-      gitlabUsername: identity.username,
-      tokenScopes: identity.scopes,
-      tokenExpiresAt: identity.expiresAt,
-    });
-    await this.auditService.log({
-      action: GITLAB_AUDIT_ACTIONS.userCredentialAuthorize,
-      userId,
-      resourceType: 'integration-connector',
-      resourceId: connectorId,
-      details: {
-        connectorName: connector.name,
-        gitlabUserId: identity.userId,
-        gitlabUsername: identity.username,
-      },
-    });
-    return {
-      connectorId: connector.id,
-      connectorName: connector.name,
-      baseUrl: connector.baseUrl,
-      patCreationUrl: this.gitLabPatCreationUrl(connector.baseUrl),
-      ...credential,
-    };
+  async authorizeGitLabUserCredential(
+    _connectorId: string,
+    _input: GitLabUserCredentialAuthorizeInput,
+    _userId: string
+  ): Promise<{
+    authorized: boolean;
+    status: 'missing' | 'valid' | 'invalid';
+    tokenMasked: string | null;
+    gitlabUserId: string | null;
+    gitlabUsername: string | null;
+    tokenScopes: string[];
+    tokenExpiresAt: Date | null;
+    lastValidatedAt: Date | null;
+    connectorId: string;
+    connectorName: string;
+    baseUrl: string;
+    patCreationUrl: string;
+  }> {
+    return commercialModuleUnavailable();
   }
 
-  async disconnectGitLabUserCredential(connectorId: string, userId: string) {
-    const connector = await this.getConnectorRow(connectorId, 'gitlab');
-    const disconnected = await this.gitLabUserCredentials.disconnect(userId, connectorId);
-    if (disconnected) {
-      await this.auditService.log({
-        action: GITLAB_AUDIT_ACTIONS.userCredentialDisconnect,
-        userId,
-        resourceType: 'integration-connector',
-        resourceId: connectorId,
-        details: { connectorName: connector.name },
-      });
-    }
-    return { disconnected };
+  async disconnectGitLabUserCredential(
+    _connectorId: string,
+    _userId: string
+  ): Promise<{
+    disconnected: boolean;
+  }> {
+    return commercialModuleUnavailable();
   }
 
-  async resolvePersonalGitLabAuth(userId: string, connectorId: string): Promise<ResolvedGitLabUserCredential | null> {
-    const connector = await this.getConnectorRow(connectorId, 'gitlab');
-    return this.gitLabUserCredentials.resolveAuth(userId, connectorId, connector.baseUrl);
+  async resolvePersonalGitLabAuth(_userId: string, _connectorId: string): Promise<ResolvedGitLabUserCredential | null> {
+    return commercialModuleUnavailable();
   }
 
-  async invalidateGitLabUserCredential(userId: string, connectorId: string): Promise<void> {
-    const connector = await this.getConnectorRow(connectorId, 'gitlab');
-    await this.gitLabUserCredentials.markInvalid(userId, connectorId);
-    await this.auditService.log({
-      action: GITLAB_AUDIT_ACTIONS.userCredentialInvalidate,
-      userId,
-      resourceType: 'integration-connector',
-      resourceId: connectorId,
-      details: { connectorName: connector.name },
-    });
+  async invalidateGitLabUserCredential(_userId: string, _connectorId: string): Promise<void> {
+    return commercialModuleUnavailable();
   }
 
   async listDockerBuildSourceRepositories(user: User, connectorId: string): Promise<DockerBuildSourceRepository[]> {

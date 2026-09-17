@@ -4,6 +4,9 @@ import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { LicensePlan } from "@/types";
 
 export const LICENSE_FEATURE_PLANS = {
+  "storage-connections": "personal",
+  "external-database-connections": "personal",
+  gitlab: "personal",
   "container-export": "personal",
   "blue-green": "personal",
   "cross-node-migration": "personal",
@@ -33,6 +36,7 @@ export const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
 };
 
 export interface LicensePaywallRequest {
+  reason?: "module-unavailable";
   capability: string;
   requiredPlan: PaidLicensePlan;
   currentPlan: LicensePlan;
@@ -69,7 +73,8 @@ export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
 
 export function requireLicenseFeature(feature: LicenseFeature, capability: string): boolean {
   const allowed = hasLicenseFeature(feature);
-  if (allowed !== false) return true;
+  if (allowed === null) return true;
+  if (allowed) return requireCommercialModule(capability, LICENSE_FEATURE_PLANS[feature]);
   useLicensePaywallStore.getState().open({
     capability,
     requiredPlan: LICENSE_FEATURE_PLANS[feature],
@@ -84,12 +89,23 @@ export function requireMinimumLicensePlan(
 ): boolean {
   const license = useUIBootstrapStore.getState().snapshot?.license;
   if (!license) return true;
-  if (LICENSE_PLAN_RANK[license.plan] >= LICENSE_PLAN_RANK[requiredPlan]) return true;
+  if (LICENSE_PLAN_RANK[license.plan] >= LICENSE_PLAN_RANK[requiredPlan])
+    return requireCommercialModule(capability, requiredPlan);
   useLicensePaywallStore.getState().open({
     capability,
     requiredPlan,
     currentPlan: license.plan,
   });
+  return false;
+}
+
+function requireCommercialModule(capability: string, requiredPlan: PaidLicensePlan): boolean {
+  const state = useUIBootstrapStore.getState().snapshot?.commercialModule;
+  // Older backends do not expose module state; retain their existing behavior.
+  if (!state || state === "ready") return true;
+  useLicensePaywallStore
+    .getState()
+    .open({ capability, requiredPlan, currentPlan: currentPlan(), reason: "module-unavailable" });
   return false;
 }
 
@@ -112,6 +128,16 @@ function isLicensePlan(value: unknown): value is LicensePlan {
 
 export function handleLicenseApiError(error: unknown, capability: string): boolean {
   if (!(error instanceof ApiRequestError)) return false;
+  if (error.code === "COMMERCIAL_MODULE_UNAVAILABLE") {
+    const plan = currentPlan();
+    useLicensePaywallStore.getState().open({
+      capability,
+      requiredPlan: plan === "community" ? "personal" : plan,
+      currentPlan: plan,
+      ...(plan === "community" ? {} : { reason: "module-unavailable" as const }),
+    });
+    return true;
+  }
   if (error.code !== "LICENSE_ENTITLEMENT_REQUIRED" && error.code !== "LICENSE_QUOTA_EXCEEDED") {
     return false;
   }

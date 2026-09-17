@@ -2,11 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   AI_TOOLS,
   getOpenAITools,
-  inferDiscoveredToolsetsFromText,
   isDestructiveTool,
   parseAndValidateAIToolArguments,
   TOOL_STORE_INVALIDATION_MAP,
 } from './ai.tools.js';
+
+it('does not ship planning or sandbox implementations in the Community tool catalog', () => {
+  expect(AI_TOOLS.some((tool) => tool.category === 'Planning' || tool.category === 'Sandbox')).toBe(false);
+  const names = getOpenAITools([], ['*'], true, { sandboxEnabled: true }).map((tool) => tool.function.name);
+  expect(names).not.toContain('enter_plan_mode');
+  expect(names).not.toContain('execute_script');
+  expect(names).not.toContain('download_artifact');
+});
 
 function toolNames(scopes: string[]): string[] {
   return getOpenAITools([], scopes, false).map((tool) => tool.function.name);
@@ -27,13 +34,6 @@ function databaseToolNamesForScopes(scopes: string[]): string[] {
 function dockerToolNamesForScopes(scopes: string[]): string[] {
   const dockerToolNames = new Set(AI_TOOLS.filter((tool) => tool.category === 'Docker').map((tool) => tool.name));
   return toolNames(scopes).filter((name) => dockerToolNames.has(name));
-}
-
-function sandboxToolNamesForScopes(scopes: string[], sandboxEnabled: boolean): string[] {
-  const sandboxToolNames = new Set(AI_TOOLS.filter((tool) => tool.category === 'Sandbox').map((tool) => tool.name));
-  return getOpenAITools([], scopes, false, { sandboxEnabled })
-    .map((tool) => tool.function.name)
-    .filter((name) => sandboxToolNames.has(name));
 }
 
 describe('AI tool scope filtering', () => {
@@ -194,68 +194,6 @@ describe('AI tool scope filtering', () => {
         JSON.stringify({ operation: 'create', routeId: 'host-1', path: '/api', targetKind: 'manual' })
       )
     ).toMatchObject({ ok: true });
-  });
-
-  it('exposes only planning-safe tools while keeping read variants of composite tools available', () => {
-    const names = getOpenAITools(
-      [],
-      [
-        'ai:workspace:use',
-        'domains:view',
-        'domains:manage',
-        'integrations:github:view',
-        'integrations:github:manage',
-        'integrations:git:view',
-        'integrations:git:manage',
-        'integrations:ssh:view',
-        'integrations:ssh:use',
-      ],
-      true,
-      {
-        discoveredToolsets: ['Domains', 'GitHub', 'Git', 'External SSH', 'Setup'],
-        planningMode: true,
-      }
-    ).map((tool) => tool.function.name);
-
-    expect(names).toEqual(
-      expect.arrayContaining([
-        'enter_plan_mode',
-        'submit_plan',
-        'manage_domain',
-        'open_connector_setup',
-        'github_list_repositories',
-        'github_list_repository_tree',
-        'github_list_workflow_runs',
-        'git_list_repository_tree',
-        'git_read_repository_file',
-        'ssh_list_connectors',
-      ])
-    );
-    expect(names).not.toContain('create_domain');
-    expect(names).not.toContain('delete_domain');
-    expect(names).not.toContain('github_upsert_repository_file');
-    expect(names).not.toContain('github_upsert_actions_secret');
-    expect(names).not.toContain('git_upsert_repository_file');
-    expect(names).not.toContain('ssh_execute_command');
-  });
-
-  it('derives active plan lifecycle identifiers on the server instead of asking the model to copy them', () => {
-    for (const toolName of ['submit_plan_review', 'update_plan_step', 'submit_plan_verification']) {
-      const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
-      expect(tool?.parameters.properties).not.toHaveProperty('planId');
-      expect(tool?.parameters.properties).not.toHaveProperty('revisionId');
-      expect(tool?.parameters.properties).not.toHaveProperty('stepId');
-    }
-    expect(AI_TOOLS.find((tool) => tool.name === 'submit_plan_review')?.parameters.required).toEqual([
-      'intentReview',
-      'securityReview',
-    ]);
-    expect(AI_TOOLS.find((tool) => tool.name === 'update_plan_step')?.parameters.required).toEqual(['status']);
-    expect(AI_TOOLS.find((tool) => tool.name === 'submit_plan_verification')?.parameters.required).toEqual([
-      'verdict',
-      'summary',
-      'findings',
-    ]);
   });
 
   it('rejects unsupported composite resource and operation pairs before dispatch', () => {
@@ -646,34 +584,6 @@ describe('AI tool scope filtering', () => {
     expect(createContainer?.description).toContain('never provide host bind paths');
   });
 
-  it('exposes fetch as a base tool for direct URLs when sandbox access is enabled', () => {
-    const baseToolNames = getOpenAITools([], ['ai:workspace:use', 'ai:sandbox:use'], false, {
-      discoveredToolsets: [],
-      sandboxEnabled: true,
-    }).map((tool) => tool.function.name);
-
-    expect(baseToolNames).toContain('fetch');
-    expect(baseToolNames).not.toContain('execute_script');
-    expect(baseToolNames).not.toContain('download_artifact');
-  });
-
-  it('infers hidden toolsets from explicit Gateway tool names in user text', () => {
-    const inferred = inferDiscoveredToolsetsFromText(
-      'Start a process, run download_artifact, then send artifact back to me.'
-    );
-
-    expect(inferred).toEqual(['Sandbox']);
-
-    const toolNames = getOpenAITools([], ['ai:workspace:use', 'ai:sandbox:use'], false, {
-      discoveredToolsets: inferred,
-      sandboxEnabled: true,
-    }).map((tool) => tool.function.name);
-
-    expect(toolNames).toContain('run_process');
-    expect(toolNames).toContain('download_artifact');
-    expect(toolNames).toContain('send_artifact');
-  });
-
   it('keeps logging and status-page tool registry contracts stable', () => {
     const manageLogging = AI_TOOLS.find((tool) => tool.name === 'manage_logging');
     expect(AI_TOOLS.filter((tool) => tool.category === 'Logging').map((tool) => tool.name)).toEqual(['manage_logging']);
@@ -898,46 +808,5 @@ describe('AI tool scope filtering', () => {
     expect(isDestructiveTool('manage_docker_compose')).toBe(true);
     expect(isDestructiveTool('manage_docker_source')).toBe(true);
     expect(isDestructiveTool('manage_docker_task')).toBe(false);
-  });
-
-  it('only advertises sandbox tools when sandbox is enabled and scoped', () => {
-    const expectedSandboxTools = [
-      'execute_script',
-      'run_process',
-      'fetch',
-      'download_artifact',
-      'list_artifact_files',
-      'read_artifact',
-      'send_artifact',
-      'read_process_output',
-      'write_process_stdin',
-      'kill_process',
-      'list_sandbox_jobs',
-    ];
-
-    expect(AI_TOOLS.filter((tool) => tool.category === 'Sandbox').map((tool) => tool.name)).toEqual(
-      expectedSandboxTools
-    );
-    expect(sandboxToolNamesForScopes(['ai:sandbox:use'], false)).toEqual([]);
-    expect(sandboxToolNamesForScopes([], true)).toEqual([]);
-    expect(sandboxToolNamesForScopes(['ai:sandbox:use'], true)).toEqual(expectedSandboxTools);
-    expect(AI_TOOLS.find((tool) => tool.name === 'run_process')?.description).toContain(
-      'The process working directory is /workspace'
-    );
-    expect(AI_TOOLS.find((tool) => tool.name === 'send_artifact')?.description).toContain(
-      'path argument must be relative to /workspace'
-    );
-    expect(AI_TOOLS.find((tool) => tool.name === 'list_artifact_files')?.description).toContain(
-      'without starting another sandbox process'
-    );
-    expect(isDestructiveTool('execute_script')).toBe(true);
-    expect(isDestructiveTool('run_process')).toBe(true);
-    expect(isDestructiveTool('fetch')).toBe(false);
-    expect(isDestructiveTool('download_artifact')).toBe(false);
-    expect(isDestructiveTool('list_artifact_files')).toBe(false);
-    expect(isDestructiveTool('read_artifact')).toBe(false);
-    expect(isDestructiveTool('send_artifact')).toBe(false);
-    expect(isDestructiveTool('read_process_output')).toBe(false);
-    expect(isDestructiveTool('list_sandbox_jobs')).toBe(false);
   });
 });

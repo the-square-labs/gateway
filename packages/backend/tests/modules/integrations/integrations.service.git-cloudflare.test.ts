@@ -371,67 +371,7 @@ describe('IntegrationsService', () => {
     }
   });
 
-  it('streams GitLab archives into the sandbox without materializing or base64-encoding the archive', async () => {
-    const auditService = { log: vi.fn() };
-    const service = new IntegrationsService({} as never, auditService as never, {} as never);
-    const streamedChunks = [Buffer.alloc(256 * 1024, 1), Buffer.alloc(4 * 1024, 2)];
-    async function* archiveChunks() {
-      for (const chunk of streamedChunks) yield chunk;
-    }
-    const provider = {
-      streamRepositoryArchive: vi.fn().mockResolvedValue({
-        filename: 'app.tar.gz',
-        contentType: 'application/gzip',
-        chunks: archiveChunks(),
-      }),
-    };
-    (service as any).resolveGitLabProjectContext = vi.fn().mockResolvedValue({
-      connector: connectorRow({ capabilities: { repoRead: true } }),
-      project: projectRow(),
-      auth: { baseUrl: 'https://gitlab.example.com', token: 'glpat-never-exposed' },
-      provider,
-    });
-    (service as any).auditGitLabTool = vi.fn().mockResolvedValue(undefined);
-    const sandboxService = {
-      runProcess: vi.fn().mockResolvedValue({ processId: 'process-1', jobId: 'job-1' }),
-      uploadArtifactStream: vi.fn().mockResolvedValue({ sizeBytes: 260 * 1024 }),
-      uploadArtifact: vi.fn().mockResolvedValue({ sizeBytes: 0 }),
-      killProcess: vi.fn(),
-    };
-    const user = {
-      ...BASE_USER,
-      scopes: ['integrations:gitlab:sandbox:clone', 'ai:sandbox:use'],
-    };
 
-    await expect(
-      service.gitLabCloneRepositoryToSandbox(
-        user as never,
-        { connectorId: 'connector-1', project: 'general/balanceify', ref: 'main' },
-        sandboxService as never,
-        'conversation-1'
-      )
-    ).resolves.toMatchObject({
-      processId: 'process-1',
-      archiveBytes: 260 * 1024,
-      status: 'extracting',
-    });
-
-    expect(sandboxService.uploadArtifactStream).toHaveBeenCalledWith(
-      user,
-      expect.objectContaining({ chunks: expect.anything(), maxBytes: 1024 * 1024 * 1024 })
-    );
-    expect(sandboxService.uploadArtifact).toHaveBeenCalledWith(
-      user,
-      expect.objectContaining({
-        processId: 'process-1',
-        path: expect.stringMatching(/\.tar\.gz\.ready$/),
-        contentBase64: '',
-      })
-    );
-    const command = sandboxService.runProcess.mock.calls[0][1].command.join(' ');
-    expect(command).toContain('.tar.gz.ready');
-    expect(command).not.toContain('glpat-never-exposed');
-  });
 
   it('proves Cloudflare DNS edit capability with a temporary TXT record during preview test', async () => {
     const originalFetch = globalThis.fetch;
@@ -598,35 +538,10 @@ describe('IntegrationsService', () => {
     expect(db.delete).not.toHaveBeenCalled();
   });
 
-  it('strips encrypted tokens and returns masked token metadata in list responses', async () => {
-    const db = createListDb([connectorRow()]);
-    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, {} as never);
 
-    const [connector] = await service.listGitLabConnectors();
 
-    expect(connector).toMatchObject({ hasToken: true, tokenMasked: '****abcd' });
-    expect(connector).not.toHaveProperty('encryptedToken');
-  });
 
-  it('returns stored capabilities without decrypting the token', async () => {
-    const db = createGetDb(connectorRow({ capabilities: { repoRead: true, repoWrite: false } }));
-    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, {} as never);
 
-    await expect(service.getGitLabConnectorCapabilities('11111111-1111-4111-8111-111111111111')).resolves.toEqual({
-      repoRead: true,
-      repoWrite: false,
-    });
-  });
 
-  it('rejects malformed connector IDs before querying the database', async () => {
-    const db = createGetDb(connectorRow());
-    const service = new IntegrationsService(db as never, { log: vi.fn() } as never, {} as never);
-
-    await expect(service.listGitLabProjectsForTool(BASE_USER, { connectorId: 'connector-1' })).rejects.toMatchObject({
-      statusCode: 400,
-      code: 'INVALID_CONNECTOR_ID',
-    } satisfies Partial<AppError>);
-    expect(db.select).not.toHaveBeenCalled();
-  });
 
 });

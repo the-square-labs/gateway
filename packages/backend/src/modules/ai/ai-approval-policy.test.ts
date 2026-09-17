@@ -135,7 +135,7 @@ describe('AI backend approval policy', () => {
   });
 
   it('requires approval for outbound test side effects even in bypass-non-destructive mode', () => {
-    for (const toolName of ['test_webhook', 'test_siem_destination', 'download_artifact']) {
+    for (const toolName of ['test_webhook', 'test_siem_destination']) {
       expect(getAIToolApprovalDecision(toolName, 'normal'), toolName).toMatchObject({
         classification: 'destructive',
         requiresApproval: true,

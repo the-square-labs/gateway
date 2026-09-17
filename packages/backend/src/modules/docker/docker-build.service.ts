@@ -1,32 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { and, asc, eq, inArray, lt, ne, or, sql } from 'drizzle-orm';
-import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
-import {
-  type DockerBuildScanSummary,
-  type DockerBuildStatus,
-  type DockerBuildTrigger,
-  dockerBuildBatches,
-  dockerBuilds,
-  dockerSourceBindings,
-} from '@/db/schema/index.js';
+import type { DrizzleClient } from '@/db/client.js';
+import type { DockerBuildScanSummary, DockerBuildStatus, DockerBuildTrigger } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { DockerBuildEvent } from '@/grpc/generated/types.js';
-import { createChildLogger } from '@/lib/logger.js';
-import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import { DockerAccessResourceService } from './docker-access-resource.service.js';
-import { DockerBuildArtifactStore } from './docker-build-artifact.js';
-import {
-  ACTIVE_BUILD_STATUSES,
-  assertSupportedDockerBuildResourcePolicy,
-  canTransitionDockerBuild,
-  DEFAULT_BUILD_LEASE_MS,
-  expiredDockerBuildDisposition,
-  parseDockerBuildProgress,
-  parseDockerBuildScanSummary,
-  readDockerBuildRolloutProgress,
-  TERMINAL_BUILD_STATUSES,
-} from './docker-build-policy.js';
-import { type DockerBuildListInput, DockerBuildQuery } from './docker-build-query.js';
+import type { DockerBuildListInput } from './docker-build-query.js';
 
 export {
   assertSupportedDockerBuildResourcePolicy,
@@ -36,7 +13,6 @@ export {
   expiredDockerBuildDisposition,
   redactDockerBuildLog,
 } from './docker-build-policy.js';
-
 export interface DockerBuildEnqueueInput {
   sourceBindingId: string;
   commitSha: string;
@@ -45,692 +21,692 @@ export interface DockerBuildEnqueueInput {
   createdById?: string | null;
   force?: boolean;
 }
-
-const TERMINAL_BUILD_LOG_GRACE_MS = 5 * 60 * 1000;
-const ROLLOUT_HEARTBEAT_INTERVAL_MS = 15_000;
-const logger = createChildLogger('DockerBuildService');
-
-type DockerBuildRow = typeof dockerBuilds.$inferSelect;
-type RecoveredDockerBuild = { build: DockerBuildRow; resumeRollout: boolean; releaseBuild: boolean };
-
-function dockerBuildRolloutOperationId(buildId: string, attempt: number): string {
-  return `docker-build:${buildId}:attempt:${attempt}`;
-}
-
-export function canAcceptDockerBuildLogEvent(
-  build: {
-    builderNodeId: string | null;
-    leaseOwner: string | null;
-    status: DockerBuildStatus;
-    completedAt: Date | null;
-  },
-  builderNodeId: string,
-  now = new Date()
-): boolean {
-  if (build.builderNodeId !== builderNodeId) return false;
-  if (TERMINAL_BUILD_STATUSES.includes(build.status)) {
-    if (!build.completedAt) return false;
-    const completedAge = now.getTime() - build.completedAt.getTime();
-    return completedAge >= 0 && completedAge <= TERMINAL_BUILD_LOG_GRACE_MS;
-  }
-  return Boolean(build.leaseOwner);
-}
-
 export class DockerBuildService {
-  private eventBus?: EventBusService;
-  private admissionGuard?: () => Promise<void>;
-  private licenseGuard?: () => Promise<void>;
-  private artifactRollout?: (
-    buildId: string,
-    leaseOwner: string,
-    operationId: string
-  ) => Promise<'deployed' | 'superseded' | 'pending'>;
-  private buildReleaseHandler?: (buildId: string) => Promise<void>;
-  private readonly artifactRolloutTasks = new Map<string, { leaseOwner: string; task: Promise<void> }>();
-
-  private readonly artifacts: DockerBuildArtifactStore;
-  private readonly query: DockerBuildQuery;
-
-  constructor(private readonly db: DrizzleClient) {
-    this.query = new DockerBuildQuery(db);
-    this.artifacts = new DockerBuildArtifactStore(db, (topic, payload) => this.publishBuildEvent(topic, payload));
-  }
-
-  setEventBus(eventBus: EventBusService): void {
-    this.eventBus = eventBus;
-  }
-
-  setAdmissionGuard(guard: () => Promise<void>): void {
-    this.admissionGuard = guard;
-  }
-
-  setLicenseGuard(guard: () => Promise<void>): void {
-    this.licenseGuard = guard;
-  }
-
+  // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
+  constructor(_db: DrizzleClient) {}
+  setEventBus(_eventBus: EventBusService): void {}
+  setAdmissionGuard(_guard: () => Promise<void>): void {}
+  setLicenseGuard(_guard: () => Promise<void>): void {}
   setArtifactRollout(
-    handler: (
+    _handler: (
       buildId: string,
       leaseOwner: string,
       operationId: string
     ) => Promise<'deployed' | 'superseded' | 'pending'>
-  ): void {
-    this.artifactRollout = handler;
+  ): void {}
+  setBuildReleaseHandler(_handler: (buildId: string) => Promise<void>): void {}
+  async admissionStatus(): Promise<{
+    ready: boolean;
+    code: string | null;
+    message: string | null;
+  }> {
+    return { ready: false, code: 'COMMERCIAL_MODULE_UNAVAILABLE', message: 'Builds require the commercial module' };
   }
-
-  setBuildReleaseHandler(handler: (buildId: string) => Promise<void>): void {
-    this.buildReleaseHandler = handler;
+  async enqueue(_input: DockerBuildEnqueueInput): Promise<{
+    build: {
+      id: string;
+      ref: string;
+      status: DockerBuildStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      createdById: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      errorCode: string | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+      batchId: string | null;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      serviceName: string | null;
+      sourceConfigGeneration: number;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      progress: Record<string, unknown>;
+      queuedAt: Date;
+      startedAt: Date | null;
+    };
+    builds: {
+      id: string;
+      ref: string;
+      status: DockerBuildStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      createdById: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      errorCode: string | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+      batchId: string | null;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      serviceName: string | null;
+      sourceConfigGeneration: number;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      progress: Record<string, unknown>;
+      queuedAt: Date;
+      startedAt: Date | null;
+    }[];
+    batch: {
+      id: string;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      status: import('@/db/schema/index.js').DockerBuildBatchStatus;
+      expectedServices: string[];
+      composeBuildPlan: import('@/db/schema/index.js').DockerComposeBuildPlan;
+      composeVariables: Record<string, string>;
+      composeSecretKeys: string[];
+      candidateRevisionId: string | null;
+      supersededByBatchId: string | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      createdById: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      completedAt: Date | null;
+    } | null;
+    created: boolean;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async admissionStatus(): Promise<{ ready: boolean; code: string | null; message: string | null }> {
-    try {
-      await this.admissionGuard?.();
-      return { ready: true, code: null, message: null };
-    } catch (error) {
-      if (!(error instanceof AppError)) throw error;
-      return { ready: false, code: error.code, message: error.message };
-    }
+  async hasBuildForCommit(_sourceBindingId: string, _commitSha: string): Promise<boolean> {
+    return commercialModuleUnavailable();
   }
-
-  async enqueue(input: DockerBuildEnqueueInput) {
-    await this.licenseGuard?.();
-    await this.admissionGuard?.();
-    const now = new Date();
-    const result = await this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`docker-build-source:${input.sourceBindingId}`}))`);
-      const [source] = await tx
-        .select()
-        .from(dockerSourceBindings)
-        .where(eq(dockerSourceBindings.id, input.sourceBindingId))
-        .limit(1);
-      if (!source) throw new AppError(404, 'SOURCE_BINDING_NOT_FOUND', 'Git source is not configured');
-      assertSupportedDockerBuildResourcePolicy(source.policy as Record<string, unknown>);
-      if (source.desiredCommitSha && source.desiredCommitSha.toLowerCase() !== input.commitSha.toLowerCase()) {
-        throw new AppError(409, 'SOURCE_COMMIT_STALE', 'Build commit is no longer the desired source commit');
-      }
-
-      const specs =
-        source.targetKind === 'compose_project'
-          ? (source.composeBuildPlan?.services ?? [])
-          : [
-              {
-                serviceName: null,
-                dockerfilePath: source.dockerfilePath,
-                contextPath: source.contextPath,
-                buildArgs: source.buildArgs,
-              },
-            ];
-      if (specs.length === 0) {
-        throw new AppError(409, 'COMPOSE_BUILD_PLAN_MISSING', 'Compose source has no resolved build services');
-      }
-      const commitSha = input.commitSha.toLowerCase();
-      let batchId: string | null = null;
-      if (source.targetKind === 'compose_project') {
-        const batchDedupeKey = input.force ? `${source.id}:${commitSha}:${randomUUID()}` : `${source.id}:${commitSha}`;
-        if (!input.force) {
-          const [existingBatch] = await tx
-            .select()
-            .from(dockerBuildBatches)
-            .where(eq(dockerBuildBatches.dedupeKey, batchDedupeKey))
-            .limit(1);
-          if (existingBatch) {
-            const builds = await tx.select().from(dockerBuilds).where(eq(dockerBuilds.batchId, existingBatch.id));
-            const build = builds[0];
-            if (!build) throw new AppError(409, 'BUILD_BATCH_INCOMPLETE', 'Compose build batch has no child builds');
-            return { build, builds, batch: existingBatch, created: false };
-          }
-        }
-        const [batch] = await tx
-          .insert(dockerBuildBatches)
-          .values({
-            sourceBindingId: source.id,
-            dedupeKey: batchDedupeKey,
-            commitSha,
-            status: 'building',
-            expectedServices: specs.map((spec) => spec.serviceName!).sort(),
-            composeBuildPlan: source.composeBuildPlan!,
-            composeVariables: source.composeVariables,
-            composeSecretKeys: source.composeSecretKeys,
-            createdById: input.createdById ?? null,
-          })
-          .returning();
-        batchId = batch.id;
-        await tx
-          .update(dockerBuildBatches)
-          .set({
-            status: 'superseded',
-            supersededByBatchId: batch.id,
-            completedAt: now,
-            updatedAt: now,
-            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
-            errorMessage: 'A newer source commit was queued',
-          })
-          .where(
-            and(
-              eq(dockerBuildBatches.sourceBindingId, source.id),
-              inArray(dockerBuildBatches.status, ['building', 'awaiting_approval', 'applying']),
-              ne(dockerBuildBatches.id, batch.id)
-            )
-          );
-      }
-      const existing =
-        source.targetKind === 'compose_project' || input.force
-          ? []
-          : await tx
-              .select()
-              .from(dockerBuilds)
-              .where(
-                and(
-                  eq(dockerBuilds.sourceBindingId, source.id),
-                  eq(dockerBuilds.commitSha, commitSha),
-                  eq(dockerBuilds.sourceConfigGeneration, source.configGeneration)
-                )
-              );
-      const existingByService = new Map(existing.map((build) => [build.serviceName ?? '', build]));
-      const missing = specs.filter((spec) => !existingByService.has(spec.serviceName ?? ''));
-      const inserted =
-        missing.length === 0
-          ? []
-          : await tx
-              .insert(dockerBuilds)
-              .values(
-                missing.map((spec) => ({
-                  sourceBindingId: source.id,
-                  batchId,
-                  dedupeKey: batchId
-                    ? `${batchId}:${spec.serviceName}`
-                    : input.force
-                      ? `${source.id}:${commitSha}:${source.configGeneration}:${spec.serviceName ?? 'default'}:${randomUUID()}`
-                      : `${source.id}:${commitSha}:${source.configGeneration}:${spec.serviceName ?? 'default'}`,
-                  trigger: input.trigger,
-                  triggerDeliveryId: input.triggerDeliveryId ?? null,
-                  repositoryRemoteId: source.repositoryRemoteId,
-                  repositoryFullPath: source.repositoryFullPath,
-                  ref: `refs/heads/${source.branch}`,
-                  commitSha,
-                  serviceName: spec.serviceName,
-                  dockerfilePath: spec.dockerfilePath,
-                  contextPath: spec.contextPath,
-                  buildArgs: spec.buildArgs,
-                  applicationRoot: source.applicationRoot,
-                  packageManager: source.packageManager,
-                  packageManagerVersion: source.packageManagerVersion,
-                  nodeVersion: source.nodeVersion,
-                  buildScript: source.buildScript,
-                  artifactDirectory: source.artifactDirectory,
-                  publishTag: source.publishTag,
-                  sourceConfigGeneration: source.configGeneration,
-                  status: 'queued' as const,
-                  createdById: input.createdById ?? null,
-                  queuedAt: now,
-                  createdAt: now,
-                  updatedAt: now,
-                }))
-              )
-              .returning();
-      const builds = specs
-        .map(
-          (spec) =>
-            existingByService.get(spec.serviceName ?? '') ??
-            inserted.find((row) => row.serviceName === spec.serviceName)
-        )
-        .filter((row): row is typeof dockerBuilds.$inferSelect => Boolean(row));
-      const build = builds[0];
-      if (!build) throw new AppError(500, 'BUILD_CREATE_FAILED', 'Docker build was not created');
-
-      if (inserted.length > 0)
-        await tx
-          .update(dockerBuilds)
-          .set({
-            status: 'superseded',
-            supersededByBuildId: build.id,
-            completedAt: now,
-            updatedAt: now,
-            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
-            errorMessage: 'A newer source commit was queued',
-          })
-          .where(
-            and(
-              eq(dockerBuilds.sourceBindingId, source.id),
-              eq(dockerBuilds.status, 'queued'),
-              or(
-                ne(dockerBuilds.commitSha, commitSha),
-                ne(dockerBuilds.sourceConfigGeneration, source.configGeneration)
-              )
-            )
-          );
-      if (inserted.length > 0)
-        await tx
-          .update(dockerBuilds)
-          .set({
-            cancellationRequestedAt: now,
-            supersededByBuildId: build.id,
-            updatedAt: now,
-            errorCode: 'SUPERSEDED_BY_NEWER_COMMIT',
-            errorMessage: 'Cancellation requested because a newer source commit was queued',
-          })
-          .where(
-            and(
-              eq(dockerBuilds.sourceBindingId, source.id),
-              inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES),
-              or(
-                ne(dockerBuilds.commitSha, commitSha),
-                ne(dockerBuilds.sourceConfigGeneration, source.configGeneration)
-              )
-            )
-          );
-      const batch = batchId
-        ? (await tx.select().from(dockerBuildBatches).where(eq(dockerBuildBatches.id, batchId)).limit(1))[0]
-        : null;
-      return { build, builds, batch, created: inserted.length > 0 };
-    });
-    for (const build of result.builds) this.emit(build);
-    return result;
-  }
-
-  async hasBuildForCommit(sourceBindingId: string, commitSha: string): Promise<boolean> {
-    const [source, builds] = await Promise.all([
-      this.db.select().from(dockerSourceBindings).where(eq(dockerSourceBindings.id, sourceBindingId)).limit(1),
-      this.db
-        .select({ serviceName: dockerBuilds.serviceName, sourceConfigGeneration: dockerBuilds.sourceConfigGeneration })
-        .from(dockerBuilds)
-        .where(
-          and(eq(dockerBuilds.sourceBindingId, sourceBindingId), eq(dockerBuilds.commitSha, commitSha.toLowerCase()))
-        ),
-    ]);
-    const expected =
-      source[0]?.targetKind === 'compose_project' ? (source[0].composeBuildPlan?.services ?? []) : [null];
-    const present = new Set(
-      builds
-        .filter((build) => build.sourceConfigGeneration === source[0]?.configGeneration)
-        .map((build) => build.serviceName)
-    );
-    return (
-      expected.length > 0 &&
-      expected.every((spec) => present.has(spec && typeof spec === 'object' ? spec.serviceName : null))
-    );
-  }
-
-  async claimNext(input: {
+  async claimNext(_input: {
     builderNodeId: string;
     leaseOwner: string;
     platform: string;
     leaseMs?: number;
     now?: Date;
     supportsScanDisable?: boolean;
-  }) {
-    const now = input.now ?? new Date();
-    const leaseExpiresAt = new Date(now.getTime() + (input.leaseMs ?? DEFAULT_BUILD_LEASE_MS));
-    const result = await this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('docker-build-claim'))`);
-      const recovered = await this.recoverExpiredLeasesWith(tx, now);
-      const [candidate] = await tx
-        .select({ id: dockerBuilds.id })
-        .from(dockerBuilds)
-        .where(
-          and(
-            eq(dockerBuilds.status, 'queued'),
-            input.supportsScanDisable === false
-              ? sql`not exists (
-                  select 1 from ${dockerSourceBindings}
-                  where ${dockerSourceBindings.id} = ${dockerBuilds.sourceBindingId}
-                    and ${dockerSourceBindings.targetKind} <> 'pages_project'
-                    and ${dockerSourceBindings.policy}->>'vulnerabilityThreshold' = 'disabled'
-                )`
-              : undefined,
-            sql`not exists (
-              select 1 from docker_builds active
-              where active.source_binding_id = ${dockerBuilds.sourceBindingId}
-                and active.status in ('claimed', 'checking_out', 'building', 'scanning', 'pushing', 'deploying')
-            )`
-          )
-        )
-        .orderBy(asc(dockerBuilds.queuedAt), asc(dockerBuilds.id))
-        .limit(1);
-      if (!candidate) return { claimed: null, recovered };
-      const [row] = await tx
-        .update(dockerBuilds)
-        .set({
-          status: 'claimed',
-          builderNodeId: input.builderNodeId,
-          platform: input.platform,
-          attempt: sql`${dockerBuilds.attempt} + 1`,
-          leaseOwner: input.leaseOwner,
-          leaseHeartbeatAt: now,
-          leaseExpiresAt,
-          startedAt: sql`coalesce(${dockerBuilds.startedAt}, ${now})`,
-          updatedAt: now,
-          errorCode: null,
-          errorMessage: null,
-        })
-        .where(and(eq(dockerBuilds.id, candidate.id), eq(dockerBuilds.status, 'queued')))
-        .returning();
-      return { claimed: row ?? null, recovered };
-    });
-    await this.processRecoveredLeases(result.recovered);
-    if (result.claimed) this.emit(result.claimed);
-    return result.claimed;
+  }): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  } | null> {
+    return commercialModuleUnavailable();
   }
-
-  async heartbeat(buildId: string, leaseOwner: string, leaseMs = DEFAULT_BUILD_LEASE_MS, now = new Date()) {
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({ leaseHeartbeatAt: now, leaseExpiresAt: new Date(now.getTime() + leaseMs), updatedAt: now })
-      .where(
-        and(
-          eq(dockerBuilds.id, buildId),
-          eq(dockerBuilds.leaseOwner, leaseOwner),
-          inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES)
-        )
-      )
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_LEASE_LOST', 'Build lease is no longer owned by this worker');
-    this.emit(row);
-    return row;
+  async heartbeat(
+    _buildId: string,
+    _leaseOwner: string,
+    _leaseMs?: number,
+    _now?: Date
+  ): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
   async beginArtifactRollout(
-    buildId: string,
-    workerLeaseOwner: string,
-    attempt: number,
-    progress: Record<string, unknown>,
-    now = new Date()
-  ) {
-    const rolloutLeaseOwner = `gateway-rollout:${process.pid}:${randomUUID()}`;
-    const operationId = dockerBuildRolloutOperationId(buildId, attempt);
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({
-        status: 'deploying',
-        leaseOwner: rolloutLeaseOwner,
-        leaseHeartbeatAt: now,
-        leaseExpiresAt: new Date(now.getTime() + DEFAULT_BUILD_LEASE_MS),
-        progress: { ...progress, rollout: { operationId, attempt, phase: 'accepted' } },
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(dockerBuilds.id, buildId),
-          eq(dockerBuilds.status, 'pushing'),
-          eq(dockerBuilds.leaseOwner, workerLeaseOwner)
-        )
-      )
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_STATE_CONFLICT', 'Build state changed before rollout ownership transfer');
-    this.emit(row);
-    return row;
+    _buildId: string,
+    _workerLeaseOwner: string,
+    _attempt: number,
+    _progress: Record<string, unknown>,
+    _now?: Date
+  ): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async returnClaimToQueue(buildId: string, leaseOwner: string, reason: string, now = new Date()) {
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({
-        status: 'queued',
-        builderNodeId: null,
-        leaseOwner: null,
-        leaseHeartbeatAt: null,
-        leaseExpiresAt: null,
-        queuedAt: now,
-        startedAt: null,
-        attempt: sql`greatest(${dockerBuilds.attempt} - 1, 0)`,
-        errorCode: 'BUILD_WORKER_CAPACITY_RETRY',
-        errorMessage: reason.slice(0, 4096),
-        updatedAt: now,
-      })
-      .where(
-        and(eq(dockerBuilds.id, buildId), eq(dockerBuilds.status, 'claimed'), eq(dockerBuilds.leaseOwner, leaseOwner))
-      )
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_LEASE_LOST', 'Build lease is no longer owned by this worker');
-    this.emit(row);
-    return row;
+  async returnClaimToQueue(
+    _buildId: string,
+    _leaseOwner: string,
+    _reason: string,
+    _now?: Date
+  ): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
   async transition(
-    buildId: string,
-    leaseOwner: string,
-    nextStatus: DockerBuildStatus,
-    input: { progress?: Record<string, unknown>; errorCode?: string | null; errorMessage?: string | null } = {}
-  ) {
-    const [current] = await this.db.select().from(dockerBuilds).where(eq(dockerBuilds.id, buildId)).limit(1);
-    if (!current) throw new AppError(404, 'BUILD_NOT_FOUND', 'Docker build not found');
-    if (current.leaseOwner !== leaseOwner)
-      throw new AppError(409, 'BUILD_LEASE_LOST', 'Build lease owner does not match');
-    if (!canTransitionDockerBuild(current.status, nextStatus)) {
-      throw new AppError(409, 'BUILD_STATE_INVALID', `Cannot move build from ${current.status} to ${nextStatus}`);
+    _buildId: string,
+    _leaseOwner: string,
+    _nextStatus: DockerBuildStatus,
+    _input?: {
+      progress?: Record<string, unknown>;
+      errorCode?: string | null;
+      errorMessage?: string | null;
     }
-    const terminal = TERMINAL_BUILD_STATUSES.includes(nextStatus);
-    const now = new Date();
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({
-        status: nextStatus,
-        progress: input.progress ?? current.progress,
-        errorCode: input.errorCode ?? (nextStatus === 'failed' ? 'BUILD_FAILED' : null),
-        errorMessage: input.errorMessage ?? null,
-        ...(terminal ? { leaseOwner: null, leaseHeartbeatAt: null, leaseExpiresAt: null } : {}),
-        completedAt: terminal ? now : null,
-        updatedAt: now,
-      })
-      .where(
-        and(
-          eq(dockerBuilds.id, buildId),
-          eq(dockerBuilds.status, current.status),
-          eq(dockerBuilds.leaseOwner, leaseOwner)
-        )
-      )
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_STATE_CONFLICT', 'Build state changed concurrently');
-    if (row.batchId && ['failed', 'cancelled', 'superseded'].includes(nextStatus)) {
-      const batchStatus =
-        nextStatus === 'superseded' ? 'superseded' : nextStatus === 'cancelled' ? 'cancelled' : 'failed';
-      await this.db
-        .update(dockerBuildBatches)
-        .set({
-          status: batchStatus,
-          errorCode: row.errorCode,
-          errorMessage: row.errorMessage,
-          completedAt: now,
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(dockerBuildBatches.id, row.batchId),
-            inArray(dockerBuildBatches.status, ['building', 'awaiting_approval', 'applying'])
-          )
-        );
-    }
-    this.emit(row);
-    if (terminal) await this.buildReleaseHandler?.(row.id);
-    return row;
+  ): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async requestCancellation(buildId: string, userId: string) {
-    const now = new Date();
-    const [current] = await this.db.select().from(dockerBuilds).where(eq(dockerBuilds.id, buildId)).limit(1);
-    if (!current) throw new AppError(404, 'BUILD_NOT_FOUND', 'Docker build not found');
-    if (TERMINAL_BUILD_STATUSES.includes(current.status)) {
-      throw new AppError(409, 'BUILD_NOT_ACTIVE', 'Completed builds cannot be cancelled');
-    }
-    const queued = current.status === 'queued';
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({
-        status: queued ? 'cancelled' : current.status,
-        cancellationRequestedAt: now,
-        cancellationRequestedById: userId,
-        completedAt: queued ? now : current.completedAt,
-        errorCode: queued ? 'CANCELLED_BY_USER' : current.errorCode,
-        errorMessage: queued ? 'Build cancelled before it was claimed' : current.errorMessage,
-        updatedAt: now,
-      })
-      .where(and(eq(dockerBuilds.id, buildId), eq(dockerBuilds.status, current.status)))
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_STATE_CONFLICT', 'Build state changed concurrently');
-    this.emit(row);
-    return row;
+  async requestCancellation(
+    _buildId: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async retry(buildId: string, userId: string) {
-    const current = await this.get(buildId);
-    if (!['failed', 'cancelled', 'superseded'].includes(current.status)) {
-      throw new AppError(409, 'BUILD_NOT_RETRYABLE', 'Only failed, cancelled, or superseded builds can be retried');
-    }
-    return this.enqueue({
-      sourceBindingId: current.sourceBindingId,
-      commitSha: current.commitSha,
-      trigger: 'retry',
-      createdById: userId,
-      force: true,
-    });
+  async retry(
+    _buildId: string,
+    _userId: string
+  ): Promise<{
+    build: {
+      id: string;
+      ref: string;
+      status: DockerBuildStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      createdById: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      errorCode: string | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+      batchId: string | null;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      serviceName: string | null;
+      sourceConfigGeneration: number;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      progress: Record<string, unknown>;
+      queuedAt: Date;
+      startedAt: Date | null;
+    };
+    builds: {
+      id: string;
+      ref: string;
+      status: DockerBuildStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      createdById: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      errorCode: string | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+      batchId: string | null;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      serviceName: string | null;
+      sourceConfigGeneration: number;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      progress: Record<string, unknown>;
+      queuedAt: Date;
+      startedAt: Date | null;
+    }[];
+    batch: {
+      id: string;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      status: import('@/db/schema/index.js').DockerBuildBatchStatus;
+      expectedServices: string[];
+      composeBuildPlan: import('@/db/schema/index.js').DockerComposeBuildPlan;
+      composeVariables: Record<string, string>;
+      composeSecretKeys: string[];
+      candidateRevisionId: string | null;
+      supersededByBatchId: string | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      createdById: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+      completedAt: Date | null;
+    } | null;
+    created: boolean;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async recoverExpiredLeases(now = new Date()) {
-    const recovered = await this.db.transaction((tx) => this.recoverExpiredLeasesWith(tx, now));
-    await this.processRecoveredLeases(recovered);
-    return recovered.map(({ build }) => build);
+  async recoverExpiredLeases(_now?: Date): Promise<
+    {
+      id: string;
+      ref: string;
+      status: DockerBuildStatus;
+      createdAt: Date;
+      updatedAt: Date;
+      createdById: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceBindingId: string;
+      dedupeKey: string;
+      commitSha: string;
+      errorCode: string | null;
+      errorMessage: string | null;
+      completedAt: Date | null;
+      batchId: string | null;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      serviceName: string | null;
+      sourceConfigGeneration: number;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      progress: Record<string, unknown>;
+      queuedAt: Date;
+      startedAt: Date | null;
+    }[]
+  > {
+    return [];
   }
-
   async appendLog(
-    buildId: string,
-    sequence: number,
-    content: string,
-    options: { secretValues?: readonly string[]; secretNames?: readonly string[] } = {}
-  ) {
-    return this.artifacts.appendLog(buildId, sequence, content, options);
+    _buildId: string,
+    _sequence: number,
+    _content: string,
+    _options?: {
+      secretValues?: readonly string[];
+      secretNames?: readonly string[];
+    }
+  ): Promise<{
+    createdAt: Date;
+    sequence: number;
+    content: string;
+    buildId: string;
+    byteLength: number;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async handleDaemonEvent(builderNodeId: string, event: DockerBuildEvent) {
-    const current = await this.get(event.buildId);
-    const eventAttempt = Number(event.attempt ?? 0);
-    if (!Number.isSafeInteger(eventAttempt) || eventAttempt < 0) {
-      throw new AppError(400, 'BUILD_EVENT_ATTEMPT_INVALID', 'Build event attempt is invalid');
-    }
-    if (eventAttempt === 0 && current.attempt !== 1) {
-      throw new AppError(409, 'BUILD_EVENT_ATTEMPT_STALE', 'Legacy build event no longer matches the active attempt');
-    }
-    if (eventAttempt > 0 && current.attempt !== eventAttempt) {
-      throw new AppError(409, 'BUILD_EVENT_ATTEMPT_STALE', 'Build event belongs to a stale build attempt');
-    }
-    if (event.status === 'log') {
-      if (!canAcceptDockerBuildLogEvent(current, builderNodeId)) {
-        throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build log does not belong to this builder');
+  async handleDaemonEvent(
+    _builderNodeId: string,
+    _event: DockerBuildEvent
+  ): Promise<
+    | {
+        id: string;
+        sourceBindingId: string;
+        batchId: string | null;
+        dedupeKey: string;
+        trigger: DockerBuildTrigger;
+        triggerDeliveryId: string | null;
+        repositoryRemoteId: string;
+        repositoryFullPath: string;
+        ref: string;
+        commitSha: string;
+        serviceName: string | null;
+        dockerfilePath: string;
+        contextPath: string;
+        buildArgs: Record<string, string>;
+        applicationRoot: string;
+        packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+        packageManagerVersion: string | null;
+        nodeVersion: string | null;
+        buildScript: string | null;
+        artifactDirectory: string | null;
+        publishTag: string | null;
+        sourceConfigGeneration: number;
+        status: DockerBuildStatus;
+        builderNodeId: string | null;
+        platform: string | null;
+        attempt: number;
+        maxAttempts: number;
+        leaseOwner: string | null;
+        leaseHeartbeatAt: Date | null;
+        leaseExpiresAt: Date | null;
+        cancellationRequestedAt: Date | null;
+        cancellationRequestedById: string | null;
+        supersededByBuildId: string | null;
+        errorCode: string | null;
+        errorMessage: string | null;
+        progress: Record<string, unknown>;
+        createdById: string | null;
+        createdAt: Date;
+        queuedAt: Date;
+        startedAt: Date | null;
+        updatedAt: Date;
+        completedAt: Date | null;
       }
-      const sequence = Number(event.sequence);
-      if (!Number.isSafeInteger(sequence)) {
-        throw new AppError(400, 'BUILD_LOG_SEQUENCE_INVALID', 'Build log sequence is invalid');
+    | {
+        createdAt: Date;
+        sequence: number;
+        content: string;
+        buildId: string;
+        byteLength: number;
       }
-      return this.appendLog(event.buildId, sequence, event.logChunk.toString('utf8'));
-    }
-    if (current.builderNodeId !== builderNodeId) {
-      throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build event does not belong to this builder lease');
-    }
-    const terminalEvent = event.status === 'succeeded' || event.status === 'failed';
-    if (TERMINAL_BUILD_STATUSES.includes(current.status)) {
-      if (event.status === 'heartbeat') return current;
-      if (event.status === 'succeeded' && current.artifact) return current;
-      if (event.status === 'failed' && !current.artifact && ['failed', 'cancelled'].includes(current.status)) {
-        return current;
-      }
-      if (terminalEvent) {
-        throw new AppError(409, 'BUILD_EVENT_TERMINAL_CONFLICT', 'Build attempt already completed with another result');
-      }
-      throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Build is already terminal');
-    }
-    if (!current.leaseOwner) {
-      throw new AppError(409, 'BUILD_EVENT_OWNER_MISMATCH', 'Build event does not belong to this builder lease');
-    }
-    const leaseOwner = current.leaseOwner;
-    if (current.status === 'deploying') {
-      if (event.status === 'heartbeat' || event.status === 'succeeded') return current;
-      if (event.status === 'failed') {
-        throw new AppError(409, 'BUILD_EVENT_TERMINAL_CONFLICT', 'Backend rollout already owns this build attempt');
-      }
-      throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Backend rollout already owns this build attempt');
-    }
-    if (event.status === 'heartbeat') {
-      return this.heartbeat(event.buildId, leaseOwner);
-    }
-
-    const status = event.status as DockerBuildStatus;
-    if (status === 'checking_out' || status === 'building' || status === 'scanning' || status === 'pushing') {
-      if (current.status === status) return current;
-      return this.transition(event.buildId, leaseOwner, status, parseDockerBuildProgress(event.progressJson));
-    }
-    if (event.status === 'failed') {
-      const cancelled = event.errorCode === 'BUILD_CANCELLED' || Boolean(current.cancellationRequestedAt);
-      return this.transition(event.buildId, leaseOwner, cancelled ? 'cancelled' : 'failed', {
-        errorCode: event.errorCode || (cancelled ? 'CANCELLED_BY_USER' : 'BUILD_FAILED'),
-        errorMessage: event.errorMessage.slice(0, 4096) || null,
-      });
-    }
-    if (event.status !== 'succeeded') {
-      throw new AppError(400, 'BUILD_EVENT_STATUS_INVALID', 'Builder reported an unsupported build status');
-    }
-
-    let readyStatus: DockerBuildStatus = current.status;
-    if (readyStatus === 'building' && current.target.kind === 'pages_project') {
-      try {
-        await this.transition(event.buildId, leaseOwner, 'scanning');
-        readyStatus = 'scanning';
-      } catch (error) {
-        if (!(error instanceof AppError) || error.code !== 'BUILD_STATE_CONFLICT') throw error;
-        readyStatus = (await this.get(event.buildId)).status;
-      }
-    }
-    if (readyStatus === 'scanning') {
-      try {
-        await this.transition(event.buildId, leaseOwner, 'pushing');
-        readyStatus = 'pushing';
-      } catch (error) {
-        if (!(error instanceof AppError) || error.code !== 'BUILD_STATE_CONFLICT') throw error;
-        readyStatus = (await this.get(event.buildId)).status;
-      }
-    }
-    if (readyStatus !== 'pushing') {
-      throw new AppError(409, 'BUILD_EVENT_STATE_INVALID', 'Successful artifact arrived before the pushing state');
-    }
-    const artifact = await this.recordArtifact({
-      buildId: event.buildId,
-      registryRepository: event.artifactRepository,
-      digest: event.artifactDigest,
-      platform: event.platform,
-      sizeBytes: Number(event.artifactSizeBytes),
-      sbomDigest: event.sbomDigest || null,
-      provenanceDigest: event.provenanceDigest || null,
-      scanSummary: parseDockerBuildScanSummary(event.scanSummaryJson),
-    });
-    if (artifact.artifact.policyDecision !== 'approved') {
-      return this.transition(event.buildId, leaseOwner, 'failed', {
-        errorCode: 'BUILD_ARTIFACT_POLICY_REJECTED',
-        errorMessage: artifact.artifact.policyReason || 'Built artifact did not satisfy source policy',
-      });
-    }
-    if (
-      current.sourceAutoDeploy === false &&
-      current.target.kind !== 'compose_project' &&
-      current.target.kind !== 'pages_project'
-    ) {
-      return this.transition(event.buildId, leaseOwner, 'succeeded');
-    }
-    if (!this.artifactRollout) {
-      throw new AppError(503, 'BUILD_ROLLOUT_UNAVAILABLE', 'Artifact rollout service is unavailable');
-    }
-    const deploying = await this.beginArtifactRollout(
-      event.buildId,
-      leaseOwner,
-      current.attempt,
-      current.progress as Record<string, unknown>
-    );
-    const rollout = readDockerBuildRolloutProgress(deploying.progress);
-    if (!rollout) {
-      throw new AppError(500, 'BUILD_ROLLOUT_STATE_INVALID', 'Backend rollout state was not persisted');
-    }
-    this.scheduleArtifactRollout(event.buildId, deploying.leaseOwner!, rollout.operationId);
-    return deploying;
+  > {
+    return commercialModuleUnavailable();
   }
-
-  async recordArtifact(input: {
+  async recordArtifact(_input: {
     buildId: string;
     registryRepository: string;
     digest: string;
@@ -739,301 +715,272 @@ export class DockerBuildService {
     sbomDigest?: string | null;
     provenanceDigest?: string | null;
     scanSummary?: DockerBuildScanSummary | null;
-  }) {
-    return this.artifacts.record(input);
+  }): Promise<{
+    artifact: {
+      id: string;
+      buildId: string | null;
+      sourceBindingId: string | null;
+      ownerKind: import('@/db/schema/index.js').DockerArtifactOwnerKind;
+      ownerKey: string | null;
+      sourceImageReference: string | null;
+      registryRepository: string;
+      digest: string;
+      platform: string;
+      sizeBytes: number;
+      status: import('@/db/schema/index.js').DockerArtifactStatus;
+      sbomDigest: string | null;
+      provenanceDigest: string | null;
+      scanSummary: DockerBuildScanSummary | null;
+      policyDecision: import('@/db/schema/index.js').DockerArtifactPolicyDecision;
+      policyReason: string | null;
+      verifiedAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    };
+    created: boolean;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async listLogs(buildId: string, afterSequence = -1, limit = 200) {
-    return this.artifacts.listLogs(buildId, afterSequence, limit);
+  async listLogs(
+    _buildId: string,
+    _afterSequence?: number,
+    _limit?: number
+  ): Promise<
+    {
+      buildId: string;
+      sequence: number;
+      content: string;
+      byteLength: number;
+      createdAt: Date;
+    }[]
+  > {
+    return [];
   }
-
   async listInternalRegistryRepositories(): Promise<string[]> {
-    return this.query.listInternalRegistryRepositories();
+    return [];
   }
-
-  async get(id: string) {
-    return this.query.get(id);
-  }
-
-  async list(input: DockerBuildListInput = {}) {
-    return this.query.list(input);
-  }
-
-  private async recoverExpiredLeasesWith(db: DrizzleExecutor, now: Date): Promise<RecoveredDockerBuild[]> {
-    const expired = await db
-      .select()
-      .from(dockerBuilds)
-      .where(and(inArray(dockerBuilds.status, ACTIVE_BUILD_STATUSES), lt(dockerBuilds.leaseExpiresAt, now)));
-    const recovered: RecoveredDockerBuild[] = [];
-    for (const build of expired) {
-      if (build.status === 'deploying') {
-        let [source] = await db
-          .select({
-            targetKind: dockerSourceBindings.targetKind,
-            desiredCommitSha: dockerSourceBindings.desiredCommitSha,
-            deployedCommitSha: dockerSourceBindings.deployedCommitSha,
-          })
-          .from(dockerSourceBindings)
-          .where(eq(dockerSourceBindings.id, build.sourceBindingId))
-          .limit(1);
-        const rollout = readDockerBuildRolloutProgress(build.progress);
-        const idempotentTarget = source?.targetKind === 'compose_project' || source?.targetKind === 'pages_project';
-        const safeToResume =
-          !build.cancellationRequestedAt && (rollout?.phase === 'accepted' || Boolean(idempotentTarget));
-        if (safeToResume) {
-          const rolloutLeaseOwner = `gateway-rollout:${process.pid}:${randomUUID()}`;
-          const recoveredProgress = rollout
-            ? build.progress
-            : {
-                ...build.progress,
-                rollout: {
-                  operationId: dockerBuildRolloutOperationId(build.id, build.attempt),
-                  attempt: build.attempt,
-                  phase: 'executing',
-                },
-              };
-          const [row] = await db
-            .update(dockerBuilds)
-            .set({
-              leaseOwner: rolloutLeaseOwner,
-              leaseHeartbeatAt: now,
-              leaseExpiresAt: new Date(now.getTime() + DEFAULT_BUILD_LEASE_MS),
-              progress: recoveredProgress,
-              updatedAt: now,
-            })
-            .where(
-              and(
-                eq(dockerBuilds.id, build.id),
-                eq(dockerBuilds.status, 'deploying'),
-                eq(dockerBuilds.leaseExpiresAt, build.leaseExpiresAt!)
-              )
-            )
-            .returning();
-          if (row) recovered.push({ build: row, resumeRollout: true, releaseBuild: false });
-          continue;
+  async get(_id: string): Promise<{
+    provider: import('@/db/schema/index.js').IntegrationProvider;
+    builderName: string | null;
+    sourceAutoDeploy: boolean;
+    artifact: {
+      id: string;
+      buildId: string | null;
+      sourceBindingId: string | null;
+      ownerKind: import('@/db/schema/index.js').DockerArtifactOwnerKind;
+      ownerKey: string | null;
+      sourceImageReference: string | null;
+      registryRepository: string;
+      digest: string;
+      platform: string;
+      sizeBytes: number;
+      status: import('@/db/schema/index.js').DockerArtifactStatus;
+      sbomDigest: string | null;
+      provenanceDigest: string | null;
+      scanSummary: DockerBuildScanSummary | null;
+      policyDecision: import('@/db/schema/index.js').DockerArtifactPolicyDecision;
+      policyReason: string | null;
+      verifiedAt: Date | null;
+      createdAt: Date;
+      updatedAt: Date;
+    };
+    target:
+      | {
+          kind: 'container';
+          nodeId: string;
+          containerName: string;
+          name: string;
+          deploymentId?: undefined;
+          composeProjectId?: undefined;
+          serviceName?: undefined;
+          pageProjectId?: undefined;
         }
-
-        if (!idempotentTarget && source) {
-          const lockResult = (await db.execute(
-            sql`select pg_try_advisory_xact_lock(hashtext(${`docker-build-source:${build.sourceBindingId}`})) as acquired`
-          )) as { rows?: Array<{ acquired?: boolean }> };
-          if (lockResult.rows?.[0]?.acquired !== true) continue;
-          [source] = await db
-            .select({
-              targetKind: dockerSourceBindings.targetKind,
-              desiredCommitSha: dockerSourceBindings.desiredCommitSha,
-              deployedCommitSha: dockerSourceBindings.deployedCommitSha,
-            })
-            .from(dockerSourceBindings)
-            .where(eq(dockerSourceBindings.id, build.sourceBindingId))
-            .limit(1);
+      | {
+          kind: 'deployment';
+          nodeId: string;
+          deploymentId: string;
+          name: string;
+          containerName?: undefined;
+          composeProjectId?: undefined;
+          serviceName?: undefined;
+          pageProjectId?: undefined;
         }
-
-        const deployed = source?.deployedCommitSha?.toLowerCase() === build.commitSha.toLowerCase();
-        const superseded = Boolean(source) && source?.desiredCommitSha?.toLowerCase() !== build.commitSha.toLowerCase();
-        const terminalStatus = build.cancellationRequestedAt
-          ? 'cancelled'
-          : superseded
-            ? 'superseded'
-            : deployed
-              ? 'succeeded'
-              : 'failed';
-        const [row] = await db
-          .update(dockerBuilds)
-          .set({
-            status: terminalStatus,
-            leaseOwner: null,
-            leaseHeartbeatAt: null,
-            leaseExpiresAt: null,
-            completedAt: now,
-            errorCode:
-              terminalStatus === 'failed'
-                ? 'BUILD_ROLLOUT_INTERRUPTED'
-                : terminalStatus === 'cancelled'
-                  ? 'CANCELLED_BY_USER'
-                  : null,
-            errorMessage:
-              terminalStatus === 'failed'
-                ? 'Backend rollout lease expired after external execution may have started; automatic replay was refused'
-                : null,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(dockerBuilds.id, build.id),
-              eq(dockerBuilds.status, 'deploying'),
-              eq(dockerBuilds.leaseExpiresAt, build.leaseExpiresAt!)
-            )
-          )
-          .returning();
-        if (row) recovered.push({ build: row, resumeRollout: false, releaseBuild: true });
-        continue;
-      }
-      const disposition = expiredDockerBuildDisposition(build);
-      const retry = disposition === 'retry';
-      const [row] = await db
-        .update(dockerBuilds)
-        .set({
-          status: retry ? 'queued' : disposition,
-          builderNodeId: retry ? null : build.builderNodeId,
-          leaseOwner: null,
-          leaseHeartbeatAt: null,
-          leaseExpiresAt: null,
-          queuedAt: retry ? now : build.queuedAt,
-          completedAt: retry ? null : now,
-          errorCode:
-            disposition === 'retry'
-              ? 'BUILD_LEASE_EXPIRED_RETRY'
-              : disposition === 'cancelled'
-                ? 'CANCELLED_BY_USER'
-                : 'BUILD_LEASE_EXHAUSTED',
-          errorMessage: retry
-            ? 'Builder lease expired; build returned to the queue'
-            : disposition === 'cancelled'
-              ? 'Build cancellation completed after worker lease expired'
-              : 'Builder lease expired and retry attempts were exhausted',
-          updatedAt: now,
-        })
-        .where(
-          and(
-            eq(dockerBuilds.id, build.id),
-            eq(dockerBuilds.status, build.status),
-            eq(dockerBuilds.leaseExpiresAt, build.leaseExpiresAt!)
-          )
-        )
-        .returning();
-      if (row) recovered.push({ build: row, resumeRollout: false, releaseBuild: true });
-    }
-    return recovered;
+      | {
+          kind: 'compose_project';
+          nodeId: string;
+          composeProjectId: string;
+          name: string;
+          serviceName: string | null;
+          containerName?: undefined;
+          deploymentId?: undefined;
+          pageProjectId?: undefined;
+        }
+      | {
+          kind: 'pages_project';
+          nodeId: string | undefined;
+          pageProjectId: string;
+          name: string;
+          containerName?: undefined;
+          deploymentId?: undefined;
+          composeProjectId?: undefined;
+          serviceName?: undefined;
+        };
+    id: string;
+    sourceBindingId: string;
+    batchId: string | null;
+    dedupeKey: string;
+    trigger: DockerBuildTrigger;
+    triggerDeliveryId: string | null;
+    repositoryRemoteId: string;
+    repositoryFullPath: string;
+    ref: string;
+    commitSha: string;
+    serviceName: string | null;
+    dockerfilePath: string;
+    contextPath: string;
+    buildArgs: Record<string, string>;
+    applicationRoot: string;
+    packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+    packageManagerVersion: string | null;
+    nodeVersion: string | null;
+    buildScript: string | null;
+    artifactDirectory: string | null;
+    publishTag: string | null;
+    sourceConfigGeneration: number;
+    status: DockerBuildStatus;
+    builderNodeId: string | null;
+    platform: string | null;
+    attempt: number;
+    maxAttempts: number;
+    leaseOwner: string | null;
+    leaseHeartbeatAt: Date | null;
+    leaseExpiresAt: Date | null;
+    cancellationRequestedAt: Date | null;
+    cancellationRequestedById: string | null;
+    supersededByBuildId: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    progress: Record<string, unknown>;
+    createdById: string | null;
+    createdAt: Date;
+    queuedAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  private async processRecoveredLeases(recovered: RecoveredDockerBuild[]): Promise<void> {
-    for (const { build } of recovered) this.emit(build);
-    await Promise.allSettled(
-      recovered.filter(({ releaseBuild }) => releaseBuild).map(({ build }) => this.buildReleaseHandler?.(build.id))
-    );
-    for (const { build, resumeRollout } of recovered) {
-      const rollout = readDockerBuildRolloutProgress(build.progress);
-      if (resumeRollout && build.leaseOwner && rollout) {
-        this.scheduleArtifactRollout(build.id, build.leaseOwner, rollout.operationId);
-      }
-    }
-  }
-
-  private scheduleArtifactRollout(buildId: string, leaseOwner: string, operationId: string): void {
-    if (this.artifactRolloutTasks.get(buildId)?.leaseOwner === leaseOwner) return;
-    const task = this.runArtifactRollout(buildId, leaseOwner, operationId);
-    this.artifactRolloutTasks.set(buildId, { leaseOwner, task });
-    void task.finally(() => {
-      if (this.artifactRolloutTasks.get(buildId)?.task === task) this.artifactRolloutTasks.delete(buildId);
-    });
-  }
-
-  private async markArtifactRolloutExecuting(buildId: string, leaseOwner: string, operationId: string) {
-    const [current] = await this.db.select().from(dockerBuilds).where(eq(dockerBuilds.id, buildId)).limit(1);
-    const rollout = current ? readDockerBuildRolloutProgress(current.progress) : null;
-    if (
-      !current ||
-      current.status !== 'deploying' ||
-      current.leaseOwner !== leaseOwner ||
-      rollout?.operationId !== operationId
-    ) {
-      throw new AppError(409, 'BUILD_ROLLOUT_LEASE_LOST', 'Backend rollout lease is no longer current');
-    }
-    if (rollout.phase === 'executing') return current;
-    const [row] = await this.db
-      .update(dockerBuilds)
-      .set({
-        progress: { ...current.progress, rollout: { ...rollout, phase: 'executing' } },
-        updatedAt: new Date(),
-      })
-      .where(
-        and(eq(dockerBuilds.id, buildId), eq(dockerBuilds.status, 'deploying'), eq(dockerBuilds.leaseOwner, leaseOwner))
-      )
-      .returning();
-    if (!row) throw new AppError(409, 'BUILD_ROLLOUT_LEASE_LOST', 'Backend rollout lease is no longer current');
-    return row;
-  }
-
-  private async runArtifactRollout(buildId: string, leaseOwner: string, operationId: string): Promise<void> {
-    if (!this.artifactRollout) return;
-    let heartbeatRunning = false;
-    const heartbeatTimer = setInterval(() => {
-      if (heartbeatRunning) return;
-      heartbeatRunning = true;
-      void this.heartbeat(buildId, leaseOwner)
-        .catch((error) => {
-          logger.warn('Docker build rollout lease heartbeat failed', {
-            buildId,
-            error: (error as Error).message,
-          });
-        })
-        .finally(() => {
-          heartbeatRunning = false;
-        });
-    }, ROLLOUT_HEARTBEAT_INTERVAL_MS);
-    heartbeatTimer.unref?.();
-    try {
-      await this.markArtifactRolloutExecuting(buildId, leaseOwner, operationId);
-      const disposition = await this.artifactRollout(buildId, leaseOwner, operationId);
-      await this.transition(buildId, leaseOwner, disposition === 'superseded' ? 'superseded' : 'succeeded');
-    } catch (error) {
-      try {
-        await this.transition(buildId, leaseOwner, 'failed', {
-          errorCode: 'BUILD_ROLLOUT_FAILED',
-          errorMessage: (error as Error).message.slice(0, 4096),
-        });
-      } catch (transitionError) {
-        logger.warn('Docker build rollout could not finalize after losing its lease', {
-          buildId,
-          rolloutError: (error as Error).message,
-          transitionError: (transitionError as Error).message,
-        });
-      }
-    } finally {
-      clearInterval(heartbeatTimer);
-    }
-  }
-
-  private emit(build: typeof dockerBuilds.$inferSelect): void {
-    this.publishBuildEvent('docker.build.changed', {
-      buildId: build.id,
-      sourceBindingId: build.sourceBindingId,
-      status: build.status,
-      builderNodeId: build.builderNodeId,
-      commitSha: build.commitSha,
-      cancellationRequestedAt: build.cancellationRequestedAt,
-      errorCode: build.errorCode,
-      errorMessage: build.errorMessage,
-      updatedAt: build.updatedAt,
-    });
-  }
-
-  private publishBuildEvent(topic: string, payload: Record<string, unknown>): void {
-    if (!this.eventBus) return;
-    const buildId = typeof payload.buildId === 'string' ? payload.buildId : null;
-    if (!buildId) return;
-    void this.query
-      .get(buildId)
-      .then(async (build) => {
-        const scopeResourceId =
-          build.target.kind === 'container'
-            ? await new DockerAccessResourceService(this.db).resolveContainer(build.target.nodeId, {
-                name: build.target.containerName,
-              })
-            : build.target.kind === 'deployment'
-              ? build.target.deploymentId
-              : build.target.kind === 'compose_project'
-                ? build.target.composeProjectId
-                : build.target.pageProjectId;
-        this.eventBus?.publish(topic, {
-          ...payload,
-          nodeId: build.target.nodeId,
-          scopeResourceId,
-          targetKind: build.target.kind,
-          targetName: build.target.name,
-        });
-      })
-      .catch(() => undefined);
+  async list(_input?: DockerBuildListInput): Promise<
+    {
+      provider: import('@/db/schema/index.js').IntegrationProvider;
+      builderName: string | null;
+      sourceAutoDeploy: boolean;
+      artifact: {
+        id: string;
+        buildId: string | null;
+        sourceBindingId: string | null;
+        ownerKind: import('@/db/schema/index.js').DockerArtifactOwnerKind;
+        ownerKey: string | null;
+        sourceImageReference: string | null;
+        registryRepository: string;
+        digest: string;
+        platform: string;
+        sizeBytes: number;
+        status: import('@/db/schema/index.js').DockerArtifactStatus;
+        sbomDigest: string | null;
+        provenanceDigest: string | null;
+        scanSummary: DockerBuildScanSummary | null;
+        policyDecision: import('@/db/schema/index.js').DockerArtifactPolicyDecision;
+        policyReason: string | null;
+        verifiedAt: Date | null;
+        createdAt: Date;
+        updatedAt: Date;
+      } | null;
+      target:
+        | {
+            kind: 'container';
+            nodeId: string;
+            containerName: string;
+            name: string;
+            deploymentId?: undefined;
+            composeProjectId?: undefined;
+            serviceName?: undefined;
+            pageProjectId?: undefined;
+          }
+        | {
+            kind: 'deployment';
+            nodeId: string;
+            deploymentId: string;
+            name: string;
+            containerName?: undefined;
+            composeProjectId?: undefined;
+            serviceName?: undefined;
+            pageProjectId?: undefined;
+          }
+        | {
+            kind: 'compose_project';
+            nodeId: string;
+            composeProjectId: string;
+            name: string;
+            serviceName: string | null;
+            containerName?: undefined;
+            deploymentId?: undefined;
+            pageProjectId?: undefined;
+          }
+        | {
+            kind: 'pages_project';
+            nodeId: string | undefined;
+            pageProjectId: string;
+            name: string;
+            containerName?: undefined;
+            deploymentId?: undefined;
+            composeProjectId?: undefined;
+            serviceName?: undefined;
+          };
+      id: string;
+      sourceBindingId: string;
+      batchId: string | null;
+      dedupeKey: string;
+      trigger: DockerBuildTrigger;
+      triggerDeliveryId: string | null;
+      repositoryRemoteId: string;
+      repositoryFullPath: string;
+      ref: string;
+      commitSha: string;
+      serviceName: string | null;
+      dockerfilePath: string;
+      contextPath: string;
+      buildArgs: Record<string, string>;
+      applicationRoot: string;
+      packageManager: import('@/db/schema/index.js').PagesBuildPackageManager | null;
+      packageManagerVersion: string | null;
+      nodeVersion: string | null;
+      buildScript: string | null;
+      artifactDirectory: string | null;
+      publishTag: string | null;
+      sourceConfigGeneration: number;
+      status: DockerBuildStatus;
+      builderNodeId: string | null;
+      platform: string | null;
+      attempt: number;
+      maxAttempts: number;
+      leaseOwner: string | null;
+      leaseHeartbeatAt: Date | null;
+      leaseExpiresAt: Date | null;
+      cancellationRequestedAt: Date | null;
+      cancellationRequestedById: string | null;
+      supersededByBuildId: string | null;
+      errorCode: string | null;
+      errorMessage: string | null;
+      progress: Record<string, unknown>;
+      createdById: string | null;
+      createdAt: Date;
+      queuedAt: Date;
+      startedAt: Date | null;
+      updatedAt: Date;
+      completedAt: Date | null;
+    }[]
+  > {
+    return [];
   }
 }

@@ -3,7 +3,8 @@ import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
@@ -26,7 +27,6 @@ import { AIConversationService } from './ai-conversation.service.js';
 import { AIConversationFolderService } from './ai-conversation-folder.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService } from './ai-run.service.js';
-import { listVisibleAIScenarios, rankAIScenarios } from './ai-scenarios.js';
 
 export const aiRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -187,7 +187,12 @@ aiRoutes.get('/scenarios', requireScope('ai:workspace:use'), async (c) => {
   if (rawContext && !parsed?.success) {
     return c.json({ code: 'VALIDATION_ERROR', message: 'Invalid page context' }, 400);
   }
-  const scenarios = rankAIScenarios(listVisibleAIScenarios(c.get('user')!), parsed?.data).map(
+  const available = container.isRegistered(TOKENS.CommercialEdition)
+    ? await container
+        .resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition)
+        .listAIScenarios(c.get('user')!, parsed?.data)
+    : [];
+  const scenarios = available.map(
     ({ kickoffInstruction: _kickoffInstruction, requiredAnyScopes: _requiredAnyScopes, ...scenario }) => scenario
   );
   return c.json({ data: scenarios });

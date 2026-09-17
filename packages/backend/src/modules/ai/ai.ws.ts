@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { WSContext } from 'hono/ws';
 import { container, TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { canUseAI } from '@/lib/permissions.js';
 import { withRateLimitRedisTimeout } from '@/lib/rate-limit-timeout.js';
@@ -12,6 +13,7 @@ import {
   resolveLiveSessionUser,
 } from '@/modules/auth/live-session-user.js';
 import { isDemoRealtimeCapabilityAllowed } from '@/modules/demo/demo-mode.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import { AISettingsService } from './ai.settings.service.js';
@@ -19,7 +21,6 @@ import type { WSClientMessage, WSServerMessage } from './ai.types.js';
 import { AIPlanService } from './ai-plan.service.js';
 import { AIProviderRuntimeService } from './ai-provider-runtime.service.js';
 import { AIRunService, aiUserConversationsChangedChannel } from './ai-run.service.js';
-import { getAIScenario, listVisibleAIScenarios } from './ai-scenarios.js';
 
 const logger = createChildLogger('AI-WebSocket');
 const RATE_LIMIT_PIPELINE_RESULT_COUNT = 4;
@@ -504,6 +505,9 @@ export function createWSHandlers() {
                 msg.conversationId && planService
                   ? await planService.getActivePlanSnapshot(user.id, msg.conversationId)
                   : null;
+              if (msg.workMode === 'plan' || activePlan) {
+                await container.resolve(LicensePolicyService).requireFeature('ai-plan-mode');
+              }
               if (activePlan?.status === 'validating' || activePlan?.status === 'verifying') {
                 throw new AppError(409, 'AI_PLAN_BUSY', 'The active plan is being verified');
               }
@@ -592,8 +596,11 @@ export function createWSHandlers() {
 
           if (msg.type === 'conversation.start_scenario') {
             try {
-              const scenario = getAIScenario(msg.scenarioId);
-              if (!scenario || !listVisibleAIScenarios(user).some((item) => item.id === scenario.id)) {
+              const scenarios = container.isRegistered(TOKENS.CommercialEdition)
+                ? await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).listAIScenarios(user)
+                : [];
+              const scenario = scenarios.find((item) => item.id === msg.scenarioId);
+              if (!scenario) {
                 throw new AppError(404, 'AI_SCENARIO_NOT_FOUND', 'This scenario is not available to you');
               }
               const rateCheck = await checkRateLimit(user.id);

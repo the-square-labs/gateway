@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import type { PreparedCommercialUpdate } from '@/edition/prepare-update.js';
 
 export const DEFAULT_SANDBOX_WORKSPACE_DIR = '/var/lib/gateway/sandbox-workspaces';
 
@@ -13,6 +14,7 @@ const REGISTRY_SERVICE_END = '# gateway-managed:end registry-service';
 const DEFAULT_REGISTRY_IMAGE_REF = 'registry:3';
 
 export interface FoundationMigrationOptions {
+  commercial?: PreparedCommercialUpdate;
   hostDir: string;
   targetVersion?: string;
   imageRef?: string;
@@ -72,6 +74,14 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
     'DATABASE_CONNECTOR_IMAGE',
   ]);
   const envPatch = patchEnv(sanitizedEnvContent, {
+    ...(options.commercial
+      ? {
+          GATEWAY_COMMERCIAL_DIR:
+            options.commercial.edition === 'commercial'
+              ? `/var/lib/gateway/commercial/versions/${options.commercial.hostVersion}`
+              : '/var/lib/gateway/commercial/community',
+        }
+      : {}),
     ...(options.targetVersion ? { GATEWAY_VERSION: options.targetVersion } : {}),
     ...(options.imageRef ? { GATEWAY_IMAGE_REF: options.imageRef } : {}),
     ...(options.secureLinkConnectorImage ? { SECURE_LINK_CONNECTOR_IMAGE: options.secureLinkConnectorImage } : {}),
@@ -86,7 +96,7 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
   });
 
   const composeContent = await fs.readFile(composePath, 'utf8');
-  const composePatch = patchCompose(composeContent);
+  const composePatch = patchCompose(composeContent, Boolean(options.commercial));
 
   const effectiveSandboxWorkspaceDir =
     envPatch.values.get('SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir;
@@ -179,7 +189,7 @@ function removeEnvKeys(content: string, keys: string[]): string {
     .join('\n');
 }
 
-export function patchCompose(content: string): string {
+export function patchCompose(content: string, commercialPrepared = false): string {
   let lines = content.replace(/\r\n/g, '\n').split('\n');
   const hadTrailingNewline = lines.at(-1) === '';
   if (hadTrailingNewline) lines = lines.slice(0, -1);
@@ -190,13 +200,61 @@ export function patchCompose(content: string): string {
   const imagePatched = patchAppImage(lines, appBlock);
   const gracePatched = patchAppStopGracePeriod(imagePatched);
   const volumesPatched = patchAppSandboxVolume(gracePatched, findServiceBlock(gracePatched, 'app') ?? appBlock);
-  const runtimePatched = patchAppRuntimeStorageAndSocket(volumesPatched);
+  const runtimePatched = patchAppRuntimeStorageAndSocket(
+    commercialPrepared ? patchCommercialCore(volumesPatched) : volumesPatched
+  );
   const healthcheckPatched = patchAppHealthcheck(runtimePatched);
   const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
   const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
   const relayPatched = patchRelayFoundation(clickHousePatched);
   const registryPatched = patchRegistryFoundation(relayPatched);
   return `${registryPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+}
+
+function patchCommercialCore(lines: string[]): string[] {
+  const app = findServiceBlock(lines, 'app');
+  if (!app) throw new Error('Commercial core requires services.app');
+  const volumes = findNestedBlock(lines, app, 'volumes');
+  if (!volumes) throw new Error('Commercial core requires app volumes');
+  const mount = `${' '.repeat(volumes.indent + 2)}- ./.gateway-commercial:/var/lib/gateway/commercial:ro`;
+  const next = [...lines];
+  const existing = next.findIndex(
+    (line, index) =>
+      index > volumes.start &&
+      index < volumes.end &&
+      /^\s*-\s*[^#]+:\/var\/lib\/gateway\/commercial(?::(?:ro|rw))?\s*$/.test(line)
+  );
+  if (existing >= 0) next[existing] = mount;
+  else next.splice(volumes.end, 0, mount);
+  const updatedApp = findServiceBlock(next, 'app')!;
+  const environment = findNestedBlock(next, updatedApp, 'environment');
+  if (!environment) {
+    const indent = ' '.repeat(updatedApp.indent + 2);
+    next.splice(
+      updatedApp.start + 1,
+      0,
+      `${indent}environment:`,
+      `${indent}  GATEWAY_COMMERCIAL_DIR: \${GATEWAY_COMMERCIAL_DIR}`
+    );
+    return next;
+  }
+  const listStyle = next.slice(environment.start + 1, environment.end).some((line) => /^\s*-\s/.test(line));
+  const value = `${' '.repeat(environment.indent + 2)}GATEWAY_COMMERCIAL_DIR: \${GATEWAY_COMMERCIAL_DIR}`;
+  if (listStyle) {
+    const listValue = `${' '.repeat(environment.indent + 2)}- GATEWAY_COMMERCIAL_DIR=\${GATEWAY_COMMERCIAL_DIR}`;
+    const index = next.findIndex(
+      (line, i) => i > environment.start && i < environment.end && /^\s*-\s*GATEWAY_COMMERCIAL_DIR(?:=|\s*$)/.test(line)
+    );
+    if (index >= 0) next[index] = listValue;
+    else next.splice(environment.end, 0, listValue);
+    return next;
+  }
+  const envIndex = next.findIndex(
+    (line, index) => index > environment.start && index < environment.end && /^\s*GATEWAY_COMMERCIAL_DIR\s*:/.test(line)
+  );
+  if (envIndex >= 0) next[envIndex] = value;
+  else next.splice(environment.end, 0, value);
+  return next;
 }
 
 function patchAppStopGracePeriod(lines: string[]): string[] {

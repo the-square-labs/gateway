@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { container, TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { User } from '@/types.js';
 import { AI_TOOLS, type getOpenAITools } from './ai.tools.js';
@@ -123,31 +125,10 @@ export function isToolNameAllowedForPlanState(
   toolName: string,
   status: AIPlanRuntimeSnapshot['status'] | null
 ): boolean {
-  if (!status) return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'enter_plan_mode';
-  if (status === 'drafting') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan';
-  if (status === 'validating') return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan_review';
-  if (status === 'awaiting_decision') {
-    return (
-      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) || toolName === 'submit_plan' || toolName === 'start_plan_execution'
-    );
-  }
-  if (status === 'executing') {
-    return (
-      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) ||
-      toolName === 'update_plan_step' ||
-      toolName === 'pause_plan_execution' ||
-      toolName === 'finalize_plan_execution'
-    );
-  }
-  if (status === 'pause_requested') return false;
-  if (status === 'paused') return toolName === 'resume_plan_execution';
-  if (status === 'verifying')
-    return (
-      !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName) ||
-      toolName === 'pause_plan_execution' ||
-      toolName === 'submit_plan_verification'
-    );
-  return !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName);
+  return (
+    planningRuntime()?.isToolNameAllowedForPlanState(toolName, status) ??
+    (status === null && !PLAN_LIFECYCLE_TOOL_NAMES.has(toolName))
+  );
 }
 
 export function isToolAllowedForPlanState(
@@ -155,82 +136,18 @@ export function isToolAllowedForPlanState(
   status: AIPlanRuntimeSnapshot['status'] | null,
   args?: Record<string, unknown>
 ): boolean {
-  if (!isToolNameAllowedForPlanState(tool.name, status)) return false;
-  if (status === 'drafting' || status === 'validating' || status === 'verifying') {
-    if (tool.planningAccess !== 'allowed') return false;
-    if (!args || PLAN_LIFECYCLE_TOOL_NAMES.has(tool.name)) return true;
-    const classification = getAIToolApprovalDecision(tool.name, 'normal', args).classification;
-    return classification === 'read' || classification === 'system-never-ask';
-  }
-  return true;
-}
-
-export function shouldEndRunAfterPlanTool(toolName: string, result: unknown, error: string | undefined): boolean {
-  if (error) return false;
-  if (toolName === 'submit_plan_review') {
-    return !isRecord(result) || result.requiresQuestion !== true;
-  }
-  if (
-    toolName === 'enter_plan_mode' ||
-    toolName === 'submit_plan' ||
-    toolName === 'start_plan_execution' ||
-    toolName === 'pause_plan_execution' ||
-    toolName === 'resume_plan_execution' ||
-    toolName === 'finalize_plan_execution'
-  ) {
-    return true;
-  }
   return (
-    toolName === 'submit_plan_verification' &&
-    isRecord(result) &&
-    result.status !== 'completed' &&
-    result.completionPending !== true
+    planningRuntime()?.isToolAllowedForPlanState(tool, status, args) ??
+    (status === null && !PLAN_LIFECYCLE_TOOL_NAMES.has(tool.name))
   );
 }
 
+export function shouldEndRunAfterPlanTool(toolName: string, result: unknown, error: string | undefined): boolean {
+  return planningRuntime()?.shouldEndRunAfterPlanTool(toolName, result, error) ?? false;
+}
+
 export function buildPlanRuntimePrompt(plan: AIPlanRuntimeSnapshot): string {
-  const planState = JSON.stringify({
-    status: plan.status,
-    goal: plan.goal,
-    scope: plan.scope,
-    assumptions: plan.assumptions,
-    research: plan.research,
-    verification: plan.verification,
-    changeSummary: plan.changeSummary,
-    validatorFindings:
-      plan.intentReview?.verdict === 'revise' || plan.securityReview?.verdict === 'revise'
-        ? [...(plan.intentReview?.findings ?? []), ...(plan.securityReview?.findings ?? [])]
-        : [],
-    steps: plan.steps.map((step) => ({
-      title: step.title,
-      status: step.status,
-      verification: step.verification,
-      evidence: step.evidence,
-      skipReason: step.skipReason,
-    })),
-  });
-  if (plan.status === 'drafting') {
-    return `PLAN MODE is active. Clarify only material unknowns with ask_question, perform detailed research with planning-safe tools, and do not attempt any mutating action. Then call submit_plan with a complete structured plan. If validator findings are present, revise the plan to resolve them. Active plan: ${planState}`;
-  }
-  if (plan.status === 'validating') {
-    return `You are the independent plan validator. Compare the draft with the user's intent and research, independently verify critical facts with planning-safe tools when needed, and call submit_plan_review. If the result says requiresQuestion:true, immediately call ask_question for the missing user decision before ending the run. Do not implement or change infrastructure. Active plan: ${planState}`;
-  }
-  if (plan.status === 'awaiting_decision') {
-    return `A validated plan is published and available, but it does not put the conversation into a separate refinement state. Continue as a normal conversation. If and only if the user explicitly asks to execute, implement, proceed with, or resume this published plan, call start_plan_execution. If the user clearly requests changes to the plan, discuss or research them as needed and call submit_plan with the complete revised plan; do not change plan state merely because the user selected Refine in the UI or asked a question about it. For unrelated requests, answer or act normally under the current approval policy. Active plan: ${planState}`;
-  }
-  if (plan.status === 'executing') {
-    return `Execute the accepted plan. Keep exactly one step in_progress and update every step through update_plan_step with verification evidence. User messages steer the execution. If they materially change scope, call pause_plan_execution with requiresRevision:true; the next planning run must publish a validated revision with changeSummary and wait for acceptance. Call finalize_plan_execution only when the goal is fully implemented and verified. Active plan: ${planState}`;
-  }
-  if (plan.status === 'pause_requested') {
-    return `The user requested a pause. Finish only the already-started tool round and do not begin another model or tool round. Active plan: ${planState}`;
-  }
-  if (plan.status === 'paused') {
-    return `The plan is paused. Use new user context to resolve the blocker, then call resume_plan_execution before continuing. Active plan: ${planState}`;
-  }
-  if (plan.status === 'verifying') {
-    return `You are the independent final verifier. Use planning-safe read tools as needed, compare the implemented result and evidence with every accepted step, then call submit_plan_verification. Do not change infrastructure. When a passing result returns completionPending:true, provide the user-facing final response and end the turn without calling more tools; the plan becomes completed only after that turn finishes successfully. Active plan: ${planState}`;
-  }
-  return `An AI plan is active in state ${plan.status}. Do not start another plan. Active plan: ${planState}`;
+  return planningRuntime()?.buildPlanRuntimePrompt(plan) ?? '';
 }
 
 export function isAIResourceAppearanceColor(
@@ -327,3 +244,13 @@ export function createToolRoundStartEvent(
   };
 }
 export const UNHANDLED_TOOL = Symbol('unhandled-ai-tool');
+
+function planningRuntime() {
+  return container.isRegistered(TOKENS.CommercialEdition)
+    ? container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).planning
+    : undefined;
+}
+
+export function getPlanningSystemInstructions(): string {
+  return planningRuntime()?.systemInstructions ?? '';
+}

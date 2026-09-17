@@ -153,6 +153,14 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    async activateLicenseModule(): Promise<{ restarting: boolean }> {
+      return this.unwrapData(
+        this.request<{ data: { restarting: boolean } }>("/system/license/module/activate", {
+          method: "POST",
+        })
+      );
+    }
+
     async clearLicenseKey(): Promise<LicenseStatusView> {
       return this.unwrapData(
         this.request<{ data: LicenseStatusView }>("/system/license/key", { method: "DELETE" })

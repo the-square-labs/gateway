@@ -202,7 +202,7 @@ export function MultiContainerMonitoring({
             <h2 className="text-base font-semibold text-foreground">{group.title}</h2>
           )}
           {group.instances.map((instance) => {
-            const inspect = inspectById[instance.id] ?? instance.data;
+            const inspect = instance.data ?? inspectById[instance.id];
             return (
               <div key={instance.id} className="space-y-3">
                 <div>

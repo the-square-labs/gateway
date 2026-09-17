@@ -129,6 +129,7 @@ const SETTINGS_KEYS = {
 } as const;
 
 export class UpdateService {
+  private gatewayUpdateInProgress = false;
   private readonly releasesUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
@@ -463,6 +464,18 @@ export class UpdateService {
   }
 
   async performUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
+    if (this.gatewayUpdateInProgress)
+      throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress');
+    this.gatewayUpdateInProgress = true;
+    try {
+      await this.performGatewayUpdate(targetVersion, artifact);
+    } catch (error) {
+      this.gatewayUpdateInProgress = false;
+      throw error;
+    }
+  }
+
+  private async performGatewayUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
     logger.info('Starting self-update', { targetVersion });
 
     const selfInfo = await this.dockerService.inspectSelf();

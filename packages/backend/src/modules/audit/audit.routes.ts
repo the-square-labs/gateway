@@ -2,17 +2,13 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
-import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
-import { AuditExportSchema, exportAuditLogRoute, listAuditLogRoute, listAuditUsersRoute } from './audit.docs.js';
+import { listAuditLogRoute, listAuditUsersRoute } from './audit.docs.js';
 import { AuditService } from './audit.service.js';
-import { siemRoutes } from './siem.routes.js';
 
 export const auditRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 auditRoutes.use('*', authMiddleware);
-
-auditRoutes.route('/siem', siemRoutes);
 
 auditRoutes.openapi({ ...listAuditUsersRoute, middleware: requireScope('admin:audit') }, async (c) => {
   const auditService = container.resolve(AuditService);
@@ -45,22 +41,6 @@ auditRoutes.openapi({ ...listAuditLogRoute, middleware: requireScope('admin:audi
   });
 
   return c.json(result);
-});
-
-auditRoutes.openapi({ ...exportAuditLogRoute, middleware: requireScope('admin:audit') }, async (c) => {
-  // LICENSE ENFORCEMENT: The official audit export operation requires Business under the project license/TOS.
-  await container.resolve(LicensePolicyService).requireFeature('audit-export');
-  const input = AuditExportSchema.parse(await c.req.json());
-  const data = await container.resolve(AuditService).getAuditExport({
-    actions: input.actions,
-    resourceTypes: input.resourceTypes,
-    userIds: input.userIds,
-    excludedActions: input.excludedActions,
-    excludedResourceTypes: input.excludedResourceTypes,
-    from: parseDateQuery(input.from),
-    to: parseDateQuery(input.to),
-  });
-  return c.json({ data });
 });
 
 function getQueryValues(url: string, key: string): string[] {

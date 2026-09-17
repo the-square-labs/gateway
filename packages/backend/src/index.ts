@@ -23,6 +23,7 @@ import { createApp } from '@/app.js';
 import { container, initializeContainer } from '@/bootstrap.js';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { startGrpcServer, stopGrpcServer } from '@/grpc/server.js';
 import { closeApplicationLogger, logger } from '@/lib/logger.js';
@@ -138,6 +139,7 @@ async function main() {
 
     // Initialize dependency injection container
     await initializeContainer();
+    const commercialEdition = container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition);
 
     const statusPageService = container.resolve(StatusPageService);
     await statusPageService.primePublicHost();
@@ -233,6 +235,7 @@ async function main() {
 
     const scheduler = container.resolve(SchedulerService);
     scheduler.start();
+    await commercialEdition.start();
 
     let userDrainPromises: Promise<unknown>[] = [];
     let loggingClosePromise: Promise<void> | null = null;
@@ -251,6 +254,7 @@ async function main() {
         freezeStatusPage: () => statusPageService.freezePublicSnapshot(),
         quiesce: async () => {
           userDrainPromises = [
+            commercialEdition.quiesce(),
             container.resolve(AISandboxService).stopPolicyReconciliation(),
             scheduler.stop(),
             container.resolve(RelaySupervisorService).stop(),
@@ -263,10 +267,17 @@ async function main() {
           ];
         },
         drainUserWork: async (deadline) => {
-          await Promise.allSettled([...userDrainPromises, container.resolve(AIRunService).waitForIdle(deadline)]);
+          await Promise.allSettled([
+            ...userDrainPromises,
+            commercialEdition.drain(deadline),
+            container.resolve(AIRunService).waitForIdle(deadline),
+          ]);
         },
         forceCloseUserWork: async () => {
-          forceUserPromise ??= container.resolve(AIRunService).stopAllForShutdown();
+          forceUserPromise ??= Promise.all([
+            commercialEdition.forceClose(),
+            container.resolve(AIRunService).stopAllForShutdown(),
+          ]).then(() => undefined);
           await forceUserPromise;
         },
         closeLogging: async () => {
@@ -316,6 +327,7 @@ async function main() {
 
           await Promise.all([
             ...independentFinalizers,
+            settleShutdownTask('commercial_module', commercialEdition.close(deadline)),
             settleShutdownTask('grpc', stopGrpcServer(Math.min(3000, Math.max(0, deadline - Date.now())))),
             settleShutdownTask(
               'sandbox_runner',

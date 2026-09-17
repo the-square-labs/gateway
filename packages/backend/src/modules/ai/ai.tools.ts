@@ -12,10 +12,8 @@ import { INTEGRATION_AI_TOOLS } from './ai.tools.integrations.js';
 import { NOTIFICATION_AI_TOOLS, WEB_SEARCH_AI_TOOL } from './ai.tools.notifications.js';
 import { OPERATION_AI_TOOLS } from './ai.tools.operations.js';
 import { PKI_AI_TOOLS } from './ai.tools.pki.js';
-import { PLAN_AI_TOOLS } from './ai.tools.planning.js';
 import { PLATFORM_AI_TOOLS } from './ai.tools.platform.js';
 import { RESOURCE_SETUP_AI_TOOLS } from './ai.tools.resource-setup.js';
-import { SANDBOX_AI_TOOLS } from './ai.tools.sandbox.js';
 import { SSH_AI_TOOLS } from './ai.tools.ssh.js';
 import type { AIToolDefinition } from './ai.types.js';
 import { createAIToolArgumentValidator } from './ai-tool-contract.js';
@@ -38,11 +36,9 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...INFERENCE_AI_TOOLS,
   ...OPERATION_AI_TOOLS,
   ...RESOURCE_SETUP_AI_TOOLS,
-  ...SANDBOX_AI_TOOLS,
   ...SSH_AI_TOOLS,
   ...NOTIFICATION_AI_TOOLS,
   WEB_SEARCH_AI_TOOL,
-  ...PLAN_AI_TOOLS,
 ];
 
 export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(AI_TOOL_DEFINITIONS);
@@ -123,7 +119,31 @@ export const TOOL_STORE_INVALIDATION_MAP: Record<string, string[]> = Object.from
   AI_TOOLS.filter((t) => t.invalidateStores.length > 0).map((t) => [t.name, t.invalidateStores])
 );
 
-const AI_TOOL_ARGUMENT_VALIDATOR = createAIToolArgumentValidator(AI_TOOLS);
+let AI_TOOL_ARGUMENT_VALIDATOR = createAIToolArgumentValidator(AI_TOOLS);
+
+/** Register verified first-party tools together with their validation and policy metadata. */
+export function registerCommercialAITools(definitions: readonly AIToolDefinition[]): () => void {
+  const additions = withAIToolPolicyMetadata([...definitions]);
+  const validator = createAIToolArgumentValidator([...AI_TOOLS, ...additions]);
+  AI_TOOLS.push(...additions);
+  AI_TOOL_ARGUMENT_VALIDATOR = validator;
+  for (const tool of additions) {
+    if (tool.destructive) destructiveSet.add(tool.name);
+    if (tool.invalidateStores.length) TOOL_STORE_INVALIDATION_MAP[tool.name] = tool.invalidateStores;
+  }
+  let disposed = false;
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    for (const tool of additions) {
+      const index = AI_TOOLS.indexOf(tool);
+      if (index !== -1) AI_TOOLS.splice(index, 1);
+      destructiveSet.delete(tool.name);
+      delete TOOL_STORE_INVALIDATION_MAP[tool.name];
+    }
+    AI_TOOL_ARGUMENT_VALIDATOR = createAIToolArgumentValidator(AI_TOOLS);
+  };
+}
 
 export function parseAndValidateAIToolArguments(toolName: string, rawArguments: string) {
   return AI_TOOL_ARGUMENT_VALIDATOR.parseAndValidate(toolName, rawArguments);

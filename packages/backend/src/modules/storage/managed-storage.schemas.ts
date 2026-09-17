@@ -1,15 +1,9 @@
 import { z } from 'zod';
-import { MANAGED_STORAGE_CATALOG } from './managed-storage-catalog.js';
 
 const managedStorageNameSchema = z.string().trim().min(1).max(255);
-const managedStorageVersionSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(128)
-  .refine((value) => value in MANAGED_STORAGE_CATALOG.minio, {
-    message: 'Unknown managed storage version',
-  });
+// DTO validation is shared; the installed storage provider checks its private
+// version catalog before creating any workload or database record.
+const managedStorageVersionSchema = z.string().trim().min(1).max(128);
 const tagsSchema = z.array(z.string().trim().min(1).max(64)).max(32).optional();
 
 export const ManagedStorageListQuerySchema = z.object({

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
-import { LICENSE_PLAN_ENTITLEMENTS, LICENSE_PLAN_ENTITLEMENTS_V3, type LicenseStatusView } from './license.types.js';
+import {
+  LICENSE_PLAN_ENTITLEMENTS,
+  LICENSE_PLAN_ENTITLEMENTS_V3,
+  LICENSE_PLAN_ENTITLEMENTS_V4,
+  type LicenseStatusView,
+} from './license.types.js';
 import { LicensePolicyService } from './license-policy.service.js';
 
 const baseStatus = (): LicenseStatusView => ({
@@ -16,7 +21,7 @@ const baseStatus = (): LicenseStatusView => ({
   installationId: 'installation-id',
   installationName: 'gateway.example.com',
   expiresAt: null,
-  entitlementsVersion: 4,
+  entitlementsVersion: 5,
   entitlements: LICENSE_PLAN_ENTITLEMENTS.community,
   lastCheckedAt: null,
   lastValidAt: null,
@@ -113,7 +118,7 @@ describe('LicensePolicyService', () => {
     await expect(policy.requireQuota('users', 10)).rejects.toMatchObject({
       statusCode: 409,
       code: 'LICENSE_QUOTA_EXCEEDED',
-      details: { resource: 'users', limit: 10, currentPlan: 'community' },
+      details: { resource: 'users', limit: 3, currentPlan: 'community' },
     });
     await expect(policy.getSummary()).resolves.toMatchObject({
       plan: 'community',
@@ -223,8 +228,51 @@ describe('LicensePolicyService', () => {
     await expect(policy.requireQuota('users', 10)).rejects.toMatchObject({
       statusCode: 409,
       code: 'LICENSE_QUOTA_EXCEEDED',
-      details: { resource: 'users', limit: 10, current: 10, currentPlan: 'community' },
+      details: { resource: 'users', limit: 3, current: 10, currentPlan: 'community' },
     });
+  });
+
+  it.each([
+    ['managedNodes', 25],
+    ['users', 3],
+    ['customPermissionGroups', 1],
+  ] as const)('admits only creations below the current %s limit', async (resource, limit) => {
+    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
+    await expect(policy.requireQuota(resource, limit - 1)).resolves.toBeUndefined();
+    for (const current of [limit, limit + 10]) {
+      await expect(policy.requireQuota(resource, current)).rejects.toMatchObject({
+        code: 'LICENSE_QUOTA_EXCEEDED',
+        details: { resource, limit, current },
+      });
+    }
+    // Reading the existing installation is still valid even when a creation is denied.
+    await expect(policy.getSummary()).resolves.toMatchObject({ status: 'community', licensed: true });
+  });
+
+  it.each([
+    'storage-connections',
+    'external-database-connections',
+    'gitlab',
+    'ai-plan-mode',
+    'ai-scenarios',
+    'ai-sandboxes',
+  ] as const)('requires Personal for the new %s feature in v5', async (feature) => {
+    const community = new LicensePolicyService({ getStatus: vi.fn(async () => baseStatus()) } as never);
+    await expect(community.hasFeature(feature)).resolves.toBe(false);
+    await expect(community.requireFeature(feature)).rejects.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+      details: { feature, requiredPlan: 'personal' },
+    });
+    for (const plan of ['personal', 'business', 'enterprise'] as const) {
+      const status: LicenseStatusView = {
+        ...baseStatus(),
+        plan,
+        status: 'valid',
+        entitlements: LICENSE_PLAN_ENTITLEMENTS[plan],
+      };
+      const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+      await expect(policy.requireFeature(feature)).resolves.toBeUndefined();
+    }
   });
 
   it('fails protected mutations closed with a generic error for an unsupported policy version', async () => {
@@ -267,7 +315,7 @@ describe('LicensePolicyService', () => {
     expect(summary).not.toHaveProperty('licenseMetadata');
     expect(summary).not.toHaveProperty('keyLast4');
     expect(summary).not.toHaveProperty('installationId');
-    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 4 });
+    expect(summary).toMatchObject({ plan: 'community', entitlementsVersion: 5 });
   });
 });
 
@@ -275,7 +323,7 @@ describe('storage entitlement compatibility', () => {
   it.each([3, 4])('preserves all paid version %s contracts and derives storage access', async (version) => {
     for (const plan of ['personal', 'business', 'enterprise'] as const) {
       const entitlements = structuredClone(
-        (version === 3 ? LICENSE_PLAN_ENTITLEMENTS_V3 : LICENSE_PLAN_ENTITLEMENTS)[plan]
+        (version === 3 ? LICENSE_PLAN_ENTITLEMENTS_V3 : LICENSE_PLAN_ENTITLEMENTS_V4)[plan]
       );
       expect(entitlements.features).not.toContain('managed-storage');
       const status = {
@@ -289,6 +337,15 @@ describe('storage entitlement compatibility', () => {
       const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
       await expect(policy.requireFeature('managed-storage')).resolves.toBeUndefined();
       await expect(policy.requireFeature('managed-databases')).resolves.toBeUndefined();
+      for (const feature of [
+        'storage-connections',
+        'external-database-connections',
+        'ai-plan-mode',
+        'ai-scenarios',
+        'ai-sandboxes',
+      ] as const) {
+        await expect(policy.requireFeature(feature)).resolves.toBeUndefined();
+      }
     }
   });
   it('does not give Community storage access', async () => {

@@ -22,6 +22,52 @@ afterEach(() => {
 });
 
 describe("license paywall store", () => {
+  it.each([
+    "storage-connections",
+    "external-database-connections",
+    "gitlab",
+  ] as const)("requires Personal for %s", (feature) => {
+    setLicense("community", []);
+    expect(requireLicenseFeature(feature, feature)).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+    setLicense("personal", [feature]);
+    useLicensePaywallStore.setState({ request: null });
+    expect(requireLicenseFeature(feature, feature)).toBe(true);
+  });
+
+  it.each([
+    "community",
+    "unavailable",
+  ] as const)("distinguishes an entitled feature from a %s module", (commercialModule) => {
+    useUIBootstrapStore.setState({
+      snapshot: {
+        commercialModule,
+        license: { plan: "business", entitlements: { features: ["pages"] } },
+      } as never,
+    });
+    expect(requireLicenseFeature("pages", "Pages")).toBe(false);
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      reason: "module-unavailable",
+      currentPlan: "business",
+    });
+  });
+
+  it("reports an unavailable module without suggesting a second license purchase", () => {
+    setLicense("business", ["pages"]);
+    expect(
+      handleLicenseApiError(
+        new ApiRequestError("Unavailable", { status: 503, code: "COMMERCIAL_MODULE_UNAVAILABLE" }),
+        "Pages"
+      )
+    ).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      reason: "module-unavailable",
+      currentPlan: "business",
+    });
+  });
   it("does not speculate before the UI bootstrap is available", () => {
     expect(requireLicenseFeature("secure-runtime", "Secure Runtime")).toBe(true);
     expect(useLicensePaywallStore.getState().request).toBeNull();

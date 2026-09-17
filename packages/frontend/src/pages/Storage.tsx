@@ -683,6 +683,10 @@ export function Storage() {
     managedProvisioningError !== null
   );
 
+  const openConnectionCreate = () => {
+    if (requireLicenseFeature("storage-connections", "Storage connections")) setCreateOpen(true);
+  };
+
   const openManagedCreate = useCallback(() => {
     if (!requireLicenseFeature("managed-storage", "Managed storage")) return;
     setManagedDraft(defaultManagedStorageDraft(managedCatalog));
@@ -983,7 +987,7 @@ export function Storage() {
                     {
                       label: "Connect existing storage",
                       icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setCreateOpen(true),
+                      onClick: openConnectionCreate,
                     },
                   ]
                 : []),
@@ -999,7 +1003,7 @@ export function Storage() {
               </Button>
             )}
             {canCreate && (
-              <Button variant="outline" onClick={() => setCreateOpen(true)}>
+              <Button variant="outline" onClick={openConnectionCreate}>
                 <Plus className="h-4 w-4" />
                 Connect existing
               </Button>
@@ -1072,9 +1076,7 @@ export function Storage() {
           emptyState={
             <EmptyState
               message="No storage connections. Add an S3-compatible bucket to manage it through Gateway."
-              {...(canCreate
-                ? { actionLabel: "Add Storage", onAction: () => setCreateOpen(true) }
-                : {})}
+              {...(canCreate ? { actionLabel: "Add Storage", onAction: openConnectionCreate } : {})}
               hasActiveFilters={search !== "" || providerFilter !== "all" || healthFilter !== "all"}
               onReset={() => {
                 setSearch("");

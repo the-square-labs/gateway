@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { DrizzleExecutor } from '@/db/client.js';
 import {
   type AIConversationInput,
@@ -20,6 +20,7 @@ import {
   aiRunToolCalls,
   aiRunToolRounds,
 } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import type { AIPlanRuntimeSnapshot } from './ai.types.js';
@@ -53,140 +54,24 @@ import { AI_CONTINUATION_COMMAND_PREFIX } from './ai-run-runtime.helpers.js';
 export * from './ai-run.shared.js';
 
 export class AIRunService extends AIRunServiceRuntime {
-  async attachRunToPlan(input: {
+  async attachRunToPlan(_input: {
     userId: string;
     conversationId: string;
     runId: string;
     plan: AIPlanRuntimeSnapshot;
     purpose: AIRunPurpose;
   }): Promise<AIRun> {
-    const [run] = await this.db
-      .update(aiRuns)
-      .set({
-        planId: input.plan.id,
-        planRevisionId: input.plan.revisionId,
-        purpose: input.purpose,
-        updatedAt: new Date(),
-      })
-      .where(
-        and(
-          eq(aiRuns.id, input.runId),
-          eq(aiRuns.userId, input.userId),
-          eq(aiRuns.conversationId, input.conversationId),
-          eq(aiRuns.status, 'queued')
-        )
-      )
-      .returning();
-    if (!run) throw new AppError(409, 'AI_PLAN_RUN_NOT_ATTACHABLE', 'The AI run is no longer available for Plan Mode');
-    this.publishConversationChanged(input.userId, input.conversationId);
-    return run;
+    return commercialModuleUnavailable();
   }
 
-  async startPlanRun(input: {
+  async startPlanRun(_input: {
     user: User;
     plan: AIPlanRuntimeSnapshot;
     purpose: Exclude<AIRunPurpose, 'direct'>;
     clientCommandId: string;
     instruction?: string;
   }): Promise<{ run: AIRun; duplicate: boolean }> {
-    const result = await this.db.transaction(async (tx) => {
-      const conversation = await getOwnedConversation(tx, input.user.id, input.plan.conversationId);
-      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
-      const existing = await findRunByCommand(tx, input.user.id, conversation.id, input.clientCommandId);
-      if (existing) return { run: existing, duplicate: true };
-      const activeRun = await getActiveRunForUpdate(tx, conversation.id);
-      if (activeRun) throw new AppError(409, 'AI_RUN_ACTIVE', 'Conversation already has an active AI run');
-
-      let activeMessageId: string | null = null;
-      const pendingInputs = await tx
-        .select()
-        .from(aiConversationInputs)
-        .where(
-          and(
-            eq(aiConversationInputs.conversationId, conversation.id),
-            eq(aiConversationInputs.userId, input.user.id),
-            eq(aiConversationInputs.status, 'pending')
-          )
-        )
-        .orderBy(asc(aiConversationInputs.createdAt));
-      const userMessages = [
-        ...pendingInputs.map((item) => ({
-          content: item.content,
-          attachments: item.attachments,
-          steer: true,
-        })),
-        ...(input.instruction?.trim() ? [{ content: input.instruction.trim(), attachments: [], steer: true }] : []),
-      ];
-      if (userMessages.length > 0) {
-        let sequence = await nextMessageSequence(tx, conversation.id);
-        const inserted = await tx
-          .insert(aiConversationMessages)
-          .values(
-            userMessages.map((message) =>
-              toConversationMessage(
-                conversation.id,
-                {
-                  role: 'user',
-                  content: message.content,
-                  attachments: message.attachments,
-                  steer: message.steer,
-                },
-                sequence++
-              )
-            )
-          )
-          .returning({ id: aiConversationMessages.id });
-        activeMessageId = inserted.at(-1)?.id ?? null;
-        if (pendingInputs.length > 0) {
-          const now = new Date();
-          await tx
-            .update(aiConversationInputs)
-            .set({ status: 'consumed', consumedAt: now, updatedAt: now })
-            .where(
-              inArray(
-                aiConversationInputs.id,
-                pendingInputs.map((item) => item.id)
-              )
-            );
-        }
-      }
-      if (!activeMessageId) {
-        const [lastUserMessage] = await tx
-          .select({ id: aiConversationMessages.id })
-          .from(aiConversationMessages)
-          .where(
-            and(eq(aiConversationMessages.conversationId, conversation.id), eq(aiConversationMessages.role, 'user'))
-          )
-          .orderBy(desc(aiConversationMessages.sequence))
-          .limit(1);
-        activeMessageId = lastUserMessage?.id ?? null;
-      }
-      if (!activeMessageId) {
-        throw new AppError(409, 'AI_PLAN_MESSAGE_REQUIRED', 'A Plan Mode run requires conversation context');
-      }
-
-      const [run] = await tx
-        .insert(aiRuns)
-        .values({
-          conversationId: conversation.id,
-          userId: input.user.id,
-          planId: input.plan.id,
-          planRevisionId: input.plan.revisionId,
-          purpose: input.purpose,
-          clientCommandId: input.clientCommandId,
-          activeMessageId,
-          model: input.plan.model ?? conversation.model,
-          reasoningEffort: input.plan.reasoningEffort ?? conversation.reasoningEffort,
-          status: 'queued',
-          updatedAt: new Date(),
-        })
-        .returning();
-      return { run, duplicate: false };
-    });
-    this.publishConversationChanged(input.user.id, input.plan.conversationId);
-    this.conversationSearchService?.rebuildConversationIndexBestEffort(input.user.id, input.plan.conversationId);
-    if (!result.duplicate || result.run.status === 'queued') this.startRunExecution(input.user, result.run.id);
-    return result;
+    return commercialModuleUnavailable();
   }
 
   async startUserRun(input: StartUserRunInput): Promise<StartUserRunResult> {

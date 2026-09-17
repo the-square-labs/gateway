@@ -25,7 +25,7 @@ const openToolNames = (
 ) => getOpenAITools([], allRequiredScopes, webSearchEnabled, options).map((tool) => tool.function.name);
 
 describe('AI tool registry characterization', () => {
-  it('preserves the complete tool registry, ordering, and category topology', () => {
+  it('preserves the Community tool registry after removing 9 planning and 11 sandbox tools', () => {
     const categoryCounts = AI_TOOLS.reduce<Record<string, number>>((counts, tool) => {
       counts[tool.category] = (counts[tool.category] ?? 0) + 1;
       return counts;
@@ -42,8 +42,8 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 256,
-      digest: '0ce003875d0e3ba7c22f12e22763718d472bedc04109d96976014d305cd48463',
+      count: 236,
+      digest: 'aea150bb9f8ee04b1dc1e6f05040421ca122257e9c57811c404d5af8f49d9fb4',
       categoryCounts: {
         Discovery: 6,
         Artifact: 2,
@@ -82,15 +82,13 @@ describe('AI tool registry characterization', () => {
         'Managed Databases': 1,
         'Docker Migration': 1,
         'Logging Backend': 1,
-        Sandbox: 11,
         'External SSH': 3,
         Notifications: 21,
         'Web Search': 1,
-        Planning: 9,
       },
       destructive: {
-        count: 138,
-        digest: 'ddb467bccbc5c05ef4ff0f90139117871f41dc9f264f1bac95c1235a2068f37f',
+        count: 134,
+        digest: '5454e0e9d0183ae757e511156336d667cbd17ed76385d2ace8de7be862e4cb88',
       },
       invalidationMapDigest: '8e085cf6d990249d5a3b196675af430bc20e8fed576341f4b601bc5f64ea974d',
     });
@@ -114,20 +112,20 @@ describe('AI tool registry characterization', () => {
       )
     ).toEqual({
       allDefault: {
-        count: 241,
-        digest: '2b0a39f624c366f2d4a8f456611d1d187d9854f6db55cb72075a302b91aa4363',
+        count: 232,
+        digest: '7021c4f3964dfa3a4192d35a8b5dc1b7dd76e900fc243a806b454c20630d47bc',
       },
       allCapabilities: {
-        count: 253,
-        digest: '59e5488913837ac7b81c044a8ed4da7ee5e1a2e89160c41905d814ddab9cdeed',
+        count: 233,
+        digest: 'b552a6ebd47ee4fef835e2c17234f0a9b185d4fda7469187ae0028375f16701b',
       },
       discoveredIngressDocker: {
-        count: 81,
-        digest: '1cc98bc5ffd014cac4fac12e1257186d450580fa199893cbf158c003fcfa33de',
+        count: 71,
+        digest: '57b6846b955cdc3ff79b04647c0859d1e586e0d3d5d800e5564b91c78d74955d',
       },
       planningMode: {
-        count: 145,
-        digest: '5264e85940663736a919d324f4224f888e2cd717a0c68a2585f6d3de343055f2',
+        count: 131,
+        digest: 'd676753f94215b539f348672906ab95d9c1a749322846be7163afcd3cd7ff395',
       },
     });
     expect(matrix.allDefault).not.toContain('web_search');
@@ -165,7 +163,7 @@ describe('AI tool registry characterization', () => {
     }).toEqual({
       base: [true, true, true],
       nonBase: [false, false, false],
-      destructive: [true, true, false, true],
+      destructive: [true, true, false, false],
       unknown: { base: false, destructive: false },
     });
   });

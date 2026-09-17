@@ -1,7 +1,5 @@
-import { migrationTransferRelay } from '@/grpc/services/migration-transfer.js';
-import { AppError } from '@/middleware/error-handler.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
-
 export interface MigrationArtifactMetadata {
   artifactId: string;
   artifactType: 'image' | 'volume' | '';
@@ -14,16 +12,24 @@ export interface MigrationArtifactMetadata {
   imageTags?: string[];
   complete: boolean;
 }
-
 export interface MigrationVolumeMeasure {
   volumeName: string;
   entryCount: number;
   logicalBytes: number;
 }
-
 export interface ArchiveImportPlan {
-  networks: Array<{ id: string; name: string; driver: string; scope: string }>;
-  volumes: Array<{ name: string; driver: string; mountpoint: string; scope: string }>;
+  networks: Array<{
+    id: string;
+    name: string;
+    driver: string;
+    scope: string;
+  }>;
+  volumes: Array<{
+    name: string;
+    driver: string;
+    mountpoint: string;
+    scope: string;
+  }>;
   resolution: {
     networks: Record<string, string>;
     createNetworks: string[];
@@ -33,19 +39,16 @@ export interface ArchiveImportPlan {
   };
   conflictingPorts: string[];
 }
-
 export class DockerMigrationDispatchAdapter {
-  constructor(private dispatch: NodeDispatchService) {}
-
-  capabilities(nodeId: string): Promise<Record<string, unknown>> {
-    return this.command(nodeId, 'capabilities');
+  // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
+  constructor(_dispatch: NodeDispatchService) {}
+  async capabilities(_nodeId: string): Promise<Record<string, unknown>> {
+    return commercialModuleUnavailable();
   }
-
-  captureManifest(nodeId: string, resourceId: string): Promise<Record<string, unknown>> {
-    return this.command(nodeId, 'capture_manifest', { resourceId });
+  async captureManifest(_nodeId: string, _resourceId: string): Promise<Record<string, unknown>> {
+    return commercialModuleUnavailable();
   }
-
-  openArchiveExport(args: {
+  async openArchiveExport(_args: {
     nodeId: string;
     archiveId: string;
     artifactId: string;
@@ -58,47 +61,27 @@ export class DockerMigrationDispatchAdapter {
     includeEnvironment: boolean;
     includeSecrets: boolean;
   }): Promise<Record<string, unknown>> {
-    return this.command(args.nodeId, args.includeEnvironment ? 'open_archive_export' : 'open_archive_export_v2', {
-      migrationId: args.archiveId,
-      artifactId: args.artifactId,
-      resourceId: args.containerId,
-      configJson: JSON.stringify({
-        includeWritableLayer: args.includeWritableLayer,
-        imageMode: args.imageMode,
-        environment: args.environment,
-        secrets: args.secrets,
-        secretKeys: args.secretKeys,
-        includeEnvironment: args.includeEnvironment,
-        includeSecrets: args.includeSecrets,
-      }),
-    });
+    return commercialModuleUnavailable();
   }
-
-  readArchiveImage(nodeId: string, archiveId: string, artifactId: string): ReadableStream<Uint8Array> {
-    return migrationTransferRelay.readArtifact({ nodeId, migrationId: archiveId, artifactId });
+  readArchiveImage(_nodeId: string, _archiveId: string, _artifactId: string): ReadableStream<Uint8Array> {
+    return commercialModuleUnavailable();
   }
-
   async openArchiveImport(
-    nodeId: string,
-    archiveId: string,
-    artifactId: string,
-    config: {
+    _nodeId: string,
+    _archiveId: string,
+    _artifactId: string,
+    _config: {
       expectedImageId: string;
       imageEmbedded: boolean;
       pullReference?: string;
       registryAuthCandidates?: string[];
     }
   ): Promise<void> {
-    await this.command(nodeId, 'open_archive_import_v2', {
-      migrationId: archiveId,
-      artifactId,
-      configJson: JSON.stringify(config),
-    });
+    return commercialModuleUnavailable();
   }
-
-  planArchiveImport(
-    nodeId: string,
-    config: {
+  async planArchiveImport(
+    _nodeId: string,
+    _config: {
       manifest: unknown;
       canViewNetworks: boolean;
       canCreateNetworks: boolean;
@@ -106,65 +89,48 @@ export class DockerMigrationDispatchAdapter {
       canCreateVolumes: boolean;
     }
   ): Promise<ArchiveImportPlan> {
-    return this.command<ArchiveImportPlan>(nodeId, 'plan_archive_import', {
-      configJson: JSON.stringify(config),
-    });
+    return commercialModuleUnavailable();
   }
-
-  writeArchiveImage(
-    nodeId: string,
-    archiveId: string,
-    artifactId: string,
-    chunks: AsyncIterable<Uint8Array>
+  async writeArchiveImage(
+    _nodeId: string,
+    _archiveId: string,
+    _artifactId: string,
+    _chunks: AsyncIterable<Uint8Array>
   ): Promise<number> {
-    return migrationTransferRelay.writeArtifact({ nodeId, migrationId: archiveId, artifactId, chunks });
+    return commercialModuleUnavailable();
   }
-
-  finishArchiveImport(
-    nodeId: string,
-    archiveId: string,
-    artifactId: string,
-    config: Record<string, unknown>
-  ): Promise<{ containerId: string; containerName: string; imageId: string; createdVolumes?: string[] }> {
-    return this.command(nodeId, 'finish_archive_import', {
-      migrationId: archiveId,
-      artifactId,
-      configJson: JSON.stringify(config),
-    });
+  async finishArchiveImport(
+    _nodeId: string,
+    _archiveId: string,
+    _artifactId: string,
+    _config: Record<string, unknown>
+  ): Promise<{
+    containerId: string;
+    containerName: string;
+    imageId: string;
+    createdVolumes?: string[];
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  async cleanupArchiveImport(nodeId: string, archiveId: string): Promise<void> {
-    await this.command(nodeId, 'cleanup_archive_import', { migrationId: archiveId });
+  async cleanupArchiveImport(_nodeId: string, _archiveId: string): Promise<void> {
+    return commercialModuleUnavailable();
   }
-
-  measureVolume(nodeId: string, volumeName: string): Promise<MigrationVolumeMeasure> {
-    return this.command<MigrationVolumeMeasure>(nodeId, 'measure_volume', { resourceId: volumeName });
+  async measureVolume(_nodeId: string, _volumeName: string): Promise<MigrationVolumeMeasure> {
+    return commercialModuleUnavailable();
   }
-
-  prepareArtifact(args: {
+  async prepareArtifact(_args: {
     nodeId: string;
     migrationId: string;
     artifactId: string;
     kind: 'image' | 'volume';
     sourceIdentity: string;
   }): Promise<MigrationArtifactMetadata> {
-    return this.command<MigrationArtifactMetadata>(
-      args.nodeId,
-      args.kind === 'image' ? 'prepare_image' : 'prepare_volume',
-      {
-        migrationId: args.migrationId,
-        artifactId: args.artifactId,
-        artifactType: args.kind,
-        resourceId: args.sourceIdentity,
-      }
-    );
+    return commercialModuleUnavailable();
   }
-
-  queryArtifact(nodeId: string, migrationId: string, artifactId: string): Promise<MigrationArtifactMetadata> {
-    return this.command<MigrationArtifactMetadata>(nodeId, 'query_artifact', { migrationId, artifactId });
+  async queryArtifact(_nodeId: string, _migrationId: string, _artifactId: string): Promise<MigrationArtifactMetadata> {
+    return commercialModuleUnavailable();
   }
-
-  async transferArtifact(args: {
+  async transferArtifact(_args: {
     sourceNodeId: string;
     targetNodeId: string;
     migrationId: string;
@@ -172,132 +138,64 @@ export class DockerMigrationDispatchAdapter {
     offset: number;
     onProgress?: (offset: number) => void | Promise<void>;
   }): Promise<number> {
-    return migrationTransferRelay.relayArtifact(args);
+    return commercialModuleUnavailable();
   }
-
-  importArtifact(args: {
+  async importArtifact(_args: {
     nodeId: string;
     migrationId: string;
     artifactId: string;
     kind: 'image' | 'volume';
     config: Record<string, unknown>;
   }): Promise<MigrationArtifactMetadata> {
-    return this.command<MigrationArtifactMetadata>(
-      args.nodeId,
-      args.kind === 'image' ? 'import_image' : 'import_volume',
-      {
-        migrationId: args.migrationId,
-        artifactId: args.artifactId,
-        artifactType: args.kind,
-        configJson: JSON.stringify(args.config),
-      }
-    );
+    return commercialModuleUnavailable();
   }
-
-  createContainerStopped(
-    nodeId: string,
-    migrationId: string,
-    config: Record<string, unknown>
-  ): Promise<{ containerId: string }> {
-    return this.command<{ containerId: string }>(nodeId, 'create_container_stopped', {
-      migrationId,
-      configJson: JSON.stringify(config),
-    });
+  async createContainerStopped(
+    _nodeId: string,
+    _migrationId: string,
+    _config: Record<string, unknown>
+  ): Promise<{
+    containerId: string;
+  }> {
+    return commercialModuleUnavailable();
   }
-
-  createDeploymentStopped(
-    nodeId: string,
-    migrationId: string,
-    config: Record<string, unknown>
+  async createDeploymentStopped(
+    _nodeId: string,
+    _migrationId: string,
+    _config: Record<string, unknown>
   ): Promise<Record<string, string>> {
-    return this.command<Record<string, string>>(nodeId, 'create_deployment_stopped', {
-      migrationId,
-      configJson: JSON.stringify(config),
-    });
+    return commercialModuleUnavailable();
   }
-
-  heartbeat(nodeId: string, migrationId: string): Promise<Record<string, unknown>> {
-    return this.command(nodeId, 'heartbeat', { migrationId });
+  async heartbeat(_nodeId: string, _migrationId: string): Promise<Record<string, unknown>> {
+    return commercialModuleUnavailable();
   }
-
-  finalize(nodeId: string, migrationId: string): Promise<Record<string, unknown>> {
-    return this.command(nodeId, 'finalize', { migrationId });
+  async finalize(_nodeId: string, _migrationId: string): Promise<Record<string, unknown>> {
+    return commercialModuleUnavailable();
   }
-
-  abort(nodeId: string, migrationId: string): Promise<Record<string, unknown>> {
-    return this.command(nodeId, 'abort', { migrationId });
+  async abort(_nodeId: string, _migrationId: string): Promise<Record<string, unknown>> {
+    return commercialModuleUnavailable();
   }
-
   async containerAction(
-    nodeId: string,
-    action: string,
-    containerId: string,
-    options: Record<string, unknown> = {}
+    _nodeId: string,
+    _action: string,
+    _containerId: string,
+    _options?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.parse(
-      await this.dispatch.sendDockerContainerCommand(
-        nodeId,
-        action,
-        { containerId, ...(options as object) },
-        15 * 60 * 1000
-      )
-    );
+    return commercialModuleUnavailable();
   }
-
   async deploymentAction(
-    nodeId: string,
-    action: string,
-    deploymentId: string,
-    options: Record<string, unknown> = {}
+    _nodeId: string,
+    _action: string,
+    _deploymentId: string,
+    _options?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.parse(
-      await this.dispatch.sendDockerDeploymentCommand(
-        nodeId,
-        action,
-        { deploymentId, ...(options as object) },
-        15 * 60 * 1000
-      )
-    );
+    return commercialModuleUnavailable();
   }
-
   async volumeAction(
-    nodeId: string,
-    action: string,
-    name: string,
-    options: Record<string, unknown> = {}
+    _nodeId: string,
+    _action: string,
+    _name: string,
+    _options?: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.parse(
-      await this.dispatch.sendDockerVolumeCommand(nodeId, action, { name, ...(options as object) }, 15 * 60 * 1000)
-    );
-  }
-
-  private async command<T = Record<string, unknown>>(
-    nodeId: string,
-    action: string,
-    options: {
-      migrationId?: string;
-      artifactId?: string;
-      artifactType?: string;
-      resourceId?: string;
-      configJson?: string;
-    } = {}
-  ): Promise<T> {
-    return this.parse(await this.dispatch.sendDockerMigrationCommand(nodeId, action, options, 15 * 60 * 1000)) as T;
-  }
-
-  private parse(result: { success: boolean; error?: string; detail?: string }): Record<string, unknown> {
-    if (!result.success) {
-      const message = result.error?.trim() || 'Docker migration command failed';
-      if (/offline|unavailable|disconnect|timed out/i.test(message)) {
-        throw new AppError(503, 'MIGRATION_NODE_UNAVAILABLE', message);
-      }
-      throw new AppError(502, 'MIGRATION_DAEMON_ERROR', message);
-    }
-    if (!result.detail) return {};
-    try {
-      return JSON.parse(result.detail) as Record<string, unknown>;
-    } catch {
-      throw new AppError(502, 'MIGRATION_DAEMON_PROTOCOL', 'Docker daemon returned invalid migration data');
-    }
+    return commercialModuleUnavailable();
   }
 }

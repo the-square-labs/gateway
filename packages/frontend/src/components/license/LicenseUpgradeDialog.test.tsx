@@ -41,6 +41,20 @@ afterEach(() => {
 });
 
 describe("LicenseUpgradeDialog", () => {
+  it("sends licensed administrators to settings when the module is unavailable", () => {
+    useAuthStore.setState({ user: USER as never, isAuthenticated: true });
+    useLicensePaywallStore.getState().open({
+      capability: "Pages",
+      requiredPlan: "personal",
+      currentPlan: "business",
+      reason: "module-unavailable",
+    });
+    renderDialog();
+    expect(screen.getByRole("heading", { name: "Paid features unavailable" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Upgrade license key" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open license settings" }));
+    expect(screen.getByText(/\/settings\/general.*gateway-license/)).toBeInTheDocument();
+  });
   it("reuses the settings navigation target for license managers", () => {
     useAuthStore.setState({ user: USER as never, isAuthenticated: true });
     useLicensePaywallStore.getState().open({

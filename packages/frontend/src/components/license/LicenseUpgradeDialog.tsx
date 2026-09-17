@@ -57,11 +57,17 @@ export function LicenseUpgradeDialog() {
         {renderedRequest ? (
           <>
             <DialogHeader>
-              <DialogTitle>{planLabel(renderedRequest.requiredPlan)} plan required</DialogTitle>
+              <DialogTitle>
+                {renderedRequest.reason === "module-unavailable"
+                  ? "Paid features unavailable"
+                  : `${planLabel(renderedRequest.requiredPlan)} plan required`}
+              </DialogTitle>
             </DialogHeader>
             <div className="space-y-3 py-4">
               <p className="text-sm text-muted-foreground">
-                {`${renderedRequest.capability} requires the ${planLabel(renderedRequest.requiredPlan)} plan. This Gateway is currently on the ${PLAN_LABELS[renderedRequest.currentPlan]} plan.`}
+                {renderedRequest.reason === "module-unavailable"
+                  ? `${renderedRequest.capability} is unavailable because this Gateway's paid features are not ready. Check license settings to restore access.`
+                  : `${renderedRequest.capability} requires the ${planLabel(renderedRequest.requiredPlan)} plan. This Gateway is currently on the ${PLAN_LABELS[renderedRequest.currentPlan]} plan.`}
               </p>
               {renderedRequest.quota?.limit !== undefined ? (
                 <p className="text-sm text-muted-foreground">
@@ -71,7 +77,9 @@ export function LicenseUpgradeDialog() {
               ) : null}
               {!canManageLicense ? (
                 <p className="text-sm text-muted-foreground">
-                  Contact your administrator to upgrade the Gateway license.
+                  {renderedRequest.reason === "module-unavailable"
+                    ? "Contact your administrator to restore access."
+                    : "Contact your administrator to upgrade the Gateway license."}
                 </p>
               ) : null}
             </div>
@@ -83,7 +91,9 @@ export function LicenseUpgradeDialog() {
               {canManageLicense ? (
                 <Button onClick={goToLicense}>
                   <KeyRound className="h-4 w-4" />
-                  Upgrade license key
+                  {renderedRequest.reason === "module-unavailable"
+                    ? "Open license settings"
+                    : "Upgrade license key"}
                 </Button>
               ) : null}
             </DialogFooter>

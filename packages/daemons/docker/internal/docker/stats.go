@@ -158,6 +158,14 @@ func statsResponseToProto(stats *container.StatsResponse, inspect *container.Ins
 	// Memory
 	cs.MemoryUsageBytes = int64(stats.MemoryStats.Usage)
 	cs.MemoryLimitBytes = int64(stats.MemoryStats.Limit)
+	// Docker may report host RAM here even for a configured container quota.
+	// Reuse the inspect already fetched for CPU accounting, retaining a lower
+	// effective cgroup limit when the stats endpoint reports one.
+	if inspect != nil && inspect.HostConfig != nil && inspect.HostConfig.Memory > 0 {
+		if cs.MemoryLimitBytes <= 0 || inspect.HostConfig.Memory < cs.MemoryLimitBytes {
+			cs.MemoryLimitBytes = inspect.HostConfig.Memory
+		}
+	}
 
 	// Network: aggregate all interfaces
 	var rxBytes, txBytes uint64

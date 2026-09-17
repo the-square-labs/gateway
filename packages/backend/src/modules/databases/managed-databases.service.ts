@@ -1,13 +1,408 @@
-export {
-  DEFAULT_MANAGED_REDIS_CONFIG,
-  daemonCreateConfig,
-  MANAGED_DATABASE_CATALOG,
-  type ManagedDatabaseLogOptions,
-  type ManagedDatabaseLogTarget,
-  type ManagedDatabaseRuntimeStats,
-  managedConnectionConfig,
+import type { DrizzleClient } from '@/db/client.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import type { AuditService } from '@/modules/audit/audit.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import type { CryptoService } from '@/services/crypto.service.js';
+import type { DatabaseCAService } from '@/services/database-ca.service.js';
+import type { EventBusService } from '@/services/event-bus.service.js';
+import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import type {
+  CreateManagedDatabaseInput,
+  ManagedDatabaseListQuery,
+  UpdateManagedDatabaseInput,
+} from './databases.schemas.js';
+import type { DatabaseConnectionService } from './databases.service.js';
+import type {
+  ManagedDatabaseLogOptions,
+  ManagedDatabaseLogTarget,
+  ManagedDatabaseRow,
+  ManagedDatabaseRuntimeStats,
 } from './managed-databases.service.core.js';
-
-import { ManagedDatabaseMutationService } from './managed-databases.service.mutations.js';
-
-export class ManagedDatabaseService extends ManagedDatabaseMutationService {}
+export class ManagedDatabaseService {
+  // biome-ignore lint/complexity/noUselessConstructor: Stable commercial constructor contract.
+  constructor(
+    _db: DrizzleClient,
+    _auditService: AuditService,
+    _cryptoService: CryptoService,
+    _nodeDispatch: NodeDispatchService,
+    _databaseCA?: DatabaseCAService | undefined,
+    _databaseConnectionService?: DatabaseConnectionService | undefined
+  ) {}
+  setLicensePolicyService(_service: LicensePolicyService): void {}
+  setEventBus(_bus: EventBusService): void {}
+  async ensureBindingIdentity(_managedDatabaseId: string, _userId?: string | null): Promise<ManagedDatabaseRow> {
+    return commercialModuleUnavailable();
+  }
+  async finalizeBindingIdentity(
+    _managedDatabaseId: string,
+    _userId?: string | null,
+    _expectedPendingOperationId?: string | null
+  ): Promise<ManagedDatabaseRow> {
+    return commercialModuleUnavailable();
+  }
+  async runBindingLifecycleOperation<T>(_managedDatabaseId: string, _operation: () => Promise<T>): Promise<T> {
+    return commercialModuleUnavailable();
+  }
+  listCatalog(): {
+    type: string;
+    versions: string[];
+  }[] {
+    return commercialModuleUnavailable();
+  }
+  async list(_query?: ManagedDatabaseListQuery): Promise<
+    {
+      id: string;
+      databaseConnectionId: string | null;
+      nodeId: string;
+      name: string;
+      slug: string;
+      type: 'postgres' | 'redis' | 'clickhouse';
+      version: string;
+      storageSizeBytes: number;
+      runtimeConfig: {
+        cpuCores: number;
+        memoryMb: number;
+        swapMb: number;
+      };
+      publishedPort: number | null;
+      publishedNativePort: number | null;
+      tlsEnabled: boolean;
+      status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+      lastError: string | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }[]
+  > {
+    return commercialModuleUnavailable();
+  }
+  async get(_id: string): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async getByDatabaseConnectionId(_databaseConnectionId: string): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  } | null> {
+    return commercialModuleUnavailable();
+  }
+  async getCanonicalScopeResourceId(_id: string): Promise<string> {
+    return commercialModuleUnavailable();
+  }
+  async resolveLogTarget(_databaseConnectionId: string): Promise<ManagedDatabaseLogTarget> {
+    return commercialModuleUnavailable();
+  }
+  async getLogs(_databaseConnectionId: string, _options?: ManagedDatabaseLogOptions): Promise<string[]> {
+    return commercialModuleUnavailable();
+  }
+  async reconcileDatabaseConnections(): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async reconcileClickHouseQueryPrincipals(_nodeId?: string): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async reconcileBindingIdentities(_nodeId?: string): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async reconcileDatabaseCertificates(): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async warmReadyPostgresExtensionCatalogs(): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async create(
+    _input: CreateManagedDatabaseInput,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async update(
+    _id: string,
+    _input: UpdateManagedDatabaseInput,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async rotateCertificate(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async pause(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async unpause(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async restart(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async delete(
+    _id: string,
+    _userId: string
+  ): Promise<
+    | {
+        id: string;
+        databaseConnectionId: string | null;
+        nodeId: string;
+        name: string;
+        slug: string;
+        type: 'postgres' | 'redis' | 'clickhouse';
+        version: string;
+        storageSizeBytes: number;
+        runtimeConfig: {
+          cpuCores: number;
+          memoryMb: number;
+          swapMb: number;
+        };
+        publishedPort: number | null;
+        publishedNativePort: number | null;
+        tlsEnabled: boolean;
+        status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+        lastError: string | null;
+        createdAt: Date;
+        updatedAt: Date;
+      }
+    | {
+        success: boolean;
+      }
+  > {
+    return commercialModuleUnavailable();
+  }
+  async retryProvisioning(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    id: string;
+    databaseConnectionId: string | null;
+    nodeId: string;
+    name: string;
+    slug: string;
+    type: 'postgres' | 'redis' | 'clickhouse';
+    version: string;
+    storageSizeBytes: number;
+    runtimeConfig: {
+      cpuCores: number;
+      memoryMb: number;
+      swapMb: number;
+    };
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    status: 'error' | 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'deleting';
+    lastError: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async revealCredentials(_id: string): Promise<{
+    caCertificate?: string | undefined;
+    caFingerprint?: string | undefined;
+    publishedPort: number | null;
+    publishedNativePort: number | null;
+    tlsEnabled: boolean;
+    databaseName?: string | undefined;
+    username: string;
+    password: string;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async rotateDirectAccessCredentials(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    publishedPort: number | null;
+    databaseName?: string | undefined;
+    username: string;
+    password: string;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async getRuntimeStatsByDatabaseConnectionId(
+    _databaseConnectionId: string
+  ): Promise<ManagedDatabaseRuntimeStats | null> {
+    return commercialModuleUnavailable();
+  }
+  async reconcilePendingOperations(): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+}
+export type {
+  ManagedDatabaseLogOptions,
+  ManagedDatabaseLogTarget,
+  ManagedDatabaseRuntimeStats,
+} from './managed-databases.service.core.js';

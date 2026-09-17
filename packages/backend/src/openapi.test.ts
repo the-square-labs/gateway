@@ -139,13 +139,13 @@ describe('OpenAPI documentation', () => {
     expect(paths).toContain('/api/docker/nodes/{nodeId}/deployments');
     expect(paths).toContain('/api/proxy-hosts');
     expect(paths).toContain('/api/proxy-host-folders/grouped');
-    expect(paths).toContain('/api/status-page/services');
-    expect(paths).toContain('/api/logging/environments/{id}/search');
-    expect(paths).toContain('/api/cas');
-    expect(paths).toContain('/api/certificates');
+    expect(paths).not.toContain('/api/status-page/services');
+    expect(paths).not.toContain('/api/logging/environments/{id}/search');
+    expect(paths).not.toContain('/api/cas');
+    expect(paths).not.toContain('/api/certificates');
     expect(paths).toContain('/api/ssl-certificates');
     expect(paths).toContain('/api/domains');
-    expect(paths).toContain('/api/databases');
+    expect(paths).not.toContain('/api/databases');
     expect(paths).toContain('/api/system/version');
     expect(paths).toContain('/api/notifications/webhooks');
 

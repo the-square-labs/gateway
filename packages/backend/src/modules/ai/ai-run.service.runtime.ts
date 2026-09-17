@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   type AICredentialChallenge,
@@ -8,9 +8,6 @@ import {
   type AIRunToolCall,
   aiConversationInputs,
   aiConversationMessages,
-  aiConversations,
-  aiPlanRevisions,
-  aiPlans,
   aiRunCredentialChallenges,
   aiRunQuestions,
   aiRunSetupInteractions,
@@ -18,6 +15,7 @@ import {
   aiRunToolCalls,
   aiRunToolRounds,
 } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
@@ -31,7 +29,6 @@ import {
 import type { AIConversationSearchService } from './ai-conversation-search.service.js';
 import type { AIPlanService } from './ai-plan.service.js';
 import {
-  ACTIVE_PLAN_STATUSES,
   ACTIVE_RUN_STATUSES,
   type AIAssistantCommentDeltaEvent,
   type AIAssistantCommentDoneEvent,
@@ -46,12 +43,9 @@ import {
   findRunByCommand,
   findRunByUserCommand,
   getOwnedConversation,
-  nextMessageSequence,
-  PRE_EXECUTION_PLAN_STATUSES,
   questionIdentityWhere,
   type RuntimeSnapshot,
   readMessageRole,
-  toConversationMessage,
   toolCallIdentityWhere,
   toSnapshotMessage,
   withAssistantDraftMessage,
@@ -471,260 +465,12 @@ export abstract class AIRunServiceRuntime {
     }
   }
 
-  async abandonPlanning(input: {
+  async abandonPlanning(_input: {
     conversationId: string;
     userId: string;
     clientCommandId: string;
   }): Promise<{ duplicate: boolean; stoppedRunId: string | null; deletedPlanId: string | null }> {
-    const result = await this.db.transaction(async (tx) => {
-      const [conversation] = await tx
-        .select({ id: aiConversations.id })
-        .from(aiConversations)
-        .where(and(eq(aiConversations.id, input.conversationId), eq(aiConversations.userId, input.userId)))
-        .for('update');
-      if (!conversation) throw new AppError(404, 'AI_CONVERSATION_NOT_FOUND', 'AI conversation not found');
-
-      const [existingReceipt] = await tx
-        .select({ id: aiConversationMessages.id })
-        .from(aiConversationMessages)
-        .where(
-          and(
-            eq(aiConversationMessages.conversationId, input.conversationId),
-            eq(aiConversationMessages.role, 'system'),
-            sql`${aiConversationMessages.uiMessage}->'lifecycleEvent'->>'type' = 'planning_cancelled'`,
-            sql`${aiConversationMessages.uiMessage}->'lifecycleEvent'->>'clientCommandId' = ${input.clientCommandId}`
-          )
-        )
-        .limit(1);
-      if (existingReceipt) {
-        return { duplicate: true, stoppedRunId: null, deletedPlanId: null };
-      }
-
-      const [plan] = await tx
-        .select()
-        .from(aiPlans)
-        .where(
-          and(
-            eq(aiPlans.userId, input.userId),
-            eq(aiPlans.conversationId, input.conversationId),
-            inArray(aiPlans.status, ACTIVE_PLAN_STATUSES)
-          )
-        )
-        .orderBy(desc(aiPlans.createdAt))
-        .limit(1)
-        .for('update');
-      if (plan && !PRE_EXECUTION_PLAN_STATUSES.includes(plan.status)) {
-        throw new AppError(
-          409,
-          'AI_PLAN_ALREADY_EXECUTING',
-          'Use the existing plan controls to pause or cancel an executing plan'
-        );
-      }
-
-      const [publishedRevision] = plan
-        ? await tx
-            .select()
-            .from(aiPlanRevisions)
-            .where(and(eq(aiPlanRevisions.planId, plan.id), isNotNull(aiPlanRevisions.publishedAt)))
-            .orderBy(desc(aiPlanRevisions.revision))
-            .limit(1)
-            .for('update')
-        : [];
-
-      const [activeRun] = await tx
-        .select()
-        .from(aiRuns)
-        .where(
-          and(
-            eq(aiRuns.userId, input.userId),
-            eq(aiRuns.conversationId, input.conversationId),
-            inArray(aiRuns.status, ACTIVE_RUN_STATUSES)
-          )
-        )
-        .orderBy(desc(aiRuns.createdAt))
-        .limit(1)
-        .for('update');
-      const now = new Date();
-      let stoppedRunId: string | null = null;
-      if (activeRun) {
-        const [stopped] = await tx
-          .update(aiRuns)
-          .set({
-            status: 'stopped',
-            error: null,
-            assistantDraftContent: null,
-            stoppedAt: now,
-            completedAt: null,
-            leaseOwner: null,
-            leaseExpiresAt: null,
-            updatedAt: now,
-          })
-          .where(
-            and(
-              eq(aiRuns.id, activeRun.id),
-              eq(aiRuns.userId, input.userId),
-              eq(aiRuns.conversationId, input.conversationId),
-              inArray(aiRuns.status, ACTIVE_RUN_STATUSES)
-            )
-          )
-          .returning({ id: aiRuns.id });
-        if (!stopped) {
-          throw new AppError(409, 'AI_PLANNING_STATE_CHANGED', 'Planning state changed while it was being cancelled');
-        }
-        stoppedRunId = stopped.id;
-        await tx
-          .update(aiRunToolRounds)
-          .set({ status: 'stopped', completedAt: now, updatedAt: now })
-          .where(
-            and(
-              eq(aiRunToolRounds.runId, stopped.id),
-              inArray(aiRunToolRounds.status, [
-                'collecting',
-                'waiting_questions',
-                'waiting_approvals',
-                'waiting_setup',
-                'ready',
-                'executing',
-              ])
-            )
-          );
-        await tx
-          .update(aiRunToolCalls)
-          .set({ status: 'stopped', updatedAt: now })
-          .where(
-            and(
-              eq(aiRunToolCalls.runId, stopped.id),
-              eq(aiRunToolCalls.conversationId, input.conversationId),
-              inArray(aiRunToolCalls.status, ['created', 'pending_approval', 'approved', 'running'])
-            )
-          );
-        await tx
-          .update(aiRunQuestions)
-          .set({ status: 'stopped', updatedAt: now })
-          .where(
-            and(
-              eq(aiRunQuestions.runId, stopped.id),
-              eq(aiRunQuestions.conversationId, input.conversationId),
-              eq(aiRunQuestions.status, 'pending')
-            )
-          );
-        await tx
-          .update(aiRunCredentialChallenges)
-          .set({ status: 'stopped', resolvedAt: now, updatedAt: now })
-          .where(
-            and(
-              eq(aiRunCredentialChallenges.runId, stopped.id),
-              eq(aiRunCredentialChallenges.conversationId, input.conversationId),
-              eq(aiRunCredentialChallenges.status, 'pending')
-            )
-          );
-        await tx
-          .update(aiRunSetupInteractions)
-          .set({ status: 'stopped', resolvedAt: now, updatedAt: now })
-          .where(
-            and(
-              eq(aiRunSetupInteractions.runId, stopped.id),
-              eq(aiRunSetupInteractions.conversationId, input.conversationId),
-              eq(aiRunSetupInteractions.status, 'pending')
-            )
-          );
-        await tx
-          .update(aiConversationInputs)
-          .set({ mode: 'queued', targetRunId: null, updatedAt: now })
-          .where(
-            and(
-              eq(aiConversationInputs.conversationId, input.conversationId),
-              eq(aiConversationInputs.targetRunId, stopped.id),
-              eq(aiConversationInputs.userId, input.userId),
-              eq(aiConversationInputs.mode, 'steer'),
-              eq(aiConversationInputs.status, 'pending')
-            )
-          );
-      }
-
-      let deletedPlanId: string | null = null;
-      if (plan) {
-        if (publishedRevision) {
-          await tx
-            .delete(aiPlanRevisions)
-            .where(and(eq(aiPlanRevisions.planId, plan.id), isNull(aiPlanRevisions.publishedAt)));
-          await tx
-            .update(aiPlanRevisions)
-            .set({
-              status: 'published',
-              decision: null,
-              customInstruction: null,
-              decisionClientCommandId: null,
-              acceptedAt: null,
-              decisionAt: null,
-              updatedAt: now,
-            })
-            .where(eq(aiPlanRevisions.id, publishedRevision.id));
-          const [restored] = await tx
-            .update(aiPlans)
-            .set({
-              status: 'awaiting_decision',
-              activeSince: null,
-              pauseReason: null,
-              noProgressRuns: 0,
-              updatedAt: now,
-            })
-            .where(
-              and(
-                eq(aiPlans.id, plan.id),
-                eq(aiPlans.userId, input.userId),
-                eq(aiPlans.conversationId, input.conversationId),
-                inArray(aiPlans.status, PRE_EXECUTION_PLAN_STATUSES)
-              )
-            )
-            .returning({ id: aiPlans.id });
-          if (!restored) {
-            throw new AppError(409, 'AI_PLANNING_STATE_CHANGED', 'Planning state changed while it was being cancelled');
-          }
-        } else {
-          const [deleted] = await tx
-            .delete(aiPlans)
-            .where(
-              and(
-                eq(aiPlans.id, plan.id),
-                eq(aiPlans.userId, input.userId),
-                eq(aiPlans.conversationId, input.conversationId),
-                inArray(aiPlans.status, PRE_EXECUTION_PLAN_STATUSES)
-              )
-            )
-            .returning({ id: aiPlans.id });
-          if (!deleted) {
-            throw new AppError(409, 'AI_PLANNING_STATE_CHANGED', 'Planning state changed while it was being cancelled');
-          }
-          deletedPlanId = deleted.id;
-        }
-      }
-
-      await tx
-        .update(aiConversations)
-        .set({ checkpoint: null, updatedAt: now })
-        .where(and(eq(aiConversations.id, input.conversationId), eq(aiConversations.userId, input.userId)));
-      const sequence = await nextMessageSequence(tx, input.conversationId);
-      await tx.insert(aiConversationMessages).values(
-        toConversationMessage(
-          input.conversationId,
-          {
-            role: 'system',
-            content: publishedRevision
-              ? 'The user left Plan Mode. The active planning run and unfinished revision were discarded. The last published plan remains available, but do not continue revising or execute it unless the user explicitly asks.'
-              : 'The user cancelled Plan Mode. The unfinished plan and planning run were discarded. Do not continue or revive that plan unless the user explicitly asks to plan again.',
-            hiddenSystemEvent: true,
-            lifecycleEvent: { type: 'planning_cancelled', clientCommandId: input.clientCommandId },
-          },
-          sequence
-        )
-      );
-      return { duplicate: false, stoppedRunId, deletedPlanId };
-    });
-    if (result.stoppedRunId) this.executor.abortRun(result.stoppedRunId);
-    this.publishConversationChanged(input.userId, input.conversationId);
-    this.conversationSearchService?.rebuildConversationIndexBestEffort(input.userId, input.conversationId);
-    return result;
+    return commercialModuleUnavailable();
   }
 
   startRunExecution(user: User, runId: string): void {
@@ -739,111 +485,20 @@ export abstract class AIRunServiceRuntime {
     this.executor.startContextCompaction(user, runId, trigger);
   }
 
-  protected async handleCompletedRun(user: User, run: AIRun): Promise<boolean> {
-    if (!this.planService) return false;
-    let plan = await this.planService.getActivePlanSnapshot(user.id, run.conversationId);
-    if (!plan) return false;
-
-    if (plan.status === 'pause_requested') {
-      await this.planService.completePauseRequest(user.id, run.conversationId);
-      return true;
-    }
-
-    if (plan.status === 'executing' && run.purpose === 'plan_execution') {
-      const progressCalls = await this.db
-        .select({ status: aiRunToolCalls.status, result: aiRunToolCalls.result })
-        .from(aiRunToolCalls)
-        .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.toolName, 'update_plan_step')));
-      plan =
-        (await this.planService.recordExecutionRunOutcome(
-          user.id,
-          run.conversationId,
-          progressCalls.some(
-            (call) =>
-              call.status === 'completed' &&
-              !!call.result &&
-              typeof call.result === 'object' &&
-              !Array.isArray(call.result) &&
-              (call.result as Record<string, unknown>).progressMade === true
-          )
-        )) ?? plan;
-    }
-
-    if (plan.status === 'verifying' && run.purpose === 'plan_verification') {
-      const verificationCalls = await this.db
-        .select({ status: aiRunToolCalls.status })
-        .from(aiRunToolCalls)
-        .where(and(eq(aiRunToolCalls.runId, run.id), eq(aiRunToolCalls.toolName, 'submit_plan_verification')));
-      if (verificationCalls.some((call) => call.status === 'completed')) {
-        await this.planService.completeFinalVerificationAfterRun(user.id, run.conversationId);
-        return true;
-      }
-    }
-
-    if (plan.status === 'drafting' && run.purpose === 'plan_draft') return true;
-    if (plan.status === 'awaiting_decision' || plan.status === 'paused') return true;
-    await this.schedulePlanStateRun(user, plan, run.id);
-    return true;
+  protected async handleCompletedRun(_user: User, _run: AIRun): Promise<boolean> {
+    return false;
   }
 
-  protected async handleFailedRun(_user: User, run: AIRun, error: string): Promise<void> {
-    if (this.planService && run.planId && run.purpose === 'plan_validation') {
-      const recovered = await this.planService.recoverFailedValidation(
-        run.userId,
-        run.conversationId,
-        run.planId,
-        `Plan validation failed: ${error}`.slice(0, 1000)
-      );
-      if (recovered) this.publishConversationChanged(run.userId, run.conversationId);
-      return;
-    }
-    await this.pausePlanAfterFailedRun(run, `AI run failed: ${error}`);
-  }
+  protected async handleFailedRun(_user: User, _run: AIRun, _error: string): Promise<void> {}
 
   protected async pausePlanAfterFailedRun(
-    run: Pick<AIRun, 'conversationId' | 'userId' | 'planId' | 'purpose'>,
-    reason: string
+    _run: Pick<AIRun, 'conversationId' | 'userId' | 'planId' | 'purpose'>,
+    _reason: string
   ): Promise<boolean> {
-    if (!this.planService || !run.planId || (run.purpose !== 'plan_execution' && run.purpose !== 'plan_verification')) {
-      return false;
-    }
-    const plan = await this.planService.getActivePlanSnapshot(run.userId, run.conversationId);
-    if (
-      !plan ||
-      plan.id !== run.planId ||
-      (plan.status !== 'executing' && plan.status !== 'pause_requested' && plan.status !== 'verifying')
-    ) {
-      return false;
-    }
-    if (plan.status === 'pause_requested') {
-      await this.planService.completePauseRequest(run.userId, run.conversationId);
-      this.publishConversationChanged(run.userId, run.conversationId);
-      return true;
-    }
-    await this.planService.pause(run.userId, run.conversationId, reason.slice(0, 1000));
-    this.publishConversationChanged(run.userId, run.conversationId);
-    return true;
+    return false;
   }
 
-  protected async schedulePlanStateRun(user: User, plan: AIPlanRuntimeSnapshot, triggerId: string): Promise<void> {
-    const purpose =
-      plan.status === 'drafting'
-        ? 'plan_draft'
-        : plan.status === 'validating'
-          ? 'plan_validation'
-          : plan.status === 'executing'
-            ? 'plan_execution'
-            : plan.status === 'verifying'
-              ? 'plan_verification'
-              : null;
-    if (!purpose) return;
-    await this.startPlanRun({
-      user,
-      plan,
-      purpose,
-      clientCommandId: `plan:${plan.id}:${purpose}:${triggerId}`,
-    });
-  }
+  protected async schedulePlanStateRun(_user: User, _plan: AIPlanRuntimeSnapshot, _triggerId: string): Promise<void> {}
 
   protected async getRuntimeSnapshot(userId: string, conversationId: string): Promise<RuntimeSnapshot> {
     const [plans, latestPlan] = await Promise.all([

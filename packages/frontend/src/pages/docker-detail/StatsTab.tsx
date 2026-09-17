@@ -51,6 +51,11 @@ function hasMemoryStats(stats: ContainerStats | null): stats is ContainerStats {
   return !!stats && (stats.memoryUsageBytes > 0 || stats.memoryLimitBytes > 0);
 }
 
+function positiveLimit(value: unknown): number | null {
+  const limit = typeof value === "number" || typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(limit) && limit > 0 ? limit : null;
+}
+
 function timestampMs(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return null;
@@ -382,12 +387,21 @@ export function StatsTab({
 
   const cpuPercent = current?.cpuPercent ?? 0;
   const memUsage = current?.memoryUsageBytes ?? 0;
-  const memLimit = current?.memoryLimitBytes ?? 0;
+  const configuredMemoryLimit = positiveLimit(data.HostConfig?.Memory);
+  const sampledMemoryLimit = positiveLimit(current?.memoryLimitBytes);
+  // Old daemon samples can contain host RAM even when Docker inspect has a
+  // container quota. Keep a smaller effective cgroup limit when one is reported.
+  const memLimit =
+    configuredMemoryLimit && sampledMemoryLimit
+      ? Math.min(configuredMemoryLimit, sampledMemoryLimit)
+      : (configuredMemoryLimit ?? sampledMemoryLimit ?? 0);
   const netRx = current?.networkRxBytes ?? 0;
   const netTx = current?.networkTxBytes ?? 0;
   const blockRead = current?.blockReadBytes ?? 0;
   const blockWrite = current?.blockWriteBytes ?? 0;
   const pids = current?.pids ?? 0;
+  const pidsLimit = positiveLimit(data.HostConfig?.PidsLimit);
+  const pidsPercent = pidsLimit ? (pids / pidsLimit) * 100 : 0;
   const memPercent = memLimit > 0 ? (memUsage / memLimit) * 100 : 0;
   const memoryAvailable = hasMemoryStats(current);
   const sharedGpuDevices = attachedGpuDevices(data, gpuDevices);
@@ -428,10 +442,12 @@ export function StatsTab({
               history={memHist}
               sparklineMax={memoryAvailable ? memLimit || undefined : undefined}
               color="#8b5cf6"
-              progress={memoryAvailable ? { percent: memPercent } : undefined}
+              progress={memoryAvailable && memLimit > 0 ? { percent: memPercent } : undefined}
               subtitle={
                 memoryAvailable
-                  ? `${memPercent.toFixed(0)}% of ${formatBytes(memLimit)}`
+                  ? memLimit > 0
+                    ? `${memPercent.toFixed(0)}% of ${formatBytes(memLimit)}`
+                    : "Memory limit unavailable"
                   : "Unavailable from Docker stats"
               }
             />
@@ -468,6 +484,11 @@ export function StatsTab({
               value={current ? String(pids) : "N/A"}
               icon={Users}
               history={pidsHist}
+              sparklineMax={pidsLimit ?? undefined}
+              progress={current && pidsLimit ? { percent: pidsPercent } : undefined}
+              subtitle={
+                current && pidsLimit ? `${pidsPercent.toFixed(0)}% of ${pidsLimit}` : undefined
+              }
               color="#64748b"
             />
             <StatCard label="Uptime" value={uptime} icon={Clock} color="#a855f7" />

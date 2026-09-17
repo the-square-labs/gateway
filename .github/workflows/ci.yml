@@ -202,3 +202,6 @@ jobs:
 
       - name: Build
         run: pnpm build:all
+
+      - name: Verify Community backend boundary
+        run: node scripts/verify-edition-artifacts.mjs --require-complete

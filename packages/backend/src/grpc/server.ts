@@ -35,6 +35,7 @@ function resolveProtoPath() {
     resolve(process.cwd(), '../../proto/gateway/v1/nginx-daemon.proto'),
     resolve(moduleDir, '../../proto/gateway/v1/nginx-daemon.proto'),
     resolve(moduleDir, '../../../proto/gateway/v1/nginx-daemon.proto'),
+    resolve(moduleDir, '../../../../proto/gateway/v1/nginx-daemon.proto'),
   ];
 
   for (const candidate of candidates) {

@@ -726,6 +726,11 @@ export function Databases({
     if (createOpen || managedCreateOpen) void fetchFolders("database");
   }, [createOpen, fetchFolders, managedCreateOpen]);
 
+  const openConnectionCreate = () => {
+    if (requireLicenseFeature("external-database-connections", "External database connections"))
+      setCreateOpen(true);
+  };
+
   const openManagedCreate = useCallback(() => {
     if (!requireLicenseFeature("managed-databases", "Managed databases")) return;
     if (databaseNodesLoaded && databaseNodes.length === 0) {
@@ -1127,7 +1132,7 @@ export function Databases({
                       {
                         label: "Connect existing database",
                         icon: <Plus className="h-4 w-4" />,
-                        onClick: () => setCreateOpen(true),
+                        onClick: openConnectionCreate,
                       },
                     ]
                   : []),
@@ -1143,7 +1148,7 @@ export function Databases({
                 </Button>
               )}
               {canCreate && (
-                <Button variant="outline" onClick={() => setCreateOpen(true)}>
+                <Button variant="outline" onClick={openConnectionCreate}>
                   <Plus className="h-4 w-4" />
                   Connect existing
                 </Button>
@@ -1214,7 +1219,7 @@ export function Databases({
             <EmptyState
               message="No databases yet. Connect an existing database or deploy a managed instance."
               {...(canCreate
-                ? { actionLabel: "Connect existing database", onAction: () => setCreateOpen(true) }
+                ? { actionLabel: "Connect existing database", onAction: openConnectionCreate }
                 : {})}
               hasActiveFilters={search !== "" || typeFilter !== "all" || healthFilter !== "all"}
               onReset={() => {

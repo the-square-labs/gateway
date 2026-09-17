@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { DrizzleClient } from '@/db/client.js';
 import type { DockerRegistryMaintenancePhase } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerInternalRegistrySettingsInput } from './docker-build.schemas.js';
 import {
@@ -48,7 +49,6 @@ export class DockerInternalRegistryService {
   private executor: DockerRegistryMaintenanceExecutor = unavailableDockerRegistryMaintenanceExecutor;
   private externalAccessReconciler?: DockerRegistryExternalAccessReconciler;
   private eventBus?: EventBusService;
-  private licensePolicyService?: LicensePolicyService;
   private readonly store: DockerRegistryMaintenanceStore;
 
   constructor(
@@ -72,9 +72,7 @@ export class DockerInternalRegistryService {
     this.eventBus = eventBus;
   }
 
-  setLicensePolicyService(service: LicensePolicyService): void {
-    this.licensePolicyService = service;
-  }
+  setLicensePolicyService(_service: LicensePolicyService): void {}
 
   async initialize(): Promise<void> {
     await this.store.initialize();
@@ -172,45 +170,35 @@ export class DockerInternalRegistryService {
     return state;
   }
 
+  protected externalRegistryContext() {
+    return {
+      store: this.store,
+      audit: this.auditService,
+      reconcile: this.externalAccessReconciler,
+      emitChanged: (action: string, state: RegistryState) => this.emitChanged(action, state),
+    };
+  }
+
   async updateSettings(input: DockerInternalRegistrySettingsInput, userId: string): Promise<RegistryState> {
-    if (input.externalAccessEnabled) {
-      await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('git-push-to-deploy');
-    }
+    if (input.externalAccessEnabled) return commercialModuleUnavailable();
     const current = await this.getState();
-    const previous: DockerRegistryExternalAccessConfig = {
-      externalAccessEnabled: current.externalAccessEnabled,
-      externalHostname: current.externalHostname,
-      externalNginxNodeId: current.externalNginxNodeId,
-      externalCertificateId: current.externalCertificateId,
-    };
-    const next: DockerRegistryExternalAccessConfig = {
-      externalAccessEnabled: input.externalAccessEnabled,
-      externalHostname: input.externalAccessEnabled ? input.externalHostname! : null,
-      externalNginxNodeId: input.externalAccessEnabled ? input.externalNginxNodeId! : null,
-      externalCertificateId: input.externalAccessEnabled ? input.externalCertificateId! : null,
-    };
-    if (!this.externalAccessReconciler && (next.externalAccessEnabled || previous.externalAccessEnabled)) {
+    if (!this.externalAccessReconciler && current.externalAccessEnabled) {
       throw new AppError(503, 'REGISTRY_INGRESS_UNAVAILABLE', 'Registry ingress reconciliation is unavailable');
     }
-
-    let state: RegistryState;
-    if (next.externalAccessEnabled) {
-      await this.externalAccessReconciler?.(next, previous, userId);
-      state = await this.store.updateState(next);
-    } else {
-      state = await this.store.updateState(next);
-      await this.externalAccessReconciler?.(next, previous, userId);
-    }
+    const next: DockerRegistryExternalAccessConfig = {
+      externalAccessEnabled: false,
+      externalHostname: null,
+      externalNginxNodeId: null,
+      externalCertificateId: null,
+    };
+    const state = await this.store.updateState(next);
+    await this.externalAccessReconciler?.(next, current, userId);
     await this.auditService.log({
       action: 'docker.internal-registry.settings.update',
       userId,
       resourceType: 'docker-registry',
       resourceId: INTERNAL_DOCKER_REGISTRY_ID,
-      details: {
-        externalAccessEnabled: state.externalAccessEnabled,
-        externalHostname: state.externalHostname,
-        externalNginxNodeId: state.externalNginxNodeId,
-      },
+      details: { ...next },
     });
     this.emitChanged('settings', state);
     return state;
@@ -245,14 +233,7 @@ export class DockerInternalRegistryService {
   }
 
   async assertExternalAccessEntitled(): Promise<RegistryState> {
-    const state = await this.getState();
-    if (!state.externalAccessEnabled) {
-      throw new AppError(404, 'REGISTRY_EXTERNAL_ACCESS_DISABLED', 'Not found');
-    }
-    await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeatureForExistingRuntime(
-      'git-push-to-deploy'
-    );
-    return state;
+    return commercialModuleUnavailable();
   }
 
   private emitChanged(action: string, state: RegistryState): void {

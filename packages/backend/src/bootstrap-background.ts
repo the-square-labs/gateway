@@ -1,8 +1,8 @@
 import 'reflect-metadata';
-import { resolveBackupRunnerImage } from '@/config/backup-runner-image.js';
 import type { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { ACMERenewalJob } from '@/jobs/acme-renewal.job.js';
 import { DaemonUpdateCheckJob } from '@/jobs/daemon-update-check.job.js';
 import { DnsCheckJob } from '@/jobs/dns-check.job.js';
@@ -15,11 +15,9 @@ import { UpdateCheckJob } from '@/jobs/update-check.job.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
-import { AuditService } from '@/modules/audit/audit.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
-import { BackupService } from '@/modules/backups/backups.service.js';
+import { backupRuntime } from '@/modules/backups/backup-runtime.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
-import { MANAGED_DATABASE_CATALOG, ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
@@ -52,23 +50,13 @@ import { NotificationDeliveryService } from '@/modules/notifications/notificatio
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
-import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
-import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
-import { PageMaintenanceService } from '@/modules/pages/retention/page-maintenance.service.js';
-import { PageRouteService } from '@/modules/pages/routes/page-route.service.js';
-import { PageNodeRuntimeService } from '@/modules/pages/runtime/page-node-runtime.service.js';
 import { TemplatesService } from '@/modules/pki/templates.service.js';
 import { AdditionalRouteService } from '@/modules/proxy/additional-route.service.js';
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
-import { StatusIncidentEvaluatorService } from '@/modules/status-page/status-incident-evaluator.service.js';
-import { StatusPageService } from '@/modules/status-page/status-page.service.js';
-import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
-import { BackupRuntimeIntegration } from '@/services/backup-integration.js';
 import { CacheService } from '@/services/cache.service.js';
-import { CryptoService } from '@/services/crypto.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
@@ -80,7 +68,6 @@ import { RelayPolicyService } from '@/services/relay-policy.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
-import { StorageCAService } from '@/services/storage-ca.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
 import { UpdateService } from '@/services/update.service.js';
 
@@ -122,20 +109,14 @@ export async function initializeBackgroundServices(): Promise<void> {
     : undefined;
   const dockerSourceService = container.resolve(DockerSourceService);
   const dockerInternalRegistryService = container.resolve(DockerInternalRegistryService);
-  const managedDatabaseService = container.resolve(ManagedDatabaseService);
   const dockerSnapshotReconciler = container.resolve(DockerSnapshotReconciler);
   const dockerSnapshotService = container.resolve(DockerSnapshotService);
-  const pageMaintenanceService = container.resolve(PageMaintenanceService);
-  const pageProfileService = container.resolve(PageProfileService);
-  const pageNodeRuntimeService = container.resolve(PageNodeRuntimeService);
-  const pageRouteService = container.resolve(PageRouteService);
   const updateService = container.resolve(UpdateService);
   const eventBus = container.resolve(EventBusService);
   const licenseService = container.resolve(LicenseService);
   const generalSettingsService = container.resolve(GeneralSettingsService);
   const daemonUpdateService = container.resolve(DaemonUpdateService);
   const loggingMaintenanceService = container.resolve(LoggingMaintenanceService);
-  const statusPageService = container.resolve(StatusPageService);
   const integrationsService = container.resolve(IntegrationsService);
   const externalSshService = container.resolve(ExternalSshService);
   const readModelCoordinator = container.resolve(ReadModelCoordinator);
@@ -165,7 +146,6 @@ export async function initializeBackgroundServices(): Promise<void> {
   nodeRegistry.setEvaluator(notifEvaluatorService);
   proxyService.setEvaluator(notifEvaluatorService);
   notifEvaluatorService.start();
-  databaseMonitoringService.start();
   container.registerInstance(NotificationEvaluatorService, notifEvaluatorService);
   await licenseEntitlementReconciler.start();
 
@@ -179,80 +159,9 @@ export async function initializeBackgroundServices(): Promise<void> {
   // Background jobs
   const scheduler = new SchedulerService();
   container.registerInstance(SchedulerService, scheduler);
-  const storageTargets = container.resolve(ObjectStorageService);
-  const backupRuntime = new BackupRuntimeIntegration(
-    db,
-    container.resolve(CryptoService),
-    relayPolicyService,
-    container.resolve(StorageCAService),
-    container.resolve(ManagedDatabaseService)
-  );
-  const backupService = new BackupService(
-    db,
-    container.resolve(AuditService),
-    container.resolve(CryptoService),
-    container.resolve(NodeDispatchService),
-    {
-      getBackupTarget: (id) => storageTargets.getBackupTarget(id),
-      deleteOwnedBackupArtifacts: async (target, selection, manifest) => {
-        const prefix = manifest.ownedPrefix.endsWith('/') ? manifest.ownedPrefix : `${manifest.ownedPrefix}/`;
-        if (
-          !prefix ||
-          prefix.startsWith('/') ||
-          prefix.split('/').includes('..') ||
-          manifest.artifactKeys.some((key) => !key.startsWith(prefix))
-        )
-          throw new Error('Invalid backup artifact ownership');
-        await storageTargets.deleteBackupArtifacts(target.connectionId, selection.bucket, [
-          ...manifest.artifactKeys,
-          `${manifest.ownedPrefix}/manifest.json`,
-        ]);
-      },
-    },
-    {
-      assertSource: (user, id, purpose) =>
-        backupRuntime.assertScope(
-          user,
-          purpose === 'restore' ? 'databases:backups:restore' : 'databases:backups:run',
-          id
-        ),
-      assertDestination: async (user, id, purpose) => {
-        await backupRuntime.assertScope(
-          user,
-          purpose === 'read'
-            ? 'storage:objects:read'
-            : purpose === 'delete'
-              ? 'storage:objects:admin'
-              : 'storage:objects:write',
-          id
-        );
-        await backupRuntime.assertScope(user, 'storage:credentials:reveal', id);
-      },
-      assertExecutor: (user, id) => backupRuntime.assertScope(user, 'nodes:backups:execute', id),
-      assertRestoreTarget: async (user, id) => {
-        await backupRuntime.assertScope(user, 'databases:backups:restore', id);
-        await backupRuntime.assertScope(user, 'databases:edit', id);
-      },
-      assertScheduledActor: async (user, source, destination, executor) => {
-        await backupRuntime.assertScope(user, 'databases:backups:run', source);
-        await backupRuntime.assertScope(user, 'storage:objects:write', destination);
-        await backupRuntime.assertScope(user, 'storage:credentials:reveal', destination);
-        await backupRuntime.assertScope(user, 'nodes:backups:execute', executor);
-      },
-    },
-    scheduler,
-    {
-      get: () => resolveBackupRunnerImage(env.BACKUP_RUNNER_IMAGE),
-      getRedisStage: () => Object.values(MANAGED_DATABASE_CATALOG.redis)[0],
-    },
-    backupRuntime,
-    backupRuntime,
-    backupRuntime,
-    backupRuntime,
-    backupRuntime
-  );
-  container.registerInstance(BackupService, backupService);
-  backupService.registerScheduler();
+  container
+    .resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition)
+    .initializeBackups(scheduler, backupRuntime, relayPolicyService);
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
   });
@@ -327,12 +236,6 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('docker-internal-registry-health', 10_000, async () => {
     await dockerInternalRegistryService.probeHealth();
   });
-  scheduler.registerInterval('managed-storage-reconcile', 30000, () =>
-    container.resolve(ManagedStorageService).reconcilePendingOperations()
-  );
-  scheduler.registerInterval('managed-database-reconcile', 30000, () =>
-    managedDatabaseService.reconcilePendingOperations()
-  );
   scheduler.registerInterval('docker-snapshot-containers', 10000, async () => {
     dockerSnapshotReconciler.enqueueConnected('containers');
   });
@@ -345,18 +248,6 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('docker-snapshot-housekeeping', 60 * 60 * 1000, () =>
     dockerSnapshotService.purgeOrphans()
   );
-  scheduler.registerInterval('pages-maintenance', 15 * 60 * 1000, async () => {
-    await pageMaintenanceService.run();
-  });
-  scheduler.registerInterval('pages-preview-revocation', 60 * 1000, () =>
-    pageNodeRuntimeService.reconcileDisabledProjectPreviews()
-  );
-  scheduler.registerInterval('pages-profile-reconcile', 60 * 1000, async () => {
-    await pageProfileService.reconcile();
-  });
-  scheduler.registerInterval('pages-route-reconcile', 60 * 1000, async () => {
-    await pageRouteService.reconcile();
-  });
   scheduler.registerInterval('additional-route-reconcile', 60 * 1000, async () => {
     await additionalRouteService.reconcile();
   });
@@ -390,16 +281,12 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('stale-node-check', 60000, () => nodeRegistry.markStaleNodesOffline());
   scheduler.registerInterval('node-health-record', 30000, () => nodeRegistry.recordHealthChecks());
 
-  const statusIncidentEvaluator = new StatusIncidentEvaluatorService(db, statusPageService);
-  container.registerInstance(StatusIncidentEvaluatorService, statusIncidentEvaluator);
-  scheduler.registerInterval('status-page-incidents', 30000, () => statusIncidentEvaluator.run());
-
   // Notification webhook retry job (every 30 seconds)
   const notifRetryJob = new NotificationRetryJob(notifDeliveryService, notifDispatcherService);
   scheduler.registerInterval('notification-retry', 30000, () => notifRetryJob.run());
   const siemDeliveryJob = new SiemDeliveryJob(siemDeliveryService, generalSettingsService);
   scheduler.registerInterval('siem-delivery', 30000, () => siemDeliveryJob.run());
-  scheduler.registerInterval('gitlab-integration-sync', 60000, () => integrationsService.runDueGitLabSyncs());
+  container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).registerJobs(scheduler);
   scheduler.registerInterval('github-integration-health', 60000, () => integrationsService.runDueGitHubHealthChecks());
   scheduler.registerInterval('ssh-integration-health', 60000, () => externalSshService.runDueHealthChecks());
   scheduler.registerInterval('cloudflare-integration-sync', 60000, () => integrationsService.runDueCloudflareSyncs());

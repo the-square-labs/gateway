@@ -1,0 +1,155 @@
+import { OpenAPIHono } from '@hono/zod-openapi';
+import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
+import { openApiValidationHook } from '@/lib/openapi.js';
+import { hasScopeForCreation } from '@/lib/permissions.js';
+import { extractBaseScope } from '@/lib/scopes.js';
+import { AppError } from '@/middleware/error-handler.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import {
+  CreateResourceFolderSchema,
+  MoveResourceFolderSchema,
+  MoveResourcesToFolderSchema,
+  ReorderResourceFoldersSchema,
+  ReorderResourcesSchema,
+  UpdateResourceFolderSchema,
+} from '@/modules/resource-folders/resource-folder.schemas.js';
+import { TokensService } from '@/modules/tokens/tokens.service.js';
+import {
+  createLoggingEnvironmentFolderRoute,
+  createLoggingEnvironmentRoute,
+  createLoggingSchemaFolderRoute,
+  createLoggingSchemaRoute,
+  createLoggingTokenRoute,
+  deleteLoggingEnvironmentFolderRoute,
+  deleteLoggingEnvironmentRoute,
+  deleteLoggingSchemaFolderRoute,
+  deleteLoggingSchemaRoute,
+  deleteLoggingTokenRoute,
+  getLoggingEnvironmentBySlugRoute,
+  getLoggingEnvironmentRoute,
+  getLoggingSchemaBySlugRoute,
+  getLoggingSchemaRoute,
+  listLoggingEnvironmentFoldersRoute,
+  listLoggingEnvironmentsRoute,
+  listLoggingSchemaFoldersRoute,
+  listLoggingSchemasRoute,
+  listLoggingTokensRoute,
+  loggingBatchIngestRoute,
+  loggingFacetsRoute,
+  loggingHealthRoute,
+  loggingIngestRoute,
+  loggingMetadataRoute,
+  moveLoggingEnvironmentFolderRoute,
+  moveLoggingEnvironmentsToFolderRoute,
+  moveLoggingSchemaFolderRoute,
+  moveLoggingSchemasToFolderRoute,
+  reorderLoggingEnvironmentFoldersRoute,
+  reorderLoggingEnvironmentsRoute,
+  reorderLoggingSchemaFoldersRoute,
+  reorderLoggingSchemasRoute,
+  searchLogsRoute,
+  updateLoggingEnvironmentFolderRoute,
+  updateLoggingEnvironmentRoute,
+  updateLoggingSchemaFolderRoute,
+  updateLoggingSchemaRoute,
+} from './logging.docs.js';
+import {
+  CreateLoggingEnvironmentSchema,
+  CreateLoggingSchemaSchema,
+  CreateLoggingTokenSchema,
+  LoggingBatchSchema,
+  LoggingFacetsQuerySchema,
+  LoggingSearchSchema,
+  UpdateLoggingEnvironmentSchema,
+  UpdateLoggingSchemaSchema,
+} from './logging.schemas.js';
+import { LoggingEnvironmentService } from './logging-environment.service.js';
+import { LoggingEnvironmentFolderService } from './logging-environment-folders.service.js';
+import { LoggingFeatureService } from './logging-feature.service.js';
+import { LoggingIngestService } from './logging-ingest.service.js';
+import { loggingIngestAuthMiddleware } from './logging-ingest-auth.middleware.js';
+import { LoggingMaintenanceService } from './logging-maintenance.service.js';
+import { LoggingMetadataService } from './logging-metadata.service.js';
+import { LoggingRateLimitService } from './logging-rate-limit.service.js';
+import { LoggingSchemaService } from './logging-schema.service.js';
+import { LoggingSchemaFolderService } from './logging-schema-folders.service.js';
+import { LoggingSearchService } from './logging-search.service.js';
+import { LoggingTokenService } from './logging-token.service.js';
+export const loggingRouteRuntime = {
+  OpenAPIHono,
+  container,
+  getFolderScopedIds,
+  openApiValidationHook,
+  hasScopeForCreation,
+  extractBaseScope,
+  AppError,
+  authMiddleware,
+  requireScope,
+  LicensePolicyService,
+  CreateResourceFolderSchema,
+  MoveResourceFolderSchema,
+  MoveResourcesToFolderSchema,
+  ReorderResourceFoldersSchema,
+  ReorderResourcesSchema,
+  UpdateResourceFolderSchema,
+  TokensService,
+  createLoggingEnvironmentFolderRoute,
+  createLoggingEnvironmentRoute,
+  createLoggingSchemaFolderRoute,
+  createLoggingSchemaRoute,
+  createLoggingTokenRoute,
+  deleteLoggingEnvironmentFolderRoute,
+  deleteLoggingEnvironmentRoute,
+  deleteLoggingSchemaFolderRoute,
+  deleteLoggingSchemaRoute,
+  deleteLoggingTokenRoute,
+  getLoggingEnvironmentBySlugRoute,
+  getLoggingEnvironmentRoute,
+  getLoggingSchemaBySlugRoute,
+  getLoggingSchemaRoute,
+  listLoggingEnvironmentFoldersRoute,
+  listLoggingEnvironmentsRoute,
+  listLoggingSchemaFoldersRoute,
+  listLoggingSchemasRoute,
+  listLoggingTokensRoute,
+  loggingBatchIngestRoute,
+  loggingFacetsRoute,
+  loggingHealthRoute,
+  loggingIngestRoute,
+  loggingMetadataRoute,
+  moveLoggingEnvironmentFolderRoute,
+  moveLoggingEnvironmentsToFolderRoute,
+  moveLoggingSchemaFolderRoute,
+  moveLoggingSchemasToFolderRoute,
+  reorderLoggingEnvironmentFoldersRoute,
+  reorderLoggingEnvironmentsRoute,
+  reorderLoggingSchemaFoldersRoute,
+  reorderLoggingSchemasRoute,
+  searchLogsRoute,
+  updateLoggingEnvironmentFolderRoute,
+  updateLoggingEnvironmentRoute,
+  updateLoggingSchemaFolderRoute,
+  updateLoggingSchemaRoute,
+  CreateLoggingEnvironmentSchema,
+  CreateLoggingSchemaSchema,
+  CreateLoggingTokenSchema,
+  LoggingBatchSchema,
+  LoggingFacetsQuerySchema,
+  LoggingSearchSchema,
+  UpdateLoggingEnvironmentSchema,
+  UpdateLoggingSchemaSchema,
+  LoggingEnvironmentService,
+  LoggingEnvironmentFolderService,
+  LoggingFeatureService,
+  LoggingIngestService,
+  loggingIngestAuthMiddleware,
+  LoggingMaintenanceService,
+  LoggingMetadataService,
+  LoggingRateLimitService,
+  LoggingSchemaService,
+  LoggingSchemaFolderService,
+  LoggingSearchService,
+  LoggingTokenService,
+};

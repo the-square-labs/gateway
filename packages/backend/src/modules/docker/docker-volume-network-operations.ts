@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { dockerManagedVolumes } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { commandResultDataToBuffer } from '@/lib/command-result-data.js';
 import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -510,15 +511,15 @@ export async function createVolume(
   config: { name: string; storageKind?: 'regular' | 'disk-image'; capacityBytes?: number; folderId?: string | null },
   userId: string
 ) {
+  if (config.storageKind === 'disk-image') return commercialModuleUnavailable();
   const inventory = context.parseResult(await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'list'));
   if (!Array.isArray(inventory))
     throw new AppError(502, 'VOLUME_INVENTORY_UNAVAILABLE', 'Volume inventory is unavailable');
   if (inventory.some((volume) => String(volume.name ?? volume.Name ?? '') === config.name))
     throw new AppError(409, 'NAME_IN_USE', `A volume named "${config.name}" already exists on this node`);
-  const storageKind = config.storageKind ?? 'regular';
+  const storageKind = 'regular' as const;
   const daemonConfig = {
     name: config.name,
-    ...(storageKind === 'disk-image' ? { storageKind } : {}),
     ...(config.capacityBytes != null ? { capacityBytes: config.capacityBytes } : {}),
   };
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'create', daemonConfig);
@@ -550,52 +551,10 @@ export async function createVolume(
     details: {
       nodeId,
       name: config.name,
-      ...(storageKind === 'disk-image' ? { storageKind, capacityBytes: config.capacityBytes } : {}),
     },
   });
   context.eventBus?.publish('docker.volume.changed', { nodeId, name: config.name, action: 'created' });
   return data;
-}
-
-export async function resizeVolume(
-  context: DockerVolumeNetworkOperationContext,
-  nodeId: string,
-  name: string,
-  capacityBytes: number,
-  userId: string
-) {
-  const current = await context.db
-    .select({ storageKind: dockerManagedVolumes.storageKind, capacityBytes: dockerManagedVolumes.capacityBytes })
-    .from(dockerManagedVolumes)
-    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)))
-    .limit(1);
-  const record = current[0];
-  if (!record || record.storageKind !== 'disk-image') {
-    throw new AppError(409, 'VOLUME_NOT_RESIZABLE', 'Only managed disk-image volumes can be resized');
-  }
-  if (record.capacityBytes != null && capacityBytes <= record.capacityBytes) {
-    throw new AppError(400, 'VOLUME_SIZE_NOT_INCREASED', 'Volume capacity can only be increased');
-  }
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(
-    nodeId,
-    'resize',
-    { name, capacityBytes },
-    10 * 60_000
-  );
-  context.parseResult(result);
-  await context.onVolumeRemoved?.(nodeId, name);
-  await context.db
-    .update(dockerManagedVolumes)
-    .set({ capacityBytes, updatedAt: new Date() })
-    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)));
-  await context.auditService.log({
-    action: 'docker.volume.resize',
-    userId,
-    resourceType: 'docker-volume',
-    resourceId: name,
-    details: { nodeId, name, capacityBytes },
-  });
-  context.eventBus?.publish('docker.volume.changed', { nodeId, name, action: 'resized' });
 }
 
 export async function removeVolume(

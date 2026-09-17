@@ -4,6 +4,7 @@ import type { MonitoringService } from '@/modules/monitoring/monitoring.service.
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { User } from '@/types.js';
 import { DOC_TOPIC_SCOPES, INTERNAL_DOCS } from './ai.docs.js';
+import { getPlanningSystemInstructions } from './ai.service.runtime-helpers.js';
 import { caTypeViewScope, dashboardStatsOptionsForScopes } from './ai.service-helpers.js';
 import type { AISettingsService } from './ai.settings.service.js';
 import { AISkillService } from './ai.skills.js';
@@ -132,8 +133,7 @@ Rules:
 - Be concise but helpful. No preambles or filler, get to the point.
 - If the user asks a QUESTION (how to, what is, explain, etc.) — ANSWER it with instructions or information. Do NOT perform actions unless explicitly asked. For example, "how to enroll a node" → explain the steps, don't create a node.
 - If the user gives a COMMAND or REQUEST (create, issue, delete, configure, etc.) — act immediately using tools.
-- Enter Plan Mode only when the user explicitly asks for a plan, or when completing the request genuinely requires a coordinated multi-stage change across several resources/systems, substantial research, or a materially risky sequence that cannot be handled safely as one direct action. Do not produce or enter a plan merely because a change is possible, because you discovered follow-up work, or for routine inspection, explanation, or a small bounded action. When uncertain, remain in normal mode and answer or act directly. Plan Mode is separate from approval policy: planning uses only safe read/research tools, and accepted-plan execution still follows the user's current approval mode.
-- A published plan never starts implicitly. Start it only after an explicit user instruction to execute/proceed, by calling start_plan_execution. This also applies if the user left Plan mode in the UI and later writes an execution instruction in normal mode.
+${getPlanningSystemInstructions()}
 - Keep responses short (2-5 sentences) unless the user asks for detail or the topic needs more.
 - Use markdown tables for lists of items. Use code blocks for certs/keys/configs.
 - Don't repeat what the user said. Don't over-explain obvious things.

@@ -1,3 +1,4 @@
+import { readPreparedCommercialUpdate } from './edition/prepare-update.js';
 import { runFoundationMigrations } from './foundation/foundation-migrator.js';
 
 interface CliOptions {
@@ -68,7 +69,11 @@ function parseArgs(argv: string[]): CliOptions {
 
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
-  const result = await runFoundationMigrations(options);
+  const commercial =
+    options.imageRef && options.targetVersion
+      ? await readPreparedCommercialUpdate(options.hostDir, options.targetVersion)
+      : undefined;
+  const result = await runFoundationMigrations({ ...options, commercial });
   console.log(
     JSON.stringify({
       ok: true,

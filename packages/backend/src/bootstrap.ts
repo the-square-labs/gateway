@@ -1,3 +1,10 @@
+import { siemCommercialRuntime } from '@/modules/audit/siem-commercial-runtime.js';
+import { dockerManagementCommercialRuntime } from '@/modules/docker/docker-management-commercial-runtime.js';
+import { dockerRegistryCommercialRuntime } from '@/modules/docker/docker-registry-commercial-runtime.js';
+import { loggingCommercialRuntime } from '@/modules/logging/logging-commercial-runtime.js';
+import { pagesCommercialRuntime } from '@/modules/pages/pages-commercial-runtime.js';
+import { pkiCommercialRuntime } from '@/modules/pki/pki-commercial-runtime.js';
+import { statusPageCommercialRuntime } from '@/modules/status-page/status-page-commercial-runtime.js';
 import 'reflect-metadata';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
@@ -5,6 +12,8 @@ import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
 import { hostingResources } from '@/db/schema/index.js';
+import { COMMERCIAL_HOST_API_VERSION } from '@/edition/contract.js';
+import { initializeCommercialEdition } from '@/edition/runtime.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
 import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
 import { logger } from '@/lib/logger.js';
@@ -17,12 +26,14 @@ import { AISandboxJobsService } from '@/modules/ai/ai.sandbox-jobs.service.js';
 import { AISandboxRunnerService } from '@/modules/ai/ai.sandbox-runner.service.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { AISettingsService } from '@/modules/ai/ai.settings.service.js';
+import { aiCommercialRuntime } from '@/modules/ai/ai-commercial-runtime.js';
 import { AIConversationService } from '@/modules/ai/ai-conversation.service.js';
 import { AIConversationFolderService } from '@/modules/ai/ai-conversation-folder.service.js';
 import { AIConversationSearchService } from '@/modules/ai/ai-conversation-search.service.js';
 import { AIPlanService } from '@/modules/ai/ai-plan.service.js';
 import { AIProviderRuntimeService } from '@/modules/ai/ai-provider-runtime.service.js';
 import { AIRunService } from '@/modules/ai/ai-run.service.js';
+import { aiRunCommercialRuntime } from '@/modules/ai/ai-run-commercial-runtime.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { SiemDeliveryService } from '@/modules/audit/siem-delivery.service.js';
@@ -38,36 +49,35 @@ import { LocalAuthService } from '@/modules/auth/local-auth.service.js';
 import { MfaService } from '@/modules/auth/mfa.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { PasskeyService } from '@/modules/auth/passkey.service.js';
+import { databaseCommercialRuntime } from '@/modules/databases/database-commercial-runtime.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DatabaseMonitoringService } from '@/modules/databases/database-monitoring.service.js';
 import { DatabaseConnectionService } from '@/modules/databases/databases.service.js';
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
+import { managedDatabaseRuntime } from '@/modules/databases/managed-database-runtime.js';
 import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
-import {
-  CompositeDockerAvailabilityProjector,
-  DockerComposeAvailabilityAdapter,
-  DockerContainerAvailabilityAdapter,
-  DockerDeploymentAvailabilityAdapter,
-  ManagedDatabaseAvailabilityProjector,
-} from '@/modules/docker/availability/docker-availability.adapters.js';
+
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
-import { DockerAvailabilityArtifactService } from '@/modules/docker/availability/docker-availability-artifact.service.js';
-import { DockerAvailabilityIngressProjector } from '@/modules/docker/availability/docker-availability-ingress.js';
+import { dockerAvailabilityCommercialRuntime } from '@/modules/docker/availability/docker-availability-commercial-runtime.js';
 import { DockerWorkloadResolverService } from '@/modules/docker/availability/docker-workload-resolver.service.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { DockerComposeNodeDispatcher } from '@/modules/docker/compose/compose-node-dispatcher.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
+import { dockerBuildCommercialRuntime } from '@/modules/docker/docker-build-commercial-runtime.js';
+import { DockerBuildQuery } from '@/modules/docker/docker-build-query.js';
 import { DockerBuildRolloutService } from '@/modules/docker/docker-build-rollout.service.js';
 import { DockerBuildRunnerService } from '@/modules/docker/docker-build-runner.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
+import { dockerDeploymentCommercialRuntime } from '@/modules/docker/docker-deployment-commercial-runtime.js';
 import { DockerEnvironmentService } from '@/modules/docker/docker-environment.service.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.service.js';
 import { DockerImageCleanupService } from '@/modules/docker/docker-image-cleanup.service.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
+import { dockerMigrationCommercialRuntime } from '@/modules/docker/docker-migration-commercial-runtime.js';
 import { DockerMigrationCoordinator } from '@/modules/docker/docker-migration-coordinator.js';
 import { DockerMigrationDispatchAdapter } from '@/modules/docker/docker-migration-dispatch.js';
 import { DockerMigrationExecutor } from '@/modules/docker/docker-migration-executor.js';
@@ -85,6 +95,7 @@ import { DockerSecretService } from '@/modules/docker/docker-secret.service.js';
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
+import { dockerSourceCommercialRuntime } from '@/modules/docker/docker-source-commercial-runtime.js';
 import { DockerTaskService } from '@/modules/docker/docker-task.service.js';
 import { DockerWebhookService } from '@/modules/docker/docker-webhook.service.js';
 import { DomainsService } from '@/modules/domains/domain.service.js';
@@ -126,7 +137,7 @@ import { InferenceProviderService } from '@/modules/inference/providers/inferenc
 import { InferenceProviderCredentialService } from '@/modules/inference/providers/inference-provider-credential.service.js';
 import { InferenceRoutingService } from '@/modules/inference/providers/inference-routing.service.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
-import { GitLabProvider } from '@/modules/integrations/gitlab-provider.js';
+import { integrationCommercialRuntime } from '@/modules/integrations/integration-commercial-runtime.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
 import { LicenseEntitlementReconcilerService } from '@/modules/license/license-entitlement-reconciler.service.js';
@@ -160,11 +171,11 @@ import { NotificationDeliveryService } from '@/modules/notifications/notificatio
 import { NotificationDispatcherService } from '@/modules/notifications/notification-dispatcher.service.js';
 import { NotificationWebhookService } from '@/modules/notifications/notification-webhook.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
-import { ManagedStorageMetricsProvider } from '@/modules/object-storage/managed-storage-metrics-provider.js';
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
 import { ObjectStorageMonitoringService } from '@/modules/object-storage/object-storage-monitoring.service.js';
 import { ObjectStorageUploadService } from '@/modules/object-storage/object-storage-upload.service.js';
+import { storageCommercialRuntime } from '@/modules/object-storage/storage-commercial-runtime.js';
 import { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import { PageArtifactStore, resolvePageStorageDir } from '@/modules/pages/artifacts/page-artifact-store.js';
 import { PageBuildRolloutService } from '@/modules/pages/deployments/page-build-rollout.service.js';
@@ -207,8 +218,8 @@ import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folde
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
 import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
 import { ManagedStorageBindingsService } from '@/modules/storage/managed-storage-bindings.service.js';
+import { managedStorageRuntime } from '@/modules/storage/managed-storage-runtime.js';
 import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
-import { StorageClusterMemberStore } from '@/modules/storage/storage-cluster-member-store.js';
 import { StorageWorkloadDispatch } from '@/modules/storage/storage-workload-dispatch.js';
 import { STORAGE_WORKLOAD_LABELS } from '@/modules/storage/storage-workload-labels.js';
 import { StorageWorkloadProvider } from '@/modules/storage/storage-workload-provider.js';
@@ -332,8 +343,24 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(LicensePolicyService, licensePolicyService);
   generalSettingsService.setLicensePolicyService(licensePolicyService);
   const licenseQuotaService = new LicenseQuotaService(db, licensePolicyService);
+  const commercialEdition = await initializeCommercialEdition({
+    operations: acceptedOperations,
+    apiVersion: COMMERCIAL_HOST_API_VERSION,
+    env,
+    db,
+    redis,
+    container,
+    tokens: TOKENS,
+    license: licensePolicyService,
+    errors: { AppError },
+  });
+  container.registerInstance(TOKENS.CommercialEdition, commercialEdition);
   container.registerInstance(LicenseQuotaService, licenseQuotaService);
-  const siemOutboxService = new SiemAuditOutboxService(licenseService, generalSettingsService);
+  const siemOutboxService = commercialEdition.createSiem(
+    'SiemAuditOutboxService',
+    [licenseService, generalSettingsService],
+    siemCommercialRuntime
+  );
   siemOutboxService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemAuditOutboxService, siemOutboxService);
 
@@ -347,7 +374,7 @@ export async function initializeContainer(): Promise<void> {
   const outboundWebhookPolicyService = new OutboundWebhookPolicyService(db);
   container.registerInstance(OutboundWebhookPolicyService, outboundWebhookPolicyService);
 
-  const auditService = new AuditService(db, siemOutboxService);
+  const auditService = commercialEdition.createAuditService(AuditService, [db, siemOutboxService]);
   auditService.setEventBus(eventBus);
   container.registerInstance(AuditService, auditService);
 
@@ -398,7 +425,7 @@ export async function initializeContainer(): Promise<void> {
   oauthService.setEventBus(eventBus);
   container.registerInstance(OAuthService, oauthService);
 
-  const templatesService = new TemplatesService(db);
+  const templatesService = commercialEdition.createPki('TemplatesService', [db], pkiCommercialRuntime);
   container.registerInstance(TemplatesService, templatesService);
 
   const caService = new CAService(db, cryptoService, auditService);
@@ -415,7 +442,7 @@ export async function initializeContainer(): Promise<void> {
   const ocspService = new OCSPService(db, cryptoService, caService, cacheService);
   container.registerInstance(OCSPService, ocspService);
 
-  const exportService = new ExportService(cryptoService);
+  const exportService = commercialEdition.createPki('ExportService', [cryptoService], pkiCommercialRuntime);
   container.registerInstance(ExportService, exportService);
 
   const tokensService = new TokensService(db, auditService);
@@ -539,8 +566,11 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(InferenceReservationReconciler, inferenceReservationReconciler);
   inferenceReservationReconciler.start();
 
-  const gitLabProvider = new GitLabProvider();
-  const integrationsService = new IntegrationsService(db, auditService, cryptoService, [gitLabProvider]);
+  const integrationsService = commercialEdition.createIntegrationsService(
+    IntegrationsService,
+    [db, auditService, cryptoService, [...commercialEdition.vcsProviders]],
+    integrationCommercialRuntime
+  );
   integrationsService.setEventBus(eventBus);
   integrationsService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(IntegrationsService, integrationsService);
@@ -801,7 +831,11 @@ export async function initializeContainer(): Promise<void> {
   const nodeMonitoringService = new NodeMonitoringService(nodeRegistry, cacheService);
   container.registerInstance(NodeMonitoringService, nodeMonitoringService);
 
-  const dockerManagementService = new DockerManagementService(db, auditService, nodeDispatch, nodeRegistry);
+  const dockerManagementService = commercialEdition.createDockerManagementService(
+    DockerManagementService,
+    [db, auditService, nodeDispatch, nodeRegistry],
+    dockerManagementCommercialRuntime
+  );
   dockerManagementService.setLicensePolicyService(licensePolicyService);
   const dockerAccessResourceService = new DockerAccessResourceService(db);
   container.registerInstance(DockerAccessResourceService, dockerAccessResourceService);
@@ -830,7 +864,11 @@ export async function initializeContainer(): Promise<void> {
   const dockerRegistryTokenService = new DockerRegistryTokenService();
   await dockerRegistryTokenService.initialize();
   container.registerInstance(DockerRegistryTokenService, dockerRegistryTokenService);
-  const dockerInternalRegistryService = new DockerInternalRegistryService(db, dockerRegistryTokenService, auditService);
+  const dockerInternalRegistryService = commercialEdition.createDockerRegistryService(
+    DockerInternalRegistryService,
+    [db, dockerRegistryTokenService, auditService],
+    dockerRegistryCommercialRuntime
+  );
   dockerInternalRegistryService.setEventBus(eventBus);
   dockerInternalRegistryService.setLicensePolicyService(licensePolicyService);
   await dockerInternalRegistryService.initialize();
@@ -871,25 +909,19 @@ export async function initializeContainer(): Promise<void> {
 
   const dockerTaskService = new DockerTaskService(db);
   container.registerInstance(DockerTaskService, dockerTaskService);
-  const dockerComposeService = new DockerComposeService(
-    db,
-    auditService,
-    dockerTaskService,
-    dockerSecretService,
-    dockerSnapshotService
+  const dockerComposeService = commercialEdition.createDockerDeployment(
+    'DockerComposeService',
+    [db, auditService, dockerTaskService, dockerSecretService, dockerSnapshotService],
+    dockerDeploymentCommercialRuntime
   );
   dockerComposeService.setDispatcher(new DockerComposeNodeDispatcher(nodeDispatch));
   dockerComposeService.setEventBus(eventBus);
   dockerComposeService.setSnapshotReconciler(dockerSnapshotReconciler);
   container.registerInstance(DockerComposeService, dockerComposeService);
-  const dockerDeploymentService = new DockerDeploymentService(
-    db,
-    auditService,
-    nodeDispatch,
-    dockerRegistryService,
-    dockerTaskService,
-    nodeRegistry,
-    dockerSecretService
+  const dockerDeploymentService = commercialEdition.createDockerDeployment(
+    'DockerDeploymentService',
+    [db, auditService, nodeDispatch, dockerRegistryService, dockerTaskService, nodeRegistry, dockerSecretService],
+    dockerDeploymentCommercialRuntime
   );
   container.registerInstance(DockerDeploymentService, dockerDeploymentService);
   dockerDeploymentService.setLicensePolicyService(licensePolicyService);
@@ -912,7 +944,15 @@ export async function initializeContainer(): Promise<void> {
     dockerDeploymentService
   );
   container.registerInstance(DockerWebhookService, dockerWebhookService);
-  const dockerBuildService = new DockerBuildService(db);
+  const dockerBuildService = commercialEdition.createDockerBuild(
+    'DockerBuildService',
+    [db],
+    dockerBuildCommercialRuntime
+  );
+  container.registerInstance(
+    DockerBuildQuery,
+    commercialEdition.createDockerBuild('DockerBuildQuery', [db], dockerBuildCommercialRuntime)
+  );
   dockerBuildService.setEventBus(eventBus);
   if (relayRegistryService) {
     dockerBuildService.setBuildReleaseHandler((buildId) =>
@@ -921,7 +961,11 @@ export async function initializeContainer(): Promise<void> {
   }
   container.registerInstance(DockerBuildService, dockerBuildService);
   const dockerBuildRunnerService = relayRegistryService
-    ? new DockerBuildRunnerService(db, dockerBuildService, nodeDispatch, integrationsService, relayRegistryService)
+    ? commercialEdition.createDockerBuild(
+        'DockerBuildRunnerService',
+        [db, dockerBuildService, nodeDispatch, integrationsService, relayRegistryService],
+        dockerBuildCommercialRuntime
+      )
     : null;
   if (dockerBuildRunnerService) container.registerInstance(DockerBuildRunnerService, dockerBuildRunnerService);
   dockerBuildService.setLicenseGuard(() => licensePolicyService.requireFeature('git-push-to-deploy'));
@@ -933,13 +977,10 @@ export async function initializeContainer(): Promise<void> {
     await dockerBuildRunnerService.assertBuildAdmission();
   });
   const dockerBuildRolloutService = relayRegistryService
-    ? new DockerBuildRolloutService(
-        db,
-        dockerManagementService,
-        dockerDeploymentService,
-        relayRegistryService,
-        dockerComposeService,
-        authService
+    ? commercialEdition.createDockerBuild(
+        'DockerBuildRolloutService',
+        [db, dockerManagementService, dockerDeploymentService, relayRegistryService, dockerComposeService, authService],
+        dockerBuildCommercialRuntime
       )
     : null;
   if (dockerBuildRolloutService) {
@@ -948,7 +989,11 @@ export async function initializeContainer(): Promise<void> {
       dockerBuildRolloutService.rollout(buildId, leaseOwner, operationId)
     );
   }
-  const dockerSourceService = new DockerSourceService(db, auditService, integrationsService, cryptoService);
+  const dockerSourceService = commercialEdition.createDockerSourceService(
+    DockerSourceService,
+    [db, auditService, integrationsService, cryptoService],
+    dockerSourceCommercialRuntime
+  );
   dockerSourceService.setBuildService(dockerBuildService);
   dockerSourceService.setLicensePolicyService(licensePolicyService);
   dockerBuildRunnerService?.setSourceService(dockerSourceService);
@@ -989,61 +1034,49 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
-  const managedDatabaseTunnelProxy = new ManagedDatabaseTunnelProxy(relayPolicyService, appRelayClientFingerprint);
+  const managedDatabaseTunnelProxy = commercialEdition.createManagedDatabase(
+    'ManagedDatabaseTunnelProxy',
+    [relayPolicyService, appRelayClientFingerprint],
+    managedDatabaseRuntime
+  );
   container.registerInstance(ManagedDatabaseTunnelProxy, managedDatabaseTunnelProxy);
-  const managedStorageTunnelProxy = new ManagedStorageTunnelProxy(relayPolicyService, appRelayClientFingerprint);
+  const managedStorageTunnelProxy = commercialEdition.createManagedStorage(
+    'ManagedStorageTunnelProxy',
+    [relayPolicyService, appRelayClientFingerprint],
+    managedStorageRuntime
+  );
   container.registerInstance(ManagedStorageTunnelProxy, managedStorageTunnelProxy);
-  const databaseConnectionService = new DatabaseConnectionService(
-    db,
-    auditService,
-    cryptoService,
-    managedDatabaseTunnelProxy
+  const databaseConnectionService = commercialEdition.createDatabaseService(
+    DatabaseConnectionService,
+    [db, auditService, cryptoService, managedDatabaseTunnelProxy],
+    databaseCommercialRuntime
   );
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
 
-  const managedDatabaseService = new ManagedDatabaseService(
-    db,
-    auditService,
-    cryptoService,
-    nodeDispatch,
-    databaseCA,
-    databaseConnectionService
+  const managedDatabaseService = commercialEdition.createManagedDatabase(
+    'ManagedDatabaseService',
+    [db, auditService, cryptoService, nodeDispatch, databaseCA, databaseConnectionService],
+    managedDatabaseRuntime
   );
   managedDatabaseService.setEventBus(eventBus);
   managedDatabaseService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedDatabaseService, managedDatabaseService);
-  void (async () => {
-    try {
-      await managedDatabaseService.reconcileDatabaseConnections();
-    } catch (error) {
-      logger.warn('Failed to backfill managed database connection records', { error });
-    }
-    try {
-      await managedDatabaseService.warmReadyPostgresExtensionCatalogs();
-    } catch (error) {
-      logger.warn('Failed to warm managed PostgreSQL extension catalogs', { error });
-    }
-    try {
-      await managedDatabaseService.reconcileBindingIdentities();
-    } catch (error) {
-      logger.warn('Failed to reconcile managed database identities during startup', { error });
-    }
-  })();
-  void managedDatabaseService.reconcileDatabaseCertificates().catch((error) => {
-    logger.warn('Failed to backfill managed database TLS certificates', { error });
-  });
 
-  const managedDatabaseBindingService = new ManagedDatabaseBindingService(
-    db,
-    auditService,
-    cryptoService,
-    nodeDispatch,
-    dockerManagementService,
-    dockerDeploymentService,
-    dockerSecretService,
-    relayPolicyService,
-    dockerComposeService,
-    managedDatabaseService
+  const managedDatabaseBindingService = commercialEdition.createManagedDatabase(
+    'ManagedDatabaseBindingService',
+    [
+      db,
+      auditService,
+      cryptoService,
+      nodeDispatch,
+      dockerManagementService,
+      dockerDeploymentService,
+      dockerSecretService,
+      relayPolicyService,
+      dockerComposeService,
+      managedDatabaseService,
+    ],
+    managedDatabaseRuntime
   );
   managedDatabaseBindingService.setEventBus(eventBus);
   managedDatabaseBindingService.setLicensePolicyService(licensePolicyService);
@@ -1052,66 +1085,88 @@ export async function initializeContainer(): Promise<void> {
   const databaseFolderService = new DatabaseFolderService(db, auditService);
   container.registerInstance(DatabaseFolderService, databaseFolderService);
 
-  const databaseMonitoringService = new DatabaseMonitoringService(
-    databaseConnectionService,
-    cacheService,
-    managedDatabaseService
+  const databaseMonitoringService = commercialEdition.createDatabaseMonitoring(
+    DatabaseMonitoringService,
+    [databaseConnectionService, cacheService, managedDatabaseService],
+    databaseCommercialRuntime
   );
   container.registerInstance(DatabaseMonitoringService, databaseMonitoringService);
   databaseConnectionService.setEventBus(eventBus);
   databaseFolderService.setEventBus(eventBus);
 
-  const objectStorageService = new ObjectStorageService(
-    db,
-    auditService,
-    cryptoService,
-    storageCAService,
-    managedStorageTunnelProxy
+  const objectStorageService = commercialEdition.createObjectStorageService(
+    ObjectStorageService,
+    [db, auditService, cryptoService, storageCAService, managedStorageTunnelProxy],
+    storageCommercialRuntime
   );
   container.registerInstance(ObjectStorageService, objectStorageService);
   container.registerInstance(
     ObjectStorageUploadService,
-    new ObjectStorageUploadService(
-      objectStorageService,
-      generalSettingsService,
-      join(resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV), 'object-uploads')
+    commercialEdition.createStorageUploads(
+      ObjectStorageUploadService,
+      [
+        objectStorageService,
+        generalSettingsService,
+        join(resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV), 'object-uploads'),
+      ],
+      storageCommercialRuntime
     )
   );
 
   const objectStorageFolderService = new ObjectStorageFolderService(db, auditService);
   container.registerInstance(ObjectStorageFolderService, objectStorageFolderService);
 
-  const managedStorageMetricsProvider = new ManagedStorageMetricsProvider(db);
-  const objectStorageMonitoringService = new ObjectStorageMonitoringService(
-    objectStorageService,
-    cacheService,
-    managedStorageMetricsProvider
+  const managedStorageMetricsProvider = commercialEdition.createManagedStorage(
+    'ManagedStorageMetricsProvider',
+    [db],
+    managedStorageRuntime
+  );
+  const objectStorageMonitoringService = commercialEdition.createStorageMonitoring(
+    ObjectStorageMonitoringService,
+    [objectStorageService, cacheService, managedStorageMetricsProvider],
+    storageCommercialRuntime
   );
   container.registerInstance(ObjectStorageMonitoringService, objectStorageMonitoringService);
   objectStorageService.setEventBus(eventBus);
   objectStorageFolderService.setEventBus(eventBus);
 
-  const storageWorkloadProvider = new StorageWorkloadProvider(db, cryptoService, storageCAService);
+  const storageWorkloadProvider = commercialEdition.createManagedStorage(
+    'StorageWorkloadProvider',
+    [db, cryptoService, storageCAService],
+    managedStorageRuntime
+  );
   storageWorkloadProvider.setEventBus(eventBus);
   container.registerInstance(StorageWorkloadProvider, storageWorkloadProvider);
 
-  const storageWorkloadStore = new StorageWorkloadStore(db);
+  const storageWorkloadStore = commercialEdition.createManagedStorage(
+    'StorageWorkloadStore',
+    [db],
+    managedStorageRuntime
+  );
   container.registerInstance(StorageWorkloadStore, storageWorkloadStore);
 
   // Shared across the dispatch and the service so both see the same
   // cluster-member rows within a request/reconcile cycle.
-  const storageClusterMemberStore = new StorageClusterMemberStore(db);
+  const storageClusterMemberStore = commercialEdition.createManagedStorage(
+    'StorageClusterMemberStore',
+    [db],
+    managedStorageRuntime
+  );
 
-  const storageWorkloadDispatch = new StorageWorkloadDispatch(
-    nodeDispatch,
-    auditService,
-    cryptoService,
-    storageWorkloadProvider,
-    objectStorageService,
-    db,
-    storageClusterMemberStore,
-    storageCAService,
-    relayPolicyService
+  const storageWorkloadDispatch = commercialEdition.createManagedStorage(
+    'StorageWorkloadDispatch',
+    [
+      nodeDispatch,
+      auditService,
+      cryptoService,
+      storageWorkloadProvider,
+      objectStorageService,
+      db,
+      storageClusterMemberStore,
+      storageCAService,
+      relayPolicyService,
+    ],
+    managedStorageRuntime
   );
   storageWorkloadDispatch.setEventBus(eventBus);
   container.registerInstance(StorageWorkloadDispatch, storageWorkloadDispatch);
@@ -1122,32 +1177,40 @@ export async function initializeContainer(): Promise<void> {
     STORAGE_WORKLOAD_LABELS
   );
 
-  const managedStorageService = new ManagedStorageService(
-    db,
-    auditService,
-    cryptoService,
-    nodeDispatch,
-    storageWorkloadProvider,
-    objectStorageService,
-    storageWorkloadStore,
-    storageWorkloadDispatch,
-    storageWorkloadLifecycle,
-    storageClusterMemberStore,
-    managedStorageTunnelProxy,
-    storageCAService,
-    relayPolicyService
+  const managedStorageService = commercialEdition.createManagedStorage(
+    'ManagedStorageService',
+    [
+      db,
+      auditService,
+      cryptoService,
+      nodeDispatch,
+      storageWorkloadProvider,
+      objectStorageService,
+      storageWorkloadStore,
+      storageWorkloadDispatch,
+      storageWorkloadLifecycle,
+      storageClusterMemberStore,
+      managedStorageTunnelProxy,
+      storageCAService,
+      relayPolicyService,
+    ],
+    managedStorageRuntime
   );
-  const managedStorageBindingsService = new ManagedStorageBindingsService(
-    db,
-    auditService,
-    cryptoService,
-    nodeDispatch,
-    dockerManagementService,
-    dockerDeploymentService,
-    dockerSecretService,
-    getEnv().SECURE_LINK_CONNECTOR_IMAGE,
-    relayPolicyService,
-    storageCAService
+  const managedStorageBindingsService = commercialEdition.createManagedStorage(
+    'ManagedStorageBindingsService',
+    [
+      db,
+      auditService,
+      cryptoService,
+      nodeDispatch,
+      dockerManagementService,
+      dockerDeploymentService,
+      dockerSecretService,
+      getEnv().SECURE_LINK_CONNECTOR_IMAGE,
+      relayPolicyService,
+      storageCAService,
+    ],
+    managedStorageRuntime
   );
   managedStorageBindingsService.setEventBus(eventBus);
   managedStorageBindingsService.setLicensePolicyService(licensePolicyService);
@@ -1203,54 +1266,28 @@ export async function initializeContainer(): Promise<void> {
   );
   proxyService.setEventBus(eventBus);
   container.registerInstance(ProxyService, proxyService);
-  const dockerAvailabilityIngressProjector = proxySecureLinkService
-    ? new DockerAvailabilityIngressProjector(
-        db,
-        nodeRegistry,
-        dockerManagementService,
-        proxySecureLinkService,
-        proxyService
-      )
-    : undefined;
-  if (dockerAvailabilityIngressProjector) {
-    proxyService.setAvailabilityIngressReconciler((hostId) => dockerAvailabilityIngressProjector.reconcileHost(hostId));
-  }
-  const dockerAvailabilityProjectors = [
-    new ManagedDatabaseAvailabilityProjector(managedDatabaseBindingService, nodeRegistry),
-    ...(dockerAvailabilityIngressProjector ? [dockerAvailabilityIngressProjector] : []),
-  ];
-  const dockerAvailabilityProjector = new CompositeDockerAvailabilityProjector(dockerAvailabilityProjectors);
-  const dockerAvailabilityArtifacts = relayRegistryService
-    ? new DockerAvailabilityArtifactService(db, dockerInternalRegistryService, relayRegistryService, nodeDispatch)
-    : undefined;
   const dockerWorkloadResolver = new DockerWorkloadResolverService(db);
   container.registerInstance(DockerWorkloadResolverService, dockerWorkloadResolver);
   dockerHealthCheckService.setWorkloadResolver(dockerWorkloadResolver);
-  const dockerAvailabilityService = new DockerAvailabilityService(
-    db,
-    nodeRegistry,
-    licensePolicyService,
-    auditService,
-    eventBus,
-    dockerAvailabilityArtifacts,
-    dockerEnvironmentService,
-    dockerWorkloadResolver
-  );
-  dockerAvailabilityService.registerAdapter(
-    new DockerContainerAvailabilityAdapter(
+  const dockerAvailabilityService = commercialEdition.createDockerAvailabilityService(
+    {
       db,
-      nodeDispatch,
-      dockerManagementService,
-      dockerEnvironmentService,
-      dockerSecretService,
-      dockerAvailabilityProjector
-    )
-  );
-  dockerAvailabilityService.registerAdapter(
-    new DockerDeploymentAvailabilityAdapter(db, nodeDispatch, dockerSecretService, dockerAvailabilityProjector)
-  );
-  dockerAvailabilityService.registerAdapter(
-    new DockerComposeAvailabilityAdapter(db, nodeDispatch, dockerSecretService, dockerAvailabilityProjector)
+      nodes: nodeRegistry,
+      license: licensePolicyService,
+      audit: auditService,
+      events: eventBus,
+      dispatch: nodeDispatch,
+      docker: dockerManagementService,
+      environment: dockerEnvironmentService,
+      secrets: dockerSecretService,
+      registry: dockerInternalRegistryService,
+      relay: relayRegistryService,
+      bindings: managedDatabaseBindingService,
+      proxy: proxyService,
+      secureLinks: proxySecureLinkService,
+      workloads: dockerWorkloadResolver,
+    },
+    dockerAvailabilityCommercialRuntime
   );
   container.registerInstance(DockerAvailabilityService, dockerAvailabilityService);
   dockerManagementService.setWorkloadResolver(dockerWorkloadResolver);
@@ -1295,7 +1332,6 @@ export async function initializeContainer(): Promise<void> {
     },
     removeBinding: (policyId, userId) => dockerAvailabilityService.removeManagedDatabaseBinding(policyId, userId),
   });
-  dockerAvailabilityService.start();
   dockerManagementService.setContainerRecreateCompletedHandler(async (nodeId, newContainerId) => {
     // A recreated workload keeps its persisted binding metadata, but the
     // daemon-owned listeners and Relay lanes still need to be proven against
@@ -1305,11 +1341,10 @@ export async function initializeContainer(): Promise<void> {
     await dockerSnapshotReconciler.finalizeContainerRecreate(nodeId, newContainerId);
   });
   if (relayPolicyService && relayRegistryService) {
-    const relayRegistryIngressService = new RelayRegistryIngressService(
-      relayPolicyService,
-      nodeDispatch,
-      dockerInternalRegistryService,
-      proxyService
+    const relayRegistryIngressService = commercialEdition.createRegistryIngress(
+      RelayRegistryIngressService,
+      [relayPolicyService, nodeDispatch, dockerInternalRegistryService, proxyService],
+      dockerRegistryCommercialRuntime
     );
     relayRegistryIngressService.setEventBus(eventBus);
     dockerInternalRegistryService.setExternalAccessReconciler((next, previous, userId) =>
@@ -1329,48 +1364,59 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(AdditionalRouteService, additionalRouteService);
   nodesService.setProxyService(proxyService);
 
-  const dockerMigrationDispatch = new DockerMigrationDispatchAdapter(nodeDispatch);
+  const dockerMigrationDispatch = commercialEdition.createDockerMigration(
+    'DockerMigrationDispatchAdapter',
+    [nodeDispatch],
+    dockerMigrationCommercialRuntime
+  );
   container.registerInstance(DockerMigrationDispatchAdapter, dockerMigrationDispatch);
-  const dockerMigrationPreflight = new DockerMigrationPreflightService(
-    db,
-    dockerManagementService,
-    dockerDeploymentService,
-    dockerMigrationDispatch
+  const dockerMigrationPreflight = commercialEdition.createDockerMigration(
+    'DockerMigrationPreflightService',
+    [db, dockerManagementService, dockerDeploymentService, dockerMigrationDispatch],
+    dockerMigrationCommercialRuntime
   );
   container.registerInstance(DockerMigrationPreflightService, dockerMigrationPreflight);
   dockerMigrationPreflight.setLicensePolicyService(licensePolicyService);
-  const dockerMigrationCoordinator = new DockerMigrationCoordinator(
-    db,
-    proxyService,
-    dockerSnapshotReconciler,
-    dockerAccessResourceService,
-    relayRegistryService
+  const dockerMigrationCoordinator = commercialEdition.createDockerMigration(
+    'DockerMigrationCoordinator',
+    [db, proxyService, dockerSnapshotReconciler, dockerAccessResourceService, relayRegistryService],
+    dockerMigrationCommercialRuntime
   );
   container.registerInstance(DockerMigrationCoordinator, dockerMigrationCoordinator);
-  const dockerMigrationExecutor = new DockerMigrationExecutor(
-    db,
-    dockerMigrationDispatch,
-    dockerManagementService,
-    dockerDeploymentService,
-    dockerEnvironmentService,
-    dockerSecretService,
-    cryptoService
+  const dockerMigrationExecutor = commercialEdition.createDockerMigration(
+    'DockerMigrationExecutor',
+    [
+      db,
+      dockerMigrationDispatch,
+      dockerManagementService,
+      dockerDeploymentService,
+      dockerEnvironmentService,
+      dockerSecretService,
+      cryptoService,
+    ],
+    dockerMigrationCommercialRuntime
   );
   container.registerInstance(DockerMigrationExecutor, dockerMigrationExecutor);
-  const dockerMigrationService = new DockerMigrationService(
-    db,
-    dockerMigrationPreflight,
-    dockerMigrationExecutor,
-    dockerMigrationCoordinator,
-    auditService,
-    eventBus,
-    dockerManagementService,
-    authService
+  const dockerMigrationService = commercialEdition.createDockerMigration(
+    'DockerMigrationService',
+    [
+      db,
+      dockerMigrationPreflight,
+      dockerMigrationExecutor,
+      dockerMigrationCoordinator,
+      auditService,
+      eventBus,
+      dockerManagementService,
+      authService,
+    ],
+    dockerMigrationCommercialRuntime
   );
   container.registerInstance(DockerMigrationService, dockerMigrationService);
-  dockerMigrationService.start();
 
-  const statusPageService = new StatusPageService(db, proxyService, auditService, generalSettingsService);
+  const statusPageService = commercialEdition.createStatusPageService(
+    [db, proxyService, auditService, generalSettingsService],
+    statusPageCommercialRuntime
+  );
   statusPageService.setEventBus(eventBus);
   statusPageService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(StatusPageService, statusPageService);
@@ -1447,6 +1493,7 @@ export async function initializeContainer(): Promise<void> {
   );
   generalSettingsService.setInferenceDisabledHandler(() => aiSettingsService.handleInferenceDisabled());
   container.registerInstance(AISettingsService, aiSettingsService);
+  commercialEdition.initializeAI(aiCommercialRuntime);
   const aiSandboxArtifactService = new AISandboxArtifactService(env);
   await aiSandboxArtifactService.cleanInterruptedFiles().catch((error) => {
     logger.warn('Failed to clean interrupted AI artifact writes during bootstrap', { error });
@@ -1461,11 +1508,19 @@ export async function initializeContainer(): Promise<void> {
     aiSandboxArtifactService
   );
   container.registerInstance(AIProviderRuntimeService, aiProviderRuntimeService);
-  const aiSandboxJobsService = new AISandboxJobsService(db);
+  const aiSandboxJobsService = commercialEdition.createAISandboxJobsService(
+    AISandboxJobsService,
+    [db],
+    aiCommercialRuntime
+  );
   container.registerInstance(AISandboxJobsService, aiSandboxJobsService);
   const aiSandboxRunnerService = new AISandboxRunnerService();
   container.registerInstance(AISandboxRunnerService, aiSandboxRunnerService);
-  const aiSandboxService = new AISandboxService(aiSandboxJobsService, aiSandboxRunnerService, aiSandboxArtifactService);
+  const aiSandboxService = commercialEdition.createAISandboxService(
+    AISandboxService,
+    [aiSandboxJobsService, aiSandboxRunnerService, aiSandboxArtifactService],
+    aiCommercialRuntime
+  );
   container.registerInstance(AISandboxService, aiSandboxService);
   const aiConversationSearchService = new AIConversationSearchService(db, auditService);
   container.registerInstance(AIConversationSearchService, aiConversationSearchService);
@@ -1480,9 +1535,13 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(AIConversationService, aiConversationService);
   const aiConversationFolderService = new AIConversationFolderService(db, aiConversationSearchService);
   container.registerInstance(AIConversationFolderService, aiConversationFolderService);
-  const aiPlanService = new AIPlanService(db);
+  const aiPlanService = commercialEdition.createAIPlanService(AIPlanService, [db], aiCommercialRuntime);
   container.registerInstance(AIPlanService, aiPlanService);
-  const aiRunService = new AIRunService(db, eventBus, aiConversationSearchService, aiPlanService);
+  const aiRunService = commercialEdition.createAIRunService(
+    AIRunService,
+    [db, eventBus, aiConversationSearchService, aiPlanService],
+    aiRunCommercialRuntime
+  );
   container.registerInstance(AIRunService, aiRunService);
   aiSandboxService.startPolicyReconciliation();
   authService.setSandboxService(aiSandboxService);
@@ -1501,60 +1560,98 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DomainFolderService, domainFolderService);
 
   // Pages control plane
-  const pageProjectService = new PageProjectService(db, auditService);
+  const pageProjectService = commercialEdition.createPages(
+    'PageProjectService',
+    [db, auditService],
+    pagesCommercialRuntime
+  );
   pageProjectService.setEventBus(eventBus);
   container.registerInstance(PageProjectService, pageProjectService);
   const pageProjectFolderService = new PageProjectFolderService(db, auditService);
   pageProjectFolderService.setEventBus(eventBus);
   container.registerInstance(PageProjectFolderService, pageProjectFolderService);
-  const pageArtifactStore = new PageArtifactStore(resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV));
+  const pageArtifactStore = commercialEdition.createPages(
+    'PageArtifactStore',
+    [resolvePageStorageDir(env.PAGES_STORAGE_DIR, env.NODE_ENV)],
+    pagesCommercialRuntime
+  );
   await pageArtifactStore.initialize();
   container.registerInstance(PageArtifactStore, pageArtifactStore);
-  const pageDeployTokenService = new PageDeployTokenService(db, auditService);
+  const pageDeployTokenService = commercialEdition.createPages(
+    'PageDeployTokenService',
+    [db, auditService],
+    pagesCommercialRuntime
+  );
   pageDeployTokenService.setEventBus(eventBus);
   container.registerInstance(PageDeployTokenService, pageDeployTokenService);
-  const pageDeploymentService = new PageDeploymentService(db, auditService, generalSettingsService, pageArtifactStore);
+  const pageDeploymentService = commercialEdition.createPages(
+    'PageDeploymentService',
+    [db, auditService, generalSettingsService, pageArtifactStore],
+    pagesCommercialRuntime
+  );
   pageDeploymentService.setEventBus(eventBus);
   container.registerInstance(PageDeploymentService, pageDeploymentService);
-  const pageTagService = new PageTagService(db, auditService);
+  const pageTagService = commercialEdition.createPages('PageTagService', [db, auditService], pagesCommercialRuntime);
   pageTagService.setEventBus(eventBus);
   container.registerInstance(PageTagService, pageTagService);
-  const pageRuntimeConfigService = new PageRuntimeConfigService(db, auditService);
+  const pageRuntimeConfigService = commercialEdition.createPages(
+    'PageRuntimeConfigService',
+    [db, auditService],
+    pagesCommercialRuntime
+  );
   pageRuntimeConfigService.setEventBus(eventBus);
   container.registerInstance(PageRuntimeConfigService, pageRuntimeConfigService);
-  const pagePublicationService = new PagePublicationService(db, auditService, pageTagService);
+  const pagePublicationService = commercialEdition.createPages(
+    'PagePublicationService',
+    [db, auditService, pageTagService],
+    pagesCommercialRuntime
+  );
   pagePublicationService.setEventBus(eventBus);
   container.registerInstance(PagePublicationService, pagePublicationService);
-  const pageBuildRolloutService = new PageBuildRolloutService(
-    db,
-    dockerRegistryTokenService,
-    pageDeploymentService,
-    pagePublicationService
+  const pageBuildRolloutService = commercialEdition.createPages(
+    'PageBuildRolloutService',
+    [db, dockerRegistryTokenService, pageDeploymentService, pagePublicationService],
+    pagesCommercialRuntime
   );
   container.registerInstance(PageBuildRolloutService, pageBuildRolloutService);
   dockerBuildRolloutService?.setPagesRollout(pageBuildRolloutService);
-  const pageRetentionService = new PageRetentionService(db, auditService, pageArtifactStore);
+  const pageRetentionService = commercialEdition.createPages(
+    'PageRetentionService',
+    [db, auditService, pageArtifactStore],
+    pagesCommercialRuntime
+  );
   pageRetentionService.setEventBus(eventBus);
   container.registerInstance(PageRetentionService, pageRetentionService);
   pageDeploymentService.setRetentionService(pageRetentionService);
   pageProjectService.setRetentionService(pageRetentionService);
-  const pageMaintenanceService = new PageMaintenanceService(db, pageArtifactStore, pageRetentionService, eventBus);
+  const pageMaintenanceService = commercialEdition.createPages(
+    'PageMaintenanceService',
+    [db, pageArtifactStore, pageRetentionService, eventBus],
+    pagesCommercialRuntime
+  );
   container.registerInstance(PageMaintenanceService, pageMaintenanceService);
-  const pageProfileService = new PageProfileService(db, auditService, env.APP_URL);
+  const pageProfileService = commercialEdition.createPages(
+    'PageProfileService',
+    [db, auditService, env.APP_URL],
+    pagesCommercialRuntime
+  );
   pageProfileService.setEventBus(eventBus);
   pageProfileService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(PageProfileService, pageProfileService);
-  const pageNodeRuntimeService = new PageNodeRuntimeService(
-    db,
-    pageArtifactStore,
-    nodeDispatch,
-    nginxCertificateDistribution
+  const pageNodeRuntimeService = commercialEdition.createPages(
+    'PageNodeRuntimeService',
+    [db, pageArtifactStore, nodeDispatch, nginxCertificateDistribution],
+    pagesCommercialRuntime
   );
   container.registerInstance(PageNodeRuntimeService, pageNodeRuntimeService);
   pageProjectService.setRuntimeAdapter(pageNodeRuntimeService);
   pageProjectService.setRouteRuntimeAdapter(proxyService);
   pageMaintenanceService.setMigrationReconciler(pageProjectService);
-  const pageRouteService = new PageRouteService(db, pageNodeRuntimeService, auditService, pageRuntimeConfigService);
+  const pageRouteService = commercialEdition.createPages(
+    'PageRouteService',
+    [db, pageNodeRuntimeService, auditService, pageRuntimeConfigService],
+    pagesCommercialRuntime
+  );
   container.registerInstance(PageRouteService, pageRouteService);
   pageRouteService.setAdditionalRoutePublicationAdapter(additionalRouteService);
   pageProfileService.setRuntimeAdapter(pageNodeRuntimeService);
@@ -1695,10 +1792,18 @@ export async function initializeContainer(): Promise<void> {
     generalSettingsService
   );
   container.registerInstance(UpdateService, updateService);
+  container.registerInstance(
+    LicenseModuleService,
+    new LicenseModuleService(licenseService, commercialEdition, updateService, eventBus)
+  );
 
   const loggingSettingsService = new LoggingSettingsService(db, cryptoService);
   container.registerInstance(LoggingSettingsService, loggingSettingsService);
-  const loggingClickHouseService = new LoggingClickHouseService();
+  const loggingClickHouseService = commercialEdition.createLogging(
+    'LoggingClickHouseService',
+    [],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LoggingClickHouseService, loggingClickHouseService);
   const loggingFeatureService = new LoggingFeatureService(loggingClickHouseService);
   container.registerInstance(LoggingFeatureService, loggingFeatureService);
@@ -1716,16 +1821,20 @@ export async function initializeContainer(): Promise<void> {
     aiSettingsService,
     finalizeSetupService,
     licensePolicyService,
-    pageProfileService
+    pageProfileService,
+    commercialEdition
   );
   container.registerInstance(UIBootstrapService, uiBootstrapService);
-  const localClickHouseService = new LocalClickHouseService(dockerService);
+  const localClickHouseService = commercialEdition.createLogging(
+    'LocalClickHouseService',
+    [dockerService],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LocalClickHouseService, localClickHouseService);
-  const loggingRuntimeService = new LoggingRuntimeService(
-    loggingSettingsService,
-    localClickHouseService,
-    loggingClickHouseService,
-    loggingFeatureService
+  const loggingRuntimeService = commercialEdition.createLogging(
+    'LoggingRuntimeService',
+    [loggingSettingsService, localClickHouseService, loggingClickHouseService, loggingFeatureService],
+    loggingCommercialRuntime
   );
   loggingRuntimeService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingRuntimeService, loggingRuntimeService);
@@ -1738,7 +1847,11 @@ export async function initializeContainer(): Promise<void> {
   licenseEntitlementReconciler.setPageProfileService(pageProfileService);
   licenseEntitlementReconciler.setDockerInternalRegistryService(dockerInternalRegistryService);
   container.registerInstance(LicenseEntitlementReconcilerService, licenseEntitlementReconciler);
-  const loggingMaintenanceService = new LoggingMaintenanceService(loggingClickHouseService, loggingFeatureService);
+  const loggingMaintenanceService = commercialEdition.createLogging(
+    'LoggingMaintenanceService',
+    [loggingClickHouseService, loggingFeatureService],
+    loggingCommercialRuntime
+  );
   loggingMaintenanceService.setEventBus(eventBus);
   container.registerInstance(LoggingMaintenanceService, loggingMaintenanceService);
   try {
@@ -1747,38 +1860,66 @@ export async function initializeContainer(): Promise<void> {
     loggingFeatureService.markUnavailable(error instanceof Error ? error.message : 'ClickHouse initialization failed');
     logger.warn('External logging ClickHouse initialization failed', { error });
   }
-  const loggingEnvironmentService = new LoggingEnvironmentService(db, auditService, loggingClickHouseService);
+  const loggingEnvironmentService = commercialEdition.createLogging(
+    'LoggingEnvironmentService',
+    [db, auditService, loggingClickHouseService],
+    loggingCommercialRuntime
+  );
   loggingEnvironmentService.setEventBus(eventBus);
   loggingEnvironmentService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingEnvironmentService, loggingEnvironmentService);
   const loggingEnvironmentFolderService = new LoggingEnvironmentFolderService(db, auditService);
   loggingEnvironmentFolderService.setEventBus(eventBus);
   container.registerInstance(LoggingEnvironmentFolderService, loggingEnvironmentFolderService);
-  const loggingTokenService = new LoggingTokenService(db, auditService);
+  const loggingTokenService = commercialEdition.createLogging(
+    'LoggingTokenService',
+    [db, auditService],
+    loggingCommercialRuntime
+  );
   loggingTokenService.setEventBus(eventBus);
   loggingTokenService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingTokenService, loggingTokenService);
-  const loggingSchemaService = new LoggingSchemaService(db, auditService);
+  const loggingSchemaService = commercialEdition.createLogging(
+    'LoggingSchemaService',
+    [db, auditService],
+    loggingCommercialRuntime
+  );
   loggingSchemaService.setEventBus(eventBus);
   loggingSchemaService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingSchemaService, loggingSchemaService);
   const loggingSchemaFolderService = new LoggingSchemaFolderService(db, auditService);
   loggingSchemaFolderService.setEventBus(eventBus);
   container.registerInstance(LoggingSchemaFolderService, loggingSchemaFolderService);
-  const loggingValidationService = new LoggingValidationService();
+  const loggingValidationService = commercialEdition.createLogging(
+    'LoggingValidationService',
+    [],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LoggingValidationService, loggingValidationService);
-  const loggingRateLimitService = new LoggingRateLimitService(redis);
+  const loggingRateLimitService = commercialEdition.createLogging(
+    'LoggingRateLimitService',
+    [redis],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LoggingRateLimitService, loggingRateLimitService);
-  const loggingMetadataService = new LoggingMetadataService(db);
+  const loggingMetadataService = commercialEdition.createLogging(
+    'LoggingMetadataService',
+    [db],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LoggingMetadataService, loggingMetadataService);
-  const loggingIngestService = new LoggingIngestService(
-    loggingValidationService,
-    loggingClickHouseService,
-    loggingMetadataService
+  const loggingIngestService = commercialEdition.createLogging(
+    'LoggingIngestService',
+    [loggingValidationService, loggingClickHouseService, loggingMetadataService],
+    loggingCommercialRuntime
   );
   loggingIngestService.setEventBus(eventBus);
   container.registerInstance(LoggingIngestService, loggingIngestService);
-  const loggingSearchService = new LoggingSearchService(loggingEnvironmentService, loggingClickHouseService);
+  const loggingSearchService = commercialEdition.createLogging(
+    'LoggingSearchService',
+    [loggingEnvironmentService, loggingClickHouseService],
+    loggingCommercialRuntime
+  );
   container.registerInstance(LoggingSearchService, loggingSearchService);
 
   const daemonUpdateService = new DaemonUpdateService(db, env, generalSettingsService);
@@ -1866,18 +2007,25 @@ export async function initializeContainer(): Promise<void> {
   );
   container.registerInstance(NotificationDispatcherService, notifDispatcherService);
 
-  const siemTransportService = new SiemTransportService(
-    env,
-    cryptoService,
-    outboundWebhookPolicyService,
-    generalSettingsService
+  const siemTransportService = commercialEdition.createSiem(
+    'SiemTransportService',
+    [env, cryptoService, outboundWebhookPolicyService, generalSettingsService],
+    siemCommercialRuntime
   );
   container.registerInstance(SiemTransportService, siemTransportService);
-  const siemDeliveryService = new SiemDeliveryService(db, siemTransportService, generalSettingsService);
+  const siemDeliveryService = commercialEdition.createSiem(
+    'SiemDeliveryService',
+    [db, siemTransportService, generalSettingsService],
+    siemCommercialRuntime
+  );
   siemDeliveryService.setEventBus(eventBus);
   siemDeliveryService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemDeliveryService, siemDeliveryService);
-  const siemDestinationService = new SiemDestinationService(db, auditService, cryptoService, siemTransportService);
+  const siemDestinationService = commercialEdition.createSiem(
+    'SiemDestinationService',
+    [db, auditService, cryptoService, siemTransportService],
+    siemCommercialRuntime
+  );
   siemDestinationService.setEventBus(eventBus);
   siemDestinationService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(SiemDestinationService, siemDestinationService);
@@ -1926,3 +2074,6 @@ export async function initializeContainer(): Promise<void> {
 
   logger.info('Dependency injection container initialized');
 }
+
+import { acceptedOperations } from '@/edition/accepted-operations.js';
+import { LicenseModuleService } from '@/modules/license/license-module.service.js';

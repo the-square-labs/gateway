@@ -7,16 +7,17 @@ import {
   managedDatabaseInstances,
   nodes,
 } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import { type LicensePolicyService, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { DockerWorkloadResolverService } from './availability/docker-workload-resolver.service.js';
-import { type DockerRuntimeStatus, DockerRuntimeStatusSchema } from './docker.schemas.js';
+import type { DockerRuntimeStatus } from './docker.schemas.js';
 import {
   CONTAINER_LIFECYCLE_TIMEOUT_BUFFER_SECONDS,
   DEFAULT_CONTAINER_STOP_TIMEOUT_SECONDS,
@@ -123,7 +124,6 @@ import {
   removeNetwork as removeDockerNetwork,
   removeVolume as removeDockerVolume,
   renameVolume as renameDockerVolume,
-  resizeVolume as resizeDockerVolume,
   updateVolumeLabels as updateDockerVolumeLabels,
   writeVolumeFile as writeDockerVolumeFile,
 } from './docker-volume-network-operations.js';
@@ -154,7 +154,6 @@ export class DockerManagementService {
   private migrationGuard?: DockerMigrationGuard;
   private accessResourceService?: DockerAccessResourceService;
   private networkAccessResourceService?: DockerNetworkAccessResourceService;
-  private licensePolicy?: LicensePolicyService;
   private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
   private availabilityMutationGuard?: (nodeId: string, containerName: string) => Promise<void>;
   private availabilityMutationCoordinator?: {
@@ -287,9 +286,7 @@ export class DockerManagementService {
     this.networkAccessResourceService = service;
   }
 
-  setLicensePolicyService(service: LicensePolicyService): void {
-    this.licensePolicy = service;
-  }
+  setLicensePolicyService(_service: LicensePolicyService): void {}
 
   setContainerRecreateCompletedHandler(handler: (nodeId: string, newContainerId: string) => Promise<void>): void {
     this.containerRecreateCompletedHandler = handler;
@@ -424,7 +421,7 @@ export class DockerManagementService {
     };
   }
 
-  private volumeNetworkOperationContext() {
+  protected volumeNetworkOperationContext() {
     return {
       db: this.db,
       nodeDispatch: this.nodeDispatch,
@@ -779,16 +776,19 @@ export class DockerManagementService {
     }
   }
 
-  private async assertDockerRuntimeProfileAvailable(
+  protected async assertDockerRuntimeProfileAvailable(
     nodeId: string,
     profile: unknown,
     currentProfile?: unknown
   ): Promise<void> {
     if (profile !== 'secure') return;
     if (currentProfile !== 'secure') {
-      // LICENSE ENFORCEMENT: A new transition to Secure Runtime requires Business under the project license/TOS.
-      await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('secure-runtime');
+      return commercialModuleUnavailable();
     }
+    await this.requireHealthySecureRuntime(nodeId);
+  }
+
+  protected async requireHealthySecureRuntime(nodeId: string): Promise<void> {
     const node = await this.validateDockerNode(nodeId);
     const status = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus;
     if (status?.state !== 'healthy') {
@@ -1738,16 +1738,14 @@ export class DockerManagementService {
       );
     }
     if (config.storageKind === 'disk-image') {
-      await requireConfiguredLicensePolicy(this.licensePolicy).requireMinimumPlan('personal');
+      return commercialModuleUnavailable();
     }
     await this.validateDockerNode(nodeId);
     return createDockerVolume(this.volumeNetworkOperationContext(), nodeId, config, userId);
   }
 
-  async resizeVolume(nodeId: string, name: string, capacityBytes: number, userId: string) {
-    await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
-    await this.validateDockerNode(nodeId);
-    return resizeDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, capacityBytes, userId);
+  async resizeVolume(_nodeId: string, _name: string, _capacityBytes: number, _userId: string): Promise<void> {
+    return commercialModuleUnavailable();
   }
 
   async listManagedVolumeOptions(nodeId: string) {
@@ -1906,62 +1904,19 @@ export class DockerManagementService {
     return adoptDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, userId);
   }
 
-  async manageRunsc(nodeId: string, action: 'preflight' | 'install') {
-    await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('secure-runtime');
-    const node = await this.validateDockerNode(nodeId);
-    const reportedStatus = (node.capabilities as Record<string, any> | null)?.dockerRuntimeStatus as
-      | DockerRuntimeStatus
-      | undefined;
-    if (reportedStatus?.state === 'installing') {
-      throw new AppError(409, 'RUNTIME_INSTALL_IN_PROGRESS', 'Secure Runtime setup is already in progress');
-    }
-
-    if (action === 'install') {
-      await this.persistDockerRuntimeStatus(node, {
-        state: 'installing',
-        targetVersion: reportedStatus?.targetVersion,
-        message: 'Installing and verifying Secure Runtime',
-        checkedAt: new Date().toISOString(),
-        remoteInstallable: reportedStatus?.remoteInstallable ?? true,
-        localInstallCommand: reportedStatus?.localInstallCommand,
-      });
-    }
-
-    let parsed: DockerRuntimeStatus;
-    try {
-      const result = await this.nodeDispatch.sendDockerRuntimeCommand(nodeId, action);
-      parsed = DockerRuntimeStatusSchema.parse(this.parseResult(result));
-    } catch (error) {
-      if (action === 'install') {
-        await this.persistDockerRuntimeStatus(node, {
-          state: 'failed',
-          targetVersion: reportedStatus?.targetVersion,
-          reasonCode: 'INSTALL_FAILED',
-          message: error instanceof Error ? error.message : 'Secure Runtime setup failed',
-          checkedAt: new Date().toISOString(),
-          remoteInstallable: reportedStatus?.remoteInstallable ?? true,
-          localInstallCommand: reportedStatus?.localInstallCommand,
-        });
-      }
-      throw error;
-    }
-
-    await this.persistDockerRuntimeStatus(node, parsed);
-    return parsed;
+  protected secureRuntimeContext() {
+    return {
+      db: this.db,
+      nodeRegistry: this.nodeRegistry,
+      nodeDispatch: this.nodeDispatch,
+      validateDockerNode: (nodeId: string) => this.validateDockerNode(nodeId),
+      assertVolumeAllowed: (nodeId: string, name: string) => this.migrationGuard?.assertVolumeAllowed(nodeId, name),
+      parseResult: (result: { success: boolean; error?: string; detail?: string }) => this.parseResult(result),
+    };
   }
 
-  private async persistDockerRuntimeStatus(
-    node: { id: string; hostname: string; capabilities: unknown },
-    status: DockerRuntimeStatus
-  ) {
-    await this.db
-      .update(nodes)
-      .set({
-        capabilities: { ...((node.capabilities as Record<string, unknown> | null) ?? {}), dockerRuntimeStatus: status },
-        updatedAt: new Date(),
-      })
-      .where(eq(nodes.id, node.id));
-    this.nodeRegistry.publishDockerRuntimeChanged(node.id, status);
+  async manageRunsc(_nodeId: string, _action: 'preflight' | 'install'): Promise<DockerRuntimeStatus> {
+    return commercialModuleUnavailable();
   }
 
   private async assertContainerMigrationAllowed(nodeId: string, containerId: string): Promise<void> {

@@ -17,6 +17,27 @@ func TestCalculateCPUPercentUsesHostTotalWhenUnlimited(t *testing.T) {
 	}
 }
 
+func TestStatsMemoryUsesContainerLimit(t *testing.T) {
+	stats := testStatsResponse(100, 400, 4)
+	stats.MemoryStats.Usage = 64 * 1024 * 1024
+	stats.MemoryStats.Limit = 16 * 1024 * 1024 * 1024
+	inspect := &container.InspectResponse{HostConfig: &container.HostConfig{
+		Resources: container.Resources{Memory: 256 * 1024 * 1024},
+	}}
+	got := statsResponseToProto(stats, inspect)
+	if got.MemoryLimitBytes != 256*1024*1024 || got.MemoryUsageBytes != int64(stats.MemoryStats.Usage) {
+		t.Fatalf("expected container memory denominator, got %+v", got)
+	}
+	stats.MemoryStats.Limit = 128 * 1024 * 1024
+	if got := statsResponseToProto(stats, inspect); got.MemoryLimitBytes != 128*1024*1024 {
+		t.Fatalf("expected lower effective cgroup limit, got %d", got.MemoryLimitBytes)
+	}
+	inspect.HostConfig.Memory = 0
+	if got := statsResponseToProto(stats, inspect); got.MemoryLimitBytes != int64(stats.MemoryStats.Limit) {
+		t.Fatalf("expected Docker stats fallback when unlimited, got %d", got.MemoryLimitBytes)
+	}
+}
+
 func TestCalculateCPUPercentUsesNanoCpuLimit(t *testing.T) {
 	stats := testStatsResponse(100, 400, 4)
 	inspect := &container.InspectResponse{

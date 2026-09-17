@@ -1,4 +1,6 @@
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { CommercialEditionRuntime } from '@/edition/runtime.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { boundScopes } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getAuditRequestContext, setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
@@ -470,12 +472,16 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     if (PKI_CA_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
       await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
+      if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
+      container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).requireAvailable();
       return executePkiCaTool({ caService: this.caService }, user, toolName, args);
     }
     if (PKI_CERTIFICATE_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
       if (toolName !== 'audit_system_pki_leaves') {
         await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
+        if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
+        container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).requireAvailable();
       }
       return executePkiCertificateTool(
         {

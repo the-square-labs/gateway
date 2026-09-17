@@ -8,16 +8,23 @@ const mocks = vi.hoisted(() => ({
     exportJKS: vi.fn(),
   },
   systemCertificateLifecycle: { auditSystemLeaves: vi.fn() },
+  edition: { requireAvailable: vi.fn() },
 }));
 
 vi.mock('@/container.js', () => ({
   container: {
+    isRegistered: vi.fn((token) => token === Symbol.for('CommercialEdition')),
     resolve: vi.fn((token) =>
-      token?.name === 'SystemCertificateLifecycleService' ? mocks.systemCertificateLifecycle : mocks.exportService
+      token === Symbol.for('CommercialEdition')
+        ? mocks.edition
+        : token?.name === 'SystemCertificateLifecycleService'
+          ? mocks.systemCertificateLifecycle
+          : mocks.exportService
     ),
   },
   TOKENS: {
     DrizzleClient: Symbol.for('DrizzleClient'),
+    CommercialEdition: Symbol.for('CommercialEdition'),
   },
 }));
 

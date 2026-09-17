@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { container, TOKENS } from '@/container.js';
+import { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -12,6 +14,13 @@ const BASE_USER = {
   scopes: [] as string[],
   isBlocked: false,
 };
+
+beforeEach(() => {
+  container.registerInstance(TOKENS.CommercialEdition, { requireAvailable: vi.fn() });
+});
+afterEach(() => {
+  container.reset();
+});
 
 function createService(caService: Record<string, unknown>) {
   const service = new AIService(
@@ -37,6 +46,14 @@ function createService(caService: Record<string, unknown>) {
 }
 
 describe('AIService PKI CA tool routing', () => {
+  it('does not expose user PKI through MCP when an entitled license has no private module', async () => {
+    container.registerInstance(TOKENS.CommercialEdition, CommercialEditionRuntime.community());
+    const caService = { getCATree: vi.fn() };
+    await expect(
+      createService(caService).executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})
+    ).resolves.toMatchObject({ error: expect.stringContaining('commercial module') });
+    expect(caService.getCATree).not.toHaveBeenCalled();
+  });
   it('checks the Enterprise PKI entitlement before invoking a PKI tool', async () => {
     const caService = { getCATree: vi.fn() };
     const service = createService(caService);

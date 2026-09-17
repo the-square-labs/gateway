@@ -26,9 +26,9 @@ import {
   sslCertificates,
   users,
 } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
-import { AppError } from '@/middleware/error-handler.js';
 import { INTERNAL_DOCKER_REGISTRY_ID } from '@/modules/docker/docker-registry-internal.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import { getAuditRequestContext, markAuditEmitted } from './audit-request-context.js';
@@ -64,8 +64,6 @@ export interface AuditLogFilters {
   from?: Date;
   to?: Date;
 }
-
-const AUDIT_EXPORT_MAX_ENTRIES = 50_000;
 
 interface AuditLogRow {
   id: string;
@@ -280,20 +278,8 @@ export class AuditService {
     };
   }
 
-  async getAuditExport(filters: AuditLogFilters): Promise<AuditLogRow[]> {
-    const result = await this.getAuditLog({
-      ...filters,
-      page: 1,
-      limit: AUDIT_EXPORT_MAX_ENTRIES + 1,
-    });
-    if (result.pagination.total > AUDIT_EXPORT_MAX_ENTRIES) {
-      throw new AppError(
-        413,
-        'AUDIT_EXPORT_TOO_LARGE',
-        `Audit export exceeds ${AUDIT_EXPORT_MAX_ENTRIES} entries; narrow the filters or date range`
-      );
-    }
-    return result.data;
+  async getAuditExport(_filters: AuditLogFilters): Promise<AuditLogRow[]> {
+    return commercialModuleUnavailable();
   }
 
   async getAuditUsers(): Promise<Array<{ userId: string | null; userName: string | null; userEmail: string | null }>> {

@@ -66,6 +66,7 @@ export interface LicenseEntitlements {
 }
 
 export interface LicenseStatusView {
+  moduleRestarting?: boolean;
   status: LicenseStatus;
   plan: LicensePlan;
   registrationStatus: LicenseRegistrationStatus;

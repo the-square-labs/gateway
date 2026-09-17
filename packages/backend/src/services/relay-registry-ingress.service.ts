@@ -1,7 +1,5 @@
-import {
-  INTERNAL_REGISTRY_INGRESS_ID,
-  INTERNAL_REGISTRY_INGRESS_PORT,
-} from '@/modules/docker/docker-registry.constants.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import { INTERNAL_REGISTRY_INGRESS_ID } from '@/modules/docker/docker-registry.constants.js';
 import type {
   DockerInternalRegistryService,
   DockerRegistryExternalAccessConfig,
@@ -13,7 +11,6 @@ import type { RelayPolicyService } from './relay-policy.service.js';
 
 export class RelayRegistryIngressService {
   private reconcileChain: Promise<void> = Promise.resolve();
-  private generation = Date.now();
 
   constructor(
     private readonly relayPolicy: RelayPolicyService,
@@ -55,7 +52,7 @@ export class RelayRegistryIngressService {
     return run;
   }
 
-  private async reconcileLocked(
+  protected async reconcileLocked(
     next: DockerRegistryExternalAccessConfig,
     previous: DockerRegistryExternalAccessConfig,
     userId: string | null
@@ -69,61 +66,21 @@ export class RelayRegistryIngressService {
       });
       return;
     }
-    if (!next.externalHostname || !next.externalNginxNodeId || !next.externalCertificateId) {
-      throw new Error('External registry hostname, Nginx node, and certificate are required');
-    }
-
-    await this.relayPolicy.ensureInternalRegistryRoute(
-      INTERNAL_REGISTRY_INGRESS_ID,
-      next.externalNginxNodeId,
-      'registry_ingress'
-    );
-    try {
-      await this.syncNode(next.externalNginxNodeId, [this.binding()]);
-      await this.proxy.upsertRegistrySystemHost(
-        {
-          domain: next.externalHostname,
-          nodeId: next.externalNginxNodeId,
-          sslCertificateId: next.externalCertificateId,
-        },
-        userId
-      );
-      if (
-        previous.externalAccessEnabled &&
-        previous.externalNginxNodeId &&
-        previous.externalNginxNodeId !== next.externalNginxNodeId
-      ) {
-        await this.syncNode(previous.externalNginxNodeId, []);
-      }
-    } catch (error) {
-      await this.syncNode(next.externalNginxNodeId, []).catch(() => undefined);
-      await this.relayPolicy
-        .revokeOwner('registry_ingress', INTERNAL_REGISTRY_INGRESS_ID, { allowDeferredSnapshot: true })
-        .catch(() => undefined);
-      throw error;
-    }
+    return commercialModuleUnavailable();
   }
 
-  private async syncNode(nodeId: string, bindings: ReturnType<RelayRegistryIngressService['binding']>[]) {
+  protected registryIngressContext() {
+    return {
+      relayPolicy: this.relayPolicy,
+      proxy: this.proxy,
+      syncNode: (nodeId: string, bindings: Parameters<NodeDispatchService['sendNginxRegistryBindings']>[1]) =>
+        this.syncNode(nodeId, bindings),
+    };
+  }
+
+  private async syncNode(nodeId: string, bindings: Parameters<NodeDispatchService['sendNginxRegistryBindings']>[1]) {
     const result = await this.dispatch.sendNginxRegistryBindings(nodeId, bindings);
     if (!result.success) throw new Error(result.error || 'Nginx daemon rejected registry ingress bindings');
-  }
-
-  private binding() {
-    this.generation += 1;
-    return {
-      bindingId: INTERNAL_REGISTRY_INGRESS_ID,
-      role: 'ingress' as const,
-      generation: this.generation,
-      repository: '*' as const,
-      actions: ['pull', 'push'] as ['pull', 'push'],
-      localAddress: '127.0.0.1' as const,
-      localPort: INTERNAL_REGISTRY_INGRESS_PORT,
-      relayOwnerKind: 'registry_ingress' as const,
-      relayOwnerId: INTERNAL_REGISTRY_INGRESS_ID,
-      authorization: '' as const,
-      authorizationExpiresAtUnix: 0 as const,
-    };
   }
 
   private fromState(state: DockerRegistryExternalAccessConfig): DockerRegistryExternalAccessConfig {

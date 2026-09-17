@@ -36,43 +36,14 @@ function harness() {
 }
 
 describe('RelayRegistryIngressService', () => {
-  it('uses a distinct registry ingress route and a blind Nginx transport binding', async () => {
+  it('requires the private module before enabling external ingress', async () => {
     const { service, relayPolicy, dispatch, proxy } = harness();
-    await service.reconcile(
-      enabled,
-      {
-        externalAccessEnabled: false,
-        externalHostname: null,
-        externalNginxNodeId: null,
-        externalCertificateId: null,
-      },
-      'user-1'
-    );
-
-    expect(relayPolicy.ensureInternalRegistryRoute).toHaveBeenCalledWith(
-      INTERNAL_REGISTRY_INGRESS_ID,
-      enabled.externalNginxNodeId,
-      'registry_ingress'
-    );
-    expect(dispatch.sendNginxRegistryBindings).toHaveBeenCalledWith(enabled.externalNginxNodeId, [
-      expect.objectContaining({
-        bindingId: INTERNAL_REGISTRY_INGRESS_ID,
-        role: 'ingress',
-        repository: '*',
-        actions: ['pull', 'push'],
-        relayOwnerKind: 'registry_ingress',
-        authorization: '',
-        authorizationExpiresAtUnix: 0,
-      }),
-    ]);
-    expect(proxy.upsertRegistrySystemHost).toHaveBeenCalledWith(
-      {
-        domain: enabled.externalHostname,
-        nodeId: enabled.externalNginxNodeId,
-        sslCertificateId: enabled.externalCertificateId,
-      },
-      'user-1'
-    );
+    await expect(service.reconcile(enabled, enabled, 'user')).rejects.toMatchObject({
+      code: 'COMMERCIAL_MODULE_UNAVAILABLE',
+    });
+    expect(relayPolicy.ensureInternalRegistryRoute).not.toHaveBeenCalled();
+    expect(dispatch.sendNginxRegistryBindings).not.toHaveBeenCalled();
+    expect(proxy.upsertRegistrySystemHost).not.toHaveBeenCalled();
   });
 
   it('withdraws only external ingress and leaves internal registry secure links untouched', async () => {
@@ -98,27 +69,5 @@ describe('RelayRegistryIngressService', () => {
       expect.anything(),
       expect.anything()
     );
-  });
-
-  it('fails closed and withdraws the route when Nginx config application fails', async () => {
-    const { service, relayPolicy, dispatch, proxy } = harness();
-    proxy.upsertRegistrySystemHost.mockRejectedValueOnce(new Error('nginx rejected config'));
-    await expect(
-      service.reconcile(
-        enabled,
-        {
-          externalAccessEnabled: false,
-          externalHostname: null,
-          externalNginxNodeId: null,
-          externalCertificateId: null,
-        },
-        'user-1'
-      )
-    ).rejects.toThrow('nginx rejected config');
-
-    expect(dispatch.sendNginxRegistryBindings).toHaveBeenLastCalledWith(enabled.externalNginxNodeId, []);
-    expect(relayPolicy.revokeOwner).toHaveBeenCalledWith('registry_ingress', INTERNAL_REGISTRY_INGRESS_ID, {
-      allowDeferredSnapshot: true,
-    });
   });
 });

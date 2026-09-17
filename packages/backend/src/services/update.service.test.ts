@@ -268,6 +268,40 @@ describe('imageRepositoryFromRef', () => {
 });
 
 describe('UpdateService foundation migration', () => {
+  it('prevents concurrent module activation and Gateway updates from modifying the same installation', async () => {
+    const dockerService = makeDockerService();
+    let rejectPull!: (reason: Error) => void;
+    const waiting = new Promise<void>((_, reject) => {
+      rejectPull = reject;
+    });
+    dockerService.pullImageRef.mockImplementationOnce(() => waiting);
+    const service = makeUpdateService(dockerService);
+    const artifact = makeArtifact('registry.example.com/wiolett/gateway@sha256:new');
+    const first = service.performUpdate('v2.4.3', artifact);
+    const failed = expect(first).rejects.toThrow('download interrupted');
+    await vi.waitFor(() => expect(dockerService.pullImageRef).toHaveBeenCalledOnce());
+    await expect(service.performUpdate('v2.4.3', artifact)).rejects.toMatchObject({ code: 'UPDATE_IN_PROGRESS' });
+    expect(dockerService.runOneShot).not.toHaveBeenCalled();
+    rejectPull(new Error('download interrupted'));
+    await failed;
+    await service.performUpdate('v2.4.3', artifact);
+    expect(dockerService.runDetached).toHaveBeenCalledOnce();
+  });
+  it('never migrates or replaces the running app when target-image license/core preparation fails', async () => {
+    const dockerService = makeDockerService();
+    dockerService.runOneShot.mockResolvedValueOnce({
+      exitCode: 1,
+      output: 'Private core signature verification failed',
+    });
+    await expect(
+      makeUpdateService(dockerService).performUpdate(
+        'v2.4.3',
+        makeArtifact('registry.example.com/wiolett/gateway@sha256:new')
+      )
+    ).rejects.toThrow('Private core signature verification failed');
+    expect(dockerService.runOneShot).toHaveBeenCalledOnce();
+    expect(dockerService.runDetached).not.toHaveBeenCalled();
+  });
   it('runs foundation migrations from the target image before validating and recreating compose', async () => {
     const dockerService = makeDockerService();
     const service = makeUpdateService(dockerService);

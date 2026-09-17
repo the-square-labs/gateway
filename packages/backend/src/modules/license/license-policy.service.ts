@@ -4,7 +4,7 @@ import type { LicenseService } from './license.service.js';
 import {
   isCanonicalEntitlements,
   LICENSE_ENTITLEMENTS_VERSION,
-  LICENSE_LEGACY_ENTITLEMENTS_VERSION,
+  LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS,
   type LicenseEntitlements,
   type LicensePlan,
   type LicenseStatus,
@@ -14,6 +14,12 @@ import {
 const logger = createChildLogger('LicensePolicyService');
 
 export const LICENSE_FEATURE_PLANS = {
+  'storage-connections': 'personal',
+  'external-database-connections': 'personal',
+  gitlab: 'personal',
+  'ai-plan-mode': 'personal',
+  'ai-scenarios': 'personal',
+  'ai-sandboxes': 'personal',
   'container-export': 'personal',
   'blue-green': 'personal',
   'cross-node-migration': 'personal',
@@ -36,10 +42,26 @@ export type LicenseFeature = keyof typeof LICENSE_FEATURE_PLANS;
 export type LicenseQuotaResource = 'managedNodes' | 'users' | 'customPermissionGroups';
 export type PaidLicensePlan = Exclude<LicensePlan, 'community'>;
 
-// Storage is included in the existing signed managed-databases entitlement.
+// Retained v3/v4 storage uses managed-databases; v5 explicitly includes both.
 // Never add features retroactively to the canonical v3/v4 signed contracts.
 function entitlementFeature(feature: LicenseFeature): string {
   return feature === 'managed-storage' ? 'managed-databases' : feature;
+}
+
+const PRE_V5_PERSONAL_CAPABILITIES = new Set<LicenseFeature>([
+  'storage-connections',
+  'external-database-connections',
+  'ai-plan-mode',
+  'ai-scenarios',
+  'ai-sandboxes',
+]);
+
+function includesFeature(entitlements: LicenseEntitlements, feature: LicenseFeature): boolean {
+  if (entitlements.features.includes(entitlementFeature(feature))) return true;
+  // Published paid v3/v4 grants predate these capability names. Their canonical
+  // paid maps all include managed-databases; Community never does. Validate the
+  // original canonical contract first rather than editing the cached/signed map.
+  return PRE_V5_PERSONAL_CAPABILITIES.has(feature) && entitlements.features.includes('managed-databases');
 }
 
 const LICENSE_RUNTIME_CONTINUITY_STATUSES = new Set<LicenseStatus>(['expired', 'unreachable_grace_expired']);
@@ -124,16 +146,13 @@ export class LicensePolicyService {
     return (
       this.isPolicyStateValid(status) &&
       !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
-      status.entitlements.features.includes(entitlementFeature(feature))
+      includesFeature(status.entitlements, feature)
     );
   }
 
   async requireFeature(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (
-      !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
-      status.entitlements.features.includes(entitlementFeature(feature))
-    ) {
+    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) && includesFeature(status.entitlements, feature)) {
       return;
     }
 
@@ -149,18 +168,18 @@ export class LicensePolicyService {
   async hasFeatureForExistingRuntime(feature: LicenseFeature): Promise<boolean> {
     const status = await this.licenses.getStatus();
     if (!this.isPolicyStateValid(status)) return false;
-    if (status.entitlements.features.includes(entitlementFeature(feature))) return true;
+    if (includesFeature(status.entitlements, feature)) return true;
     if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) return false;
     const retained = await this.licenses.getRuntimeContinuityEntitlements();
-    return retained?.features.includes(entitlementFeature(feature)) ?? false;
+    return retained ? includesFeature(retained, feature) : false;
   }
 
   async requireFeatureForExistingRuntime(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (status.entitlements.features.includes(entitlementFeature(feature))) return;
+    if (includesFeature(status.entitlements, feature)) return;
     if (LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) {
       const retained = await this.licenses.getRuntimeContinuityEntitlements();
-      if (retained?.features.includes(entitlementFeature(feature))) return;
+      if (retained && includesFeature(retained, feature)) return;
     }
 
     throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
@@ -221,10 +240,7 @@ export class LicensePolicyService {
       'deactivated',
     ];
     if (!plans.includes(status.plan) || !statuses.includes(status.status)) return false;
-    if (
-      status.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION &&
-      status.entitlementsVersion !== LICENSE_LEGACY_ENTITLEMENTS_VERSION
-    ) {
+    if (!LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS.includes(status.entitlementsVersion)) {
       return false;
     }
     if (!entitlements || typeof entitlements !== 'object' || !Array.isArray(entitlements.features)) return false;

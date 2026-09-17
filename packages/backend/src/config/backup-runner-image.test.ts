@@ -53,7 +53,7 @@ describe('release-bundled backup runner', () => {
     expect(build).toContain(`--build-arg "BACKUP_RUNNER_IMAGE=\${GATEWAY_IMAGE}/backup-runner@\${runner_digest}"`);
     expect(build.indexOf('test-backup-runner-release.mjs')).toBeLessThan(build.indexOf('push-image-with-digest.sh'));
     expect(workflow).not.toContain('refs/tags/backup');
-    const bootstrap = readFileSync(new URL('packages/backend/src/bootstrap-background.ts', root), 'utf8');
-    expect(bootstrap).toContain('get: () => resolveBackupRunnerImage(env.BACKUP_RUNNER_IMAGE)');
+    const runtime = readFileSync(new URL('packages/backend/src/modules/backups/backup-runtime.ts', root), 'utf8');
+    expect(runtime).toContain('resolveBackupRunnerImage');
   });
 });

@@ -129,14 +129,14 @@ describe('authentication boundaries in the complete application route graph', ()
     ['/api/logging/ingest', 'gwl_fixture', 'Invalid or expired logging ingest token'],
     ['/api/logging/ingest/batch', 'gwl_fixture', 'Invalid or expired logging ingest token'],
     ['/api/pages-deploy/deployments', 'gwp_fixture', 'Invalid or expired Page deploy token'],
-  ])('lets %s use its dedicated token validator', async (path, token, message) => {
+  ])('does not register %s without the private module', async (path, token) => {
     const response = await createApp().app.request(path, {
       method: 'POST',
       headers: { host: 'gateway.test', Authorization: `Bearer ${token}` },
     });
-    expect(response.status).toBe(401);
-    expect(await response.json()).toMatchObject({ message });
-    expect(token.startsWith('gwl_') ? loggingToken : pageToken).toHaveBeenCalledExactlyOnceWith(token);
+    expect(response.status).toBe(404);
+    expect(loggingToken).not.toHaveBeenCalled();
+    expect(pageToken).not.toHaveBeenCalled();
     expect(validateOAuth).not.toHaveBeenCalled();
   });
 

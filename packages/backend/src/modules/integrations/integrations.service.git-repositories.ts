@@ -3,6 +3,7 @@ import { dirname, resolve } from 'node:path';
 import { desc, eq, type SQL } from 'drizzle-orm';
 import sodium from 'libsodium-wrappers';
 import { integrationConnectors } from '@/db/schema/index.js';
+import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { hasScope } from '@/lib/permissions.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -12,17 +13,10 @@ import { GIT_FILE_READ_LIMIT_BYTES, GIT_FILE_WRITE_LIMIT_BYTES, isPlainRecord } 
 import { IntegrationsSourceService } from './integrations.service.sources.js';
 
 export abstract class IntegrationsGitRepositoryService extends IntegrationsSourceService {
-  async listGitLabConnectors(query: GitLabConnectorListQuery = {}) {
-    const conditions: SQL[] = [eq(integrationConnectors.provider, 'gitlab')];
-    if (query.enabled !== undefined) conditions.push(eq(integrationConnectors.enabled, query.enabled));
-
-    const rows = await this.db
-      .select()
-      .from(integrationConnectors)
-      .where(buildWhere(conditions))
-      .orderBy(desc(integrationConnectors.createdAt));
-
-    return rows.map((row) => this.toSafeConnector(row));
+  async listGitLabConnectors(
+    _query?: GitLabConnectorListQuery
+  ): Promise<import('./integrations.service.core.js').SafeIntegrationConnector[]> {
+    return commercialModuleUnavailable();
   }
 
   async listGitConnectors(provider: 'github' | 'git', enabled?: boolean) {

@@ -104,17 +104,13 @@ describe('DockerManagementService volume and network operations', () => {
     expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalledWith('node-1', 'create', expect.anything());
   });
 
-  it('requires Personal or higher before creating a disk-image volume', async () => {
+  it('requires the private module before creating a disk-image volume', async () => {
     const dispatch = { sendDockerVolumeCommand: vi.fn() };
     const { service } = createService(dispatch);
-    const denial = new Error('Personal plan required');
-    const requireMinimumPlan = vi.fn().mockRejectedValue(denial);
-    service.setLicensePolicyService({ requireMinimumPlan } as never);
 
     await expect(
       service.createVolume('node-1', { name: 'bounded', storageKind: 'disk-image', capacityBytes: 1024 ** 3 }, 'user-1')
-    ).rejects.toBe(denial);
-    expect(requireMinimumPlan).toHaveBeenCalledWith('personal');
+    ).rejects.toMatchObject({ code: 'COMMERCIAL_MODULE_UNAVAILABLE' });
     expect(dispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
   });
 

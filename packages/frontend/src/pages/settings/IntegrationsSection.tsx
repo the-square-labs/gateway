@@ -289,6 +289,7 @@ function GitLabIntegrationsSection() {
   }, [canSearchAllowlist, dialogStep, editingConnector, form.baseUrl, form.token, search]);
 
   const openCreateDialog = () => {
+    if (!requireLicenseFeature("gitlab", "GitLab integration")) return;
     setEditingConnector(null);
     setForm(emptyForm());
     setRefreshingAllowlist(false);
@@ -301,6 +302,7 @@ function GitLabIntegrationsSection() {
   };
 
   const openEditDialog = async (connector: GitLabConnector) => {
+    if (!requireLicenseFeature("gitlab", "GitLab integration")) return;
     setDialogOpen(true);
     setEditingConnector(connector);
     setLoadingDetail(true);
@@ -1184,3 +1186,5 @@ function CapabilityBadges({
     </div>
   );
 }
+
+import { requireLicenseFeature } from "@/stores/license-paywall";
