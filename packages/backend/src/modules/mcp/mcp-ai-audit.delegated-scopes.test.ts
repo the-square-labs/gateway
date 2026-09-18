@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TOKENS } from '@/container.js';
 import {
   AIService,
   container,
@@ -10,6 +11,11 @@ import {
 } from './mcp-ai-audit.test-helpers.js';
 
 describe('AIService MCP delegated scope audit behavior', () => {
+  beforeEach(() => {
+    // These tests exercise delegated grants with the licensed backend available.
+    container.registerInstance(TOKENS.CommercialEdition, { requireAvailable: vi.fn() });
+  });
+
   it('rechecks live account access without expanding an OAuth token scope', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const nodesService = { create: vi.fn() };
