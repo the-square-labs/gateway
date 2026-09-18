@@ -843,13 +843,25 @@ function findNestedBlock(
 }
 
 function findBlockEnd(lines: string[], start: number, indent: number): number {
+  let end = lines.length;
   for (let index = start; index < lines.length; index += 1) {
     const line = lines[index];
     if (!line.trim() || line.trimStart().startsWith('#')) continue;
     const currentIndent = line.length - line.trimStart().length;
-    if (currentIndent <= indent) return index;
+    if (currentIndent <= indent) {
+      end = index;
+      break;
+    }
   }
-  return lines.length;
+  // Keep sibling managed markers outside this block. Otherwise a later upsert
+  // inserts keys after the marker and the sibling rewrite silently removes them.
+  while (end > start) {
+    const previous = lines[end - 1];
+    const previousIndent = previous.length - previous.trimStart().length;
+    if (previous.trim() && !(previous.trimStart().startsWith('#') && previousIndent <= indent)) break;
+    end -= 1;
+  }
+  return end;
 }
 
 function findLineInRange(lines: string[], start: number, end: number, text: string): number {

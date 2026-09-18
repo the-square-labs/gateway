@@ -39,6 +39,18 @@ const BUILD_ONLY_APP_COMPOSE = `services:
 `;
 
 describe('foundation migrator patches', () => {
+  it('retains an app label immediately before the managed relay marker on repeated paid upgrades', () => {
+    const source = OLD_COMPOSE.replace(
+      '\n  redis:',
+      '\n  relay:\n    image: relay:old\n    labels:\n      com.wiolett.gateway.managed-service: relay\n\n  redis:'
+    );
+    const first = patchCompose(source, true);
+    const second = patchCompose(first, true);
+    expect(second).toBe(first);
+    expect(second).toContain('    labels:\n      com.wiolett.gateway.managed-service: app');
+    expect(second).toContain('    expose:\n      - "9443"');
+  });
+
   it('inherits image healthchecks on upgrades and preserves operator overrides', () => {
     const legacy = OLD_COMPOSE.replace(
       'wget -qO- http://127.0.0.1:3000/health',
