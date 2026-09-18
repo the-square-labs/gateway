@@ -131,6 +131,73 @@ function registerResponse(state = communityState()) {
 }
 
 describe('LicenseService', () => {
+  it.each([
+    'community',
+    'personal',
+  ] as const)('preserves the running v4 %s cache during target-image preparation and failed download', async (plan) => {
+    const db = createDb();
+    const cache = {
+      registrationStatus: 'registered',
+      plan,
+      entitlementsVersion: 4,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS_V4[plan],
+    };
+    db.rows.set('license:cached_state', cache);
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        dataResponse({
+          state: plan === 'community' ? communityState() : paidState(plan),
+          signedManifest: 'signed-release',
+        })
+      )
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const grant = await service.authorizeCommercialUpdate('v3.0.0-rc.1');
+    if (grant.edition === 'commercial')
+      expect((await grant.readFile('backend/index.cjs', 'a'.repeat(64))).status).toBe(503);
+    expect(db.rows.get('license:cached_state')).toBe(cache);
+  });
+
+  it('registers for update without replacing the running cache or marking registration failures into it', async () => {
+    for (const fails of [false, true]) {
+      const db = createDb();
+      const cache = { registrationStatus: 'pending', plan: 'community', entitlementsVersion: 4 };
+      db.rows.set('license:cached_state', cache);
+      const fetcher = fails
+        ? vi.fn().mockRejectedValue(new Error('offline'))
+        : vi
+            .fn()
+            .mockImplementationOnce(() => registerResponse())
+            .mockImplementationOnce(() => dataResponse({ state: communityState() }));
+      const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+      if (fails) await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toThrow();
+      else await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toEqual({ edition: 'community' });
+      expect(db.rows.get('license:cached_state')).toBe(cache);
+    }
+  });
+
+  it('reactivates a legacy key for preparation without migrating its active cache', async () => {
+    const db = createDb();
+    const cache = { plan: 'business', status: 'valid', entitlementsVersion: 3 };
+    db.rows.set('license:cached_state', cache);
+    db.rows.set('license:key_encrypted', createCrypto().encryptString('legacy-key'));
+    const fetcher = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState()))
+      .mockImplementationOnce(() => dataResponse({ state: paidState(), signedManifest: 'signed-release' }));
+    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toMatchObject({ edition: 'commercial' });
+    expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+      '/api/v1/installations/register',
+      '/api/v1/licenses/activate',
+      '/api/v1/releases/authorize',
+    ]);
+    expect(db.rows.get('license:cached_state')).toBe(cache);
+  });
+
   it('authorizes an exact private core online and keeps installation credentials out of URLs', async () => {
     const db = createDb();
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));

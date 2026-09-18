@@ -169,14 +169,24 @@ export class LicenseService {
     commercialVersionKey(hostVersion);
     return this.runSerialized(async () => {
       const cached = await this.getSetting<Record<string, unknown> | null>(SETTINGS_KEYS.cachedState, null);
-      if (cached && !Object.hasOwn(cached, 'registrationStatus')) await this.checkNowUnlocked();
-      const credential = await this.ensureRegistered(true);
+      const credential = await this.ensureRegistered(true, false);
       if (!credential)
         throw new LicenseServerRequestError(
           503,
           'LICENSE_SERVER_UNAVAILABLE',
           'Installation registration is required for update'
         );
+      if (credential.newlyRegistered && cached && !Object.hasOwn(cached, 'registrationStatus')) {
+        const key = await this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null);
+        if (key) {
+          const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
+            installationToken: credential.token,
+            licenseKey: this.cryptoService.decryptString(key),
+            entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+          });
+          this.assertServerState(state);
+        }
+      }
       const result = await this.post<{ state: LicenseServerState; signedManifest?: string }>(
         '/api/v1/releases/authorize',
         { installationToken: credential.token, hostVersion, entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION }
@@ -190,7 +200,6 @@ export class LicenseService {
             'Update cannot silently replace a paid installation with Community'
           );
         }
-        await this.saveServerState(result.state);
         return { edition: 'community' };
       }
       if (
@@ -202,7 +211,8 @@ export class LicenseService {
           'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
           'A current paid entitlement and signed core release are required'
         );
-      await this.saveServerState(result.state);
+      // The target-image preparer shares the running version's database. Never
+      // replace its cache with a newer entitlement format before activation.
       return {
         edition: 'commercial',
         signedManifest: result.signedManifest,
@@ -305,19 +315,19 @@ export class LicenseService {
     });
   }
 
-  private async ensureRegistered(strict: boolean): Promise<RegistrationCredential | null> {
+  private async ensureRegistered(strict: boolean, persistState = true): Promise<RegistrationCredential | null> {
     const token = await this.readInstallationToken();
     if (token) return { token, newlyRegistered: false };
 
     if (!this.registrationPromise) {
-      this.registrationPromise = this.registerInstallation().finally(() => {
+      this.registrationPromise = this.registerInstallation(persistState).finally(() => {
         this.registrationPromise = null;
       });
     }
     try {
       return await this.registrationPromise;
     } catch (error) {
-      await this.markRegistrationPending(error);
+      if (persistState) await this.markRegistrationPending(error);
       if (strict) throw error;
       return null;
     }
@@ -332,7 +342,7 @@ export class LicenseService {
     return result;
   }
 
-  private async registerInstallation(): Promise<RegistrationCredential> {
+  private async registerInstallation(persistState = true): Promise<RegistrationCredential> {
     const nonce = await this.getOrCreateRegistrationNonce();
     const result = await this.post<LicenseServerRegistration>('/api/v1/installations/register', {
       installationId: await this.getInstallationId(),
@@ -349,7 +359,7 @@ export class LicenseService {
       SETTINGS_KEYS.installationTokenEncrypted,
       this.cryptoService.encryptString(result.installationToken)
     );
-    await this.saveServerState(result.state);
+    if (persistState) await this.saveServerState(result.state);
     logger.info('Community installation registered');
     return { token: result.installationToken, newlyRegistered: true };
   }
