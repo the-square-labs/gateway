@@ -14,12 +14,8 @@ export class PagePublicationService {
   // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
   constructor(_db: DrizzleClient, _auditService: AuditService, _tagService: PageTagService) {}
   setEventBus(_eventBus: EventBusService): void {}
-  setAdapter(_adapter: PageTagPublicationAdapter): void {
-    commercialModuleUnavailable();
-  }
-  setDeploymentAdapter(_adapter: PageDeploymentPublicationAdapter): void {
-    commercialModuleUnavailable();
-  }
+  setAdapter(_adapter: PageTagPublicationAdapter): void {}
+  setDeploymentAdapter(_adapter: PageDeploymentPublicationAdapter): void {}
   async moveUserTag(
     _projectId: string,
     _tag: string,

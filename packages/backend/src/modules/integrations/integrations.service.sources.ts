@@ -160,10 +160,22 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       throw new AppError(400, 'UNSUPPORTED_SOURCE_CONNECTOR', 'Connector does not provide a Git repository');
     }
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
+    // PaaS entrypoints authorize Docker/Pages access. Repository discovery must
+    // use the same connector credential as source resolution and queued builds.
+    const sourceActor: User = {
+      ...user,
+      scopes: [
+        'integrations:gitlab:repo:read',
+        'integrations:github:view',
+        'integrations:github:system',
+        'integrations:git:view',
+        'integrations:git:system',
+      ],
+    };
 
     if (connector.provider === 'gitlab') {
       assertConnectorOperationAccess({
-        actor: { userId: user.id, scopes: user.scopes },
+        actor: { userId: sourceActor.id, scopes: sourceActor.scopes },
         provider: 'gitlab',
         operation: 'repository.read',
         requiredScope: 'integrations:gitlab:repo:read',
@@ -189,7 +201,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     }
 
     if (connector.provider === 'github') {
-      const repositories = await this.githubListRepositories(user, { connectorId });
+      const repositories = await this.githubListRepositories(sourceActor, { connectorId });
       await this.upsertProjectRows(
         connector.id,
         repositories
@@ -230,7 +242,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     }
 
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: user.scopes },
+      actor: { userId: sourceActor.id, scopes: sourceActor.scopes },
       provider: 'git',
       connectorId: connector.id,
       connectorName: connector.name,

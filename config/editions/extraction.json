@@ -905,6 +905,8 @@
       "emptyConstructor": true,
       "emptyMethods": [
         "setEventBus",
+        "setAdapter",
+        "setDeploymentAdapter",
         "setRuntimeAdapter"
       ],
       "sharedMethods": []

@@ -1,5 +1,7 @@
 import { useAuthStore } from "@/stores/auth";
+import { hasLicenseFeature, type LicenseFeature } from "@/stores/license-paywall";
 import { useUIStore } from "@/stores/ui";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type {
   Alert,
   ApiToken,
@@ -115,6 +117,9 @@ class ApiClient extends withPagesDomainsApi(
       useUIStore.getState().showSystemCertificates &&
       useAuthStore.getState().hasScope("admin:details:certificates");
     const auth = useAuthStore.getState();
+    const moduleState = useUIBootstrapStore.getState().snapshot?.commercialModule;
+    const licensed = (feature: LicenseFeature) =>
+      (!moduleState || moduleState === "ready") && hasLicenseFeature(feature) !== false;
     const tasks: BackgroundPrewarmTask[] = [];
     const add = (condition: boolean, key: string, run: () => Promise<unknown>) => {
       if (condition) tasks.push({ key, run });
@@ -140,7 +145,7 @@ class ApiClient extends withPagesDomainsApi(
       cache("dashboard:health", () => this.getHealthOverview())
     );
     add(
-      auth.hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate"),
+      licensed("internal-pki") && auth.hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate"),
       "cas",
       cache(`cas:list:${showSystem ? "system" : "default"}`, () => this.listCAs({ showSystem }))
     );
@@ -150,12 +155,13 @@ class ApiClient extends withPagesDomainsApi(
       cache("proxy:grouped", () => this.getGroupedProxyHosts({}))
     );
     add(
-      auth.hasScopedAccess("pages:view"),
+      licensed("pages") && auth.hasScopedAccess("pages:view"),
       "pages-projects",
       cache("pages:projects", () => this.listPageProjects({ page: 1, limit: 100 }))
     );
     add(
-      auth.hasScopedAccess("pages:view") || auth.hasScope("pages:folders:manage"),
+      licensed("pages") &&
+        (auth.hasScopedAccess("pages:view") || auth.hasScope("pages:folders:manage")),
       "pages-project-folders",
       cache("pages:project-folders", () => this.listPageProjectFolders())
     );
@@ -167,7 +173,7 @@ class ApiClient extends withPagesDomainsApi(
       )
     );
     add(
-      auth.hasScopedAccess("pki:cert:view"),
+      licensed("internal-pki") && auth.hasScopedAccess("pki:cert:view"),
       "pki-certificates",
       cache(`certificates:list:${showSystem ? "system" : "default"}`, () =>
         this.listCertificates({ page: 1, limit: 25, status: "active", showSystem })
@@ -179,7 +185,7 @@ class ApiClient extends withPagesDomainsApi(
       cache("domains:list:folder-view", () => this.listDomains({ page: 1, limit: 1000 }))
     );
     add(
-      auth.hasScope("pki:templates:view"),
+      licensed("internal-pki") && auth.hasScope("pki:templates:view"),
       "pki-templates",
       cache("templates:list", () => this.listTemplates())
     );
@@ -199,19 +205,19 @@ class ApiClient extends withPagesDomainsApi(
       cache("nodes:list:default", () => this.listNodes({ page: 1, limit: 50 }))
     );
     add(
-      auth.hasScopedAccess("databases:view"),
+      licensed("external-database-connections") && auth.hasScopedAccess("databases:view"),
       "databases",
       cache("databases:list", () =>
         this.listDatabases({ limit: 200 }).then((result) => result.data)
       )
     );
     add(
-      auth.hasScopedAccess("logs:environments:view"),
+      licensed("structured-logging") && auth.hasScopedAccess("logs:environments:view"),
       "logging-environments",
       cache("logging:environments", () => this.listLoggingEnvironments())
     );
     add(
-      auth.hasScopedAccess("logs:schemas:view"),
+      licensed("structured-logging") && auth.hasScopedAccess("logs:schemas:view"),
       "logging-schemas",
       cache("logging:schemas", () => this.listLoggingSchemas())
     );
@@ -242,17 +248,18 @@ class ApiClient extends withPagesDomainsApi(
       cache("settings:license-status", () => this.getLicenseStatus())
     );
     add(
-      auth.hasScope("status-page:view"),
+      licensed("status-pages") && auth.hasScope("status-page:view"),
       "status-page-settings",
       cache("settings:status-page-config", () => this.getStatusPageSettings())
     );
     add(
-      auth.hasScope("status-page:view"),
+      licensed("status-pages") && auth.hasScope("status-page:view"),
       "status-page-templates",
       cache("settings:status-page-proxy-templates", () => this.listStatusPageProxyTemplates())
     );
     add(
-      auth.hasAnyScope("integrations:gitlab:view", "integrations:gitlab:manage"),
+      licensed("gitlab") &&
+        auth.hasAnyScope("integrations:gitlab:view", "integrations:gitlab:manage"),
       "gitlab-integrations",
       cache("settings:gitlab-connectors", () => this.listGitLabConnectors())
     );
