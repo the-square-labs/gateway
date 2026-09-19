@@ -6,6 +6,8 @@ describe('Gateway internal container filtering', () => {
   it.each([
     { Labels: { 'wiolett.gateway.managed': 'secure-link-connector' } },
     { labels: { 'wiolett.gateway.managed-database.connector': 'true' } },
+    { labels: { 'wiolett.gateway.managed-storage.connector': 'true' } },
+    { Config: { Labels: { 'wiolett.gateway.internal-workload': 'managed-storage-connector' } } },
     {
       Config: {
         Labels: {
@@ -24,6 +26,9 @@ describe('Gateway internal container filtering', () => {
     { Labels: { app: 'api' } },
     { Labels: { 'wiolett.gateway.managed-database.id': 'postgres-main' } },
     { Labels: { 'wiolett.gateway.deployment.managed': 'true' } },
+    { Name: '/gateway-storage-connector-user-app', Labels: {} },
+    { Labels: { 'wiolett.gateway.managed-storage.connector': 'false' } },
+    { Labels: { 'wiolett.gateway.internal-workload': 'user-app' } },
     {
       Labels: {
         'net.wiolett.gateway.managed': 'clickhouse',
@@ -44,7 +49,11 @@ describe('Gateway internal container filtering', () => {
     expect(filterGatewayInternalContainers([user, connector])).toEqual([user]);
   });
 
-  it('keeps the full inventory internally while filtering the public read model', async () => {
+  it.each([
+    { 'wiolett.gateway.managed': 'secure-link-connector' },
+    { 'wiolett.gateway.managed-storage.connector': 'true' },
+    { 'wiolett.gateway.internal-workload': 'managed-storage-connector' },
+  ])('keeps the full inventory internally while filtering the public read model', async (labels) => {
     const where = vi.fn().mockResolvedValue([]);
     const innerJoin = vi.fn(() => ({ where }));
     const from = vi.fn(() => ({ innerJoin }));
@@ -54,7 +63,7 @@ describe('Gateway internal container filtering', () => {
     const connector = {
       Id: 'connector',
       Name: '/gateway-secure-link-connector',
-      Labels: { 'wiolett.gateway.managed': 'secure-link-connector' },
+      Labels: labels,
     };
 
     await expect(service.decorateContainerSnapshot('node-1', [user, connector])).resolves.toEqual([user, connector]);
@@ -64,6 +73,8 @@ describe('Gateway internal container filtering', () => {
   it.each([
     { 'wiolett.gateway.managed': 'secure-link-connector' },
     { 'wiolett.gateway.managed-database.connector': 'true' },
+    { 'wiolett.gateway.managed-storage.connector': 'true' },
+    { 'wiolett.gateway.internal-workload': 'managed-storage-connector' },
     { 'net.wiolett.gateway.managed': 'clickhouse', 'net.wiolett.gateway.owner': 'gateway' },
     { 'com.wiolett.gateway.managed-service': 'relay' },
     { 'gateway.sandbox': 'true' },
@@ -99,6 +110,8 @@ describe('Gateway internal container filtering', () => {
   it.each([
     { 'wiolett.gateway.managed': 'secure-link-connector' },
     { 'wiolett.gateway.managed-database.connector': 'true' },
+    { 'wiolett.gateway.managed-storage.connector': 'true' },
+    { 'wiolett.gateway.internal-workload': 'managed-storage-connector' },
     { 'net.wiolett.gateway.managed': 'clickhouse', 'net.wiolett.gateway.owner': 'gateway' },
     { 'com.wiolett.gateway.managed-service': 'relay' },
     { 'gateway.sandbox': 'true' },

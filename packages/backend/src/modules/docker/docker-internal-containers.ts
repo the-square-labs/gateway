@@ -1,5 +1,7 @@
 const SECURE_LINK_MANAGED_LABEL = 'wiolett.gateway.managed';
 const MANAGED_DATABASE_CONNECTOR_LABEL = 'wiolett.gateway.managed-database.connector';
+const MANAGED_STORAGE_CONNECTOR_LABEL = 'wiolett.gateway.managed-storage.connector';
+const INTERNAL_WORKLOAD_LABEL = 'wiolett.gateway.internal-workload';
 const LOCAL_SERVICE_MANAGED_LABEL = 'net.wiolett.gateway.managed';
 const LOCAL_SERVICE_OWNER_LABEL = 'net.wiolett.gateway.owner';
 const FOUNDATION_SERVICE_LABEL = 'com.wiolett.gateway.managed-service';
@@ -19,6 +21,8 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
   return (
     labels[SECURE_LINK_MANAGED_LABEL] === 'secure-link-connector' ||
     labels[MANAGED_DATABASE_CONNECTOR_LABEL] === 'true' ||
+    labels[MANAGED_STORAGE_CONNECTOR_LABEL] === 'true' ||
+    labels[INTERNAL_WORKLOAD_LABEL] === 'managed-storage-connector' ||
     (labels[LOCAL_SERVICE_MANAGED_LABEL] === 'clickhouse' && labels[LOCAL_SERVICE_OWNER_LABEL] === 'gateway') ||
     (typeof labels[FOUNDATION_SERVICE_LABEL] === 'string' && labels[FOUNDATION_SERVICE_LABEL] !== '') ||
     labels[SANDBOX_LABEL] === 'true' ||
