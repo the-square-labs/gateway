@@ -40,7 +40,8 @@ const pg = `${prefix}-pg`, s3 = `${prefix}-s3`;
 const configVolume = `${prefix}-config`, workVolume = `${prefix}-work`;
 const fixture = mkdtempSync(join(tmpdir(), 'gateway-backup-smoke-'));
 const postgresImage = readFileSync(new URL('../packages/daemons/backup-runner/Dockerfile', import.meta.url), 'utf8').match(/^FROM (\S+)/m)?.[1];
-const minioImage = readFileSync(new URL('../packages/backend/src/modules/storage/managed-storage-catalog.ts', import.meta.url), 'utf8').match(/quay\.io\/minio\/minio@sha256:[a-f0-9]{64}/)?.[0];
+// The disposable S3 fixture must not depend on the private managed-storage catalog.
+const minioImage = 'quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e';
 assert.ok(postgresImage && minioImage, 'use the repository-pinned fixture images');
 const password = randomUUID();
 const resources = { containers: [], volumes: [], network: false };
