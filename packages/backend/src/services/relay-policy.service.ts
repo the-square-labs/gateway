@@ -362,7 +362,12 @@ export class RelayPolicyService {
       () => this.refreshAllNodeGrantsIfDue(true)
     );
     const pendingPolicyKey = await this.policyKeys.beginRotationIfDue(now);
-    if (pendingPolicyKey) await this.syncAllRemoteInstancePolicies();
+    if (pendingPolicyKey) {
+      // The local relay has to receive the pending key in a snapshot signed by the current
+      // one, exactly like the remote relays, before that key can be promoted.
+      await this.syncSnapshot();
+      await this.syncAllRemoteInstancePolicies();
+    }
     const policyChanged = await this.finalizePolicySigningKeyRotation(now);
     return grantRotated || Boolean(pendingPolicyKey) || policyChanged;
   }

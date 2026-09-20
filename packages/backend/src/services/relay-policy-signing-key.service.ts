@@ -7,6 +7,21 @@ import type { CryptoService } from './crypto.service.js';
 const KEY_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const KEY_OVERLAP_MS = 30 * 60 * 1000;
 
+type RotationCandidate = { kind: string; state: string; health: { policySigningKeyIds?: string[] } | null };
+
+/**
+ * Relays that must hold a pending key before it may sign. A remote relay counts while it
+ * serves or is coming up. The local relay always counts, whatever its state: it pins its
+ * trust on first use and learns a new key only from a snapshot signed by the old one, so
+ * promoting without it destroys the only key that could still introduce its successor and
+ * the relay then refuses every policy from this Gateway.
+ */
+function rotationParticipants<T extends RotationCandidate>(instances: T[]): T[] {
+  return instances.filter(
+    (instance) => instance.kind === 'local' || ['synchronizing', 'ready', 'draining'].includes(instance.state)
+  );
+}
+
 function allPolicyKeysAcknowledged(
   instances: Array<{ health: { policySigningKeyIds?: string[] } | null }>,
   keyId: string
@@ -137,13 +152,10 @@ export class RelayPolicySigningKeyService {
         .where(eq(relayPolicySigningKeys.status, 'pending'))
         .limit(1);
       if (!pending) return false;
-      const readyRemoteInstances = await tx
-        .select({ health: relayInstances.health })
-        .from(relayInstances)
-        .where(
-          and(eq(relayInstances.kind, 'remote'), inArray(relayInstances.state, ['synchronizing', 'ready', 'draining']))
-        );
-      if (!allPolicyKeysAcknowledged(readyRemoteInstances, pending.keyId)) return false;
+      const instances = await tx
+        .select({ kind: relayInstances.kind, state: relayInstances.state, health: relayInstances.health })
+        .from(relayInstances);
+      if (!allPolicyKeysAcknowledged(rotationParticipants(instances), pending.keyId)) return false;
       await tx
         .update(relayPolicySigningKeys)
         .set({
@@ -194,4 +206,4 @@ export class RelayPolicySigningKeyService {
   }
 }
 
-export const relayPolicySigningKeyInternals = { allPolicyKeysAcknowledged };
+export const relayPolicySigningKeyInternals = { allPolicyKeysAcknowledged, rotationParticipants };
