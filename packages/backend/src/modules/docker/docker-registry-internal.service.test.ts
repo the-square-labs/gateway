@@ -121,6 +121,7 @@ function createExecutor(store: FakeStore, failAction?: string) {
   };
   const executor: DockerRegistryMaintenanceExecutor = {
     hasRepositories: async () => true,
+    storageUsedBytes: async () => 0,
     pauseAdmissions: () => invoke('pauseAdmissions'),
     drainUploads: () => invoke('drainUploads'),
     deleteManifest: () => invoke('deleteManifest'),
@@ -253,6 +254,35 @@ describe('DockerInternalRegistryService', () => {
 
     expect(updateState).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('reports the measured registry volume size and re-measures it only after the interval or a collection', async () => {
+    vi.useFakeTimers({ now: new Date('2026-09-21T00:00:00.000Z') });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(null, { status: 401 }));
+    try {
+      const store = new FakeStore();
+      const executor = createExecutor(store);
+      const measure = vi.fn().mockResolvedValueOnce(1_500_000_000).mockResolvedValueOnce(900_000_000);
+      executor.storageUsedBytes = measure;
+      const { service } = createService(store, executor);
+
+      expect((await service.probeHealth()).storageUsedBytes).toBe(1_500_000_000);
+      // The probe runs every few seconds; the volume is not walked again inside the interval.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect((await service.probeHealth()).storageUsedBytes).toBe(1_500_000_000);
+      expect(measure).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect((await service.probeHealth()).storageUsedBytes).toBe(900_000_000);
+
+      // A failed measurement keeps the last known size instead of falling back to zero.
+      measure.mockRejectedValueOnce(new Error('exec failed'));
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      expect((await service.probeHealth()).storageUsedBytes).toBe(900_000_000);
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+    }
   });
 
   it('limits every write grant to the bounded maintenance drain window', async () => {

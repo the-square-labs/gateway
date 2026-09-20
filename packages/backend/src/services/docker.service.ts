@@ -80,6 +80,17 @@ export class DockerService {
     return result.exitCode === 0;
   }
 
+  /** Bytes the managed registry keeps on its data volume, measured inside the registry container. */
+  async managedRegistryStorageUsedBytes(): Promise<number> {
+    const registryId = await this.managedRegistryContainerId();
+    const result = await this.execInContainer(registryId, ['sh', '-c', 'du -sk /var/lib/registry | cut -f1']);
+    const kibibytes = Number(result.output.trim());
+    if (result.exitCode !== 0 || !Number.isSafeInteger(kibibytes) || kibibytes < 0) {
+      throw new Error(`Registry storage usage is unavailable (${result.exitCode}): ${result.output.trim()}`);
+    }
+    return kibibytes * 1024;
+  }
+
   async runManagedRegistryGarbageCollection(dryRun: boolean): Promise<void> {
     const registryId = await this.managedRegistryContainerId();
     const inspected = await this.request('GET', `${API_VERSION}/containers/${registryId}/json`);

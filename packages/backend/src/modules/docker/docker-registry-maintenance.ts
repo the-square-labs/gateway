@@ -67,6 +67,7 @@ export interface RegistryRetentionArtifact {
 
 export interface DockerRegistryMaintenanceExecutor {
   hasRepositories(): Promise<boolean>;
+  storageUsedBytes(): Promise<number>;
   pauseAdmissions(): Promise<void>;
   drainUploads(): Promise<void>;
   deleteManifest(repository: string, digest: string): Promise<void>;
@@ -131,6 +132,7 @@ export function createDockerRegistryMaintenanceExecutor(
   };
   return {
     hasRepositories: () => docker.managedRegistryHasRepositories(),
+    storageUsedBytes: () => docker.managedRegistryStorageUsedBytes(),
     pauseAdmissions: async () => undefined,
     drainUploads: async () => {
       await wait(REGISTRY_WRITE_DRAIN_GRACE_MS);
@@ -373,6 +375,9 @@ export function createDockerRegistryMaintenanceStore(db: DrizzleClient): DockerR
 
 export const unavailableDockerRegistryMaintenanceExecutor: DockerRegistryMaintenanceExecutor = {
   hasRepositories: async () => {
+    throw new AppError(503, 'REGISTRY_CONTROL_UNAVAILABLE', 'Internal registry control channel is unavailable');
+  },
+  storageUsedBytes: async () => {
     throw new AppError(503, 'REGISTRY_CONTROL_UNAVAILABLE', 'Internal registry control channel is unavailable');
   },
   pauseAdmissions: async () => {

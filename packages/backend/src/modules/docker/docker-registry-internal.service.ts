@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { DrizzleClient } from '@/db/client.js';
 import type { DockerRegistryMaintenancePhase } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { LicensePolicyService } from '@/modules/license/license-policy.service.js';
@@ -30,7 +31,9 @@ export {
 } from './docker-registry-maintenance.js';
 
 export const INTERNAL_DOCKER_REGISTRY_ID = 'gateway-internal-registry';
+const logger = createChildLogger('DockerInternalRegistryService');
 const DEFAULT_DISK_PRESSURE_RATIO = 0.9;
+const STORAGE_MEASURE_INTERVAL_MS = 5 * 60_000;
 
 export interface DockerRegistryExternalAccessConfig {
   externalAccessEnabled: boolean;
@@ -50,6 +53,7 @@ export class DockerInternalRegistryService {
   private externalAccessReconciler?: DockerRegistryExternalAccessReconciler;
   private eventBus?: EventBusService;
   private readonly store: DockerRegistryMaintenanceStore;
+  private storageMeasuredAt = 0;
 
   constructor(
     db: DrizzleClient,
@@ -125,7 +129,29 @@ export class DockerInternalRegistryService {
     } catch {
       healthy = false;
     }
-    return this.reportHealth({ healthy, writable: healthy, usedBytes: 0, capacityBytes: null });
+    return this.reportHealth({
+      healthy,
+      writable: healthy,
+      usedBytes: await this.storageUsedBytes(healthy),
+      capacityBytes: null,
+    });
+  }
+
+  /**
+   * The health probe runs every few seconds and walking the registry volume is not free, so usage is re-measured at most
+   * once per STORAGE_MEASURE_INTERVAL_MS. Between measurements, and whenever measuring fails, the stored value stands.
+   */
+  private async storageUsedBytes(healthy: boolean): Promise<number> {
+    const known = (await this.getState()).storageUsedBytes;
+    if (!healthy || Date.now() - this.storageMeasuredAt < STORAGE_MEASURE_INTERVAL_MS) return known;
+    try {
+      const measured = await this.executor.storageUsedBytes();
+      this.storageMeasuredAt = Date.now();
+      return measured;
+    } catch (error) {
+      logger.debug('Managed registry storage usage could not be measured', { error });
+      return known;
+    }
   }
 
   async reportHealth(input: { healthy: boolean; writable: boolean; usedBytes: number; capacityBytes?: number | null }) {
@@ -416,6 +442,8 @@ export class DockerInternalRegistryService {
         await phase('restoring_writes');
         await this.executor.restoreWrites();
         writesRestored = true;
+        // Garbage collection just changed the volume; do not keep showing the pre-collection size.
+        this.storageMeasuredAt = 0;
       }
 
       run = await this.store.updateRun(run.id, {
