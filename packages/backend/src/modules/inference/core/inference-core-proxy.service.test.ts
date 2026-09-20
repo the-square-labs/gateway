@@ -498,13 +498,17 @@ describe('inference core proxy', () => {
     const bodies = fetchStub.mock.calls.map(([, init]) => JSON.parse(init.body as string));
     expect(bodies.map((body) => body.model)).toEqual(['core-conn-1/gpt-5.5', 'anthropic/claude-sonnet-5']);
     expect(bodies.map((body) => body.previous_response_id)).toEqual(['resp_previous', 'resp_previous']);
+    // Routing gets each connection's upstream model so a model-scoped quota window only
+    // excludes the source it actually meters.
     expect(routing.select).toHaveBeenNthCalledWith(1, {
       allowedConnectionIds: ['conn-1', 'conn-2'],
+      upstreamModelByConnection: { 'conn-1': 'gpt-5.5', 'conn-2': 'claude-sonnet-5' },
       existingThread: true,
     });
     expect(routing.select).toHaveBeenNthCalledWith(2, {
       providerId: 'anthropic',
       allowedConnectionIds: ['conn-2'],
+      upstreamModelByConnection: { 'conn-2': 'claude-sonnet-5' },
       existingThread: true,
     });
     expect(coreAccounting.retargetCoreRequest).toHaveBeenCalledWith(
@@ -558,6 +562,7 @@ describe('inference core proxy', () => {
 
     expect(routing.select).toHaveBeenCalledWith({
       allowedConnectionIds: ['conn-1', 'conn-2'],
+      upstreamModelByConnection: { 'conn-1': 'gpt-5.5', 'conn-2': 'claude-sonnet-5' },
       existingThread: false,
     });
     const where = (selection.where as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
