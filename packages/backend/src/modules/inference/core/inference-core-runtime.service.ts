@@ -5,7 +5,7 @@ import type { InferenceCoreStateRow } from '@/db/schema/inference-core.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { TrustedOpenCodexImageArtifact } from '@/lib/update-artifact-trust.js';
 import { AppError } from '@/middleware/error-handler.js';
-import type { DockerService } from '@/services/docker.service.js';
+import type { DockerCreateContainerConfig, DockerService } from '@/services/docker.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import { imageRepositoryFromRef } from '@/services/update.service.js';
 import type { InferenceCredentialVault } from '../inference-credential-vault.js';
@@ -49,7 +49,7 @@ const CORE_BACKUP_TIMEOUT_MS = 15_000;
  * it prints usage and exits 0, so a probe reads no number and a cleanup silently does nothing.
  * Maintenance one-shots built from that image must replace the entrypoint.
  */
-const CORE_IMAGE_SHELL = { Entrypoint: ['/bin/sh', '-c'] } as const;
+const CORE_IMAGE_SHELL: Pick<DockerCreateContainerConfig, 'Entrypoint'> = { Entrypoint: ['/bin/sh', '-c'] };
 const CORE_BACKUP_KEEP = 3;
 const HEALTH_PROBE_INTERVAL_MS = 60_000;
 
