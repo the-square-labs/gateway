@@ -8,7 +8,7 @@ import { inferenceProviderConnections, inferenceProviderSettings, inferenceQuota
 import type { InferenceConnectionStatus, InferenceRoutingStrategy } from '@/db/schema/inference-providers.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
-import { latestValidQuota } from './inference-provider.service.helpers.js';
+import { latestValidQuota, quotaAppliesToModel } from './inference-provider.service.helpers.js';
 
 const AFFINITY_TTL_SECONDS = 24 * 60 * 60;
 const AFFINITY_REBALANCE_IDLE_MS = 60 * 60 * 1000;
@@ -65,6 +65,8 @@ export interface InferenceRoutingInput {
   /** Omit only when a logical model intentionally spans multiple providers. */
   providerId?: string;
   allowedConnectionIds?: string[];
+  /** Upstream model each connection would serve, so model-scoped quota windows gate only that model. */
+  upstreamModelByConnection?: Record<string, string>;
   affinityKey?: string;
   preferredConnectionId?: string;
   existingThread: boolean;
@@ -481,7 +483,10 @@ export class InferenceRoutingService {
         });
         const latestQuotas = latestQuotaWindows(quotas);
         const now = Date.now();
-        const validQuotas = latestValidQuota(quotas, now);
+        const upstreamModelId = input.upstreamModelByConnection?.[connection.id];
+        const validQuotas = latestValidQuota(quotas, now).filter((quota) =>
+          quotaAppliesToModel(quota, upstreamModelId)
+        );
         const minimumRemainingFraction = connection.minimumRemainingPercent / 100;
         const remainingFractions = validQuotas.flatMap((quota) =>
           quota.remainingFraction === null || quota.remainingFraction === undefined

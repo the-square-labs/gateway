@@ -163,6 +163,8 @@ export const inferenceCoreHealthIdentitySchema = z.object({
   instanceId: z.string().min(1),
   startedAt: isoDateTime,
   requestLimitsVersion: z.literal(1).optional(),
+  /** Core accepts the signed `maxOutputTokens` claim (strict cores reject unknown claims). */
+  outputLimitVersion: z.literal(1).optional(),
 });
 export type InferenceCoreHealthIdentity = z.infer<typeof inferenceCoreHealthIdentitySchema>;
 
@@ -219,6 +221,8 @@ export const inferenceCoreRequestContextSchema = z
       })
       .strict()
       .optional(),
+    /** Published model output ceiling; sent only to cores advertising `outputLimitVersion`. */
+    maxOutputTokens: z.number().int().positive().optional(),
   })
   .strict()
   .refine((claims) => claims.expiresAt > claims.issuedAt, { message: 'expiresAt must be after issuedAt' });

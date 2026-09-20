@@ -9,6 +9,11 @@ export interface CodexCatalogMetadata {
   etag?: string;
   catalogVersion?: string;
   lastSyncedAt: string;
+  /**
+   * Codex's own instructions, kept apart from the catalog: once a Gateway model prompt is
+   * applied the catalog no longer holds the harness default, so it cannot be recovered from it.
+   */
+  harnessBaseInstructions?: CodexBaseInstructionsCatalog;
 }
 
 export interface CatalogSyncResult {
@@ -40,6 +45,8 @@ export interface GatewayInferenceModel {
   supported_reasoning_efforts: string[];
   default_reasoning_effort: string | null;
   supported_service_tiers?: string[];
+  /** Administrator-configured harness instructions for this model. */
+  system_prompt?: { text: string; mode: 'append' | 'replace' };
 }
 
 const CODEX_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
@@ -122,7 +129,12 @@ export async function syncCodexCatalog(input: {
     } catch (error) {
       throw new CliError('CATALOG_INVALID', 'Gateway returned invalid Codex catalog JSON.', { cause: error });
     }
-    const baseInstructions = input.baseInstructions ?? (existing ? codexBaseInstructionsFromCatalog(existing) : null);
+    // A catalog written before model prompts existed still holds the pristine harness
+    // instructions; afterwards only the metadata copy is trustworthy.
+    const baseInstructions =
+      input.baseInstructions ??
+      harnessBaseInstructionsFromMetadata(metadata) ??
+      (existing ? codexBaseInstructionsFromCatalog(existing) : null);
     if (!baseInstructions) {
       throw new CliError(
         'CODEX_BASE_INSTRUCTIONS_MISSING',
@@ -139,6 +151,7 @@ export async function syncCodexCatalog(input: {
         ...(response.headers.get('etag') ? { etag: response.headers.get('etag')! } : {}),
         ...(catalogVersion ? { catalogVersion } : {}),
         lastSyncedAt: now,
+        harnessBaseInstructions: baseInstructions,
       } satisfies CodexCatalogMetadata,
       0o600
     );
@@ -217,7 +230,10 @@ export function codexCatalogFromModels(
         default_service_tier: null,
         availability_nux: null,
         upgrade: null,
-        base_instructions: baseInstructions.bySlug[model.id] ?? baseInstructions.fallback,
+        base_instructions: modelBaseInstructions(
+          baseInstructions.bySlug[model.id] ?? baseInstructions.fallback,
+          model.system_prompt
+        ),
         model_messages: null,
         include_skills_usage_instructions: false,
         supports_reasoning_summary_parameter: reasoning,
@@ -253,6 +269,24 @@ export function codexCatalogFromModels(
       };
     }),
   };
+}
+
+function modelBaseInstructions(harnessDefault: string, prompt: GatewayInferenceModel['system_prompt']): string {
+  const text = typeof prompt?.text === 'string' ? prompt.text.trim() : '';
+  if (!text) return harnessDefault;
+  return prompt?.mode === 'replace' ? text : `${harnessDefault}\n\n${text}`;
+}
+
+function harnessBaseInstructionsFromMetadata(
+  metadata: CodexCatalogMetadata | null
+): CodexBaseInstructionsCatalog | null {
+  const stored = metadata?.harnessBaseInstructions;
+  if (!stored || typeof stored.fallback !== 'string' || !stored.fallback.trim()) return null;
+  const bySlug: Record<string, string> = {};
+  for (const [slug, value] of Object.entries(stored.bySlug ?? {})) {
+    if (typeof value === 'string' && value.trim()) bySlug[slug] = value;
+  }
+  return { bySlug, fallback: stored.fallback };
 }
 
 export function codexBaseInstructionsFromCatalog(value: unknown): CodexBaseInstructionsCatalog {

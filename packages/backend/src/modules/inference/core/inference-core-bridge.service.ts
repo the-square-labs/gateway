@@ -24,6 +24,8 @@ export interface CoreDataPlaneTarget {
    */
   requestLimitsCapability: CoreRequestLimitsCapability;
   requestLimits?: { httpBodyMaxBytes: number; webSocketMaxPayloadBytes: number };
+  /** Whether this core accepts the signed `maxOutputTokens` claim; older cores reject it. */
+  outputLimitSupported: boolean;
 }
 
 /**
@@ -34,7 +36,12 @@ export interface CoreDataPlaneTarget {
  */
 @injectable()
 export class InferenceCoreBridgeService {
-  private limitsCapability: { digest: string | null; supported: boolean; expiresAt: number } | null = null;
+  private limitsCapability: {
+    digest: string | null;
+    supported: boolean;
+    outputLimitSupported: boolean;
+    expiresAt: number;
+  } | null = null;
   constructor(
     private readonly store: InferenceCoreStore,
     private readonly vault: InferenceCredentialVault
@@ -109,6 +116,7 @@ export class InferenceCoreBridgeService {
       this.limitsCapability = {
         digest: row.installedDigest,
         supported: identity?.requestLimitsVersion === 1,
+        outputLimitSupported: identity?.outputLimitVersion === 1,
         expiresAt: Date.now() + 5_000,
       };
     }
@@ -117,6 +125,7 @@ export class InferenceCoreBridgeService {
       baseUrl,
       credential: await this.dataPlaneCredential(),
       requestLimitsCapability: this.limitsCapability.supported ? 'negotiated-v1' : 'legacy',
+      outputLimitSupported: this.limitsCapability.outputLimitSupported,
       ...(this.limitsCapability.supported
         ? {
             requestLimits: {

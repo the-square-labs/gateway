@@ -49,6 +49,8 @@ const InferenceModelFieldsSchema = z.object({
   capabilities: z.record(z.boolean()),
   reasoningEfforts: z.array(z.string().trim().min(1).max(32)),
   defaultReasoningEffort: z.string().trim().min(1).max(32).nullable().optional(),
+  systemPrompt: z.string().max(32_000).nullable().optional(),
+  systemPromptMode: z.enum(['append', 'replace']).optional(),
   defaultAccessAllowed: z.boolean(),
   subscriptionMultiplier: z.number().positive().max(10_000),
 });
@@ -146,6 +148,7 @@ export const InferencePublicModelsResponseSchema = z.object({
       capabilities: z.record(z.boolean()),
       supported_reasoning_efforts: z.array(z.string()),
       default_reasoning_effort: z.string().nullable(),
+      system_prompt: z.object({ text: z.string(), mode: z.enum(['append', 'replace']) }).optional(),
     })
   ),
 });

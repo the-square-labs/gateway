@@ -163,6 +163,28 @@ export function hasSpendableSubscriptionBudget(limits: EffectiveInferenceLimits,
   return enabledWindows.length === 0 || enabledWindows.every((window) => window.used < window.limit);
 }
 
+/**
+ * When a user with no spendable subscription budget can spend again: every exhausted window
+ * has to recover, so this is the latest recovery among them.
+ */
+export function subscriptionBudgetRecoveryAt(
+  limits: EffectiveInferenceLimits,
+  usage: InferenceBudgetUsage
+): Date | null {
+  const exhausted = [
+    limits.credits5hEnabled && usage.credits5h >= limits.credits5h * SUBSCRIPTION_CHAT_BUDGET_FRACTION
+      ? usage.recoveryAt.credits5h
+      : null,
+    limits.credits7dEnabled && usage.credits7d >= limits.credits7d * SUBSCRIPTION_CHAT_BUDGET_FRACTION
+      ? usage.recoveryAt.credits7d
+      : null,
+    limits.credits30dEnabled && usage.credits30d >= limits.credits30d * SUBSCRIPTION_CHAT_BUDGET_FRACTION
+      ? usage.recoveryAt.credits30d
+      : null,
+  ].filter((value): value is Date => value instanceof Date);
+  return exhausted.length === 0 ? null : new Date(Math.max(...exhausted.map((value) => value.getTime())));
+}
+
 export function unitCharge(
   pricing: typeof inferencePricingSnapshots.$inferSelect | null,
   priceKey: string,

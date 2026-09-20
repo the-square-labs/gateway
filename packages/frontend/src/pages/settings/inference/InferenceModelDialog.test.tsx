@@ -172,6 +172,93 @@ describe("InferenceModelDialog", () => {
     ).toEqual(["high", "low", "ultra"]);
   });
 
+  it("restores the saved system prompt and submits the edited prompt with its delivery mode", async () => {
+    const user = userEvent.setup();
+    const saveConfiguration = vi
+      .spyOn(api, "saveInferenceModelConfiguration")
+      .mockResolvedValue({} as never);
+    const editing = {
+      id: "model-1",
+      publicId: "k3",
+      displayName: "K3",
+      sortOrder: 0,
+      enabled: true,
+      contextWindow: 1_000_000,
+      maxInputTokens: 900_000,
+      maxOutputTokens: 8_000,
+      autoCompactTokenLimit: 800_000,
+      modalities: ["text", "image"],
+      capabilities: { reasoning: true, tools: true, vision: true },
+      configuredCapabilities: { reasoning: true, tools: true, vision: true },
+      capabilityLimitations: {},
+      reasoningEfforts: ["high", "low", "ultra"],
+      defaultReasoningEffort: "high",
+      systemPrompt: "Prefer small diffs.",
+      systemPromptMode: "replace",
+      defaultAccessAllowed: true,
+      accessMode: "everyone",
+      accessSubjects: [],
+      subscriptionMultiplier: 1,
+      sources: [
+        {
+          id: "source-1",
+          connectionId: "kimi-a",
+          discoveredModelId: "kimi-a-k3",
+          providerId: "kimi",
+          connectionName: "kimi-a",
+          upstreamModelId: "k3",
+          sourceType: "subscription",
+          enabled: true,
+          priority: 0,
+          subscriptionMultiplierOverride: null,
+          // PostgreSQL jsonb does not preserve the order selected by the user.
+          reasoningEffortMap: { low: "low", high: "high", ultra: "max" },
+          reasoningEfforts: ["low", "high", "max"],
+          capabilities: { reasoning: true, tools: true, vision: true },
+          contextWindow: 1_000_000,
+          maxInputTokens: 900_000,
+          maxOutputTokens: 8_000,
+          autoCompactTokenLimit: 800_000,
+          modalities: ["text", "image"],
+          capabilitiesOverride: null,
+          metadata: {},
+          pricing: null,
+        },
+      ],
+      accessRules: [],
+    } as InferenceModel;
+
+    render(
+      <InferenceModelDialog
+        open
+        editing={editing}
+        connections={[connection("kimi-a")]}
+        catalog={[provider("kimi", "Kimi subscription", true)]}
+        groups={[]}
+        users={[]}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    await user.click(screen.getByRole("tab", { name: "System prompt" }));
+    const prompt = screen.getByRole("textbox", { name: "Model system prompt" });
+    expect(prompt).toHaveValue("Prefer small diffs.");
+    expect(screen.getByRole("combobox", { name: "System prompt delivery mode" })).toHaveTextContent(
+      "Replace harness default"
+    );
+
+    await user.clear(prompt);
+    await user.type(prompt, "Answer tersely.");
+    await user.click(screen.getByRole("button", { name: "Save model" }));
+
+    await waitFor(() => expect(saveConfiguration).toHaveBeenCalled());
+    expect(saveConfiguration.mock.calls[0]?.[1].model).toMatchObject({
+      systemPrompt: "Answer tersely.",
+      systemPromptMode: "replace",
+    });
+  });
+
   it("shows upstream ids only when display names collide", async () => {
     const openAi = connection("openai-key", "openai-apikey");
     const base = openAi.discoveredModels[0]!;

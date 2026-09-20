@@ -10,7 +10,9 @@ import { INFERENCE_CORE_PROTOCOL_MAJOR } from './inference-core.contract.js';
  * signature-verified before any Docker mutation is considered.
  */
 
-export const OPENCODEX_RELEASE_TAG_RE = /^v\d+\.\d+\.\d+-wiolett\.\d+$/;
+// Releases were tagged `-wiolett.N` up to 2.25.0; newer ones use `-thesqlabs.N`. Installed
+// legacy versions must stay valid and comparable, so both suffixes are accepted.
+export const OPENCODEX_RELEASE_TAG_RE = /^v\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/;
 
 /** Fetch the newest published OpenCodex core tag, or null when none exist yet. */
 export async function fetchLatestOpenCodexTag(releasesApiUrl: string): Promise<string | null> {
@@ -28,20 +30,26 @@ export async function fetchLatestOpenCodexTag(releasesApiUrl: string): Promise<s
   return target && OPENCODEX_RELEASE_TAG_RE.test(target.tag_name) ? target.tag_name : null;
 }
 
-/** Compare `1.2.3-wiolett.4` style versions: semver first, then the build number. */
+/**
+ * Compare `1.2.3-thesqlabs.4` style versions: semver first, then the release line
+ * (`thesqlabs` supersedes legacy `wiolett` on the same base), then the build number.
+ */
 export function compareOpenCodexVersions(a: string, b: string): number {
   const parsedA = parseOpenCodexVersion(a);
   const parsedB = parseOpenCodexVersion(b);
   if (!parsedA || !parsedB) return 0;
   const semverOrder = compareSemver(parsedA.base, parsedB.base);
   if (semverOrder !== 0) return semverOrder;
+  if (parsedA.line !== parsedB.line) return parsedA.line === 'thesqlabs' ? 1 : -1;
   return parsedA.build - parsedB.build;
 }
 
-export function parseOpenCodexVersion(version: string): { base: string; build: number } | null {
-  const match = /^v?(\d+\.\d+\.\d+)-wiolett\.(\d+)$/.exec(version);
+export function parseOpenCodexVersion(
+  version: string
+): { base: string; line: 'wiolett' | 'thesqlabs'; build: number } | null {
+  const match = /^v?(\d+\.\d+\.\d+)-(wiolett|thesqlabs)\.(\d+)$/.exec(version);
   if (!match || !parseSemver(match[1])) return null;
-  return { base: match[1], build: Number(match[2]) };
+  return { base: match[1], line: match[2] as 'wiolett' | 'thesqlabs', build: Number(match[3]) };
 }
 
 /**
@@ -56,7 +64,7 @@ export async function fetchOpenCodexImageManifest(
   publicKey?: string | Buffer
 ): Promise<TrustedOpenCodexImageArtifact> {
   if (!OPENCODEX_RELEASE_TAG_RE.test(tag)) {
-    throw new AppError(400, 'INVALID_CORE_VERSION', `Core release tag must match vX.Y.Z-wiolett.N, got "${tag}"`);
+    throw new AppError(400, 'INVALID_CORE_VERSION', `Core release tag must match vX.Y.Z-thesqlabs.N, got "${tag}"`);
   }
   const source = releaseFileSource(artifactBaseUrl, 'inference-core', tag, 'opencodex-image.update.json');
   const response = await fetch(source.url, {

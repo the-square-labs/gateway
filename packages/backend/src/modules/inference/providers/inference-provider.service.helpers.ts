@@ -25,9 +25,21 @@ export function validateBaseUrl(value: string, required: boolean): string {
   }
 }
 
+/**
+ * Whether a quota window constrains requests for one upstream model. Account-wide windows
+ * always do; a model-scoped window (for example Anthropic's weekly Fable bucket) constrains
+ * only models of that family, so an exhausted bucket never blocks the account's other models.
+ */
+export function quotaAppliesToModel(window: { modelBucket?: string | null }, upstreamModelId?: string | null): boolean {
+  if (!window.modelBucket) return true;
+  if (!upstreamModelId) return false;
+  return upstreamModelId.toLowerCase().includes(window.modelBucket.toLowerCase());
+}
+
 export function classifyStatus(windows: InferenceQuotaWindow[], minimumRemainingFraction = 0.01) {
+  // Connection health is account-wide; model-scoped windows gate only their own models.
   const fractions = windows.flatMap((window) =>
-    window.remainingFraction === undefined ? [] : [window.remainingFraction]
+    window.remainingFraction === undefined || window.modelBucket ? [] : [window.remainingFraction]
   );
   if (fractions.length === 0) return 'healthy' as const;
   const minimum = Math.min(...fractions);

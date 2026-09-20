@@ -57,6 +57,12 @@ export function normalizePublicId(value: string): string {
   return normalized;
 }
 
+/** Blank or whitespace-only prompts clear the model's harness instructions. */
+export function normalizeSystemPrompt(value?: string | null): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 export function validateDefaultEffort(efforts: string[], value?: string | null) {
   if (value && !efforts.includes(value.toLowerCase())) {
     throw new AppError(400, 'INFERENCE_REASONING_DEFAULT_INVALID', 'Default reasoning effort must be advertised');

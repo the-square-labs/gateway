@@ -252,7 +252,17 @@ export interface CoreQuotaReport {
     monthlyPercent?: number;
     monthlyResetAt?: number;
     creditsUsd?: { remaining?: number; limit?: number };
+    /** Extra provider windows, e.g. Anthropic's model-scoped weekly buckets (Fable/Opus/Sonnet). */
+    customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   };
+}
+
+/** Model families a subscription can meter separately from the account-wide weekly window. */
+const MODEL_SCOPED_QUOTA_FAMILIES = ['fable', 'mythos', 'opus', 'sonnet', 'haiku'] as const;
+
+function quotaModelScope(label: string): string | null {
+  const normalized = label.trim().toLowerCase();
+  return MODEL_SCOPED_QUOTA_FAMILIES.find((family) => normalized.includes(family)) ?? null;
 }
 
 export function parseCoreQuotaReports(body: unknown): CoreQuotaReport[] {
@@ -284,6 +294,22 @@ export function parseCoreQuotaReports(body: unknown): CoreQuotaReport[] {
               },
             }
           : {}),
+        ...(Array.isArray(quota.customWindows)
+          ? {
+              customWindows: quota.customWindows.flatMap((entry) => {
+                if (!entry || typeof entry !== 'object') return [];
+                const window = entry as Record<string, unknown>;
+                if (typeof window.label !== 'string' || typeof window.percent !== 'number') return [];
+                return [
+                  {
+                    label: window.label,
+                    percent: window.percent,
+                    ...(typeof window.resetAt === 'number' ? { resetAt: window.resetAt } : {}),
+                  },
+                ];
+              }),
+            }
+          : {}),
       },
     });
   }
@@ -296,6 +322,7 @@ export function parseCoreQuotaReports(body: unknown): CoreQuotaReport[] {
  */
 export function coreQuotaToWindows(report: CoreQuotaReport): Array<{
   dimension: string;
+  modelBucket?: string;
   remainingFraction?: number;
   remainingValue?: string;
   limitValue?: string;
@@ -304,6 +331,7 @@ export function coreQuotaToWindows(report: CoreQuotaReport): Array<{
 }> {
   const windows: Array<{
     dimension: string;
+    modelBucket?: string;
     remainingFraction?: number;
     remainingValue?: string;
     limitValue?: string;
@@ -327,6 +355,28 @@ export function coreQuotaToWindows(report: CoreQuotaReport): Array<{
   usage(report.quota.fiveHourPercent, report.quota.fiveHourResetAt, '5h');
   usage(report.quota.weeklyPercent, report.quota.weeklyResetAt, '7d');
   usage(report.quota.monthlyPercent, report.quota.monthlyResetAt, '30d');
+  // Only recognised model families are ingested: other providers reuse custom windows for
+  // limits whose duration and scope Gateway cannot interpret.
+  // A provider can report several windows for one family (Anthropic sends a canonical "Opus"
+  // bucket and may add a separately labelled scoped limit). One window is stored per family, so
+  // the most constrained one wins: keeping the first would admit turns into an exhausted bucket.
+  const mostConstrained = new Map<string, { label: string; percent: number; resetAt?: number }>();
+  for (const custom of report.quota.customWindows ?? []) {
+    const modelBucket = quotaModelScope(custom.label);
+    if (!modelBucket) continue;
+    const current = mostConstrained.get(modelBucket);
+    if (!current || custom.percent > current.percent) mostConstrained.set(modelBucket, custom);
+  }
+  for (const [modelBucket, custom] of mostConstrained) {
+    const normalizedResetAt = resetDate(custom.resetAt);
+    windows.push({
+      dimension: '7d',
+      modelBucket,
+      remainingFraction: Math.max(0, Math.min(1, 1 - custom.percent / 100)),
+      ...(normalizedResetAt ? { resetAt: normalizedResetAt } : {}),
+      metadata: { label: custom.label },
+    });
+  }
   if (
     report.quota.creditsUsd &&
     (report.quota.creditsUsd.remaining !== undefined || report.quota.creditsUsd.limit !== undefined)

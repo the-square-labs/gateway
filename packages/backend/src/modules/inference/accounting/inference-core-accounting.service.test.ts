@@ -323,7 +323,8 @@ describe('inference core accounting', () => {
       estimate: { inputTokens: 1_000, maxOutputTokens: 2_000_000 },
     });
 
-    expect(decision).toEqual({ decision: 'allow', maxOutputTokens: 1_498_750 });
+    // The reservation is bounded by the tail, but the turn itself is never truncated.
+    expect(decision).toEqual({ decision: 'allow' });
     expect(reservations.reserve).toHaveBeenCalledWith(
       expect.objectContaining({ amounts: expect.objectContaining({ credits5h: 2_000 }) })
     );
@@ -337,14 +338,19 @@ describe('inference core accounting', () => {
         credits7dEnabled: false,
         credits30dEnabled: false,
       },
-      usage: { credits5h: 1_000 },
+      usage: { credits5h: 1_000, recoveryAt: { credits5h: new Date(Date.now() + 90 * 60_000) } },
     });
 
-    await expect(service.admitCoreAttempt(ADMISSION)).resolves.toEqual({ decision: 'deny', reason: 'budget_exceeded' });
+    // The deny carries the window reset so the client backs off instead of hot-retrying a 402.
+    const decision = await service.admitCoreAttempt(ADMISSION);
+    expect(decision).toMatchObject({ decision: 'deny', reason: 'budget_exceeded' });
+    const retryAfterSeconds = (decision as { retryAfterSeconds?: number }).retryAfterSeconds;
+    expect(retryAfterSeconds).toBeGreaterThan(89 * 60);
+    expect(retryAfterSeconds).toBeLessThanOrEqual(90 * 60);
     expect(reservations.reserve).not.toHaveBeenCalled();
   });
 
-  it('releases an atomically reserved tail that cannot leave one valid output token', async () => {
+  it('admits a turn whose input alone exceeds the remaining tail instead of truncating or denying it', async () => {
     const { service, reservations } = createHarness({
       limits: {
         credits5hEnabled: true,
@@ -363,8 +369,8 @@ describe('inference core accounting', () => {
 
     await expect(
       service.admitCoreAttempt({ ...ADMISSION, estimate: { inputTokens: 1_500_000, maxOutputTokens: 1 } })
-    ).resolves.toEqual({ decision: 'deny', reason: 'budget_exceeded' });
-    expect(reservations.release).toHaveBeenCalledWith(expect.objectContaining({ id: `${REQUEST.id}:att_1` }));
+    ).resolves.toEqual({ decision: 'allow' });
+    expect(reservations.release).not.toHaveBeenCalled();
   });
 
   it('does not cap core admission through disabled subscription windows', async () => {

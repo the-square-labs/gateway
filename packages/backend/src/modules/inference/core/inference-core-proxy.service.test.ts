@@ -257,6 +257,69 @@ describe('inference core proxy', () => {
     await response.text();
   });
 
+  it('maps Anthropic Messages effort through output_config without OpenAI reasoning fields', async () => {
+    const { service, fetchStub, coreAccounting } = createService();
+    const c = createContext(
+      JSON.stringify({
+        model: 'gpt-5.5',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: 'hi' }],
+        thinking: { type: 'adaptive' },
+        output_config: { effort: 'low', format: { type: 'json_schema', schema: {} } },
+      }),
+      { 'content-type': 'application/json' }
+    );
+
+    const response = await service.proxy(c, 'messages');
+
+    expect(coreAccounting.createCoreRequest).toHaveBeenCalledWith(expect.objectContaining({ reasoningEffort: 'low' }));
+    const sentBody = JSON.parse(fetchStub.mock.calls[0]![1].body);
+    expect(sentBody.output_config).toEqual({ effort: 'minimal', format: { type: 'json_schema', schema: {} } });
+    expect(sentBody.reasoning).toBeUndefined();
+    expect(sentBody.reasoning_effort).toBeUndefined();
+    await response.text();
+  });
+
+  it('does not inject the model default effort into an Anthropic Messages body', async () => {
+    const { service, fetchStub } = createService();
+    const c = createContext(
+      JSON.stringify({ model: 'gpt-5.5', max_tokens: 1024, messages: [{ role: 'user', content: 'hi' }] }),
+      { 'content-type': 'application/json' }
+    );
+
+    const response = await service.proxy(c, 'messages');
+
+    const sentBody = JSON.parse(fetchStub.mock.calls[0]![1].body);
+    expect(sentBody.output_config).toBeUndefined();
+    expect(sentBody.reasoning_effort).toBeUndefined();
+    await response.text();
+  });
+
+  it('signs the published output ceiling only for a core that negotiated the claim', async () => {
+    const model = { ...MODEL, maxOutputTokens: 128_000 };
+    const claimsFor = async (outputLimitSupported: boolean) => {
+      const { service, models, fetchStub, bridge } = createService();
+      models.resolveForUser.mockResolvedValue({ model, sources: [SOURCE] } as never);
+      bridge.dataPlaneTarget.mockResolvedValue({
+        baseUrl: 'http://inference-core:10100',
+        credential: 'ocx_data cred',
+        requestLimitsCapability: 'legacy',
+        outputLimitSupported,
+      });
+      const response = await service.proxy(
+        createContext(JSON.stringify({ model: MODEL.publicId, input: 'hi' }), { 'content-type': 'application/json' }),
+        'responses'
+      );
+      await response.text();
+      const headers = (fetchStub.mock.calls[0] as [string, RequestInit])[1].headers as Record<string, string>;
+      return JSON.parse(Buffer.from(headers['x-wiolett-context'], 'base64url').toString('utf8'));
+    };
+
+    // Older cores validate claims strictly and would reject the unknown field.
+    expect(await claimsFor(false)).not.toHaveProperty('maxOutputTokens');
+    expect(await claimsFor(true)).toMatchObject({ maxOutputTokens: 128_000 });
+  });
+
   it('rewrites the model to the core reference and injects signed context headers', async () => {
     const { service, fetchStub, coreAccounting } = createService();
     const c = createContext(JSON.stringify({ model: 'gpt-5.5', input: 'hi', reasoning: { effort: 'low' } }), {

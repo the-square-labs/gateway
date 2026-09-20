@@ -130,6 +130,61 @@ describe('Codex catalog synchronization', () => {
     expect(fallback.base_instructions).toBe('Official instructions for the exact model.');
   });
 
+  it('applies an administrator model prompt on top of or instead of the Codex instructions', () => {
+    const [appended, replaced, blank] = codexCatalogFromModels(
+      [
+        { ...MODELS.data[0], system_prompt: { text: ' Prefer small diffs. ', mode: 'append' as const } },
+        {
+          ...MODELS.data[0],
+          id: 'replaced',
+          system_prompt: { text: 'Custom harness prompt.', mode: 'replace' as const },
+        },
+        { ...MODELS.data[0], id: 'blank', system_prompt: { text: '  ', mode: 'replace' as const } },
+      ],
+      BASE_INSTRUCTIONS
+    ).models;
+
+    expect(appended.base_instructions).toBe('Official instructions for the exact model.\n\nPrefer small diffs.');
+    expect(replaced.base_instructions).toBe('Custom harness prompt.');
+    expect(blank.base_instructions).toBe('Official instructions for the exact model.');
+  });
+
+  it('keeps the harness instructions recoverable after a model prompt replaced them in the catalog', async () => {
+    const files = await fixture();
+    let prompt: { text: string; mode: 'append' | 'replace' } | undefined = {
+      text: 'Custom harness prompt.',
+      mode: 'replace',
+    };
+    const fetcher = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ ...MODELS, data: [{ ...MODELS.data[0], ...(prompt ? { system_prompt: prompt } : {}) }] }),
+          { headers: { 'Content-Type': 'application/json' } }
+        )
+    ) as typeof fetch;
+    const input = {
+      modelsUrl: 'https://gateway.example/api/inference/v1/models',
+      token: 'gwi_secret',
+      ...files,
+      fetch: fetcher,
+    };
+    const instructions = async () =>
+      JSON.parse(await readFile(files.catalogFile, 'utf8')).models[0].base_instructions as string;
+
+    await syncCodexCatalog({ ...input, baseInstructions: BASE_INSTRUCTIONS });
+    expect(await instructions()).toBe('Custom harness prompt.');
+
+    // Background refreshes have no bundled catalog: the default must come from metadata,
+    // not from the catalog that now holds the custom prompt.
+    prompt = { text: 'Prefer small diffs.', mode: 'append' };
+    await syncCodexCatalog(input);
+    expect(await instructions()).toBe('Official instructions for the exact model.\n\nPrefer small diffs.');
+
+    prompt = undefined;
+    await syncCodexCatalog(input);
+    expect(await instructions()).toBe('Official instructions for the exact model.');
+  });
+
   it('downloads the standard model list, converts it, and then uses If-None-Match', async () => {
     const files = await fixture();
     const calls: Request[] = [];

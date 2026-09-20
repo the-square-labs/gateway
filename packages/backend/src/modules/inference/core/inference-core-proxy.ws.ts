@@ -405,6 +405,7 @@ async function connectTurnAttempt(input: {
 
   const { claims } = newCoreRequestContext({
     requestLimits: input.target.requestLimits,
+    maxOutputTokens: input.target.outputLimitSupported ? resolved.model.maxOutputTokens : null,
     tenantUserId: input.auth.user.id,
     rootRequestId: input.turn.requestId,
     publicModelId: resolved.model.publicId,

@@ -145,6 +145,9 @@ export class InferenceCoreProxyService {
     const selection = await this.routing.select({
       ...(singleProviderId ? { providerId: singleProviderId } : {}),
       allowedConnectionIds: candidates.map((row) => row.connection.id),
+      upstreamModelByConnection: Object.fromEntries(
+        candidates.map((row) => [row.connection.id, row.source.upstreamModelId])
+      ),
       ...(options.affinityKey ? { affinityKey: options.affinityKey } : {}),
       existingThread: options.existingThread === true,
     });
@@ -214,6 +217,9 @@ export class InferenceCoreProxyService {
     const selection = await this.routing.select({
       providerId,
       allowedConnectionIds: candidates.map((row) => row.connection.id),
+      upstreamModelByConnection: Object.fromEntries(
+        candidates.map((row) => [row.connection.id, row.source.upstreamModelId])
+      ),
       existingThread: false,
     });
     const selected = candidates.find((row) => row.connection.id === selection.connectionId);
@@ -350,6 +356,7 @@ export class InferenceCoreProxyService {
         );
         const { claims } = newCoreRequestContext({
           requestLimits: target.requestLimits,
+          maxOutputTokens: target.outputLimitSupported ? resolved.model.maxOutputTokens : null,
           tenantUserId: user.id,
           rootRequestId,
           publicModelId: resolved.model.publicId,
@@ -677,10 +684,18 @@ export class InferenceCoreProxyService {
     const body = await readJsonObject(c);
     const model = requiredModel(body.model);
     const units = operation === 'images/generations' ? positiveUnits(Number(body.n ?? 1)) : 1;
-    const reasoningEffort =
-      (body.reasoning && typeof body.reasoning === 'object'
-        ? (body.reasoning as Record<string, unknown>).effort
-        : undefined) ?? body.reasoning_effort;
+    // Anthropic Messages carries effort in `output_config.effort`; the OpenAI-style
+    // `reasoning`/`reasoning_effort` fields are not part of that wire.
+    const isMessages = operation === 'messages' || operation === 'messages/count_tokens';
+    const outputConfig =
+      body.output_config && typeof body.output_config === 'object' && !Array.isArray(body.output_config)
+        ? (body.output_config as Record<string, unknown>)
+        : undefined;
+    const reasoningEffort = isMessages
+      ? outputConfig?.effort
+      : ((body.reasoning && typeof body.reasoning === 'object'
+          ? (body.reasoning as Record<string, unknown>).effort
+          : undefined) ?? body.reasoning_effort);
     return {
       publicModelId: model,
       units,
@@ -693,6 +708,22 @@ export class InferenceCoreProxyService {
       existingThread: typeof body.previous_response_id === 'string',
       rewrite: (upstreamModel, resolvedModel, source) => {
         const next: Record<string, unknown> = { ...body, model: upstreamModel };
+        if (isMessages) {
+          // Only translate an effort the client actually sent: a model default must not
+          // override the client's own `thinking` configuration on this wire.
+          if (typeof reasoningEffort === 'string') {
+            const mappedMessages = mapReasoningEffort(
+              reasoningEffort,
+              resolvedModel.defaultReasoningEffort,
+              resolvedModel.reasoningEfforts,
+              source.reasoningEffortMap
+            );
+            if (mappedMessages.upstreamEffort) {
+              next.output_config = { ...outputConfig, effort: mappedMessages.upstreamEffort };
+            }
+          }
+          return JSON.stringify(next);
+        }
         const mapped = mapReasoningEffort(
           typeof reasoningEffort === 'string' ? reasoningEffort : undefined,
           resolvedModel.defaultReasoningEffort,

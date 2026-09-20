@@ -110,6 +110,7 @@ export class InferenceCoreExecutor implements InferenceExecutor {
         };
         const { claims } = newCoreRequestContext({
           requestLimits: target.requestLimits,
+          maxOutputTokens: target.outputLimitSupported ? resolved.model.maxOutputTokens : null,
           tenantUserId: user.id,
           rootRequestId: requestId,
           publicModelId: resolved.model.publicId,

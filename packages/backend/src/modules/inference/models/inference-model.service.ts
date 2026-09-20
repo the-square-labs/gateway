@@ -39,6 +39,7 @@ import {
   latestPricing,
   manualSourceAllowed,
   normalizePublicId,
+  normalizeSystemPrompt,
   serializeDiscovered,
   validateDefaultEffort,
   validateModelInput,
@@ -103,6 +104,8 @@ export class InferenceModelService {
         displayName: input.displayName.trim(),
         reasoningEfforts: efforts,
         defaultReasoningEffort: input.defaultReasoningEffort ?? null,
+        systemPrompt: normalizeSystemPrompt(input.systemPrompt),
+        systemPromptMode: input.systemPromptMode ?? 'append',
         sortOrder: (lastModel?.sortOrder ?? -1) + 1,
         subscriptionMultiplier: String(input.subscriptionMultiplier),
         enabled: false,
@@ -127,6 +130,8 @@ export class InferenceModelService {
       reasoningEfforts: input.reasoningEfforts ?? model.reasoningEfforts,
       defaultReasoningEffort:
         input.defaultReasoningEffort === undefined ? model.defaultReasoningEffort : input.defaultReasoningEffort,
+      systemPrompt: input.systemPrompt === undefined ? model.systemPrompt : normalizeSystemPrompt(input.systemPrompt),
+      systemPromptMode: input.systemPromptMode ?? (model.systemPromptMode as 'append' | 'replace'),
       defaultAccessAllowed: input.defaultAccessAllowed ?? model.defaultAccessAllowed,
       subscriptionMultiplier: input.subscriptionMultiplier ?? Number(model.subscriptionMultiplier),
     };
@@ -590,6 +595,9 @@ export class InferenceModelService {
       capabilities: sourceState.capabilities.effective,
       supported_reasoning_efforts: model.reasoningEfforts,
       default_reasoning_effort: model.defaultReasoningEffort,
+      ...(model.systemPrompt
+        ? { system_prompt: { text: model.systemPrompt, mode: model.systemPromptMode as 'append' | 'replace' } }
+        : {}),
       supported_service_tiers: sourceState.supportsFast ? ['priority'] : [],
     };
   }

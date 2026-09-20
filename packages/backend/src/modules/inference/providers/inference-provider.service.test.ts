@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
-import { serializeModel } from './inference-provider.service.helpers.js';
+import { quotaAppliesToModel, serializeModel } from './inference-provider.service.helpers.js';
 import { __testOnly, InferenceProviderService } from './inference-provider.service.js';
 
 describe('InferenceProviderService policy helpers', () => {
@@ -14,6 +14,20 @@ describe('InferenceProviderService policy helpers', () => {
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.029 }], 0.03)).toBe('unavailable');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.03 }], 0.03)).toBe('unavailable');
     expect(__testOnly.classifyStatus([{ dimension: '5h', remainingFraction: 0.031 }], 0.03)).toBe('quota_hot');
+  });
+
+  it('keeps an exhausted model-scoped window from taking the whole connection down', () => {
+    expect(
+      __testOnly.classifyStatus([
+        { dimension: '7d', remainingFraction: 0.6 },
+        { dimension: '7d', modelBucket: 'fable', remainingFraction: 0 },
+      ])
+    ).toBe('healthy');
+    expect(quotaAppliesToModel({ modelBucket: null }, 'claude-sonnet-5')).toBe(true);
+    expect(quotaAppliesToModel({ modelBucket: 'fable' }, 'anthropic/claude-fable-5-1')).toBe(true);
+    expect(quotaAppliesToModel({ modelBucket: 'fable' }, 'claude-sonnet-5')).toBe(false);
+    // Without model context a scoped window cannot be attributed, so it does not gate.
+    expect(quotaAppliesToModel({ modelBucket: 'fable' }, undefined)).toBe(false);
   });
 
   it('validates custom endpoints without accepting embedded credentials', () => {

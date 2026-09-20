@@ -58,7 +58,10 @@ afterEach(() => {
 
 describe('OpenCodex release version helpers', () => {
   it('parses and compares wiolett build versions', () => {
-    expect(parseOpenCodexVersion('v2.26.0-wiolett.1')).toEqual({ base: '2.26.0', build: 1 });
+    expect(parseOpenCodexVersion('v2.26.0-wiolett.1')).toEqual({ base: '2.26.0', line: 'wiolett', build: 1 });
+    expect(parseOpenCodexVersion('v2.60.0-thesqlabs.3')).toEqual({ base: '2.60.0', line: 'thesqlabs', build: 3 });
+    expect(compareOpenCodexVersions('v2.60.0-thesqlabs.1', 'v2.25.0-wiolett.27')).toBeGreaterThan(0);
+    expect(compareOpenCodexVersions('v2.60.0-thesqlabs.1', 'v2.60.0-wiolett.9')).toBeGreaterThan(0);
     expect(parseOpenCodexVersion('2.26.0')).toBeNull();
     expect(compareOpenCodexVersions('v2.26.0-wiolett.2', 'v2.26.0-wiolett.1')).toBeGreaterThan(0);
     expect(compareOpenCodexVersions('v2.26.1-wiolett.1', 'v2.26.0-wiolett.9')).toBeGreaterThan(0);

@@ -242,6 +242,31 @@ describe("InferenceProviderDialog", () => {
     expect(screen.getByText(/^Resets 24 Aug 2026,/)).toBeInTheDocument();
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
   });
+
+  it("lists a model-scoped weekly limit separately from the account-wide window", () => {
+    render(
+      <InferenceProviderDialog
+        open
+        connection={{
+          ...connection,
+          quota: [
+            { dimension: "7d", status: "fresh", remainingFraction: 0.64 },
+            { dimension: "7d", modelBucket: "fable", status: "fresh", remainingFraction: 0.05 },
+          ],
+        }}
+        provider={provider}
+        canManage
+        onOpenChange={vi.fn()}
+        onChanged={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    // The exhausted Fable bucket must not replace the account-wide reading.
+    expect(screen.getByText("Weekly")).toBeInTheDocument();
+    expect(screen.getByText("64% remaining")).toBeInTheDocument();
+    expect(screen.getByText("Weekly · Fable")).toBeInTheDocument();
+    expect(screen.getByText("5% remaining")).toBeInTheDocument();
+  });
 });
 
 const provider: InferenceProviderCatalogItem = {

@@ -96,9 +96,19 @@ export function InferenceProviderDialog({
   const minimumRemainingPercentValid = !subscription || parsedMinimumRemainingPercent !== undefined;
   const apiMonthlyLimitMicrodollars = parseUsdLimit(apiMonthlyLimitUsd);
   const apiMonthlyLimitValid = subscription || apiMonthlyLimitMicrodollars !== undefined;
+  // Model-scoped windows (for example Anthropic's weekly Fable bucket) are separate limits,
+  // not a worse reading of the account-wide window, so they get their own rows.
+  const accountQuota = displayedConnection.quota.filter((window) => !window.modelBucket);
   const reportedQuotaWindows = QUOTA_WINDOWS.flatMap(({ dimension, label }) => {
-    const quota = quotaForDimension(displayedConnection.quota, dimension);
-    return quota ? [{ dimension, label, quota }] : [];
+    const quota = quotaForDimension(accountQuota, dimension);
+    const scoped = displayedConnection.quota
+      .filter((window) => window.dimension === dimension && window.modelBucket)
+      .map((window) => ({
+        dimension: `${dimension}:${window.modelBucket}`,
+        label: `${label} · ${modelBucketLabel(window.modelBucket as string)}`,
+        quota: window,
+      }));
+    return [...(quota ? [{ dimension, label, quota }] : []), ...scoped];
   });
   const providerBalance = displayedConnection.quota.find(
     (quota) => quota.remainingValue != null || quota.limitValue != null
@@ -399,6 +409,10 @@ function formatUsdInput(microdollars: number | null): string {
 
 function formatUsd(microdollars: number): string {
   return `$${(microdollars / 1_000_000).toFixed(2)}`;
+}
+
+function modelBucketLabel(bucket: string): string {
+  return bucket.charAt(0).toUpperCase() + bucket.slice(1);
 }
 
 function quotaForDimension(quota: InferenceQuotaWindow[], dimension: string) {

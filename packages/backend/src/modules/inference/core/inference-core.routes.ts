@@ -24,7 +24,7 @@ const coreVersionInputSchema = z
   .object({
     version: z
       .string()
-      .regex(/^\d+\.\d+\.\d+-wiolett\.\d+$/)
+      .regex(/^\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/)
       .optional()
       .openapi({ description: 'Target core version (defaults to the latest published release)' }),
   })
@@ -52,7 +52,7 @@ const coreUpdateInputSchema = z
   .object({
     version: z
       .string()
-      .regex(/^\d+\.\d+\.\d+-wiolett\.\d+$/)
+      .regex(/^\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/)
       .openapi({ description: 'Target core version from the release channel' }),
   })
   .strict();

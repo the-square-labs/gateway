@@ -217,6 +217,44 @@ describe('inference core provider mapping', () => {
     ).toMatchObject({ tools: false, structured_outputs: true });
   });
 
+  it('projects model-scoped subscription windows into bucketed weekly quota', () => {
+    const [report] = parseCoreQuotaReports({
+      reports: [
+        {
+          provider: 'anthropic',
+          quota: {
+            weeklyPercent: 36,
+            customWindows: [
+              { label: 'Fable', percent: 95, resetAt: 1_790_000_000 },
+              { label: 'Claude Opus', percent: 10 },
+              { label: 'Tool calls', percent: 50 },
+              { label: 'Fable', percent: 1 },
+              { label: 'Opus 4.1', percent: 100, resetAt: 1_790_500_000 },
+              { percent: 5 },
+            ],
+          },
+        },
+      ],
+    });
+
+    const windows = coreQuotaToWindows(report!);
+
+    expect(windows[0]).toMatchObject({ dimension: '7d', remainingFraction: 0.64 });
+    expect(windows[0]).not.toHaveProperty('modelBucket');
+    // Unrecognised labels are skipped. A repeated family keeps its most constrained reading,
+    // wherever it sits in the list: an exhausted scoped limit must not hide behind a healthy one.
+    expect(windows.slice(1)).toEqual([
+      expect.objectContaining({ dimension: '7d', modelBucket: 'fable', resetAt: new Date(1_790_000_000_000) }),
+      expect.objectContaining({
+        dimension: '7d',
+        modelBucket: 'opus',
+        remainingFraction: 0,
+        resetAt: new Date(1_790_500_000_000),
+      }),
+    ]);
+    expect(windows[1]!.remainingFraction).toBeCloseTo(0.05);
+  });
+
   it('parses core quota reports and projects usage percents into remaining fractions', () => {
     const reports = parseCoreQuotaReports({
       reports: [

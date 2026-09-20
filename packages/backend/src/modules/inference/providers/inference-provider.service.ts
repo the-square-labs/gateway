@@ -636,6 +636,8 @@ export class InferenceProviderService {
       hasQuotaHistory: quotas.length > 0,
       hasCurrentQuotaExhaustion: latestValidQuota(quotas).some(
         (quota) =>
+          // Model-scoped windows gate only their own models, never the whole connection.
+          !quota.modelBucket &&
           quota.remainingFraction !== null &&
           quota.remainingFraction !== undefined &&
           Number(quota.remainingFraction) <= connection.minimumRemainingPercent / 100

@@ -23,14 +23,16 @@ import type {
 import { CORE_ACCOUNT_METADATA_KEY } from '../core/inference-core-provider-map.js';
 import { InferenceProtocolError } from '../protocol/inference-protocol.error.js';
 import type { InferenceUsage } from '../protocol/inference-protocol.types.js';
-import { latestValidQuota } from '../providers/inference-provider.service.helpers.js';
+import { latestValidQuota, quotaAppliesToModel } from '../providers/inference-provider.service.helpers.js';
 import {
   capSubscriptionEstimateToBudget,
   capSubscriptionEstimateToCredits,
   errorCode,
   hash,
+  hasSpendableSubscriptionBudget,
   latestPricing,
   reservationAmounts,
+  subscriptionBudgetRecoveryAt,
 } from './inference-accounting.helpers.js';
 import type { InferenceBudgetLockService } from './inference-budget-lock.service.js';
 import {
@@ -272,7 +274,9 @@ export class InferenceCoreAccountingService {
       if (!model.enabled || !source.enabled || !connection.enabled || connection.deletedAt) {
         return deny('model_disabled');
       }
-      if (!(await this.connectionAllowsNewAttempt(database, connection))) return deny('model_disabled');
+      if (!(await this.connectionAllowsNewAttempt(database, connection, source.upstreamModelId))) {
+        return deny('model_disabled');
+      }
 
       assertPinnedRoute(input, source, connection);
 
@@ -280,7 +284,11 @@ export class InferenceCoreAccountingService {
     });
   }
 
-  private async connectionAllowsNewAttempt(database: DrizzleTransaction, connection: ConnectionRow): Promise<boolean> {
+  private async connectionAllowsNewAttempt(
+    database: DrizzleTransaction,
+    connection: ConnectionRow,
+    upstreamModelId: string
+  ): Promise<boolean> {
     // Redis is authoritative for cooldown lifetime. Check it regardless of the
     // denormalized DB status so admission cannot race markCooldown's two writes,
     // and treat an expired persisted cooldown exactly as routing does.
@@ -299,6 +307,7 @@ export class InferenceCoreAccountingService {
     const minimumRemainingFraction = Number(connection.minimumRemainingPercent ?? 1) / 100;
     const exhausted = latestValidQuota(quotas).some(
       (quota) =>
+        quotaAppliesToModel(quota, upstreamModelId) &&
         quota.remainingFraction !== null &&
         quota.remainingFraction !== undefined &&
         Number(quota.remainingFraction) <= minimumRemainingFraction
@@ -335,9 +344,21 @@ export class InferenceCoreAccountingService {
     const serviceTier = normalizeServiceTier(request.serviceTier);
     const serviceTierMultiplier = serviceTierCreditMultiplier(source.sourceType, connection.providerId, serviceTier);
     const conservativeUsage = coreEstimateUsage(input.estimate);
+    // A turn admitted with a positive balance always runs to completion: admission never
+    // truncates its output, and the turn may settle past the window. Only the reservation
+    // is bounded by the live tail, so parallel turns cannot stack past the limit. A
+    // truncated turn is worse than a small overage: the harness retries it several times
+    // and every retry is billed.
+    if (source.sourceType === 'subscription' && !hasSpendableSubscriptionBudget(limits, usage)) {
+      const recoveryAt = subscriptionBudgetRecoveryAt(limits, usage);
+      return deny(
+        'budget_exceeded',
+        recoveryAt ? Math.max(0, Math.ceil((recoveryAt.getTime() - admittedAt.getTime()) / 1000)) : undefined
+      );
+    }
     let estimatedUsage =
       source.sourceType === 'subscription'
-        ? capSubscriptionEstimateToBudget({
+        ? (capSubscriptionEstimateToBudget({
             estimate: conservativeUsage,
             limits,
             usage,
@@ -345,11 +366,10 @@ export class InferenceCoreAccountingService {
             burnMultiplier,
             serviceTierMultiplier,
             isCompaction: request.isCompaction,
-          })
+          }) ?? conservativeUsage)
         : conservativeUsage;
-    if (!estimatedUsage) return deny('budget_exceeded');
-    let admittedMaxOutputTokens =
-      estimatedUsage.outputTokens < conservativeUsage.outputTokens ? estimatedUsage.outputTokens : null;
+    // Kept for replaying caps persisted by releases that still truncated turns.
+    const admittedMaxOutputTokens: number | null = null;
     const fixedApiMicrodollars = Number(request.fixedApiMicrodollars ?? 0);
     let amounts = reservationAmounts(
       source.sourceType,
@@ -382,22 +402,20 @@ export class InferenceCoreAccountingService {
           burnMultiplier,
           serviceTierMultiplier,
         });
-        if (!committedUsage) {
-          await this.reservations.release(reservation);
-          return deny('budget_exceeded');
+        // The tail may not even cover the input estimate; the turn still runs, and the
+        // admitted reservation stays the recorded estimate until settlement.
+        if (committedUsage) {
+          estimatedUsage = committedUsage;
+          amounts = reservationAmounts(
+            source.sourceType,
+            committedUsage,
+            modelMultiplier,
+            burnMultiplier,
+            serviceTierMultiplier,
+            pricing,
+            fixedApiMicrodollars
+          );
         }
-        estimatedUsage = committedUsage;
-        amounts = reservationAmounts(
-          source.sourceType,
-          committedUsage,
-          modelMultiplier,
-          burnMultiplier,
-          serviceTierMultiplier,
-          pricing,
-          fixedApiMicrodollars
-        );
-        admittedMaxOutputTokens =
-          committedUsage.outputTokens < conservativeUsage.outputTokens ? committedUsage.outputTokens : null;
       }
     } catch (error) {
       const denied = budgetDeny(error);

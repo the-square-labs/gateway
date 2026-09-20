@@ -59,7 +59,7 @@ const TAG_PATTERNS: Readonly<Record<string, RegExp>> = {
 	"docker-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-docker$/,
 	"monitoring-daemon": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-monitoring$/,
 	"relay-supervisor": /^v\d+\.\d+\.\d+(?:-rc\.\d+)?-relay$/,
-	"inference-core": /^v\d+\.\d+\.\d+-wiolett\.\d+$/,
+	"inference-core": /^v\d+\.\d+\.\d+-(?:wiolett|thesqlabs)\.\d+$/,
 };
 
 const ARTIFACT_PATTERNS: Readonly<Record<string, RegExp>> = {
@@ -169,13 +169,18 @@ function parseReleaseVersion(
 ): ParsedReleaseVersion | null {
 	const clean = value.replace(/^v/, "");
 	if (component === "inference-core") {
-		const match = /^(\d+)\.(\d+)\.(\d+)-wiolett\.(\d+)$/.exec(clean);
+		const match = /^(\d+)\.(\d+)\.(\d+)-(wiolett|thesqlabs)\.(\d+)$/.exec(
+			clean,
+		);
 		if (!match) return null;
+		// `thesqlabs` replaced the legacy `wiolett` release line; on the same base
+		// version every thesqlabs build must order after every wiolett build.
+		const lineOffset = match[4] === "thesqlabs" ? 1_000_000 : 0;
 		return {
 			major: Number(match[1]),
 			minor: Number(match[2]),
 			patch: Number(match[3]),
-			build: Number(match[4]),
+			build: lineOffset + Number(match[5]),
 			rc: null,
 		};
 	}

@@ -266,6 +266,29 @@ describe("gateway update facade", () => {
 		});
 	});
 
+	it("orders thesqlabs core builds after the legacy wiolett line", async () => {
+		const fetcher = vi
+			.fn<typeof fetch>()
+			.mockResolvedValue(
+				Response.json([
+					release("v2.60.0-wiolett.9"),
+					release("v2.60.0-thesqlabs.1"),
+					release("v2.25.0-wiolett.27"),
+				]),
+			);
+		const response = await handleRequest(
+			new Request(
+				"https://updates.thesqlabs.com/gateway/releases?component=inference-core&current=v2.25.0-wiolett.27",
+			),
+			env,
+			fetcher,
+		);
+		await expect(response.json()).resolves.toMatchObject({
+			reason: "latest",
+			target: { tag_name: "v2.60.0-thesqlabs.1" },
+		});
+	});
+
 	it("returns the latest component release when current is omitted", async () => {
 		const fetcher = vi
 			.fn<typeof fetch>()

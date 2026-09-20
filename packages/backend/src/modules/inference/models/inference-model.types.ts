@@ -9,6 +9,9 @@ export interface InferenceModelInput {
   capabilities: Record<string, boolean>;
   reasoningEfforts: string[];
   defaultReasoningEffort?: string | null;
+  /** Harness catalog instructions for this model; blank text clears it. */
+  systemPrompt?: string | null;
+  systemPromptMode?: 'append' | 'replace';
   defaultAccessAllowed: boolean;
   subscriptionMultiplier: number;
 }

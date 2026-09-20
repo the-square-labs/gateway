@@ -207,6 +207,8 @@ export interface InferenceModel {
   capabilityLimitations: Record<string, string[]>;
   reasoningEfforts: string[];
   defaultReasoningEffort: string | null;
+  systemPrompt?: string | null;
+  systemPromptMode?: "append" | "replace";
   defaultAccessAllowed: boolean;
   accessMode: "everyone" | "selected" | "disabled";
   accessSubjects: InferenceAccessSubject[];

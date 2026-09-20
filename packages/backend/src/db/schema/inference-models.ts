@@ -39,6 +39,9 @@ export const inferenceModels = pgTable(
     capabilities: jsonb('capabilities').$type<Record<string, boolean>>().notNull().default({}),
     reasoningEfforts: jsonb('reasoning_efforts').$type<string[]>().notNull().default([]),
     defaultReasoningEffort: varchar('default_reasoning_effort', { length: 32 }),
+    // Delivered to harness catalogs (Codex `base_instructions`); never rewritten into client requests.
+    systemPrompt: text('system_prompt'),
+    systemPromptMode: varchar('system_prompt_mode', { length: 16 }).notNull().default('append'),
     defaultAccessAllowed: boolean('default_access_allowed').notNull().default(false),
     subscriptionMultiplier: numeric('subscription_multiplier', { precision: 20, scale: 6 }).notNull().default('1'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
@@ -55,6 +58,7 @@ export const inferenceModels = pgTable(
       sql`${table.maxInputTokens} > 0 AND (${table.maxOutputTokens} IS NULL OR ${table.maxOutputTokens} > 0) AND ${table.autoCompactTokenLimit} > 0 AND ${table.autoCompactTokenLimit} <= ${table.maxInputTokens}`
     ),
     check('inference_models_multiplier_positive', sql`${table.subscriptionMultiplier} > 0`),
+    check('inference_models_system_prompt_mode_valid', sql`${table.systemPromptMode} IN ('append', 'replace')`),
   ]
 );
 

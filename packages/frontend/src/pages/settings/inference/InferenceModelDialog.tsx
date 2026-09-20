@@ -22,6 +22,7 @@ import type {
 } from "@/types/inference";
 import { ModelAccessFields, ModelGeneralFields } from "./InferenceModelFormFields";
 import { ModelPricingFields } from "./InferenceModelPricingFields";
+import { ModelPromptFields, type ModelSystemPromptMode } from "./InferenceModelPromptFields";
 import { ModelReasoningFields } from "./InferenceModelReasoningFields";
 import {
   buildProviderModelOptions,
@@ -73,6 +74,8 @@ export function InferenceModelDialog({
   const [remoteModelId, setRemoteModelId] = useState("");
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [defaultEffort, setDefaultEffort] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState("");
+  const [systemPromptMode, setSystemPromptMode] = useState<ModelSystemPromptMode>("append");
   const [pricing, setPricing] = useState(EMPTY_MODEL_PRICING);
   const [accessMode, setAccessMode] = useState<"everyone" | "selected" | "disabled">("everyone");
   const [accessSubjects, setAccessSubjects] = useState<InferenceAccessSubject[]>([]);
@@ -114,6 +117,8 @@ export function InferenceModelDialog({
           ? "high"
           : (exposed[0] ?? "")
     );
+    setSystemPrompt(editing?.systemPrompt ?? "");
+    setSystemPromptMode(editing?.systemPromptMode ?? "append");
     setPricing(editing ? pricingFromModel(editing) : pricingFromProvider(option?.pricing));
     setAccessMode(editing?.accessMode ?? "everyone");
     setAccessSubjects(editing?.accessSubjects ?? []);
@@ -163,6 +168,8 @@ export function InferenceModelDialog({
         },
         reasoningEfforts: efforts,
         defaultReasoningEffort: efforts.includes(defaultEffort) ? defaultEffort : null,
+        systemPrompt: systemPrompt.trim() ? systemPrompt : null,
+        systemPromptMode,
         defaultAccessAllowed: accessMode === "everyone",
         subscriptionMultiplier,
       };
@@ -229,6 +236,7 @@ export function InferenceModelDialog({
               <TabsTrigger value="model">Model</TabsTrigger>
               {showPricing && <TabsTrigger value="pricing">Pricing</TabsTrigger>}
               {showReasoning && <TabsTrigger value="reasoning">Reasoning</TabsTrigger>}
+              <TabsTrigger value="prompt">System prompt</TabsTrigger>
               <TabsTrigger value="access">Access</TabsTrigger>
             </TabsList>
             <TabsContent value="model">
@@ -259,6 +267,14 @@ export function InferenceModelDialog({
                 />
               </TabsContent>
             ) : null}
+            <TabsContent value="prompt">
+              <ModelPromptFields
+                prompt={systemPrompt}
+                setPrompt={setSystemPrompt}
+                mode={systemPromptMode}
+                setMode={setSystemPromptMode}
+              />
+            </TabsContent>
             <TabsContent value="access">
               <ModelAccessFields
                 mode={accessMode}
