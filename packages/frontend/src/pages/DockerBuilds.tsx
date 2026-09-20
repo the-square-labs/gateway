@@ -270,7 +270,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       {
         key: "source",
         header: "Source / resource",
-        width: "minmax(16rem,1.4fr)",
+        width: "minmax(14rem,1fr)",
         render: (build) => (
           <span className="flex min-w-0 items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -294,7 +294,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       {
         key: "commit",
         header: "Commit / ref",
-        width: "8.5rem",
+        width: "minmax(8.5rem,0.5fr)",
         render: (build) => (
           <span className="block min-w-0">
             <Badge variant="outline" className="font-mono">
@@ -319,7 +319,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         key: "result",
         header: "Result",
         align: "right",
-        width: "minmax(12rem,1fr)",
+        width: "12rem",
         render: (build) => {
           if (!build.artifact) {
             return (
