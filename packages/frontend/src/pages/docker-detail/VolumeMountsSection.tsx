@@ -32,6 +32,9 @@ function comparableMount(mount: MountEntry) {
   });
 }
 
+/** Docker's rule for a named volume; mirrors the backend's volume create schema. */
+const MANAGED_VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+
 export function serializeMounts(mounts: MountEntry[]) {
   return JSON.stringify(mounts.map(comparableMount));
 }
@@ -50,6 +53,14 @@ export async function ensureManagedMountVolumes(
       .map((mount) => mount.name)
   );
   if (requiredNames.size === 0) return;
+  // Checked before anything is created, so one bad row cannot leave half the volumes behind.
+  for (const name of requiredNames) {
+    if (!MANAGED_VOLUME_NAME_PATTERN.test(name)) {
+      throw new Error(
+        `"${name}" is not a valid volume name. Use letters, digits, "_", "." and "-", starting with a letter or digit. Host paths are not supported: select or create a managed volume.`
+      );
+    }
+  }
   const existing = new Set((await api.listManagedVolumeOptions(nodeId)).map((row) => row.name));
   for (const name of requiredNames) {
     if (!existing.has(name)) await api.createVolume(nodeId, { name });

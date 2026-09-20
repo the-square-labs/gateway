@@ -61,6 +61,25 @@ describe("VolumeMountsSection", () => {
     expect(create).toHaveBeenCalledWith("node-1", { name: "app-data" });
   });
 
+  it("refuses a host path typed as a volume name before creating anything", async () => {
+    const list = vi.spyOn(api, "listManagedVolumeOptions").mockResolvedValue([]);
+    const create = vi.spyOn(api, "createVolume").mockResolvedValue({});
+
+    await expect(
+      ensureManagedMountVolumes(
+        "node-1",
+        [
+          { hostPath: "", containerPath: "/data", name: "app-data", readOnly: false },
+          { hostPath: "", containerPath: "/releases", name: "/opt/releases", readOnly: false },
+        ],
+        []
+      )
+    ).rejects.toThrow(/Host paths are not supported/);
+
+    expect(list).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("does not recreate an unchanged legacy volume", async () => {
     const list = vi.spyOn(api, "listManagedVolumeOptions");
     const legacy = [{ hostPath: "", containerPath: "/data", name: "legacy", readOnly: false }];

@@ -297,9 +297,20 @@ export const ImagePullSchema = z.object({
 });
 
 // Volume create
+// Docker's own rule for a named volume. A host path is the usual mistake: it is rejected here
+// with a usable message instead of surfacing as a daemon dispatch failure.
+export const DOCKER_VOLUME_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/;
+
 export const VolumeCreateSchema = z
   .object({
-    name: z.string().trim().min(1),
+    name: z
+      .string()
+      .trim()
+      .min(1)
+      .regex(
+        DOCKER_VOLUME_NAME_PATTERN,
+        'Volume names use letters, digits, "_", "." and "-", and start with a letter or digit. Host paths are not supported; create a managed volume instead.'
+      ),
     storageKind: z.enum(['regular', 'disk-image']).default('regular'),
     capacityBytes: z
       .number()

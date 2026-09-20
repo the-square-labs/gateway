@@ -11,6 +11,14 @@ import {
 import { DockerDeploymentDesiredConfigSchema } from './docker-deployment.schemas.js';
 
 describe('docker volume create schema', () => {
+  it('rejects a host path and other names Docker would refuse', () => {
+    for (const name of ['/opt/gateway-commercial/releases', '../data', 'a', '-data', 'my volume']) {
+      const result = VolumeCreateSchema.safeParse({ name });
+      expect(result.success, name).toBe(false);
+    }
+    expect(VolumeCreateSchema.safeParse({ name: 'license-releases_v1.2' }).success).toBe(true);
+  });
+
   it('defaults regular volumes and requires capacity only for disk images', () => {
     expect(VolumeCreateSchema.parse({ name: 'data' })).toEqual({ name: 'data', storageKind: 'regular' });
     expect(VolumeCreateSchema.safeParse({ name: 'bounded', storageKind: 'disk-image' }).success).toBe(false);
