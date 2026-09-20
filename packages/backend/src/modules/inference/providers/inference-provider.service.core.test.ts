@@ -93,6 +93,7 @@ function createService(options: {
       reports: [{ provider: 'core-conn-1', quota: { weeklyPercent: 40, weeklyResetAt: 1_800_000_000_000 } }],
     }),
     coreCodexQuota: vi.fn().mockResolvedValue(null),
+    coreOauthAccountQuotas: vi.fn().mockResolvedValue(null),
     ...options.client,
   };
   const bridge = {
@@ -330,6 +331,7 @@ describe('inference provider service — core-managed delegation', () => {
     expect(persistModels).toHaveBeenCalledWith('conn-1', [
       expect.objectContaining({
         id: 'claude-sonnet-4-6',
+        displayName: 'Claude Sonnet 4.6',
         modalities: ['text', 'image'],
         capabilities: {
           tools: true,
@@ -344,6 +346,51 @@ describe('inference provider service — core-managed delegation', () => {
         },
       }),
     ]);
+  });
+
+  it('reads subscription quota from the connection own core account instead of the provider-wide report', async () => {
+    const connection = {
+      ...CORE_CONNECTION,
+      providerId: 'anthropic',
+      authType: 'oauth',
+      baseUrl: 'https://api.anthropic.com',
+      metadata: { coreManaged: true, coreAccountId: 'half-used' },
+    };
+    const quotas = new Map<string, unknown>([
+      ['fresh', { fiveHourPercent: 0, weeklyPercent: 0 }],
+      ['half-used', { fiveHourPercent: 12, weeklyPercent: 55, weeklyResetAt: 1_800_000_000_000 }],
+    ]);
+    const { service, db, client } = createService({
+      client: {
+        listCoreProviders: vi.fn().mockResolvedValue([{ name: 'anthropic', hasApiKey: false }]),
+        listCoreModels: vi.fn().mockResolvedValue([]),
+        coreProviderLiveModelIds: vi.fn().mockResolvedValue([]),
+        // The provider report follows the core's active account: the freshly added subscription.
+        coreProviderQuotas: vi.fn().mockResolvedValue({
+          reports: [{ provider: 'anthropic', quota: { fiveHourPercent: 0, weeklyPercent: 0 } }],
+        }),
+        coreOauthAccountQuotas: vi.fn().mockResolvedValue({ activeAccountId: 'fresh', quotas }),
+      },
+    });
+    db.query.inferenceProviderConnections.findFirst.mockResolvedValue(connection);
+    db.update.mockReturnValue(updateChain());
+    const persistQuota = vi.fn().mockResolvedValue(undefined);
+    Object.assign(service, { persistModels: vi.fn().mockResolvedValue(undefined), persistQuota });
+    vi.spyOn(service, 'getConnection').mockResolvedValue({ id: 'conn-1' } as never);
+
+    await service.syncConnection('conn-1', true);
+
+    expect(client.coreOauthAccountQuotas).toHaveBeenCalledWith('anthropic');
+    const windows = persistQuota.mock.calls[0]?.[1] as Array<{ dimension: string; remainingFraction?: number }>;
+    const weekly = windows.find((window) => window.dimension === '7d');
+    expect(weekly?.remainingFraction).toBeCloseTo(0.45);
+    expect(windows.every((window) => window.remainingFraction !== 1)).toBe(true);
+
+    // An account the core has no reading for must not inherit the active account's numbers.
+    quotas.set('half-used', null);
+    persistQuota.mockClear();
+    await service.syncConnection('conn-1', true);
+    expect(persistQuota.mock.calls[0]?.[1] ?? []).toEqual([]);
   });
 
   it('repairs live discovery on an existing Alibaba Token Plan connection before syncing', async () => {

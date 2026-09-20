@@ -514,6 +514,7 @@ export class InferenceProviderService {
             // connections pool together and no core provider name leaks into
             // the admin UI or public model ids.
             id: row.id,
+            ...(known ? { displayName: known.displayName } : {}),
             ...(row.contextWindow !== undefined ? { contextWindow: row.contextWindow } : {}),
             ...(row.maxInputTokens !== undefined ? { maxInputTokens: row.maxInputTokens } : {}),
             ...(row.maxOutputTokens !== undefined ? { maxOutputTokens: row.maxOutputTokens } : {}),
@@ -622,6 +623,21 @@ export class InferenceProviderService {
       }
     }
     const report = reports.find((candidate) => candidate.provider === providerRef);
+    const target = connection.authType === 'oauth' ? coreOAuthTarget(connection.providerId) : null;
+    const accountId = connection.metadata[CORE_ACCOUNT_METADATA_KEY];
+    if (target?.kind === 'core-oauth' && typeof accountId === 'string' && accountId) {
+      // The provider report describes the core's active account only. With several accounts of one provider it
+      // would stamp that account's usage on every connection, so each connection reads its own account row.
+      const accounts = await client.coreOauthAccountQuotas(target.oauthProvider);
+      if (accounts && accounts.quotas.size > 0) {
+        const [own] = parseCoreQuotaReports({
+          reports: [{ provider: providerRef, quota: accounts.quotas.get(accountId) }],
+        });
+        if (own) return coreQuotaToWindows(own);
+        const describesThisAccount = accounts.quotas.size === 1 || accounts.activeAccountId === accountId;
+        if (!describesThisAccount) return [];
+      }
+    }
     return report ? coreQuotaToWindows(report) : [];
   }
 

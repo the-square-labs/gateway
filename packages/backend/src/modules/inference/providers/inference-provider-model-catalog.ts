@@ -200,6 +200,8 @@ const OPENAI_MODELS: Record<string, KnownInferenceProviderModel> = {
 };
 
 const ANTHROPIC_MODELS: Record<string, KnownInferenceProviderModel> = {
+  'claude-fable-5-1': claudeModel('Claude Fable 5.1', 1_000_000, 128_000, 10, 50, 0.25),
+  'claude-mythos-5-1': claudeModel('Claude Mythos 5.1', 1_000_000, 128_000, 10, 50, 0.25),
   'claude-fable-5': claudeModel('Claude Fable 5', 1_000_000, 128_000, 10, 50),
   'claude-mythos-5': claudeModel('Claude Mythos 5', 1_000_000, 128_000, 10, 50),
   'claude-opus-5': claudeModel('Claude Opus 5', 1_000_000, 128_000, 5, 25),
@@ -315,7 +317,8 @@ function claudeModel(
   maxInputTokens: number,
   maxOutputTokens: number,
   inputPrice: number,
-  outputPrice: number
+  outputPrice: number,
+  cachedInputPrice = inputPrice * 0.1
 ): KnownInferenceProviderModel {
   return {
     displayName,
@@ -326,7 +329,7 @@ function claudeModel(
     modalities: ['text', 'image'],
     capabilities: { reasoning: true, tools: true, vision: true },
     reasoningEfforts: [...CLAUDE_REASONING],
-    pricing: tokenPricing(ANTHROPIC_VERSION, inputPrice, outputPrice, inputPrice * 0.1, inputPrice * 1.25),
+    pricing: tokenPricing(ANTHROPIC_VERSION, inputPrice, outputPrice, cachedInputPrice, inputPrice * 1.25),
     catalogVersion: ANTHROPIC_VERSION,
     sourceUrl: ANTHROPIC_SOURCE,
   };

@@ -197,6 +197,25 @@ export class InferenceCoreClient {
   }
 
   /** Remove one account from a core OAuth provider account set. */
+  /**
+   * Per-account subscription quota. The provider-wide quota report only describes the core's active account, so a
+   * connection bound to any other account must read its own row here. `quota` is null while the core has no reading.
+   */
+  async coreOauthAccountQuotas(
+    provider: string
+  ): Promise<{ activeAccountId: string | null; quotas: Map<string, unknown> } | null> {
+    const response = await this.request('GET', `/api/oauth/accounts?provider=${encodeURIComponent(provider)}&quota=1`);
+    if (!response || response.status !== 200 || !response.body || typeof response.body !== 'object') return null;
+    const body = response.body as { activeAccountId?: unknown; accounts?: unknown };
+    const quotas = new Map<string, unknown>();
+    for (const account of Array.isArray(body.accounts) ? body.accounts : []) {
+      if (!account || typeof account !== 'object') continue;
+      const row = account as { id?: unknown; quota?: unknown };
+      if (typeof row.id === 'string' && row.id) quotas.set(row.id, row.quota ?? null);
+    }
+    return { activeAccountId: typeof body.activeAccountId === 'string' ? body.activeAccountId : null, quotas };
+  }
+
   async deleteCoreOauthAccount(provider: string, accountId: string): Promise<void> {
     const response = await this.request(
       'DELETE',

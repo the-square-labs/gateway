@@ -238,6 +238,25 @@ describe('known inference provider model catalog', () => {
     });
   });
 
+  it('knows Claude 5.1 so discovery keeps its name and tool support when the core reports no capabilities', () => {
+    for (const [modelId, displayName] of [
+      ['claude-fable-5-1', 'Claude Fable 5.1'],
+      ['claude-mythos-5-1', 'Claude Mythos 5.1'],
+    ] as const) {
+      expect(knownProviderModel('anthropic', modelId)).toMatchObject({
+        displayName,
+        contextWindow: 1_000_000,
+        maxOutputTokens: 128_000,
+        capabilities: { reasoning: true, tools: true, vision: true },
+        pricing: {
+          inputMicrodollarsPerMillion: 10_000_000,
+          cachedInputMicrodollarsPerMillion: 250_000,
+          outputMicrodollarsPerMillion: 50_000_000,
+        },
+      });
+    }
+  });
+
   it('maps dated OpenAI snapshots to the audited family defaults', () => {
     expect(knownProviderModel('openai-apikey', 'gpt-4o-2024-11-20')).toEqual(
       knownProviderModel('openai-apikey', 'gpt-4o')
