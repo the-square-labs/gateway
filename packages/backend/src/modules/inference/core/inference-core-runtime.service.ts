@@ -44,6 +44,12 @@ const CORE_STABILITY_WINDOW_MS = 20_000;
 const CORE_DRAIN_TIMEOUT_MS = 8_000;
 const CORE_BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 const CORE_BACKUP_TIMEOUT_MS = 15_000;
+/**
+ * The core image's entrypoint always runs `ocx start` and treats a command as its arguments:
+ * it prints usage and exits 0, so a probe reads no number and a cleanup silently does nothing.
+ * Maintenance one-shots built from that image must replace the entrypoint.
+ */
+const CORE_IMAGE_SHELL = { Entrypoint: ['/bin/sh', '-c'] } as const;
 const CORE_BACKUP_KEEP = 3;
 const HEALTH_PROBE_INTERVAL_MS = 60_000;
 
@@ -946,7 +952,8 @@ export class InferenceCoreRuntimeService {
       Image: imageRef,
       User: '0',
       HostConfig: { Binds: [`${layout.stateVolume}:/state:ro`] },
-      Cmd: ['sh', '-c', 'du -sb /state | cut -f1'],
+      ...CORE_IMAGE_SHELL,
+      Cmd: ['du -sb /state | cut -f1'],
     });
     const bytes = Number(sizeProbe.output.trim().split('\n').pop());
     if (sizeProbe.exitCode !== 0 || !Number.isFinite(bytes) || bytes < 0 || !sizeProbe.output.trim()) {
@@ -962,7 +969,8 @@ export class InferenceCoreRuntimeService {
       Image: imageRef,
       User: '0',
       HostConfig: { Binds: [`${layout.stateVolume}:/state`] },
-      Cmd: ['sh', '-c', 'find /state -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'],
+      ...CORE_IMAGE_SHELL,
+      Cmd: ['find /state -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'],
     });
     if (cleared.exitCode !== 0) {
       throw new AppError(500, 'CORE_STATE_CLEAR_FAILED', 'The previous core state volume could not be cleared');

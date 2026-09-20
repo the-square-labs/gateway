@@ -191,6 +191,11 @@ function makeDocker() {
       return 9;
     },
     runOneShot: async (config: DockerCreateContainerConfig) => {
+      // Like the real core image: without a shell entrypoint the command becomes arguments of
+      // `ocx start`, which prints usage and exits 0 without running anything.
+      if (config.Entrypoint?.join(' ') !== '/bin/sh -c') {
+        return { exitCode: 0, output: 'Usage: ocx start [--port <port>]\n' };
+      }
       if (config.Cmd?.join(' ').includes('find /state')) calls.push('clearStateVolume');
       if (config.Cmd?.join(' ').includes('du -sb /state')) calls.push('measureStateVolume');
       return { exitCode: 0, output: `${docker.stateBytes}\n` };
