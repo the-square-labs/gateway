@@ -96,6 +96,9 @@ func (m *Manager) runCommand(ctx context.Context, buildID, dir string, env []str
 }
 
 func (m *Manager) prune(ctx context.Context, buildID string) error {
+	if err := m.removeStoredImages(ctx); err != nil {
+		m.log(buildID, []byte("builder image store cleanup failed: "+err.Error()))
+	}
 	return m.runCommand(
 		ctx,
 		buildID,
@@ -108,6 +111,33 @@ func (m *Manager) prune(ctx context.Context, buildID string) error {
 		"--all",
 	)
 }
+
+// removeStoredImages deletes build results that daemons without imageStoreOutputOption left in the builder's
+// containerd namespace. Those image records pin their layers, so the content store grows until the disk is full.
+func (m *Manager) removeStoredImages(ctx context.Context) error {
+	executable, err := m.executable("ctr")
+	if err != nil {
+		return fmt.Errorf("resolve builder executable ctr: %w", err)
+	}
+	images := func(args ...string) *exec.Cmd {
+		scope := []string{"--address", m.config.ContainerdSocket, "--namespace", m.config.ContainerdNamespace, "images"}
+		return exec.CommandContext(ctx, executable, append(scope, args...)...)
+	}
+	output, err := images("list", "--quiet").Output()
+	if err != nil {
+		return fmt.Errorf("list stored builder images: %w", err)
+	}
+	refs := strings.Fields(string(output))
+	for start := 0; start < len(refs); start += storedImageRemovalBatch {
+		end := min(start+storedImageRemovalBatch, len(refs))
+		if output, err := images(append([]string{"remove", "--sync"}, refs[start:end]...)...).CombinedOutput(); err != nil {
+			return fmt.Errorf("remove stored builder images: %w: %s", err, strings.TrimSpace(string(output)))
+		}
+	}
+	return nil
+}
+
+const storedImageRemovalBatch = 100
 
 func (m *Manager) pruneAfterJob(buildID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)

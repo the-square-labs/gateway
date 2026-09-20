@@ -55,6 +55,10 @@ func (m *Manager) checkout(ctx context.Context, command *pb.DockerBuildCommand, 
 	return nil
 }
 
+// imageStoreOutputOption keeps the pushed result out of the builder's containerd image store. The containerd worker
+// stores every exported image by default, and nothing prunes that store: BuildKit cache cleanup does not own it.
+const imageStoreOutputOption = ",store=false"
+
 func (m *Manager) build(ctx context.Context, command *pb.DockerBuildCommand, jobDir, metadataPath, imageRef string) error {
 	contextDir, err := containedPath(jobDir, command.GetContextPath())
 	if err != nil {
@@ -76,7 +80,7 @@ func (m *Manager) build(ctx context.Context, command *pb.DockerBuildCommand, job
 		"--local", "context=" + contextDir, "--local", "dockerfile=" + filepath.Dir(dockerfileAbsolute),
 		"--opt", "filename=" + filepath.Base(dockerfileAbsolute), "--opt", "platform=" + command.GetPlatform(),
 		"--metadata-file", metadataPath,
-		"--output", "type=image,name=" + imageRef + ",push=true",
+		"--output", "type=image,name=" + imageRef + ",push=true" + imageStoreOutputOption,
 	}
 	keys := make([]string, 0, len(command.GetBuildArgs()))
 	for key := range command.GetBuildArgs() {
@@ -138,7 +142,7 @@ func (m *Manager) buildPages(ctx context.Context, command *pb.DockerBuildCommand
 		"--local", "context=" + jobDir, "--local", "dockerfile=" + controlDir,
 		"--opt", "filename=" + filepath.Base(dockerfilePath), "--opt", "platform=" + command.GetPlatform(),
 		"--metadata-file", metadataPath,
-		"--output", "type=image,name=" + imageRef + ",push=true,compression=gzip,force-compression=true,oci-mediatypes=true",
+		"--output", "type=image,name=" + imageRef + ",push=true,compression=gzip,force-compression=true,oci-mediatypes=true" + imageStoreOutputOption,
 	}
 	keys := make([]string, 0, len(command.GetBuildArgs()))
 	for key := range command.GetBuildArgs() {
