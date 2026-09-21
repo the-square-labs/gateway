@@ -43,6 +43,85 @@ describe('ProxySecureLinkService migration rollback', () => {
     if (fail) expect(db.update).not.toHaveBeenCalled();
     else expect(where).toHaveBeenCalledOnce();
   });
+  it('activates a binding whose generation advanced because target sync reselected the network', async () => {
+    const host = { id: 'host' } as any;
+    const binding = {
+      id: 'binding',
+      proxyHostId: 'host',
+      name: 'availability_member',
+      generation: 3,
+      status: 'provisioning',
+      upstreamKind: 'docker_container',
+      sourceNodeId: 'nginx',
+      dockerNodeId: 'docker',
+      forwardScheme: 'http',
+      targetNetwork: '',
+      targetContainer: 'app',
+      dockerHostPort: 9898,
+    };
+    let current = binding;
+    const where = vi.fn((condition) => {
+      const sql = new PgDialect().sqlToQuery(condition);
+      expect(sql.params).toContain(4);
+      return { returning: vi.fn().mockResolvedValue([{ ...current, status: 'active' }]) };
+    });
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn(async () => current) } },
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where })) })),
+    };
+    const relay = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() };
+    const service = new ProxySecureLinkService(db as never, {} as never, relay as never, 'image');
+    vi.spyOn(service as any, 'syncTargetNode').mockImplementation(async () => {
+      current = { ...binding, generation: 4, targetNetwork: 'bridge' };
+    });
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'probeSecureLink').mockResolvedValue({ httpStatus: 200 });
+
+    const result = await (service as any).createAdditionalFromExisting(host, binding.id);
+
+    expect(result).toMatchObject({ status: 'active', generation: 4, targetNetwork: 'bridge' });
+    expect(where).toHaveBeenCalledOnce();
+    expect(relay.revokeOwner).not.toHaveBeenCalled();
+  });
+
+  it('does not adopt a generation advanced by a concurrent retarget during target sync', async () => {
+    const host = { id: 'host' } as any;
+    const binding = {
+      id: 'binding',
+      proxyHostId: 'host',
+      name: 'route_a',
+      generation: 3,
+      status: 'provisioning',
+      upstreamKind: 'docker_container',
+      sourceNodeId: 'nginx',
+      dockerNodeId: 'docker',
+      forwardScheme: 'http',
+      targetNetwork: 'app-net',
+      targetContainer: 'app',
+      dockerHostPort: 9898,
+    };
+    let current = binding;
+    const where = vi.fn((condition) => {
+      const sql = new PgDialect().sqlToQuery(condition);
+      expect(sql.params).toContain(3);
+      return { returning: vi.fn().mockResolvedValue([]) };
+    });
+    const db = {
+      query: { proxyAdditionalSecureLinks: { findFirst: vi.fn(async () => current) } },
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where })) })),
+    };
+    const relay = { ensureProxySecureLink: vi.fn(), revokeOwner: vi.fn() };
+    const service = new ProxySecureLinkService(db as never, {} as never, relay as never, 'image');
+    vi.spyOn(service as any, 'syncTargetNode').mockImplementation(async () => {
+      current = { ...binding, generation: 4, targetNetwork: 'other-net', targetContainer: 'app-v2' };
+    });
+    vi.spyOn(service as any, 'syncSourceNode').mockResolvedValue(undefined);
+    vi.spyOn(service as any, 'probeSecureLink').mockResolvedValue({ httpStatus: 200 });
+
+    expect(await (service as any).createAdditionalFromExisting(host, binding.id)).toEqual(current);
+    expect(where).toHaveBeenCalledOnce();
+  });
+
   it('removes an Availability member runtime only after the proxy config excludes it', async () => {
     const order: string[] = [];
     const host = { id: '11111111-1111-4111-8111-111111111111' } as any;

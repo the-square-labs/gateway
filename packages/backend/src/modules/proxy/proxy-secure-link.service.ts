@@ -72,6 +72,19 @@ function isManagedStorageUpstream(kind: string): kind is 'managed_storage' {
   return kind === 'managed_storage';
 }
 
+/** True when `after` differs from `before` only by the target network the daemon picked during target sync. */
+function isNetworkReselection(before: ProxyAdditionalSecureLinkRow, after: ProxyAdditionalSecureLinkRow): boolean {
+  return (
+    after.status === 'provisioning' &&
+    after.generation > before.generation &&
+    after.targetNetwork !== before.targetNetwork &&
+    after.dockerNodeId === before.dockerNodeId &&
+    after.targetContainer === before.targetContainer &&
+    after.dockerHostPort === before.dockerHostPort &&
+    after.name === before.name
+  );
+}
+
 export class ProxySecureLinkService {
   private eventBus?: EventBusService;
   private readonly targetNodeSyncs = new Map<string, Promise<void>>();
@@ -943,7 +956,7 @@ export class ProxySecureLinkService {
     bindingId: string
   ): Promise<ProxyAdditionalSecureLinkRow> {
     return this.withLinkOperation(bindingId, async () => {
-      const binding = await this.requireAdditional(host.id, bindingId);
+      let binding = await this.requireAdditional(host.id, bindingId);
       if (binding.status !== 'provisioning') return binding;
       try {
         if (isManagedStorageUpstream(binding.upstreamKind)) {
@@ -956,6 +969,11 @@ export class ProxySecureLinkService {
           );
         } else {
           await this.syncTargetNode(binding.dockerNodeId, undefined, binding.id);
+          // Target sync advances the generation itself when the daemon reselects the
+          // container network (always, for a binding recorded without one). Adopt that
+          // generation; any other concurrent change still fails the guards below.
+          const synced = await this.requireAdditional(host.id, binding.id);
+          if (isNetworkReselection(binding, synced)) binding = synced;
           await this.relayPolicy.ensureProxySecureLink(binding.id, binding.sourceNodeId, binding.dockerNodeId);
         }
         await this.syncSourceNode(binding.sourceNodeId);
