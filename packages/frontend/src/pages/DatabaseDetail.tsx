@@ -1,5 +1,5 @@
-import { Activity, Puzzle, ScrollText, Table2, Terminal } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Activity, DatabaseBackup, Puzzle, ScrollText, Table2, Terminal } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -170,17 +170,25 @@ function DatabaseDetailContent({
     };
   }, [activeTab, canViewBackups, hasScope]);
 
+  const loadedRouteIdRef = useRef<string | null>(null);
   const load = useCallback(async () => {
     if (!id) return;
-    setLoading(true);
+    // Refreshing the database that is already on screen must not swap the page
+    // for the skeleton: that would unmount the active tab and drop its state.
+    if (loadedRouteIdRef.current !== id) setLoading(true);
     try {
       const [database, healthHistory] = await Promise.all([
         api.getDatabase(id),
         api.getDatabaseHealthHistory(id),
       ]);
+      loadedRouteIdRef.current = id;
       setDatabase(database);
       setLiveHealthHistory(healthHistory);
       setLiveHealthStatus(database.healthStatus);
+      updateDatabaseMonitoringCache(database.id, {
+        healthHistory,
+        healthStatus: database.healthStatus,
+      });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load database");
       navigate("/databases");
@@ -304,9 +312,10 @@ function DatabaseDetailContent({
 
   useEffect(() => {
     if (!database) return;
+    // Health status and history are owned by load() and the monitoring stream.
+    // Resetting them here used to wipe the history load() had just fetched, and
+    // an offline database never gets it back from the stream.
     const cached = readDatabaseMonitoringCache(database.id);
-    setLiveHealthStatus(cached?.healthStatus ?? database.healthStatus);
-    setLiveHealthHistory(cached?.healthHistory ?? database.healthHistory ?? []);
     setMonitoringHistory(cached?.history ?? []);
     setMonitoringLoading(
       canViewMonitoring &&
@@ -316,32 +325,39 @@ function DatabaseDetailContent({
     );
   }, [canViewMonitoring, database]);
 
+  // The stream is keyed by the route id, not by the loaded database object: it
+  // opens alongside load() so the saved metric history is already there when the
+  // page renders, and a reload of the same database does not reconnect it.
   useEffect(() => {
-    if (!database || !canViewMonitoring || database.managed?.status === "paused") {
+    if (!id || !canViewMonitoring || isManagedPaused) {
       setMonitoringLoading(false);
       return;
     }
-    const es = api.createDatabaseMonitoringStream(database.id);
+    const es = api.createDatabaseMonitoringStream(id);
     es.addEventListener("connected", (event: MessageEvent) => {
-      const message = JSON.parse(event.data);
-      const healthHistory = message.healthHistory ?? database.healthHistory ?? [];
-      const healthStatus = message.healthStatus ?? database.healthStatus;
-      setLiveHealthHistory(healthHistory);
-      setLiveHealthStatus(healthStatus);
-      updateDatabaseMonitoringCache(database.id, { healthHistory, healthStatus });
+      const message = JSON.parse(event.data) as {
+        healthHistory?: DatabaseConnection["healthHistory"];
+        healthStatus?: DatabaseConnection["healthStatus"];
+      };
+      if (message.healthHistory) setLiveHealthHistory(message.healthHistory);
+      if (message.healthStatus) setLiveHealthStatus(message.healthStatus);
+      updateDatabaseMonitoringCache(id, {
+        ...(message.healthHistory ? { healthHistory: message.healthHistory } : {}),
+        ...(message.healthStatus ? { healthStatus: message.healthStatus } : {}),
+      });
     });
     es.addEventListener("history", (event: MessageEvent) => {
       const message = JSON.parse(event.data);
       const history = message.history ?? [];
       setMonitoringHistory(history);
-      updateDatabaseMonitoringCache(database.id, { history });
+      updateDatabaseMonitoringCache(id, { history });
       setMonitoringLoading(false);
     });
     es.addEventListener("snapshot", (event: MessageEvent) => {
       const snapshot = JSON.parse(event.data) as DatabaseMetricSnapshot;
       setMonitoringHistory((previous) => {
         const history = appendDatabaseMetricSnapshot(previous, snapshot);
-        updateDatabaseMonitoringCache(database.id, { history, healthStatus: snapshot.status });
+        updateDatabaseMonitoringCache(id, { history, healthStatus: snapshot.status });
         return history;
       });
       setLiveHealthStatus(snapshot.status);
@@ -349,7 +365,7 @@ function DatabaseDetailContent({
     });
     es.onerror = () => setMonitoringLoading(false);
     return () => es.close();
-  }, [canViewMonitoring, database]);
+  }, [canViewMonitoring, id, isManagedPaused]);
 
   useRealtime(id ? "database.changed" : null, (payload) => {
     const event = payload as {
@@ -654,7 +670,12 @@ function DatabaseDetailContent({
                   Extensions
                 </TabsTrigger>
               )}
-              {canViewBackups && <TabsTrigger value="backups">Backups</TabsTrigger>}
+              {canViewBackups && (
+                <TabsTrigger value="backups" className="gap-1.5">
+                  <DatabaseBackup className="h-3.5 w-3.5" />
+                  Backups
+                </TabsTrigger>
+              )}
               {database.managed && canViewMonitoring && (
                 <TabsTrigger value="logs" disabled={!managedNodeAvailable} className="gap-1.5">
                   <ScrollText className="h-3.5 w-3.5" />
