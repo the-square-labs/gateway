@@ -112,6 +112,17 @@ describe("ManagedDatabaseSettingsTab", () => {
     expect(screen.getByRole("button", { name: "Publish TCP port" })).toBeDisabled();
   });
 
+  it("locks saving while a previous managed database operation is still being applied", () => {
+    render(
+      <ManagedDatabaseSettingsTab
+        database={{ ...database, managed: { ...database.managed!, status: "updating" } }}
+        onSaved={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "Applying previous change..." })).toBeDisabled();
+  });
+
   it("updates only the console budget without reprovisioning a managed database", async () => {
     const user = userEvent.setup();
     const updateDatabase = vi.spyOn(api, "updateDatabase").mockResolvedValue(database as never);

@@ -139,6 +139,11 @@ export function ManagedDatabaseSettingsTab({
     Number(swapMb) !== managed.runtimeConfig.swapMb ||
     publicationChanged;
 
+  // The backend rejects a second change with 409 until the previous one is
+  // reconciled; the page reloads on the "ready" event and unlocks the form.
+  const operationPending =
+    managed.status === "creating" || managed.status === "updating" || managed.status === "deleting";
+
   const save = async () => {
     const cpu = Number(cpuCores);
     const memory = Number(memoryMb);
@@ -391,19 +396,22 @@ export function ManagedDatabaseSettingsTab({
             disabled={
               saving ||
               confirmingRecreate ||
+              operationPending ||
               managed.status === "paused" ||
               !portIsValid ||
               !nativePortIsValid
             }
           >
-            {saving && <Loader2 className="animate-spin" />}
-            {saving
-              ? publicationChanged
-                ? "Recreating database..."
-                : "Saving..."
-              : publicationChanged
-                ? "Save & Recreate"
-                : "Save Changes"}
+            {(saving || operationPending) && <Loader2 className="animate-spin" />}
+            {operationPending
+              ? "Applying previous change..."
+              : saving
+                ? publicationChanged
+                  ? "Recreating database..."
+                  : "Saving..."
+                : publicationChanged
+                  ? "Save & Recreate"
+                  : "Save Changes"}
           </Button>
         </DialogFooter>
       </div>
