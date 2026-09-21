@@ -240,6 +240,30 @@ func TestPreflightValidationFailurePersistsTerminalStatus(t *testing.T) {
 	}
 }
 
+func TestPreflightInfrastructureFailurePersistsTerminalStatus(t *testing.T) {
+	runID := "11111111-1111-4111-8111-111111111111"
+	root := t.TempDir()
+	// A file where the run's config directory belongs makes runTool fail before
+	// the runner container exists, like a capacity or image pull failure does.
+	if err := os.MkdirAll(filepath.Join(root, runID), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, runID, "config"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &backupRuntime{root: root, runs: map[string]*backupRunStatus{}, cancel: map[string]context.CancelFunc{}}
+	if _, err := runtime.apply("preflight", runID, validBackupPayloadJSON()); err == nil {
+		t.Fatal("expected preflight failure")
+	}
+	status, err := runtime.load(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "failed" || status.Phase != "preflight" || status.Error == "" || status.CompletedAt == nil {
+		t.Fatalf("preflight failure was not durable: %#v", status)
+	}
+}
+
 func TestRestartKeepsPreflightCompleteForSafeStartReplay(t *testing.T) {
 	runtime := &backupRuntime{root: t.TempDir()}
 	status, err := runtime.reconcilePersistedRun(backupRunStatus{RunID: "run", Status: "queued", Phase: "preflight_complete", Fingerprint: "immutable"})

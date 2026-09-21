@@ -422,6 +422,13 @@ func (r *backupRuntime) preflight(runID string, payload backupPayload, fingerpri
 			}
 			return status, err
 		}
+		// The controller only trusts persisted runner status. Without it a
+		// preflight that failed before the runner wrote a result (no workspace
+		// capacity, image pull, relay route) keeps the run and its node lease
+		// alive until someone cancels it by hand.
+		if persistErr := r.persistPreflightFailure(runID, "preflight", err); persistErr != nil {
+			return backupRunStatus{}, persistErr
+		}
 		return backupRunStatus{}, err
 	}
 	if status.Status != "completed" {

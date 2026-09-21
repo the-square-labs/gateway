@@ -109,6 +109,32 @@ def db_args(endpoint, executable):
     return args
 
 
+POSTGRES_TOOLS = pathlib.Path("/usr/lib/postgresql")
+
+
+def postgres_major(endpoint):
+    version = run(db_args(endpoint, "psql") + ["-d", endpoint["database"], "-Atqc", "SHOW server_version_num"], postgres_env(endpoint)).strip()
+    return int(version) // 10000
+
+
+def postgres_tool(name, major):
+    # A dump written by a newer pg_dump does not restore into an older server: it carries settings that
+    # server rejects. Use the client of the server's own major; the image default only covers the newest.
+    candidate = POSTGRES_TOOLS / str(major) / "bin" / name
+    return str(candidate) if candidate.exists() else name
+
+
+def postgres_restore_tool(target, artifact):
+    tool = postgres_tool("pg_restore", postgres_major(target))
+    if tool == "pg_restore": return tool
+    try:
+        run([tool, "--list", str(artifact)])
+    except BackupError:
+        # An archive written by a newer pg_dump can only be read by that newer pg_restore.
+        return "pg_restore"
+    return tool
+
+
 def postgres_env(endpoint):
     env = os.environ.copy()
     env["PGPASSWORD"] = endpoint.get("password", "")
@@ -133,10 +159,11 @@ def preflight(config):
             clickhouse_query(source, "SELECT 1")
             stage = config.get("staging") or config["destination"]
             if stage.get("provider") != "s3": raise BackupError("clickhouse requires an S3 native staging destination")
-            database = quote_identifier(source.get("database", "default"))
             probe_prefix = safe_part(stage.get("prefix", "database-backups")) + "/probe/" + config["runId"]
             try:
-                clickhouse_query(source, f"BACKUP DATABASE {database} TO {clickhouse_s3(stage, 'probe/' + config['runId'])}")
+                # Preflight has seconds, not the run's time limit: prove the server itself can write to the
+                # staging bucket with a one-row object instead of backing the whole database up twice.
+                clickhouse_query(source, f"INSERT INTO FUNCTION {clickhouse_s3(stage, 'probe/' + config['runId'] + '/probe.csv', ['CSV', 'probe UInt8'])} SELECT 1")
                 if not list_objects(stage, probe_prefix):
                     raise BackupError("clickhouse native staging probe produced no objects")
             finally:
@@ -160,7 +187,7 @@ def backup(config):
     if engine == "postgres":
         artifact = artifact_dir / "database.dump"
         source = config["source"]
-        run(db_args(source, "pg_dump") + ["-d", source["database"], "--format=custom", "--no-owner", "--no-privileges", "--file", str(artifact)], postgres_env(source))
+        run(db_args(source, postgres_tool("pg_dump", postgres_major(source))) + ["-d", source["database"], "--format=custom", "--no-owner", "--no-privileges", "--file", str(artifact)], postgres_env(source))
         engine_version = run(db_args(source, "psql") + ["-d", source["database"], "-Atqc", "SHOW server_version"], postgres_env(source)).strip()
     elif engine == "redis":
         artifact = artifact_dir / "database.rdb"
@@ -194,7 +221,7 @@ def restore(config):
     if config["engine"] == "postgres":
         artifact = next(artifact_dir.glob("*.dump"))
         target = config["restoreTarget"]
-        run(db_args(target, "pg_restore") + ["-d", target["database"], "--no-owner", "--no-privileges", "--exit-on-error", str(artifact)], postgres_env(target))
+        run(db_args(target, postgres_restore_tool(target, artifact)) + ["-d", target["database"], "--no-owner", "--no-privileges", "--exit-on-error", str(artifact)], postgres_env(target))
     elif config["engine"] == "redis":
         restore_redis(config, next(artifact_dir.glob("*.rdb")))
     else:
@@ -266,7 +293,7 @@ def redis_has_keys(target):
     return False
 
 
-def clickhouse_query(endpoint, query):
+def clickhouse_query(endpoint, query, timeout=60):
     scheme = "https" if endpoint.get("tls") else "http"
     url = f"{scheme}://{endpoint['host']}:{endpoint['port']}/?database={urllib.parse.quote(endpoint.get('database', 'default'))}"
     request = urllib.request.Request(url, data=query.encode(), method="POST")
@@ -276,19 +303,20 @@ def clickhouse_query(endpoint, query):
     if endpoint.get("caPem"):
         context = ssl.create_default_context(cadata=endpoint["caPem"])
     try:
-        with urllib.request.urlopen(request, timeout=60, context=context) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             return response.read().decode()
     except Exception as error:
         raise BackupError("clickhouse native command failed") from error
 
 
-def clickhouse_s3(endpoint, suffix):
+def clickhouse_s3(endpoint, suffix, extra=()):
     native_endpoint = endpoint.get("nativeEndpoint") or endpoint.get("endpoint")
     parsed = urllib.parse.urlparse(native_endpoint or "")
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise BackupError("clickhouse requires a server-reachable native S3 endpoint")
     base = native_endpoint.rstrip("/") + "/" + endpoint["bucket"] + "/" + safe_part(endpoint.get("prefix", "database-backups")) + "/" + suffix.strip("/")
-    return "S3(" + ", ".join(repr(value) for value in [base, endpoint["accessKeyId"], endpoint["secretAccessKey"]]) + ")"
+    # BACKUP/RESTORE take the S3 engine; with a format and structure in `extra` the same arguments form the s3() table function.
+    return ("s3(" if extra else "S3(") + ", ".join(repr(value) for value in [base, endpoint["accessKeyId"], endpoint["secretAccessKey"], *extra]) + ")"
 
 
 def clickhouse_backup(config):
@@ -297,7 +325,8 @@ def clickhouse_backup(config):
     database = quote_identifier(config["source"].get("database", "default")); stage_prefix = "native/" + config["runId"]
     stage_root = safe_part(stage.get("prefix", "database-backups")) + "/" + stage_prefix
     try:
-        clickhouse_query(config["source"], f"BACKUP DATABASE {database} TO {clickhouse_s3(stage, stage_prefix)}")
+        # BACKUP is synchronous and runs for as long as the data takes; the run's own limit bounds it.
+        clickhouse_query(config["source"], f"BACKUP DATABASE {database} TO {clickhouse_s3(stage, stage_prefix)}", timeout=config["limits"]["timeoutSeconds"])
         entries = list_objects(stage, stage_root)
         if not entries:
             raise BackupError("clickhouse native backup produced no staged artifacts")
@@ -342,7 +371,7 @@ def restore_clickhouse(config, manifest):
         if not isinstance(source_database, str) or not source_database:
             raise BackupError("clickhouse artifact source database is missing")
         target_database = quote_identifier(target.get("database", "default"))
-        clickhouse_query(target, f"RESTORE DATABASE {quote_identifier(source_database)} AS {target_database} FROM {clickhouse_s3(stage, restore_prefix.removeprefix(safe_part(stage.get('prefix', 'database-backups')) + '/'))}")
+        clickhouse_query(target, f"RESTORE DATABASE {quote_identifier(source_database)} AS {target_database} FROM {clickhouse_s3(stage, restore_prefix.removeprefix(safe_part(stage.get('prefix', 'database-backups')) + '/'))}", timeout=config["limits"]["timeoutSeconds"])
     finally:
         delete_prefix(stage, restore_prefix)
 
@@ -352,7 +381,9 @@ def restore_redis(config, artifact):
     stage = config.get("redisStaging")
     if not stage: raise BackupError("external Redis restore requires node-created staged Redis")
     stage_dir = WORK / "redis-stage"; stage_dir.mkdir(mode=0o700, exist_ok=True)
-    shutil.copyfile(artifact, stage_dir / "dump.rdb")
+    # The staged Redis starts as soon as dump.rdb exists, so it must appear complete.
+    shutil.copyfile(artifact, stage_dir / "dump.rdb.tmp")
+    os.replace(stage_dir / "dump.rdb.tmp", stage_dir / "dump.rdb")
     deadline = time.time() + 60
     while time.time() < deadline:
         try:

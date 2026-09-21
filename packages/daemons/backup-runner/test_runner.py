@@ -40,6 +40,7 @@ class FileProtocolKeyTests(unittest.TestCase):
             config = {
                 "runId": "run-1",
                 "engine": "clickhouse",
+                "limits": {"timeoutSeconds": 7200},
                 "destination": {"provider": "s3", "endpoint": "https://destination.example.test", "bucket": "backups", "prefix": "nightly"},
                 "staging": {"provider": "s3", "endpoint": "https://stage.example.test", "bucket": "stage", "prefix": "native", "accessKeyId": "key", "secretAccessKey": "secret"},
                 "restoreTarget": {"database": "target"},
@@ -56,9 +57,11 @@ class FileProtocolKeyTests(unittest.TestCase):
             def download(_, key, local):
                 local.write_bytes(contents[key])
 
-            with patch.object(runner, "download", side_effect=download) as downloaded, patch.object(runner, "upload"), patch.object(runner, "delete_prefix"), patch.object(runner, "clickhouse_query"), patch.object(runner, "assert_empty_target"):
+            with patch.object(runner, "download", side_effect=download) as downloaded, patch.object(runner, "upload"), patch.object(runner, "delete_prefix"), patch.object(runner, "clickhouse_query") as queried, patch.object(runner, "assert_empty_target"):
                 runner.restore({**config, "restoreArtifact": manifest})
             self.assertEqual(downloaded.call_count, len(contents))
+            # RESTORE is bounded by the run's limit, not the short default used for probes.
+            self.assertEqual(queried.call_args.kwargs["timeout"], 7200)
         runner.WORK = original_work
 
     def test_manifest_key_never_contains_base_path_or_bucket(self):
@@ -121,6 +124,44 @@ class FileProtocolKeyTests(unittest.TestCase):
         statement = runner.clickhouse_s3(endpoint, "run-1")
         self.assertIn("storage-reachable.example.test", statement)
         self.assertNotIn("127.0.0.1", statement)
+
+    def test_clickhouse_preflight_probes_native_staging_without_backing_the_database_up(self):
+        original_work = runner.WORK
+        stage = {"provider": "s3", "endpoint": "https://stage.example.test", "bucket": "stage", "prefix": "native", "accessKeyId": "key", "secretAccessKey": "secret"}
+        config = {"runId": "run-1", "engine": "clickhouse", "direction": "backup", "source": {"host": "ch.example.test", "port": 8123, "database": "app"}, "destination": stage}
+        with tempfile.TemporaryDirectory() as directory:
+            runner.WORK = pathlib.Path(directory)
+
+            def download(_, __, local):
+                local.write_bytes(b"gateway-backup-probe")
+
+            with patch.object(runner, "clickhouse_query") as queried, patch.object(runner, "list_objects", return_value=["native/probe/run-1/probe.csv"]), patch.object(runner, "delete_prefix") as deleted, patch.object(runner, "upload"), patch.object(runner, "download", side_effect=download), patch.object(runner, "delete_object"):
+                runner.preflight(config)
+        runner.WORK = original_work
+        statements = [call.args[1] for call in queried.call_args_list]
+        self.assertFalse(any(statement.startswith("BACKUP") for statement in statements))
+        probe = next(statement for statement in statements if statement.startswith("INSERT INTO FUNCTION s3("))
+        self.assertIn("'https://stage.example.test/stage/native/probe/run-1/probe.csv'", probe)
+        self.assertTrue(probe.endswith("'CSV', 'probe UInt8') SELECT 1"))
+        deleted.assert_called_once_with(stage, "native/probe/run-1")
+
+    def test_postgres_tools_follow_the_server_major_and_fall_back_to_the_image_default(self):
+        original_tools = runner.POSTGRES_TOOLS
+        with tempfile.TemporaryDirectory() as directory:
+            runner.POSTGRES_TOOLS = pathlib.Path(directory)
+            binary = pathlib.Path(directory) / "16" / "bin" / "pg_restore"
+            binary.parent.mkdir(parents=True); binary.write_text("")
+            (binary.parent / "pg_dump").write_text("")
+            self.assertEqual(runner.postgres_tool("pg_dump", 16), str(binary.parent / "pg_dump"))
+            self.assertEqual(runner.postgres_tool("pg_dump", 18), "pg_dump")
+            target = {"host": "pg.example.test", "port": 5432, "database": "app"}
+            with patch.object(runner, "postgres_major", return_value=16), patch.object(runner, "run") as ran:
+                self.assertEqual(runner.postgres_restore_tool(target, pathlib.Path("database.dump")), str(binary))
+                ran.assert_called_once_with([str(binary), "--list", "database.dump"])
+            # An archive from a newer pg_dump is unreadable for the older client.
+            with patch.object(runner, "postgres_major", return_value=16), patch.object(runner, "run", side_effect=runner.BackupError("native command failed")):
+                self.assertEqual(runner.postgres_restore_tool(target, pathlib.Path("database.dump")), "pg_restore")
+        runner.POSTGRES_TOOLS = original_tools
 
 
 if __name__ == "__main__":
