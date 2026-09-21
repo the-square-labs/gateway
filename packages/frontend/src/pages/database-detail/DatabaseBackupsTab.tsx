@@ -1,9 +1,10 @@
-import { Loader2, Pause, Play, RotateCcw, Trash2, X } from "lucide-react";
+import { DatabaseBackup, History, Loader2, Pause, Play, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
-import { Badge } from "@/components/ui/badge";
+import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
 import {
@@ -22,17 +23,40 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
+import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { BackupPolicy, BackupPolicyInput, BackupRun } from "@/types/backups";
+import type { BackupPolicy, BackupPolicyInput, BackupRun, BackupRunStatus } from "@/types/backups";
 import type { DatabaseConnection } from "@/types/databases";
 
-const backupApi = api;
 const defaultLimits = {
   workspaceBytes: 20 * 1024 ** 3,
   timeoutSeconds: 3600,
   cpuCores: 1,
   memoryMb: 1024,
 };
+
+const RUN_STATUS_BADGE: Record<BackupRunStatus, { label: string; variant: BadgeProps["variant"] }> =
+  {
+    queued: { label: "Queued", variant: "secondary" },
+    running: { label: "Running", variant: "info" },
+    completed: { label: "Completed", variant: "success" },
+    failed: { label: "Failed", variant: "destructive" },
+    cancelled: { label: "Cancelled", variant: "secondary" },
+  };
+
+interface BackupsCache {
+  policies: BackupPolicy[];
+  runs: BackupRun[];
+}
+
+function backupsCacheKey(databaseId: string) {
+  return `database:backups:${databaseId}`;
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
 
 export interface BackupSelectionOption {
   id: string;
@@ -56,45 +80,47 @@ export function DatabaseBackupsTab({
   canRun: boolean;
   canRestore: boolean;
 }) {
-  const [policies, setPolicies] = useState<BackupPolicy[]>([]);
-  const [runs, setRuns] = useState<BackupRun[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = backupsCacheKey(database.id);
+  const [policies, setPolicies] = useState<BackupPolicy[]>(
+    () => api.getCached<BackupsCache>(cacheKey)?.policies ?? []
+  );
+  const [runs, setRuns] = useState<BackupRun[]>(
+    () => api.getCached<BackupsCache>(cacheKey)?.runs ?? []
+  );
+  const [loading, setLoading] = useState(() => api.getCached<BackupsCache>(cacheKey) === undefined);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [restoreRun, setRestoreRun] = useState<BackupRun | null>(null);
-  const refresh = useCallback(
-    async (background = false) => {
-      if (!background) setLoading(true);
-      try {
-        const [nextPolicies, nextRuns] = await Promise.all([
-          backupApi.listBackupPolicies(database.id),
-          backupApi.listBackupRuns(database.id),
-        ]);
-        setPolicies(nextPolicies);
-        setRuns(nextRuns);
-      } catch {
-        toast.error("Could not load backup history");
-      } finally {
-        setLoading(false);
-      }
-    },
-    [database.id]
-  );
+  const refresh = useCallback(async () => {
+    try {
+      const [nextPolicies, nextRuns] = await Promise.all([
+        api.listBackupPolicies(database.id),
+        api.listBackupRuns(database.id),
+      ]);
+      api.setCache(cacheKey, { policies: nextPolicies, runs: nextRuns } satisfies BackupsCache);
+      setPolicies(nextPolicies);
+      setRuns(nextRuns);
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to load backups"));
+    } finally {
+      setLoading(false);
+    }
+  }, [cacheKey, database.id]);
   useEffect(() => {
     void refresh();
   }, [refresh]);
   useEffect(() => {
     if (!runs.some((run) => run.status === "queued" || run.status === "running")) return;
-    const timer = window.setInterval(() => void refresh(true), 5000);
+    const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
   }, [runs, refresh]);
   const deleteHistory = useCallback(
     async (run: BackupRun) => {
       try {
-        await backupApi.deleteBackupHistory(database.id, run.id);
-        toast.success("History removed");
+        await api.deleteBackupHistory(database.id, run.id);
+        toast.success("History entry removed");
         await refresh();
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "Could not remove history");
+        toast.error(errorMessage(error, "Failed to remove history entry"));
       }
     },
     [database.id, refresh]
@@ -102,11 +128,11 @@ export function DatabaseBackupsTab({
   const cancel = useCallback(
     async (run: BackupRun) => {
       try {
-        await backupApi.cancelBackup(database.id, run.id);
-        toast.message("Cancellation requested");
+        await api.cancelBackup(database.id, run.id);
+        toast.success("Cancellation requested");
         await refresh();
-      } catch {
-        toast.error("Could not request cancellation");
+      } catch (error) {
+        toast.error(errorMessage(error, "Failed to request cancellation"));
       }
     },
     [database.id, refresh]
@@ -116,36 +142,41 @@ export function DatabaseBackupsTab({
       {
         key: "created",
         header: "Started",
-        render: (run) => new Date(run.createdAt).toLocaleString(),
+        render: (run) => formatDateTime(run.startedAt ?? run.createdAt),
       },
       {
         key: "type",
         header: "Operation",
-        render: (run) => <span className="capitalize">{run.direction}</span>,
+        render: (run) => (run.direction === "backup" ? "Backup" : "Restore"),
       },
       {
         key: "status",
         header: "Status",
         render: (run) => (
-          <Badge
-            variant={
-              run.status === "completed"
-                ? "secondary"
-                : run.status === "failed"
-                  ? "destructive"
-                  : "outline"
-            }
-          >
-            {run.phase === "queued" ? "Queued" : run.status}
+          <Badge variant={RUN_STATUS_BADGE[run.status].variant}>
+            {RUN_STATUS_BADGE[run.status].label}
           </Badge>
+        ),
+      },
+      {
+        key: "details",
+        header: "Details",
+        render: (run) => (
+          <span className="text-muted-foreground">
+            {run.error ??
+              (run.status === "queued" || run.status === "running"
+                ? run.phase.replaceAll("_", " ")
+                : run.artifactsDeletedAt
+                  ? "Artifacts removed by retention"
+                  : "—")}
+          </span>
         ),
       },
       {
         key: "size",
         header: "Size",
         align: "right",
-        render: (run) =>
-          run.bytes === "0" ? "—" : `${(Number(run.bytes) / 1024 ** 2).toFixed(1)} MB`,
+        render: (run) => (Number(run.bytes) > 0 ? formatBytes(Number(run.bytes)) : "—"),
       },
       {
         key: "actions",
@@ -158,7 +189,7 @@ export function DatabaseBackupsTab({
             !run.artifactsDeletedAt &&
             canRestore ? (
               <Button size="sm" variant="outline" onClick={() => setRestoreRun(run)}>
-                <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                <RotateCcw />
                 Restore
               </Button>
             ) : null}
@@ -166,12 +197,13 @@ export function DatabaseBackupsTab({
             !["queued", "running"].includes(run.status) &&
             (!run.manifest || run.artifactsDeletedAt) ? (
               <Button size="sm" variant="ghost" onClick={() => void deleteHistory(run)}>
-                Remove history
+                <Trash2 />
+                Remove
               </Button>
             ) : null}
             {(run.status === "queued" || run.status === "running") && canRun ? (
               <Button size="sm" variant="ghost" onClick={() => void cancel(run)}>
-                <X className="mr-1 h-3.5 w-3.5" />
+                <X />
                 Cancel
               </Button>
             ) : null}
@@ -183,98 +215,130 @@ export function DatabaseBackupsTab({
   );
   const start = async (policy: BackupPolicy) => {
     try {
-      await backupApi.startBackup(database.id, policy.id);
-      toast.message("Backup queued");
+      await api.startBackup(database.id, policy.id);
+      toast.success("Backup queued");
       await refresh();
-    } catch {
-      toast.error("Could not queue backup");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to queue backup"));
     }
   };
-  const disableSchedule = async (policy: BackupPolicy) => {
+  const setScheduleEnabled = async (policy: BackupPolicy, enabled: boolean) => {
     try {
-      await backupApi.updateBackupPolicy(database.id, policy.id, { ...policy, enabled: false });
-      toast.message("Backup schedule disabled");
+      await api.updateBackupPolicy(database.id, policy.id, policyInput(policy, enabled));
+      toast.success(enabled ? "Backup schedule enabled" : "Backup schedule disabled");
       await refresh();
-    } catch {
-      toast.error("Could not disable backup schedule");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to update backup schedule"));
     }
   };
   const removePolicy = async (policy: BackupPolicy) => {
+    const ok = await confirm({
+      title: "Delete backup policy",
+      description:
+        "Scheduled backups for this policy will stop. Completed backups stay in the destination storage.",
+      confirmLabel: "Delete",
+      variant: "destructive",
+    });
+    if (!ok) return;
     try {
-      await backupApi.deleteBackupPolicy(database.id, policy.id);
-      toast.message("Backup policy deleted");
+      await api.deleteBackupPolicy(database.id, policy.id);
+      toast.success("Backup policy deleted");
       await refresh();
-    } catch {
-      toast.error("Could not delete backup policy");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to delete backup policy"));
     }
   };
+  const destinationLabel = (policy: BackupPolicy) =>
+    destinations.find((item) => item.id === policy.destinationId)?.label ?? "Storage";
   return (
     <div className="space-y-4">
       <PanelShell
-        title="Backup policy"
+        icon={<DatabaseBackup className="h-4 w-4" />}
+        title="Backup policies"
+        description="Where backups are stored, which node runs them, and how many are kept."
         actions={
           canManage ? (
             <Button size="sm" onClick={() => setPolicyOpen(true)}>
-              Configure backup
+              Add policy
             </Button>
           ) : undefined
         }
       >
-        <div>
-          {policies.length ? (
-            policies.map((policy) => (
-              <SettingsControlRow
-                key={policy.id}
-                title={policy.schedule ? `Schedule: ${policy.schedule}` : "Manual backups"}
-                description={
-                  policy.enabled
-                    ? `Retains ${policy.retentionCount} completed backup${policy.retentionCount === 1 ? "" : "s"}.`
-                    : "Schedule disabled. Manual runs remain available."
-                }
-              >
-                <div className="flex items-center gap-1">
-                  <Button size="sm" disabled={!canRun} onClick={() => void start(policy)}>
-                    <Play className="mr-1 h-3.5 w-3.5" />
-                    Run now
-                  </Button>
-                  {canManage && policy.enabled && policy.schedule ? (
-                    <Button size="sm" variant="ghost" onClick={() => void disableSchedule(policy)}>
-                      <Pause className="mr-1 h-3.5 w-3.5" />
-                      Disable
-                    </Button>
-                  ) : null}
-                  {canManage ? (
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="Delete backup policy"
-                      onClick={() => void removePolicy(policy)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  ) : null}
-                </div>
-              </SettingsControlRow>
-            ))
-          ) : (
+        {loading ? (
+          <div
+            className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
+            aria-busy="true"
+            aria-label="Loading backup policies"
+          >
+            <div className="min-w-0 flex-1 space-y-2">
+              <Skeleton className="h-4 w-36" />
+              <Skeleton className="h-3 w-4/5" />
+            </div>
+            <Skeleton className="h-8 w-24 shrink-0" />
+          </div>
+        ) : policies.length ? (
+          policies.map((policy) => (
             <SettingsControlRow
-              title="No backup policy"
-              description="Configure a destination, Storage node, schedule, and retention before running a backup."
+              key={policy.id}
+              title={
+                policy.schedule
+                  ? `Schedule ${policy.schedule} (${policy.timezone})`
+                  : "Manual backups"
+              }
+              description={`${destinationLabel(policy)} / ${policy.bucket}${policy.prefix ? ` / ${policy.prefix}` : ""} · keeps ${policy.retentionCount} backup${policy.retentionCount === 1 ? "" : "s"}${policy.schedule && !policy.enabled ? " · schedule disabled" : ""}`}
             >
-              <span className="text-sm text-muted-foreground">Not configured</span>
+              <div className="flex items-center gap-2">
+                {canManage && policy.schedule ? (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void setScheduleEnabled(policy, !policy.enabled)}
+                  >
+                    {policy.enabled ? <Pause /> : <Play />}
+                    {policy.enabled ? "Disable schedule" : "Enable schedule"}
+                  </Button>
+                ) : null}
+                {canManage ? (
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    aria-label="Delete backup policy"
+                    onClick={() => void removePolicy(policy)}
+                  >
+                    <Trash2 />
+                  </Button>
+                ) : null}
+                <Button size="sm" disabled={!canRun} onClick={() => void start(policy)}>
+                  <Play />
+                  Run now
+                </Button>
+              </div>
             </SettingsControlRow>
-          )}
-        </div>
+          ))
+        ) : (
+          <SettingsControlRow
+            title="No backup policy"
+            description="Add a policy with a destination, Storage node, schedule, and retention before running a backup."
+          >
+            <span className="text-sm text-muted-foreground">Not configured</span>
+          </SettingsControlRow>
+        )}
       </PanelShell>
-      <PanelShell title="Backup history">
+      <PanelShell
+        icon={<History className="h-4 w-4" />}
+        title="Backup history"
+        description="Backup and restore runs for this database."
+        bodyClassName="p-0"
+      >
         <DataTable
           columns={columns}
           data={runs}
           keyFn={(run) => run.id}
           loading={loading}
           emptyMessage="No backups have run for this database."
+          embedded
           horizontalScroll
-          minWidth="42rem"
+          minWidth="52rem"
         />
       </PanelShell>
       <PolicyDialog
@@ -284,8 +348,8 @@ export function DatabaseBackupsTab({
         engine={database.type}
         executors={executors}
         onSave={async (input) => {
-          await backupApi.createBackupPolicy(database.id, input);
-          toast.message("Backup policy saved");
+          await api.createBackupPolicy(database.id, input);
+          toast.success("Backup policy saved");
           setPolicyOpen(false);
           await refresh();
         }}
@@ -296,14 +360,30 @@ export function DatabaseBackupsTab({
         executors={executors}
         onRestore={async (input) => {
           if (!restoreRun) return;
-          await backupApi.restoreBackup(database.id, restoreRun.id, input);
-          toast.message("Restore queued");
+          await api.restoreBackup(database.id, restoreRun.id, input);
+          toast.success("Restore queued");
           setRestoreRun(null);
           await refresh();
         }}
       />
     </div>
   );
+}
+
+function policyInput(policy: BackupPolicy, enabled: boolean): BackupPolicyInput {
+  return {
+    destinationId: policy.destinationId,
+    bucket: policy.bucket,
+    prefix: policy.prefix,
+    stagingStorageConnectionId: policy.stagingStorageConnectionId,
+    stagingBucket: policy.stagingBucket,
+    executorNodeId: policy.executorNodeId,
+    schedule: policy.schedule,
+    timezone: policy.timezone,
+    retentionCount: policy.retentionCount,
+    limits: policy.limits,
+    enabled,
+  };
 }
 
 function PolicyDialog({
@@ -334,154 +414,234 @@ function PolicyDialog({
   const [retentionCount, setRetentionCount] = useState("7");
   const [saving, setSaving] = useState(false);
   const [limits, setLimits] = useState(defaultLimits);
+  useEffect(() => {
+    if (!open) return;
+    setDestinationId("");
+    setExecutorNodeId("");
+    setBucket("");
+    setPrefix("database-backups");
+    setStagingStorageConnectionId("");
+    setStagingBucket("");
+    setSchedule("0 2 * * *");
+    setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
+    setRetentionCount("7");
+    setLimits(defaultLimits);
+  }, [open]);
+  const retention = Number(retentionCount);
   const save = async () => {
-    if (
-      !destinationId ||
-      !bucket.trim() ||
-      !executorNodeId ||
-      !Number.isInteger(Number(retentionCount))
-    )
-      return toast.error("Choose a destination, bucket, executor, and retention");
-    if (Boolean(stagingStorageConnectionId.trim()) !== Boolean(stagingBucket.trim()))
-      return toast.error("Staging storage and bucket must be configured together");
+    if (!destinationId || !bucket.trim() || !executorNodeId) {
+      toast.error("Choose a destination, bucket, and Storage node");
+      return;
+    }
+    if (!Number.isInteger(retention) || retention < 1) {
+      toast.error("Retention must be a whole number of at least 1");
+      return;
+    }
+    if (Boolean(stagingStorageConnectionId) !== Boolean(stagingBucket.trim())) {
+      toast.error("Staging storage and bucket must be configured together");
+      return;
+    }
     setSaving(true);
     try {
       await onSave({
         destinationId,
         bucket: bucket.trim(),
         prefix: prefix.trim(),
-        stagingStorageConnectionId: stagingStorageConnectionId.trim() || null,
+        stagingStorageConnectionId: stagingStorageConnectionId || null,
         stagingBucket: stagingBucket.trim() || null,
         executorNodeId,
         schedule: schedule.trim() || null,
         timezone: timezone.trim() || "UTC",
-        retentionCount: Number(retentionCount),
+        retentionCount: retention,
         limits,
       });
-    } catch {
-      toast.error("Could not save backup policy");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to save backup policy"));
     } finally {
       setSaving(false);
     }
   };
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={open} onOpenChange={(nextOpen) => !saving && onOpenChange(nextOpen)}>
+      <DialogContent className="flex max-h-[88dvh] flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Configure database backup</DialogTitle>
+          <DialogTitle>Add backup policy</DialogTitle>
           <DialogDescription>
-            Backups are queued on the selected Storage node and only completed owned artifacts are
-            retained.
+            Backups run on the selected Storage node and are uploaded to the destination storage.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
-          <Choice
-            label="Destination"
-            value={destinationId}
-            onValueChange={setDestinationId}
-            options={destinations}
-          />
-          <SettingsInlineControl label="Bucket">
-            <Input value={bucket} onChange={(event) => setBucket(event.target.value)} />
-          </SettingsInlineControl>
-          <SettingsInlineControl label="Prefix">
-            <Input value={prefix} onChange={(event) => setPrefix(event.target.value)} />
-          </SettingsInlineControl>
-          {engine === "clickhouse" && (
-            <>
+        <div className="space-y-4 pr-1">
+          <PanelShell title="Destination" description="Where completed backups are stored.">
+            <SettingsControlRow
+              title="Storage"
+              description="Object storage connection that receives the backups."
+            >
               <Choice
-                label="S3 staging (required for file destinations)"
-                value={stagingStorageConnectionId || "none"}
-                onValueChange={(id) => {
-                  setStagingStorageConnectionId(id === "none" ? "" : id);
-                  if (id === "none") setStagingBucket("");
-                }}
-                options={[
-                  { id: "none", label: "Use the S3 destination directly" },
-                  ...destinations.filter(
-                    (item) => !["ftp", "ftps", "sftp"].includes(item.provider ?? "")
-                  ),
-                ]}
+                label="Storage"
+                value={destinationId}
+                onValueChange={setDestinationId}
+                options={destinations}
               />
-              {stagingStorageConnectionId && (
-                <SettingsInlineControl label="Staging S3 bucket">
+            </SettingsControlRow>
+            <SettingsControlRow title="Bucket" description="Bucket inside the destination storage.">
+              <Input
+                aria-label="Bucket"
+                value={bucket}
+                onChange={(event) => setBucket(event.target.value)}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow title="Prefix" description="Folder for this database's backups.">
+              <Input
+                aria-label="Prefix"
+                value={prefix}
+                onChange={(event) => setPrefix(event.target.value)}
+              />
+            </SettingsControlRow>
+            {engine === "clickhouse" && (
+              <SettingsControlRow
+                title="S3 staging"
+                description="ClickHouse writes backups to S3 natively. A file destination (FTP, SFTP) needs an S3 staging storage."
+              >
+                <div className="grid w-full gap-3">
+                  <Choice
+                    label="S3 staging storage"
+                    value={stagingStorageConnectionId || "none"}
+                    onValueChange={(id) => {
+                      setStagingStorageConnectionId(id === "none" ? "" : id);
+                      if (id === "none") setStagingBucket("");
+                    }}
+                    options={[
+                      { id: "none", label: "Use the S3 destination directly" },
+                      ...destinations.filter(
+                        (item) => !["ftp", "ftps", "sftp"].includes(item.provider ?? "")
+                      ),
+                    ]}
+                  />
+                  {stagingStorageConnectionId && (
+                    <SettingsInlineControl label="Staging bucket">
+                      <Input
+                        value={stagingBucket}
+                        onChange={(event) => setStagingBucket(event.target.value)}
+                      />
+                    </SettingsInlineControl>
+                  )}
+                </div>
+              </SettingsControlRow>
+            )}
+          </PanelShell>
+
+          <PanelShell title="Execution" description="Which node runs backups and when.">
+            <SettingsControlRow
+              title="Storage node"
+              description="Node that runs the backup job and uploads the result."
+            >
+              <Choice
+                label="Storage node"
+                value={executorNodeId}
+                onValueChange={setExecutorNodeId}
+                options={executors}
+              />
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Schedule"
+              description="Five-field cron expression. Leave empty to run backups manually only."
+            >
+              <div className="grid w-full grid-cols-2 gap-3">
+                <SettingsInlineControl label="Cron">
+                  <Input value={schedule} onChange={(event) => setSchedule(event.target.value)} />
+                </SettingsInlineControl>
+                <SettingsInlineControl label="Timezone">
+                  <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
+                </SettingsInlineControl>
+              </div>
+            </SettingsControlRow>
+            <SettingsControlRow
+              title="Retention"
+              description="Completed backups to keep. Older ones are removed from the destination."
+            >
+              <Input
+                aria-label="Completed backups to keep"
+                type="number"
+                min={1}
+                value={retentionCount}
+                onChange={(event) => setRetentionCount(event.target.value)}
+              />
+            </SettingsControlRow>
+          </PanelShell>
+
+          <PanelShell title="Resource limits" description="Limits for one backup or restore job.">
+            <SettingsControlRow
+              title="Workspace and timeout"
+              description="Temporary disk space on the Storage node and the maximum job duration."
+            >
+              <div className="grid w-full grid-cols-2 gap-3">
+                <SettingsInlineControl label="Workspace (GiB)">
                   <Input
-                    value={stagingBucket}
-                    onChange={(event) => setStagingBucket(event.target.value)}
+                    type="number"
+                    min={1}
+                    max={1024}
+                    value={limits.workspaceBytes / 1024 ** 3}
+                    onChange={(event) =>
+                      setLimits({
+                        ...limits,
+                        workspaceBytes: Number(event.target.value) * 1024 ** 3,
+                      })
+                    }
                   />
                 </SettingsInlineControl>
-              )}
-            </>
-          )}
-          <Choice
-            label="Storage node"
-            value={executorNodeId}
-            onValueChange={setExecutorNodeId}
-            options={executors}
-          />
-          <SettingsInlineControl label="Schedule (five-field cron; empty for manual)">
-            <Input value={schedule} onChange={(event) => setSchedule(event.target.value)} />
-          </SettingsInlineControl>
-          <SettingsInlineControl label="Timezone">
-            <Input value={timezone} onChange={(event) => setTimezone(event.target.value)} />
-          </SettingsInlineControl>
-          <SettingsInlineControl label="Completed backups to retain">
-            <Input
-              inputMode="numeric"
-              value={retentionCount}
-              onChange={(event) => setRetentionCount(event.target.value)}
-            />
-          </SettingsInlineControl>
-          <details>
-            <summary className="cursor-pointer text-sm font-medium">Resource limits</summary>
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <SettingsInlineControl label="Workspace (GiB)">
-                <Input
-                  type="number"
-                  min={1}
-                  max={1024}
-                  value={limits.workspaceBytes / 1024 ** 3}
-                  onChange={(e) =>
-                    setLimits({ ...limits, workspaceBytes: Number(e.target.value) * 1024 ** 3 })
-                  }
-                />
-              </SettingsInlineControl>
-              <SettingsInlineControl label="Timeout (seconds)">
-                <Input
-                  type="number"
-                  min={60}
-                  max={86400}
-                  value={limits.timeoutSeconds}
-                  onChange={(e) => setLimits({ ...limits, timeoutSeconds: Number(e.target.value) })}
-                />
-              </SettingsInlineControl>
-              <SettingsInlineControl label="CPU cores">
-                <Input
-                  type="number"
-                  min={1}
-                  max={32}
-                  value={limits.cpuCores}
-                  onChange={(e) => setLimits({ ...limits, cpuCores: Number(e.target.value) })}
-                />
-              </SettingsInlineControl>
-              <SettingsInlineControl label="Memory (MiB)">
-                <Input
-                  type="number"
-                  min={128}
-                  max={262144}
-                  value={limits.memoryMb}
-                  onChange={(e) => setLimits({ ...limits, memoryMb: Number(e.target.value) })}
-                />
-              </SettingsInlineControl>
-            </div>
-          </details>
+                <SettingsInlineControl label="Timeout (seconds)">
+                  <Input
+                    type="number"
+                    min={60}
+                    max={86400}
+                    value={limits.timeoutSeconds}
+                    onChange={(event) =>
+                      setLimits({ ...limits, timeoutSeconds: Number(event.target.value) })
+                    }
+                  />
+                </SettingsInlineControl>
+              </div>
+            </SettingsControlRow>
+            <SettingsControlRow title="CPU and memory" description="Limits of the job container.">
+              <div className="grid w-full grid-cols-2 gap-3">
+                <SettingsInlineControl label="CPU cores">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={32}
+                    value={limits.cpuCores}
+                    onChange={(event) =>
+                      setLimits({ ...limits, cpuCores: Number(event.target.value) })
+                    }
+                  />
+                </SettingsInlineControl>
+                <SettingsInlineControl label="Memory (MiB)">
+                  <Input
+                    type="number"
+                    min={128}
+                    max={262144}
+                    value={limits.memoryMb}
+                    onChange={(event) =>
+                      setLimits({ ...limits, memoryMb: Number(event.target.value) })
+                    }
+                  />
+                </SettingsInlineControl>
+              </div>
+            </SettingsControlRow>
+          </PanelShell>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={saving}
+          >
             Cancel
           </Button>
-          <Button disabled={saving} onClick={() => void save()}>
-            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Save policy
+          <Button type="button" disabled={saving} onClick={() => void save()}>
+            {saving && <Loader2 className="animate-spin" />}
+            {saving ? "Saving..." : "Save policy"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -503,48 +663,70 @@ function RestoreDialog({
   const [executorNodeId, setExecutorNodeId] = useState("");
   const [newManagedDatabaseName, setNewManagedDatabaseName] = useState("");
   const [restoring, setRestoring] = useState(false);
+  const runId = run?.id;
+  useEffect(() => {
+    if (!runId) return;
+    setExecutorNodeId("");
+    setNewManagedDatabaseName("");
+  }, [runId]);
   const restore = async () => {
-    if (!executorNodeId || !newManagedDatabaseName.trim())
-      return toast.error("Choose the Storage node and a new target");
+    if (!executorNodeId || !newManagedDatabaseName.trim()) {
+      toast.error("Choose the Storage node and a name for the new database");
+      return;
+    }
     setRestoring(true);
     try {
       await onRestore({ executorNodeId, newManagedDatabaseName: newManagedDatabaseName.trim() });
-    } catch {
-      toast.error("Could not queue restore");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to queue restore"));
     } finally {
       setRestoring(false);
     }
   };
   return (
-    <Dialog open={Boolean(run)} onOpenChange={onOpenChange}>
-      <DialogContent>
+    <Dialog open={Boolean(run)} onOpenChange={(nextOpen) => !restoring && onOpenChange(nextOpen)}>
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Restore backup</DialogTitle>
-          <DialogDescription>
-            Restores archive {run?.id.slice(0, 8)} into a new target. Existing databases are never
-            overwritten.
-          </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4">
-          <Choice
-            label="Storage node"
-            value={executorNodeId}
-            onValueChange={setExecutorNodeId}
-            options={executors}
-          />
-          <SettingsInlineControl label="New managed database name">
+        <div className="space-y-4">
+          <DialogDescription>
+            Restores the backup from {run ? formatDateTime(run.startedAt ?? run.createdAt) : ""}{" "}
+            into a new managed database. Existing databases are never overwritten.
+          </DialogDescription>
+          <div className="space-y-1.5">
+            <span className="text-sm font-medium">Storage node</span>
+            <Choice
+              label="Storage node"
+              value={executorNodeId}
+              onValueChange={setExecutorNodeId}
+              options={executors}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="backup-restore-database-name">
+              New managed database name
+            </label>
             <Input
+              id="backup-restore-database-name"
               value={newManagedDatabaseName}
               onChange={(event) => setNewManagedDatabaseName(event.target.value)}
+              disabled={restoring}
             />
-          </SettingsInlineControl>
+          </div>
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={restoring}
+          >
             Cancel
           </Button>
-          <Button disabled={restoring} onClick={() => void restore()}>
-            {restoring ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}Queue restore
+          <Button type="button" disabled={restoring} onClick={() => void restore()}>
+            {restoring && <Loader2 className="animate-spin" />}
+            {restoring ? "Queueing..." : "Queue restore"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -564,20 +746,22 @@ function Choice({
   options: BackupSelectionOption[];
 }) {
   return (
-    <SettingsInlineControl label={label}>
-      <Select value={value} onValueChange={onValueChange}>
-        <SelectTrigger>
-          <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.id} value={option.id} disabled={Boolean(option.disabledReason)}>
-              {option.label}
-              {option.disabledReason ? ` — ${option.disabledReason}` : ""}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </SettingsInlineControl>
+    <Select value={value} onValueChange={onValueChange}>
+      <SelectTrigger aria-label={label}>
+        <SelectValue placeholder={`Select ${label.toLowerCase()}`} />
+      </SelectTrigger>
+      <SelectContent className="w-[var(--radix-select-trigger-width)]">
+        {options.map((option) => (
+          <SelectItem
+            key={option.id}
+            value={option.id}
+            disabled={Boolean(option.disabledReason)}
+            description={option.disabledReason}
+          >
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
