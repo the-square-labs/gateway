@@ -1,0 +1,15 @@
+{
+  "file_name": "47jk3wjw_backup_executor_tests",
+  "edges": [
+    {
+      "from_id": "47jk3wjw",
+      "to_id": "rofhavtg",
+      "relation": "same_area",
+      "weight": 0.72,
+      "reason": "Both document gateway-commercial backend behavior and verification contracts for the backups area.",
+      "source": "auto",
+      "created_at": 1790023733476,
+      "updated_at": 1790023733476
+    }
+  ]
+}

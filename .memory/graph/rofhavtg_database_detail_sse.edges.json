@@ -1,0 +1,45 @@
+{
+  "file_name": "rofhavtg_database_detail_sse",
+  "edges": [
+    {
+      "from_id": "rofhavtg",
+      "to_id": "7abclq2n",
+      "relation": "same_area",
+      "weight": 0.9,
+      "reason": "Both document Gateway managed-database backend ownership and database service/API boundaries.",
+      "source": "auto",
+      "created_at": 1790021818459,
+      "updated_at": 1790021818459
+    },
+    {
+      "from_id": "rofhavtg",
+      "to_id": "412x4uua",
+      "relation": "same_workflow",
+      "weight": 0.78,
+      "reason": "The frontend database detail page consumes the database API methods covered by this client-splitting workflow.",
+      "source": "auto",
+      "created_at": 1790021818459,
+      "updated_at": 1790021818459
+    },
+    {
+      "from_id": "rofhavtg",
+      "to_id": "94t2cjlq",
+      "relation": "same_area",
+      "weight": 0.7,
+      "reason": "The managed database detail page should use the shared Gateway frontend shell, table, and detail primitives.",
+      "source": "auto",
+      "created_at": 1790021818459,
+      "updated_at": 1790021818459
+    },
+    {
+      "from_id": "rofhavtg",
+      "to_id": "3ta908aa",
+      "relation": "same_area",
+      "weight": 0.66,
+      "reason": "Both cover managed-database monitoring and its relay/proxy runtime behavior.",
+      "source": "auto",
+      "created_at": 1790021818459,
+      "updated_at": 1790021818459
+    }
+  ]
+}
