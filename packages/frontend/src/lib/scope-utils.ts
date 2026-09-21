@@ -187,7 +187,10 @@ export function parseScopesForForm(scopes: readonly string[]) {
   const restrictableScopeSet = new Set<string>(RESOURCE_SCOPABLE_SCOPES);
 
   for (const scope of scopes) {
-    if (restrictableScopeSet.has(scope)) {
+    // A complete scope wins over prefix matching, like extractBaseScope does:
+    // "admin:users:folders:manage" is its own scope, not "admin:users"
+    // restricted to a resource named "folders:manage".
+    if (restrictableScopeSet.has(scope) || ALL_SCOPE_VALUES.has(scope)) {
       if (!baseScopes.includes(scope)) baseScopes.push(scope);
       continue;
     }

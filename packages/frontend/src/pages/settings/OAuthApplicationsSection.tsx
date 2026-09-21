@@ -459,12 +459,9 @@ export function OAuthApplicationsSection({
                     </p>
                     <div className="flex flex-wrap gap-1">
                       {unknownScopes.map((scope) => (
-                        <code
-                          key={scope}
-                          className="border border-border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
-                        >
+                        <Badge key={scope} variant="secondary">
                           {scope}
-                        </code>
+                        </Badge>
                       ))}
                     </div>
                   </div>
