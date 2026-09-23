@@ -15,6 +15,7 @@ interface UpdateState {
   checkForUpdates: () => Promise<void>;
   triggerUpdate: (version: string) => Promise<void>;
   triggerRelayUpdate: (version: string) => Promise<void>;
+  proceedWithUpdate: () => Promise<void>;
   setUpdating: (
     component: "gateway" | "relay",
     active: boolean,
@@ -60,6 +61,11 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
       const status = applyForcedGatewayUpdateStatus(await api.getVersionInfo());
       api.setCache("system:version", status);
       set((state) => ({ status, ...relayStatusState(status, state) }));
+      // A session that missed the update event still shows the update screen.
+      const gatewayOperation = status.gatewayOperation;
+      if (gatewayOperation && !useAppStatusStore.getState().gatewayUpdatingActive) {
+        useAppStatusStore.getState().setGatewayUpdatingActive(true, gatewayOperation.targetVersion);
+      }
     } catch {
       // ignore
     }
@@ -102,6 +108,11 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
     } catch {
       set({ isUpdating: false, updatingComponent: null, updatingTargetVersion: null });
     }
+  },
+
+  proceedWithUpdate: async () => {
+    await api.proceedWithUpdate();
+    await useUpdateStore.getState().fetchStatus();
   },
 
   setUpdating: (component, active, targetVersion = null) =>

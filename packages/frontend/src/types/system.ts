@@ -7,6 +7,18 @@ export interface UpdateStatus {
   releaseUrl: string | null;
   lastCheckedAt: string | null;
   relay: RelayUpdateStatus;
+  /** Absent on Gateways that predate the update gate. */
+  gatewayOperation?: GatewayUpdateOperation | null;
+}
+
+/** An accepted Gateway update, waiting for running orchestration operations first. */
+export interface GatewayUpdateOperation {
+  status: "waiting_for_operations" | "updating";
+  targetVersion: string;
+  startedAt: string;
+  /** When the update proceeds even if operations still run. */
+  waitDeadline: string | null;
+  operations: { kind: string; label: string; count: number }[];
 }
 
 export interface RelayUpdateStatus {

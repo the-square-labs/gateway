@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
     completeRelayUpdate: vi.fn(),
     failRelayUpdate: vi.fn(),
     checkForUpdates: vi.fn(),
+    isGatewayUpdateInProgress: vi.fn(),
+    proceedWithoutWaiting: vi.fn(),
   },
   daemonUpdateService: {
     getLatestRelease: vi.fn(),
@@ -71,6 +73,7 @@ describe('System RC update routes', () => {
     vi.clearAllMocks();
     mocks.updateService.prepareGatewayUpdate.mockResolvedValue({ imageRef: 'gateway@sha256:test' });
     mocks.updateService.prepareRelayUpdate.mockResolvedValue({ imageRef: 'relay@sha256:test' });
+    mocks.updateService.isGatewayUpdateInProgress.mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -93,6 +96,32 @@ describe('System RC update routes', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.updateService.prepareGatewayUpdate).toHaveBeenCalledWith('v2.10.0-rc.2');
+  });
+
+  it('refuses a second Gateway update while one is waiting or running', async () => {
+    mocks.updateService.isGatewayUpdateInProgress.mockReturnValue(true);
+
+    const response = await app().request('/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 'v2.10.0-rc.2' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'UPDATE_IN_PROGRESS' });
+    expect(mocks.updateService.prepareGatewayUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin update now instead of waiting for running operations', async () => {
+    mocks.updateService.proceedWithoutWaiting.mockReturnValueOnce(true).mockReturnValueOnce(false);
+
+    const proceeded = await app().request('/update/proceed', { method: 'POST' });
+    expect(proceeded.status).toBe(200);
+    await expect(proceeded.json()).resolves.toEqual({ data: { status: 'updating' } });
+
+    const notWaiting = await app().request('/update/proceed', { method: 'POST' });
+    expect(notWaiting.status).toBe(409);
+    await expect(notWaiting.json()).resolves.toMatchObject({ code: 'UPDATE_NOT_WAITING' });
   });
 
   it('accepts a Relay release candidate selected by the resolver', async () => {

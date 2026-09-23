@@ -23,6 +23,11 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import type { GeneralSettingsService, UpdateChannel } from '@/modules/settings/general-settings.service.js';
 import type { DockerService } from './docker.service.js';
+import {
+  type OrchestrationActivitySource,
+  type PendingOrchestrationOperation,
+  waitForOrchestrationIdle,
+} from './orchestration-activity.js';
 import { saveInstalledRelayArtifact } from './relay-installed-artifact.js';
 
 const logger = createChildLogger('UpdateService');
@@ -37,7 +42,29 @@ export interface UpdateStatus {
   releaseUrl: string | null;
   lastCheckedAt: string | null;
   relay: RelayUpdateStatus;
+  gatewayOperation: GatewayUpdateOperation | null;
 }
+
+/** A Gateway self-update this process accepted and has not handed off yet. */
+export interface GatewayUpdateOperation {
+  /** `waiting_for_operations` until running orchestration work finishes. */
+  status: 'waiting_for_operations' | 'updating';
+  targetVersion: string;
+  startedAt: string;
+  /** When the update proceeds even if operations still run. */
+  waitDeadline: string | null;
+  operations: PendingOrchestrationOperation[];
+}
+
+export interface UpdateEvents {
+  publish(channel: string, payload: unknown): void;
+}
+
+/**
+ * A handed-off update replaces this process within minutes. If it is still
+ * alive after this, the handoff failed: accept orchestration work again.
+ */
+const UPDATE_HANDOFF_SETTLE_MS = 20 * 60_000;
 
 export interface RelayUpdateOperation {
   status: 'updating' | 'failed';
@@ -130,6 +157,11 @@ const SETTINGS_KEYS = {
 
 export class UpdateService {
   private gatewayUpdateInProgress = false;
+  private gatewayUpdateOperation: GatewayUpdateOperation | null = null;
+  private orchestration?: OrchestrationActivitySource;
+  private events?: UpdateEvents;
+  private operationWaitOverride: AbortController | null = null;
+  private handoffSettleTimer?: ReturnType<typeof setTimeout>;
   private readonly releasesUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
@@ -208,6 +240,23 @@ export class UpdateService {
 
   setRelayPoolUpdateRuntime(runtime: RelayPoolUpdateRuntime): void {
     this.relayPoolRuntime = runtime;
+  }
+
+  /** The update waits for (and holds new) orchestration work reported by this source. */
+  setOrchestrationGate(source: OrchestrationActivitySource, events?: UpdateEvents): void {
+    this.orchestration = source;
+    this.events = events;
+  }
+
+  isGatewayUpdateInProgress(): boolean {
+    return this.gatewayUpdateInProgress;
+  }
+
+  /** The operator's "update now": stop waiting for running orchestration work. */
+  proceedWithoutWaiting(): boolean {
+    if (this.gatewayUpdateOperation?.status !== 'waiting_for_operations' || !this.operationWaitOverride) return false;
+    this.operationWaitOverride.abort();
+    return true;
   }
 
   getCurrentVersion(): string {
@@ -293,6 +342,7 @@ export class UpdateService {
         releaseUrl: latestRelayVersion ? (map.get(SETTINGS_KEYS.relayReleaseUrl) ?? null) : null,
         operation: durableOperation ?? this.relayUpdateOperation,
       },
+      gatewayOperation: this.gatewayUpdateOperation,
     };
   }
 
@@ -320,6 +370,7 @@ export class UpdateService {
           releaseUrl: null,
           operation: this.relayUpdateOperation,
         },
+        gatewayOperation: this.gatewayUpdateOperation,
       };
     }
 
@@ -467,11 +518,95 @@ export class UpdateService {
     if (this.gatewayUpdateInProgress)
       throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress');
     this.gatewayUpdateInProgress = true;
+    this.setGatewayUpdateOperation({
+      status: 'updating',
+      targetVersion: normalizeVersionTag(targetVersion),
+      startedAt: new Date().toISOString(),
+      waitDeadline: null,
+      operations: [],
+    });
     try {
       await this.performGatewayUpdate(targetVersion, artifact);
     } catch (error) {
       this.gatewayUpdateInProgress = false;
+      this.setGatewayUpdateOperation(null);
+      this.orchestration?.setOrchestrationAdmissionHold(null);
       throw error;
+    }
+    this.handoffSettleTimer = setTimeout(() => {
+      logger.error('Gateway update handoff did not replace this process; accepting orchestration work again', {
+        targetVersion,
+      });
+      this.gatewayUpdateInProgress = false;
+      this.setGatewayUpdateOperation(null);
+      this.orchestration?.setOrchestrationAdmissionHold(null);
+      this.events?.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion });
+    }, UPDATE_HANDOFF_SETTLE_MS);
+    this.handoffSettleTimer.unref?.();
+  }
+
+  private setGatewayUpdateOperation(operation: GatewayUpdateOperation | null): void {
+    this.gatewayUpdateOperation = operation;
+    if (operation) {
+      this.events?.publish('system.update.changed', {
+        updating: true,
+        component: 'gateway',
+        targetVersion: operation.targetVersion,
+        statusChanged: true,
+      });
+    }
+  }
+
+  /**
+   * A restart interrupts blue/green deployments, drains, Availability and
+   * Compose operations, build rollouts and Docker migrations. Hold new ones
+   * and wait for those running, up to the longest announced operation deadline
+   * (15 minutes by default) or until the operator chooses to update now.
+   * Durable recovery resumes whatever still runs at the handoff.
+   */
+  private async waitForOrchestrationOperations(targetVersion: string): Promise<void> {
+    const source = this.orchestration;
+    if (!source) return;
+    const held = source.setOrchestrationAdmissionHold(
+      `Gateway is updating to ${targetVersion}. Start this operation again once the update has finished.`
+    );
+    const override = new AbortController();
+    this.operationWaitOverride = override;
+    const startedAt = this.gatewayUpdateOperation?.startedAt ?? new Date().toISOString();
+    try {
+      const result = await waitForOrchestrationIdle(source, {
+        scope: 'all',
+        deadline: 'auto',
+        signal: override.signal,
+        onProgress: (operations, deadline) =>
+          this.setGatewayUpdateOperation({
+            status: 'waiting_for_operations',
+            targetVersion,
+            startedAt,
+            waitDeadline: new Date(deadline).toISOString(),
+            operations,
+          }),
+      });
+      if (result.outcome === 'deadline' || result.outcome === 'override') {
+        logger.warn('Gateway update proceeds while orchestration operations still run; recovery resumes them', {
+          targetVersion,
+          reason: result.outcome,
+          operations: result.operations,
+        });
+      } else if (result.outcome === 'unsupported' || !held) {
+        logger.info('Installed private core cannot report orchestration operations; the update does not wait', {
+          targetVersion,
+        });
+      }
+    } finally {
+      this.operationWaitOverride = null;
+      this.setGatewayUpdateOperation({
+        status: 'updating',
+        targetVersion,
+        startedAt,
+        waitDeadline: null,
+        operations: [],
+      });
     }
   }
 
@@ -513,6 +648,9 @@ export class UpdateService {
     await this.dockerService.pullImageRef(artifact.imageRef);
 
     await this.dockerService.pullImageRef(DOCKER_COMPOSE_CLI_IMAGE_REF);
+
+    // Before anything on the host changes: a restart during the wait keeps the current version.
+    await this.waitForOrchestrationOperations(tag);
 
     logger.info('Migrating legacy environment-owned Gateway settings');
     const settingsMigration = await this.dockerService.runOneShot({

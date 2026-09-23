@@ -1791,6 +1791,7 @@ export async function initializeContainer(): Promise<void> {
     },
     generalSettingsService
   );
+  updateService.setOrchestrationGate(commercialEdition, eventBus);
   container.registerInstance(UpdateService, updateService);
   container.registerInstance(
     LicenseModuleService,

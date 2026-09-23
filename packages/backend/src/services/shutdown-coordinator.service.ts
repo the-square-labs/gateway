@@ -9,6 +9,12 @@ export interface ShutdownHooks {
   freezeStatusPage: () => Promise<void>;
   quiesce: () => Promise<void>;
   drainUserWork: (deadline: number) => Promise<void>;
+  /**
+   * Waits for running orchestration work (deployments, Availability, Compose,
+   * rollouts, migrations) within the user drain deadline and returns how many
+   * operations still run at the deadline. Durable recovery resumes those.
+   */
+  drainOrchestration: (deadline: number) => Promise<number>;
   forceCloseUserWork: () => Promise<void> | void;
   closeLogging: (deadline: number) => Promise<void>;
   closeHttp: (deadline: number) => Promise<void>;
@@ -59,16 +65,26 @@ export class ShutdownCoordinator {
       this.options.lifecycle.transition('draining_user');
       const userPhaseStartedAt = this.now();
       logger.info('Graceful shutdown phase started', { shutdownId, phase: 'draining_user' });
+      const orchestration: { remaining: number | null } = { remaining: null };
       const userPhaseCompleted = await untilDeadline(
         Promise.allSettled([
           this.options.hooks.freezeStatusPage(),
           this.options.hooks.quiesce(),
           this.options.lifecycle.waitForZero('user', userDeadline),
           this.options.hooks.drainUserWork(userDeadline),
+          this.options.hooks.drainOrchestration(userDeadline).then((remaining) => {
+            orchestration.remaining = remaining;
+          }),
         ]).then(() => undefined),
         userDeadline,
         () => this.now()
       );
+      if (orchestration.remaining !== 0) {
+        logger.warn('Orchestration operations still run at the user drain deadline; recovery resumes them', {
+          shutdownId,
+          operations: orchestration.remaining,
+        });
+      }
       if (this.options.lifecycle.getActiveCount('user') > 0) {
         logger.warn('User drain deadline reached', {
           shutdownId,

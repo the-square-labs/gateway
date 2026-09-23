@@ -22,6 +22,7 @@ import {
   nodes,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   decodeComposeServiceTarget,
@@ -82,4 +83,5 @@ export const dockerDeploymentCommercialRuntime = {
   encodeComposeServiceTarget,
 
   PgDialect,
+  createChildLogger,
 };

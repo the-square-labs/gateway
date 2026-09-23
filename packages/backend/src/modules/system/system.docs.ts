@@ -47,6 +47,14 @@ export const performSystemUpdateRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const proceedSystemUpdateRoute = appRoute({
+  method: 'post',
+  path: '/update/proceed',
+  tags: ['System'],
+  summary: 'Update now without waiting for running orchestration operations',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const performRelayUpdateRoute = appRoute({
   method: 'post',
   path: '/relay-update',

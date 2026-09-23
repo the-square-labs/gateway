@@ -9,6 +9,7 @@ vi.mock("@/services/api", () => ({
     setCache: vi.fn(),
     triggerUpdate: vi.fn(),
     triggerRelayUpdate: vi.fn(),
+    proceedWithUpdate: vi.fn(),
   },
 }));
 
@@ -167,5 +168,48 @@ describe("useUpdateStore", () => {
       isUpdating: true,
       updatingComponent: "relay",
     });
+  });
+
+  it("shows the update screen in a session that missed the update event", async () => {
+    vi.mocked(api.getVersionInfo).mockResolvedValueOnce({
+      currentVersion: "v2.4.0",
+      latestVersion: "v2.5.0",
+      updateAvailable: true,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.4.0",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+      gatewayOperation: {
+        status: "waiting_for_operations",
+        targetVersion: "v2.5.0",
+        startedAt: "2026-09-23T12:00:00.000Z",
+        waitDeadline: "2026-09-23T12:15:00.000Z",
+        operations: [{ kind: "compose", label: "Compose operations", count: 1 }],
+      },
+    });
+
+    await useUpdateStore.getState().fetchStatus();
+
+    expect(useAppStatusStore.getState()).toMatchObject({
+      gatewayUpdatingActive: true,
+      gatewayUpdatingTargetVersion: "v2.5.0",
+    });
+  });
+
+  it("asks the server to update now and refreshes the update status", async () => {
+    vi.mocked(api.proceedWithUpdate).mockResolvedValueOnce({ status: "updating" });
+    vi.mocked(api.getVersionInfo).mockRejectedValueOnce(new Error("offline"));
+
+    await useUpdateStore.getState().proceedWithUpdate();
+
+    expect(api.proceedWithUpdate).toHaveBeenCalledOnce();
+    expect(api.getVersionInfo).toHaveBeenCalledOnce();
   });
 });

@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import type { TrustedGatewayUpdateArtifact, TrustedRelayUpdateArtifact } from '@/lib/update-artifact-trust.js';
 import {
@@ -667,6 +667,113 @@ describe('UpdateService foundation migration', () => {
         HostConfig: { Binds: ['/srv/gateway-workspaces:/srv/gateway-workspaces'] },
       })
     );
+  });
+});
+
+describe('UpdateService orchestration gate', () => {
+  const deployment = (running: number, queued = 0, expectedBy: number | null = null) => [
+    { kind: 'deployment', label: 'Blue/green deployment operations', running, queued, expectedBy },
+  ];
+
+  function gatedService(readings: () => ReturnType<typeof deployment> | null) {
+    const dockerService = makeDockerService();
+    const service = makeUpdateService(dockerService);
+    const source = {
+      activeOrchestrationOperations: vi.fn(async () => readings()),
+      setOrchestrationAdmissionHold: vi.fn(() => true),
+    };
+    const events = { publish: vi.fn() };
+    service.setOrchestrationGate(source, events);
+    const operation = () => (service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation;
+    return { dockerService, service, source, events, operation };
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('holds new orchestration work and hands off only after running operations finish', async () => {
+    vi.useFakeTimers();
+    let running = 1;
+    const { dockerService, service, source, events, operation } = gatedService(() => deployment(running, 1));
+    const update = service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'));
+
+    await vi.waitFor(() => expect(operation()).toMatchObject({ status: 'waiting_for_operations' }));
+    expect(source.setOrchestrationAdmissionHold).toHaveBeenCalledWith(
+      expect.stringContaining('Gateway is updating to v2.4.3')
+    );
+    expect(operation()).toMatchObject({
+      targetVersion: 'v2.4.3',
+      operations: [{ kind: 'deployment', label: 'Blue/green deployment operations', count: 2 }],
+      waitDeadline: expect.any(String),
+    });
+    expect(events.publish).toHaveBeenCalledWith(
+      'system.update.changed',
+      expect.objectContaining({ updating: true, component: 'gateway', statusChanged: true })
+    );
+    // Nothing on the host changes while operations run.
+    expect(dockerService.pullImageRef).toHaveBeenCalledTimes(2);
+    expect(dockerService.runOneShot).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(dockerService.runDetached).not.toHaveBeenCalled();
+
+    running = 0;
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() =>
+      expect(operation()).toMatchObject({ status: 'waiting_for_operations', operations: [{ count: 1 }] })
+    );
+    // The queued drain falls due and completes too.
+    source.activeOrchestrationOperations.mockResolvedValue(deployment(0, 0));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await update;
+
+    expect(dockerService.runDetached).toHaveBeenCalledOnce();
+    expect(operation()).toMatchObject({ status: 'updating', operations: [] });
+    // The hold stays until the handed-off update replaces this process.
+    expect(source.setOrchestrationAdmissionHold).not.toHaveBeenCalledWith(null);
+  });
+
+  it('updates now when the operator overrides the wait', async () => {
+    vi.useFakeTimers();
+    const { dockerService, service } = gatedService(() => deployment(1));
+    expect(service.proceedWithoutWaiting()).toBe(false);
+    const update = service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'));
+
+    await vi.waitFor(() => expect(service.proceedWithoutWaiting()).toBe(true));
+    await update;
+    expect(dockerService.runDetached).toHaveBeenCalledOnce();
+    expect(service.proceedWithoutWaiting()).toBe(false);
+  });
+
+  it('proceeds at the longest announced operation deadline', async () => {
+    vi.useFakeTimers();
+    const expectedBy = Date.now() + 20 * 60_000;
+    const { dockerService, service, operation } = gatedService(() => deployment(1, 0, expectedBy));
+    const update = service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'));
+
+    await vi.waitFor(() => expect(operation()).toMatchObject({ waitDeadline: new Date(expectedBy).toISOString() }));
+    await vi.advanceTimersByTimeAsync(15 * 60_000);
+    expect(dockerService.runOneShot).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await update;
+    expect(dockerService.runDetached).toHaveBeenCalledOnce();
+  });
+
+  it('accepts orchestration work again when the update fails after the wait', async () => {
+    const { dockerService, service, source, operation } = gatedService(() => deployment(0));
+    dockerService.runOneShot.mockResolvedValueOnce({ exitCode: 1, output: 'migration failed' });
+
+    await expect(
+      service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'))
+    ).rejects.toThrow('migration failed');
+    expect(source.setOrchestrationAdmissionHold).toHaveBeenLastCalledWith(null);
+    expect(operation()).toBeNull();
+    expect(service.isGatewayUpdateInProgress()).toBe(false);
+  });
+
+  it('does not wait for a private core that cannot report its operations', async () => {
+    const { dockerService, service } = gatedService(() => null);
+
+    await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'));
+    expect(dockerService.runDetached).toHaveBeenCalledOnce();
   });
 });
 

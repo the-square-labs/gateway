@@ -120,7 +120,28 @@ export interface CommercialLifecycle {
   close(deadline: number): Promise<void>;
 }
 
+/** One kind of orchestration work that a Gateway restart would interrupt. */
+export interface CommercialOrchestrationActivity {
+  kind: string;
+  /** Short plural label, e.g. "Blue/green deployments". */
+  label: string;
+  /** Executing now, in this process or on a node. */
+  running: number;
+  /** Accepted and executed without a new request, e.g. a slot drain due later. */
+  queued: number;
+  /** Epoch ms by which the known work of this kind should have finished. */
+  expectedBy?: number | null;
+}
+
+/** Optional: cores older than the update gate omit it. */
+export interface CommercialOrchestration {
+  activeOperations(): Promise<CommercialOrchestrationActivity[]>;
+  /** A reason refuses new orchestration operations with it; null accepts them again. */
+  setAdmissionHold(reason: string | null): void;
+}
+
 export interface CommercialRegistration {
+  orchestration?: CommercialOrchestration;
   createRegistryIngress?(
     Base: typeof RelayRegistryIngressService,
     args: ConstructorParameters<typeof RelayRegistryIngressService>,

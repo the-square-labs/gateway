@@ -82,4 +82,25 @@ describe('commercial lifecycle', () => {
     };
     await expect(CommercialEditionRuntime.register(pkg, {} as CommercialHost)).rejects.toThrow('registration failed');
   });
+
+  it('reports and holds orchestration work only for cores that support it', async () => {
+    const community = CommercialEditionRuntime.community();
+    await expect(community.activeOrchestrationOperations()).resolves.toBeNull();
+    expect(community.setOrchestrationAdmissionHold('Gateway is updating')).toBe(false);
+
+    const older = await CommercialEditionRuntime.register(loaded({}), {} as CommercialHost);
+    await expect(older.activeOrchestrationOperations()).resolves.toBeNull();
+    expect(older.setOrchestrationAdmissionHold('Gateway is updating')).toBe(false);
+
+    const activity = [{ kind: 'deployment', label: 'Blue/green deployment operations', running: 1, queued: 0 }];
+    const orchestration = {
+      activeOperations: vi.fn(async () => activity),
+      setAdmissionHold: vi.fn(),
+    };
+    const current = await CommercialEditionRuntime.register(loaded({ orchestration }), {} as CommercialHost);
+    await expect(current.activeOrchestrationOperations()).resolves.toEqual(activity);
+    expect(current.setOrchestrationAdmissionHold('Gateway is updating')).toBe(true);
+    expect(current.setOrchestrationAdmissionHold(null)).toBe(true);
+    expect(orchestration.setAdmissionHold.mock.calls).toEqual([['Gateway is updating'], [null]]);
+  });
 });

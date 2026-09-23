@@ -1,5 +1,5 @@
-import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
-import { useEffect, useState } from "react";
+import { AlertTriangle, Loader2, RotateCw, XCircle } from "lucide-react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   isGatewayUpdateTargetVersion,
@@ -8,8 +8,11 @@ import {
   reloadGatewayClient,
   subscribeGatewayReload,
 } from "@/lib/gateway-update-reload";
+import { formatDateTime } from "@/lib/utils";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
+import type { GatewayUpdateOperation } from "@/types";
 
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
@@ -133,7 +136,15 @@ interface GatewayHealthSnapshot {
   version?: string | null;
 }
 
-function UpdateOperationScreen({ title, description }: { title: string; description: string }) {
+function UpdateOperationScreen({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children?: ReactNode;
+}) {
   return (
     <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
       <div className="w-full max-w-sm text-center">
@@ -142,6 +153,7 @@ function UpdateOperationScreen({ title, description }: { title: string; descript
         </div>
         <h2 className="m-0 text-lg font-semibold leading-[1.4]">{title}</h2>
         <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">{description}</p>
+        {children}
         <div className="mt-7 text-xs text-[#71717a]">
           Powered by{" "}
           <a
@@ -167,8 +179,68 @@ export function buildGatewayRestartTargetUrl(targetBase: string, currentHref: st
   return target.toString();
 }
 
+/** The update waits for running orchestration operations before it restarts Gateway. */
+function GatewayUpdateWaitingScreen({ operation }: { operation: GatewayUpdateOperation }) {
+  const canUpdate = useAuthStore((state) => state.hasScope("admin:update"));
+  const proceedWithUpdate = useUpdateStore((state) => state.proceedWithUpdate);
+  const [proceeding, setProceeding] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleProceed = async () => {
+    setProceeding(true);
+    setError(null);
+    try {
+      await proceedWithUpdate();
+    } catch (proceedError) {
+      setError(
+        proceedError instanceof Error ? proceedError.message : "The update could not be started"
+      );
+      setProceeding(false);
+    }
+  };
+
+  return (
+    <UpdateOperationScreen
+      title="Waiting to update Gateway"
+      description={`Gateway updates to ${operation.targetVersion} as soon as running operations finish${
+        operation.waitDeadline ? `, at the latest at ${formatDateTime(operation.waitDeadline)}` : ""
+      }. New deployments and other operations are paused until then.`}
+    >
+      <ul
+        aria-label="Running operations"
+        className="mt-5 divide-y divide-[#27272a] border border-[#27272a] text-left text-sm"
+      >
+        {operation.operations.map((item) => (
+          <li key={item.kind} className="flex items-center justify-between gap-4 px-3 py-2">
+            <span className="text-[#d4d4d8]">{item.label}</span>
+            <span className="font-medium tabular-nums text-[#f4f4f5]">{item.count}</span>
+          </li>
+        ))}
+      </ul>
+      {canUpdate && (
+        <div className="mt-5 space-y-2">
+          <Button className="w-full" onClick={handleProceed} disabled={proceeding}>
+            {proceeding && <Loader2 className="animate-spin" />}
+            Update now
+          </Button>
+          <p className="text-xs leading-[1.5] text-[#71717a]">
+            Updating now interrupts these operations. Gateway resumes or reconciles them after the
+            restart.
+          </p>
+          {error && (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </UpdateOperationScreen>
+  );
+}
+
 function GatewayOperationScreen() {
   const updatingActive = useAppStatusStore((s) => s.gatewayUpdatingActive);
+  const gatewayOperation = useUpdateStore((state) => state.status?.gatewayOperation ?? null);
   const targetVersion = useAppStatusStore((s) => s.gatewayUpdatingTargetVersion);
   const restartTargetUrl = useAppStatusStore((s) => s.gatewayRestartTargetUrl);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
@@ -293,6 +365,15 @@ function GatewayOperationScreen() {
     targetVersion,
     updatingActive,
   ]);
+
+  // The server reports whether the accepted update still waits for operations.
+  useEffect(() => {
+    if (updatingActive) void useUpdateStore.getState().fetchStatus();
+  }, [updatingActive]);
+
+  if (updatingActive && gatewayOperation?.status === "waiting_for_operations") {
+    return <GatewayUpdateWaitingScreen operation={gatewayOperation} />;
+  }
 
   return (
     <UpdateOperationScreen

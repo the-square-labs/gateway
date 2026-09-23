@@ -21,6 +21,7 @@ import {
   daemonUpdatesRoute,
   performRelayUpdateRoute,
   performSystemUpdateRoute,
+  proceedSystemUpdateRoute,
   releaseNotesForVersionRoute,
   releaseNotesRoute,
   systemConfigRoute,
@@ -143,6 +144,9 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
 
   const updateService = container.resolve(UpdateService);
   const eventBus = container.resolve(EventBusService);
+  if (updateService.isGatewayUpdateInProgress()) {
+    return c.json({ code: 'UPDATE_IN_PROGRESS', message: 'A Gateway update is already in progress' }, 409);
+  }
 
   // Verify update is actually available and version matches
   const status = await updateService.getCachedStatus();
@@ -163,6 +167,8 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
   });
   setTimeout(() => {
     updateService.performUpdate(version, artifact).catch((err) => {
+      // A concurrent request lost the race; the accepted update keeps running.
+      if (err instanceof AppError && err.code === 'UPDATE_IN_PROGRESS') return;
       eventBus.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion: version });
       logger.error('Update failed', {
         error: err instanceof Error ? err.message : String(err),
@@ -172,6 +178,18 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
   }, 500);
 
   return c.json({ data: { status: 'updating', targetVersion: version } });
+});
+
+// POST /update/proceed — stop waiting for running orchestration operations (admin only)
+systemRoutes.openapi({ ...proceedSystemUpdateRoute, middleware: sessionOnly }, async (c) => {
+  const forbidden = requireUpdateScope(c);
+  if (forbidden) return forbidden;
+  const updateService = container.resolve(UpdateService);
+  if (!updateService.proceedWithoutWaiting()) {
+    return c.json({ code: 'UPDATE_NOT_WAITING', message: 'No Gateway update is waiting for running operations' }, 409);
+  }
+  logger.warn('Gateway update proceeds without waiting for running operations', { userId: c.get('user')?.id });
+  return c.json({ data: { status: 'updating' } });
 });
 
 systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, async (c) => {

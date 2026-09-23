@@ -7,6 +7,7 @@ function hooks(overrides: Partial<ShutdownHooks> = {}): ShutdownHooks {
     freezeStatusPage: vi.fn().mockResolvedValue(undefined),
     quiesce: vi.fn().mockResolvedValue(undefined),
     drainUserWork: vi.fn().mockResolvedValue(undefined),
+    drainOrchestration: vi.fn().mockResolvedValue(0),
     forceCloseUserWork: vi.fn().mockResolvedValue(undefined),
     closeLogging: vi.fn().mockResolvedValue(undefined),
     closeHttp: vi.fn().mockResolvedValue(undefined),
@@ -115,6 +116,35 @@ describe('ShutdownCoordinator', () => {
 
     expect(lifecycleHooks.finalize).toHaveBeenCalledOnce();
     expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it('waits for running orchestration work within the user drain deadline', async () => {
+    vi.useFakeTimers();
+    let finishOperations!: (remaining: number) => void;
+    const operations = new Promise<number>((resolve) => (finishOperations = resolve));
+    const lifecycleHooks = hooks({ drainOrchestration: vi.fn(() => operations) });
+    const coordinator = new ShutdownCoordinator({
+      lifecycle: new GatewayLifecycleService(),
+      getSettings: () => ({
+        userRequestDrainSeconds: 10,
+        structuredLogDrainSeconds: 0,
+        finalizationTimeoutSeconds: 5,
+      }),
+      hooks: lifecycleHooks,
+      exit: vi.fn(),
+    });
+
+    const startedAt = Date.now();
+    const stopping = coordinator.request('SIGTERM');
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(lifecycleHooks.drainOrchestration).toHaveBeenCalledWith(startedAt + 10_000);
+    // User work is only force-closed once running operations finished.
+    expect(lifecycleHooks.forceCloseUserWork).not.toHaveBeenCalled();
+
+    finishOperations(0);
+    await stopping;
+    expect(lifecycleHooks.forceCloseUserWork).toHaveBeenCalledOnce();
+    expect(lifecycleHooks.finalize).toHaveBeenCalledOnce();
   });
 
   it('bounds the dependency barrier and reports unresolved drain work', async () => {

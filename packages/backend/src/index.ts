@@ -51,6 +51,7 @@ import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
+import { waitForOrchestrationIdle } from '@/services/orchestration-activity.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { RelayPolicyService } from '@/services/relay-policy.service.js';
@@ -272,6 +273,10 @@ async function main() {
             commercialEdition.drain(deadline),
             container.resolve(AIRunService).waitForIdle(deadline),
           ]);
+        },
+        drainOrchestration: async (deadline) => {
+          const result = await waitForOrchestrationIdle(commercialEdition, { scope: 'running', deadline });
+          return result.operations.reduce((total, operation) => total + operation.count, 0);
         },
         forceCloseUserWork: async () => {
           forceUserPromise ??= Promise.all([

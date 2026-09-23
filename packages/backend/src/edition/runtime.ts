@@ -67,6 +67,7 @@ import type { User } from '@/types.js';
 import type {
   CommercialEditionStatus,
   CommercialHost,
+  CommercialOrchestrationActivity,
   CommercialRegistration,
   CommercialRouteHost,
 } from './contract.js';
@@ -447,6 +448,21 @@ export class CommercialEditionRuntime {
     if (this.jobsRegistered) throw new Error('Commercial jobs are already registered');
     this.jobsRegistered = true;
     this.registration.registerJobs?.(scheduler);
+  }
+
+  /** Null when the installed core cannot report its orchestration work. */
+  async activeOrchestrationOperations(): Promise<CommercialOrchestrationActivity[] | null> {
+    const orchestration = this.registration.orchestration;
+    if (typeof orchestration?.activeOperations !== 'function') return null;
+    return orchestration.activeOperations();
+  }
+
+  /** Returns false when the installed core cannot hold new orchestration work. */
+  setOrchestrationAdmissionHold(reason: string | null): boolean {
+    const orchestration = this.registration.orchestration;
+    if (typeof orchestration?.setAdmissionHold !== 'function') return false;
+    orchestration.setAdmissionHold(reason);
+    return true;
   }
 
   start(): Promise<void> {

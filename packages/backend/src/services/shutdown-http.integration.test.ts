@@ -88,6 +88,7 @@ describe('graceful shutdown HTTP integration', () => {
           phaseEvents.push('producers_stopped');
         },
         drainUserWork: () => userDrain,
+        drainOrchestration: async () => 0,
         forceCloseUserWork: async () => {
           phaseEvents.push('user_forced');
         },

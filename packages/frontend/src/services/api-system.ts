@@ -81,6 +81,13 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    /** Update now instead of waiting for running orchestration operations. */
+    async proceedWithUpdate(): Promise<{ status: string }> {
+      return this.unwrapData(
+        this.request<{ data: { status: string } }>("/system/update/proceed", { method: "POST" })
+      );
+    }
+
     async triggerRelayUpdate(version: string): Promise<{ status: string; targetVersion: string }> {
       return this.unwrapData(
         this.request<{ data: { status: string; targetVersion: string } }>("/system/relay-update", {

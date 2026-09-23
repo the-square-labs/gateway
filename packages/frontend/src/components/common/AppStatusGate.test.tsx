@@ -1,7 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
+import type { UpdateStatus } from "@/types";
 import {
   AppStatusGate,
   buildGatewayRestartTargetUrl,
@@ -67,6 +69,103 @@ describe("gateway update version matching", () => {
     expect(
       screen.getByText("Gateway is updating to v2.5.0.", { exact: false })
     ).toBeInTheDocument();
+  });
+
+  describe("while the update waits for running operations", () => {
+    const { fetchStatus, proceedWithUpdate } = useUpdateStore.getState();
+    const { hasScope } = useAuthStore.getState();
+    afterEach(() => {
+      useUpdateStore.setState({ fetchStatus, proceedWithUpdate });
+      useAuthStore.setState({ hasScope });
+    });
+
+    const status = (gatewayStatus: "waiting_for_operations" | "updating"): UpdateStatus => ({
+      currentVersion: "v2.4.0",
+      latestVersion: "v2.5.0",
+      updateAvailable: true,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.4.0",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+      gatewayOperation: {
+        status: gatewayStatus,
+        targetVersion: "v2.5.0",
+        startedAt: "2026-09-23T12:00:00.000Z",
+        waitDeadline:
+          gatewayStatus === "waiting_for_operations" ? "2026-09-23T12:15:00.000Z" : null,
+        operations:
+          gatewayStatus === "waiting_for_operations"
+            ? [
+                { kind: "deployment", label: "Blue/green deployment operations", count: 2 },
+                { kind: "availability", label: "Availability operations", count: 1 },
+              ]
+            : [],
+      },
+    });
+
+    function renderWaiting(options: {
+      canUpdate: boolean;
+      gatewayStatus?: "waiting_for_operations" | "updating";
+    }) {
+      const proceedWithUpdate = vi.fn().mockResolvedValue(undefined);
+      useAppStatusStore.setState({
+        gatewayUpdatingActive: true,
+        gatewayUpdatingTargetVersion: "v2.5.0",
+      });
+      useUpdateStore.setState({
+        status: status(options.gatewayStatus ?? "waiting_for_operations"),
+        fetchStatus: vi.fn().mockResolvedValue(undefined),
+        proceedWithUpdate,
+      });
+      useAuthStore.setState({
+        hasScope: (scope: string) => options.canUpdate && scope === "admin:update",
+      });
+      render(<AppStatusGate />);
+      return { proceedWithUpdate };
+    }
+
+    it("lists what the update waits for and lets an admin update now", async () => {
+      const { proceedWithUpdate } = renderWaiting({ canUpdate: true });
+
+      expect(
+        screen.getByRole("heading", { name: "Waiting to update Gateway" })
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Gateway updates to v2.5.0 as soon as running operations finish", {
+          exact: false,
+        })
+      ).toBeInTheDocument();
+      const operations = within(screen.getByRole("list", { name: "Running operations" }));
+      expect(operations.getByText("Blue/green deployment operations")).toBeInTheDocument();
+      expect(operations.getByText("2")).toBeInTheDocument();
+      expect(operations.getByText("Availability operations")).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Update now" }));
+      await waitFor(() => expect(proceedWithUpdate).toHaveBeenCalledOnce());
+    });
+
+    it("does not offer to update now without the update permission", () => {
+      renderWaiting({ canUpdate: false });
+
+      expect(
+        screen.getByRole("heading", { name: "Waiting to update Gateway" })
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Update now" })).not.toBeInTheDocument();
+    });
+
+    it("returns to the update screen once the wait is over", () => {
+      renderWaiting({ canUpdate: true, gatewayStatus: "updating" });
+
+      expect(screen.getByRole("heading", { name: "Updating Gateway" })).toBeInTheDocument();
+      expect(screen.queryByRole("list", { name: "Running operations" })).not.toBeInTheDocument();
+    });
   });
 
   it("uses the shared operation screen for a server-restored Relay update", () => {
