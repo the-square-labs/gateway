@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -196,10 +197,126 @@ func TestDeploymentRemovalContainerMatchesAvailabilityOwnership(t *testing.T) {
 		t.Fatal("fully matched legacy managed deployment container should be removable")
 	}
 	legacy.Image = "registry/app@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	if deploymentRemovalContainerMatches(legacy, dep, "app", "blue", false) {
-		t.Fatal("legacy image mismatch should require an explicitly forced owned-runtime cleanup")
+	if !deploymentRemovalContainerMatches(legacy, dep, "app", "blue", false) {
+		t.Fatal("labels prove ownership of a managed deployment container whatever image it runs")
 	}
 	if !deploymentRemovalContainerMatches(legacy, dep, "app", "blue", true) {
 		t.Fatal("forced cleanup should recover an exact managed deployment identity after a partial rollout")
+	}
+	otherSlot := legacy
+	if deploymentRemovalContainerMatches(otherSlot, dep, "app", "green", false) {
+		t.Fatal("a container labelled for another slot must not match")
+	}
+	otherDeployment := legacy
+	otherDeployment.Labels = map[string]string{
+		deploymentIDLabel:      "deployment-2",
+		deploymentManagedLabel: "true",
+		deploymentRoleLabel:    "app",
+		deploymentSlotLabel:    "blue",
+	}
+	if deploymentRemovalContainerMatches(otherDeployment, dep, "app", "blue", false) {
+		t.Fatal("a container of another deployment must not match")
+	}
+	unmanaged := legacy
+	unmanaged.Labels = map[string]string{deploymentIDLabel: dep.ID, deploymentRoleLabel: "app", deploymentSlotLabel: "blue"}
+	if deploymentRemovalContainerMatches(unmanaged, dep, "app", "blue", false) {
+		t.Fatal("a container without the managed label must not match")
+	}
+}
+
+// TestRemoveDeploymentAfterImageChange reproduces create (v1) → deploy (v2) →
+// delete: the standby slot still runs v1 and the router a differently
+// spelled nginx image.
+func TestRemoveDeploymentAfterImageChange(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-blue", Image: "registry.example/app:v1", Labels: deploymentLabels("app", "blue")})
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-green", Image: "registry.example/app:v2", Running: true, Labels: deploymentLabels("app", "green")})
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-router", Image: "docker.io/library/nginx:alpine", Running: true, Labels: deploymentLabels("router", "")})
+	unrelated := engine.addContainer(&fakeContainer{Name: "unrelated", Image: "registry.example/app:v1"})
+
+	if err := client.RemoveDeployment(context.Background(), deploymentCommandPayload{Deployment: testDeploymentSnapshot("green")}); err != nil {
+		t.Fatalf("remove deployment: %v", err)
+	}
+	for _, name := range []string{"gwdep-dep-1-blue", "gwdep-dep-1-green", "gwdep-dep-1-router"} {
+		if engine.byName(name) != nil {
+			t.Fatalf("%s was not removed", name)
+		}
+	}
+	if engine.byName("unrelated") != unrelated {
+		t.Fatal("an unrelated container was removed")
+	}
+}
+
+func TestRemoveDeploymentRefusesUnownedContainer(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-blue", Image: "registry.example/app:v2", Labels: deploymentLabels("app", "blue")})
+	engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-green", Image: "registry.example/app:v2"})
+
+	err := client.RemoveDeployment(context.Background(), deploymentCommandPayload{Deployment: testDeploymentSnapshot("blue")})
+	if err == nil || !strings.Contains(err.Error(), "ownership does not match") {
+		t.Fatalf("remove error = %v, want an ownership error", err)
+	}
+	if engine.byName("gwdep-dep-1-blue") == nil || engine.byName("gwdep-dep-1-green") == nil {
+		t.Fatal("nothing may be removed when one target is not owned")
+	}
+}
+
+// TestCreateDeploymentReplacesOwnedLeftovers retries a create whose first
+// attempt failed after creating the blue slot and the router.
+func TestCreateDeploymentReplacesOwnedLeftovers(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	leftoverBlue := engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-blue", Image: "registry.example/app:v2", Running: true, Labels: deploymentLabels("app", "blue")})
+	leftoverRouter := engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-router", Image: "nginx:alpine", Labels: deploymentLabels("router", "")})
+	unrelated := engine.addContainer(&fakeContainer{Name: "unrelated", Image: "registry.example/other:v1", Running: true})
+
+	_, err := client.CreateDeployment(context.Background(), testCreatePayload())
+	// The fake engine gives containers no address, so readiness is the first
+	// step that can fail; anything earlier (a name conflict) is the bug.
+	if err == nil || !strings.Contains(err.Error(), "deployment readiness timed out") {
+		t.Fatalf("create error = %v, want only the readiness timeout of the fake engine", err)
+	}
+	for _, name := range []string{"gwdep-dep-1-blue", "gwdep-dep-1-green", "gwdep-dep-1-router"} {
+		if engine.byName(name) == nil {
+			t.Fatalf("%s was not created", name)
+		}
+	}
+	if engine.byName("gwdep-dep-1-blue").ID == leftoverBlue.ID || engine.byName("gwdep-dep-1-router").ID == leftoverRouter.ID {
+		t.Fatal("leftover containers were not replaced")
+	}
+	if engine.byName("unrelated") != unrelated {
+		t.Fatal("an unrelated container was touched")
+	}
+}
+
+func TestCreateDeploymentRefusesUnownedNameCollision(t *testing.T) {
+	engine, client := newFakeDockerEngine(t)
+	leftover := engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-blue", Labels: deploymentLabels("app", "blue")})
+	foreign := engine.addContainer(&fakeContainer{Name: "gwdep-dep-1-green", Image: "someone/else:latest", Labels: map[string]string{deploymentIDLabel: "dep-1"}})
+
+	_, err := client.CreateDeployment(context.Background(), testCreatePayload())
+	if err == nil || !strings.Contains(err.Error(), `"gwdep-dep-1-green" is already used by a container that is not owned by deployment dep-1`) {
+		t.Fatalf("create error = %v, want a name collision error", err)
+	}
+	if engine.byName("gwdep-dep-1-green") != foreign || engine.byName("gwdep-dep-1-blue") != leftover {
+		t.Fatal("nothing may be removed when a target name is held by an unowned container")
+	}
+	if engine.countCalls("POST /containers/create") != 0 {
+		t.Fatal("no container may be created after a name collision")
+	}
+}
+
+func testCreatePayload() deploymentCommandPayload {
+	return deploymentCommandPayload{
+		DeploymentID: "dep-1",
+		ActiveSlot:   "blue",
+		RouterName:   "gwdep-dep-1-router",
+		RouterImage:  "nginx:alpine",
+		NetworkName:  "gwdep-dep-1",
+		Slots:        map[string]string{"blue": "gwdep-dep-1-blue", "green": "gwdep-dep-1-green"},
+		Routes:       testDeploymentRoutes,
+		Health:       deploymentHealthConfig{DeployTimeoutSeconds: 1, IntervalSeconds: 1},
+		DesiredConfig: deploymentDesiredConfig{
+			Image: "registry.example/app:v2",
+		},
 	}
 }

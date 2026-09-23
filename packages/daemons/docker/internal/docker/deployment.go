@@ -100,24 +100,42 @@ type deploymentCommandPayload struct {
 }
 
 type deploymentOperation struct {
-	generation uint64
-	cancel     context.CancelFunc
-	done       chan struct{}
+	cancel context.CancelFunc
+	done   chan struct{}
 }
 
+// deploymentLock serializes the mutating operations of one deployment. It is a
+// one-slot semaphore so that waiting for it can be cancelled.
+type deploymentLock struct {
+	slot chan struct{}
+	refs int
+}
+
+// beginDeploymentOperation registers a cancellable operation on a deployment.
+// Every registered operation, running or still waiting for the deployment
+// lock, is cancelled by an emergency kill.
 func (p *DockerPlugin) beginDeploymentOperation(deploymentID string) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.deploymentOpMu.Lock()
+	if p.deploymentOps == nil {
+		p.deploymentOps = make(map[string]map[uint64]deploymentOperation)
+	}
 	p.deploymentOpSeq++
 	generation := p.deploymentOpSeq
 	done := make(chan struct{})
-	p.deploymentOps[deploymentID] = deploymentOperation{generation: generation, cancel: cancel, done: done}
+	if p.deploymentOps[deploymentID] == nil {
+		p.deploymentOps[deploymentID] = make(map[uint64]deploymentOperation)
+	}
+	p.deploymentOps[deploymentID][generation] = deploymentOperation{cancel: cancel, done: done}
 	p.deploymentOpMu.Unlock()
 	return ctx, func() {
 		cancel()
 		p.deploymentOpMu.Lock()
-		if current, ok := p.deploymentOps[deploymentID]; ok && current.generation == generation {
-			delete(p.deploymentOps, deploymentID)
+		if operations := p.deploymentOps[deploymentID]; operations != nil {
+			delete(operations, generation)
+			if len(operations) == 0 {
+				delete(p.deploymentOps, deploymentID)
+			}
 		}
 		close(done)
 		p.deploymentOpMu.Unlock()
@@ -126,19 +144,60 @@ func (p *DockerPlugin) beginDeploymentOperation(deploymentID string) (context.Co
 
 func (p *DockerPlugin) cancelDeploymentOperationAndWait(deploymentID string, timeout time.Duration) bool {
 	p.deploymentOpMu.Lock()
-	operation, ok := p.deploymentOps[deploymentID]
-	p.deploymentOpMu.Unlock()
-	if !ok {
-		return true
+	operations := make([]deploymentOperation, 0, len(p.deploymentOps[deploymentID]))
+	for _, operation := range p.deploymentOps[deploymentID] {
+		operations = append(operations, operation)
 	}
-	operation.cancel()
+	p.deploymentOpMu.Unlock()
+	for _, operation := range operations {
+		operation.cancel()
+	}
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	for _, operation := range operations {
+		select {
+		case <-operation.done:
+		case <-timer.C:
+			return false
+		}
+	}
+	return true
+}
+
+// lockDeployment waits until no other mutating operation runs on the
+// deployment. The backend retries commands it timed out on, so without this a
+// retry could run next to the original, e.g. recreate the slot the router is
+// serving while a switch is still in progress.
+func (p *DockerPlugin) lockDeployment(ctx context.Context, deploymentID string) (func(), error) {
+	p.deploymentOpMu.Lock()
+	if p.deploymentLocks == nil {
+		p.deploymentLocks = make(map[string]*deploymentLock)
+	}
+	lock := p.deploymentLocks[deploymentID]
+	if lock == nil {
+		lock = &deploymentLock{slot: make(chan struct{}, 1)}
+		p.deploymentLocks[deploymentID] = lock
+	}
+	lock.refs++
+	p.deploymentOpMu.Unlock()
+
+	release := func(held bool) {
+		if held {
+			<-lock.slot
+		}
+		p.deploymentOpMu.Lock()
+		lock.refs--
+		if lock.refs == 0 && p.deploymentLocks[deploymentID] == lock {
+			delete(p.deploymentLocks, deploymentID)
+		}
+		p.deploymentOpMu.Unlock()
+	}
 	select {
-	case <-operation.done:
-		return true
-	case <-timer.C:
-		return false
+	case lock.slot <- struct{}{}:
+		return func() { release(true) }, nil
+	case <-ctx.Done():
+		release(false)
+		return nil, ctx.Err()
 	}
 }
 
@@ -168,17 +227,37 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	}
 
 	ctx := context.Background()
-	finishOperation := func() {}
-	if cmd.Action == "kill" {
+	switch cmd.Action {
+	case "inspect":
+	case "kill":
+		// Cancel the running operation and every one queued behind it, then
+		// take the deployment lock so nothing interleaves with the kill.
 		if !p.cancelDeploymentOperationAndWait(payload.DeploymentID, emergencyKillCancellationTimeout) {
 			result.Success = false
 			result.Error = "timed out cancelling the active deployment operation"
 			return
 		}
-	} else if cmd.Action != "inspect" {
+		lockCtx, cancelLock := context.WithTimeout(ctx, emergencyKillCancellationTimeout)
+		unlock, err := p.lockDeployment(lockCtx, payload.DeploymentID)
+		cancelLock()
+		if err != nil {
+			result.Success = false
+			result.Error = "timed out waiting for the active deployment operation to stop"
+			return
+		}
+		defer unlock()
+	default:
+		var finishOperation func()
 		ctx, finishOperation = p.beginDeploymentOperation(payload.DeploymentID)
+		defer finishOperation()
+		unlock, err := p.lockDeployment(ctx, payload.DeploymentID)
+		if err != nil {
+			result.Success = false
+			result.Error = fmt.Sprintf("deployment %s action cancelled while waiting for another operation on the deployment: %v", cmd.Action, err)
+			return
+		}
+		defer unlock()
 	}
-	defer finishOperation()
 
 	var detail any
 	var err error
@@ -224,9 +303,47 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	}
 }
 
+// removeLeftoverDeploymentContainers makes a retried create idempotent. It
+// removes every container an earlier, partially failed attempt left behind,
+// proven to belong to this deployment by its managed and id labels. A container
+// without those labels that holds one of the target names is never removed:
+// the create fails instead, before anything is changed.
+func (c *Client) removeLeftoverDeploymentContainers(ctx context.Context, deploymentID string, names []string) error {
+	containers, err := c.ListContainers(ctx)
+	if err != nil {
+		return err
+	}
+	targets := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if name != "" {
+			targets[name] = struct{}{}
+		}
+	}
+	var leftovers []ContainerInfo
+	for _, ctr := range containers {
+		if deploymentContainerLabelsOwned(ctr.Labels, deploymentID) {
+			leftovers = append(leftovers, ctr)
+			continue
+		}
+		if _, collides := targets[ctr.Name]; collides {
+			return fmt.Errorf("deployment container name %q is already used by a container that is not owned by deployment %s; remove or rename that container and retry", ctr.Name, deploymentID)
+		}
+	}
+	for _, ctr := range leftovers {
+		target := ctr.ID
+		if target == "" {
+			target = ctr.Name
+		}
+		if err := c.removeContainerByName(ctx, target, true); err != nil {
+			return fmt.Errorf("remove leftover deployment container %q: %w", ctr.Name, err)
+		}
+	}
+	return nil
+}
+
 func (c *Client) CreateDeployment(ctx context.Context, payload deploymentCommandPayload) (map[string]string, error) {
 	if payload.RouterImage == "" {
-		payload.RouterImage = "nginx:alpine"
+		payload.RouterImage = defaultDeploymentRouterImage
 	}
 	if payload.ActiveSlot == "" {
 		payload.ActiveSlot = "blue"
@@ -244,6 +361,14 @@ func (c *Client) CreateDeployment(ctx context.Context, payload deploymentCommand
 	if err := c.pullImageIfNeeded(ctx, payload.RouterImage, ""); err != nil {
 		return nil, err
 	}
+	for _, slot := range []string{"blue", "green"} {
+		if payload.Slots[slot] == "" {
+			return nil, fmt.Errorf("%s slot container name is required", slot)
+		}
+	}
+	if err := c.removeLeftoverDeploymentContainers(ctx, payload.DeploymentID, []string{payload.Slots["blue"], payload.Slots["green"], payload.RouterName}); err != nil {
+		return nil, err
+	}
 	if err := c.ensureDeploymentNetwork(ctx, payload.NetworkName, payload.DeploymentID); err != nil {
 		return nil, err
 	}
@@ -251,9 +376,6 @@ func (c *Client) CreateDeployment(ctx context.Context, payload deploymentCommand
 	slotIDs := map[string]string{}
 	for _, slot := range []string{"blue", "green"} {
 		slotName := payload.Slots[slot]
-		if slotName == "" {
-			return nil, fmt.Errorf("%s slot container name is required", slot)
-		}
 		slotID, err := c.createDeploymentSlot(ctx, payload.DeploymentID, payload.NetworkName, slot, slotName, payload.DesiredConfig, slot == payload.ActiveSlot, gpuSelection)
 		if err != nil {
 			return nil, err
@@ -419,6 +541,9 @@ func (c *Client) StopDeploymentSlot(ctx context.Context, payload deploymentComma
 
 func (c *Client) StartDeployment(ctx context.Context, payload deploymentCommandPayload) (map[string]string, error) {
 	dep := payload.Deployment
+	if dep.ID == "" {
+		dep.ID = payload.DeploymentID
+	}
 	slotName := dep.slotName(dep.ActiveSlot)
 	if slotName == "" {
 		return nil, fmt.Errorf("unknown deployment slot %q", dep.ActiveSlot)
@@ -435,7 +560,7 @@ func (c *Client) StartDeployment(ctx context.Context, payload deploymentCommandP
 			return nil, err
 		}
 	}
-	if _, err := c.ensureDeploymentContainerRunning(ctx, dep.RouterName); err != nil {
+	if _, err := c.ensureDeploymentRouterRunning(ctx, dep); err != nil {
 		return nil, err
 	}
 	if err := c.writeRouterConfig(ctx, dep.RouterName, renderDeploymentNginx(dep.Routes, dep.ActiveSlot)); err != nil {
@@ -462,6 +587,9 @@ func (c *Client) StopDeployment(ctx context.Context, payload deploymentCommandPa
 
 func (c *Client) RestartDeployment(ctx context.Context, payload deploymentCommandPayload) (map[string]string, error) {
 	dep := payload.Deployment
+	if dep.ID == "" {
+		dep.ID = payload.DeploymentID
+	}
 	slotName := dep.slotName(dep.ActiveSlot)
 	if slotName == "" {
 		return nil, fmt.Errorf("unknown deployment slot %q", dep.ActiveSlot)
@@ -477,7 +605,7 @@ func (c *Client) RestartDeployment(ctx context.Context, payload deploymentComman
 			return nil, err
 		}
 	}
-	routerID, err := c.ensureDeploymentContainerRunning(ctx, dep.RouterName)
+	routerID, err := c.ensureDeploymentRouterRunning(ctx, dep)
 	if err != nil {
 		return nil, err
 	}
@@ -616,11 +744,10 @@ func deploymentRemovalContainerMatches(container ContainerInfo, dep deploymentSn
 		}
 	}
 	if !hasAvailabilityIdentity {
-		expectedImage := dep.RouterImage
-		if role == "app" {
-			expectedImage = dep.DesiredConfig.Image
-		}
-		return expectedImage == "" || container.Image == expectedImage
+		// The managed, id, role and slot labels checked above prove ownership.
+		// The image is not compared: the standby slot keeps the previous image
+		// after a deploy or rollback, and tags move or gain registry prefixes.
+		return true
 	}
 	if role != "app" {
 		return false

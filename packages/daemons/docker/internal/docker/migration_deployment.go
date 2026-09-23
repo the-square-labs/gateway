@@ -4,14 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/moby/moby/api/types/container"
-	"github.com/moby/moby/api/types/network"
 	mobyclient "github.com/moby/moby/client"
 )
 
 func (c *Client) CreateDeploymentStopped(ctx context.Context, payload deploymentCommandPayload) (map[string]string, error) {
 	if payload.RouterImage == "" {
-		payload.RouterImage = "nginx:alpine"
+		payload.RouterImage = defaultDeploymentRouterImage
 	}
 	if payload.ActiveSlot == "" {
 		payload.ActiveSlot = "blue"
@@ -98,27 +96,11 @@ func (c *Client) existingMigrationDeploymentContainer(
 }
 
 func (c *Client) createStoppedDeploymentRouter(ctx context.Context, payload deploymentCommandPayload) (string, error) {
-	labels := map[string]string{
-		deploymentManagedLabel: "true", deploymentIDLabel: payload.DeploymentID, deploymentRoleLabel: "router",
+	options, err := deploymentRouterCreateOptions(payload, payload.ActiveSlot)
+	if err != nil {
+		return "", err
 	}
-	exposedPorts := make(network.PortSet)
-	portBindings := make(network.PortMap)
-	for _, route := range payload.Routes {
-		port, err := network.ParsePort(fmt.Sprintf("%d/tcp", route.HostPort))
-		if err != nil {
-			return "", fmt.Errorf("parse router port: %w", err)
-		}
-		exposedPorts[port] = struct{}{}
-		portBindings[port] = []network.PortBinding{{HostPort: fmt.Sprintf("%d", route.HostPort)}}
-	}
-	config := renderDeploymentNginx(payload.Routes, payload.ActiveSlot)
-	cmd := []string{"sh", "-c", "cat > /etc/nginx/conf.d/default.conf <<'EOF'\n" + config + "\nEOF\nnginx -g 'daemon off;'"}
-	resp, err := c.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config:           &container.Config{Image: payload.RouterImage, Cmd: cmd, Labels: labels, ExposedPorts: exposedPorts},
-		HostConfig:       &container.HostConfig{NetworkMode: container.NetworkMode(payload.NetworkName), PortBindings: portBindings},
-		NetworkingConfig: &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{payload.NetworkName: {}}},
-		Name:             payload.RouterName,
-	})
+	resp, err := c.cli.ContainerCreate(ctx, options)
 	if err != nil {
 		return "", fmt.Errorf("create stopped deployment router: %w", err)
 	}

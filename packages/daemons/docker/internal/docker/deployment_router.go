@@ -15,7 +15,56 @@ import (
 	mobyclient "github.com/moby/moby/client"
 )
 
-func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentCommandPayload, activeSlot string) (string, error) {
+const (
+	defaultDeploymentRouterImage = "nginx:alpine"
+	deploymentRouterConfigPath   = "/etc/nginx/conf.d/default.conf"
+	// deploymentRouterConfigMarker records that the router config was written
+	// at least once. The start command writes the creation-time config only
+	// while the marker is missing, so a restarted router (Stop→Start, Docker or
+	// node restart) keeps the last config written by writeRouterConfig instead
+	// of reverting to the slot that was active when the router was created.
+	deploymentRouterConfigMarker  = "/etc/nginx/conf.d/.wiolett-gateway-router-config"
+	deploymentRouterRestartPolicy = container.RestartPolicyUnlessStopped
+	// deploymentRouterResolver is Docker's embedded DNS server, reachable from
+	// every container attached to a user-defined network.
+	deploymentRouterResolver = "127.0.0.11"
+	// Reloading while nginx is still starting fails because the pid file does
+	// not exist yet; such a reload is retried for a short while.
+	deploymentRouterReloadAttempts = 10
+	deploymentRouterReloadBackoff  = 300 * time.Millisecond
+	deploymentRouterOutputLimit    = 1024 * 1024
+)
+
+// deploymentRouterCommand is the router's start command: it writes config only
+// on the very first start, then execs nginx in the foreground.
+func deploymentRouterCommand(config string) []string {
+	script := "if [ ! -f " + deploymentRouterConfigMarker + " ]; then\n" +
+		"cat > " + deploymentRouterConfigPath + " <<'EOF'\n" + config + "\nEOF\n" +
+		"touch " + deploymentRouterConfigMarker + "\n" +
+		"fi\n" +
+		"exec nginx -g 'daemon off;'"
+	return []string{"sh", "-c", script}
+}
+
+// deploymentRouterWriteScript replaces the router config and reloads nginx. A
+// config that nginx rejects is rolled back, so the file on disk (which is what
+// a restarted router serves) always matches the config nginx is running.
+func deploymentRouterWriteScript(config string) string {
+	return "conf=" + deploymentRouterConfigPath + "\n" +
+		"cat > \"$conf.next\" <<'EOF' || exit 1\n" + config + "\nEOF\n" +
+		"if [ -f \"$conf\" ]; then cp \"$conf\" \"$conf.prev\" || exit 1; fi\n" +
+		"mv \"$conf.next\" \"$conf\" || exit 1\n" +
+		"nginx -s reload\n" +
+		"status=$?\n" +
+		"if [ \"$status\" -ne 0 ]; then\n" +
+		"  if [ -f \"$conf.prev\" ]; then mv \"$conf.prev\" \"$conf\"; fi\n" +
+		"  exit \"$status\"\n" +
+		"fi\n" +
+		"rm -f \"$conf.prev\"\n" +
+		"touch " + deploymentRouterConfigMarker + " || :\n"
+}
+
+func deploymentRouterCreateOptions(payload deploymentCommandPayload, activeSlot string) (mobyclient.ContainerCreateOptions, error) {
 	labels := map[string]string{
 		deploymentManagedLabel: "true",
 		deploymentIDLabel:      payload.DeploymentID,
@@ -26,7 +75,7 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 	for _, route := range payload.Routes {
 		port, err := network.ParsePort(fmt.Sprintf("%d/tcp", route.HostPort))
 		if err != nil {
-			return "", fmt.Errorf("parse router port: %w", err)
+			return mobyclient.ContainerCreateOptions{}, fmt.Errorf("parse router port: %w", err)
 		}
 		exposedPorts[port] = struct{}{}
 		hostIP := strings.TrimSpace(route.HostIP)
@@ -35,29 +84,40 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 		}
 		parsedHostIP, err := netip.ParseAddr(hostIP)
 		if err != nil {
-			return "", fmt.Errorf("parse router host IP: %w", err)
+			return mobyclient.ContainerCreateOptions{}, fmt.Errorf("parse router host IP: %w", err)
 		}
 		portBindings[port] = []network.PortBinding{{HostIP: parsedHostIP, HostPort: fmt.Sprintf("%d", route.HostPort)}}
 	}
-	config := renderDeploymentNginx(payload.Routes, activeSlot)
-	cmd := []string{"sh", "-c", "cat > /etc/nginx/conf.d/default.conf <<'EOF'\n" + config + "\nEOF\nnginx -g 'daemon off;'"}
-	resp, err := c.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
+	image := payload.RouterImage
+	if image == "" {
+		image = defaultDeploymentRouterImage
+	}
+	return mobyclient.ContainerCreateOptions{
 		Config: &container.Config{
-			Image:        payload.RouterImage,
-			Cmd:          cmd,
+			Image:        image,
+			Cmd:          deploymentRouterCommand(renderDeploymentNginx(payload.Routes, activeSlot)),
 			Labels:       labels,
 			ExposedPorts: exposedPorts,
 		},
 		HostConfig: &container.HostConfig{
-			NetworkMode:  container.NetworkMode(payload.NetworkName),
-			PortBindings: portBindings,
-			SecurityOpt:  []string{"no-new-privileges:true"},
+			NetworkMode:   container.NetworkMode(payload.NetworkName),
+			PortBindings:  portBindings,
+			RestartPolicy: container.RestartPolicy{Name: deploymentRouterRestartPolicy},
+			SecurityOpt:   []string{"no-new-privileges:true"},
 		},
 		NetworkingConfig: &network.NetworkingConfig{
 			EndpointsConfig: map[string]*network.EndpointSettings{payload.NetworkName: {}},
 		},
 		Name: payload.RouterName,
-	})
+	}, nil
+}
+
+func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentCommandPayload, activeSlot string) (string, error) {
+	options, err := deploymentRouterCreateOptions(payload, activeSlot)
+	if err != nil {
+		return "", err
+	}
+	resp, err := c.cli.ContainerCreate(ctx, options)
 	if err != nil {
 		return "", fmt.Errorf("create deployment router: %w", err)
 	}
@@ -65,6 +125,59 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 		return "", fmt.Errorf("start deployment router: %w", err)
 	}
 	return resp.ID, nil
+}
+
+// ensureDeploymentRouterRunning makes sure the deployment router serves the
+// snapshot's active slot and routes. A running router is kept (the caller
+// rewrites its config). A stopped router is started only when it has the
+// current shape and ports; a router created by an older daemon would restart
+// with the slot baked into its command at creation time, so it is recreated
+// from the snapshot instead.
+func (c *Client) ensureDeploymentRouterRunning(ctx context.Context, dep deploymentSnapshot) (string, error) {
+	if dep.RouterName == "" {
+		return "", fmt.Errorf("router name is required")
+	}
+	inspect, err := c.cli.ContainerInspect(ctx, dep.RouterName, mobyclient.ContainerInspectOptions{})
+	switch {
+	case err == nil:
+		current := inspect.Container
+		if current.State != nil && current.State.Running {
+			return current.ID, nil
+		}
+		if !deploymentRouterContainerNeedsRecreate(current, dep.Routes) {
+			if _, err := c.cli.ContainerStart(ctx, dep.RouterName, mobyclient.ContainerStartOptions{}); err != nil {
+				return "", fmt.Errorf("start deployment container %s: %w", dep.RouterName, err)
+			}
+			return current.ID, nil
+		}
+		var labels map[string]string
+		if current.Config != nil {
+			labels = current.Config.Labels
+		}
+		if !deploymentContainerLabelsOwned(labels, dep.ID) || labels[deploymentRoleLabel] != "router" {
+			return "", fmt.Errorf("deployment router name %q is used by a container that is not owned by deployment %s", dep.RouterName, dep.ID)
+		}
+		if err := c.removeContainerByName(ctx, dep.RouterName, true); err != nil {
+			return "", fmt.Errorf("remove stale deployment router: %w", err)
+		}
+	case isNotFoundErr(err):
+	default:
+		return "", fmt.Errorf("inspect deployment container %s: %w", dep.RouterName, err)
+	}
+	payload := deploymentCommandPayload{
+		DeploymentID: dep.ID,
+		RouterName:   dep.RouterName,
+		RouterImage:  dep.RouterImage,
+		NetworkName:  dep.NetworkName,
+		Routes:       dep.Routes,
+	}
+	if payload.RouterImage == "" {
+		payload.RouterImage = defaultDeploymentRouterImage
+	}
+	if err := c.pullImageIfNeeded(ctx, payload.RouterImage, ""); err != nil {
+		return "", err
+	}
+	return c.createDeploymentRouter(ctx, payload, dep.ActiveSlot)
 }
 
 func (c *Client) deploymentRouterNeedsRecreate(ctx context.Context, routerName string, routes []deploymentRouteConfig) (bool, error) {
@@ -78,15 +191,24 @@ func (c *Client) deploymentRouterNeedsRecreate(ctx context.Context, routerName s
 		}
 		return false, fmt.Errorf("inspect deployment router: %w", err)
 	}
+	return deploymentRouterContainerNeedsRecreate(inspect.Container, routes), nil
+}
+
+// deploymentRouterContainerNeedsRecreate reports whether an existing router
+// must be replaced to serve routes: its published ports differ, or it was
+// created by an older daemon. Only the command shape is compared, never the
+// config it embeds, which legitimately goes stale after every slot switch.
+func deploymentRouterContainerNeedsRecreate(current container.InspectResponse, routes []deploymentRouteConfig) bool {
+	if !deploymentRouterHasCurrentShape(current) {
+		return true
+	}
 	actual := map[string]string{}
-	if inspect.Container.HostConfig != nil {
-		for port, bindings := range inspect.Container.HostConfig.PortBindings {
-			hostIP := "0.0.0.0"
-			if len(bindings) > 0 && bindings[0].HostIP.IsValid() {
-				hostIP = bindings[0].HostIP.String()
-			}
-			actual[port.String()] = hostIP
+	for port, bindings := range current.HostConfig.PortBindings {
+		hostIP := "0.0.0.0"
+		if len(bindings) > 0 && bindings[0].HostIP.IsValid() {
+			hostIP = bindings[0].HostIP.String()
 		}
+		actual[port.String()] = hostIP
 	}
 	desired := map[string]string{}
 	for _, route := range routes {
@@ -97,47 +219,97 @@ func (c *Client) deploymentRouterNeedsRecreate(ctx context.Context, routerName s
 		desired[fmt.Sprintf("%d/tcp", route.HostPort)] = hostIP
 	}
 	if len(actual) != len(desired) {
-		return true, nil
+		return true
 	}
 	for port, hostIP := range desired {
 		if actual[port] != hostIP {
-			return true, nil
+			return true
 		}
 	}
-	return false, nil
+	return false
+}
+
+// deploymentRouterHasCurrentShape reports whether a router keeps its last
+// written config across restarts and restarts with the Docker engine.
+func deploymentRouterHasCurrentShape(current container.InspectResponse) bool {
+	if current.Config == nil || current.HostConfig == nil {
+		return false
+	}
+	if current.HostConfig.RestartPolicy.Name != deploymentRouterRestartPolicy {
+		return false
+	}
+	script := strings.Join(current.Config.Cmd, " ")
+	return strings.Contains(script, "if [ ! -f "+deploymentRouterConfigMarker+" ]") &&
+		strings.Contains(script, "exec nginx -g 'daemon off;'")
+}
+
+func deploymentContainerLabelsOwned(labels map[string]string, deploymentID string) bool {
+	return deploymentID != "" && labels[deploymentManagedLabel] == "true" && labels[deploymentIDLabel] == deploymentID
 }
 
 func (c *Client) writeRouterConfig(ctx context.Context, routerName string, config string) error {
-	script := "cat > /etc/nginx/conf.d/default.conf <<'EOF'\n" + config + "\nEOF\nnginx -s reload"
+	script := deploymentRouterWriteScript(config)
+	for attempt := 1; ; attempt++ {
+		output, exitCode, err := c.runRouterScript(ctx, routerName, script)
+		if err != nil {
+			return err
+		}
+		if exitCode == 0 {
+			return nil
+		}
+		if attempt < deploymentRouterReloadAttempts && routerReloadNotReady(output) {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(deploymentRouterReloadBackoff):
+			}
+			continue
+		}
+		if output == "" {
+			output = fmt.Sprintf("exit code %d", exitCode)
+		}
+		return fmt.Errorf("reload router failed: %s", output)
+	}
+}
+
+// runRouterScript runs script in the router and returns its output, with the
+// Docker stream multiplexing removed, and its exit code.
+func (c *Client) runRouterScript(ctx context.Context, routerName, script string) (string, int, error) {
 	exec, err := c.cli.ExecCreate(ctx, routerName, mobyclient.ExecCreateOptions{
 		AttachStdout: true,
 		AttachStderr: true,
 		Cmd:          []string{"sh", "-c", script},
 	})
 	if err != nil {
-		return fmt.Errorf("create router reload exec: %w", err)
+		return "", 0, fmt.Errorf("create router reload exec: %w", err)
 	}
 	attach, err := c.cli.ExecAttach(ctx, exec.ID, mobyclient.ExecAttachOptions{})
 	if err != nil {
-		return fmt.Errorf("reload router: %w", err)
+		return "", 0, fmt.Errorf("reload router: %w", err)
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(attach.Reader, 1024*1024))
+	raw, readErr := io.ReadAll(io.LimitReader(attach.Reader, deploymentRouterOutputLimit))
 	attach.Close()
 	if readErr != nil {
-		return fmt.Errorf("read router reload output: %w", readErr)
+		return "", 0, fmt.Errorf("read router reload output: %w", readErr)
 	}
 	inspect, err := c.cli.ExecInspect(ctx, exec.ID, mobyclient.ExecInspectOptions{})
 	if err != nil {
-		return fmt.Errorf("inspect router reload exec: %w", err)
+		return "", 0, fmt.Errorf("inspect router reload exec: %w", err)
 	}
-	if inspect.ExitCode != 0 {
-		output := strings.TrimSpace(string(raw))
-		if output == "" {
-			output = fmt.Sprintf("exit code %d", inspect.ExitCode)
+	stdout, stderr := splitDockerExecOutput(raw)
+	var parts []string
+	for _, part := range [][]byte{stderr, stdout} {
+		if text := strings.TrimSpace(string(part)); text != "" {
+			parts = append(parts, text)
 		}
-		return fmt.Errorf("reload router failed: %s", output)
 	}
-	return nil
+	return strings.Join(parts, "\n"), inspect.ExitCode, nil
+}
+
+// routerReloadNotReady reports a reload that raced nginx startup: the master
+// process has not written its pid file yet.
+func routerReloadNotReady(output string) bool {
+	return strings.Contains(output, ".pid\" failed")
 }
 
 func (c *Client) waitDeploymentReady(ctx context.Context, networkName, containerName string, routes []deploymentRouteConfig, health deploymentHealthConfig) error {
@@ -308,8 +480,22 @@ func renderDeploymentNginx(routes []deploymentRouteConfig, activeSlot string) st
 	var b strings.Builder
 	b.WriteString("map $http_upgrade $connection_upgrade {\n  default upgrade;\n  '' close;\n}\n")
 	for _, route := range routes {
-		fmt.Fprintf(&b, "server {\n  listen %d;\n  location / {\n", route.HostPort)
-		fmt.Fprintf(&b, "    proxy_pass http://%s:%d;\n", activeSlot, route.ContainerPort)
+		fmt.Fprintf(&b, "server {\n  listen %d;\n", route.HostPort)
+		// The slot is resolved per request through Docker's embedded DNS rather
+		// than once at startup, so nginx starts and reloads even while the
+		// active slot container is stopped or not created yet.
+		fmt.Fprintf(&b, "  resolver %s valid=10s ipv6=off;\n", deploymentRouterResolver)
+		b.WriteString("  location / {\n")
+		fmt.Fprintf(&b, "    set $deployment_upstream %s:%d;\n", activeSlot, route.ContainerPort)
+		// Without a URI part, proxy_pass forwards the original request URI
+		// unchanged, exactly as the static http://slot:port form did. nginx
+		// drops the default proxy_redirect when proxy_pass uses variables, so
+		// it is spelled out to keep rewriting upstream Location headers.
+		b.WriteString("    proxy_pass http://$deployment_upstream;\n")
+		b.WriteString("    proxy_redirect http://$deployment_upstream/ /;\n")
+		// A crashed slot keeps its cached address until the resolver entry
+		// expires; fail fast instead of holding requests for the 60 s default.
+		b.WriteString("    proxy_connect_timeout 5s;\n")
 		b.WriteString("    proxy_http_version 1.1;\n")
 		b.WriteString("    proxy_set_header Host $host;\n")
 		b.WriteString("    proxy_set_header X-Real-IP $remote_addr;\n")

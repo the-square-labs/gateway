@@ -32,7 +32,8 @@ type DockerPlugin struct {
 	envStore                 *EnvStore
 	taskMgr                  *TaskManager
 	deploymentOpMu           sync.Mutex
-	deploymentOps            map[string]deploymentOperation
+	deploymentOps            map[string]map[uint64]deploymentOperation
+	deploymentLocks          map[string]*deploymentLock
 	deploymentOpSeq          uint64
 	registryMu               sync.RWMutex
 	registryCreds            map[string]string // registry URL -> base64-encoded auth
@@ -197,7 +198,7 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 
 	// Initialize task manager
 	p.taskMgr = NewTaskManager()
-	p.deploymentOps = make(map[string]deploymentOperation)
+	p.deploymentOps = make(map[string]map[uint64]deploymentOperation)
 	p.migrationStore, err = newMigrationArtifactStore(p.cfg.StateDir)
 	if err != nil {
 		return err
