@@ -125,6 +125,7 @@ function isTransitionStatus(status?: string | null) {
     status === "restarting" ||
     status === "killing" ||
     status === "removing" ||
+    status === "deleting" ||
     status === "rolling_back"
   );
 }
@@ -791,6 +792,16 @@ export function DockerDeploymentDetail({
   const serviceTransition = deployment?._transition;
   const unavailable = deployment?.availability === "unavailable";
   const serviceBusy = !!serviceTransition || isTransitionStatus(deployment?.status);
+  // A pending source deployment rests in `creating` until its first build and
+  // stays editable; any other busy state would overwrite a save when it ends.
+  const awaitingFirstSourceBuild =
+    deployment?.status === "creating" &&
+    !serviceTransition &&
+    deployment.slots.every((slot) => !slot.containerId && !slot.image);
+  const settingsBusyReason =
+    serviceBusy && !awaitingFirstSourceBuild
+      ? `Deployment is ${(serviceTransition ?? deployment?.status ?? "busy").replaceAll("_", " ")}; wait for it to finish`
+      : null;
   const serviceState =
     serviceTransition ??
     (deployment?.status === "ready"
@@ -1396,6 +1407,7 @@ export function DockerDeploymentDetail({
                 canEditMounts={canEditMounts}
                 availabilityManaged={Boolean(availabilityManaged)}
                 availabilitySourceImageReference={availabilityPolicy?.sourceImageReference}
+                busyReason={settingsBusyReason}
                 canManageWebhooks={canManageWebhooks}
                 runAction={runAction}
                 onAvailabilityDisableQueued={({ nodeSlug: survivorNodeSlug }) => {

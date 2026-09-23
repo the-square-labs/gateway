@@ -111,6 +111,7 @@ export function DeploymentSettings({
   runAction,
   onAvailabilityDisableQueued,
   availabilitySourceImageReference,
+  busyReason = null,
 }: {
   deployment: DockerDeployment;
   nodeId: string;
@@ -124,6 +125,8 @@ export function DeploymentSettings({
   runAction: (name: string, fn: () => Promise<void>) => Promise<void>;
   onAvailabilityDisableQueued?: (survivor: { nodeId: string; nodeSlug: string }) => void;
   availabilitySourceImageReference?: string | null;
+  /** Set while the server reports a running operation that would overwrite a save. */
+  busyReason?: string | null;
 }) {
   const initialEntrypoint = useMemo(
     () => ((deployment.desiredConfig as any).entrypoint ?? []).join(" "),
@@ -559,7 +562,7 @@ export function DeploymentSettings({
           runtimeValidationError={runtimeValidationError}
           runtimeFieldErrors={runtimeFieldErrors}
           hasRuntimeChanges={runtimeChanged}
-          liveLoading={!!action}
+          liveLoading={!!action || !!busyReason}
           onApply={() =>
             runAction("update-runtime", async () => {
               await api.updateDockerDeployment(nodeId, deployment.id, {
@@ -575,13 +578,14 @@ export function DeploymentSettings({
 
         <PanelShell
           title="Execution"
-          description="Saved to deployment configuration"
+          description={busyReason ?? "Saved to deployment configuration"}
           dirty={executionCardChanged}
           bodyClassName="divide-y divide-border"
           actions={
             <Button
               className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
-              disabled={!!action || !settingsChanged || !nextImage.trim()}
+              disabled={!!action || !!busyReason || !settingsChanged || !nextImage.trim()}
+              title={busyReason ?? undefined}
               onClick={() => {
                 if (
                   savedRuntimeProfile !== "secure" &&

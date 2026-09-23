@@ -457,6 +457,62 @@ describe("DockerDeploymentDetail", () => {
     });
   });
 
+  it.each([
+    { name: "a server-reported deploy", overrides: { status: "deploying" }, reason: /deploying/ },
+    {
+      name: "an in-flight rollback",
+      overrides: { _transition: "rolling_back" },
+      reason: /rolling back/,
+    },
+  ] as const)("blocks deployment settings saves during $name and says why", async ({
+    overrides,
+    reason,
+  }) => {
+    vi.spyOn(api, "getDockerDeployment").mockResolvedValue(makeDeployment(overrides));
+    vi.spyOn(api, "inspectContainer").mockResolvedValue({
+      State: { Status: "running", Running: true },
+    } as never);
+    const update = vi.spyOn(api, "updateDockerDeployment");
+
+    renderWithRouter(<DockerDeploymentDetail />, {
+      path: "/docker/deployments/:nodeId/:deploymentId/:tab",
+      route: "/docker/deployments/node-1/deployment-1/settings",
+    });
+
+    expect(await screen.findByText("Execution")).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue("server.js"), {
+      target: { value: "node worker.js" },
+    });
+    const save = screen.getByRole("button", { name: /^save$/i });
+    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute("title", expect.stringMatching(reason));
+    expect(screen.getByText(/wait for it to finish/)).toBeInTheDocument();
+    fireEvent.click(save);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("keeps settings editable while a pending source deployment waits for its first build", async () => {
+    const deployment = makeDeployment({ status: "creating" });
+    deployment.slots = deployment.slots.map((slot) => ({
+      ...slot,
+      containerId: null,
+      image: null,
+    }));
+    vi.spyOn(api, "getDockerDeployment").mockResolvedValue(deployment);
+
+    renderWithRouter(<DockerDeploymentDetail />, {
+      path: "/docker/deployments/:nodeId/:deploymentId/:tab",
+      route: "/docker/deployments/node-1/deployment-1/settings",
+    });
+
+    expect(await screen.findByText("Execution")).toBeInTheDocument();
+    fireEvent.change(screen.getByDisplayValue("server.js"), {
+      target: { value: "node worker.js" },
+    });
+    expect(screen.getByRole("button", { name: /^save$/i })).toBeEnabled();
+    expect(screen.getByText("Saved to deployment configuration")).toBeInTheDocument();
+  });
+
   it("shows the canonical Availability source image instead of the immutable runtime digest", async () => {
     const deployment = makeDeployment({
       desiredConfig: {
