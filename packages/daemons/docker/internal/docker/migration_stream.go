@@ -9,6 +9,7 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	gwstream "github.com/wiolett-industries/gateway/daemon-shared/stream"
 	"google.golang.org/grpc"
 )
 
@@ -272,6 +273,6 @@ func sendMigrationAck(stream pb.MigrationTransfer_TransferClient, incoming *migr
 
 func sendMigrationStreamError(stream pb.MigrationTransfer_TransferClient, migrationID, artifactID string, err error) error {
 	return stream.Send(&pb.MigrationTransferMessage{Payload: &pb.MigrationTransferMessage_Error{Error: &pb.MigrationArtifactError{
-		MigrationId: migrationID, ArtifactId: artifactID, Message: err.Error(),
+		MigrationId: migrationID, ArtifactId: artifactID, Message: gwstream.ValidUTF8(err.Error()),
 	}}})
 }
