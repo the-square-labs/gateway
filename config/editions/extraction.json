@@ -554,7 +554,8 @@
         "setImageCleanupService",
         "setMigrationGuard",
         "setAccessResourceService",
-        "setAvailabilityCoordinator"
+        "setAvailabilityCoordinator",
+        "setBuildRolloutGuard"
       ],
       "sharedMethods": [
         "list",
@@ -569,7 +570,8 @@
         "setDispatcher",
         "setEventBus",
         "setSnapshotReconciler",
-        "setAvailabilityCoordinator"
+        "setAvailabilityCoordinator",
+        "setBuildRolloutGuard"
       ],
       "sharedMethods": [
         "list",
