@@ -257,6 +257,21 @@ describe('known inference provider model catalog', () => {
     }
   });
 
+  it('knows Claude Opus 5.5 so discovery keeps its name, tool support and auto-compaction limit', () => {
+    expect(knownProviderModel('anthropic', 'claude-opus-5-5')).toMatchObject({
+      displayName: 'Claude Opus 5.5',
+      contextWindow: 1_000_000,
+      maxOutputTokens: 128_000,
+      capabilities: { reasoning: true, tools: true, vision: true },
+      pricing: {
+        inputMicrodollarsPerMillion: 5_000_000,
+        cachedInputMicrodollarsPerMillion: 500_000,
+        outputMicrodollarsPerMillion: 25_000_000,
+      },
+    });
+    expect(knownProviderModel('anthropic-apikey', 'claude-opus-5-5')?.autoCompactTokenLimit).toBeGreaterThan(0);
+  });
+
   it('maps dated OpenAI snapshots to the audited family defaults', () => {
     expect(knownProviderModel('openai-apikey', 'gpt-4o-2024-11-20')).toEqual(
       knownProviderModel('openai-apikey', 'gpt-4o')

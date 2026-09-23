@@ -204,6 +204,7 @@ const ANTHROPIC_MODELS: Record<string, KnownInferenceProviderModel> = {
   'claude-mythos-5-1': claudeModel('Claude Mythos 5.1', 1_000_000, 128_000, 10, 50, 0.25),
   'claude-fable-5': claudeModel('Claude Fable 5', 1_000_000, 128_000, 10, 50),
   'claude-mythos-5': claudeModel('Claude Mythos 5', 1_000_000, 128_000, 10, 50),
+  'claude-opus-5-5': claudeModel('Claude Opus 5.5', 1_000_000, 128_000, 5, 25),
   'claude-opus-5': claudeModel('Claude Opus 5', 1_000_000, 128_000, 5, 25),
   'claude-sonnet-5': claudeModel('Claude Sonnet 5', 1_000_000, 128_000, 2, 10),
   'claude-opus-4-8': claudeModel('Claude Opus 4.8', 1_000_000, 128_000, 5, 25),
