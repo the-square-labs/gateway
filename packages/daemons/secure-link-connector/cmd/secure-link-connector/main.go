@@ -47,7 +47,10 @@ func main() {
 		log.Fatalf("set control socket permissions: %v", err)
 	}
 
-	manager := newBindingManager(maxConnectorSessions, maxBindingSessions)
+	// Secure links carry long-lived traffic (WebSockets, database pools), so
+	// the connector never caps or times out sessions; nginx bounds the load
+	// and TCP keepalive clears dead peers.
+	manager := newBindingManager(0, 0)
 	go func() {
 		<-ctx.Done()
 		listener.Close()
