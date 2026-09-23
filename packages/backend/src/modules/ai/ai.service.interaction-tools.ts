@@ -224,7 +224,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         if (a.operation === 'renew') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
-          return this.sslService.renewCert(a.sslCertificateId, user.id);
+          return this.sslService.renewCert(a.sslCertificateId, user.id, user.email);
+        }
+        if (a.operation === 'cancel_acme') {
+          this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
+          await this.sslService.cancelPendingAcmeIssue(a.sslCertificateId, user.id);
+          return { success: true };
         }
         if (a.operation === 'verify_dns') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
@@ -240,6 +245,27 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           return { success: true };
         }
         throw new Error(`Unsupported SSL certificate operation: ${String(a.operation)}`);
+      }
+      // Same global admin repair permission as the TLS resync routes.
+      case 'resync_tls_distribution': {
+        this.ensureToolScope(user, 'admin:update');
+        if (a.target === 'route') {
+          const routeId = stringArg(a.routeId);
+          if (!routeId) throw new AppError(400, 'ROUTE_ID_REQUIRED', 'routeId is required for target route');
+          return this.proxyService.resyncTlsHost(routeId, user.id);
+        }
+        if (a.target === 'certificate') {
+          const certificateId = stringArg(a.sslCertificateId);
+          if (!certificateId) {
+            throw new AppError(
+              400,
+              'SSL_CERTIFICATE_ID_REQUIRED',
+              'sslCertificateId is required for target certificate'
+            );
+          }
+          return this.sslService.resyncDistribution(certificateId, user.id);
+        }
+        throw new Error(`Unsupported TLS resync target: ${String(a.target)}`);
       }
 
       // ── Raw Config ──

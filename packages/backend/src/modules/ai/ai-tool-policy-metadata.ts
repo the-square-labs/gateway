@@ -30,11 +30,16 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   }),
   manage_ssl_certificate: operationPolicies({
     read: ['get'],
-    update: ['upload', 'set_auto_renew'],
+    update: ['upload', 'set_auto_renew', 'cancel_acme'],
     external: ['renew', 'verify_dns'],
     delete: ['delete'],
   }),
-  manage_domain: operationPolicies({ read: ['get'], update: ['update'], external: ['check_dns'] }),
+  manage_domain: operationPolicies({
+    read: ['get', 'preview_ingress_migration'],
+    update: ['update'],
+    external: ['check_dns', 'issue_certificate'],
+    execute: ['migrate_ingress'],
+  }),
   manage_access_list: operationPolicies({ read: ['get'], update: ['update'] }),
   manage_node_config: operationPolicies({ read: ['read'], update: ['update'], external: ['test'] }),
   manage_node_file: operationPolicies({
@@ -54,9 +59,17 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   }),
   manage_system_updates: operationPolicies({
     read: ['get_gateway_status', 'list_daemon_updates'],
+    update: ['acknowledge_gateway_update_failure'],
     external: ['check_gateway', 'get_gateway_release_notes', 'check_daemon_updates'],
-    execute: ['perform_gateway_update', 'update_daemon'],
+    execute: [
+      'perform_gateway_update',
+      'proceed_gateway_update',
+      'perform_relay_update',
+      'abandon_relay_update',
+      'update_daemon',
+    ],
   }),
+  manage_system_alerts: operationPolicies({ read: ['list'], update: ['dismiss'] }),
   manage_docker_registry: operationPolicies({
     read: ['list', 'get'],
     create: ['create'],
@@ -64,7 +77,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     delete: ['delete'],
     external: ['test', 'test_direct'],
   }),
-  manage_docker_volume: operationPolicies({ create: ['create'], delete: ['delete'] }),
+  manage_docker_volume: operationPolicies({ create: ['create'], update: ['resize', 'adopt'], delete: ['delete'] }),
   manage_docker_network: operationPolicies({
     create: ['create'],
     delete: ['delete', 'disconnect'],
@@ -89,6 +102,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     execute: ['cancel', 'retry'],
   }),
   manage_docker_task: operationPolicies({ read: ['list', 'get'] }),
+  manage_docker_deployment: operationPolicies({ create: ['create'], update: ['update'], delete: ['delete'] }),
   manage_docker_container_config: operationPolicies({
     read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_webhook', 'get_health_check'],
     create: ['create_secret'],
@@ -224,7 +238,7 @@ const COMPOSITE_OPERATION_POLICIES: Record<
       read: ['list_policies', 'list_runs'],
       create: ['create_policy'],
       update: ['update_policy'],
-      delete: ['delete_policy'],
+      delete: ['delete_policy', 'delete_run'],
       destructive: ['run', 'cancel', 'restore'],
     }),
   },
@@ -237,7 +251,7 @@ const COMPOSITE_OPERATION_POLICIES: Record<
     operations: operationPolicies({
       read: ['list_buckets', 'list_objects', 'head', 'presign'],
       create: ['create_bucket', 'create_prefix'],
-      delete: ['delete_objects'],
+      delete: ['delete_bucket', 'delete_objects'],
     }),
   },
   manage_managed_storage: {
@@ -368,6 +382,7 @@ const PLANNING_SAFE_TOOL_NAMES = new Set([
   'list_docker_volumes',
   'list_domains',
   'list_groups',
+  'list_integration_connectors',
   'list_nodes',
   'list_routes',
   'list_resource_folders',

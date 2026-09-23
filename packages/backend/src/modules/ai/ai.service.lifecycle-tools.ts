@@ -3,7 +3,11 @@ import { container, TOKENS } from '@/container.js';
 import { nodes as nodesTable } from '@/db/schema/nodes.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import { IdParamSchema } from '@/lib/openapi.js';
 import { hasScope, hasScopeBase } from '@/lib/permissions.js';
+import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
+import { AppError } from '@/middleware/error-handler.js';
+import { AlertService } from '@/modules/audit/alert.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -40,18 +44,32 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
             if (!/^v?\d+\.\d+\.\d+$/.test(version)) throw new Error('version must be a semantic version');
             return { version, notes: await updateService.getReleaseNotes(version) };
           }
+          // The update operations mirror the /system update routes step for step.
           case 'perform_gateway_update': {
-            const version = String(a.version ?? '');
-            if (!/^v?\d+\.\d+\.\d+$/.test(version)) throw new Error('version must be a semantic version');
+            const version = releaseVersionArg(a.version);
+            if (updateService.isGatewayUpdateInProgress()) {
+              throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress');
+            }
+            // A running Relay Pool update refuses the Gateway update.
+            await updateService.assertGatewayUpdateAllowed();
             const status = await updateService.getCachedStatus();
             if (!status.updateAvailable) throw new Error('No gateway update is available');
             if (version !== status.latestVersion) throw new Error('Requested version does not match available update');
             const artifact = await updateService.prepareGatewayUpdate(version);
+            // A new attempt supersedes the report of a previous rolled-back one.
+            await updateService.acknowledgeGatewayUpdateFailure();
             const eventBus = container.resolve(EventBusService);
-            eventBus.publish('system.update.changed', { updating: true, targetVersion: version });
+            eventBus.publish('system.update.changed', { updating: true, component: 'gateway', targetVersion: version });
             setTimeout(() => {
-              updateService.performUpdate(version, artifact).catch((error) => {
-                eventBus.publish('system.update.changed', { updating: false, targetVersion: version });
+              updateService.performUpdate(version, artifact, user.id).catch((error) => {
+                // A concurrent request lost the race; the accepted update keeps running.
+                if (error instanceof AppError && error.code === 'UPDATE_IN_PROGRESS') return;
+                eventBus.publish('system.update.changed', {
+                  updating: false,
+                  component: 'gateway',
+                  targetVersion: version,
+                  ...(error instanceof AppError ? { error: error.message } : {}),
+                });
                 logger.error('Gateway update failed from AI tool', {
                   error: error instanceof Error ? error.message : String(error),
                   stack: error instanceof Error ? error.stack : undefined,
@@ -59,6 +77,74 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
               });
             }, 500);
             return { status: 'updating', targetVersion: version };
+          }
+          case 'proceed_gateway_update': {
+            if (!updateService.proceedWithoutWaiting()) {
+              throw new AppError(409, 'UPDATE_NOT_WAITING', 'No Gateway update is waiting for running operations');
+            }
+            logger.warn('Gateway update proceeds without waiting for running operations', { userId: user.id });
+            return { status: 'updating' };
+          }
+          case 'acknowledge_gateway_update_failure':
+            return { acknowledged: await updateService.acknowledgeGatewayUpdateFailure() };
+          case 'perform_relay_update': {
+            const version = releaseVersionArg(a.version);
+            if (updateService.isGatewayUpdateInProgress()) {
+              throw new AppError(
+                409,
+                'GATEWAY_UPDATE_IN_PROGRESS',
+                'Gateway is updating. Update the Relay Pool after the Gateway update has finished.'
+              );
+            }
+            const status = await updateService.getCachedStatus();
+            if (!status.relay.updateAvailable || !status.relay.latestVersion) {
+              throw new AppError(400, 'NO_UPDATE', 'No relay update available');
+            }
+            if (version !== status.relay.latestVersion) {
+              throw new AppError(400, 'VERSION_MISMATCH', 'Requested version does not match available relay update');
+            }
+            const artifact = await updateService.prepareRelayUpdate(version);
+            updateService.startRelayUpdate(version);
+            const eventBus = container.resolve(EventBusService);
+            eventBus.publish('system.update.changed', { updating: true, component: 'relay', targetVersion: version });
+            setTimeout(() => {
+              updateService
+                .performRelayUpdate(version, artifact, user.id)
+                .then(() => updateService.completeRelayUpdate())
+                .then(() => updateService.checkForUpdates())
+                .then(() => {
+                  eventBus.publish('system.update.changed', {
+                    updating: false,
+                    component: 'relay',
+                    targetVersion: version,
+                  });
+                })
+                .catch((error) => {
+                  updateService.failRelayUpdate(error);
+                  eventBus.publish('system.update.changed', {
+                    updating: false,
+                    component: 'relay',
+                    targetVersion: version,
+                  });
+                  logger.error('Relay update failed from AI tool', {
+                    error: error instanceof Error ? error.message : String(error),
+                    stack: error instanceof Error ? error.stack : undefined,
+                  });
+                });
+            }, 500);
+            return { status: 'updating', targetVersion: version };
+          }
+          case 'abandon_relay_update': {
+            const data = await updateService.abandonRelayUpdate(user.id);
+            const eventBus = container.resolve(EventBusService);
+            eventBus.publish('system.update.changed', {
+              updating: false,
+              component: 'relay',
+              targetVersion: data.targetVersion,
+              statusChanged: true,
+            });
+            eventBus.publish('system.relay.health.changed', { poolId: 'system', action: 'update_abandoned' });
+            return data;
           }
           case 'list_daemon_updates':
             return container.resolve(DaemonUpdateService).getCachedStatus();
@@ -109,6 +195,18 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
           default:
             throw new Error('Unsupported system update operation');
         }
+      }
+      case 'manage_system_alerts': {
+        // Same broad admin:alerts scope as the /alerts routes.
+        this.ensureToolScope(user, 'admin:alerts');
+        const alertService = container.resolve(AlertService);
+        if (a.operation === 'list') return alertService.getAlerts();
+        if (a.operation === 'dismiss') {
+          const { id } = IdParamSchema.parse({ id: a.alertId });
+          await alertService.dismissAlert(id);
+          return { success: true, message: 'Alert dismissed' };
+        }
+        throw new Error(`Unsupported system alert operation: ${String(a.operation)}`);
       }
       case 'get_audit_log':
         return this.auditService.getAuditLog({
@@ -212,4 +310,10 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         return UNHANDLED_TOOL;
     }
   }
+}
+
+function releaseVersionArg(value: unknown): string {
+  const version = String(value ?? '');
+  if (!RELEASE_VERSION_PATTERN.test(version)) throw new AppError(400, 'INVALID_VERSION', 'Invalid version format');
+  return version;
 }

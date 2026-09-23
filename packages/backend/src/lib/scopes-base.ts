@@ -136,9 +136,11 @@ export const ALL_SCOPES = [
   // ── Integrations: GitHub, generic Git, and external SSH ─────────
   'integrations:github:view',
   'integrations:github:manage',
+  'integrations:github:sync',
   'integrations:github:system',
   'integrations:git:view',
   'integrations:git:manage',
+  'integrations:git:sync',
   'integrations:git:system',
   'integrations:ssh:view',
   'integrations:ssh:manage',
@@ -146,6 +148,7 @@ export const ALL_SCOPES = [
   // ── Integrations: Cloudflare ─────────────────────────────────────
   'integrations:cloudflare:view',
   'integrations:cloudflare:manage',
+  'integrations:cloudflare:sync',
   // Hosting account access is separate from VM control and account finances.
   'integrations:hosting:view',
   'integrations:hosting:manage',
@@ -350,12 +353,16 @@ export const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
   'integrations:ssh:',
 ] as const;
 
+/** Source-control and SSH scopes Gateway MCP may delegate: discovery reads plus connector resync. */
 export const MCP_EXTERNAL_INTEGRATION_READ_SCOPES = new Set<string>([
   'integrations:gitlab:view',
   'integrations:gitlab:projects:view',
   'integrations:gitlab:repo:read',
+  'integrations:gitlab:sync',
   'integrations:github:view',
+  'integrations:github:sync',
   'integrations:git:view',
+  'integrations:git:sync',
   'integrations:ssh:view',
 ]);
 

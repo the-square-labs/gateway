@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   type AICredentialChallenge,
@@ -14,9 +14,11 @@ import {
   aiRuns,
   aiRunToolCalls,
   aiRunToolRounds,
+  auditLog,
 } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { getEnvironmentSettingsSnapshot } from '@/modules/settings/environment-settings.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { AIPlanRuntimeSnapshot } from './ai.types.js';
@@ -294,7 +296,7 @@ export abstract class AIRunServiceRuntime {
           .limit(1);
         if (!readyRound) continue;
         const user = await loadUser(run.userId).catch(() => null);
-        if (user && !user.isBlocked) {
+        if (user && !user.isBlocked && !(await this.mayHaveRunUnderImpersonation(run.userId, run.createdAt))) {
           this.executor.startToolRoundContinuation(user, {
             conversationId: run.conversationId,
             runId: run.id,
@@ -305,7 +307,7 @@ export abstract class AIRunServiceRuntime {
       }
       if (current.status === 'waiting_for_credential') {
         const user = await loadUser(run.userId).catch(() => null);
-        if (user && !user.isBlocked) {
+        if (user && !user.isBlocked && !(await this.mayHaveRunUnderImpersonation(run.userId, run.createdAt))) {
           await this.resumeResolvedCredentialContinuation(user, {
             conversationId: run.conversationId,
             runId: run.id,
@@ -315,12 +317,15 @@ export abstract class AIRunServiceRuntime {
       }
       if (current.status !== 'queued') continue;
       const user = await loadUser(run.userId).catch(() => null);
-      if (!user || user.isBlocked) {
+      if (!user || user.isBlocked || (await this.mayHaveRunUnderImpersonation(run.userId, run.createdAt))) {
         await this.db
           .update(aiRuns)
           .set({
             status: 'failed',
-            error: 'PERMISSION_DENIED: Current account access could not be verified after restart.',
+            error:
+              !user || user.isBlocked
+                ? 'PERMISSION_DENIED: Current account access could not be verified after restart.'
+                : 'PERMISSION_DENIED: The run was not resumed after restart because it may have started while an administrator impersonated this account. Send the request again.',
             leaseOwner: null,
             leaseExpiresAt: null,
             completedAt: new Date(),
@@ -342,10 +347,18 @@ export abstract class AIRunServiceRuntime {
         conversationId: aiConversationInputs.conversationId,
         userId: aiConversationInputs.userId,
         targetRunId: aiConversationInputs.targetRunId,
+        createdAt: aiConversationInputs.createdAt,
       })
       .from(aiConversationInputs)
       .where(eq(aiConversationInputs.status, 'pending'))
       .orderBy(asc(aiConversationInputs.createdAt));
+    // A dispatch drains the whole queue of its conversation, so check from its oldest input.
+    const oldestPendingInput = new Map<string, Date>();
+    for (const pending of pendingInputs) {
+      if (!oldestPendingInput.has(pending.conversationId)) {
+        oldestPendingInput.set(pending.conversationId, pending.createdAt);
+      }
+    }
     const recoveredConversations = new Set<string>();
     for (const pending of pendingInputs) {
       if (recoveredConversations.has(pending.conversationId)) continue;
@@ -376,6 +389,8 @@ export abstract class AIRunServiceRuntime {
       }
       const user = await loadUser(pending.userId).catch(() => null);
       if (!user || user.isBlocked) continue;
+      const queuedSince = oldestPendingInput.get(pending.conversationId) ?? pending.createdAt;
+      if (await this.mayHaveRunUnderImpersonation(pending.userId, queuedSince)) continue;
       recoveredConversations.add(pending.conversationId);
       this.executor.startPendingInputExecution(user, pending.conversationId);
     }
@@ -387,8 +402,40 @@ export abstract class AIRunServiceRuntime {
         if (!user || user.isBlocked) continue;
         const plan = await this.planService.getActivePlanSnapshot(owner.userId, owner.conversationId);
         if (!plan) continue;
+        if (await this.mayHaveRunUnderImpersonation(owner.userId, new Date(plan.createdAt))) continue;
         await this.schedulePlanStateRun(user, plan, `recovery:${Date.now()}`);
       }
+    }
+  }
+
+  /**
+   * Recovery resumes work without a live session, so its tool calls would run
+   * without the impersonation context they started under: no credential guard
+   * (ai-impersonation-policy) and audit attributed to the subject instead of
+   * the administrator. Runs do not record that context, so a run, queued input
+   * or plan is resumed only when no impersonation of its owner can have
+   * overlapped it: none started later than one session lifetime before it was
+   * created (impersonation sessions are never refreshed). A failed lookup
+   * counts as a possible impersonation.
+   */
+  protected async mayHaveRunUnderImpersonation(userId: string, createdAt: Date): Promise<boolean> {
+    try {
+      const sessionLifetimeMs = getEnvironmentSettingsSnapshot().sessions.expirySeconds * 1000;
+      const [started] = await this.db
+        .select({ id: auditLog.id })
+        .from(auditLog)
+        .where(
+          and(
+            eq(auditLog.action, 'auth.impersonation.start'),
+            eq(auditLog.resourceType, 'session'),
+            eq(auditLog.resourceId, userId),
+            gte(auditLog.createdAt, new Date(createdAt.getTime() - sessionLifetimeMs))
+          )
+        )
+        .limit(1);
+      return Boolean(started);
+    } catch {
+      return true;
     }
   }
 

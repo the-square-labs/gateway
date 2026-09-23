@@ -43,4 +43,11 @@ UPDATE "backup_runs" r SET "deadline_at" = l."expires_at" + interval '5 minutes'
 FROM "backup_run_node_leases" l
 WHERE l."run_id" = r."id" AND r."deadline_at" IS NULL AND r."status" IN ('queued', 'running');--> statement-breakpoint
 UPDATE "nodes" SET "enrollment_token_expires_at" = now() + interval '7 days'
-WHERE "status" = 'pending' AND "enrollment_token_hash" IS NOT NULL AND "enrollment_token_expires_at" IS NULL;
+WHERE "status" = 'pending' AND "enrollment_token_hash" IS NOT NULL AND "enrollment_token_expires_at" IS NULL;--> statement-breakpoint
+UPDATE "permission_groups" g SET "scopes" = g."scopes" || to_jsonb(ARRAY(
+  SELECT replace(s, ':manage', ':sync') FROM jsonb_array_elements_text(g."scopes") s
+  WHERE s IN ('integrations:gitlab:manage', 'integrations:github:manage', 'integrations:git:manage', 'integrations:cloudflare:manage')
+    AND NOT g."scopes" ? replace(s, ':manage', ':sync')
+)), "updated_at" = now()
+WHERE NOT g."is_builtin"
+  AND g."scopes" ?| array['integrations:gitlab:manage', 'integrations:github:manage', 'integrations:git:manage', 'integrations:cloudflare:manage'];

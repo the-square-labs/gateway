@@ -1,9 +1,10 @@
 import { container } from '@/container.js';
-import { hasScopeForCreation } from '@/lib/permissions.js';
+import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
+import { DomainIngressMigrationSchema, UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import { SSLService } from '@/modules/ssl/ssl.service.js';
 import type { User } from '@/types.js';
 import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
 
@@ -69,6 +70,33 @@ export async function executeDomainTool(
       if (a.operation === 'check_dns') {
         context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
         return context.domainsService.checkDns(a.domainId);
+      }
+      if (a.operation === 'preview_ingress_migration' || a.operation === 'migrate_ingress') {
+        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
+        const input = DomainIngressMigrationSchema.parse({ targetNodeId: a.targetNodeId });
+        return a.operation === 'preview_ingress_migration'
+          ? context.domainsService.previewIngressMigration(a.domainId, input)
+          : context.domainsService.migrateIngress(a.domainId, input, user.id, user.scopes);
+      }
+      if (a.operation === 'issue_certificate') {
+        // Mirrors POST /domains/{id}/issue-cert: domain edit plus broad ssl:cert:issue.
+        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
+        if (!hasScope(user.scopes, 'ssl:cert:issue')) {
+          throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
+        }
+        const domain = await context.domainsService.getDomain(a.domainId);
+        const cloudflare = domain.dnsProvider === 'cloudflare';
+        return container.resolve(SSLService).requestACMECert(
+          {
+            domains: [domain.domain],
+            challengeType: cloudflare ? 'dns-01' : 'http-01',
+            provider: 'letsencrypt',
+            autoRenew: true,
+            ...(cloudflare ? { dnsProvider: 'cloudflare' as const } : {}),
+          },
+          user.id,
+          user.email
+        );
       }
       throw new Error(`Unsupported domain operation: ${String(a.operation)}`);
     default:

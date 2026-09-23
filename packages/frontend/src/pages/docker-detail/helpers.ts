@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import type { DockerGpuAttachment } from "@/types";
+import type { DockerBuildRolloutOwner, DockerGpuAttachment } from "@/types";
 
 export const STATUS_BADGE: Record<
   string,
@@ -87,4 +87,16 @@ export type InspectData = Record<string, any> & {
   nodeId?: string;
   availability?: "available" | "unavailable";
   gpuAttachment?: DockerGpuAttachment;
+  /** Set while a build rollout owns the container; user mutations are refused. */
+  _buildRollout?: DockerBuildRolloutOwner | null;
 };
+
+/** Why mutating actions are disabled while a build rollout owns the resource. */
+export function buildRolloutBusyReason(
+  rollout: DockerBuildRolloutOwner | null | undefined,
+  resource: "container" | "deployment"
+): string | null {
+  return rollout
+    ? `A deployment of build ${rollout.commitSha.slice(0, 10)} is in progress for this ${resource}; wait for it to finish`
+    : null;
+}

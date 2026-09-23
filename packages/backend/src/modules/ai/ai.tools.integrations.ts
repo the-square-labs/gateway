@@ -1,5 +1,11 @@
 import type { AIToolDefinition } from './ai.types.js';
 
+const integrationConnectorProviderSchema = {
+  type: 'string',
+  enum: ['gitlab', 'github', 'git', 'cloudflare', 'ssh'],
+  description: 'Connector provider: gitlab, github, git (generic Git), cloudflare, or ssh (external SSH).',
+};
+
 const repositoryFields = {
   name: { type: 'string', description: 'Connector name.' },
   baseUrl: { type: 'string', description: 'Provider or Git host base URL.' },
@@ -371,5 +377,49 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
     effect: 'write',
     approvalClass: 'create',
     historyRetention: { mode: 'never_full' },
+  },
+  {
+    name: 'list_integration_connectors',
+    description:
+      'List integration connectors (GitLab, GitHub, generic Git, Cloudflare, external SSH) with their IDs, enabled state, and last sync or test status. Never returns credentials. Without provider, lists every provider the caller may view and skips the rest; providers that cannot be listed (for example unlicensed GitLab) appear under unavailableProviders. Pass the returned provider and id to sync_integration_connector.',
+    parameters: {
+      type: 'object',
+      properties: {
+        provider: integrationConnectorProviderSchema,
+        enabled: { type: 'boolean', description: 'Return only enabled (true) or only disabled (false) connectors.' },
+      },
+    },
+    destructive: false,
+    category: 'Integrations',
+    requiredScope: 'integrations:cloudflare:view',
+    invalidateStores: [],
+    effect: 'read',
+    approvalClass: 'read',
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'sync_integration_connector',
+    description:
+      'Resync one integration connector now, with the same permission checks as its REST sync route: integrations:<provider>:sync or integrations:<provider>:manage. gitlab refreshes visible projects and registries. cloudflare refreshes zones and capabilities. github and git re-validate the connector credential and repository allowlist. ssh re-tests the external SSH connection and requires integrations:ssh:manage. Per-user Git credentials are never used or changed. Get provider and connectorId from list_integration_connectors.',
+    parameters: {
+      type: 'object',
+      properties: {
+        provider: integrationConnectorProviderSchema,
+        connectorId: {
+          type: 'string',
+          pattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$',
+          description: 'Exact connector UUID returned by list_integration_connectors.',
+        },
+      },
+      required: ['provider', 'connectorId'],
+    },
+    destructive: false,
+    category: 'Integrations',
+    requiredScope: 'integrations:gitlab:sync',
+    invalidateStores: [],
+    effect: 'write',
+    approvalClass: 'update',
+    targetIdentity: { resourceType: 'integration-connector', arguments: ['connectorId'] },
+    historyRetention: { mode: 'persistent_context' },
   },
 ];

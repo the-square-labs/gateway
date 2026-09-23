@@ -1,11 +1,15 @@
 import { container } from '@/container.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { FolderService } from '@/modules/proxy/folder.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
-import { reservedTemplateVariableNames } from '@/modules/proxy/proxy-template-variables.js';
+import {
+  reservedTemplateVariableNames,
+  withoutReservedTemplateVariables,
+} from '@/modules/proxy/proxy-template-variables.js';
 import type { User } from '@/types.js';
 import {
   agentPage,
@@ -14,6 +18,8 @@ import {
   compactProxyHostForAgent,
   PROXY_HOST_UPDATE_FIELDS,
 } from './ai.service-helpers.js';
+
+const logger = createChildLogger('AIProxyTools');
 
 export const PROXY_TOOL_NAMES = new Set([
   'list_routes',
@@ -69,7 +75,7 @@ export async function executeProxyTool(
       if (togglesRawMode(a) && !hasScope(user.scopes, 'proxy:raw:toggle')) {
         throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:toggle scope');
       }
-      assertNoReservedTemplateVariables(a.templateVariables);
+      const templateVariables = dropReservedTemplateVariables(a.templateVariables);
       await context.proxyService.assertReferenceAccess(user.scopes, a);
       return compactProxyHostForAgent(
         await context.proxyService.createProxyHost(
@@ -111,7 +117,7 @@ export async function executeProxyTool(
             accessListId: a.accessListId,
             folderId: a.folderId,
             nginxTemplateId: a.nginxTemplateId,
-            templateVariables: a.templateVariables,
+            templateVariables,
             healthCheckEnabled: a.healthCheckEnabled || false,
             healthCheckUrl: a.healthCheckUrl,
             healthCheckInterval: a.healthCheckInterval,
@@ -203,16 +209,27 @@ export async function executeProxyTool(
       ) {
         throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${a.nodeId}`);
       }
-      assertNoReservedTemplateVariables(a.templateVariables);
+      if (updateFields.templateVariables !== undefined) {
+        updateFields.templateVariables = dropReservedTemplateVariables(updateFields.templateVariables);
+      }
+      // The update route does not accept `enabled`; enabling or disabling goes
+      // through the toggle lifecycle, which protects system and public routes.
+      const enabled = typeof updateFields.enabled === 'boolean' ? updateFields.enabled : undefined;
+      delete updateFields.enabled;
       await context.proxyService.assertReferenceAccess(user.scopes, updateFields, existing);
       const bypassAdvancedValidation = hasScope(user.scopes, `proxy:advanced:bypass:${routeId}`);
-      return compactProxyHostForAgent(
-        await context.proxyService.updateProxyHost(routeId, updateFields, user.id, {
+      let updated: Record<string, any> = existing;
+      if (Object.keys(updateFields).length > 0 || enabled === undefined) {
+        updated = await context.proxyService.updateProxyHost(routeId, updateFields, user.id, {
           actorScopes: user.scopes,
           bypassAdvancedValidation,
           ...(rawToggle ? { bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${routeId}`) } : {}),
-        })
-      );
+        });
+      }
+      if (enabled !== undefined && enabled !== updated.enabled) {
+        updated = await context.proxyService.toggleProxyHost(routeId, enabled, user.id);
+      }
+      return compactProxyHostForAgent(updated);
     }
     case 'set_route_maintenance':
       return compactProxyHostForAgent(
@@ -256,20 +273,19 @@ function normalizedAdvancedConfig(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
-/** Same rule as the proxy host schemas: Gateway-managed render keys cannot be overridden. */
-function assertNoReservedTemplateVariables(variables: unknown) {
-  if (variables === undefined || variables === null) return;
+/**
+ * Same rule as the proxy host schemas: Gateway-managed render keys cannot be
+ * overridden, and are dropped (and logged) instead of rejecting the save.
+ */
+function dropReservedTemplateVariables<T>(variables: T): T {
+  if (variables === undefined || variables === null) return variables;
   if (typeof variables !== 'object' || Array.isArray(variables)) {
     throw new AppError(400, 'VALIDATION_ERROR', 'templateVariables must be an object');
   }
   const reserved = reservedTemplateVariableNames(variables as Record<string, unknown>);
-  if (reserved.length > 0) {
-    throw new AppError(
-      400,
-      'VALIDATION_ERROR',
-      `Template variables cannot override Gateway-managed values: ${reserved.join(', ')}`
-    );
-  }
+  if (reserved.length === 0) return variables;
+  logger.info('Dropped Gateway-managed template variables from proxy host input', { reserved });
+  return withoutReservedTemplateVariables(variables as Record<string, unknown>) as T;
 }
 
 async function requirePagesRouteAccess(user: User, projectId: unknown) {

@@ -3,6 +3,7 @@ import type { DockerComposeOperationAction, dockerComposeOperations } from '@/db
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { DockerBuildRolloutGuard } from '../docker-build-rollout-guard.js';
 import type { DockerSecretService } from '../docker-secret.service.js';
 import type { DockerSnapshotService } from '../docker-snapshot.service.js';
 import type { DockerSnapshotReconciler } from '../docker-snapshot-reconciler.service.js';
@@ -28,6 +29,7 @@ export class DockerComposeService {
   ) {}
   setDispatcher(_dispatcher: DockerComposeDispatcher): void {}
   setEventBus(_eventBus: EventBusService): void {}
+  setBuildRolloutGuard(_guard: DockerBuildRolloutGuard): void {}
   setSnapshotReconciler(_reconciler: Pick<DockerSnapshotReconciler, 'refreshNow'>): void {}
   setAvailabilityCoordinator(
     _coordinator: NonNullable<{

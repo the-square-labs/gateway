@@ -667,4 +667,48 @@ describe('integrations routes', () => {
     expect(listCloudflareZones).toHaveBeenCalledWith('cf-1');
     expect(createCloudflareConnector).not.toHaveBeenCalled();
   });
+
+  it('syncs connectors through API tokens with only the provider sync scope', async () => {
+    const syncCloudflareConnector = vi.fn().mockResolvedValue({ status: 'success', zoneCount: 1 });
+    const syncGitConnector = vi.fn().mockResolvedValue({ id: 'git-1', allowlistEntries: [] });
+    const syncGitLabConnector = vi.fn().mockResolvedValue({ status: 'success', projectCount: 1 });
+    const testCloudflareConnector = vi.fn();
+    const deleteGitConnector = vi.fn();
+    registerServices(
+      ['integrations:cloudflare:sync', 'integrations:github:sync', 'integrations:git:sync', 'integrations:gitlab:sync'],
+      { syncCloudflareConnector, syncGitConnector, syncGitLabConnector, testCloudflareConnector, deleteGitConnector }
+    );
+
+    const app = createApp();
+    const post = (path: string) => app.request(`/api/integrations/${path}`, { method: 'POST', headers: authHeaders() });
+
+    expect((await post('cloudflare/connectors/cf-1/sync')).status).toBe(200);
+    expect((await post('github/connectors/gh-1/sync')).status).toBe(200);
+    expect((await post('git/connectors/git-1/sync')).status).toBe(200);
+    expect((await post('gitlab/connectors/gl-1/sync')).status).toBe(200);
+    expect((await post('cloudflare/connectors/cf-1/test')).status).toBe(403);
+    expect(
+      (await app.request('/api/integrations/git/connectors/git-1', { method: 'DELETE', headers: authHeaders() })).status
+    ).toBe(403);
+
+    expect(syncCloudflareConnector).toHaveBeenCalledWith('cf-1', USER.id);
+    expect(syncGitConnector).toHaveBeenCalledWith('github', 'gh-1', USER.id);
+    expect(syncGitConnector).toHaveBeenCalledWith('git', 'git-1', USER.id);
+    expect(syncGitLabConnector).toHaveBeenCalledWith('gl-1', USER.id);
+    expect(testCloudflareConnector).not.toHaveBeenCalled();
+    expect(deleteGitConnector).not.toHaveBeenCalled();
+  });
+
+  it('keeps accepting the provider manage scope on sync routes', async () => {
+    const syncGitConnector = vi.fn().mockResolvedValue({ id: 'gh-1', allowlistEntries: [] });
+    registerServices(['integrations:github:manage'], { syncGitConnector });
+
+    const response = await createApp().request('/api/integrations/github/connectors/gh-1/sync', {
+      method: 'POST',
+      headers: authHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(syncGitConnector).toHaveBeenCalledWith('github', 'gh-1', USER.id);
+  });
 });

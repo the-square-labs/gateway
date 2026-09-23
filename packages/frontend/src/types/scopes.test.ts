@@ -117,4 +117,30 @@ describe("scope constants", () => {
     expect(mcpValues).not.toContain("integrations:git:manage");
     expect(mcpValues).not.toContain("integrations:ssh:use");
   });
+
+  it("delegates connector sync scopes to API and MCP tokens while manage stays session-only", () => {
+    const syncScopes = [
+      "integrations:gitlab:sync",
+      "integrations:github:sync",
+      "integrations:git:sync",
+      "integrations:cloudflare:sync",
+    ];
+    const apiValues = scopeValues(API_TOKEN_SCOPES);
+    const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
+
+    expect(apiValues).toEqual(expect.arrayContaining(syncScopes));
+    expect(mcpValues).toEqual(expect.arrayContaining(syncScopes));
+    for (const scope of [
+      "integrations:gitlab:manage",
+      "integrations:github:manage",
+      "integrations:git:manage",
+      "integrations:cloudflare:manage",
+      "integrations:ssh:manage",
+    ]) {
+      expect(mcpValues).not.toContain(scope);
+    }
+    expect(mcpValues.filter((scope) => scope.startsWith("integrations:ssh:"))).toEqual([
+      "integrations:ssh:view",
+    ]);
+  });
 });

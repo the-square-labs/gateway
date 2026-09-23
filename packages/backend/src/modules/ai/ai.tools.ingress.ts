@@ -274,6 +274,24 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: ['proxy'],
   },
   {
+    name: 'resync_tls_distribution',
+    description:
+      'Repair TLS delivery: target "route" re-applies one enabled TLS route to its nginx node; target "certificate" re-sends one SSL certificate to every node that serves it. Requires admin:update.',
+    parameters: {
+      type: 'object',
+      properties: {
+        target: { type: 'string', enum: ['route', 'certificate'] },
+        routeId: { type: 'string', description: 'Route UUID when target is route' },
+        sslCertificateId: { type: 'string', description: 'SSL certificate UUID when target is certificate' },
+      },
+      required: ['target'],
+    },
+    destructive: true,
+    category: 'Ingress',
+    requiredScope: 'admin:update',
+    invalidateStores: ['proxy', 'ssl'],
+  },
+  {
     name: 'delete_route',
     description: 'Permanently delete an ingress route and its nginx configuration.',
     parameters: {
@@ -439,11 +457,14 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_ssl_certificate',
     description:
-      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew, verify_dns, set_auto_renew, delete. Operation-specific ssl:cert:* scopes are enforced.',
+      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew, verify_dns, set_auto_renew, cancel_acme (abandon a pending ACME issue), delete. Operation-specific ssl:cert:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['get', 'upload', 'renew', 'verify_dns', 'set_auto_renew', 'delete'] },
+        operation: {
+          type: 'string',
+          enum: ['get', 'upload', 'renew', 'verify_dns', 'set_auto_renew', 'cancel_acme', 'delete'],
+        },
         sslCertificateId: { type: 'string' },
         name: { type: 'string' },
         certificatePem: { type: 'string' },
@@ -532,13 +553,21 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'manage_domain',
-    description: 'Get, update, or re-check DNS for a registered domain. Operations: get, update, check_dns.',
+    description:
+      'Get, update, or re-check DNS for a registered domain. Operations: get, update, check_dns, issue_certificate (ACME certificate for the domain; also needs ssl:cert:issue), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['get', 'update', 'check_dns'] },
+        operation: {
+          type: 'string',
+          enum: ['get', 'update', 'check_dns', 'issue_certificate', 'preview_ingress_migration', 'migrate_ingress'],
+        },
         domainId: { type: 'string' },
         description: { type: ['string', 'null'] },
+        targetNodeId: {
+          type: 'string',
+          description: 'Nginx ingress node UUID for preview_ingress_migration and migrate_ingress.',
+        },
       },
       required: ['operation', 'domainId'],
     },

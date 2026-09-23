@@ -6,6 +6,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { DockerBuildRolloutGuard } from './docker-build-rollout-guard.js';
 import type { DockerMigrationGuard } from './docker-migration-guard.js';
 
 const logger = createChildLogger('DockerSecretService');
@@ -14,6 +15,7 @@ const MASKED_VALUE = '••••••••';
 
 export class DockerSecretService {
   private migrationGuard?: DockerMigrationGuard;
+  private buildRolloutGuard?: DockerBuildRolloutGuard;
   private eventBus?: EventBusService;
 
   constructor(
@@ -24,6 +26,19 @@ export class DockerSecretService {
 
   setMigrationGuard(guard: DockerMigrationGuard) {
     this.migrationGuard = guard;
+  }
+
+  setBuildRolloutGuard(guard: DockerBuildRolloutGuard) {
+    this.buildRolloutGuard = guard;
+  }
+
+  /** Secrets are applied on recreate; a running build rollout must not see them change underneath. */
+  private async assertBuildRolloutAllowed(nodeId: string, containerName: string): Promise<void> {
+    if (!this.buildRolloutGuard) return;
+    const deploymentId = containerName.startsWith('deployment:') ? containerName.slice('deployment:'.length) : null;
+    await this.buildRolloutGuard.assertAllowed(
+      deploymentId ? { kind: 'deployment', deploymentId } : { kind: 'container', nodeId, containerName }
+    );
   }
 
   setEventBus(eventBus: EventBusService): void {
@@ -62,6 +77,7 @@ export class DockerSecretService {
     options: { managed?: boolean; managedOwner?: string } = {}
   ) {
     await this.migrationGuard?.assertContainerAllowed(nodeId, containerName);
+    await this.assertBuildRolloutAllowed(nodeId, containerName);
     const encrypted = this.cryptoService.encryptString(value);
     const encryptedValue = JSON.stringify(encrypted);
 
@@ -113,6 +129,7 @@ export class DockerSecretService {
     if (existing.managedOwner)
       throw new AppError(409, 'MANAGED_SECRET_OWNED', 'Manage this secret through its storage link');
     await this.migrationGuard?.assertContainerAllowed(existing.nodeId, existing.containerName);
+    await this.assertBuildRolloutAllowed(existing.nodeId, existing.containerName);
 
     const encrypted = this.cryptoService.encryptString(value);
     const encryptedValue = JSON.stringify(encrypted);
@@ -147,6 +164,7 @@ export class DockerSecretService {
     if (existing.managedOwner)
       throw new AppError(409, 'MANAGED_SECRET_OWNED', 'Manage this secret through its storage link');
     await this.migrationGuard?.assertContainerAllowed(existing.nodeId, existing.containerName);
+    await this.assertBuildRolloutAllowed(existing.nodeId, existing.containerName);
 
     await this.db.delete(dockerSecrets).where(eq(dockerSecrets.id, id));
 

@@ -46,6 +46,7 @@ import {
   TERMINAL_BUILD_STATUSES,
   WORKER_ACTIVE_BUILD_STATUSES,
 } from './docker-build-policy.js';
+import { runAsDockerBuildRollout } from './docker-build-rollout-guard.js';
 import { startContainer } from './docker-container-mutation-operations.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 
@@ -101,6 +102,7 @@ export const dockerBuildCommercialRuntime = {
   PgDialect,
   DockerManagementService,
   startContainer,
+  runAsDockerBuildRollout,
   loggerDockerBuildService,
   loggerDockerBuildRunner,
 };

@@ -71,7 +71,7 @@ import { ConsoleTab } from "./docker-detail/ConsoleTab";
 import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { EnvironmentTab } from "./docker-detail/EnvironmentTab";
 import { FilesTab } from "./docker-detail/FilesTab";
-import type { InspectData } from "./docker-detail/helpers";
+import { buildRolloutBusyReason, type InspectData } from "./docker-detail/helpers";
 import { LogsTab } from "./docker-detail/LogsTab";
 import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 
@@ -561,8 +561,11 @@ export function DockerDeploymentDetail({
   useRealtime(
     sourceIdentity ? "docker.build.changed" : null,
     (payload) => {
-      if ((payload as { sourceBindingId?: string })?.sourceBindingId === sourceIdentity?.id)
+      if ((payload as { sourceBindingId?: string })?.sourceBindingId === sourceIdentity?.id) {
         setSourceIdentityRevision((revision) => revision + 1);
+        // A rollout starting or finishing changes whether the deployment is busy.
+        void load();
+      }
     },
     { onReconnect: () => setSourceIdentityRevision((revision) => revision + 1) }
   );
@@ -798,10 +801,14 @@ export function DockerDeploymentDetail({
     deployment?.status === "creating" &&
     !serviceTransition &&
     deployment.slots.every((slot) => !slot.containerId && !slot.image);
+  // A build rollout owns the deployment from acceptance, before its deploy
+  // starts and between deploy and switch; the server refuses saves until then.
+  const buildRolloutReason = buildRolloutBusyReason(deployment?._buildRollout, "deployment");
   const settingsBusyReason =
-    serviceBusy && !awaitingFirstSourceBuild
+    buildRolloutReason ??
+    (serviceBusy && !awaitingFirstSourceBuild
       ? `Deployment is ${(serviceTransition ?? deployment?.status ?? "busy").replaceAll("_", " ")}; wait for it to finish`
-      : null;
+      : null);
   const serviceState =
     serviceTransition ??
     (deployment?.status === "ready"
@@ -985,13 +992,12 @@ export function DockerDeploymentDetail({
 
   if (!deployment) return null;
 
-  const actionDisabled = !!action || serviceBusy || unavailable;
+  const actionDisabled = !!action || serviceBusy || unavailable || !!buildRolloutReason;
   const deploymentHasGpu = (deployment.desiredConfig.gpu?.deviceIds ?? []).length > 0;
   const migrationDisabledReason = deploymentHasGpu
     ? "GPU-attached deployments cannot be migrated in this version"
-    : actionDisabled
-      ? "Deployment is unavailable or changing state"
-      : undefined;
+    : (buildRolloutReason ??
+      (actionDisabled ? "Deployment is unavailable or changing state" : undefined));
   const headerActions = [
     {
       label: "View config",
@@ -1180,7 +1186,11 @@ export function DockerDeploymentDetail({
                 variant="outline"
                 size={headerAction.label === "Pin" ? "icon" : "default"}
                 disabled={headerAction.disabled}
-                title={headerAction.disabled ? headerAction.disabledReason : undefined}
+                title={
+                  headerAction.disabled
+                    ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
+                    : undefined
+                }
                 onClick={headerAction.onClick}
               >
                 {headerAction.icon}

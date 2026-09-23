@@ -177,15 +177,18 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `integrations:gitlab:sandbox:clone` |  |
 | `integrations:github:view` |  |
 | `integrations:github:manage` |  |
+| `integrations:github:sync` |  |
 | `integrations:github:system` |  |
 | `integrations:git:view` |  |
 | `integrations:git:manage` |  |
+| `integrations:git:sync` |  |
 | `integrations:git:system` |  |
 | `integrations:ssh:view` |  |
 | `integrations:ssh:manage` |  |
 | `integrations:ssh:use` |  |
 | `integrations:cloudflare:view` |  |
 | `integrations:cloudflare:manage` |  |
+| `integrations:cloudflare:sync` |  |
 | `integrations:hosting:view` | View hosting accounts; restrictable to connector ID. |
 | `integrations:hosting:manage` | Configure and synchronize hosting accounts; restrictable to connector ID. |
 | `hosting:resources:view` | View provider inventory; restrictable to connector ID. |
@@ -363,7 +366,9 @@ API and OAuth tokens can be granted all scopes except the protected user/session
 
 `mcp:use` is not a token scope. It gates whether the owning user account may use the MCP endpoint at all. MCP tokens use ordinary delegated Gateway scopes such as `nodes:details`, `proxy:view`, or `docker:containers:view` to determine which MCP tools and resources are available.
 
-Gateway MCP does not delegate `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, or `integrations:ssh:*` scopes. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Managed DNS access uses the ordinary `domains:*` scopes; `integrations:cloudflare:*` is limited to connector visibility and administration.
+Gateway MCP delegates only the discovery and resync scopes of `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, and `integrations:ssh:*`: the `:view` scopes, `integrations:gitlab:projects:view`, `integrations:gitlab:repo:read`, and `integrations:gitlab:sync`, `integrations:github:sync`, `integrations:git:sync`. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Managed DNS access uses the ordinary `domains:*` scopes; `integrations:cloudflare:*` is limited to connector visibility, resync, and administration.
+
+`integrations:<provider>:sync` lets API and OAuth tokens resync a GitLab, GitHub, generic Git, or Cloudflare connector without holding the session-only `integrations:<provider>:manage` scope. Sync routes accept either scope. External SSH has no sync scope: its connection re-test authenticates with the stored credential and stays under `integrations:ssh:manage`.
 
 ## OAuth Manual Approval Scopes
 

@@ -6,6 +6,7 @@ import {
   FileUploadCompleteSchema,
   FileUploadInitSchema,
 } from '@/modules/docker/docker.schemas.js';
+import { UpdateNodeServiceCreationLockSchema } from '@/modules/nodes/nodes.schemas.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
@@ -18,6 +19,7 @@ export const NODE_TOOL_NAMES = new Set([
   'execute_node_console_command',
   'create_node',
   'rename_node',
+  'set_node_service_creation_lock',
   'delete_node',
   'manage_node_config',
   'manage_node_file',
@@ -83,6 +85,14 @@ export async function executeNodeTool(
       );
     case 'rename_node':
       return context.nodesService.update(a.nodeId, { displayName: a.displayName }, user.id);
+    case 'set_node_service_creation_lock': {
+      // Mirrors PATCH /nodes/{id}/service-creation-lock.
+      if (!hasScopeForResource(user.scopes, 'nodes:lock', String(a.nodeId ?? ''))) {
+        throw new Error(`PERMISSION_DENIED: Missing required scope nodes:lock:${String(a.nodeId ?? '')}`);
+      }
+      const input = UpdateNodeServiceCreationLockSchema.parse({ serviceCreationLocked: a.serviceCreationLocked });
+      return context.nodesService.updateServiceCreationLock(a.nodeId, input, user.id);
+    }
     case 'delete_node':
       await context.nodesService.remove(a.nodeId, user.id);
       return { success: true };

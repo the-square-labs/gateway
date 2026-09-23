@@ -322,9 +322,12 @@ describe('AIService MCP delegated scope audit behavior', () => {
   it('allows delegated MCP proxy edits with matching resource-scoped edit scope', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const proxyService = {
-      getProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1', upstreamKind: 'manual', pageTarget: null }),
+      getProxyHost: vi
+        .fn()
+        .mockResolvedValue({ id: 'proxy-1', upstreamKind: 'manual', pageTarget: null, enabled: true }),
       assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
       updateProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1' }),
+      toggleProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1', enabled: false }),
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
 
@@ -336,12 +339,9 @@ describe('AIService MCP delegated scope audit behavior', () => {
     );
 
     expect(result.error).toBeUndefined();
-    expect(proxyService.updateProxyHost).toHaveBeenCalledWith(
-      'proxy-1',
-      { enabled: false },
-      USER.id,
-      expect.objectContaining({ bypassAdvancedValidation: false })
-    );
+    // Enabling or disabling goes through the toggle lifecycle, like POST /{id}/toggle.
+    expect(proxyService.updateProxyHost).not.toHaveBeenCalled();
+    expect(proxyService.toggleProxyHost).toHaveBeenCalledWith('proxy-1', false, USER.id);
   });
 
   it('executes blue/green deployment lifecycle tools through the deployment service', async () => {

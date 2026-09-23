@@ -109,6 +109,57 @@ describe('canonical scope definitions', () => {
     expect(isMcpTokenScope('nodes:details:node-1')).toBe(true);
   });
 
+  it('delegates connector sync, and nothing else mutating, to API and MCP tokens', () => {
+    const syncScopes = [
+      'integrations:gitlab:sync',
+      'integrations:github:sync',
+      'integrations:git:sync',
+      'integrations:cloudflare:sync',
+    ];
+    for (const scope of syncScopes) {
+      expect(isApiTokenScope(scope), scope).toBe(true);
+      expect(isMcpTokenScope(scope), scope).toBe(true);
+      expect(PROGRAMMATIC_DENIED_BASE_SCOPES, scope).not.toContain(scope);
+    }
+    expect(ALL_SCOPES).not.toContain('integrations:ssh:sync');
+
+    const mcpIntegrationScopes = MCP_TOKEN_SCOPES.filter((scope) => scope.startsWith('integrations:')).filter(
+      (scope) => !scope.startsWith('integrations:hosting:')
+    );
+    expect(mcpIntegrationScopes.sort()).toEqual(
+      [
+        'integrations:cloudflare:sync',
+        'integrations:cloudflare:view',
+        'integrations:git:sync',
+        'integrations:git:view',
+        'integrations:github:sync',
+        'integrations:github:view',
+        'integrations:gitlab:projects:view',
+        'integrations:gitlab:repo:read',
+        'integrations:gitlab:sync',
+        'integrations:gitlab:view',
+        'integrations:ssh:view',
+      ].sort()
+    );
+    for (const provider of ['gitlab', 'github', 'git', 'ssh', 'cloudflare']) {
+      expect(isApiTokenScope(`integrations:${provider}:manage`)).toBe(false);
+      expect(isMcpTokenScope(`integrations:${provider}:manage`)).toBe(false);
+    }
+  });
+
+  it('gives built-in groups the sync scope of every connector provider they manage', () => {
+    for (const group of BUILTIN_GROUPS) {
+      for (const provider of ['gitlab', 'github', 'git', 'cloudflare']) {
+        if (group.scopes.includes(`integrations:${provider}:manage`)) {
+          expect(group.scopes, `${group.name} ${provider}`).toContain(`integrations:${provider}:sync`);
+        }
+      }
+    }
+    expect(DEMO_ADMIN_SCOPES.filter((scope) => scope.endsWith(':sync') && scope.startsWith('integrations:'))).toEqual(
+      []
+    );
+  });
+
   it('keeps system-admin on every canonical scope', () => {
     expect(SYSTEM_ADMIN_SCOPES).toEqual([...ALL_SCOPES]);
     expect(SYSTEM_ADMIN_SCOPES).toContain('ai:skills:manage');

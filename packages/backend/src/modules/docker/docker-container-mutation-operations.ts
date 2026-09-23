@@ -1151,9 +1151,18 @@ export async function recreateWithConfig(
     next: nextMounts,
   });
   await validateDockerRuntimeResourceConfig(ctx.runtimeOperationContext(), nodeId, containerId, config);
-  await persistDockerRuntimeSettings(ctx.runtimeOperationContext(), nodeId, name, config);
-  const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
+  // Check and claim with no await in between: another mutation (or a build
+  // rollout) admitted during validation must not recreate concurrently, and
+  // must not have its runtime settings replaced by this request.
+  ctx.requireNoTransition(nodeId, name);
   ctx.setTransition(nodeId, name, 'recreating');
+  try {
+    await persistDockerRuntimeSettings(ctx.runtimeOperationContext(), nodeId, name, config);
+  } catch (error) {
+    ctx.clearTransition(nodeId, name);
+    throw error;
+  }
+  const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
   ctx.emitTransition(nodeId, name, containerId, 'recreating');
   const task = await ctx.createTask(nodeId, containerId, name, 'recreate');
 
@@ -1399,6 +1408,9 @@ export async function updateContainerEnv(
   // Never allow removing a secret key via removeEnv.
   if (removeEnv) removeEnv = removeEnv.filter((key) => !secretKeys.has(key));
 
+  // Re-check right before claiming: the stored env read above must not be
+  // overwritten by a recreate that started meanwhile.
+  ctx.requireNoTransition(nodeId, name);
   ctx.setTransition(nodeId, name, 'updating');
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   const task = await ctx.createTask(nodeId, containerId, name, 'update');

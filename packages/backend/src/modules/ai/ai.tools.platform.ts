@@ -100,6 +100,23 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: ['nodes'],
   },
   {
+    name: 'set_node_service_creation_lock',
+    description:
+      'Lock or unlock new service creation on a node, for example before maintenance or decommissioning. Existing services keep running.',
+    parameters: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Node UUID' },
+        serviceCreationLocked: { type: 'boolean', description: 'True blocks new services; false allows them again' },
+      },
+      required: ['nodeId', 'serviceCreationLocked'],
+    },
+    destructive: true,
+    category: 'Nodes',
+    requiredScope: 'nodes:lock',
+    invalidateStores: ['nodes'],
+  },
+  {
     name: 'delete_node',
     description:
       'Delete a daemon node. The node must have no assigned ingress routes. Also revokes its mTLS certificate.',

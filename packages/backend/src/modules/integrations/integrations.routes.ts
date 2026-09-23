@@ -225,7 +225,7 @@ for (const provider of ['github', 'git'] as const) {
   );
   integrationsRoutes.post(
     `/${provider}/connectors/:id/sync`,
-    requireGitOperation(provider, `${scopeBase}:manage`),
+    requireGitOperation(provider, [`${scopeBase}:sync`, `${scopeBase}:manage`]),
     async (c) => {
       const data = await container
         .resolve(IntegrationsService)
@@ -481,7 +481,10 @@ integrationsRoutes.openapi(
 integrationsRoutes.openapi(
   {
     ...syncCloudflareConnectorRoute,
-    middleware: requireCloudflareOperation('connector.sync', 'integrations:cloudflare:manage'),
+    middleware: requireCloudflareOperation('connector.sync', [
+      'integrations:cloudflare:sync',
+      'integrations:cloudflare:manage',
+    ]),
   },
   async (c) => {
     const service = container.resolve(IntegrationsService);
@@ -625,7 +628,10 @@ integrationsRoutes.openapi(
 );
 
 integrationsRoutes.openapi(
-  { ...syncGitLabConnectorRoute, middleware: requireGitLabOperation('connector.sync', 'integrations:gitlab:sync') },
+  {
+    ...syncGitLabConnectorRoute,
+    middleware: requireGitLabOperation('connector.sync', ['integrations:gitlab:sync', 'integrations:gitlab:manage']),
+  },
   async (c) => {
     const service = container.resolve(IntegrationsService);
     const user = c.get('user')!;

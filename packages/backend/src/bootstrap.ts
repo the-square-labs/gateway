@@ -69,6 +69,7 @@ import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { dockerBuildCommercialRuntime } from '@/modules/docker/docker-build-commercial-runtime.js';
 import { DockerBuildQuery } from '@/modules/docker/docker-build-query.js';
 import { DockerBuildRolloutService } from '@/modules/docker/docker-build-rollout.service.js';
+import { DockerBuildRolloutGuard } from '@/modules/docker/docker-build-rollout-guard.js';
 import { DockerBuildRunnerService } from '@/modules/docker/docker-build-runner.service.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { dockerDeploymentCommercialRuntime } from '@/modules/docker/docker-deployment-commercial-runtime.js';
@@ -845,6 +846,9 @@ export async function initializeContainer(): Promise<void> {
   dockerManagementService.setNetworkAccessResourceService(dockerNetworkAccessResourceService);
   const dockerMigrationGuard = new DockerMigrationGuard(db);
   dockerManagementService.setMigrationGuard(dockerMigrationGuard);
+  // A build rollout owns its target while its lease is live (see DockerBuildRolloutGuard).
+  const dockerBuildRolloutGuard = new DockerBuildRolloutGuard(db);
+  dockerManagementService.setBuildRolloutGuard(dockerBuildRolloutGuard);
   container.registerInstance(DockerManagementService, dockerManagementService);
 
   const dockerSnapshotService = new DockerSnapshotService(db, cacheService, nodeRegistry, eventBus);
@@ -898,6 +902,7 @@ export async function initializeContainer(): Promise<void> {
   const dockerSecretService = new DockerSecretService(db, auditService, cryptoService);
   dockerSecretService.setEventBus(eventBus);
   dockerSecretService.setMigrationGuard(dockerMigrationGuard);
+  dockerSecretService.setBuildRolloutGuard(dockerBuildRolloutGuard);
   container.registerInstance(DockerSecretService, dockerSecretService);
 
   const dockerEnvironmentService = new DockerEnvironmentService(db, cryptoService);
@@ -917,6 +922,7 @@ export async function initializeContainer(): Promise<void> {
   dockerComposeService.setDispatcher(new DockerComposeNodeDispatcher(nodeDispatch));
   dockerComposeService.setEventBus(eventBus);
   dockerComposeService.setSnapshotReconciler(dockerSnapshotReconciler);
+  dockerComposeService.setBuildRolloutGuard(dockerBuildRolloutGuard);
   container.registerInstance(DockerComposeService, dockerComposeService);
   const dockerDeploymentService = commercialEdition.createDockerDeployment(
     'DockerDeploymentService',
@@ -926,6 +932,7 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(DockerDeploymentService, dockerDeploymentService);
   dockerDeploymentService.setLicensePolicyService(licensePolicyService);
   dockerDeploymentService.setMigrationGuard(dockerMigrationGuard);
+  dockerDeploymentService.setBuildRolloutGuard(dockerBuildRolloutGuard);
   dockerDeploymentService.setAccessResourceService(dockerAccessResourceService);
   const dockerHealthCheckService = new DockerHealthCheckService(db, nodeDispatch);
   container.registerInstance(DockerHealthCheckService, dockerHealthCheckService);

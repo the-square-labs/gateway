@@ -94,7 +94,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_system_updates',
     description:
-      'Read or manage Gateway and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, perform_gateway_update, list_daemon_updates, check_daemon_updates, update_daemon. Mutating operations require explicit approval unless the user bypass mode allows it.',
+      'Read or manage Gateway, Relay Pool, and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, perform_gateway_update, proceed_gateway_update (stop waiting for running operations), acknowledge_gateway_update_failure, perform_relay_update, abandon_relay_update (end a stuck or paused Relay Pool update), list_daemon_updates, check_daemon_updates, update_daemon. Mutating operations require explicit approval unless the user bypass mode allows it.',
     parameters: {
       type: 'object',
       properties: {
@@ -105,6 +105,10 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
             'check_gateway',
             'get_gateway_release_notes',
             'perform_gateway_update',
+            'proceed_gateway_update',
+            'acknowledge_gateway_update_failure',
+            'perform_relay_update',
+            'abandon_relay_update',
             'list_daemon_updates',
             'check_daemon_updates',
             'update_daemon',
@@ -113,7 +117,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
         },
         version: {
           type: 'string',
-          description: 'Gateway version for get_gateway_release_notes or perform_gateway_update.',
+          description: 'Version for get_gateway_release_notes, perform_gateway_update, or perform_relay_update.',
         },
         nodeId: { type: 'string', description: 'Daemon node UUID for update_daemon.' },
       },
@@ -139,6 +143,23 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
     destructive: false,
     category: 'Administration',
     requiredScope: 'admin:audit',
+    invalidateStores: [],
+  },
+  {
+    name: 'manage_system_alerts',
+    description:
+      'List the Gateway system alerts shown in the header (node, certificate, relay, and update problems) or dismiss one by alertId. Operations: list, dismiss.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['list', 'dismiss'] },
+        alertId: { type: 'string', description: 'Alert ID for dismiss' },
+      },
+      required: ['operation'],
+    },
+    destructive: true,
+    category: 'Administration',
+    requiredScope: 'admin:alerts',
     invalidateStores: [],
   },
   {

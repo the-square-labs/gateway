@@ -255,6 +255,7 @@ describe('AI tool scope filtering', () => {
       'create_route',
       'update_route',
       'set_route_maintenance',
+      'resync_tls_distribution',
       'delete_route',
       'create_route_folder',
       'move_routes_to_folder',
@@ -277,6 +278,7 @@ describe('AI tool scope filtering', () => {
       'execute_node_console_command',
       'create_node',
       'rename_node',
+      'set_node_service_creation_lock',
       'delete_node',
       'manage_node_config',
       'manage_node_file',
@@ -303,10 +305,8 @@ describe('AI tool scope filtering', () => {
       'update_gateway_settings',
       'manage_system_updates',
       'get_audit_log',
+      'manage_system_alerts',
       'get_dashboard_stats',
-      'list_groups',
-      'create_group',
-      'update_group',
     ]);
     expect(TOOL_STORE_INVALIDATION_MAP.create_root_ca).toEqual(['ca']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_certificate).toEqual(['certificates', 'ca']);
@@ -746,6 +746,9 @@ describe('AI tool scope filtering', () => {
       'manage_docker_source',
       'manage_docker_task',
       'manage_docker_container_config',
+      'manage_docker_deployment',
+      'kill_docker_container',
+      'force_cancel_docker_task',
     ]);
     expect(dockerToolNamesForScopes(['docker:containers:view'])).toEqual([
       'list_docker_containers',
@@ -782,6 +785,7 @@ describe('AI tool scope filtering', () => {
       'manage_docker_build',
       'manage_docker_source',
       'manage_docker_container_config',
+      'kill_docker_container',
     ]);
     expect(dockerToolNamesForScopes(['docker:images:view'])).toEqual(['list_docker_images']);
     expect(dockerToolNamesForScopes(['docker:volumes:view'])).toEqual(['list_docker_volumes']);

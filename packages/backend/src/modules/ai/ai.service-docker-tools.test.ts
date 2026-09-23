@@ -9,6 +9,7 @@ import { AIService } from './ai.service.js';
 
 vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
   assertComposeChildMutationAllowed: vi.fn().mockResolvedValue(undefined),
+  assertComposeVolumeMutationAllowed: vi.fn().mockResolvedValue(undefined),
 }));
 
 const BASE_USER = {

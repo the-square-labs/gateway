@@ -15,17 +15,22 @@ import {
   ComposeYamlInputSchema,
 } from '@/modules/docker/compose/compose.schemas.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
-import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
+import {
+  assertComposeChildMutationAllowed,
+  assertComposeVolumeMutationAllowed,
+} from '@/modules/docker/compose/compose-child.guard.js';
 import {
   ContainerCreateSchema,
+  ContainerKillSchema,
   ContainerStopSchema,
   ImagePullSchema,
   RegistryCreateSchema,
   RegistryUpdateSchema,
   VolumeCreateSchema,
+  VolumeResizeSchema,
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
-import { assertDockerNodeScope } from '@/modules/docker/docker-access.middleware.js';
+import { assertDockerNodeScope, assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
 import {
   DockerAccessResourceService,
   hasDockerResourceScope,
@@ -43,8 +48,10 @@ import {
 } from '@/modules/docker/docker-build.schemas.js';
 import { assertDockerCreationAccess, placeCreatedDockerResource } from '@/modules/docker/docker-creation-access.js';
 import {
+  DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
   DockerDeploymentSwitchSchema,
+  DockerDeploymentUpdateSchema,
 } from '@/modules/docker/docker-deployment.schemas.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { presentDeploymentForCaller } from '@/modules/docker/docker-deployment-redaction.js';
@@ -107,6 +114,9 @@ export const DOCKER_TOOL_NAMES = new Set([
   'manage_docker_build',
   'manage_docker_source',
   'manage_docker_task',
+  'manage_docker_deployment',
+  'kill_docker_container',
+  'force_cancel_docker_task',
 ]);
 
 export interface DockerToolContext {
@@ -281,10 +291,12 @@ export async function executeDockerTool(
     }
     case 'start_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       await context.dockerService.startContainer(a.nodeId, a.containerId, user.id);
       return { success: true };
     case 'stop_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       return {
         success: true,
         message: 'Container stopping',
@@ -297,6 +309,7 @@ export async function executeDockerTool(
       };
     case 'restart_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       return {
         success: true,
         message: 'Container restarting',
@@ -307,18 +320,28 @@ export async function executeDockerTool(
           user.id
         ),
       };
+    case 'kill_docker_container': {
+      await ensureDockerContainerScope(context, user, 'docker:containers:manage', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
+      const { signal } = ContainerKillSchema.parse({ signal: a.signal });
+      await context.dockerService.killContainer(a.nodeId, a.containerId, signal, user.id);
+      return { success: true, message: `Sent ${signal} to the container` };
+    }
     case 'remove_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:delete', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       await context.dockerService.removeContainer(a.nodeId, a.containerId, a.force ?? false, user.id);
       return { success: true };
     case 'rename_docker_container':
       await ensureDockerContainerScope(context, user, 'docker:containers:edit', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       await context.dockerService.renameContainer(a.nodeId, a.containerId, a.name, user.id);
       return { success: true };
     case 'duplicate_docker_container': {
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
       await ensureDockerContainerScope(context, user, 'docker:containers:environment', a.nodeId, a.containerId);
       await ensureDockerContainerScope(context, user, 'docker:containers:secrets', a.nodeId, a.containerId);
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       const dupData = await context.dockerService.duplicateContainer(
         a.nodeId,
         a.containerId,
@@ -478,6 +501,10 @@ export async function executeDockerTool(
       return manageDockerSource(context, user, args);
     case 'manage_docker_task':
       return manageDockerTask(context, user, args);
+    case 'manage_docker_deployment':
+      return manageDockerDeployment(context, user, args);
+    case 'force_cancel_docker_task':
+      return forceCancelDockerTask(user, args);
     default:
       throw new Error(`Unsupported Docker tool: ${toolName}`);
   }
@@ -797,23 +824,49 @@ function isPublicDockerHubRegistryUrl(value: unknown): boolean {
   }
 }
 
-function manageDockerVolume(context: DockerToolContext, user: User, args: Record<string, unknown>) {
+/**
+ * Mirrors docker-volume.routes.ts: the same scopes, zod schemas, visibility
+ * checks (requireDockerVolumeScope 'live' = assertUserVolumeVisible), Compose
+ * ownership guard, and service calls as the matching REST route.
+ */
+async function manageDockerVolume(context: DockerToolContext, user: User, args: Record<string, unknown>) {
   const a = args as any;
   const operation = String(a.operation);
+  const nodeId = String(a.nodeId);
+  const name = String(a.name);
   if (operation === 'create') {
+    // POST /nodes/:nodeId/volumes: createVolume enforces docker:volumes:create for the node or folder.
     const input = VolumeCreateSchema.parse({
       name: a.name,
       storageKind: a.storageKind,
       capacityBytes: a.capacityBytes,
       folderId: a.folderId,
     });
-    return context.dockerService.createVolume(String(a.nodeId), input, user.id, user.scopes);
+    return context.dockerService.createVolume(nodeId, input, user.id, user.scopes);
+  }
+  if (operation === 'resize') {
+    // POST /nodes/:nodeId/volumes/:name/resize
+    assertDockerResourceScope(user.scopes, 'docker:volumes:create', nodeId, name);
+    await context.dockerService.assertUserVolumeVisible(nodeId, name);
+    await assertComposeVolumeMutationAllowed(nodeId, name);
+    const { capacityBytes } = VolumeResizeSchema.parse({ capacityBytes: a.capacityBytes });
+    await context.dockerService.resizeVolume(nodeId, name, capacityBytes, user.id);
+    return { success: true };
+  }
+  if (operation === 'adopt') {
+    // POST /nodes/:nodeId/volumes/:name/adopt
+    assertDockerResourceScope(user.scopes, 'docker:volumes:create', nodeId, name);
+    await context.dockerService.assertUserVolumeVisible(nodeId, name);
+    assertDockerResourceScope(user.scopes, 'docker:volumes:view', nodeId, name);
+    await assertComposeVolumeMutationAllowed(nodeId, name);
+    return context.dockerService.adoptVolume(nodeId, name, user.id);
   }
   if (operation === 'delete') {
-    context.ensureToolScopeForResource(user, 'docker:volumes:delete', `${a.nodeId}/${a.name}`);
-    return context.dockerService
-      .removeVolume(String(a.nodeId), String(a.name), Boolean(a.force), user.id)
-      .then(() => ({ success: true }));
+    // DELETE /nodes/:nodeId/volumes/:name; removeVolume re-checks user visibility itself.
+    context.ensureToolScopeForResource(user, 'docker:volumes:delete', `${nodeId}/${name}`);
+    await assertComposeVolumeMutationAllowed(nodeId, name);
+    await context.dockerService.removeVolume(nodeId, name, Boolean(a.force), user.id);
+    return { success: true };
   }
   throw new Error(`Unsupported Docker volume operation: ${operation}`);
 }
@@ -1132,4 +1185,52 @@ async function manageDockerTask(context: DockerToolContext, user: User, args: Re
     });
   }
   throw new Error(`Unsupported Docker task operation: ${String(a.operation)}`);
+}
+
+/** Mirrors POST /tasks/{id}/force-cancel: docker:tasks:manage on the task node. */
+async function forceCancelDockerTask(user: User, args: Record<string, unknown>) {
+  const { DockerTaskService } = await import('@/modules/docker/docker-task.service.js');
+  const taskService = container.resolve(DockerTaskService);
+  const task = await taskService.get(String(args.taskId ?? ''));
+  if (!hasScopeForResource(user.scopes, 'docker:tasks:manage', task.nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: docker:tasks:manage:${task.nodeId}`);
+  }
+  return taskService.forceCancel(task.id);
+}
+
+/** Mirrors the deployment create, update, and delete routes, including their redaction. */
+async function manageDockerDeployment(context: DockerToolContext, user: User, args: Record<string, unknown>) {
+  const a = args as any;
+  const nodeId = String(a.nodeId ?? '');
+  const service = container.resolve(DockerDeploymentService);
+  switch (String(a.operation)) {
+    case 'create': {
+      if (!hasScopeBase(user.scopes, 'docker:containers:create')) {
+        throw new Error('PERMISSION_DENIED: Missing required scope docker:containers:create');
+      }
+      // The service checks the node or folder destination against these scopes.
+      const data = await service.create(
+        nodeId,
+        DockerDeploymentCreateSchema.parse(a.payload ?? {}),
+        user.id,
+        user.scopes
+      );
+      return presentDeploymentForCaller(data, user.scopes, nodeId, data.id);
+    }
+    case 'update': {
+      const deploymentId = String(a.deploymentId ?? '');
+      ensureDockerDeploymentScope(context, user, 'docker:containers:edit', nodeId, deploymentId);
+      const input = DockerDeploymentUpdateSchema.parse(a.payload ?? {});
+      const data = await service.update(nodeId, deploymentId, input, user.id, user.scopes);
+      return presentDeploymentForCaller(data, user.scopes, nodeId, deploymentId);
+    }
+    case 'delete': {
+      const deploymentId = String(a.deploymentId ?? '');
+      ensureDockerDeploymentScope(context, user, 'docker:containers:delete', nodeId, deploymentId);
+      await service.remove(nodeId, deploymentId, user.id);
+      return { success: true };
+    }
+    default:
+      throw new Error(`Unsupported Docker deployment operation: ${String(a.operation)}`);
+  }
 }

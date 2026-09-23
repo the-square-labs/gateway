@@ -4,6 +4,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { assertWorkloadBindingTargetAccess } from '@/modules/ai/ai.binding-target-access.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import { BucketQuerySchema } from '@/modules/object-storage/object-storage.docs.js';
 import {
   CreateBucketSchema,
   CreateObjectStorageConnectionSchema,
@@ -33,6 +34,7 @@ export const storageToolRuntime = {
   hasScopeForCreation,
   AppError,
   hasDockerResourceScope,
+  BucketQuerySchema,
   CreateBucketSchema,
   CreateObjectStorageConnectionSchema,
   CreatePrefixSchema,

@@ -198,6 +198,7 @@ describe('AIService proxy tool routing', () => {
     const proxyService = {
       getProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       updateProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
+      toggleProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(proxyService);
@@ -259,7 +260,6 @@ describe('AIService proxy tool routing', () => {
         forwardHost: 'new-app',
         forwardPort: 3001,
         forwardScheme: 'https',
-        enabled: false,
         sslEnabled: true,
         sslForced: true,
         http2Support: true,
@@ -295,6 +295,8 @@ describe('AIService proxy tool routing', () => {
         bypassAdvancedValidation: true,
       }
     );
+    // `enabled` is applied through the toggle lifecycle, not the update write.
+    expect(proxyService.toggleProxyHost).toHaveBeenCalledWith(COMPACT_HOST.id, false, 'user-1');
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_route', {
@@ -599,10 +601,21 @@ describe('AIService proxy tool routing', () => {
         domainNames: ['app.example.com'],
         templateVariables: { accessList: '', upstreamName: 'app' },
       })
-    ).resolves.toEqual({
-      error: 'Template variables cannot override Gateway-managed values: accessList',
-      invalidateStores: [],
-    });
+    ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
+    // Gateway-managed keys are dropped like the HTTP route does, not rejected.
+    expect(proxyService.createProxyHost).toHaveBeenLastCalledWith(
+      expect.objectContaining({ templateVariables: { upstreamName: 'app' } }),
+      'user-1',
+      expect.anything()
+    );
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', {
+        nodeId: 'node-1',
+        domainNames: ['app.example.com'],
+        templateVariables: ['accessList'],
+      })
+    ).resolves.toEqual({ error: 'templateVariables must be an object', invalidateStores: [] });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', {
@@ -611,7 +624,7 @@ describe('AIService proxy tool routing', () => {
         type: 'raw',
       })
     ).resolves.toEqual({ error: 'Enabling raw mode requires proxy:raw:toggle scope', invalidateStores: [] });
-    expect(proxyService.createProxyHost).toHaveBeenCalledTimes(1);
+    expect(proxyService.createProxyHost).toHaveBeenCalledTimes(2);
   });
 
   it('applies the proxy route move, reference, raw-toggle and template checks on update_route', async () => {
@@ -696,15 +709,25 @@ describe('AIService proxy tool routing', () => {
     );
     expect(assertReferenceAccess).toHaveBeenLastCalledWith([editScope], { sslCertificateId: 'ssl-2' }, existing);
 
-    // Node moves need proxy:create on the new node; reserved template variables are rejected.
+    // Node moves need proxy:create on the new node; reserved template variables are dropped.
     await expect(run([editScope], { nodeId: 'node-9' })).resolves.toEqual({
       error: 'Missing required scope: proxy:create:node-9',
       invalidateStores: [],
     });
-    await expect(run([editScope], { templateVariables: { sslCertPath: '/etc/passwd' } })).resolves.toEqual({
-      error: 'Template variables cannot override Gateway-managed values: sslCertPath',
-      invalidateStores: [],
-    });
+    await expect(
+      run([editScope], { templateVariables: { sslCertPath: '/etc/passwd', upstreamName: 'app' } })
+    ).resolves.toMatchObject({ result: COMPACT_HOST });
+    expect(proxyService.updateProxyHost).toHaveBeenLastCalledWith(
+      COMPACT_HOST.id,
+      { templateVariables: { upstreamName: 'app' } },
+      'user-1',
+      expect.anything()
+    );
+    expect(assertReferenceAccess).toHaveBeenLastCalledWith(
+      [editScope],
+      { templateVariables: { upstreamName: 'app' } },
+      existing
+    );
 
     // A reference the caller cannot use stops the update before the service runs.
     const calls = proxyService.updateProxyHost.mock.calls.length;

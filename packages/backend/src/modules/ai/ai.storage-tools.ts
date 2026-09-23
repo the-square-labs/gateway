@@ -75,13 +75,22 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_objects',
     description:
-      'List buckets/objects, inspect metadata, create a bucket or prefix, delete objects, or obtain a supported signed download URL.',
+      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, or obtain a supported signed download URL. delete_bucket takes config.bucket and needs storage:objects:admin.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['list_buckets', 'list_objects', 'head', 'create_bucket', 'create_prefix', 'delete_objects', 'presign'],
+          enum: [
+            'list_buckets',
+            'list_objects',
+            'head',
+            'create_bucket',
+            'delete_bucket',
+            'create_prefix',
+            'delete_objects',
+            'presign',
+          ],
         },
         storageId: id,
         config: object,

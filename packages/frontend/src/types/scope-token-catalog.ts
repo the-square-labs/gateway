@@ -71,12 +71,16 @@ const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
   "integrations:ssh:",
 ] as const;
 
+// Discovery reads plus connector resync; mirrors the backend MCP allow-list.
 const MCP_EXTERNAL_INTEGRATION_READ_SCOPE_VALUES = new Set([
   "integrations:gitlab:view",
   "integrations:gitlab:projects:view",
   "integrations:gitlab:repo:read",
+  "integrations:gitlab:sync",
   "integrations:github:view",
+  "integrations:github:sync",
   "integrations:git:view",
+  "integrations:git:sync",
   "integrations:ssh:view",
 ]);
 

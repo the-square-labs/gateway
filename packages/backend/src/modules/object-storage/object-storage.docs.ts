@@ -21,7 +21,7 @@ import {
 } from './object-storage.schemas.js';
 
 const TAG = 'Object Storage';
-const BucketQuerySchema = z.object({ bucket: z.string().min(1).max(255) });
+export const BucketQuerySchema = z.object({ bucket: z.string().min(1).max(255) });
 
 // ── Connections ─────────────────────────────────────────────────────
 

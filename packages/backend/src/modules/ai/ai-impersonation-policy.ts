@@ -6,6 +6,9 @@ const IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN = 'IMPERSONATION_CREDENTIAL_IS
 
 type ToolArgs = Record<string, unknown>;
 
+/** Certificate export formats that carry the private key (see ExportCertificateQuerySchema). */
+const PRIVATE_KEY_EXPORT_FORMATS: ReadonlySet<unknown> = new Set(['pkcs12', 'jks', 'private-key', 'pem-bundle']);
+
 /**
  * AI tool calls that mint, widen or reveal a credential that outlives the
  * impersonated session. Impersonation lets an administrator act as another
@@ -25,12 +28,16 @@ const CREDENTIAL_TOOL_CALLS: Readonly<Record<string, (args: ToolArgs) => boolean
   manage_logging: (args) => args.resource === 'token' && args.operation === 'create',
   manage_managed_storage: (args) => args.action === 'create_access_key',
   manage_database_connection: (args) => args.operation === 'reveal_credentials',
-  // Docker webhook rows carry the trigger token.
+  // Docker webhook rows carry the trigger token; a revealed secret list carries the values.
   manage_docker_container_config: (args) =>
     args.operation === 'get_webhook' ||
     args.operation === 'upsert_webhook' ||
-    args.operation === 'regenerate_webhook_token',
+    args.operation === 'regenerate_webhook_token' ||
+    (args.operation === 'list_secrets' && Boolean(args.reveal)),
   gitlab_create_deploy_token: () => true,
+  // Issuance generates the certificate's private key.
+  issue_certificate: () => true,
+  manage_certificate: (args) => args.operation === 'export' && PRIVATE_KEY_EXPORT_FORMATS.has(args.format),
 };
 
 export function isImpersonationBlockedToolCall(toolName: string, args: ToolArgs): boolean {

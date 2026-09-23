@@ -26,6 +26,7 @@ import {
   logger,
 } from './docker.service.shared.js';
 import { type DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
+import type { DockerBuildRolloutGuard, DockerBuildRolloutTarget } from './docker-build-rollout-guard.js';
 import {
   createContainer as createDockerContainer,
   type DockerContainerMutationContext,
@@ -155,6 +156,7 @@ export class DockerManagementService {
   private eventBus?: EventBusService;
   private evaluator?: NotificationEvaluatorService;
   private migrationGuard?: DockerMigrationGuard;
+  private buildRolloutGuard?: DockerBuildRolloutGuard;
   private accessResourceService?: DockerAccessResourceService;
   private networkAccessResourceService?: DockerNetworkAccessResourceService;
   private containerRecreateCompletedHandler?: (nodeId: string, newContainerId: string) => Promise<void>;
@@ -279,6 +281,20 @@ export class DockerManagementService {
 
   setMigrationGuard(guard: DockerMigrationGuard) {
     this.migrationGuard = guard;
+  }
+
+  setBuildRolloutGuard(guard: DockerBuildRolloutGuard) {
+    this.buildRolloutGuard = guard;
+  }
+
+  /** The build rollout that currently owns a target, if any. */
+  async findBuildRollout(target: DockerBuildRolloutTarget) {
+    return (await this.buildRolloutGuard?.find(target)) ?? null;
+  }
+
+  /** Refuses (409) while a build rollout owns the target; the rollout's own calls pass. */
+  async assertBuildRolloutAllowed(target: DockerBuildRolloutTarget): Promise<void> {
+    await this.buildRolloutGuard?.assertAllowed(target);
   }
 
   setAccessResourceService(service: DockerAccessResourceService) {
@@ -1164,6 +1180,11 @@ export class DockerManagementService {
     const transition = cName ? this.getTransition(nodeId, cName) : undefined;
     if (transition) data._transition = transition;
     else delete data._transition;
+    const buildRollout = cName
+      ? await this.buildRolloutGuard?.find({ kind: 'container', nodeId, containerName: cName }).catch(() => null)
+      : null;
+    if (buildRollout) data._buildRollout = { buildId: buildRollout.buildId, commitSha: buildRollout.commitSha };
+    else delete data._buildRollout;
     data.gpuAttachment = deriveDockerGpuAttachment(data, gpuInventory ?? (await this.gpuInventoryForNode(nodeId)));
     const labels = (data.Config?.Labels ?? data.config?.labels ?? {}) as Record<string, string>;
     const deploymentId = labels[DOCKER_DEPLOYMENT_ID_LABEL];
@@ -1286,6 +1307,7 @@ export class DockerManagementService {
   }
 
   async startContainer(nodeId: string, containerId: string, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerId, true, userId)) return;
     const containerName = await this.resolveContainerName(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerName, true, userId)) return;
@@ -1294,6 +1316,7 @@ export class DockerManagementService {
   }
 
   async stopContainer(nodeId: string, containerId: string, timeout: number | undefined, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerId, false, userId)) return;
     const containerName = await this.resolveContainerName(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerName, false, userId)) return;
@@ -1302,6 +1325,7 @@ export class DockerManagementService {
   }
 
   async restartContainer(nodeId: string, containerId: string, timeout: number | undefined, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerId, true, userId, true)) return;
     const containerName = await this.resolveContainerName(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.setRunning(nodeId, containerName, true, userId, true)) return;
@@ -1315,6 +1339,7 @@ export class DockerManagementService {
   }
 
   async removeContainer(nodeId: string, containerId: string, force: boolean, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     const managed = await this.workloadResolver?.resolveContainerRuntimeTarget(nodeId, containerId);
     if (managed && managed.workload.policy.mode !== 'single') {
       throw new AppError(
@@ -1332,6 +1357,7 @@ export class DockerManagementService {
   }
 
   async renameContainer(nodeId: string, containerId: string, newName: string, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     await this.migrationGuard?.assertContainerNameAvailable(nodeId, newName);
     await renameDockerContainer(this.containerMutationContext(), nodeId, containerId, newName, userId);
@@ -1364,6 +1390,7 @@ export class DockerManagementService {
     userId: string,
     actorScopes: string[] = []
   ) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     await this.assertContainerMigrationAllowed(nodeId, containerId);
     return updateDockerContainer(this.containerMutationContext(), nodeId, containerId, config, userId, actorScopes);
   }
@@ -1412,6 +1439,7 @@ export class DockerManagementService {
   }
 
   async liveUpdateContainer(nodeId: string, containerId: string, config: Record<string, unknown>, userId: string) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.updateConfiguration(nodeId, containerId, config, userId)) return;
     const containerName = await this.resolveContainerName(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.updateConfiguration(nodeId, containerName, config, userId)) return;
@@ -1435,6 +1463,7 @@ export class DockerManagementService {
       expectedState?: 'running' | 'created';
     }
   ) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     const availabilityOptions =
       options?.waitForAvailability || options?.forceAvailabilityRollout
         ? { waitForCompletion: options.waitForAvailability, forceRollout: options.forceAvailabilityRollout }
@@ -1478,6 +1507,7 @@ export class DockerManagementService {
     removeEnv: string[] | undefined,
     userId: string
   ) {
+    await this.assertContainerBuildRolloutAllowed(nodeId, containerId);
     if (await this.availabilityMutationCoordinator?.updateEnvironment(nodeId, containerId, env, removeEnv, userId)) {
       return { availabilityManaged: true };
     }
@@ -1950,6 +1980,24 @@ export class DockerManagementService {
 
   async manageRunsc(_nodeId: string, _action: 'preflight' | 'install'): Promise<DockerRuntimeStatus> {
     return commercialModuleUnavailable();
+  }
+
+  /**
+   * A build rollout owns its container until it finishes: user mutations are
+   * refused (409) instead of racing the recreate or being overwritten by it.
+   * Runs before Availability routing so a managed workload is covered too.
+   */
+  private async assertContainerBuildRolloutAllowed(nodeId: string, containerId: string): Promise<void> {
+    await this.buildRolloutGuard?.assertContainerAllowed(async () => {
+      const name = await this.resolveContainerName(nodeId, containerId);
+      const identities = [
+        { nodeId, containerName: containerId },
+        { nodeId, containerName: name },
+      ];
+      const managed = await this.getManagedContainerConfiguration(nodeId, name).catch(() => null);
+      if (managed) identities.push({ nodeId: managed.nodeId, containerName: managed.containerName });
+      return identities;
+    });
   }
 
   private async assertContainerMigrationAllowed(nodeId: string, containerId: string): Promise<void> {

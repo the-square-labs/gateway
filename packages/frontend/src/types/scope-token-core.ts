@@ -578,6 +578,12 @@ export const CORE_TOKEN_SCOPES = [
     group: "Integrations: GitHub",
   },
   {
+    value: "integrations:github:sync",
+    label: "Sync GitHub Integrations",
+    desc: "Re-validate GitHub connectors and their repository allowlist using the connector credential",
+    group: "Integrations: GitHub",
+  },
+  {
     value: "integrations:github:system",
     label: "Use GitHub System Credential",
     desc: "Use the connector credential instead of a personal GitHub authorization",
@@ -594,6 +600,12 @@ export const CORE_TOKEN_SCOPES = [
     value: "integrations:git:manage",
     label: "Manage Git Integrations",
     desc: "Create, edit, rotate, and delete generic Git connectors",
+    group: "Integrations: Git",
+  },
+  {
+    value: "integrations:git:sync",
+    label: "Sync Git Integrations",
+    desc: "Re-validate generic Git connectors and their repository allowlist using the connector credential",
     group: "Integrations: Git",
   },
   {
@@ -722,6 +734,12 @@ export const CORE_TOKEN_SCOPES = [
     value: "integrations:cloudflare:manage",
     label: "Manage Cloudflare Integrations",
     desc: "Create, edit, test, synchronize, rotate, and delete Cloudflare connectors",
+    group: "Integrations: Cloudflare",
+  },
+  {
+    value: "integrations:cloudflare:sync",
+    label: "Sync Cloudflare Integrations",
+    desc: "Refresh Cloudflare zones and token capabilities using the connector credential",
     group: "Integrations: Cloudflare",
   },
 ] as const;

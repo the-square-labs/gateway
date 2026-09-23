@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ObjectStorageConnection } from "@/types";
-import { draftFromConnection, secretReentryRequired } from "./StorageConnectionForm";
+import {
+  buildStoragePayload,
+  draftFromConnection,
+  secretReentryRequired,
+} from "./StorageConnectionForm";
 
 function connection(overrides: Partial<ObjectStorageConnection>): ObjectStorageConnection {
   return {
@@ -58,5 +62,43 @@ describe("secretReentryRequired", () => {
     expect(secretReentryRequired(s3)).toBe(false);
     expect(secretReentryRequired({ ...s3, endpoint: "https://elsewhere" })).toBe(true);
     expect(secretReentryRequired({ ...s3, provider: "other" })).toBe(true);
+  });
+});
+
+describe("buildStoragePayload for an unchanged file-protocol connection", () => {
+  // The API asks for the secret again when the CA or host key fingerprint it
+  // receives differs from the stored one, so an untouched form must echo both.
+  it("sends the stored SFTP host key fingerprint back exactly", () => {
+    const fingerprint = "SHA256:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU";
+    const sftp = connection({
+      provider: "sftp",
+      host: "files.example.com",
+      port: 22,
+      username: "deploy",
+      hostKeyFingerprint: fingerprint,
+      hasStoredPassword: true,
+    });
+
+    const config = buildStoragePayload(draftFromConnection(sftp)).config as Record<string, unknown>;
+
+    expect(config.hostKeyFingerprint).toBe(fingerprint);
+    expect(config).not.toHaveProperty("caPem");
+    expect(config).not.toHaveProperty("password");
+  });
+
+  it("leaves a stored FTPS CA certificate out of the payload so it is kept as stored", () => {
+    const ftps = connection({
+      provider: "ftps",
+      host: "files.example.com",
+      port: 21,
+      username: "deploy",
+      hasStoredPassword: true,
+      hasStoredCaPem: true,
+    });
+
+    const config = buildStoragePayload(draftFromConnection(ftps)).config as Record<string, unknown>;
+
+    expect(config).not.toHaveProperty("caPem");
+    expect(config).not.toHaveProperty("hostKeyFingerprint");
   });
 });

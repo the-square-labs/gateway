@@ -181,6 +181,13 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     toolNames: toolNamesForCategories(['Status Page']),
   },
   {
+    id: 'integrations',
+    title: 'Integrations',
+    description:
+      'Integration connector inventory and connector resync for GitLab, GitHub, generic Git, Cloudflare, and external SSH.',
+    toolNames: toolNamesForCategories(['Integrations']),
+  },
+  {
     id: 'notifications',
     title: 'Notifications',
     description: 'Alert rules, webhooks, delivery logs, and notification statistics.',

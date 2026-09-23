@@ -614,14 +614,26 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create or delete Docker volumes on a node. Create always produces a regular Gateway-managed local volume and accepts no driver setting. Disk-image creation/resizing and legacy-volume adoption remain explicit UI/REST actions. Listing is available via list_docker_volumes.',
+      'Create, resize, adopt, or delete Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['create', 'delete'] },
+        operation: { type: 'string', enum: ['create', 'resize', 'adopt', 'delete'] },
         nodeId: { type: 'string' },
-        name: { type: 'string' },
-        force: { type: 'boolean' },
+        name: { type: 'string', description: 'Volume name. For create, the new volume name.' },
+        storageKind: {
+          type: 'string',
+          enum: ['regular', 'disk-image'],
+          description: 'create only. Defaults to regular.',
+        },
+        capacityBytes: {
+          type: 'integer',
+          minimum: 268435456,
+          description:
+            'Disk-image capacity in bytes. Required for create with storageKind disk-image, and for resize (new, larger size).',
+        },
+        folderId: { type: 'string', description: 'create only. Authorized destination volume folder UUID.' },
+        force: { type: 'boolean', description: 'delete only.' },
       },
       required: ['operation', 'nodeId', 'name'],
     },
@@ -912,5 +924,62 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'docker:containers:view',
     invalidateStores: [],
     historyRetention: { mode: 'summary_only' },
+  },
+  {
+    name: 'manage_docker_deployment',
+    description:
+      'Create, update, or delete a blue/green Docker deployment. create needs docker:containers:create for the node or folder; update needs docker:containers:edit; delete needs docker:containers:delete and removes both slots and the router. Use deploy_docker_deployment to roll out a new image.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['create', 'update', 'delete'] },
+        nodeId: { type: 'string', description: 'Docker node ID' },
+        deploymentId: { type: 'string', description: 'Gateway deployment ID for update and delete' },
+        payload: {
+          type: 'object',
+          description:
+            'create: { name, image, registryId?, folderId?, routes: [{ hostPort, containerPort, isPrimary? }], health?: { path, statusMin, statusMax, timeoutSeconds, intervalSeconds, successThreshold, startupGraceSeconds, deployTimeoutSeconds }, drainSeconds?, routerImage?, env?, mounts?, command?, entrypoint?, workingDir?, user?, labels?, restartPolicy?, runtimeProfile?, gpu? }. update: { name?, desiredConfig?, routes?, health?, drainSeconds? }.',
+        },
+      },
+      required: ['operation', 'nodeId'],
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:edit',
+    invalidateStores: ['containers'],
+  },
+  {
+    name: 'kill_docker_container',
+    description:
+      'Send a signal (default SIGKILL) to a Docker container. Prefer stop_docker_container unless an immediate kill is explicitly requested. Compose-owned containers must be changed through their Compose project.',
+    parameters: {
+      type: 'object',
+      properties: {
+        nodeId: { type: 'string', description: 'Docker node ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
+        signal: { type: 'string', description: 'Signal name, for example SIGKILL or SIGTERM. Defaults to SIGKILL.' },
+      },
+      required: ['nodeId', 'containerId'],
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:manage',
+    invalidateStores: ['containers'],
+  },
+  {
+    name: 'force_cancel_docker_task',
+    description:
+      'Force-cancel a stuck active Docker background task (image pull, container update, webhook action) found with manage_docker_task. Requires docker:tasks:manage for the task node.',
+    parameters: {
+      type: 'object',
+      properties: {
+        taskId: { type: 'string', description: 'Docker task ID' },
+      },
+      required: ['taskId'],
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:tasks:manage',
+    invalidateStores: ['tasks'],
   },
 ];

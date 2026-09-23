@@ -5,6 +5,7 @@ import {
   Copy,
   GitBranch,
   Hammer,
+  Loader2,
   Pin,
   Play,
   RotateCcw,
@@ -88,6 +89,7 @@ import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { EnvironmentTab } from "./docker-detail/EnvironmentTab";
 import { FilesTab } from "./docker-detail/FilesTab";
 import {
+  buildRolloutBusyReason,
   containerArchiveCapabilities,
   containerDisplayName,
   containerLifecycleActions,
@@ -1032,6 +1034,13 @@ export function DockerContainerDetail({
     void fetchContainer(true);
   });
 
+  // A build rollout starting or finishing changes whether the container is busy.
+  useRealtime("docker.build.changed", (payload) => {
+    const event = payload as { targetKind?: string; targetName?: string };
+    if (event.targetKind !== "container" || event.targetName !== routeContainerName) return;
+    void fetchContainer(true);
+  });
+
   useRealtime("docker.health.changed", (payload) => {
     const ev = payload as {
       nodeId?: string;
@@ -1312,10 +1321,14 @@ export function DockerContainerDetail({
         availabilityPolicy.latestOperation.status
       )
   );
+  // A build rollout owns the container from acceptance until it finishes; the
+  // server refuses every mutation (409) meanwhile, so disable them with the reason.
+  const buildRolloutReason = buildRolloutBusyReason(container?._buildRollout, "container");
   const actionDisabled =
     actionLoading ||
     (availabilityManaged ? availabilityBusy : !!effectiveTransition || unavailable) ||
-    composeManaged;
+    composeManaged ||
+    !!buildRolloutReason;
   const deploymentManaged = labels["wiolett.gateway.deployment.managed"] === "true";
   const gpuMapped =
     container?.gpuAttachment?.mode === "managed" || container?.gpuAttachment?.mode === "external";
@@ -1327,9 +1340,8 @@ export function DockerContainerDetail({
       ? "Docker Compose resources cannot be migrated"
       : deploymentManaged
         ? "Migrate this container through its Gateway deployment"
-        : actionDisabled
-          ? "Container is unavailable or changing state"
-          : undefined;
+        : (buildRolloutReason ??
+          (actionDisabled ? "Container is unavailable or changing state" : undefined));
   const currentTransition = runtimeReplacing ? "replacing" : effectiveTransition;
   const isStopped = availabilityManaged
     ? !availabilityPolicy?.shouldRun || availabilityServing === 0
@@ -1607,7 +1619,11 @@ export function DockerContainerDetail({
                 variant="outline"
                 size={headerAction.label === "Pin" ? "icon" : "default"}
                 disabled={headerAction.disabled}
-                title={headerAction.disabled ? headerAction.disabledReason : undefined}
+                title={
+                  headerAction.disabled
+                    ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
+                    : undefined
+                }
                 onClick={headerAction.onClick}
               >
                 {headerAction.icon}
@@ -1616,6 +1632,18 @@ export function DockerContainerDetail({
             ))}
           </ResponsiveHeaderActions>
         </div>
+
+        {buildRolloutReason && !composeManaged && (
+          <div
+            role="status"
+            className="flex items-center gap-2 border border-primary/20 bg-primary/5 p-3 text-sm"
+          >
+            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+            <p>
+              {buildRolloutReason}. Configuration and lifecycle changes are disabled until then.
+            </p>
+          </div>
+        )}
 
         {composeManaged && (
           <div className="flex flex-wrap items-center justify-between gap-3 border border-primary/20 bg-primary/5 p-3 text-sm">
@@ -1821,7 +1849,7 @@ export function DockerContainerDetail({
                   containerName={name}
                   scopeResourceId={scopeResourceId}
                   containerState={environmentWorkloadState}
-                  disabled={!!currentTransition}
+                  disabled={!!currentTransition || !!buildRolloutReason}
                   onMutationStart={beginMutationTransition}
                   onMutationEnd={clearMutationTransition}
                   onRecreating={refreshAfterMutation}
@@ -1841,7 +1869,7 @@ export function DockerContainerDetail({
                   onRecreating={refreshAfterMutation}
                   onRefresh={refreshAfterMutation}
                   onHealthCheckSaved={setHealthCheck}
-                  transition={currentTransition}
+                  transition={currentTransition ?? (buildRolloutReason ? "deploying" : undefined)}
                   readOnly={composeManaged}
                   availabilityManaged={availabilityManaged}
                   logicalContainerName={availabilityManaged ? routeContainerName : undefined}

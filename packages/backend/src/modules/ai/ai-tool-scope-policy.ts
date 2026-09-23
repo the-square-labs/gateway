@@ -99,7 +99,28 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:registries:delete',
   ],
   manage_docker_volume: ['docker:volumes:create', 'docker:volumes:delete'],
+  // The handlers enforce the exact per-provider route scope.
+  list_integration_connectors: [
+    'integrations:gitlab:view',
+    'integrations:gitlab:manage',
+    'integrations:github:view',
+    'integrations:git:view',
+    'integrations:cloudflare:view',
+    'integrations:ssh:view',
+  ],
+  sync_integration_connector: [
+    'integrations:gitlab:sync',
+    'integrations:gitlab:manage',
+    'integrations:cloudflare:sync',
+    'integrations:cloudflare:manage',
+    'integrations:github:sync',
+    'integrations:github:manage',
+    'integrations:git:sync',
+    'integrations:git:manage',
+    'integrations:ssh:manage',
+  ],
   manage_docker_network: ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete'],
+  manage_docker_deployment: ['docker:containers:create', 'docker:containers:edit', 'docker:containers:delete'],
   manage_docker_container_config: [
     'docker:containers:view',
     'docker:containers:environment',

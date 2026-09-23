@@ -245,6 +245,8 @@ export interface DockerDeployment {
   webhook?: DockerWebhook | null;
   healthCheck?: DockerHealthCheck | null;
   _transition?: string;
+  /** Set while a build rollout owns the deployment; user mutations are refused. */
+  _buildRollout?: DockerBuildRolloutOwner | null;
   availability?: "available" | "unavailable";
   _listTruncated?: boolean;
   _listTotal?: number;
@@ -665,4 +667,10 @@ export interface DaemonUpdateStatus {
   latestVersion: string | null;
   lastCheckedAt: string | null;
   nodes: DaemonNodeUpdateStatus[];
+}
+
+/** A build rollout that owns a container or deployment until it finishes. */
+export interface DockerBuildRolloutOwner {
+  buildId: string;
+  commitSha: string;
 }

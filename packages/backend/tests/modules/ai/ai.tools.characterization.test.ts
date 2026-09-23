@@ -42,8 +42,8 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 236,
-      digest: '6c28a4b13b330c07e6af1c674892479709aa2756dca9ceaf5e96aec09bd83d83',
+      count: 244,
+      digest: '3c3f38accc25d6ce88c068dc07634b0d3539f210bbc66ec23288a28b450fb99d',
       categoryCounts: {
         Discovery: 6,
         Artifact: 2,
@@ -54,12 +54,12 @@ describe('AI tool registry characterization', () => {
         'PKI - Certificates': 5,
         'PKI - Templates': 4,
         Folders: 2,
-        Ingress: 15,
+        Ingress: 16,
         'SSL Certificates': 4,
         Domains: 4,
         'Access Lists': 4,
-        Nodes: 8,
-        Administration: 12,
+        Nodes: 9,
+        Administration: 13,
         'AI Workspace': 4,
         Conversations: 1,
         OAuth: 1,
@@ -68,13 +68,14 @@ describe('AI tool registry characterization', () => {
         Dashboard: 1,
         Setup: 2,
         Documentation: 2,
-        Docker: 38,
+        Docker: 41,
         Databases: 12,
         Storage: 6,
         GitLab: 26,
         GitHub: 12,
         Git: 6,
         Cloudflare: 1,
+        Integrations: 2,
         Inference: 4,
         Logging: 1,
         'Status Page': 1,
@@ -87,10 +88,10 @@ describe('AI tool registry characterization', () => {
         'Web Search': 1,
       },
       destructive: {
-        count: 134,
-        digest: '5454e0e9d0183ae757e511156336d667cbd17ed76385d2ace8de7be862e4cb88',
+        count: 140,
+        digest: 'ceab54396256626bec9973cf4a68e389114f05172b1a253e442a2b0d1a2ffcf1',
       },
-      invalidationMapDigest: '8e085cf6d990249d5a3b196675af430bc20e8fed576341f4b601bc5f64ea974d',
+      invalidationMapDigest: 'e82d59902d0f26c22f9568a1393d72abaddb079925fe6c51fe74ac5412f2f062',
     });
     expect(new Set(AI_TOOLS.map((tool) => tool.name)).size).toBe(AI_TOOLS.length);
   });
@@ -112,20 +113,20 @@ describe('AI tool registry characterization', () => {
       )
     ).toEqual({
       allDefault: {
-        count: 232,
-        digest: '7021c4f3964dfa3a4192d35a8b5dc1b7dd76e900fc243a806b454c20630d47bc',
+        count: 240,
+        digest: '77c43150516c92aae6fe0279ce55a1cde3ade9aa032a10470d6629d244d1df35',
       },
       allCapabilities: {
-        count: 233,
-        digest: 'b552a6ebd47ee4fef835e2c17234f0a9b185d4fda7469187ae0028375f16701b',
+        count: 241,
+        digest: '8ce9d4fc09bfd9fc76338348e5c9714f00c9e1c28ad4b168894e281e152c86b8',
       },
       discoveredIngressDocker: {
-        count: 71,
-        digest: '57b6846b955cdc3ff79b04647c0859d1e586e0d3d5d800e5564b91c78d74955d',
+        count: 75,
+        digest: '316e4bb28777e0e21b45ef02ed4f9fa7802ea5626e24c8b7fb8da1d7780ca53f',
       },
       planningMode: {
-        count: 131,
-        digest: 'd676753f94215b539f348672906ab95d9c1a749322846be7163afcd3cd7ff395',
+        count: 133,
+        digest: 'b8cbbfae9a38d5d54e125a94ada3d13a05d0577cfb2e5f43f5c440904125bf51',
       },
     });
     expect(matrix.allDefault).not.toContain('web_search');

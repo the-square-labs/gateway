@@ -349,6 +349,7 @@ describe('AIService MCP audit core behavior', () => {
     const proxyService = {
       createProxyHost: vi.fn().mockResolvedValue(rawProxyHost),
       updateProxyHost: vi.fn().mockResolvedValue(rawProxyHost),
+      toggleProxyHost: vi.fn().mockResolvedValue(rawProxyHost),
       getProxyHost: vi.fn().mockResolvedValue(rawProxyHost),
       assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };

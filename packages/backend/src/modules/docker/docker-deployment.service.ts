@@ -15,6 +15,7 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import type { DockerBuildRolloutGuard } from './docker-build-rollout-guard.js';
 import type {
   DockerDeploymentCreateInput,
   DockerDeploymentDeployInput,
@@ -41,7 +42,8 @@ type DeploymentTransition =
   | 'stopping'
   | 'restarting'
   | 'killing'
-  | 'removing';
+  | 'removing'
+  | 'updating';
 export interface DockerDeploymentDetail extends DeploymentRow {
   routes: DeploymentRouteRow[];
   slots: DeploymentSlotRow[];
@@ -72,6 +74,7 @@ export class DockerDeploymentService {
   setHealthCheckService(_service: DockerHealthCheckService): void {}
   setImageCleanupService(_service: DockerImageCleanupService): void {}
   setMigrationGuard(_guard: DockerMigrationGuard): void {}
+  setBuildRolloutGuard(_guard: DockerBuildRolloutGuard): void {}
   setAccessResourceService(_service: DockerAccessResourceService): void {}
   setAvailabilityCoordinator(
     _coordinator: NonNullable<{

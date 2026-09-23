@@ -28,6 +28,7 @@ import {
   upsertDeploymentWebhookRoute,
 } from './docker.docs.js';
 import { SecretCreateSchema, SecretUpdateSchema } from './docker.schemas.js';
+import { DockerManagementService } from './docker.service.js';
 import {
   assertDockerNodeScope,
   assertDockerResourceScope,
@@ -48,6 +49,18 @@ import { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import { resolveDockerDeploymentIdByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { WebhookUpsertSchema } from './docker-webhook.schemas.js';
+
+/** The build rollout owning a deployment; the UI shows it as busy and disables mutations. */
+async function deploymentBuildRollout(deploymentId: string) {
+  try {
+    const rollout = await container
+      .resolve(DockerManagementService)
+      .findBuildRollout({ kind: 'deployment', deploymentId });
+    return rollout ? { buildId: rollout.buildId, commitSha: rollout.commitSha } : null;
+  } catch {
+    return null;
+  }
+}
 
 function deploymentSecretContainerName(deploymentId: string) {
   return `deployment:${deploymentId}`;
@@ -192,7 +205,7 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       c.req.param('nodeId')!,
       deploymentId
     );
-    return c.json({ data: { ...presented, availability } });
+    return c.json({ data: { ...presented, availability, _buildRollout: await deploymentBuildRollout(deploymentId) } });
   });
 
   router.openapi(
@@ -204,7 +217,9 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const data = await service.get(nodeId, deploymentId);
       const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
       const presented = presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId);
-      return c.json({ data: { ...presented, availability } });
+      return c.json({
+        data: { ...presented, availability, _buildRollout: await deploymentBuildRollout(deploymentId) },
+      });
     }
   );
 
