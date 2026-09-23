@@ -1,6 +1,6 @@
-import { and, eq, isNotNull, isNull, notLike } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { settings, users } from '@/db/schema/index.js';
+import { settings } from '@/db/schema/index.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 
 const OIDC_SETTING_KEY = 'auth:oidc';
@@ -97,32 +97,8 @@ export class OidcSettingsService {
     if (!clientSecret) throw new Error('OIDC client secret is required');
 
     const stored: StoredOidcConfig = { issuer, clientId, clientSecret, redirectUri, scopes };
-    if (previous?.issuer && comparableIssuer(previous.issuer) !== comparableIssuer(issuer)) {
-      await this.bindUnboundSubjectsToIssuer(previous.issuer);
-    }
     await this.setStoredConfig(stored);
     return this.getPublicConfig();
-  }
-
-  /**
-   * Accounts that signed in before issuers were recorded are bound lazily on
-   * their next login. Before the issuer changes, pin every still-unbound
-   * account to the issuer that actually created it, so a subject from the new
-   * identity provider can never land on an account from the old one.
-   */
-  private async bindUnboundSubjectsToIssuer(issuer: string): Promise<void> {
-    await this.db
-      .update(users)
-      .set({ oidcIssuer: comparableIssuer(issuer) })
-      .where(
-        and(
-          eq(users.authMethod, 'oidc'),
-          isNull(users.oidcIssuer),
-          isNotNull(users.oidcSubject),
-          notLike(users.oidcSubject, 'manual:%'),
-          notLike(users.oidcSubject, 'system:%')
-        )
-      );
   }
 
   async importLegacyEnv(env: LegacyOidcEnvironment): Promise<boolean> {
@@ -177,11 +153,6 @@ function normalizeUrl(value: string, label: string): string {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`${label} must use http or https`);
   return url.toString();
-}
-
-/** Must match normalizeOidcIssuer in auth.service.ts. */
-function comparableIssuer(value: string): string {
-  return value.trim().replace(/\/+$/, '');
 }
 
 function normalizeScopes(value: string | undefined): string {

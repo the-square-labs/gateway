@@ -1,6 +1,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { nodes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { runOutsideProxyLocks } from './proxy-host-lock.js';
 import type { ProxyAdditionalSecureLinkRow } from './proxy-secure-link.service.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -347,10 +348,12 @@ export abstract class ProxyServiceSecureLinks extends ProxyServiceLifecycle {
 
   protected queueSecureLinkRuntimeSample(host: { id: string; nodeId: string | null }): void {
     if (!this.secureLinks || !host.nodeId) return;
-    void this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES).catch((error) => {
-      logger.debug('Initial Proxy Secure Link telemetry collection failed', {
-        hostId: host.id,
-        error: error instanceof Error ? error.message : String(error),
+    runOutsideProxyLocks(() => {
+      void this.sampleSecureLinkRuntime(host, SECURE_LINK_BACKGROUND_TRAFFIC_TAIL_LINES).catch((error) => {
+        logger.debug('Initial Proxy Secure Link telemetry collection failed', {
+          hostId: host.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     });
   }

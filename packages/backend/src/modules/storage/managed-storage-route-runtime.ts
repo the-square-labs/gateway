@@ -3,7 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, rejectImpersonation, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import {
   createManagedStorageAccessKeyRoute,
   createManagedStorageBindingRoute,
@@ -39,6 +39,7 @@ export const managedStorageRouteRuntime = {
   hasScopeForCreation,
   AppError,
   authMiddleware,
+  rejectImpersonation,
   requireScopeBase,
   createManagedStorageAccessKeyRoute,
   createManagedStorageBindingRoute,

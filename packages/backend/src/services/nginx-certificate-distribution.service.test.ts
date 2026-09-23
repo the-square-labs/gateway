@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
+import { runOutsideProxyLocks, withProxyHostLock } from '@/modules/proxy/proxy-host-lock.js';
 import {
   __testOnly,
   NGINX_CERTIFICATE_DISTRIBUTION_CAPABILITY as CAPABILITY,
@@ -209,6 +210,55 @@ describe('NginxCertificateDistributionService replica retries', () => {
     await service.reconcileIntegrity('node-1');
 
     expect(repair).not.toHaveBeenCalled();
+  });
+});
+
+// Regression: repair re-pushed deployment.configContent outside the per-host lock, racing a host apply.
+describe('NginxCertificateDistributionService replica repair locking', () => {
+  it('waits for the host lock and pushes the deployment committed by the holder', async () => {
+    const asset = { id: 'asset-1', referenceType: 'ssl', referenceId: 'cert-1' };
+    let current = { hostId: 'host-1', configContent: 'old-config', generation: 1 };
+    const db = {
+      query: {
+        nginxProxyHostDeployments: { findMany: vi.fn(async () => [current]) },
+        nginxCertificateReplicas: { findFirst: vi.fn().mockResolvedValue({ generation: 3 }) },
+      },
+    };
+    const applyTlsBundle = vi.fn().mockResolvedValue({ success: true });
+    const service = new NginxCertificateDistributionService(
+      db as never,
+      {} as never,
+      {} as never,
+      {
+        applyTlsBundle,
+      } as never
+    );
+    vi.spyOn(service as any, 'decryptAsset').mockReturnValue({
+      certificatePem: 'cert',
+      keyPem: 'key',
+      chainPem: null,
+      version: 'v1',
+      fingerprint: 'f',
+    });
+    vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(1);
+    vi.spyOn(service as any, 'clearDistributionIncompleteIfSettled').mockResolvedValue(undefined);
+
+    let repair!: Promise<void>;
+    await withProxyHostLock('host-1', async () => {
+      // Started as independent background work, like the integrity reconcile.
+      repair = runOutsideProxyLocks(() => (service as any).repairReplica(asset, 'node-1'));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      expect(applyTlsBundle).not.toHaveBeenCalled();
+      current = { hostId: 'host-1', configContent: 'new-config', generation: 2 };
+    });
+    await repair;
+
+    expect(applyTlsBundle).toHaveBeenCalledTimes(1);
+    expect(applyTlsBundle.mock.calls[0][1]).toMatchObject({
+      hostId: 'host-1',
+      configContent: 'new-config',
+      generation: 2,
+    });
   });
 });
 

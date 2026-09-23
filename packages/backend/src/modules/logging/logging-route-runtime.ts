@@ -5,7 +5,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScopeForCreation } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, rejectImpersonation, requireScope } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import {
   CreateResourceFolderSchema,
@@ -86,6 +86,7 @@ export const loggingRouteRuntime = {
   extractBaseScope,
   AppError,
   authMiddleware,
+  rejectImpersonation,
   requireScope,
   LicensePolicyService,
   CreateResourceFolderSchema,

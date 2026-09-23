@@ -633,6 +633,42 @@ export async function removeVolume(
   context.eventBus?.publish('docker.volume.changed', { nodeId, name, action: 'removed' });
 }
 
+/** Docker names anonymous volumes with 64 hex characters. */
+export function isAnonymousDockerVolumeName(name: string): boolean {
+  return /^[a-f0-9]{64}$/i.test(name);
+}
+
+/**
+ * Every volume on the node, including the ones listVolumes hides from users.
+ * Only for housekeeping, which looks for orphaned anonymous volumes.
+ */
+export async function listAllVolumes(context: DockerVolumeNetworkOperationContext, nodeId: string) {
+  return context.parseResult(await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'list'));
+}
+
+/**
+ * Housekeeping removal of an anonymous volume that no container uses. Such
+ * volumes are hidden from the user volume list, so the user visibility check
+ * does not apply; the name and the unused state are re-checked instead.
+ */
+export async function removeOrphanedAnonymousVolume(
+  context: DockerVolumeNetworkOperationContext,
+  nodeId: string,
+  name: string,
+  userId: string | null
+) {
+  if (!isAnonymousDockerVolumeName(name)) {
+    throw new AppError(409, 'VOLUME_NOT_ANONYMOUS', 'Housekeeping only removes anonymous volumes');
+  }
+  const volume = context.parseResult(await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'inspect', { name }));
+  const usedBy = volume?.UsedBy ?? volume?.usedBy;
+  if (Array.isArray(usedBy) && usedBy.length > 0) {
+    throw new AppError(409, 'VOLUME_IN_USE', 'Volume is in use');
+  }
+  // force=false: Docker still refuses a volume that a container started using meanwhile.
+  await removeVolume(context, nodeId, name, false, userId);
+}
+
 export async function adoptVolume(
   context: DockerVolumeNetworkOperationContext,
   nodeId: string,

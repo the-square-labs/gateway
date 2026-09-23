@@ -68,17 +68,29 @@ function mayPromote<T extends RotationCandidate>(
   );
 }
 
+function hasReportedTrust(instance: TrustCandidate): boolean {
+  return (instance.health?.policySigningKeyIds?.length ?? 0) > 0;
+}
+
 /**
  * Keys whose private half must survive because this relay can only be reached through them.
  * A relay that reports the active key needs nothing old. A relay that reports other keys needs
  * those: they are the only signers it will accept, and the next snapshot they sign carries the
- * active key. A relay that has reported nothing yet will bootstrap from its enrollment key.
+ * active key. A relay whose trust is unknown (nothing reported, or its supervisor could not reach
+ * the worker) may trust any key from its enrollment key onward, so it needs all of them.
  */
-function keysNeededByInstance(instance: TrustCandidate, activeKeyId: string): string[] {
+function keysNeededByInstance(
+  instance: TrustCandidate,
+  activeKeyId: string,
+  keys: Array<{ keyId: string; activatedAt: Date | null }>
+): string[] {
   const reported = instance.health?.policySigningKeyIds ?? [];
   if (reported.includes(activeKeyId)) return [];
   if (reported.length > 0) return reported;
-  return instance.policySigningKeyId ? [instance.policySigningKeyId] : [];
+  const enrolledAt = keys.find(({ keyId }) => keyId === instance.policySigningKeyId)?.activatedAt ?? null;
+  return keys
+    .filter(({ activatedAt }) => activatedAt !== null && (!enrolledAt || activatedAt >= enrolledAt))
+    .map(({ keyId }) => keyId);
 }
 
 /**
@@ -159,6 +171,23 @@ function planInstancePolicyKeys(
     signingKeyId,
     keys: [...keys.values()].sort((left, right) => left.keyId.localeCompare(right.keyId)),
   };
+}
+
+/**
+ * The key ids to store from a relay status report. A report without key ids, or from a relay
+ * that is offline or failing, says nothing about what the relay trusts: its supervisor sends
+ * that when it cannot reach its worker. Such a report keeps the previously stored ids, so the
+ * keys the relay depends on are not mistaken for unneeded ones.
+ */
+export function reportedPolicySigningKeyIds(
+  previous: string[] | undefined,
+  reported: string[] | undefined,
+  state: string
+): string[] {
+  const ids = reported ?? [];
+  const uninformative = ids.length === 0 || state === 'offline' || state === 'error';
+  if (uninformative && previous && previous.length > 0) return previous;
+  return ids;
 }
 
 export interface RelayPolicyTrustAnchor {
@@ -321,7 +350,9 @@ export class RelayPolicySigningKeyService {
 
   /**
    * Destroys old private keys that no enrolled relay needs any more. A relay stops needing an
-   * old key once it reports the active key, or when an admin removes it from the pool.
+   * old key once it reports the active key, or when an admin removes it from the pool. Nothing
+   * is destroyed while any relay's trust is unknown: a destroyed key cannot be brought back, and
+   * a relay that depended on it would be locked out for good.
    */
   async destroyUnneededPrivateKeys(now = new Date()): Promise<boolean> {
     return this.db.transaction(async (tx) => {
@@ -332,15 +363,18 @@ export class RelayPolicySigningKeyService {
         .where(eq(relayPolicySigningKeys.status, 'active'))
         .limit(1);
       if (!active) return false;
-      const held = await tx
-        .select({ id: relayPolicySigningKeys.id, keyId: relayPolicySigningKeys.keyId })
-        .from(relayPolicySigningKeys)
-        .where(
-          and(
-            inArray(relayPolicySigningKeys.status, ['verification_only', 'retired']),
-            sql`(${relayPolicySigningKeys.encryptedPrivateKey} is not null or ${relayPolicySigningKeys.encryptedDek} is not null)`
-          )
-        );
+      const keys = await tx
+        .select({
+          id: relayPolicySigningKeys.id,
+          keyId: relayPolicySigningKeys.keyId,
+          status: relayPolicySigningKeys.status,
+          activatedAt: relayPolicySigningKeys.activatedAt,
+          hasPrivateKey: sql<boolean>`(${relayPolicySigningKeys.encryptedPrivateKey} is not null or ${relayPolicySigningKeys.encryptedDek} is not null)`,
+        })
+        .from(relayPolicySigningKeys);
+      const held = keys.filter(
+        ({ status, hasPrivateKey }) => hasPrivateKey && (status === 'verification_only' || status === 'retired')
+      );
       if (held.length === 0) return false;
       const instances = await tx
         .select({
@@ -349,7 +383,8 @@ export class RelayPolicySigningKeyService {
           health: relayInstances.health,
         })
         .from(relayInstances);
-      const needed = new Set(instances.flatMap((instance) => keysNeededByInstance(instance, active.keyId)));
+      if (!instances.every(hasReportedTrust)) return false;
+      const needed = new Set(instances.flatMap((instance) => keysNeededByInstance(instance, active.keyId, keys)));
       const destroy = held.filter(({ keyId }) => !needed.has(keyId)).map(({ id }) => id);
       if (destroy.length === 0) return false;
       await tx

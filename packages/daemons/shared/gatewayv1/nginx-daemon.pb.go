@@ -1680,6 +1680,11 @@ type GatewayCommand struct {
 	// expired when it is received instead of executing work the gateway no
 	// longer waits for; older daemons ignore the field.
 	ExpiresAtUnixMs int64 `protobuf:"varint,72,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
+	// Gateway wall clock in Unix milliseconds when the command was sent. Lets a
+	// daemon judge expires_at_unix_ms against the gateway clock instead of its
+	// own, so clock skew between the two does not expire commands. A daemon
+	// skips the deadline check when this is zero; older daemons ignore it.
+	SentAtUnixMs int64 `protobuf:"varint,73,opt,name=sent_at_unix_ms,json=sentAtUnixMs,proto3" json:"sent_at_unix_ms,omitempty"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*GatewayCommand_ApplyConfig
@@ -1794,6 +1799,13 @@ func (x *GatewayCommand) GetCommandId() string {
 func (x *GatewayCommand) GetExpiresAtUnixMs() int64 {
 	if x != nil {
 		return x.ExpiresAtUnixMs
+	}
+	return 0
+}
+
+func (x *GatewayCommand) GetSentAtUnixMs() int64 {
+	if x != nil {
+		return x.SentAtUnixMs
 	}
 	return 0
 }
@@ -10612,11 +10624,12 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"tx_packets\x18\x05 \x01(\x03R\ttxPackets\x12\x1b\n" +
 	"\trx_errors\x18\x06 \x01(\x03R\brxErrors\x12\x1b\n" +
 	"\ttx_errors\x18\a \x01(\x03R\btxErrors\x12!\n" +
-	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xf6,\n" +
+	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\x9d-\n" +
 	"\x0eGatewayCommand\x12\x1d\n" +
 	"\n" +
 	"command_id\x18\x01 \x01(\tR\tcommandId\x12+\n" +
-	"\x12expires_at_unix_ms\x18H \x01(\x03R\x0fexpiresAtUnixMs\x12C\n" +
+	"\x12expires_at_unix_ms\x18H \x01(\x03R\x0fexpiresAtUnixMs\x12%\n" +
+	"\x0fsent_at_unix_ms\x18I \x01(\x03R\fsentAtUnixMs\x12C\n" +
 	"\fapply_config\x18\x02 \x01(\v2\x1e.gateway.v1.ApplyConfigCommandH\x00R\vapplyConfig\x12F\n" +
 	"\rremove_config\x18\x03 \x01(\v2\x1f.gateway.v1.RemoveConfigCommandH\x00R\fremoveConfig\x12@\n" +
 	"\vdeploy_cert\x18\x04 \x01(\v2\x1d.gateway.v1.DeployCertCommandH\x00R\n" +

@@ -27,12 +27,15 @@ const input = {
 };
 
 describe('OidcSettingsService issuer changes', () => {
-  it('pins accounts not yet bound to an issuer to the previous issuer before switching', async () => {
-    const { service, updateSet } = createService('https://old-idp.example.com/');
+  it('does not rewrite account issuers when the configured issuer changes', async () => {
+    // Accounts are bound to the `iss` their provider reports at login. Some
+    // providers (Entra ID, B2C) report an issuer that differs from the
+    // configured URL, so pinning accounts to the configured URL locks them out.
+    const { service, updateSet } = createService('https://login.microsoftonline.com/common/v2.0');
 
     await service.saveConfig({ ...input, issuer: 'https://new-idp.example.com' });
 
-    expect(updateSet).toHaveBeenCalledWith({ oidcIssuer: 'https://old-idp.example.com' });
+    expect(updateSet).not.toHaveBeenCalled();
   });
 
   it('leaves accounts alone when the issuer is unchanged', async () => {

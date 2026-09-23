@@ -483,12 +483,16 @@ export class NodeRegistryService {
     }
 
     const commandId = randomUUID();
+    const sentAt = Date.now();
     const fullCommand: GatewayCommand = {
       commandId,
       ...command,
       // The daemon drops a command that is already past the point where the
-      // gateway stops waiting for it. Older daemons ignore the field.
-      expiresAtUnixMs: String(Date.now() + timeoutMs),
+      // gateway stops waiting for it. It judges the deadline against sentAt,
+      // on the gateway clock, so clock skew between hosts cannot expire it.
+      // Older daemons ignore both fields.
+      expiresAtUnixMs: String(sentAt + timeoutMs),
+      sentAtUnixMs: String(sentAt),
     };
 
     let resolveAccepted!: () => void;

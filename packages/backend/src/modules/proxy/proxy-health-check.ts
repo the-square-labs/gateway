@@ -133,6 +133,30 @@ function gatewayInternalServiceNames(env: Partial<Env>): Set<string> {
   );
 }
 
+function urlPort(raw: string | undefined, fallback: number): number | null {
+  if (!raw) return null;
+  try {
+    const url = new URL(raw.includes('://') ? raw : `tcp://${raw}`);
+    return Number(url.port) || fallback;
+  } catch {
+    return null;
+  }
+}
+
+/** Ports the Gateway's own services listen on (API, gRPC, database, cache, relay, registry). */
+export function gatewayServicePorts(env: Partial<Env>): Set<number> {
+  const registryUrl = process.env.GATEWAY_INTERNAL_REGISTRY_URL || 'http://registry:5000';
+  const ports = [
+    env.PORT ?? 3000,
+    env.GRPC_PORT ?? 9443,
+    urlPort(env.DATABASE_URL, 5432),
+    urlPort(env.REDIS_URL, 6379),
+    urlPort(env.GATEWAY_RELAY_TARGET, 9443),
+    urlPort(registryUrl, registryUrl.startsWith('https:') ? 443 : 80),
+  ];
+  return new Set(ports.filter((port): port is number => Number.isInteger(port) && (port as number) > 0));
+}
+
 async function gatewayInternalServices(env: Partial<Env>): Promise<{ names: Set<string>; addresses: Set<string> }> {
   const now = Date.now();
   if (internalServiceCache && internalServiceCache.expiresAt > now) return internalServiceCache;
@@ -157,8 +181,9 @@ async function gatewayInternalServices(env: Partial<Env>): Promise<{ names: Set<
 /**
  * Proxy upstreams are internal services by nature (LAN hosts on 192.168/16, CGNAT/Tailscale on
  * 100.64/10, ULA), so health checks allow every private range instead of following the narrower
- * outbound webhook allowlist. Loopback, link-local/metadata, multicast, unspecified and the
- * Gateway's own addresses are still always refused by checkOutboundWebhookTarget.
+ * outbound webhook allowlist. Loopback, link-local/metadata, multicast and unspecified are still
+ * always refused by checkOutboundWebhookTarget; the Gateway's own addresses are refused on its
+ * service ports (see checkProxyHealthTarget).
  */
 export const PROXY_HEALTH_CHECK_POLICY: OutboundWebhookPolicy = Object.freeze({
   allowPrivateNetworks: true,
@@ -174,16 +199,20 @@ export const PROXY_HEALTH_CHECK_POLICY: OutboundWebhookPolicy = Object.freeze({
 
 /**
  * Health checks run inside the Gateway container against user-supplied upstreams, so they get
- * the health-check outbound policy (loopback, link-local/metadata and the Gateway's own addresses
- * are always refused; every private range is allowed) plus the Gateway's own compose services,
- * which a proxy upstream never legitimately points at.
+ * the health-check outbound policy (loopback and link-local/metadata are always refused; every
+ * private range is allowed) plus the Gateway's own compose services, which a proxy upstream never
+ * legitimately points at. The Gateway's own addresses (including the LAN address its public URL
+ * resolves to on one-box installs) are refused only on the Gateway's service ports, so an
+ * upstream on the same host stays checkable.
  */
 export async function checkProxyHealthTarget(
   url: string,
   env: Env,
   publicUrl?: string | null
 ): Promise<OutboundWebhookTargetCheck> {
-  const result = await checkOutboundWebhookTarget(url, PROXY_HEALTH_CHECK_POLICY, env, publicUrl);
+  const result = await checkOutboundWebhookTarget(url, PROXY_HEALTH_CHECK_POLICY, env, publicUrl, {
+    selfAddressBlockedPorts: gatewayServicePorts(env),
+  });
   if (!result.allowed) return result;
   const hostname = urlHostname(url);
   const internal = await gatewayInternalServices(env);
@@ -215,8 +244,11 @@ function headerValue(value: string | string[] | undefined): string | undefined {
 
 /**
  * Probe a direct upstream from the Gateway process through the health-check network policy, pinned
- * to the validated addresses. Only same-origin redirects are followed: they stay on the address
- * that was already validated, while a redirect to any other target is evaluated as-is.
+ * to the validated addresses. Redirects are followed up to PROXY_HEALTH_MAX_REDIRECTS hops: a
+ * same-origin hop stays on the addresses already validated, and a hop to another origin (for
+ * example a force-HTTPS redirect) is validated through the same policy and pinned to its own
+ * addresses. A redirect to a refused target is not followed; the 3xx then counts as a live
+ * upstream unless a specific status is expected.
  */
 export async function probeDirectProxyUpstream(
   host: Parameters<typeof resolveProxyHealthCheckUrl>[0] & ProxyHealthExpectation,
@@ -224,9 +256,10 @@ export async function probeDirectProxyUpstream(
 ): Promise<DirectProxyProbeResult> {
   const url = resolveProxyHealthCheckUrl(host);
   if (!url) return { status: 'offline', error: 'Proxy upstream endpoint is unavailable' };
+  const checkTarget = deps.checkTarget ?? checkProxyHealthTargetFromContainer;
   let target: OutboundWebhookTargetCheck;
   try {
-    target = await (deps.checkTarget ?? checkProxyHealthTargetFromContainer)(url);
+    target = await checkTarget(url);
   } catch (error) {
     return { status: 'blocked', reason: error instanceof Error ? error.message : String(error) };
   }
@@ -240,31 +273,61 @@ export async function probeDirectProxyUpstream(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), PROXY_HEALTH_CHECK_TIMEOUT_MS);
   const startedAt = performance.now();
-  try {
-    let currentUrl = url;
-    let response = await request(currentUrl, target.resolvedAddresses, {
+  const send = (targetUrl: string, addresses: string[]) =>
+    request(targetUrl, addresses, {
       method: 'GET',
       headers: {},
       signal: controller.signal,
       maxResponseBytes: PROXY_HEALTH_MAX_BODY_BYTES,
     });
+  try {
+    let currentUrl = url;
+    let addresses = target.resolvedAddresses;
+    let redirectRefused = false;
+    let response = await send(currentUrl, addresses);
     for (let hop = 0; hop < PROXY_HEALTH_MAX_REDIRECTS && response.status >= 300 && response.status < 400; hop++) {
       const location = headerValue(response.headers?.location);
       if (!location) break;
-      const next = new URL(location, currentUrl);
-      if (next.origin !== new URL(url).origin) break;
+      let next: URL;
+      try {
+        next = new URL(location, currentUrl);
+      } catch {
+        break;
+      }
+      if (next.origin !== new URL(currentUrl).origin) {
+        let nextTarget: OutboundWebhookTargetCheck | null = null;
+        if (next.protocol === 'http:' || next.protocol === 'https:') {
+          try {
+            nextTarget = await checkTarget(next.toString());
+          } catch {
+            nextTarget = null;
+          }
+        }
+        if (nextTarget && nextTarget.resolvedAddresses.length === 0) {
+          return {
+            status: 'offline',
+            error: nextTarget.reason ?? `Redirect target ${next.host} did not resolve`,
+            responseMs: Math.round(performance.now() - startedAt),
+            httpStatus: response.status,
+          };
+        }
+        if (!nextTarget?.allowed) {
+          redirectRefused = true;
+          break;
+        }
+        addresses = nextTarget.resolvedAddresses;
+      }
       currentUrl = next.toString();
-      response = await request(currentUrl, target.resolvedAddresses, {
-        method: 'GET',
-        headers: {},
-        signal: controller.signal,
-        maxResponseBytes: PROXY_HEALTH_MAX_BODY_BYTES,
-      });
+      response = await send(currentUrl, addresses);
     }
+    const scoredHost =
+      redirectRefused && !host.healthCheckExpectedStatus
+        ? { ...host, healthCheckExpectedStatus: response.status }
+        : host;
     const body = host.healthCheckExpectedBody ? await response.text() : null;
     const responseMs = Math.round(performance.now() - startedAt);
     return {
-      status: evaluateProxyHealthResponse(host, response.status, body) ? 'online' : 'offline',
+      status: evaluateProxyHealthResponse(scoredHost, response.status, body) ? 'online' : 'offline',
       responseMs,
       httpStatus: response.status,
     };

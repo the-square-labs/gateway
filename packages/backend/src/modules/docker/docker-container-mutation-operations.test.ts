@@ -858,4 +858,47 @@ describe('updateContainer image changes', () => {
     expect(inspectContainer).toHaveBeenLastCalledWith('node-1', 'container-2');
     expect(environmentService.replace).toHaveBeenCalledWith('node-1', 'db', { PG_MAJOR: '16', APP_MODE: 'prod' });
   });
+
+  it('restores the stored env when the async daemon update task fails later', async () => {
+    const environmentService = {
+      getDecryptedMap: vi.fn().mockResolvedValue({ APP_MODE: 'prod' }),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    const watchRecreateByName = vi.fn();
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      environmentService,
+      nodeDispatch: {
+        sendDockerContainerCommand: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify({ id: 'daemon-task-1', type: 'update', status: 'running' }),
+        }),
+      },
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      inspectContainer: vi.fn().mockResolvedValue({ Config: { Image: 'app:1', Env: ['APP_MODE=prod'], Labels: {} } }),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
+      longDockerOperationTimeoutMs: 600000,
+      runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
+      requireNoTransition: vi.fn(),
+      setTransition: vi.fn(),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      watchRecreateByName,
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+
+    await updateContainer(ctx as never, 'node-1', 'container-1', { env: { APP_MODE: 'staging' } }, 'user-1');
+
+    // Saved before dispatch, as the mutation itself.
+    expect(environmentService.replace).toHaveBeenCalledWith('node-1', 'app', { APP_MODE: 'staging' });
+    expect(watchRecreateByName.mock.calls[0][8]).toBe('daemon-task-1');
+    const onDaemonTaskFailed = watchRecreateByName.mock.calls[0][9] as () => Promise<void>;
+    await onDaemonTaskFailed();
+    expect(environmentService.replace).toHaveBeenLastCalledWith('node-1', 'app', { APP_MODE: 'prod' });
+  });
 });

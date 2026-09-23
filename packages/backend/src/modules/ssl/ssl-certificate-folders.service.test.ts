@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { FolderedResourceService } from '@/modules/resource-folders/resource-folder.service.js';
 import { SSLCertificateFolderService } from './ssl-certificate-folders.service.js';
 
 function serviceWithSystemCertificate() {
@@ -50,5 +51,19 @@ describe('SSLCertificateFolderService', () => {
       code: 'SSL_SYSTEM_CERT_FOLDER_LOCKED',
       statusCode: 409,
     });
+  });
+
+  it('forwards the caller access to the base folder move so per-certificate checks run', async () => {
+    const { service } = serviceWithSystemCertificate();
+    vi.spyOn(service, 'getFolderTree').mockResolvedValue([]);
+    const baseMove = vi
+      .spyOn(FolderedResourceService.prototype, 'moveFolder')
+      .mockResolvedValue({ id: 'folder-1' } as never);
+    const access = { scopes: ['ssl:cert:folders:manage'], editScope: 'ssl:cert:issue' };
+
+    await service.moveFolder('folder-1', { parentId: 'folder-2' }, 'user-1', access);
+
+    expect(baseMove).toHaveBeenCalledWith('folder-1', { parentId: 'folder-2' }, 'user-1', access);
+    baseMove.mockRestore();
   });
 });

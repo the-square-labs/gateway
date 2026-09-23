@@ -227,6 +227,32 @@ describe('AI folder tools', () => {
     );
   });
 
+  it.each([
+    ['domains', DomainFolderService, 'domains:folders:manage', 'domains:edit'],
+    ['ssl_certificates', SSLCertificateFolderService, 'ssl:cert:folders:manage', 'ssl:cert:issue'],
+  ] as const)('passes %s folder moves through the per-resource edit check', async (resourceType, token, manage, edit) => {
+    const folderId = '33333333-3333-4333-8333-333333333333';
+    const parentId = '44444444-4444-4444-8444-444444444444';
+    const folderService = { moveFolder: vi.fn().mockResolvedValue({ id: folderId }) };
+    vi.spyOn(container, 'resolve').mockImplementation((resolved: unknown) => {
+      if (resolved === token) return folderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const scopes = [manage, `${edit}:folder/${parentId}`];
+
+    await executeFolderTool({ ...BASE_USER, scopes }, 'manage_resource_folder', {
+      resourceType,
+      operation: 'move_folder',
+      folderId,
+      parentId,
+    });
+
+    expect(folderService.moveFolder).toHaveBeenCalledWith(folderId, { parentId }, 'user-1', {
+      scopes,
+      editScope: edit,
+    });
+  });
+
   it('requires route edit access on the destination when moving routes into a folder', async () => {
     const routeId = '11111111-1111-4111-8111-111111111111';
     const folderId = '33333333-3333-4333-8333-333333333333';

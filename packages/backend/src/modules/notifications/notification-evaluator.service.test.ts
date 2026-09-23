@@ -61,7 +61,7 @@ function createEvaluator(
       from: (table: unknown) => {
         const activeRows = () =>
           table === sslCertificates
-            ? certs.filter((cert) => cert.status === 'active')
+            ? certs.filter((cert) => ['active', 'error', 'expired'].includes(cert.status))
             : states.filter((state) => state.status === 'firing');
         return {
           where: async () => activeRows(),
@@ -399,7 +399,8 @@ describe('NotificationEvaluatorService certificate expiry evaluation', () => {
     });
   });
 
-  it('resolves stale firing state when the certificate is no longer active', async () => {
+  // Regression: renewal marks a certificate 'expired' after notAfter, which sent "Resolved".
+  it.each(['expired', 'error'])('keeps firing when the certificate becomes %s', async (status) => {
     const cert = {
       id: 'cert-1',
       name: 'example.com',
@@ -410,7 +411,25 @@ describe('NotificationEvaluatorService certificate expiry evaluation', () => {
     const { evaluator, states } = createEvaluator([cert]);
 
     await evaluator.evaluateCertificateExpiry(new Date('2026-04-01T00:00:00Z'));
-    cert.status = 'error';
+    cert.status = status;
+    await evaluator.evaluateCertificateExpiry(new Date('2026-04-11T00:00:00Z'));
+
+    expect(states).toHaveLength(1);
+    expect(states[0].status).toBe('firing');
+  });
+
+  it('resolves stale firing state when the certificate is no longer monitored', async () => {
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      domainNames: ['example.com'],
+      status: 'active',
+      notAfter: new Date('2026-04-10T00:00:00Z'),
+    };
+    const { evaluator, states } = createEvaluator([cert]);
+
+    await evaluator.evaluateCertificateExpiry(new Date('2026-04-01T00:00:00Z'));
+    cert.status = 'pending';
     await evaluator.evaluateCertificateExpiry(new Date('2026-04-01T00:00:00Z'));
 
     expect(states).toHaveLength(1);

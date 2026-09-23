@@ -98,7 +98,10 @@ export function watchDockerRecreateByName(
   expectedState: string,
   timeoutMs = 60000,
   onComplete?: (newContainerId: string) => Promise<void>,
-  daemonTaskId?: string
+  daemonTaskId?: string,
+  // Runs when the async daemon task reports that the change was not applied,
+  // before the task is failed and the container transition is released.
+  onDaemonTaskFailed?: () => Promise<void>
 ) {
   const start = Date.now();
   const poll = setInterval(async () => {
@@ -119,6 +122,7 @@ export function watchDockerRecreateByName(
           daemonTaskStatus = String(daemonTask.status ?? '');
           if (daemonTaskStatus === 'failed') {
             clearInterval(poll);
+            await onDaemonTaskFailed?.().catch(() => undefined);
             await context.failTask(
               taskId,
               String(daemonTask.error || 'Docker daemon task failed'),

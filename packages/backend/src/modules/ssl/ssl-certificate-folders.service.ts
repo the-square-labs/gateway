@@ -8,7 +8,7 @@ import type {
   MoveResourcesToFolderInput,
   ReorderResourcesInput,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
-import { FolderedResourceService } from '@/modules/resource-folders/resource-folder.service.js';
+import { FolderedResourceService, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
 
 export class SSLCertificateFolderService extends FolderedResourceService {
   constructor(
@@ -35,9 +35,9 @@ export class SSLCertificateFolderService extends FolderedResourceService {
     return super.reorderResources(input);
   }
 
-  override async moveFolder(id: string, input: MoveResourceFolderInput, userId: string) {
+  override async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
     await this.assertFolderTreeMovable(id);
-    return super.moveFolder(id, input, userId);
+    return super.moveFolder(id, input, userId, access);
   }
 
   override async deleteFolder(id: string, userId: string) {

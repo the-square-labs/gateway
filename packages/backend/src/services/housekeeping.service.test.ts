@@ -343,12 +343,12 @@ describe('HousekeepingService orphaned volume retention', () => {
       })),
     };
     const dockerManagement = {
-      listVolumes: vi.fn(async (nodeId: string) => {
+      listHousekeepingVolumes: vi.fn(async (nodeId: string) => {
         const result = options.volumes[nodeId];
         if (result instanceof Error) throw result;
         return result;
       }),
-      removeVolume: vi.fn().mockResolvedValue(undefined),
+      removeOrphanedAnonymousVolume: vi.fn().mockResolvedValue(undefined),
     };
     const service = new HousekeepingService(db as any, {} as any, {} as any, {} as any);
     service.setDockerManagementService(dockerManagement as any);
@@ -375,7 +375,7 @@ describe('HousekeepingService orphaned volume retention', () => {
 
     await expect(h.clean()).resolves.toEqual({ itemsCleaned: 0, spaceFreedBytes: 0 });
 
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
     expect(h.state()).toEqual({ 'node-1': { [VOLUME_A]: T0.toISOString() } });
   });
 
@@ -385,12 +385,12 @@ describe('HousekeepingService orphaned volume retention', () => {
     await h.clean();
     at(29);
     await h.clean();
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
 
     at(30);
     await expect(h.clean()).resolves.toEqual({ itemsCleaned: 1, spaceFreedBytes: 2048 });
-    expect(h.dockerManagement.removeVolume).toHaveBeenCalledTimes(1);
-    expect(h.dockerManagement.removeVolume).toHaveBeenCalledWith('node-1', VOLUME_A, false, 'user-1');
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).toHaveBeenCalledTimes(1);
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).toHaveBeenCalledWith('node-1', VOLUME_A, 'user-1');
   });
 
   it('restarts the clock when an unused volume is attached again', async () => {
@@ -398,7 +398,7 @@ describe('HousekeepingService orphaned volume retention', () => {
     const h = createHarness({ volumes, unusedSince: { 'node-1': { [VOLUME_A]: daysAgo(40) } } });
 
     await h.clean();
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
     expect(h.state()).toEqual({});
 
     at(1);
@@ -406,12 +406,12 @@ describe('HousekeepingService orphaned volume retention', () => {
     await h.clean();
     at(30);
     await h.clean();
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
     expect(h.state()).toEqual({ 'node-1': { [VOLUME_A]: new Date(T0.getTime() + DAY_MS).toISOString() } });
 
     at(31);
     await h.clean();
-    expect(h.dockerManagement.removeVolume).toHaveBeenCalledWith('node-1', VOLUME_A, false, 'user-1');
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).toHaveBeenCalledWith('node-1', VOLUME_A, 'user-1');
   });
 
   it('keeps tracking for nodes that are offline or fail to list volumes', async () => {
@@ -429,7 +429,7 @@ describe('HousekeepingService orphaned volume retention', () => {
 
     await h.clean();
 
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
     expect(h.state()).toEqual({
       'node-1': unusedSince['node-1'],
       'node-2': unusedSince['node-2'],
@@ -451,7 +451,7 @@ describe('HousekeepingService orphaned volume retention', () => {
 
     await h.clean();
 
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
     expect(h.state()).toEqual({});
   });
 
@@ -466,12 +466,12 @@ describe('HousekeepingService orphaned volume retention', () => {
     h.persist.mockRejectedValueOnce(new Error('database unavailable'));
 
     await expect(h.clean()).rejects.toThrow('no volumes were removed');
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
 
     volumes['node-1'] = [volume(VOLUME_A), volume(VOLUME_B)];
     await expect(h.clean()).resolves.toEqual({ itemsCleaned: 1, spaceFreedBytes: 2048 });
-    expect(h.dockerManagement.removeVolume).toHaveBeenCalledTimes(1);
-    expect(h.dockerManagement.removeVolume).toHaveBeenCalledWith('node-1', VOLUME_A, false, 'user-1');
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).toHaveBeenCalledTimes(1);
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).toHaveBeenCalledWith('node-1', VOLUME_A, 'user-1');
     expect(h.state()).toEqual({ 'node-1': { [VOLUME_A]: daysAgo(40), [VOLUME_B]: T0.toISOString() } });
   });
 
@@ -486,7 +486,7 @@ describe('HousekeepingService orphaned volume retention', () => {
     h.persist.mockRejectedValueOnce(new Error('database unavailable'));
 
     await expect((h.service as any).getOrphanedVolumeStats()).resolves.toEqual({ count: 1, reclaimableBytes: 2048 });
-    expect(h.dockerManagement.removeVolume).not.toHaveBeenCalled();
+    expect(h.dockerManagement.removeOrphanedAnonymousVolume).not.toHaveBeenCalled();
 
     // The unsaved observation of VOLUME_B is kept in memory and persisted by the next scan.
     at(1);

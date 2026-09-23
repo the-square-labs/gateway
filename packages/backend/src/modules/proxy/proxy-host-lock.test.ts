@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { activeProxyLockCount, proxyHostLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
+import {
+  activeProxyLockCount,
+  isProxyLockHeld,
+  proxyHostLockKey,
+  runOutsideProxyLocks,
+  withProxyHostLock,
+  withProxyLocks,
+} from './proxy-host-lock.js';
 
 function deferred() {
   let resolve!: () => void;
@@ -52,6 +59,36 @@ describe('proxy host lock', () => {
       })
     ).rejects.toThrow('apply failed');
     await expect(withProxyHostLock('host-1', async () => 'next')).resolves.toBe('next');
+    expect(activeProxyLockCount()).toBe(0);
+  });
+
+  // Regression: queued reconciliation, retry timers and event handlers started under the lock
+  // inherited its held keys and later ran without waiting for the lock.
+  it('runs detached work outside the lock so it waits for the holder', async () => {
+    const key = proxyHostLockKey('host-1');
+    const events: string[] = [];
+    let inherited: boolean | undefined;
+    let detached!: Promise<void>;
+    await withProxyHostLock('host-1', async () => {
+      await new Promise<void>((resolve) =>
+        setTimeout(() => {
+          inherited = isProxyLockHeld(key);
+          resolve();
+        }, 0)
+      );
+      detached = runOutsideProxyLocks(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(isProxyLockHeld(key)).toBe(false);
+        await withProxyHostLock('host-1', async () => {
+          events.push('detached');
+        });
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      events.push('holder:end');
+    });
+    await detached;
+    expect(inherited).toBe(true);
+    expect(events).toEqual(['holder:end', 'detached']);
     expect(activeProxyLockCount()).toBe(0);
   });
 });

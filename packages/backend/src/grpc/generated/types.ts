@@ -250,6 +250,8 @@ export interface GatewayCommand {
   commandId: string;
   /** Optional absolute dispatch deadline (Unix ms, int64 as string). Omitted or zero means no deadline. */
   expiresAtUnixMs?: string;
+  /** Optional gateway send time (Unix ms, int64 as string). Daemons judge expiresAtUnixMs against it. */
+  sentAtUnixMs?: string;
   applyConfig?: ApplyConfigCommand;
   removeConfig?: RemoveConfigCommand;
   deployCert?: DeployCertCommand;

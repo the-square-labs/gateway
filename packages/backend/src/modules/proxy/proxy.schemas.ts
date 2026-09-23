@@ -1,5 +1,8 @@
 import { z } from 'zod';
-import { reservedTemplateVariableNames } from './proxy-template-variables.js';
+import { createChildLogger } from '@/lib/logger.js';
+import { reservedTemplateVariableNames, withoutReservedTemplateVariables } from './proxy-template-variables.js';
+
+const logger = createChildLogger('ProxySchemas');
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -37,17 +40,16 @@ const RewriteRuleSchema = z.object({
   type: z.enum(['permanent', 'temporary']),
 });
 
-const TemplateVariablesSchema = z
-  .record(z.union([z.string(), z.number(), z.boolean()]))
-  .superRefine((variables, ctx) => {
-    const reserved = reservedTemplateVariableNames(variables);
-    if (reserved.length > 0) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `Template variables cannot override Gateway-managed values: ${reserved.join(', ')}`,
-      });
-    }
-  });
+/**
+ * Gateway-managed render keys are ignored at render time, and custom templates that declare such
+ * variables send them back from the host form. Drop them here instead of rejecting the save.
+ */
+const TemplateVariablesSchema = z.record(z.union([z.string(), z.number(), z.boolean()])).transform((variables) => {
+  const reserved = reservedTemplateVariableNames(variables);
+  if (reserved.length === 0) return variables;
+  logger.info('Dropped Gateway-managed template variables from proxy host input', { reserved });
+  return withoutReservedTemplateVariables(variables);
+});
 
 const HealthCheckBodyMatchModeSchema = z.enum(['includes', 'exact', 'starts_with', 'ends_with']);
 const RelaySpreadModeSchema = z.enum(['inherit', 'fixed', 'all']);

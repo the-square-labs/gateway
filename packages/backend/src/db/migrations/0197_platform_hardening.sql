@@ -30,12 +30,6 @@ CREATE UNIQUE INDEX "relay_policy_signing_keys_single_active_idx" ON "relay_poli
 UPDATE "ssl_certificates" SET "status" = 'active', "updated_at" = now()
 WHERE "status" = 'error' AND "type" = 'acme' AND "not_after" > now()
   AND "certificate_pem" IS NOT NULL AND "renewal_error" LIKE 'Renewal failed:%';--> statement-breakpoint
-UPDATE "users" SET "oidc_issuer" = rtrim(s."value"->>'issuer', '/')
-FROM "settings" s
-WHERE s."key" = 'auth:oidc' AND "users"."auth_method" = 'oidc' AND "users"."oidc_issuer" IS NULL
-  AND "users"."oidc_subject" IS NOT NULL
-  AND "users"."oidc_subject" NOT LIKE 'manual:%' AND "users"."oidc_subject" NOT LIKE 'system:%'
-  AND coalesce(s."value"->>'issuer', '') <> '';--> statement-breakpoint
 UPDATE "notification_alert_rules"
 SET "duration_seconds" = 0, "fire_threshold_percent" = 100, "resolve_after_seconds" = 0,
     "resolve_threshold_percent" = 100, "updated_at" = now()

@@ -177,6 +177,28 @@ describe('NodeRegistryService', () => {
     await expect(dispatched.result).resolves.toMatchObject({ success: true, detail: 'ok' });
   });
 
+  it('stamps each command with its send time next to the deadline', async () => {
+    const registry = new NodeRegistryService(makeDb() as never);
+    const commandStream = {
+      write: vi.fn((_command, callback: (error?: Error) => void) => callback()),
+    };
+    await registry.register('node-1', 'nginx', 'worker-1', 'hash-1', commandStream as never);
+
+    const dispatched = registry.dispatchCommand('node-1', { requestHealth: {} }, 10_000);
+    await dispatched.accepted;
+    const command = commandStream.write.mock.calls[0]?.[0];
+    expect(Number(command.expiresAtUnixMs) - Number(command.sentAtUnixMs)).toBe(10_000);
+    expect(Math.abs(Number(command.sentAtUnixMs) - Date.now())).toBeLessThan(5_000);
+    registry.handleCommandResult('node-1', {
+      commandId: command.commandId,
+      success: true,
+      error: '',
+      detail: '',
+      data: Buffer.alloc(0),
+    });
+    await dispatched.result;
+  });
+
   it('handles the acceptance promise for legacy sendCommand callers', async () => {
     const registry = new NodeRegistryService(makeDb() as never);
     const accepted = Promise.reject(new Error('write failed'));

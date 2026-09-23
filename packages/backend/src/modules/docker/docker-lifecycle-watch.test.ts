@@ -106,6 +106,39 @@ describe('watchDockerRecreateByName finalization', () => {
     expect(context.failTask).toHaveBeenCalledWith('task-1', 'volume copy failed', 'node-1', 'api');
   });
 
+  it('runs the daemon task failure callback before failing the task', async () => {
+    vi.useFakeTimers();
+    const { context } = recreateWatchContext();
+    context.nodeDispatch.sendDockerContainerCommand
+      .mockResolvedValueOnce({ success: true, detail: JSON.stringify([]) })
+      .mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify({ id: 'daemon-task-1', status: 'failed', error: 'pull failed' }),
+      });
+    const onDaemonTaskFailed = vi.fn().mockResolvedValue(undefined);
+    const onComplete = vi.fn();
+
+    watchDockerRecreateByName(
+      context as never,
+      'node-1',
+      'api',
+      'container-1',
+      'task-1',
+      'Container updated',
+      'running',
+      630000,
+      onComplete,
+      'daemon-task-1',
+      onDaemonTaskFailed
+    );
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(onDaemonTaskFailed).toHaveBeenCalledTimes(1);
+    expect(onDaemonTaskFailed.mock.invocationCallOrder[0]).toBeLessThan(context.failTask.mock.invocationCallOrder[0]);
+    expect(context.failTask).toHaveBeenCalledWith('task-1', 'pull failed', 'node-1', 'api');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
   it('does not mistake a healthy rollback container for a successful recreate', async () => {
     vi.useFakeTimers();
     const { context, taskService } = recreateWatchContext();

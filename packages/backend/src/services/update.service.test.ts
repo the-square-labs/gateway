@@ -955,16 +955,50 @@ describe('UpdateService interrupted updates', () => {
     await expect(service.acknowledgeGatewayUpdateFailure()).resolves.toBe(false);
   });
 
-  it('clears the attempt when the target version started', async () => {
+  it('keeps the attempt, marked started, until the target version has settled', async () => {
+    vi.useFakeTimers();
     const { db, writes } = scriptedDb([[{ key: 'update:gateway:attempt', value: attempt }], []]);
     const { service, audit } = serviceWith(db, 'v2.5.0');
 
     await service.recoverInterruptedUpdates();
 
     expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toBeNull();
-    expect(db.delete).toHaveBeenCalledOnce();
-    expect(writes).toEqual([]);
+    // The sidecar can still roll the target back: the record must survive start-up.
+    expect(db.delete).not.toHaveBeenCalled();
+    expect(writes).toEqual([
+      expect.objectContaining({
+        key: 'update:gateway:attempt',
+        value: expect.objectContaining({ targetVersion: 'v2.5.0', targetStartedAt: expect.any(String) }),
+      }),
+    ]);
     expect(audit.log).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(db.delete).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(db.delete).toHaveBeenCalledOnce();
+  });
+
+  it('reports a rollback that happened after the target version started', async () => {
+    const started = { ...attempt, targetStartedAt: '2026-09-23T12:05:00.000Z' };
+    const { db, writes } = scriptedDb([[{ key: 'update:gateway:attempt', value: started }], []]);
+    const { service, audit } = serviceWith(db, 'v2.4.2');
+
+    await service.recoverInterruptedUpdates();
+
+    expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toMatchObject({
+      status: 'failed',
+      targetVersion: 'v2.5.0',
+      error: expect.stringContaining('rolled back'),
+    });
+    expect(writes).toEqual([
+      expect.objectContaining({
+        key: 'update:gateway:attempt',
+        value: expect.objectContaining({ failedAt: expect.any(String) }),
+      }),
+    ]);
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'system.update.failed' }));
+    expect(db.delete).not.toHaveBeenCalled();
   });
 
   it('stops reporting an old failure after a day', async () => {

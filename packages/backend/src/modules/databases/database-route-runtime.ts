@@ -13,6 +13,7 @@ import {
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
+  rejectImpersonation,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
@@ -141,6 +142,7 @@ export const databaseRouteRuntime = {
   hasScopeForResource,
   AppError,
   authMiddleware,
+  rejectImpersonation,
   requireScope,
   requireScopeBase,
   requireScopeForResource,

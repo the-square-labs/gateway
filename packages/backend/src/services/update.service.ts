@@ -83,9 +83,16 @@ const UPDATE_HANDOFF_SETTLE_MS = 20 * 60_000;
 
 /**
  * Written before anything on the host changes. The process that starts next
- * reads it: the target version clears it, any other version reports a failure.
+ * reads it: the target version marks it started and clears it once the update
+ * settles, any other version reports a failure.
  */
 const GATEWAY_UPDATE_ATTEMPT_KEY = 'update:gateway:attempt';
+/**
+ * The sidecar keeps checking a started target for about 5 minutes and rolls it
+ * back if it never becomes healthy. The target keeps the attempt record this
+ * long, so the version it rolls back to still finds the record and reports it.
+ */
+const GATEWAY_UPDATE_TARGET_GRACE_MS = 10 * 60_000;
 /** A failed update stays reported this long unless an admin acknowledges it. */
 const FAILED_GATEWAY_UPDATE_REPORT_MS = 24 * 60 * 60_000;
 
@@ -97,6 +104,8 @@ interface GatewayUpdateAttempt {
   sidecarId: string | null;
   failedAt: string | null;
   error: string | null;
+  /** Set by the target version when it starts; the sidecar may still roll it back. */
+  targetStartedAt?: string | null;
 }
 
 /** States in which a Relay Pool update run is being driven by a Gateway process. */
@@ -214,6 +223,7 @@ export class UpdateService {
   private operationWaitOverride: AbortController | null = null;
   private handoffSettleTimer?: ReturnType<typeof setTimeout>;
   private failedReportTimer?: ReturnType<typeof setTimeout>;
+  private targetGraceTimer?: ReturnType<typeof setTimeout>;
   private readonly releasesUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
@@ -682,12 +692,23 @@ export class UpdateService {
     }
     const runningVersion = this.getCurrentVersion();
     if (normalizeVersionTag(runningVersion) === normalizeVersionTag(attempt.targetVersion)) {
-      logger.info('Gateway update completed', { from: attempt.fromVersion, to: attempt.targetVersion });
-      await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]);
+      await this.markGatewayUpdateTargetStarted(attempt);
       return;
     }
     if (!attempt.failedAt) {
       const container = attempt.sidecarId ? ` (docker logs ${attempt.sidecarId.slice(0, 12)})` : '';
+      if (attempt.targetStartedAt) {
+        if (normalizeVersionTag(runningVersion) !== normalizeVersionTag(attempt.fromVersion)) {
+          // The target started and something other than the rollback replaced it since.
+          await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]);
+          return;
+        }
+        await this.reportFailedGatewayUpdate(
+          `Gateway ${attempt.targetVersion} started but did not become healthy, so the update was rolled back and Gateway ${runningVersion} is running again. Check the update container logs on the Gateway host${container}.`,
+          attempt
+        );
+        return;
+      }
       await this.reportFailedGatewayUpdate(
         `Gateway ${attempt.targetVersion} did not start, so the update was rolled back and Gateway ${runningVersion} is running again. Check the update container logs on the Gateway host${container}.`,
         attempt
@@ -695,6 +716,41 @@ export class UpdateService {
       return;
     }
     this.restoreFailedGatewayUpdateReport(attempt);
+  }
+
+  /**
+   * The target version is running, but the sidecar can still roll it back until
+   * it passes the health checks. Keep the record, marked as started, so the
+   * version it rolls back to reports the rollback; clear it once the update had
+   * time to settle.
+   */
+  private async markGatewayUpdateTargetStarted(attempt: GatewayUpdateAttempt): Promise<void> {
+    const started: GatewayUpdateAttempt = {
+      ...attempt,
+      failedAt: null,
+      error: null,
+      targetStartedAt: attempt.targetStartedAt ?? new Date().toISOString(),
+    };
+    await this.upsertSetting(GATEWAY_UPDATE_ATTEMPT_KEY, started);
+    logger.info('Gateway update target started', { from: attempt.fromVersion, to: attempt.targetVersion });
+    clearTimeout(this.targetGraceTimer);
+    this.targetGraceTimer = setTimeout(() => {
+      void this.db
+        .delete(settings)
+        .where(
+          and(
+            eq(settings.key, GATEWAY_UPDATE_ATTEMPT_KEY),
+            // A newer attempt started from this process replaced the record: keep it.
+            sql`${settings.value}->>'startedAt' = ${started.startedAt}`,
+            sql`${settings.value}->>'targetVersion' = ${started.targetVersion}`
+          )
+        )
+        .then(() => logger.info('Gateway update completed', { from: started.fromVersion, to: started.targetVersion }))
+        .catch((error) =>
+          logger.warn('Could not clear the Gateway update attempt record', { error: formatError(error) })
+        );
+    }, GATEWAY_UPDATE_TARGET_GRACE_MS);
+    this.targetGraceTimer.unref?.();
   }
 
   /** Persists, audits and reports a Gateway update that did not replace this version. */
@@ -1879,6 +1935,7 @@ function parseGatewayUpdateAttempt(value: unknown): GatewayUpdateAttempt | null 
     sidecarId: text('sidecarId'),
     failedAt: text('failedAt'),
     error: text('error'),
+    targetStartedAt: text('targetStartedAt'),
   };
 }
 

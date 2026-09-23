@@ -1,17 +1,19 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
   scopes: [] as string[],
+  impersonating: false,
   nodesService: {
     list: vi.fn(),
     get: vi.fn(),
     getHistory: vi.fn(),
     update: vi.fn(),
     create: vi.fn(),
+    regenerateEnrollmentToken: vi.fn(),
   },
   folderService: { assertFolderExists: vi.fn() },
 }));
@@ -26,7 +28,13 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
   authMiddleware: async (c: any, next: () => Promise<void>) => {
     c.set('effectiveScopes', mocks.scopes);
     c.set('user', { id: 'user-1' });
+    if (mocks.impersonating) c.set('impersonation', { adminUserId: 'admin-1' });
     await next();
+  },
+  assertNotImpersonating: (c: any, message?: string) => {
+    if (c.get('impersonation')) {
+      throw new AppError(403, 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN', message ?? 'forbidden');
+    }
   },
   requireScope: () => async (_c: any, next: () => Promise<void>) => next(),
   requireScopeForResource: () => async (_c: any, next: () => Promise<void>) => next(),
@@ -590,5 +598,35 @@ describe('nodesRoutes Build Worker settings access', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('nodesRoutes enrollment tokens under impersonation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.scopes = ['nodes:create'];
+    mocks.impersonating = true;
+  });
+
+  afterEach(() => {
+    mocks.impersonating = false;
+  });
+
+  it('refuses to create a node, which would return an enrollment token', async () => {
+    const response = await createApp().request('/', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'docker', hostname: 'node-1' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to regenerate an enrollment token', async () => {
+    const response = await createApp().request('/node-1/enrollment-token', { method: 'POST' });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.regenerateEnrollmentToken).not.toHaveBeenCalled();
   });
 });

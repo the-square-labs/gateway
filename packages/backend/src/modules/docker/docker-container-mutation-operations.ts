@@ -124,7 +124,8 @@ export interface DockerContainerMutationContext {
     expectedState: string,
     timeoutMs?: number,
     onComplete?: (newContainerId: string) => Promise<void>,
-    daemonTaskId?: string
+    daemonTaskId?: string,
+    onDaemonTaskFailed?: () => Promise<void>
   ): void;
   parseResult(result: { success: boolean; error?: string; detail?: string }): any;
 }
@@ -1028,7 +1029,13 @@ export async function updateContainer(
             logger.warn('Failed to reconcile stored env after image update', { nodeId, name, error });
           })
       : undefined,
-    daemonTaskId
+    daemonTaskId,
+    // The env was saved before dispatch; a failed async update did not apply it.
+    hasEnvChange
+      ? async () => {
+          await ctx.environmentService?.replace(nodeId, name, storedEnv);
+        }
+      : undefined
   );
   await ctx.auditService.log({
     action: 'docker.container.update',
@@ -1430,7 +1437,11 @@ export async function updateContainerEnv(
     expectedState,
     daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60),
     undefined,
-    daemonTaskId
+    daemonTaskId,
+    // The env was saved before dispatch; a failed async update did not apply it.
+    async () => {
+      await ctx.environmentService?.replace(nodeId, name, storedEnv);
+    }
   );
   await ctx.auditService.log({
     action: 'docker.container.env.update',

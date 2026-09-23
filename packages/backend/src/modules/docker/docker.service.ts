@@ -117,6 +117,7 @@ import {
   exportVolume as exportDockerVolume,
   initVolumeFileUpload as initDockerVolumeFileUpload,
   inspectVolume as inspectDockerVolume,
+  listAllVolumes as listAllDockerVolumes,
   listNetworks as listDockerNetworks,
   listVolumeFiles as listDockerVolumeFiles,
   listVolumes as listDockerVolumes,
@@ -124,6 +125,7 @@ import {
   readVolumeFile as readDockerVolumeFile,
   removeNetwork as removeDockerNetwork,
   removeVolume as removeDockerVolume,
+  removeOrphanedAnonymousVolume as removeOrphanedAnonymousDockerVolume,
   renameVolume as renameDockerVolume,
   updateVolumeLabels as updateDockerVolumeLabels,
   writeVolumeFile as writeDockerVolumeFile,
@@ -731,7 +733,8 @@ export class DockerManagementService {
     expectedState: string,
     timeoutMs = 60000,
     onComplete?: (newContainerId: string) => Promise<void>,
-    daemonTaskId?: string
+    daemonTaskId?: string,
+    onDaemonTaskFailed?: () => Promise<void>
   ) {
     watchDockerRecreateByName(
       this.lifecycleWatchContext(),
@@ -743,7 +746,8 @@ export class DockerManagementService {
       expectedState,
       timeoutMs,
       onComplete,
-      daemonTaskId
+      daemonTaskId,
+      onDaemonTaskFailed
     );
   }
 
@@ -1251,7 +1255,8 @@ export class DockerManagementService {
         expectedState,
         timeoutMs,
         onComplete,
-        daemonTaskId
+        daemonTaskId,
+        onDaemonTaskFailed
       ) =>
         this.watchRecreateByName(
           nodeId,
@@ -1262,7 +1267,8 @@ export class DockerManagementService {
           expectedState,
           timeoutMs,
           onComplete,
-          daemonTaskId
+          daemonTaskId,
+          onDaemonTaskFailed
         ),
       parseResult: (result) => this.parseResult(result),
     };
@@ -1903,10 +1909,27 @@ export class DockerManagementService {
   async removeVolume(nodeId: string, name: string, force: boolean, userId: string | null) {
     await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
     await this.validateDockerNode(nodeId);
-    // Also reached outside the volume routes (AI tools, housekeeping): never
-    // remove a volume that the user volume list hides.
+    // Also reached outside the volume routes (AI tools): never remove a volume
+    // that the user volume list hides. Housekeeping uses removeOrphanedAnonymousVolume.
     await assertDockerUserVolumeVisible(this.volumeNetworkOperationContext(), nodeId, name);
     await removeDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, force, userId);
+  }
+
+  /** Housekeeping inventory: every volume on the node, including the ones hidden from the user list. */
+  async listHousekeepingVolumes(nodeId: string) {
+    await this.validateDockerNode(nodeId);
+    return listAllDockerVolumes(this.volumeNetworkOperationContext(), nodeId);
+  }
+
+  /**
+   * Housekeeping removal of an orphaned anonymous volume. Those volumes are
+   * hidden from the user list, so the visibility check is skipped; the
+   * migration guard applies and the name and unused state are re-checked.
+   */
+  async removeOrphanedAnonymousVolume(nodeId: string, name: string, userId: string | null) {
+    await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
+    await this.validateDockerNode(nodeId);
+    await removeOrphanedAnonymousDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, userId);
   }
 
   async adoptVolume(nodeId: string, name: string, userId: string) {

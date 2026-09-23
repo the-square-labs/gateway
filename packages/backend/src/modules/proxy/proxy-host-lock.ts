@@ -62,6 +62,20 @@ export function withProxyHostLock<T>(hostId: string, fn: () => Promise<T>): Prom
   return withProxyLocks([proxyHostLockKey(hostId)], fn);
 }
 
+/**
+ * Run fire-and-forget work (queued reconciliation, retry timers, event handlers) outside the
+ * caller's lock context. Without this, detached work started while a lock is held inherits the
+ * held keys through AsyncLocalStorage and later skips waiting for a lock it no longer holds.
+ */
+export function runOutsideProxyLocks<T>(fn: () => T): T {
+  return heldKeys.exit(fn);
+}
+
+/** Test-only: whether the current async context holds a proxy lock key. */
+export function isProxyLockHeld(key: string): boolean {
+  return heldKeys.getStore()?.has(key) ?? false;
+}
+
 /** Test hook: number of keys with queued or running holders. */
 export function activeProxyLockCount(): number {
   return tails.size;

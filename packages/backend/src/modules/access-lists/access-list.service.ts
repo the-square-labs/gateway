@@ -9,7 +9,7 @@ import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
-import { accessListLockKey, withProxyLocks } from '@/modules/proxy/proxy-host-lock.js';
+import { accessListLockKey, runOutsideProxyLocks, withProxyLocks } from '@/modules/proxy/proxy-host-lock.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import type { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
@@ -55,7 +55,7 @@ export class AccessListService {
     this.eventBus = bus;
   }
   private emitAcl(id: string, action: 'created' | 'updated' | 'deleted') {
-    this.eventBus?.publish('access-list.changed', { id, action });
+    runOutsideProxyLocks(() => this.eventBus?.publish('access-list.changed', { id, action }));
   }
 
   // -----------------------------------------------------------------------
@@ -164,7 +164,7 @@ export class AccessListService {
 
     const affectedHosts = await this.db.query.proxyHosts.findMany({
       where: and(eq(proxyHosts.accessListId, id), eq(proxyHosts.enabled, true)),
-      columns: { id: true, domainNames: true },
+      columns: { id: true, domainNames: true, nodeId: true },
     });
     if (affectedHosts.length > 0 && !this.hostRuntime) {
       throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host re-apply is unavailable');
@@ -181,10 +181,32 @@ export class AccessListService {
         hostCount: affectedHosts.length,
       });
       const failures: { id: string; domainNames: string[]; error: string }[] = [];
+      const attempted: { id: string }[] = [];
       for (const host of affectedHosts) {
+        // A node that is offline or mid daemon update cannot take the config
+        // now; its reconnect resync renders from the committed DB state. Only a
+        // connected node rejecting the config rolls the change back.
+        if (!(await this.isNodeReachable(host.nodeId))) {
+          logger.warn('Skipping access list re-apply for host on unavailable node', {
+            accessListId: id,
+            hostId: host.id,
+            nodeId: host.nodeId,
+          });
+          continue;
+        }
+        attempted.push(host);
         try {
           await this.hostRuntime!.reapplyHostConfig(host.id);
         } catch (error) {
+          if (!(await this.isNodeReachable(host.nodeId))) {
+            logger.warn('Node became unavailable during access list re-apply; it resyncs on reconnect', {
+              accessListId: id,
+              hostId: host.id,
+              nodeId: host.nodeId,
+              error,
+            });
+            continue;
+          }
           failures.push({
             id: host.id,
             domainNames: host.domainNames as string[],
@@ -193,7 +215,7 @@ export class AccessListService {
         }
       }
       if (failures.length > 0) {
-        await this.rollbackUpdate(existing, affectedHosts);
+        await this.rollbackUpdate(existing, attempted);
         const names = failures.map((failure) => failure.domainNames[0] ?? failure.id).join(', ');
         throw new AppError(
           502,
@@ -225,6 +247,12 @@ export class AccessListService {
     this.emitAcl(id, 'updated');
 
     return updated;
+  }
+
+  /** Connected and not in a daemon update, so a config apply can be judged. */
+  private async isNodeReachable(nodeId: string | null): Promise<boolean> {
+    if (!nodeId || !this.nodeDispatch.isNodeConnected(nodeId)) return false;
+    return !(await this.nodeDispatch.isNodeUpdateInProgress(nodeId));
   }
 
   /**

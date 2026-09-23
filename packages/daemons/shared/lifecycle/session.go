@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/connector"
@@ -29,9 +30,9 @@ const (
 	maxAsyncBackupHandlers  = 1
 )
 
-// commandExpiryClockSkew tolerates a small clock offset between the gateway
-// and this host before a command deadline is enforced.
-const commandExpiryClockSkew = 5 * time.Second
+// commandExpiryTolerance is how far past its deadline a command may arrive,
+// on the gateway clock, before it is dropped. It absorbs delivery jitter.
+const commandExpiryTolerance = 5 * time.Second
 
 const registrationRejectedCommandID = "__registration_rejected__"
 
@@ -57,19 +58,66 @@ func newAsyncCommandPool(size int, wait bool) *asyncCommandPool {
 	return &asyncCommandPool{slots: make(chan struct{}, size), wait: wait}
 }
 
-// commandDeadline returns the command's dispatch deadline including the clock
-// skew allowance, and false when the gateway did not set one.
-func commandDeadline(cmd *pb.GatewayCommand) (time.Time, bool) {
-	expiresAt := cmd.GetExpiresAtUnixMs()
-	if expiresAt <= 0 {
-		return time.Time{}, false
-	}
-	return time.UnixMilli(expiresAt).Add(commandExpiryClockSkew), true
+// commandClock judges command deadlines on the gateway clock, so a host whose
+// clock is off does not drop commands. The gateway stamps each command with
+// its send time. The smallest (local receive - gateway send) seen in a session
+// is the clock offset plus the fastest delivery; subtracting it from local time
+// estimates the gateway clock, late only by the extra delay a command incurred.
+// Local time advances on the monotonic clock so a wall clock step on this host
+// during the session does not move the estimate.
+type commandClock struct {
+	base     time.Time
+	mu       sync.Mutex
+	minDelta int64
+	seen     bool
 }
 
-func commandExpired(cmd *pb.GatewayCommand, now time.Time) bool {
-	deadline, ok := commandDeadline(cmd)
-	return ok && now.After(deadline)
+func newCommandClock() *commandClock {
+	return &commandClock{base: time.Now()}
+}
+
+func (c *commandClock) localUnixMs(now time.Time) int64 {
+	return c.base.UnixMilli() + now.Sub(c.base).Milliseconds()
+}
+
+// observe records a received command. Call it for every command, before its
+// deadline is checked, with the time it was received.
+func (c *commandClock) observe(cmd *pb.GatewayCommand, receivedAt time.Time) {
+	sentAt := cmd.GetSentAtUnixMs()
+	if sentAt <= 0 {
+		return
+	}
+	delta := c.localUnixMs(receivedAt) - sentAt
+	c.mu.Lock()
+	if !c.seen || delta < c.minDelta {
+		c.minDelta = delta
+		c.seen = true
+	}
+	c.mu.Unlock()
+}
+
+// remaining returns how long cmd may still wait before it expires, including
+// the tolerance. It is false when the command has no deadline or no send
+// time: an older gateway's deadline can only be compared against this host's
+// clock, which is unsafe, so such commands never expire.
+func (c *commandClock) remaining(cmd *pb.GatewayCommand, now time.Time) (time.Duration, bool) {
+	expiresAt, sentAt := cmd.GetExpiresAtUnixMs(), cmd.GetSentAtUnixMs()
+	if expiresAt <= 0 || sentAt <= 0 {
+		return 0, false
+	}
+	c.mu.Lock()
+	minDelta, seen := c.minDelta, c.seen
+	c.mu.Unlock()
+	if !seen {
+		return 0, false
+	}
+	gatewayNow := c.localUnixMs(now) - minDelta
+	return time.Duration(expiresAt-gatewayNow)*time.Millisecond + commandExpiryTolerance, true
+}
+
+func (c *commandClock) expired(cmd *pb.GatewayCommand, now time.Time) bool {
+	remaining, ok := c.remaining(cmd, now)
+	return ok && remaining < 0
 }
 
 // runSession connects to the gateway, registers, and runs the command loop.
@@ -104,6 +152,14 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	// Notify plugin of session start
 	sessionCtx, sessionCancel := context.WithCancel(ctx)
 	defer sessionCancel()
+	go func() {
+		select {
+		case <-sessionCtx.Done():
+		case <-d.controlReconnect:
+			d.logger.Info("reconnecting control session to present the renewed certificate")
+			_ = conn.Close()
+		}
+	}()
 
 	// Create shared node-level exec manager for host console
 	nodeExecMgr := exec.NewManager(d.logger, writer)
@@ -129,6 +185,7 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			_ = cmdStream.CloseSend()
 		}
 	}
+	clock := newCommandClock()
 	genericPool := newAsyncCommandPool(maxAsyncCommandHandlers, false)
 	composePool := newAsyncCommandPool(maxAsyncComposeHandlers, true)
 	storagePool := newAsyncCommandPool(maxAsyncStorageHandlers, true)
@@ -152,8 +209,8 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			if pool != nil {
 				if pool.wait {
 					var expired <-chan time.Time
-					if deadline, ok := commandDeadline(c); ok {
-						timer := time.NewTimer(time.Until(deadline))
+					if remaining, ok := clock.remaining(c, time.Now()); ok {
+						timer := time.NewTimer(remaining)
 						defer timer.Stop()
 						expired = timer.C
 					}
@@ -192,6 +249,8 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 		if err != nil {
 			return err
 		}
+		receivedAt := time.Now()
+		clock.observe(cmd, receivedAt)
 
 		// Terminal registration rejection: stop this session and back off.
 		if cmd.CommandId == registrationRejectedCommandID {
@@ -208,10 +267,13 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			controlReady = true
 			d.sessionReceivedCommand = true
 			notifyLauncherControlReady(d.logger)
+			if d.tunnelIdentityPending.CompareAndSwap(true, false) {
+				d.notifyTunnelIdentityChanged()
+			}
 		}
 
 		// A command the gateway already stopped waiting for must not run.
-		if commandExpired(cmd, time.Now()) {
+		if clock.expired(cmd, receivedAt) {
 			d.logger.Warn("dropping expired gateway command", "command_id", cmd.CommandId)
 			if cmd.CommandId != "" {
 				if err := writer.Send(&pb.DaemonMessage{
@@ -486,7 +548,10 @@ func runCertRenewal(ctx context.Context, d *DaemonBase) {
 		if err := d.state.Save(); err != nil {
 			d.logger.Warn("cert renewal: state save failed", "error", err)
 		}
-		d.notifyTunnelIdentityChanged()
+		// The gateway promotes the renewed certificate (and tells relays its
+		// fingerprint) when the control session registers with it. Reconnect
+		// that session first; the tunnel switches once it is accepted.
+		d.requestControlReconnect()
 		d.logger.Info("mTLS cert renewed successfully")
 	}
 

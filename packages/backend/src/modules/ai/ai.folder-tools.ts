@@ -199,6 +199,7 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         service: container.resolve(DomainFolderService),
         viewScope: 'domains:view',
         manageScope: 'domains:folders:manage',
+        moveEditScope: 'domains:edit',
         resourceMoveScope: 'domains:edit',
       };
     case 'ssl_certificates':
@@ -206,6 +207,7 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         service: container.resolve(SSLCertificateFolderService),
         viewScope: 'ssl:cert:view',
         manageScope: 'ssl:cert:folders:manage',
+        moveEditScope: 'ssl:cert:issue',
         resourceMoveScope: 'ssl:cert:issue',
       };
     case 'logging_environments':

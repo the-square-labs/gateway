@@ -11,6 +11,15 @@ export interface OutboundWebhookPolicy {
   allowedPrivateCidrs: string[];
 }
 
+export interface OutboundTargetCheckOptions {
+  /**
+   * When set, a Gateway self address is refused only on these ports. Health checks use it so an
+   * upstream on the Gateway host's own LAN address stays reachable while the Gateway's own
+   * services on that address do not. Webhooks leave it unset and refuse every self address.
+   */
+  selfAddressBlockedPorts?: ReadonlySet<number>;
+}
+
 export interface OutboundWebhookTargetCheck {
   url: string;
   resolvedAddresses: string[];
@@ -84,7 +93,8 @@ export async function checkOutboundWebhookTarget(
   rawUrl: string,
   policy: OutboundWebhookPolicy,
   env: Env,
-  publicUrl?: string | null
+  publicUrl?: string | null,
+  options: OutboundTargetCheckOptions = {}
 ): Promise<OutboundWebhookTargetCheck> {
   let url: URL;
   try {
@@ -125,6 +135,8 @@ export async function checkOutboundWebhookTarget(
   }
 
   const selfAddresses = await getSelfAddresses(env, publicUrl);
+  const targetPort = Number(url.port) || (url.protocol === 'https:' ? 443 : 80);
+  const selfPortBlocked = !options.selfAddressBlockedPorts || options.selfAddressBlockedPorts.has(targetPort);
   for (const ip of resolvedAddresses) {
     if (isAlwaysBlockedOutboundIp(ip)) {
       return {
@@ -134,12 +146,14 @@ export async function checkOutboundWebhookTarget(
         reason: `Webhook target address ${ip} is not allowed`,
       };
     }
-    if (selfAddresses.has(ip)) {
+    if (selfAddresses.has(ip) && selfPortBlocked) {
       return {
         url: rawUrl,
         resolvedAddresses,
         allowed: false,
-        reason: `Webhook target resolves to Gateway address ${ip}`,
+        reason: options.selfAddressBlockedPorts
+          ? `Target ${ip}:${targetPort} is a Gateway service port`
+          : `Webhook target resolves to Gateway address ${ip}`,
       };
     }
     if (isPrivateIp(ip) && (!policy.allowPrivateNetworks || !ipInAnyCidr(ip, policy.allowedPrivateCidrs))) {

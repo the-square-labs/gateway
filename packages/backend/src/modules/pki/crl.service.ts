@@ -34,9 +34,17 @@ export class CRLService {
   async getCRL(caId: string): Promise<Buffer> {
     const ca = await this.db.query.certificateAuthorities.findFirst({
       where: eq(certificateAuthorities.id, caId),
-      columns: { id: true, status: true, lastCrlDer: true, isSystem: true },
+      columns: { id: true, status: true, lastCrlDer: true, lastCrlAt: true, revokedAt: true, isSystem: true },
     });
     if (!ca || ca.isSystem) throw new AppError(404, 'CA_NOT_FOUND', 'CA not found');
+
+    // A CRL stored (or cached) before the CA was revoked is not its final CRL:
+    // publishing at revocation failed. Regenerate it instead of serving the
+    // pre-revocation list until the CA expires.
+    if (ca.status !== 'active' && ca.revokedAt && (!ca.lastCrlAt || ca.lastCrlAt < ca.revokedAt)) {
+      logger.warn('Stored CRL predates CA revocation; publishing the final CRL', { caId });
+      return this.generateCRL(caId, { allowInactive: true });
+    }
 
     const cached = await this.cacheService.get<string>(`${CRL_CACHE_PREFIX}${caId}`);
     if (cached) {

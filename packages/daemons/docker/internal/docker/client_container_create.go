@@ -470,8 +470,12 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 }
 
 // validateUserWorkloadNetworkMode rejects network modes that would share
-// another namespace or join a Gateway-managed network. Those networks can
-// only be attached by Gateway itself.
+// another namespace or join the Secure Links management network.
+//
+// Managed database networks (gateway-db-*) are allowed: the HA adapter creates
+// placement and adoption containers of database-bound workloads directly on
+// them, and released control planes depend on that. The control plane rejects
+// managed networks on user create requests before they reach the daemon.
 func validateUserWorkloadNetworkMode(mode string) error {
 	mode = strings.TrimSpace(mode)
 	switch {
@@ -479,7 +483,7 @@ func validateUserWorkloadNetworkMode(mode string) error {
 		return errors.New("host networking is not allowed for user workloads")
 	case strings.Contains(mode, ":"):
 		return fmt.Errorf("network mode %q is not allowed for user workloads", mode)
-	case mode == "gateway-secure-links" || strings.HasPrefix(mode, "gateway-db-"):
+	case mode == secureLinkManagementNetwork:
 		return fmt.Errorf("Gateway-managed network %q cannot be attached to user workloads", mode)
 	}
 	return nil

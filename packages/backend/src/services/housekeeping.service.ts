@@ -595,7 +595,7 @@ export class HousekeepingService {
 
     for (const candidate of candidates) {
       try {
-        await this.dockerManagementService.removeVolume(candidate.nodeId, candidate.name, false, userId);
+        await this.dockerManagementService.removeOrphanedAnonymousVolume(candidate.nodeId, candidate.name, userId);
         itemsCleaned += 1;
         spaceFreedBytes += candidate.sizeBytes ?? 0;
       } catch (error) {
@@ -890,7 +890,8 @@ export class HousekeepingService {
     for (const node of dockerNodes) {
       let volumes: unknown;
       try {
-        volumes = await this.dockerManagementService.listVolumes(node.id);
+        // The user volume list hides unused unmanaged volumes, which are exactly the orphans.
+        volumes = await this.dockerManagementService.listHousekeepingVolumes(node.id);
       } catch (error) {
         logger.debug('Failed to list Docker volumes for housekeeping', { nodeId: node.id, error });
         continue;

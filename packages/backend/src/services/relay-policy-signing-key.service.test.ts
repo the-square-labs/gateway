@@ -1,6 +1,10 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
-import { RelayPolicySigningKeyService, relayPolicySigningKeyInternals } from './relay-policy-signing-key.service.js';
+import {
+  RelayPolicySigningKeyService,
+  relayPolicySigningKeyInternals,
+  reportedPolicySigningKeyIds,
+} from './relay-policy-signing-key.service.js';
 
 describe('Relay policy signing key rotation acknowledgements', () => {
   it('promotes only after every participating remote relay reports the pending key', () => {
@@ -131,12 +135,25 @@ describe('Relay policy signer selection per relay', () => {
 describe('Relay policy old-key retention', () => {
   const { keysNeededByInstance, mayPromote, REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS } = relayPolicySigningKeyInternals;
 
+  const activations = [
+    { keyId: 'older', activatedAt: minutes(-90) },
+    { keyId: 'enroll', activatedAt: minutes(-60) },
+    { keyId: 'old', activatedAt: minutes(-30) },
+    { keyId: 'current', activatedAt: minutes(-10) },
+    { keyId: 'next', activatedAt: null },
+  ];
+
   it('needs old keys only for relays that have not reported the active key', () => {
-    expect(keysNeededByInstance(relay(['old', 'current']), 'current')).toEqual([]);
-    expect(keysNeededByInstance(relay(['old', 'previous']), 'current')).toEqual(['old', 'previous']);
-    expect(keysNeededByInstance(relay([], 'enroll'), 'current')).toEqual(['enroll']);
-    expect(keysNeededByInstance(relay(null, 'enroll'), 'current')).toEqual(['enroll']);
-    expect(keysNeededByInstance(relay(null), 'current')).toEqual([]);
+    expect(keysNeededByInstance(relay(['old', 'current']), 'current', activations)).toEqual([]);
+    expect(keysNeededByInstance(relay(['old', 'previous']), 'current', activations)).toEqual(['old', 'previous']);
+  });
+
+  it('keeps every key since enrollment for a relay whose trust is unknown', () => {
+    // An empty report is what a supervisor sends when it cannot reach its worker: the relay
+    // may still trust any key activated since it enrolled.
+    expect(keysNeededByInstance(relay([], 'enroll'), 'current', activations)).toEqual(['enroll', 'old', 'current']);
+    expect(keysNeededByInstance(relay(null, 'enroll'), 'current', activations)).toEqual(['enroll', 'old', 'current']);
+    expect(keysNeededByInstance(relay(null), 'current', activations)).toEqual(['older', 'enroll', 'old', 'current']);
   });
 
   it('stops waiting for remote relays that never acknowledge, but never for the local relay', () => {
@@ -205,8 +222,9 @@ describe('Relay policy private key lifecycle', () => {
 
   it('destroys an old private key only once no enrolled relay still needs it', async () => {
     const held = [
-      { id: 'old-row', keyId: 'old' },
-      { id: 'older-row', keyId: 'older' },
+      { id: 'old-row', keyId: 'old', status: 'verification_only', activatedAt: minutes(-60), hasPrivateKey: true },
+      { id: 'older-row', keyId: 'older', status: 'retired', activatedAt: minutes(-120), hasPrivateKey: true },
+      { id: 'current-row', keyId: 'current', status: 'active', activatedAt: minutes(-10), hasPrivateKey: true },
     ];
     const lagging = { kind: 'remote', policySigningKeyId: 'older', health: { policySigningKeyIds: ['old'] } };
     const current = {
@@ -238,12 +256,39 @@ describe('Relay policy private key lifecycle', () => {
     // A relay that has not reported yet will bootstrap from its enrollment key.
     const unreported = rotationDb([
       [{ keyId: 'current' }],
-      [{ id: 'older-row', keyId: 'older' }],
-      [{ kind: 'remote', policySigningKeyId: 'older', health: null }],
+      held,
+      [{ kind: 'remote', policySigningKeyId: 'older', health: null }, current, local],
     ]);
     await expect(
       new RelayPolicySigningKeyService(unreported.db, {} as never).destroyUnneededPrivateKeys(NOW)
     ).resolves.toBe(false);
     expect(unreported.updates).toHaveLength(0);
+  });
+
+  it('destroys nothing while a remote relay reports an empty trust set', async () => {
+    // The relay trusts only `old`, but its supervisor lost the worker and reported no key ids.
+    const held = [
+      { id: 'old-row', keyId: 'old', status: 'verification_only', activatedAt: minutes(-60), hasPrivateKey: true },
+      { id: 'current-row', keyId: 'current', status: 'active', activatedAt: minutes(-10), hasPrivateKey: true },
+    ];
+    const blind = { kind: 'remote', policySigningKeyId: 'old', health: { policySigningKeyIds: [] } };
+    const local = { kind: 'local', policySigningKeyId: null, health: { policySigningKeyIds: ['current'] } };
+    const { db, updates } = rotationDb([[{ keyId: 'current' }], held, [blind, local]]);
+    await expect(new RelayPolicySigningKeyService(db, {} as never).destroyUnneededPrivateKeys(NOW)).resolves.toBe(
+      false
+    );
+    expect(updates).toHaveLength(0);
+  });
+});
+
+describe('Relay status report key ids', () => {
+  it('keeps the stored trust set when a report says nothing about it', () => {
+    expect(reportedPolicySigningKeyIds(['old'], [], 'ready')).toEqual(['old']);
+    expect(reportedPolicySigningKeyIds(['old'], undefined, 'synchronizing')).toEqual(['old']);
+    expect(reportedPolicySigningKeyIds(['old'], ['current'], 'offline')).toEqual(['old']);
+    expect(reportedPolicySigningKeyIds(['old'], ['current'], 'error')).toEqual(['old']);
+    expect(reportedPolicySigningKeyIds(['old'], ['old', 'current'], 'ready')).toEqual(['old', 'current']);
+    expect(reportedPolicySigningKeyIds(undefined, [], 'offline')).toEqual([]);
+    expect(reportedPolicySigningKeyIds(undefined, ['current'], 'ready')).toEqual(['current']);
   });
 });

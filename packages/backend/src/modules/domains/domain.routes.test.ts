@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   },
   folderService: {
     assertFolderExists: vi.fn(),
+    moveFolder: vi.fn(),
   },
 }));
 
@@ -125,6 +126,19 @@ describe('domain routes authorization', () => {
       unconfiguredNodes: [],
       totalNginxNodes: 0,
       unconfiguredNginxNodes: 0,
+    });
+  });
+
+  it('checks domains:edit on every moved domain when a folder is moved', async () => {
+    mocks.scopes = ['domains:folders:manage', `domains:edit:folder/${OTHER_FOLDER_ID}`];
+    mocks.folderService.moveFolder.mockResolvedValue({ id: FOLDER_ID });
+
+    const response = await request('PUT', `/folders/${FOLDER_ID}/move`, { parentId: OTHER_FOLDER_ID });
+
+    expect(response.status).toBe(200);
+    expect(mocks.folderService.moveFolder).toHaveBeenCalledWith(FOLDER_ID, { parentId: OTHER_FOLDER_ID }, 'user-1', {
+      scopes: mocks.scopes,
+      editScope: 'domains:edit',
     });
   });
 

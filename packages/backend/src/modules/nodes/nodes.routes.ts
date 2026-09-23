@@ -11,7 +11,13 @@ import {
   hasScopeForResource,
 } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope, requireScopeForResource, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import {
+  assertNotImpersonating,
+  authMiddleware,
+  requireScope,
+  requireScopeForResource,
+  sessionOnly,
+} from '@/modules/auth/auth.middleware.js';
 import {
   FileBrowseSchema,
   FileMoveSchema,
@@ -582,6 +588,8 @@ nodesRoutes.openapi(
 );
 
 nodesRoutes.openapi(createNodeRoute, async (c) => {
+  // The response carries an enrollment token that outlives the impersonation session.
+  assertNotImpersonating(c, 'Nodes cannot be created while impersonating');
   const service = container.resolve(NodesService);
   const user = c.get('user')!;
   const input = CreateNodeSchema.parse(await c.req.json());
@@ -596,6 +604,7 @@ nodesRoutes.openapi(createNodeRoute, async (c) => {
 nodesRoutes.openapi(
   { ...regenerateNodeEnrollmentTokenRoute, middleware: requireScopeForResource('nodes:create', 'id') },
   async (c) => {
+    assertNotImpersonating(c, 'Enrollment tokens cannot be regenerated while impersonating');
     const service = container.resolve(NodesService);
     const user = c.get('user')!;
     const result = await service.regenerateEnrollmentToken(c.req.param('id')!, user.id);

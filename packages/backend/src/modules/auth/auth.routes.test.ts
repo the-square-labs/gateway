@@ -391,6 +391,44 @@ describe('OIDC login CSRF binding', () => {
     expect(cookie).not.toContain('state-from-login;');
   });
 
+  it('moves a login started on another origin to the callback origin before binding state', async () => {
+    const { app } = registerOidcRouteDependencies();
+    const returnTo = 'https://gateway.example.com/nodes';
+
+    const response = await app.request(`/auth/login?return_to=${encodeURIComponent(returnTo)}`, {
+      headers: { host: '192.168.1.10:3000' },
+    });
+
+    expect(response.status).toBe(302);
+    const location = new URL(response.headers.get('location') ?? '');
+    expect(location.origin + location.pathname).toBe('https://gateway.example.com/auth/login');
+    expect(location.searchParams.get('return_to')).toBe(returnTo);
+    expect(response.headers.get('set-cookie')).toBeNull();
+  });
+
+  it('binds state directly when the login already runs on the callback origin', async () => {
+    const { app } = registerOidcRouteDependencies();
+
+    const response = await app.request('/auth/login', {
+      headers: { host: 'gateway.example.com', 'x-forwarded-proto': 'https' },
+    });
+
+    expect(response.headers.get('location')).toContain('https://idp.example.com/authorize');
+    expect(response.headers.get('set-cookie')).toContain(OIDC_STATE_COOKIE_NAME);
+  });
+
+  it('never moves a login twice, so a proxy that hides the browser host cannot loop', async () => {
+    const { app } = registerOidcRouteDependencies();
+
+    const first = await app.request('/auth/login', { headers: { host: 'backend:3000' } });
+    const hop = new URL(first.headers.get('location') ?? '');
+    const second = await app.request(hop.pathname + hop.search, { headers: { host: 'backend:3000' } });
+
+    expect(second.status).toBe(302);
+    expect(second.headers.get('location')).toContain('https://idp.example.com/authorize');
+    expect(second.headers.get('set-cookie')).toContain(OIDC_STATE_COOKIE_NAME);
+  });
+
   it('refuses a callback whose state was not started in this browser', async () => {
     const { app, handleCallback, auditLog } = registerOidcRouteDependencies();
 
@@ -509,6 +547,51 @@ describe('second-factor step-up', () => {
     expect(response.status).toBe(200);
     expect(verifyAuthentication).toHaveBeenCalledWith('challenge-value-1234', { id: 'credential' }, USER.id, false);
     expect(grantStepUp).toHaveBeenCalledWith(USER.id, 'current-session-id');
+  });
+});
+
+describe('recovery code regeneration', () => {
+  it('verifies the TOTP code through the step-up failure counter and lockout', async () => {
+    registerDependencies();
+    const localUser = { ...USER, authMethod: 'password' as const };
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: { findFirst: vi.fn().mockResolvedValue(localUser) },
+        permissionGroups: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ id: USER.groupId, parentId: null, name: USER.groupName, scopes: USER.scopes }]),
+        },
+      },
+    } as unknown as DrizzleClient);
+    const verifyTotp = vi.fn().mockResolvedValue(true);
+    const verifyStepUpCode = vi
+      .fn()
+      .mockRejectedValue(new AppError(429, 'MFA_STEP_UP_LOCKED', 'Too many failed verification attempts'));
+    const regenerateRecoveryCodes = vi.fn();
+    container.registerInstance(MfaService, {
+      verifyTotp,
+      verifyStepUpCode,
+      regenerateRecoveryCodes,
+    } as unknown as MfaService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/me/mfa/recovery-codes', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=current-session-id',
+        'X-CSRF-Token': 'csrf-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ code: '123456' }),
+    });
+
+    expect(response.status).toBe(429);
+    expect(verifyStepUpCode).toHaveBeenCalledWith(USER.id, 'current-session-id', { totpCode: '123456' });
+    expect(verifyTotp).not.toHaveBeenCalled();
+    expect(regenerateRecoveryCodes).not.toHaveBeenCalled();
   });
 });
 

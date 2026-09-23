@@ -70,6 +70,9 @@ type TemplateDetails = Partial<
   >
 > & { resourceId?: string | null };
 
+/** Certificate statuses whose expiry is still monitored (same set as ExpiryAlertJob). */
+export const CERTIFICATE_EXPIRY_MONITORED_STATUSES = ['active', 'error', 'expired'] as const;
+
 export class NotificationEvaluatorService {
   private eventBus?: EventBusService;
   private redis: RedisClient | null = null;
@@ -671,8 +674,10 @@ export class NotificationEvaluatorService {
         notAfter: sslCertificates.notAfter,
       })
       .from(sslCertificates)
-      .where(eq(sslCertificates.status, 'active'));
+      .where(inArray(sslCertificates.status, [...CERTIFICATE_EXPIRY_MONITORED_STATUSES]));
 
+    // A certificate past notAfter is marked 'expired' (and a failed renewal 'error'); both keep
+    // their expiry alert firing instead of resolving it, as ExpiryAlertJob does.
     const activeCerts = certs.filter((cert) => cert.notAfter);
     const activeCertIds = new Set(activeCerts.map((cert) => cert.id));
 

@@ -75,6 +75,7 @@ describe('DockerManagementService recreate registry auth', () => {
       expectedState,
       expect.any(Number),
       undefined,
+      undefined,
       undefined
     );
   });

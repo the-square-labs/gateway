@@ -223,6 +223,11 @@ message GatewayCommand {
   // expired when it is received instead of executing work the gateway no
   // longer waits for; older daemons ignore the field.
   int64 expires_at_unix_ms = 72;
+  // Gateway wall clock in Unix milliseconds when the command was sent. Lets a
+  // daemon judge expires_at_unix_ms against the gateway clock instead of its
+  // own, so clock skew between the two does not expire commands. A daemon
+  // skips the deadline check when this is zero; older daemons ignore it.
+  int64 sent_at_unix_ms = 73;
   oneof payload {
     ApplyConfigCommand apply_config = 2;
     RemoveConfigCommand remove_config = 3;

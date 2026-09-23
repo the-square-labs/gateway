@@ -2,6 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { assertNotImpersonating } from '@/modules/auth/auth.middleware.js';
 import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -33,7 +34,8 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerName = decodeURIComponent(c.req.param('containerName')!);
       const data = await service.getByContainer(nodeId, containerName);
-      return c.json({ data });
+      // An impersonating admin sees the config, never the user's webhook token.
+      return c.json({ data: data && c.get('impersonation') ? { ...data, token: null } : data });
     }
   );
 
@@ -44,6 +46,8 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
       middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
     },
     async (c) => {
+      // The webhook token is a long-lived credential; never mint it for an impersonated user.
+      assertNotImpersonating(c, 'Webhook tokens cannot be issued while impersonating');
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
       const containerName = decodeURIComponent(c.req.param('containerName')!);
@@ -77,6 +81,7 @@ export function registerWebhookConfigRoutes(router: OpenAPIHono<AppEnv>) {
       middleware: requireDockerContainerScope('docker:containers:webhooks', 'containerName'),
     },
     async (c) => {
+      assertNotImpersonating(c, 'Webhook tokens cannot be regenerated while impersonating');
       const service = container.resolve(DockerWebhookService);
       const nodeId = c.req.param('nodeId')!;
       const containerName = decodeURIComponent(c.req.param('containerName')!);

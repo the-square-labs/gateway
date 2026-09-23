@@ -183,6 +183,57 @@ describe('CRL publication on revocation', () => {
     expect(signing).not.toHaveBeenCalled();
   });
 
+  // Regression: when publishing at revocation failed, the stored pre-revocation CRL was served forever.
+  it('regenerates a revoked CA CRL stored before the revocation, bypassing the cache', async () => {
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    const db = {
+      query: {
+        certificateAuthorities: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'int-1',
+            status: 'revoked',
+            lastCrlDer: Buffer.from('pre-revocation').toString('base64'),
+            lastCrlAt: new Date('2026-09-01T00:00:00Z'),
+            revokedAt: new Date('2026-09-10T00:00:00Z'),
+          }),
+        },
+      },
+    };
+    const cache = {
+      get: vi.fn().mockResolvedValue(Buffer.from('pre-revocation').toString('base64')),
+      set: vi.fn(),
+      delete: vi.fn(),
+    };
+    const crlService = new CRLService(db as never, caService, cache as never);
+    const generate = vi.spyOn(crlService, 'generateCRL').mockResolvedValue(Buffer.from('final-crl'));
+
+    await expect(crlService.getCRL('int-1')).resolves.toEqual(Buffer.from('final-crl'));
+    expect(generate).toHaveBeenCalledWith('int-1', { allowInactive: true });
+  });
+
+  it('serves a revoked CA CRL published after the revocation', async () => {
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    const db = {
+      query: {
+        certificateAuthorities: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: 'int-1',
+            status: 'revoked',
+            lastCrlDer: Buffer.from('final-crl').toString('base64'),
+            lastCrlAt: new Date('2026-09-10T00:00:01Z'),
+            revokedAt: new Date('2026-09-10T00:00:00Z'),
+          }),
+        },
+      },
+    };
+    const cache = { get: vi.fn().mockResolvedValue(null), set: vi.fn(), delete: vi.fn() };
+    const crlService = new CRLService(db as never, caService, cache as never);
+    const generate = vi.spyOn(crlService, 'generateCRL');
+
+    await expect(crlService.getCRL('int-1')).resolves.toEqual(Buffer.from('final-crl'));
+    expect(generate).not.toHaveBeenCalled();
+  });
+
   it('publishes a final CRL for a revoked CA that has none stored yet', async () => {
     const caService = new CAService({} as never, cryptoService, audit as never);
     const db = {

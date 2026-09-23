@@ -42,6 +42,17 @@ export class NodeDispatchService {
     return !!nodeId && !!this.registry.getNode(nodeId);
   }
 
+  /** True while a daemon update is replacing this node's daemon. */
+  async isNodeUpdateInProgress(nodeId: string): Promise<boolean> {
+    if (this.registry.isNodeUpdateInProgress(nodeId)) return true;
+    if (!this.daemonUpdateService) return false;
+    try {
+      return await this.daemonUpdateService.isNodeUpdateInProgress(nodeId);
+    } catch {
+      return false;
+    }
+  }
+
   private async assertNodeMutable(nodeId: string) {
     if (this.daemonUpdateService && (await this.daemonUpdateService.isNodeUpdateInProgress(nodeId))) {
       throw new AppError(409, 'NODE_UPDATING', 'Node daemon update is in progress');

@@ -313,12 +313,14 @@ func TestDropInheritedImageDefaultsKeepsExplicitValues(t *testing.T) {
 }
 
 func TestValidateUserWorkloadNetworkModeRejectsSharedAndManagedNetworks(t *testing.T) {
-	for _, mode := range []string{"", "bridge", "default", "none", "app-net"} {
+	// gateway-db-* stays allowed: HA placements of database-bound workloads
+	// are created directly on the managed database network.
+	for _, mode := range []string{"", "bridge", "default", "none", "app-net", "gateway-db-0123456789abcdef"} {
 		if err := validateUserWorkloadNetworkMode(mode); err != nil {
 			t.Fatalf("mode %q rejected: %v", mode, err)
 		}
 	}
-	for _, mode := range []string{"host", "container:abc", "gateway-secure-links", "gateway-db-0123456789abcdef"} {
+	for _, mode := range []string{"host", "container:abc", "gateway-secure-links"} {
 		if err := validateUserWorkloadNetworkMode(mode); err == nil {
 			t.Fatalf("mode %q accepted", mode)
 		}
@@ -326,5 +328,46 @@ func TestValidateUserWorkloadNetworkModeRejectsSharedAndManagedNetworks(t *testi
 	if _, _, err := (&Client{}).CreateContainer(context.Background(), `{"name":"x","image":"busybox","network_mode":"host"}`); err == nil ||
 		!strings.Contains(err.Error(), "host networking") {
 		t.Fatalf("create with host network error = %v", err)
+	}
+}
+
+// HA placement and adoption containers of database-bound workloads are created
+// with network_mode set to the managed database network.
+func TestCreateContainerAllowsManagedDatabaseNetworkMode(t *testing.T) {
+	var gotNetworkMode string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/containers/create") {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			HostConfig struct {
+				NetworkMode string
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode create body: %v", err)
+		}
+		gotNetworkMode = body.HostConfig.NetworkMode
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"Id":"placement-1","Warnings":[]}`))
+	}))
+	defer server.Close()
+	cli, err := client.NewClientWithOpts(client.WithHost(server.URL), client.WithVersion("1.43"))
+	if err != nil {
+		t.Fatalf("create Docker client: %v", err)
+	}
+	defer cli.Close()
+
+	id, _, err := (&Client{cli: cli, logger: slog.Default()}).CreateContainer(
+		context.Background(),
+		`{"name":"app-ha-placement","image":"busybox","network_mode":"gateway-db-0123456789abcdef"}`,
+	)
+	if err != nil {
+		t.Fatalf("create on managed database network: %v", err)
+	}
+	if id != "placement-1" || gotNetworkMode != "gateway-db-0123456789abcdef" {
+		t.Fatalf("id=%q networkMode=%q", id, gotNetworkMode)
 	}
 }

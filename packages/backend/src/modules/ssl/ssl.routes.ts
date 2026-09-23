@@ -141,7 +141,8 @@ sslRoutes.openapi(
     const data = await service.moveFolder(
       c.req.param('id')!,
       MoveResourceFolderSchema.parse(await c.req.json()),
-      c.get('user')!.id
+      c.get('user')!.id,
+      { scopes: c.get('effectiveScopes') ?? [], editScope: 'ssl:cert:issue' }
     );
     return c.json({ data });
   }

@@ -1,5 +1,6 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { getEnv } from '@/config/env.js';
 import { container } from '@/container.js';
@@ -200,18 +201,64 @@ const loginRoute = createRoute({
   },
 });
 
+/** Marks a login already moved to the callback origin, so it is never moved twice. */
+const OIDC_LOGIN_ORIGIN_HOP_PARAM = 'oidc_origin_hop';
+
+/** Origin the browser used for this request, or null when it cannot be told. */
+function browserRequestOrigin(c: Context<AppEnv>): string | null {
+  const host = (c.req.header('x-forwarded-host') ?? c.req.header('host'))?.split(',')[0]?.trim();
+  if (!host) return null;
+  const forwardedProto = c.req.header('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  const protocol = forwardedProto ? `${forwardedProto}:` : new URL(c.req.url).protocol;
+  if (protocol !== 'http:' && protocol !== 'https:') return null;
+  try {
+    return new URL(`${protocol}//${host}`).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The state cookie must be set on the origin that receives the OIDC callback.
+ * A login started from another host (a LAN IP, plain http) is first moved to
+ * the redirect URI's origin. Only when the browser's origin is known and
+ * differs, and at most once per login, so a proxy that hides the host cannot
+ * cause a redirect loop.
+ */
+function loginOnCallbackOriginUrl(c: Context<AppEnv>, redirectUri: string): string | null {
+  const requestUrl = new URL(c.req.url);
+  if (requestUrl.searchParams.has(OIDC_LOGIN_ORIGIN_HOP_PARAM)) return null;
+  const requestOrigin = browserRequestOrigin(c);
+  if (!requestOrigin) return null;
+  let callbackOrigin: string;
+  try {
+    callbackOrigin = new URL(redirectUri).origin;
+  } catch {
+    return null;
+  }
+  if (requestOrigin === callbackOrigin) return null;
+  const target = new URL(requestUrl.pathname + requestUrl.search, callbackOrigin);
+  target.searchParams.set(OIDC_LOGIN_ORIGIN_HOP_PARAM, '1');
+  return target.toString();
+}
+
 authRoutes.openapi(loginRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const { return_to } = c.req.valid('query');
+  const oidc = await container.resolve(OidcSettingsService).getRuntimeConfig();
+  const callbackOriginLogin = oidc ? loginOnCallbackOriginUrl(c, oidc.redirectUri) : null;
+  if (callbackOriginLogin) return c.redirect(callbackOriginLogin, 302);
   const authUrl = await authService.getAuthorizationUrl(return_to);
   const state = new URL(authUrl).searchParams.get('state');
   if (!state) throw new AppError(500, 'AUTH_ERROR', 'Failed to initiate login');
   // Bind the pending authorization to this browser. Without it, an attacker
   // could start a login with their own IdP account and hand the victim the
   // callback URL, signing the victim into the attacker's Gateway account.
+  // The cookie is read back on the callback, i.e. on the redirect URI's origin.
+  const cookieOrigin = oidc?.redirectUri ?? (await getPublicUrl());
   setCookie(c, OIDC_STATE_COOKIE_NAME, hashOidcState(state), {
     httpOnly: true,
-    secure: new URL(await getPublicUrl()).protocol === 'https:',
+    secure: new URL(cookieOrigin).protocol === 'https:',
     sameSite: 'Lax',
     maxAge: OIDC_STATE_COOKIE_MAX_AGE_SECONDS,
     path: '/',
@@ -821,7 +868,9 @@ authRoutes.openapi(regenerateCurrentUserRecoveryCodesRoute, async (c) => {
   assertLocalMfaAccount(user);
   const { code } = c.req.valid('json');
   const mfa = container.resolve(MfaService);
-  if (!(await mfa.verifyTotp(user.id, code)))
+  // Shares the step-up failure counter and lockout so this endpoint cannot be
+  // used to guess TOTP codes without limit.
+  if (!(await mfa.verifyStepUpCode(user.id, c.get('sessionId')!, { totpCode: code })))
     throw new AppError(401, 'INVALID_TOTP_CODE', 'Invalid authentication code');
   return c.json({ recoveryCodes: await mfa.regenerateRecoveryCodes(user.id) });
 });

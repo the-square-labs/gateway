@@ -53,11 +53,14 @@ describe('AccessListService update', () => {
     updatedAt: new Date('2026-01-01T00:00:00Z'),
   };
   const hosts = [
-    { id: 'host-1', domainNames: ['one.example.com'] },
-    { id: 'host-2', domainNames: ['two.example.com'] },
+    { id: 'host-1', domainNames: ['one.example.com'], nodeId: 'node-1' },
+    { id: 'host-2', domainNames: ['two.example.com'], nodeId: 'node-2' },
   ];
 
-  function makeUpdateService(reapplyHostConfig: ReturnType<typeof vi.fn>) {
+  function makeUpdateService(
+    reapplyHostConfig: ReturnType<typeof vi.fn>,
+    nodeState: { offline?: string[]; updating?: string[] } = {}
+  ) {
     const writes: Record<string, unknown>[] = [];
     const db = {
       query: {
@@ -81,7 +84,11 @@ describe('AccessListService update', () => {
       }),
     } as any;
     const audit = { log: vi.fn().mockResolvedValue(undefined) };
-    const nodeDispatch = { removeHtpasswd: vi.fn().mockResolvedValue({ success: true }) };
+    const nodeDispatch = {
+      removeHtpasswd: vi.fn().mockResolvedValue({ success: true }),
+      isNodeConnected: vi.fn((nodeId: string) => !nodeState.offline?.includes(nodeId)),
+      isNodeUpdateInProgress: vi.fn(async (nodeId: string) => !!nodeState.updating?.includes(nodeId)),
+    };
     const service = new AccessListService(db, {} as any, {} as any, audit as any, nodeDispatch as any, {} as any);
     service.setHostRuntime({ reapplyHostConfig: reapplyHostConfig as (hostId: string) => Promise<unknown> });
     return { service, writes, audit };
@@ -101,7 +108,7 @@ describe('AccessListService update', () => {
     const reapplyHostConfig = vi
       .fn()
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(new Error('Node nginx-node is not connected'))
+      .mockRejectedValueOnce(new Error('nginx: [emerg] invalid directive'))
       .mockResolvedValue(undefined);
     const { service, writes, audit } = makeUpdateService(reapplyHostConfig);
 
@@ -123,6 +130,35 @@ describe('AccessListService update', () => {
     // Both hosts are restored after the rollback, including the one already changed.
     expect(reapplyHostConfig.mock.calls.map(([id]) => id)).toEqual(['host-1', 'host-2', 'host-1', 'host-2']);
     expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('skips hosts on offline or updating nodes instead of rolling back', async () => {
+    const reapplyHostConfig = vi.fn().mockResolvedValue(undefined);
+    const { service, writes, audit } = makeUpdateService(reapplyHostConfig, { offline: ['node-1'] });
+
+    await service.update('access-list-1', { ipRules: [{ type: 'deny', value: 'all' }] }, 'user-1');
+    expect(reapplyHostConfig.mock.calls.map(([id]) => id)).toEqual(['host-2']);
+    expect(writes).toHaveLength(1);
+    expect(audit.log).toHaveBeenCalled();
+
+    const updating = makeUpdateService(vi.fn().mockResolvedValue(undefined), { updating: ['node-2'] });
+    await updating.service.update('access-list-1', { ipRules: [{ type: 'deny', value: 'all' }] }, 'user-1');
+    expect(updating.writes).toHaveLength(1);
+  });
+
+  it('does not roll back when the node drops mid-apply', async () => {
+    const nodeState: { offline: string[] } = { offline: [] };
+    const reapplyHostConfig = vi.fn(async (hostId: string) => {
+      if (hostId === 'host-2') {
+        nodeState.offline.push('node-2');
+        throw new Error('Node node-2 is not connected');
+      }
+    });
+    const { service, writes } = makeUpdateService(reapplyHostConfig, nodeState);
+
+    await service.update('access-list-1', { ipRules: [{ type: 'deny', value: 'all' }] }, 'user-1');
+    expect(writes).toHaveLength(1);
+    expect(reapplyHostConfig).toHaveBeenCalledTimes(2);
   });
 
   it('rejects enabling basic auth without users before touching the database or nodes', async () => {

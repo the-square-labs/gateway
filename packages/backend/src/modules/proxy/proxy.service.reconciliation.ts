@@ -2,7 +2,13 @@ import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
 import { domains, nodes, proxyAdditionalRoutes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
-import { proxyHostLockKey, proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
+import {
+  proxyHostLockKey,
+  proxyNodeLockKey,
+  runOutsideProxyLocks,
+  withProxyHostLock,
+  withProxyLocks,
+} from './proxy-host-lock.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
@@ -21,13 +27,15 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
   }
 
   protected runImmediateHealthCheck(hostId: string): void {
-    runImmediateProxyHealthCheck({
-      db: this.db,
-      hostId,
-      logger,
-      nodeDispatch: this.nodeDispatch,
-      eventBus: this.eventBus,
-    });
+    runOutsideProxyLocks(() =>
+      runImmediateProxyHealthCheck({
+        db: this.db,
+        hostId,
+        logger,
+        nodeDispatch: this.nodeDispatch,
+        eventBus: this.eventBus,
+      })
+    );
   }
 
   protected async refreshExternalBranding(): Promise<void> {
@@ -45,6 +53,11 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     this.dockerReconcileForce ||= force;
     if (this.dockerReconcileRunning) return;
     this.dockerReconcileRunning = true;
+    // Detached: callers often hold a per-host lock that this pass must wait for, not inherit.
+    runOutsideProxyLocks(() => this.runDockerReconciliationLoop());
+  }
+
+  private runDockerReconciliationLoop(): void {
     void (async () => {
       try {
         do {
@@ -70,10 +83,12 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
     if (this.dockerReconcileRetry) return;
     const delay = this.dockerReconcileBackoffMs;
     this.dockerReconcileBackoffMs = Math.min(this.dockerReconcileBackoffMs * 2, 5 * 60_000);
-    this.dockerReconcileRetry = setTimeout(() => {
-      this.dockerReconcileRetry = undefined;
-      this.queueDockerReconciliation(true);
-    }, delay);
+    this.dockerReconcileRetry = runOutsideProxyLocks(() =>
+      setTimeout(() => {
+        this.dockerReconcileRetry = undefined;
+        this.queueDockerReconciliation(true);
+      }, delay)
+    );
   }
 
   protected async updateRenamedContainerReferences(nodeId: string, oldName: string, newName: string): Promise<void> {

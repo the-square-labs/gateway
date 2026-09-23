@@ -32,7 +32,7 @@ import {
   type DockerUpstreamReference,
   type ProxyDockerUpstreamService,
 } from './proxy-docker-upstream.service.js';
-import { withProxyHostLock } from './proxy-host-lock.js';
+import { runOutsideProxyLocks, withProxyHostLock } from './proxy-host-lock.js';
 import type { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
 import { assertProxyReferenceAccess, type ProxyReferenceInput } from './proxy-reference-access.js';
 import type { ProxySecureLinkService } from './proxy-secure-link.service.js';
@@ -316,7 +316,8 @@ export abstract class ProxyServiceCore {
     });
   }
   protected emitHost(id: string, action: string, domain?: string, extra: Record<string, unknown> = {}) {
-    this.eventBus?.publish('proxy.host.changed', { id, action, domain, ...extra });
+    // Subscribers start their own work; it must not inherit a lock held by the emitter.
+    runOutsideProxyLocks(() => this.eventBus?.publish('proxy.host.changed', { id, action, domain, ...extra }));
   }
 
   protected async isGatewayPublicRoute(host: Pick<ProxyHostRow, 'domainNames'>): Promise<boolean> {

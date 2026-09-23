@@ -8,6 +8,7 @@ vi.mock('node:dns/promises', () => {
     relay: '172.18.0.5',
     redis: '172.18.0.6',
     'db-alias.example.test': '172.18.0.3',
+    'gateway.lan': '192.168.1.10',
     localhost: '127.0.0.1',
   };
   const lookup = vi.fn(async (name: string) => {
@@ -18,7 +19,10 @@ vi.mock('node:dns/promises', () => {
   return { lookup, default: { lookup } };
 });
 
-import { DEFAULT_OUTBOUND_WEBHOOK_POLICY } from '@/modules/settings/outbound-webhook-policy.service.js';
+import {
+  checkOutboundWebhookTarget,
+  DEFAULT_OUTBOUND_WEBHOOK_POLICY,
+} from '@/modules/settings/outbound-webhook-policy.service.js';
 import {
   checkProxyHealthTarget,
   evaluateProxyHealthResponse,
@@ -289,6 +293,30 @@ describe('proxy health target policy', () => {
     await expect(checkProxyHealthTarget(url, env)).resolves.toMatchObject({ allowed: false });
   });
 
+  // Regression: on one-box LAN installs the public URL resolves to the host's LAN address, and an
+  // upstream on that address stayed "unknown" forever.
+  it("allows an upstream on the Gateway's own LAN address but not the Gateway's service ports", async () => {
+    const publicUrl = 'https://gateway.lan';
+    await expect(checkProxyHealthTarget('http://192.168.1.10:8096/', env, publicUrl)).resolves.toMatchObject({
+      allowed: true,
+      resolvedAddresses: ['192.168.1.10'],
+    });
+    for (const port of [3000, 9443, 5432, 6379, 5000]) {
+      await expect(
+        checkProxyHealthTarget(`http://192.168.1.10:${port}/`, { ...env, PORT: 3000, GRPC_PORT: 9443 }, publicUrl)
+      ).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('Gateway service port') });
+    }
+    // Webhooks still refuse every port on a Gateway address.
+    await expect(
+      checkOutboundWebhookTarget(
+        'http://192.168.1.10:8096/',
+        { allowPrivateNetworks: true, allowedPrivateCidrs: ['192.168.0.0/16'] },
+        env,
+        publicUrl
+      )
+    ).resolves.toMatchObject({ allowed: false, reason: expect.stringContaining('Gateway address') });
+  });
+
   it('does not loosen the outbound webhook policy', () => {
     expect(DEFAULT_OUTBOUND_WEBHOOK_POLICY.allowedPrivateCidrs).not.toContain('192.168.0.0/16');
     expect(PROXY_HEALTH_CHECK_POLICY.allowedPrivateCidrs).toEqual(
@@ -327,20 +355,83 @@ describe('proxy health target policy', () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it('pins requests to the validated address and does not follow redirects to another target', async () => {
+  it('pins requests to the validated address and does not follow redirects to a refused target', async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ status: 302, headers: { location: '/login' }, text: async () => '' })
       .mockResolvedValueOnce({ status: 302, headers: { location: 'http://169.254.169.254/' }, text: async () => '' });
+    const checkTarget = vi.fn(async (url: string) =>
+      url.includes('169.254')
+        ? { url, allowed: false, reason: 'metadata', resolvedAddresses: ['169.254.169.254'] }
+        : { url, allowed: true, resolvedAddresses: ['10.0.0.9'] }
+    );
     const result = await probeDirectProxyUpstream(
       { forwardScheme: 'http', forwardHost: 'app.lan', forwardPort: 8080, healthCheckUrl: '/' },
-      { checkTarget: async (url) => ({ url, allowed: true, resolvedAddresses: ['10.0.0.9'] }), request }
+      { checkTarget, request }
     );
 
     expect(request.mock.calls.map((call) => [call[0], call[1]])).toEqual([
       ['http://app.lan:8080/', ['10.0.0.9']],
       ['http://app.lan:8080/login', ['10.0.0.9']],
     ]);
+    // The upstream answered; a refused redirect target is not an outage when no status is expected.
+    expect(result).toMatchObject({ status: 'online', httpStatus: 302 });
+
+    request.mockReset();
+    request.mockResolvedValueOnce({
+      status: 302,
+      headers: { location: 'http://169.254.169.254/' },
+      text: async () => '',
+    });
+    await expect(
+      probeDirectProxyUpstream(
+        {
+          forwardScheme: 'http',
+          forwardHost: 'app.lan',
+          forwardPort: 8080,
+          healthCheckUrl: '/',
+          healthCheckExpectedStatus: 200,
+        },
+        { checkTarget, request }
+      )
+    ).resolves.toMatchObject({ status: 'offline', httpStatus: 302 });
+  });
+
+  // Regression: a force-HTTPS or external redirect was scored as a failing 3xx after the upgrade.
+  it('follows a cross-origin redirect through the policy, pinned to the new target addresses', async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 301, headers: { location: 'https://app.example.com/' }, text: async () => '' })
+      .mockResolvedValueOnce({ status: 200, headers: {}, text: async () => 'ok' });
+    const checkTarget = vi.fn(async (url: string) =>
+      url.startsWith('https://app.example.com')
+        ? { url, allowed: true, resolvedAddresses: ['203.0.113.7'] }
+        : { url, allowed: true, resolvedAddresses: ['10.0.0.9'] }
+    );
+    const result = await probeDirectProxyUpstream(
+      { forwardScheme: 'http', forwardHost: 'app.lan', forwardPort: 8080, healthCheckUrl: '/' },
+      { checkTarget, request }
+    );
+
+    expect(checkTarget).toHaveBeenCalledWith('https://app.example.com/');
+    expect(request.mock.calls.map((call) => [call[0], call[1]])).toEqual([
+      ['http://app.lan:8080/', ['10.0.0.9']],
+      ['https://app.example.com/', ['203.0.113.7']],
+    ]);
+    expect(result).toMatchObject({ status: 'online', httpStatus: 200 });
+  });
+
+  it('stops following redirects after five hops', async () => {
+    const request = vi.fn(async (url: string) => ({
+      status: 302,
+      headers: { location: `${url}x` },
+      text: async () => '',
+    }));
+    const result = await probeDirectProxyUpstream(
+      { forwardScheme: 'http', forwardHost: 'app.lan', forwardPort: 8080, healthCheckUrl: '/' },
+      { checkTarget: async (url) => ({ url, allowed: true, resolvedAddresses: ['10.0.0.9'] }), request }
+    );
+    expect(request).toHaveBeenCalledTimes(6);
     expect(result).toMatchObject({ status: 'offline', httpStatus: 302 });
   });
 });

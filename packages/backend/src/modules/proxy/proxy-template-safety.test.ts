@@ -130,24 +130,26 @@ cache={{cacheEnabled}}
     expect(rendered).toContain('cache=true');
   });
 
-  it('rejects reserved template variable names on create and update', () => {
+  // Regression: custom templates that declare reserved names send them back, and the 400 made
+  // their settings unsaveable. Reserved keys are dropped instead; they are ignored at render anyway.
+  it('drops reserved template variable names on create and update', () => {
     const create = CreateProxyHostSchema.safeParse({
       nodeId: '11111111-1111-4111-8111-111111111111',
       domainNames: ['example.com'],
       forwardHost: 'app',
       forwardPort: 80,
-      templateVariables: { accessList: false },
+      templateVariables: { accessList: false, myFlag: 'x' },
     });
-    expect(create.success).toBe(false);
-    expect(JSON.stringify(create.error?.issues)).toContain('accessList');
+    expect(create.success).toBe(true);
+    expect(create.data?.templateVariables).toEqual({ myFlag: 'x' });
 
     const update = UpdateProxyHostSchema.safeParse({ templateVariables: { upstream: 'x', sslKeyPath: 'y' } });
-    expect(update.success).toBe(false);
-    expect(JSON.stringify(update.error?.issues)).toContain('upstream, sslKeyPath');
+    expect(update.success).toBe(true);
+    expect(update.data?.templateVariables).toEqual({});
 
-    expect(
-      UpdateProxyHostSchema.safeParse({ templateVariables: { cacheEnabled: true, rateLimitRPS: 5, myFlag: 'x' } })
-        .success
-    ).toBe(true);
+    const kept = UpdateProxyHostSchema.safeParse({
+      templateVariables: { cacheEnabled: true, rateLimitRPS: 5, myFlag: 'x' },
+    });
+    expect(kept.data?.templateVariables).toEqual({ cacheEnabled: true, rateLimitRPS: 5, myFlag: 'x' });
   });
 });

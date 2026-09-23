@@ -5,10 +5,13 @@ import { container } from '@/container.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import { DockerManagementService } from './docker.service.js';
-import { dockerWebhookTriggerRoutes } from './docker-webhook.routes.js';
+import { dockerWebhookTriggerRoutes, registerWebhookConfigRoutes } from './docker-webhook.routes.js';
 import { DockerWebhookService } from './docker-webhook.service.js';
 
 vi.mock('@/modules/demo/demo-mode.js', () => ({ isDemoMode: () => false }));
+vi.mock('./docker-access.middleware.js', () => ({
+  requireDockerContainerScope: () => async (_c: unknown, next: () => Promise<void>) => next(),
+}));
 
 const token = '11111111-1111-4111-8111-111111111111';
 
@@ -141,5 +144,38 @@ describe('Docker webhook trigger resource resolution', () => {
     expect(docker.getManagedContainerConfiguration).not.toHaveBeenCalled();
     expect(docker.listContainers).not.toHaveBeenCalled();
     expect(service.triggerUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('Docker webhook token issuance under impersonation', () => {
+  function configApp() {
+    const service = { upsert: vi.fn(), regenerateToken: vi.fn() };
+    container.registerInstance(DockerWebhookService, service as never);
+    const router = new OpenAPIHono<AppEnv>();
+    router.use('*', async (c, next) => {
+      c.set('user', { id: 'target-user' } as never);
+      c.set('impersonation', { adminUserId: 'admin-1' } as never);
+      await next();
+    });
+    registerWebhookConfigRoutes(router);
+    const app = new OpenAPIHono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/', router);
+    return { app, service };
+  }
+
+  it('refuses to create or regenerate a webhook token', async () => {
+    const { app, service } = configApp();
+    const upsert = await app.request('/nodes/node-1/containers/app/webhook', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
+    const regenerate = await app.request('/nodes/node-1/containers/app/webhook/regenerate', { method: 'POST' });
+
+    expect(upsert.status).toBe(403);
+    expect(regenerate.status).toBe(403);
+    expect(service.upsert).not.toHaveBeenCalled();
+    expect(service.regenerateToken).not.toHaveBeenCalled();
   });
 });

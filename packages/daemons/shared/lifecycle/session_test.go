@@ -108,7 +108,7 @@ func TestSessionHandlesComposeCancelAndExpiredCommandsWhileComposeRuns(t *testin
 			return nil
 		}
 		compose := func(id, action string) *pb.GatewayCommand {
-			return &pb.GatewayCommand{CommandId: id, Payload: &pb.GatewayCommand_DockerCompose{DockerCompose: &pb.DockerComposeCommand{Action: action, OperationId: "op-1", ProjectId: "project-1"}}}
+			return &pb.GatewayCommand{CommandId: id, SentAtUnixMs: time.Now().UnixMilli(), Payload: &pb.GatewayCommand_DockerCompose{DockerCompose: &pb.DockerComposeCommand{Action: action, OperationId: "op-1", ProjectId: "project-1"}}}
 		}
 		if err := commandStream.Send(compose("apply-1", "apply")); err != nil {
 			return err
@@ -126,8 +126,11 @@ func TestSessionHandlesComposeCancelAndExpiredCommandsWhileComposeRuns(t *testin
 		if result := awaitCommandResult(t, commandStream, "cancel-1"); result != nil && !result.Success {
 			t.Errorf("cancel result = %+v", result)
 		}
+		// Sent two minutes ago by the gateway clock and delivered only now,
+		// while the earlier commands arrived at once.
 		expired := &pb.GatewayCommand{
 			CommandId:       "expired-1",
+			SentAtUnixMs:    time.Now().Add(-2 * time.Minute).UnixMilli(),
 			ExpiresAtUnixMs: time.Now().Add(-time.Minute).UnixMilli(),
 			Payload:         &pb.GatewayCommand_ApplyConfig{ApplyConfig: &pb.ApplyConfigCommand{}},
 		}
@@ -219,15 +222,69 @@ func TestControlSessionBackoffGrowsOnlyForQuickUnacceptedSessions(t *testing.T) 
 	}
 }
 
-func TestCommandExpiryToleratesSmallClockSkew(t *testing.T) {
-	now := time.Now()
-	if commandExpired(&pb.GatewayCommand{}, now) {
+func TestCommandExpiryToleratesDelayJitter(t *testing.T) {
+	clock := newCommandClock()
+	now := clock.base
+	first := &pb.GatewayCommand{SentAtUnixMs: now.UnixMilli(), ExpiresAtUnixMs: now.Add(10 * time.Second).UnixMilli()}
+	clock.observe(first, now)
+	if clock.expired(first, now) {
+		t.Fatal("a command delivered at once must run")
+	}
+	late := &pb.GatewayCommand{SentAtUnixMs: now.Add(-12 * time.Second).UnixMilli(), ExpiresAtUnixMs: now.Add(-2 * time.Second).UnixMilli()}
+	clock.observe(late, now)
+	if clock.expired(late, now) {
+		t.Fatal("a command within the tolerance must still run")
+	}
+	stale := &pb.GatewayCommand{SentAtUnixMs: now.Add(-2 * time.Minute).UnixMilli(), ExpiresAtUnixMs: now.Add(-time.Minute).UnixMilli()}
+	clock.observe(stale, now)
+	if !clock.expired(stale, now) {
+		t.Fatal("a command delivered well past its deadline must be dropped")
+	}
+}
+
+func TestCommandExpiryIgnoresClockSkew(t *testing.T) {
+	// This host's clock runs 16s ahead of the gateway; every 10s command
+	// arrives promptly and must run.
+	clock := newCommandClock()
+	for i := 0; i < 3; i++ {
+		received := clock.base.Add(time.Duration(i) * time.Second)
+		gatewayNow := received.Add(-16 * time.Second)
+		cmd := &pb.GatewayCommand{SentAtUnixMs: gatewayNow.UnixMilli(), ExpiresAtUnixMs: gatewayNow.Add(10 * time.Second).UnixMilli()}
+		clock.observe(cmd, received)
+		if clock.expired(cmd, received) {
+			t.Fatalf("command %d expired on a host whose clock runs ahead", i)
+		}
+	}
+	// And one that sat 30s in delivery is still dropped despite the skew.
+	received := clock.base.Add(40 * time.Second)
+	sentAt := received.Add(-16*time.Second - 30*time.Second)
+	stale := &pb.GatewayCommand{SentAtUnixMs: sentAt.UnixMilli(), ExpiresAtUnixMs: sentAt.Add(10 * time.Second).UnixMilli()}
+	clock.observe(stale, received)
+	if !clock.expired(stale, received) {
+		t.Fatal("a command delivered 30s late must be dropped")
+	}
+
+	// A host 16s behind is not lenient forever either.
+	behind := newCommandClock()
+	prompt := &pb.GatewayCommand{SentAtUnixMs: behind.base.Add(16 * time.Second).UnixMilli(), ExpiresAtUnixMs: behind.base.Add(26 * time.Second).UnixMilli()}
+	behind.observe(prompt, behind.base)
+	if behind.expired(prompt, behind.base) {
+		t.Fatal("a prompt command expired on a host whose clock runs behind")
+	}
+}
+
+func TestCommandExpirySkippedWithoutSendTime(t *testing.T) {
+	clock := newCommandClock()
+	now := clock.base
+	if clock.expired(&pb.GatewayCommand{}, now) {
 		t.Fatal("a command without a deadline must never expire")
 	}
-	if commandExpired(&pb.GatewayCommand{ExpiresAtUnixMs: now.Add(-2 * time.Second).UnixMilli()}, now) {
-		t.Fatal("a command within the skew allowance must still run")
+	oldGateway := &pb.GatewayCommand{ExpiresAtUnixMs: now.Add(-time.Hour).UnixMilli()}
+	clock.observe(oldGateway, now)
+	if clock.expired(oldGateway, now) {
+		t.Fatal("a deadline without a send time must not be judged against the local clock")
 	}
-	if !commandExpired(&pb.GatewayCommand{ExpiresAtUnixMs: now.Add(-time.Minute).UnixMilli()}, now) {
-		t.Fatal("a command well past its deadline must be dropped")
+	if _, ok := clock.remaining(oldGateway, now); ok {
+		t.Fatal("a deadline without a send time must not bound a slot wait")
 	}
 }

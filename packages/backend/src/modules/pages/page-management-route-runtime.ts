@@ -2,7 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { appRoute, createdJson, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
-import { authMiddleware, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, rejectImpersonation, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
 import { PageDeploymentListQuerySchema } from './deployments/page-deployment.schemas.js';
 import { PageDeploymentService } from './deployments/page-deployment.service.js';
@@ -29,6 +29,7 @@ export const pageManagementRouteRuntime = {
   okJson,
   UnknownDataResponseSchema,
   authMiddleware,
+  rejectImpersonation,
   requireScopeForResource,
   requireLicenseFeature,
   PageDeploymentListQuerySchema,

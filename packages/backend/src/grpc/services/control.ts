@@ -14,6 +14,7 @@ import { validateRegisteredDaemonProfile } from '@/modules/nodes/node-daemon-pro
 import { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
+import { reportedPolicySigningKeyIds } from '@/services/relay-policy-signing-key.service.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
@@ -883,6 +884,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                   id: relayInstances.id,
                   state: relayInstances.state,
                   appliedPolicyRevision: relayInstances.appliedPolicyRevision,
+                  health: relayInstances.health,
                 })
                 .from(relayInstances)
                 .where(eq(relayInstances.nodeId, activeNodeId))
@@ -923,7 +925,11 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                     registeredEndpoints: Number(runtime.registeredEndpoints || 0),
                     pressurePercent: runtime.pressurePercent || 0,
                     admissionState: runtime.draining ? 'draining' : nextState,
-                    policySigningKeyIds: runtime.policySigningKeyIds ?? [],
+                    policySigningKeyIds: reportedPolicySigningKeyIds(
+                      instance.health?.policySigningKeyIds,
+                      runtime.policySigningKeyIds,
+                      nextState
+                    ),
                     assignmentTunnels: (runtime.assignmentTunnels ?? []).map((count) => ({
                       endpointId: count.endpointId,
                       assignmentGeneration: Number(count.assignmentGeneration),

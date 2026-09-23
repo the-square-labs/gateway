@@ -74,6 +74,6 @@ describe('OidcSettingsService', () => {
     });
 
     await expect(harness.service.getRuntimeConfig()).resolves.toMatchObject({ clientSecret: 'first-secret' });
-    expect(harness.issuerPins).toEqual([{ oidcIssuer: 'https://id.example.com' }]);
+    expect(harness.issuerPins).toEqual([]);
   });
 });

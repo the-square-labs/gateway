@@ -4,6 +4,7 @@ vi.mock('@/lib/created-resource-permissions.js', () => ({
   grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
 }));
 
+import { dockerManagedVolumes } from '@/db/schema/index.js';
 import { DockerManagementService } from './docker.service.js';
 
 function dbWithOnlineDockerNode() {
@@ -144,6 +145,82 @@ describe('DockerManagementService volume and network operations', () => {
       nodeId: 'node-1',
       name: 'data',
       action: 'removed',
+    });
+  });
+
+  describe('housekeeping removal of orphaned anonymous volumes', () => {
+    const ANONYMOUS = 'a'.repeat(64);
+
+    // An anonymous, unused, unmanaged volume: hidden from the user volume list.
+    function createHousekeepingService(usedBy: string[] | null = null) {
+      const db = {
+        select: vi.fn(() => ({
+          from: vi.fn((table: unknown) => ({
+            where: vi.fn(() => {
+              const rows = table === dockerManagedVolumes ? [] : [{ id: 'node-1', type: 'docker' }];
+              return Object.assign(Promise.resolve(rows), { limit: vi.fn(async () => rows) });
+            }),
+          })),
+        })),
+        delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+      };
+      const dispatch = {
+        sendDockerVolumeCommand: vi.fn(async (_nodeId: string, action: string) => {
+          if (action === 'list') return { success: true, detail: '[]' };
+          if (action === 'inspect')
+            return { success: true, detail: JSON.stringify({ Name: ANONYMOUS, UsedBy: usedBy }) };
+          return { success: true };
+        }),
+        sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '[]' }),
+      };
+      const audit = { log: vi.fn().mockResolvedValue(undefined) };
+      const service = new DockerManagementService(
+        db as never,
+        audit as never,
+        dispatch as never,
+        { getNode: vi.fn().mockReturnValue({ id: 'node-1' }) } as never
+      );
+      const migrationGuard = { assertVolumeAllowed: vi.fn().mockResolvedValue(undefined) };
+      service.setMigrationGuard(migrationGuard as never);
+      return { service, dispatch, audit, migrationGuard };
+    }
+
+    it('removes an anonymous unused volume that the user volume list hides', async () => {
+      const { service, dispatch, audit, migrationGuard } = createHousekeepingService();
+
+      // The user path refuses it: the volume is not user-visible.
+      await expect(service.removeVolume('node-1', ANONYMOUS, false, 'user-1')).rejects.toMatchObject({
+        code: 'VOLUME_NOT_FOUND',
+      });
+      await service.removeOrphanedAnonymousVolume('node-1', ANONYMOUS, 'user-1');
+
+      expect(migrationGuard.assertVolumeAllowed).toHaveBeenCalledWith('node-1', ANONYMOUS);
+      expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'remove', {
+        name: ANONYMOUS,
+        force: false,
+      });
+      expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'docker.volume.remove' }));
+    });
+
+    it('refuses named or in-use volumes', async () => {
+      const inUse = createHousekeepingService(['app']);
+      await expect(inUse.service.removeOrphanedAnonymousVolume('node-1', ANONYMOUS, null)).rejects.toMatchObject({
+        code: 'VOLUME_IN_USE',
+      });
+      await expect(inUse.service.removeOrphanedAnonymousVolume('node-1', 'app-data', null)).rejects.toMatchObject({
+        code: 'VOLUME_NOT_ANONYMOUS',
+      });
+      expect(inUse.dispatch.sendDockerVolumeCommand).not.toHaveBeenCalledWith('node-1', 'remove', expect.anything());
+    });
+
+    it('lists hidden volumes for the housekeeping scan', async () => {
+      const { service, dispatch } = createHousekeepingService();
+      dispatch.sendDockerVolumeCommand.mockResolvedValueOnce({
+        success: true,
+        detail: JSON.stringify([{ Name: ANONYMOUS, UsedBy: null }]),
+      });
+
+      await expect(service.listHousekeepingVolumes('node-1')).resolves.toEqual([{ Name: ANONYMOUS, UsedBy: null }]);
     });
   });
 

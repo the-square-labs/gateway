@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/auth"
@@ -33,6 +34,13 @@ type DaemonBase struct {
 	logger                *slog.Logger
 	baseHandler           slog.Handler // original handler, never wrapped
 	tunnelIdentityChanged chan struct{}
+	// controlReconnect asks the running control session to reconnect, so the
+	// gateway sees a renewed certificate (and promotes it) before the relay
+	// tunnel switches to it.
+	controlReconnect chan struct{}
+	// tunnelIdentityPending is set after a renewal; the tunnel is told to
+	// switch identities once the gateway accepted the renewed certificate.
+	tunnelIdentityPending atomic.Bool
 	// sessionReceivedCommand is set by runSession once the gateway sent a
 	// command, i.e. accepted the registration. Only the Run loop reads it.
 	sessionReceivedCommand bool
@@ -61,6 +69,7 @@ func NewDaemonBase(cfg *BaseConfig, cfgPath string, plugin DaemonPlugin, logger 
 		logger:                startupLogger,
 		baseHandler:           logger.Handler(), // original handler without startup buffer
 		tunnelIdentityChanged: make(chan struct{}, 1),
+		controlReconnect:      make(chan struct{}, 1),
 	}, nil
 }
 
@@ -403,6 +412,16 @@ func runProcessRelayTunnel(
 			return
 		case <-time.After(time.Second):
 		}
+	}
+}
+
+// requestControlReconnect makes the control session reconnect with the
+// current credentials. The relay tunnel switches after the gateway accepted them.
+func (d *DaemonBase) requestControlReconnect() {
+	d.tunnelIdentityPending.Store(true)
+	select {
+	case d.controlReconnect <- struct{}{}:
+	default:
 	}
 }
 

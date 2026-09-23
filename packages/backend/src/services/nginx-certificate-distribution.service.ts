@@ -13,6 +13,8 @@ import {
 } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
+// proxy-host-lock has no imports of its own, so this adds no import cycle.
+import { withProxyHostLock } from '@/modules/proxy/proxy-host-lock.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
@@ -937,16 +939,29 @@ export class NginxCertificateDistributionService {
   }
 
   private async repairReplica(asset: AssetRow, nodeId: string): Promise<void> {
+    const candidate = await this.findActiveDeployment(asset.id, nodeId);
+    if (!candidate) return;
+    // Re-pushing configContent races a concurrent host apply unless it runs under
+    // the same per-host lock; re-read the deployment once the lock is held.
+    await withProxyHostLock(candidate.hostId, () => this.repairReplicaLocked(asset, nodeId, candidate.hostId));
+  }
+
+  private async findActiveDeployment(assetId: string, nodeId: string, hostId?: string) {
     const deployments = await this.db.query.nginxProxyHostDeployments.findMany({
       where: and(
-        eq(nginxProxyHostDeployments.assetId, asset.id),
+        eq(nginxProxyHostDeployments.assetId, assetId),
         eq(nginxProxyHostDeployments.nodeId, nodeId),
-        eq(nginxProxyHostDeployments.state, 'active')
+        eq(nginxProxyHostDeployments.state, 'active'),
+        hostId ? eq(nginxProxyHostDeployments.hostId, hostId) : undefined
       ),
       orderBy: [asc(nginxProxyHostDeployments.createdAt)],
       limit: 1,
     });
-    const deployment = deployments[0];
+    return deployments[0];
+  }
+
+  private async repairReplicaLocked(asset: AssetRow, nodeId: string, hostId: string): Promise<void> {
+    const deployment = await this.findActiveDeployment(asset.id, nodeId, hostId);
     if (!deployment) return;
     const replica = await this.db.query.nginxCertificateReplicas.findFirst({
       where: and(eq(nginxCertificateReplicas.assetId, asset.id), eq(nginxCertificateReplicas.nodeId, nodeId)),
