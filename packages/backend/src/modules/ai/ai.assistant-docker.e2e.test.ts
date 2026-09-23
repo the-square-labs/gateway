@@ -3,10 +3,17 @@ import type { User } from '@/types.js';
 import { AIService } from './ai.service.js';
 import type { AIConfig, ChatMessage, WSServerMessage } from './ai.types.js';
 
-const mocks = vi.hoisted(() => ({ streamModelResponse: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  streamModelResponse: vi.fn(),
+  assertComposeChildMutationAllowed: vi.fn(),
+}));
 
 vi.mock('./ai.provider-adapter.js', () => ({
   streamModelResponse: mocks.streamModelResponse,
+}));
+
+vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
+  assertComposeChildMutationAllowed: mocks.assertComposeChildMutationAllowed,
 }));
 
 const CONFIG: AIConfig = {
@@ -81,6 +88,7 @@ function createService(dockerService: Record<string, unknown>) {
 describe('deterministic assistant Docker deployment flow', () => {
   afterEach(() => {
     mocks.streamModelResponse.mockReset();
+    mocks.assertComposeChildMutationAllowed.mockReset();
     vi.restoreAllMocks();
   });
 
@@ -181,6 +189,7 @@ describe('deterministic assistant Docker deployment flow', () => {
       )
     );
 
+    expect(mocks.assertComposeChildMutationAllowed).toHaveBeenCalledWith('node-1', 'container-1');
     expect(dockerService.updateContainerEnv).toHaveBeenCalledWith(
       'node-1',
       'container-1',

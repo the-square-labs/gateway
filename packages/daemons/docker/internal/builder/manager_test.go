@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -222,7 +223,8 @@ func TestJobCleanupCompletesBeforeTerminalEventDelivery(t *testing.T) {
 	}
 	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded"})
 	manager.attempts["build-1"] = 0
-	terminal := manager.prepareCompletedJob("build-1", 0)
+	manager.generations["build-1"] = 1
+	terminal := manager.prepareCompletedJob("build-1", 1)
 	manager.deliverTerminal(terminal)
 	if strings.Join(order, ",") != "cleanup,terminal" {
 		t.Fatalf("completion order = %v, want cleanup before terminal delivery", order)
@@ -235,9 +237,10 @@ func TestJobCapacityIsReleasedBeforeTerminalAcknowledgement(t *testing.T) {
 	manager.jobs["build-1"] = func() {}
 	manager.secrets["build-1"] = []string{"secret"}
 	manager.attempts["build-1"] = 2
+	manager.generations["build-1"] = 1
 	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 2})
 
-	terminal := manager.prepareCompletedJob("build-1", 2)
+	terminal := manager.prepareCompletedJob("build-1", 1)
 	if terminal == nil || terminal.GetAttempt() != 2 {
 		t.Fatalf("prepared terminal event = %#v, want attempt 2", terminal)
 	}
@@ -245,8 +248,9 @@ func TestJobCapacityIsReleasedBeforeTerminalAcknowledgement(t *testing.T) {
 	_, jobExists := manager.jobs["build-1"]
 	_, secretExists := manager.secrets["build-1"]
 	_, attemptExists := manager.attempts["build-1"]
+	_, generationExists := manager.generations["build-1"]
 	manager.mu.Unlock()
-	if jobExists || secretExists || attemptExists {
+	if jobExists || secretExists || attemptExists || generationExists {
 		t.Fatalf("completed job still occupies capacity: job=%v secret=%v attempt=%v", jobExists, secretExists, attemptExists)
 	}
 }
@@ -256,9 +260,10 @@ func TestOldAttemptCleanupDoesNotDeleteReplacementJobState(t *testing.T) {
 	manager.jobs["build-1"] = func() {}
 	manager.secrets["build-1"] = []string{"replacement-secret"}
 	manager.attempts["build-1"] = 3
+	manager.generations["build-1"] = 2
 	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 3})
 
-	manager.releaseAttemptState("build-1", 2)
+	manager.releaseJobState("build-1", 1)
 
 	manager.mu.Lock()
 	_, jobExists := manager.jobs["build-1"]
@@ -268,6 +273,59 @@ func TestOldAttemptCleanupDoesNotDeleteReplacementJobState(t *testing.T) {
 	manager.mu.Unlock()
 	if !jobExists || len(secret) != 1 || secret[0] != "replacement-secret" || attempt != 3 || terminal == nil {
 		t.Fatalf("old attempt cleanup removed replacement state: job=%v secret=%v attempt=%d terminal=%#v", jobExists, secret, attempt, terminal)
+	}
+}
+
+func TestRunningBuildAdoptsNewerAttempt(t *testing.T) {
+	events := make(chan *pb.DockerBuildEvent, 8)
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, func(event *pb.DockerBuildEvent) error {
+		events <- event
+		return nil
+	})
+	command := validBuildCommand()
+	live := &atomic.Uint32{}
+	live.Store(1)
+	manager.jobs[command.GetBuildId()] = func() {}
+	manager.attempts[command.GetBuildId()] = 1
+	manager.generations[command.GetBuildId()] = 1
+	manager.liveAttempts[command.GetBuildId()] = live
+	manager.statuses[command.GetBuildId()] = "building"
+
+	command.Attempt = 2
+	if err := manager.Start(command); err != nil {
+		t.Fatalf("newer attempt of a running build was not adopted: %v", err)
+	}
+	if manager.attemptFor(command.GetBuildId()) != 2 || live.Load() != 2 {
+		t.Fatalf("adopted attempt = %d (live %d), want 2", manager.attemptFor(command.GetBuildId()), live.Load())
+	}
+	status := <-events
+	heartbeat := <-events
+	if status.GetStatus() != "building" || status.GetAttempt() != 2 {
+		t.Fatalf("adoption status event = %s/%d, want building/2", status.GetStatus(), status.GetAttempt())
+	}
+	if heartbeat.GetStatus() != "heartbeat" || heartbeat.GetAttempt() != 2 {
+		t.Fatalf("adoption heartbeat = %s/%d, want heartbeat/2", heartbeat.GetStatus(), heartbeat.GetAttempt())
+	}
+
+	for _, attempt := range []uint32{2, 1} {
+		command.Attempt = attempt
+		if err := manager.Start(command); err == nil || err.Error() != "build is already running" {
+			t.Fatalf("attempt %d: err = %v, want build is already running", attempt, err)
+		}
+	}
+}
+
+func TestAdoptedAttemptOwnsTheRecordedTerminalEvent(t *testing.T) {
+	manager := NewManager(DefaultRuntimeConfig(0), t.TempDir(), DefaultGitAskpassPath, nil)
+	manager.cleanupAfterJob = func(_ string) {}
+	manager.jobs["build-1"] = func() {}
+	manager.attempts["build-1"] = 3
+	manager.generations["build-1"] = 1
+	manager.emitTerminal(&pb.DockerBuildEvent{BuildId: "build-1", Status: "succeeded", Attempt: 2})
+
+	terminal := manager.prepareCompletedJob("build-1", 1)
+	if terminal == nil || terminal.GetAttempt() != 3 {
+		t.Fatalf("terminal event = %#v, want the adopted attempt 3", terminal)
 	}
 }
 

@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
+import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import {
   createContainer,
   daemonContainerCreateConfig,
   duplicateContainer,
   killContainer,
+  recreateWithConfig,
   removeContainer,
   renameContainer,
+  updateContainer,
+  updateContainerEnv,
 } from './docker-container-mutation-operations.js';
 
 describe('killContainer emergency path', () => {
@@ -92,8 +95,15 @@ function unlockedDockerNodeDb() {
       })),
     })),
   };
+  const deletes: unknown[] = [];
+  db.delete = vi.fn((table: unknown) => ({
+    where: vi.fn().mockImplementation(async () => {
+      deletes.push(table);
+    }),
+  }));
   db.transaction = vi.fn(async (callback: (tx: typeof db) => Promise<unknown>) => callback(db));
   db.updates = updates;
+  db.deletes = deletes;
   return db;
 }
 
@@ -415,12 +425,12 @@ describe('container name-keyed metadata lifecycle', () => {
     expect(bindingDb.transaction).toHaveBeenCalledOnce();
     expect(bindingDb.update).toHaveBeenNthCalledWith(1, managedDatabaseBindings);
     expect(bindingDb.update).toHaveBeenNthCalledWith(2, managedStorageBindings);
-    expect(bindingDb.updates).toEqual([
+    expect(bindingDb.updates.slice(0, 2)).toEqual([
       { table: managedDatabaseBindings, values: expect.objectContaining({ targetResourceId: 'orders-v2' }) },
       { table: managedStorageBindings, values: expect.objectContaining({ targetResourceId: 'orders-v2' }) },
     ]);
     expect(
-      bindingDb.updates.map(({ values }: { values: Record<string, unknown> }) => Object.keys(values).sort())
+      bindingDb.updates.slice(0, 2).map(({ values }: { values: Record<string, unknown> }) => Object.keys(values).sort())
     ).toEqual([
       ['targetResourceId', 'updatedAt'],
       ['targetResourceId', 'updatedAt'],
@@ -539,5 +549,313 @@ describe('container name-keyed metadata lifecycle', () => {
     );
     expect(clearTransition).toHaveBeenCalledWith('node-1', 'new-name');
     expect(emitContainer).not.toHaveBeenCalled();
+  });
+});
+
+describe('container webhooks follow the container name', () => {
+  it('deletes webhooks when the container is removed', async () => {
+    const db = unlockedDockerNodeDb();
+    const ctx = {
+      db,
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      requireNoTransition: vi.fn(),
+      inspectContainer: vi.fn().mockResolvedValue({ State: { Status: 'exited' } }),
+      emitContainer: vi.fn(),
+      parseResult: vi.fn(),
+    };
+
+    await removeContainer(ctx as never, 'node-1', 'container-1', false, 'user-1');
+
+    expect(db.deletes).toContain(dockerWebhooks);
+  });
+
+  it('drops stale webhooks of the new name and moves the old ones on rename', async () => {
+    const db = unlockedDockerNodeDb();
+    const ctx = {
+      db,
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('old-name'),
+      requireNoTransition: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      emitContainer: vi.fn(),
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+
+    await renameContainer(ctx as never, 'node-1', 'container-1', 'new-name', 'user-1');
+
+    expect(db.deletes).toContain(dockerWebhooks);
+    expect(db.updates).toContainEqual({
+      table: dockerWebhooks,
+      values: expect.objectContaining({ containerName: 'new-name' }),
+    });
+  });
+});
+
+describe('createContainer network restrictions', () => {
+  function networkCtx(sendDockerNetworkCommand = vi.fn()) {
+    const sendDockerContainerCommand = vi
+      .fn()
+      .mockResolvedValueOnce({ success: true, detail: JSON.stringify({ id: 'container-1', name: 'app' }) });
+    return {
+      db: unlockedDockerNodeDb(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand, sendDockerNetworkCommand },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertDockerRuntimeProfileAvailable: vi.fn().mockResolvedValue(undefined),
+      assertDockerGpuCapability: vi.fn(),
+      assertDockerPortBindIpCapability: vi.fn(),
+      assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      emitContainer: vi.fn(),
+      parseResult: (result: { success: boolean; detail?: string }) => JSON.parse(result.detail || 'null'),
+    };
+  }
+  const networkList = {
+    success: true,
+    detail: JSON.stringify([
+      { Id: 'net-front', Name: 'frontend' },
+      { Id: 'net-metrics', Name: 'metrics' },
+      { Id: 'net-host', Name: 'host' },
+      { Id: 'net-db', Name: 'gateway-db-0123456789abcdef' },
+      { Id: 'net-links', Name: 'gateway-secure-links' },
+    ]),
+  };
+
+  it.each([
+    ['host', 'NETWORK_MODE_NOT_ALLOWED'],
+    ['container:other', 'NETWORK_MODE_NOT_ALLOWED'],
+    ['gateway-db-0123456789abcdef', 'MANAGED_NETWORK'],
+    ['gateway-secure-links', 'MANAGED_NETWORK'],
+    ['missing-network', 'DOCKER_NETWORK_NOT_FOUND'],
+  ])('rejects %s before creating the container', async (network, code) => {
+    const ctx = networkCtx(vi.fn().mockResolvedValue(networkList));
+
+    await expect(
+      createContainer(ctx as never, 'node-1', { name: 'app', image: 'nginx:alpine', networks: [network] }, 'user-1')
+    ).rejects.toMatchObject({ code });
+    expect(ctx.nodeDispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
+  it('creates on the primary network and connects the additional networks', async () => {
+    const sendDockerNetworkCommand = vi.fn(async (_nodeId: string, action: string) =>
+      action === 'list' ? networkList : { success: true, detail: '{}' }
+    );
+    const ctx = networkCtx(sendDockerNetworkCommand);
+
+    await createContainer(
+      ctx as never,
+      'node-1',
+      { name: 'app', image: 'nginx:alpine', networks: ['frontend', 'metrics'] },
+      'user-1'
+    );
+
+    const createCall = ctx.nodeDispatch.sendDockerContainerCommand.mock.calls[0];
+    expect(JSON.parse(createCall[2].configJson)).toMatchObject({ network_mode: 'frontend' });
+    expect(sendDockerNetworkCommand).toHaveBeenCalledWith('node-1', 'connect', {
+      networkId: 'net-metrics',
+      containerId: 'container-1',
+    });
+  });
+});
+
+describe('updateContainerEnv persistence', () => {
+  function envCtx(overrides: Record<string, unknown> = {}) {
+    const environmentService = {
+      getDecryptedMap: vi.fn().mockResolvedValue({ APP_MODE: 'prod', LEGACY_SECRET: '********', API_KEY: 'stale' }),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    const secretService = { getDecryptedMap: vi.fn().mockResolvedValue({ API_KEY: 'real-secret' }) };
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    return {
+      environmentService,
+      secretService,
+      nodeDispatch: { sendDockerContainerCommand },
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      resolveContainerStopTimeout: vi.fn().mockResolvedValue(10),
+      inspectContainer: vi.fn().mockResolvedValue({
+        Config: { Env: ['PATH=/usr/bin', 'PG_MAJOR=15', 'API_KEY=********', 'APP_MODE=prod'] },
+      }),
+      requireNoTransition: vi.fn(),
+      setTransition: vi.fn(),
+      clearTransition: vi.fn(),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      watchRecreateByName: vi.fn(),
+      lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
+      longDockerOperationTimeoutMs: 600000,
+      parseResult: (result: { success: boolean; detail?: string; error?: string }) => {
+        if (!result.success) throw new Error(result.error);
+        return JSON.parse(result.detail || '{}');
+      },
+      ...overrides,
+    };
+  }
+
+  it('persists only user-set env with the mutation and never runtime defaults, masks or secrets', async () => {
+    const ctx = envCtx();
+
+    await updateContainerEnv(ctx as never, 'node-1', 'container-1', { NEW_VAR: '1' }, ['APP_MODE'], 'user-1');
+
+    expect(ctx.environmentService.replace).toHaveBeenCalledWith('node-1', 'app', { NEW_VAR: '1' });
+    expect(ctx.environmentService.replace.mock.invocationCallOrder[0]).toBeLessThan(
+      ctx.nodeDispatch.sendDockerContainerCommand.mock.invocationCallOrder[0]
+    );
+    const payload = JSON.parse(ctx.nodeDispatch.sendDockerContainerCommand.mock.calls[0][2].configJson);
+    expect(payload.env).toEqual({ NEW_VAR: '1', API_KEY: 'real-secret' });
+    expect(payload.removeEnv).toEqual(['APP_MODE']);
+    // The completion watcher no longer owns persistence.
+    expect(ctx.watchRecreateByName.mock.calls[0][7]).toBeUndefined();
+  });
+
+  it('starts from the runtime env when nothing is stored yet, without masks or secrets', async () => {
+    const ctx = envCtx();
+    ctx.environmentService.getDecryptedMap.mockResolvedValueOnce({});
+
+    await updateContainerEnv(ctx as never, 'node-1', 'container-1', { NEW_VAR: '1' }, undefined, 'user-1');
+
+    expect(ctx.environmentService.replace).toHaveBeenCalledWith('node-1', 'app', {
+      PATH: '/usr/bin',
+      PG_MAJOR: '15',
+      APP_MODE: 'prod',
+      NEW_VAR: '1',
+    });
+  });
+
+  it('restores the previous stored env when the daemon rejects the update', async () => {
+    const ctx = envCtx();
+    ctx.nodeDispatch.sendDockerContainerCommand.mockResolvedValueOnce({ success: false, error: 'daemon busy' });
+
+    await expect(
+      updateContainerEnv(ctx as never, 'node-1', 'container-1', { NEW_VAR: '1' }, undefined, 'user-1')
+    ).rejects.toThrow('daemon busy');
+
+    expect(ctx.environmentService.replace).toHaveBeenLastCalledWith('node-1', 'app', {
+      APP_MODE: 'prod',
+      LEGACY_SECRET: '********',
+      API_KEY: 'stale',
+    });
+  });
+});
+
+describe('recreateWithConfig runtime settings', () => {
+  it('does not persist runtime settings that fail validation', async () => {
+    const runtimeSettingsService = {
+      get: vi.fn().mockResolvedValue(null),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    const db: Record<string, any> = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({
+            limit: vi.fn().mockResolvedValue([{ capabilities: { cpuCores: 1 }, lastHealthReport: null }]),
+          })),
+        })),
+      })),
+    };
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({
+      success: true,
+      detail: JSON.stringify({ HostConfig: { Memory: 0, NanoCPUs: 0 } }),
+    });
+    const runtimeContext = {
+      db,
+      nodeDispatch: { sendDockerContainerCommand },
+      nodeRegistry: { getNode: vi.fn().mockReturnValue(undefined) },
+      runtimeSettingsService,
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+    const ctx = {
+      db,
+      runtimeSettingsService,
+      nodeDispatch: { sendDockerContainerCommand },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      assertDockerGpuCapability: vi.fn(),
+      assertDockerPortBindIpCapability: vi.fn(),
+      assertDockerRuntimeProfileAvailable: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      requireNoTransition: vi.fn(),
+      inspectContainer: vi.fn().mockResolvedValue({ HostConfig: {}, Config: { Env: [] } }),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      runtimeOperationContext: () => runtimeContext,
+      setTransition: vi.fn(),
+      parseResult: runtimeContext.parseResult,
+    };
+
+    await expect(
+      recreateWithConfig(ctx as never, 'node-1', 'container-1', { nanoCPUs: 64_000_000_000 }, 'user-1')
+    ).rejects.toMatchObject({ code: 'INVALID_RESOURCE_LIMIT' });
+
+    expect(runtimeSettingsService.replace).not.toHaveBeenCalled();
+    expect(ctx.setTransition).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateContainer image changes', () => {
+  it('syncs registry credentials and realigns stored env that mirrored the old image default', async () => {
+    const environmentService = {
+      getDecryptedMap: vi.fn().mockResolvedValue({ PG_MAJOR: '15', APP_MODE: 'prod' }),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    const registryService = { syncRegistriesToNode: vi.fn().mockResolvedValue(undefined) };
+    const inspectContainer = vi
+      .fn()
+      .mockResolvedValueOnce({ Config: { Image: 'postgres:15', Env: ['PG_MAJOR=15', 'APP_MODE=prod'], Labels: {} } })
+      .mockResolvedValueOnce({ Config: { Image: 'postgres:16', Env: ['PG_MAJOR=16', 'APP_MODE=prod'] } });
+    const sendDockerContainerCommand = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    const watchRecreateByName = vi.fn();
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      environmentService,
+      registryService,
+      nodeDispatch: { sendDockerContainerCommand },
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('db'),
+      inspectContainer,
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
+      longDockerOperationTimeoutMs: 600000,
+      runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
+      requireNoTransition: vi.fn(),
+      setTransition: vi.fn(),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      watchRecreateByName,
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+
+    await updateContainer(ctx as never, 'node-1', 'container-1', { tag: '16' }, 'user-1');
+
+    expect(registryService.syncRegistriesToNode).toHaveBeenCalledWith('node-1');
+    expect(registryService.syncRegistriesToNode.mock.invocationCallOrder[0]).toBeLessThan(
+      sendDockerContainerCommand.mock.invocationCallOrder[0]
+    );
+    // A tag-only update does not rewrite the stored env with the mutation.
+    expect(environmentService.replace).not.toHaveBeenCalled();
+
+    const onComplete = watchRecreateByName.mock.calls[0][7] as (id: string) => Promise<void>;
+    await onComplete('container-2');
+    expect(inspectContainer).toHaveBeenLastCalledWith('node-1', 'container-2');
+    expect(environmentService.replace).toHaveBeenCalledWith('node-1', 'db', { PG_MAJOR: '16', APP_MODE: 'prod' });
   });
 });

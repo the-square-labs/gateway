@@ -57,6 +57,8 @@ vi.mock('@/modules/auth/auth.middleware.js', () => {
     requireScopeBase: allow,
     requireScopeForResource: allow,
     sessionOnly: allow(),
+    rejectImpersonation: allow(),
+    assertNotImpersonating: () => undefined,
     CSRF_HEADER_NAME: 'X-CSRF-Token',
     SESSION_COOKIE_NAME: 'session_id',
   };

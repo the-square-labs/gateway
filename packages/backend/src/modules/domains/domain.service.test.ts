@@ -1368,3 +1368,104 @@ describe('DomainsService Cloudflare lifecycle', () => {
     );
   });
 });
+
+describe('DomainsService wildcard coverage', () => {
+  function usageDb(hosts: unknown[]) {
+    return {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue(hosts) })) })
+        .mockReturnValueOnce({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })) }),
+    };
+  }
+  const hosts = [
+    { id: 'apex', domainNames: ['example.com'] },
+    { id: 'app', domainNames: ['app.example.com'] },
+    { id: 'deep', domainNames: ['a.b.example.com'] },
+    { id: 'lookalike', domainNames: ['badexample.com'] },
+  ];
+
+  it('counts every host a wildcard domain covers as usage', async () => {
+    const service = new DomainsService(usageDb(hosts) as never, { log: vi.fn() } as never);
+
+    const usage = await service.getUsage('*.example.com');
+
+    expect(usage.proxyHosts.map((host) => host.id)).toEqual(['apex', 'app', 'deep']);
+  });
+
+  it('does not let an apex domain claim its subdomains', async () => {
+    const service = new DomainsService(usageDb(hosts) as never, { log: vi.fn() } as never);
+
+    const usage = await service.getUsage('example.com');
+
+    expect(usage.proxyHosts.map((host) => host.id)).toEqual(['apex']);
+  });
+
+  it('moves hosts covered by a wildcard domain during ingress migration', async () => {
+    const root = {
+      id: 'domain-1',
+      domain: '*.example.com',
+      nginxNodeId: 'source',
+      ingressMigrationId: null,
+    };
+    const allHosts = [
+      { id: 'app', domainNames: ['app.example.com'], nodeId: 'source', enabled: true },
+      { id: 'other', domainNames: ['other.test'], nodeId: 'elsewhere', enabled: true },
+    ];
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([root]) })) })),
+        })
+        .mockReturnValueOnce({ from: vi.fn().mockResolvedValue([root]) })
+        .mockReturnValueOnce({ from: vi.fn().mockResolvedValue(allHosts) }),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    vi.spyOn(service as any, 'resolveRequestedNginxNode').mockResolvedValue({ id: 'target' });
+    vi.spyOn(service as any, 'getNginxNodeSummary').mockResolvedValue({ id: 'source' });
+
+    const impact = await (service as any).buildIngressMigrationImpact('domain-1', 'target');
+
+    expect(impact.proxyHosts.map((host: { id: string }) => host.id)).toEqual(['app']);
+  });
+});
+
+describe('DomainsService Cloudflare update_dns authorization', () => {
+  function updateDnsHarness() {
+    const row = { id: 'domain-1', domain: 'app.example.com', dnsProvider: 'legacy' };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([row]) })) })),
+      })),
+    };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    const resolveCloudflareDnsContext = vi.fn();
+    service.setIntegrationsService({ resolveCloudflareDnsContext } as never);
+    vi.spyOn(service as any, 'resolveRequestedNginxNode').mockResolvedValue({ id: 'node-2' });
+    vi.spyOn(service, 'getUsage').mockResolvedValue({
+      proxyHosts: [{ id: 'host-1' }],
+      sslCertificates: [],
+    } as never);
+    return { service, resolveCloudflareDnsContext };
+  }
+  const input = { action: 'update_dns' as const, nginxNodeId: '22222222-2222-4222-8222-222222222222' };
+
+  it('requires proxy:create on the target node', async () => {
+    const { service, resolveCloudflareDnsContext } = updateDnsHarness();
+
+    await expect(
+      service.resolveCloudflareMigration('domain-1', input, 'user-1', ['domains:edit'])
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Missing required scope: proxy:create:node-2' });
+    expect(resolveCloudflareDnsContext).not.toHaveBeenCalled();
+  });
+
+  it('requires proxy:edit on every covered proxy host', async () => {
+    const { service, resolveCloudflareDnsContext } = updateDnsHarness();
+
+    await expect(
+      service.resolveCloudflareMigration('domain-1', input, 'user-1', ['domains:edit', 'proxy:create:node-2'])
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Missing required scope: proxy:edit:host-1' });
+    expect(resolveCloudflareDnsContext).not.toHaveBeenCalled();
+  });
+});

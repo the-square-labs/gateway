@@ -31,11 +31,14 @@ const (
 
 var (
 	launcherLocalReadyLimit = 30 * time.Second
-	launcherStabilityWindow = 30 * time.Second
-	launcherStopGrace       = 15 * time.Second
-	launcherRestartBackoff  = time.Second
-	launcherRestartMax      = 5 * time.Second
-	launcherStateRetry      = 5 * time.Second
+	// A candidate that announced it will report gateway control readiness
+	// must receive its first gateway command within this window.
+	launcherControlReadyLimit = 3 * time.Minute
+	launcherStabilityWindow   = 30 * time.Second
+	launcherStopGrace         = 15 * time.Second
+	launcherRestartBackoff    = time.Second
+	launcherRestartMax        = 5 * time.Second
+	launcherStateRetry        = 5 * time.Second
 )
 
 type LauncherSpec struct {
@@ -56,7 +59,16 @@ type launcherOwner struct {
 type launcherReadinessEvent struct {
 	Type    string `json:"type"`
 	Version string `json:"version"`
+	// AwaitControl on local_ready announces that this daemon will also send
+	// control_ready once the gateway accepted it. Launchers that predate the
+	// field ignore it and keep committing on local readiness alone.
+	AwaitControl bool `json:"awaitControl,omitempty"`
 }
+
+const (
+	launcherEventLocalReady   = "local_ready"
+	launcherEventControlReady = "control_ready"
+)
 
 type launcherChildStatus struct {
 	PID       int       `json:"pid"`
@@ -66,7 +78,14 @@ type launcherChildStatus struct {
 }
 
 var (
-	localReadyOnce sync.Once
+	localReadyOnce   sync.Once
+	controlReadyOnce sync.Once
+
+	launcherReadyMu       sync.Mutex
+	launcherReadyFile     *os.File
+	launcherReadyOpened   bool
+	launcherReadyVersion  string
+	launcherAwaitsControl bool
 )
 
 func IsLauncherCommand(args []string) bool {
@@ -115,12 +134,14 @@ func BootstrapLauncher(spec LauncherSpec) error {
 	if err != nil {
 		return err
 	}
-	args := []string{launcherPath, LauncherCommand, "--daemon-type", spec.DaemonType, "--state-dir", stateDir, "--binary", executable, "--"}
+	// A staged launcher refresh is tried here; the known-good copy is used
+	// whenever the trial is not due, not valid, or an update is pending.
+	launcherPath = selectLauncherForStart(stateDir, launcherPath)
 	childArgs := spec.ChildArgs
 	if len(childArgs) == 0 {
 		childArgs = []string{"run"}
 	}
-	args = append(args, childArgs...)
+	args := launcherCommandArgs(launcherPath, LauncherSpec{DaemonType: spec.DaemonType, StateDir: stateDir, BinaryPath: executable, ChildArgs: childArgs})
 	environment := append(os.Environ(), LauncherStateDirEnv+"="+stateDir)
 	return syscall.Exec(launcherPath, args, environment)
 }
@@ -195,6 +216,36 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 	}
 	defer os.Remove(filepath.Join(launcherDir, "owner.json"))
 
+	// A staged launcher on trial replaces the installed copy once a child was
+	// stable under it, and hands over to the installed copy if children keep
+	// failing before that.
+	trial := detectLauncherRefreshTrial(spec.StateDir)
+	if trial != nil {
+		logger.Info("running a staged launcher on trial", "launcher", trial.launcherPath)
+	}
+	promoteTrial := func() {
+		if trial == nil {
+			return
+		}
+		confirmed := trial
+		trial = nil
+		if err := promoteLauncherRefresh(spec.StateDir, confirmed); err != nil {
+			logger.Error("staged launcher was stable but could not replace the installed launcher", "error", err)
+			return
+		}
+		logger.Info("launcher refresh confirmed; replaced the installed launcher", "launcher", confirmed.launcherPath)
+	}
+	trialChildFailed := func() error {
+		if trial == nil {
+			return nil
+		}
+		trial.failures++
+		if trial.failures < launcherRefreshChildFailureLimit {
+			return nil
+		}
+		return fallBackFromLauncherTrial(spec, trial, logger)
+	}
+
 	backoff := launcherRestartBackoff
 	for {
 		if signalCtx.Err() != nil {
@@ -211,9 +262,15 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 					return fmt.Errorf("start candidate: %v; rollback: %w", err, rollbackErr)
 				}
 				logger.Error("candidate exec failed; restored previous daemon", "error", err, "target_version", state.TargetVersion)
+				if trialErr := trialChildFailed(); trialErr != nil {
+					return trialErr
+				}
 				continue
 			}
 			logger.Error("daemon child exec failed; retrying", "error", err)
+			if trialErr := trialChildFailed(); trialErr != nil {
+				return trialErr
+			}
 			select {
 			case <-signalCtx.Done():
 				return nil
@@ -232,13 +289,22 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 			logger.Warn("launcher child status is unavailable", "error", err)
 		}
 
-		outcome := superviseLauncherChild(signalCtx, spec, state, child, events, done, logger)
+		var onStable func()
+		if trial != nil {
+			onStable = promoteTrial
+		}
+		outcome := superviseLauncherChild(signalCtx, spec, state, child, events, done, onStable, logger)
 		_ = os.Remove(childStatusPath)
 		if outcome.stop {
 			return outcome.err
 		}
 		if outcome.err != nil {
 			logger.Warn("daemon child stopped", "error", outcome.err)
+		}
+		if !outcome.handoff {
+			if trialErr := trialChildFailed(); trialErr != nil {
+				return trialErr
+			}
 		}
 		select {
 		case <-signalCtx.Done():
@@ -256,7 +322,9 @@ func runLauncher(ctx context.Context, spec LauncherSpec, logger *slog.Logger) er
 
 type launcherChildOutcome struct {
 	stop bool
-	err  error
+	// handoff marks a child that exited to hand over to a staged update.
+	handoff bool
+	err     error
 }
 
 func prepareLauncherCandidate(spec LauncherSpec) (*launcherUpdateState, error) {
@@ -325,12 +393,35 @@ func startLauncherChild(spec LauncherSpec, ownerLock *os.File) (*exec.Cmd, <-cha
 	return cmd, events, done, nil
 }
 
-func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState *launcherUpdateState, child *exec.Cmd, events <-chan launcherReadinessEvent, done <-chan error, logger *slog.Logger) launcherChildOutcome {
+// onStable, when set, runs once this child was locally ready for the
+// stability window, independently of any pending update.
+func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState *launcherUpdateState, child *exec.Cmd, events <-chan launcherReadinessEvent, done <-chan error, onStable func(), logger *slog.Logger) launcherChildOutcome {
 	state := initialState
 	var readyTimer *time.Timer
 	var readyTimeout <-chan time.Time
+	var controlTimer *time.Timer
+	var controlTimeout <-chan time.Time
 	var stabilityTimer *time.Timer
 	var stabilityTimeout <-chan time.Time
+	var onStableTimer *time.Timer
+	var onStableTimeout <-chan time.Time
+	startStability := func() {
+		if stabilityTimer == nil {
+			stabilityTimer = time.NewTimer(launcherStabilityWindow)
+			stabilityTimeout = stabilityTimer.C
+		}
+	}
+	defer func() {
+		if controlTimer != nil {
+			controlTimer.Stop()
+		}
+		if stabilityTimer != nil {
+			stabilityTimer.Stop()
+		}
+		if onStableTimer != nil {
+			onStableTimer.Stop()
+		}
+	}()
 	// A persisted ready_stabilizing phase only describes the previous child.
 	// Every newly launched candidate must prove local readiness again.
 	if state != nil {
@@ -345,6 +436,19 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 		case <-readyTimeout:
 			err := terminateLauncherChild(child, done, launcherStopGrace)
 			return launcherChildOutcome{err: handleLauncherCandidateExit(spec, state, "local readiness timeout", err, logger)}
+		case <-controlTimeout:
+			// The candidate runs but never proved it can reach and be accepted
+			// by the gateway. Committing it would strand the node, so restore
+			// the previous daemon now.
+			_ = terminateLauncherChild(child, done, launcherStopGrace)
+			if err := rollbackLauncherUpdate(spec.StateDir, state, "gateway control readiness timeout"); err != nil {
+				return launcherChildOutcome{stop: true, err: err}
+			}
+			logger.Error("candidate never reached the gateway; restored previous daemon", "target_version", state.TargetVersion)
+			return launcherChildOutcome{err: fmt.Errorf("candidate %s did not reach gateway control readiness within %s", state.TargetVersion, launcherControlReadyLimit)}
+		case <-onStableTimeout:
+			onStableTimeout = nil
+			onStable()
 		case <-stabilityTimeout:
 			if state != nil {
 				if err := removeLauncherUpdateState(spec.StateDir); err != nil {
@@ -362,7 +466,24 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 				events = nil
 				continue
 			}
-			if event.Type != "local_ready" {
+			if event.Type == launcherEventControlReady {
+				if state == nil || controlTimeout == nil {
+					continue
+				}
+				if event.Version != state.TargetVersion {
+					_ = terminateLauncherChild(child, done, launcherStopGrace)
+					if err := rollbackLauncherUpdate(spec.StateDir, state, "candidate control readiness version did not match update target"); err != nil {
+						return launcherChildOutcome{stop: true, err: err}
+					}
+					return launcherChildOutcome{err: fmt.Errorf("candidate reported version %s, expected %s", event.Version, state.TargetVersion)}
+				}
+				controlTimer.Stop()
+				controlTimeout = nil
+				logger.Info("candidate reached gateway control readiness", "version", state.TargetVersion)
+				startStability()
+				continue
+			}
+			if event.Type != launcherEventLocalReady {
 				continue
 			}
 			if err := writeJSONFileAtomic(filepath.Join(spec.StateDir, "launcher", "child.json"), &launcherChildStatus{
@@ -372,6 +493,10 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 				UpdatedAt: time.Now().UTC(),
 			}, 0600); err != nil {
 				logger.Warn("launcher child status is unavailable", "error", err)
+			}
+			if onStable != nil && onStableTimer == nil {
+				onStableTimer = time.NewTimer(launcherStabilityWindow)
+				onStableTimeout = onStableTimer.C
 			}
 			if state == nil {
 				continue
@@ -387,11 +512,16 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 			if err := markLauncherLocalReady(spec.StateDir, state, time.Now()); err != nil {
 				logger.Error("failed to persist candidate readiness; continuing stability check", "error", err, "version", state.TargetVersion)
 			}
-			if stabilityTimer == nil {
-				stabilityTimer = time.NewTimer(launcherStabilityWindow)
-				stabilityTimeout = stabilityTimer.C
-				defer stabilityTimer.Stop()
+			if event.AwaitControl {
+				// Commit only after the candidate proved it reaches the gateway.
+				if controlTimer == nil && stabilityTimer == nil {
+					controlTimer = time.NewTimer(launcherControlReadyLimit)
+					controlTimeout = controlTimer.C
+				}
+				continue
 			}
+			// A daemon that predates control_ready keeps the local-only rule.
+			startStability()
 		case err := <-done:
 			fresh, readErr := readLauncherUpdateState(spec.StateDir)
 			if readErr != nil {
@@ -399,7 +529,7 @@ func superviseLauncherChild(ctx context.Context, spec LauncherSpec, initialState
 			}
 			if fresh != nil && fresh.Phase == "staged" {
 				if daemonProcessExitCode(err) == LauncherUpdateExitCode {
-					return launcherChildOutcome{}
+					return launcherChildOutcome{handoff: true}
 				}
 				return launcherChildOutcome{err: fmt.Errorf("daemon exited after staging an update without the update handoff code: %v", err)}
 			}
@@ -463,26 +593,77 @@ func normalizeOperatorStop(err error) error {
 	return err
 }
 
+// NotifyLauncherLocalReady reports local readiness only. A launcher commits a
+// pending update after its stability window without waiting for the gateway.
 func NotifyLauncherLocalReady(version string) {
-	localReadyOnce.Do(func() { writeLauncherReadiness("local_ready", version) })
+	localReadyOnce.Do(func() {
+		writeLauncherReadiness(launcherReadinessEvent{Type: launcherEventLocalReady, Version: version}, true)
+	})
 }
 
-func writeLauncherReadiness(eventType, version string) {
-	fdValue := os.Getenv(LauncherReadyFDEnv)
-	if fdValue == "" {
+// NotifyLauncherLocalReadyAwaitingControl reports local readiness and
+// announces a later NotifyLauncherControlReady. A launcher that understands
+// the announcement commits a pending update only after control readiness.
+func NotifyLauncherLocalReadyAwaitingControl(version string) {
+	localReadyOnce.Do(func() {
+		launcherReadyMu.Lock()
+		launcherReadyVersion = version
+		launcherAwaitsControl = true
+		launcherReadyMu.Unlock()
+		writeLauncherReadiness(launcherReadinessEvent{Type: launcherEventLocalReady, Version: version, AwaitControl: true}, false)
+	})
+}
+
+// NotifyLauncherControlReady reports that the gateway accepted this daemon's
+// control session (its first command after Register arrived). It is a no-op
+// unless NotifyLauncherLocalReadyAwaitingControl announced it.
+func NotifyLauncherControlReady() {
+	notifyLauncherControlReady(nil)
+}
+
+// notifyLauncherControlReady also stages this daemon as the next launcher once
+// its update, if any, is committed; see launcher_refresh.go.
+func notifyLauncherControlReady(logger *slog.Logger) {
+	launcherReadyMu.Lock()
+	awaits, version := launcherAwaitsControl, launcherReadyVersion
+	launcherReadyMu.Unlock()
+	if !awaits {
 		return
 	}
-	fd, err := strconv.Atoi(fdValue)
-	if err != nil || fd < 3 {
+	controlReadyOnce.Do(func() {
+		writeLauncherReadiness(launcherReadinessEvent{Type: launcherEventControlReady, Version: version}, true)
+		scheduleLauncherRefresh(version, logger)
+	})
+}
+
+// writeLauncherReadiness writes one event to the launcher pipe. The pipe stays
+// open between events when more are expected and is closed after the last.
+func writeLauncherReadiness(event launcherReadinessEvent, last bool) {
+	launcherReadyMu.Lock()
+	defer launcherReadyMu.Unlock()
+	if !launcherReadyOpened {
+		launcherReadyOpened = true
+		fdValue := os.Getenv(LauncherReadyFDEnv)
+		if fdValue == "" {
+			return
+		}
+		fd, err := strconv.Atoi(fdValue)
+		if err != nil || fd < 3 {
+			return
+		}
+		// The pipe may stay open while the daemon spawns workers; never leak it.
+		syscall.CloseOnExec(fd)
+		launcherReadyFile = os.NewFile(uintptr(fd), "launcher-ready")
+	}
+	if launcherReadyFile == nil {
 		return
 	}
-	file := os.NewFile(uintptr(fd), "launcher-ready")
-	if file == nil {
-		return
+	message, _ := json.Marshal(event)
+	_, _ = launcherReadyFile.Write(append(message, '\n'))
+	if last {
+		_ = launcherReadyFile.Close()
+		launcherReadyFile = nil
 	}
-	message, _ := json.Marshal(launcherReadinessEvent{Type: eventType, Version: version})
-	_, _ = file.Write(append(message, '\n'))
-	_ = file.Close()
 }
 
 func ensureStableLauncher(preferredStateDir, daemonType, executable string) (string, string, error) {
@@ -493,7 +674,7 @@ func ensureStableLauncher(preferredStateDir, daemonType, executable string) (str
 	candidates = append(candidates, filepath.Join(os.TempDir(), fmt.Sprintf("gateway-daemon-%d", os.Getuid()), daemonType))
 	var failures []error
 	for _, stateDir := range candidates {
-		launcherPath := filepath.Join(stateDir, "launcher", filepath.Base(executable)+"-launcher")
+		launcherPath := canonicalLauncherPath(stateDir, executable)
 		if _, statErr := os.Lstat(launcherPath); statErr == nil {
 			if err := ensureLauncherCopy(executable, launcherPath, stateDir); err != nil {
 				return "", "", err

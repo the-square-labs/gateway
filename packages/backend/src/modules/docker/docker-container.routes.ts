@@ -1,8 +1,9 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import { HTTPException } from 'hono/http-exception';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
-import { hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
@@ -95,7 +96,7 @@ import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
 import { DockerRegistryService } from './docker-registry.service.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
-import { DockerSnapshotService } from './docker-snapshot.service.js';
+import { DockerSnapshotService, sanitizeContainerInspect } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
 import { assertDockerMountChangeAllowed } from './docker-socket-mount.guard.js';
 
@@ -127,6 +128,57 @@ function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string)
     canViewVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:view', nodeId),
     canCreateVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:create', nodeId),
   };
+}
+
+const RECREATE_EXECUTION_FIELDS = ['image', 'entrypoint', 'command', 'user', 'runtimeProfile'] as const;
+
+/**
+ * Scopes a recreate request needs beyond docker:containers:manage. A plain
+ * recreate stays on manage; changing what the container executes can expose
+ * its environment and secrets, so it needs the same scopes as duplicate.
+ */
+export function containerRecreateRequiredScopes(config: Record<string, unknown>): string[] {
+  const present = (key: string) => config[key] !== undefined;
+  if (!Object.keys(config).some(present)) return [];
+  const required = ['docker:containers:edit'];
+  if (RECREATE_EXECUTION_FIELDS.some(present)) {
+    required.push('docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets');
+  }
+  return required;
+}
+
+export function containerUpdateRequiredScopes(config: { env?: unknown; removeEnv?: unknown }): string[] {
+  return config.env !== undefined || config.removeEnv !== undefined ? ['docker:containers:environment'] : [];
+}
+
+async function assertAdditionalContainerScopes(
+  c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0],
+  scopes: string[]
+) {
+  for (const scope of scopes) {
+    await requireDockerContainerScope(scope)(c as any, async () => {});
+  }
+}
+
+async function callerHasContainerScope(
+  c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0],
+  scope: string,
+  identifierParam: string
+): Promise<boolean> {
+  try {
+    await requireDockerContainerScope(scope, identifierParam)(c as any, async () => {});
+    return true;
+  } catch (error) {
+    if (error instanceof HTTPException && error.status === 403) return false;
+    throw error;
+  }
+}
+
+function canPlanArchiveImport(actorScopes: readonly string[], nodeId: string) {
+  return (
+    hasScopeForCreation(actorScopes, 'docker:containers:create', undefined, nodeId) ||
+    actorScopes.some((scope) => scope.startsWith('docker:containers:create:folder/'))
+  );
 }
 
 async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0]) {
@@ -340,7 +392,11 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const inspectNodeId = runtimeTarget?.nodeId ?? nodeId;
       const inspectIdentifier = runtimeTarget?.containerId ?? requestedName;
       if (runtimeTarget) {
-        const resolved = await service.inspectContainer(inspectNodeId, inspectIdentifier);
+        let resolved = await service.inspectContainer(inspectNodeId, inspectIdentifier);
+        // The live inspect carries the environment; snapshots never do.
+        if (!(await callerHasContainerScope(c, 'docker:containers:environment', 'containerName'))) {
+          resolved = sanitizeContainerInspect(resolved);
+        }
         const data = filterContainerDatabaseLinksForScopes(
           await service.decorateContainerDetailSnapshot(inspectNodeId, resolved),
           c.get('effectiveScopes') ?? []
@@ -655,8 +711,11 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const body = ContainerArchivePlanSchema.parse(await c.req.json());
-      await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
       const actorScopes = c.get('effectiveScopes') || [];
+      if (!canPlanArchiveImport(actorScopes, nodeId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing docker:containers:create for the destination node');
+      }
+      await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
       const data = await container.resolve(DockerMigrationDispatchAdapter).planArchiveImport(nodeId, {
         manifest: { schemaVersion: 1, ...body },
         ...archiveImportPlanAccess(actorScopes, nodeId),
@@ -823,6 +882,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerUpdateSchema.parse(body);
+      await assertAdditionalContainerScopes(c, containerUpdateRequiredScopes(config));
       const data = await service.updateContainer(nodeId, containerId, config, user.id, c.get('effectiveScopes') || []);
       return c.json({ data });
     }
@@ -855,6 +915,17 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await assertComposeChildMutationAllowed(nodeId, containerId);
       const body = await c.req.json();
       const config = ContainerRecreateSchema.parse(body);
+      await assertAdditionalContainerScopes(c, containerRecreateRequiredScopes(config));
+      if (typeof config.image === 'string') {
+        await assertDockerCreationAccess(
+          container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+          c.get('effectiveScopes') || [],
+          'docker:images:pull',
+          nodeId,
+          undefined,
+          'image'
+        );
+      }
       const data = await service.recreateWithConfig(nodeId, containerId, config, user.id, {
         actorScopes: c.get('effectiveScopes') || [],
         backgroundImagePull: true,
@@ -996,11 +1067,13 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const secretId = c.req.param('secretId')!;
-      await assertComposeChildMutationAllowed(nodeId, c.req.param('containerId')!);
+      const containerId = c.req.param('containerId')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
+      const containerName = await resolveContainerName(nodeId, containerId);
       const user = c.get('user')!;
       const body = await c.req.json();
       const { value } = SecretUpdateSchema.parse(body);
-      const data = await service.update(secretId, nodeId, value, user.id);
+      const data = await service.update(secretId, nodeId, value, user.id, containerName);
       return c.json({ data });
     }
   );
@@ -1012,9 +1085,11 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const service = container.resolve(DockerSecretService);
       const nodeId = c.req.param('nodeId')!;
       const secretId = c.req.param('secretId')!;
-      await assertComposeChildMutationAllowed(nodeId, c.req.param('containerId')!);
+      const containerId = c.req.param('containerId')!;
+      await assertComposeChildMutationAllowed(nodeId, containerId);
+      const containerName = await resolveContainerName(nodeId, containerId);
       const user = c.get('user')!;
-      await service.delete(secretId, nodeId, user.id);
+      await service.delete(secretId, nodeId, user.id, containerName);
       return c.json({ success: true });
     }
   );

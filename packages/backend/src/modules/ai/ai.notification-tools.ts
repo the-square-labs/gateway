@@ -1,4 +1,6 @@
+import { container } from '@/container.js';
 import { CreateSiemDestinationSchema, UpdateSiemDestinationSchema } from '@/modules/audit/siem.schemas.js';
+import { assertHostingAlertAccess } from '@/modules/notifications/notification-hosting-access.js';
 import { buildSampleEvent } from '@/modules/notifications/notification-templates.js';
 import type { User } from '@/types.js';
 import { agentPageLimit } from './ai.service-helpers.js';
@@ -66,36 +68,37 @@ export async function executeNotificationTool(
     case 'get_alert_rule':
       if (!context.notifRuleService) return { error: 'Notification service not available' };
       return context.notifRuleService.getById(a.ruleId);
-    case 'create_alert_rule':
+    case 'create_alert_rule': {
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      return context.notifRuleService.create(
-        {
-          name: a.name,
-          type: a.type,
-          category: a.category,
-          severity: a.severity,
-          metric: a.metric,
-          metricTarget: a.metricTarget,
-          operator: a.operator,
-          thresholdValue: a.thresholdValue,
-          durationSeconds: a.durationSeconds ?? 0,
-          fireThresholdPercent: a.fireThresholdPercent ?? 100,
-          resolveAfterSeconds: a.resolveAfterSeconds ?? 60,
-          resolveThresholdPercent: a.resolveThresholdPercent ?? 100,
-          eventPattern: a.eventPattern,
-          resourceIds: a.resourceIds ?? [],
-          messageTemplate: a.messageTemplate,
-          webhookIds: a.webhookIds ?? [],
-          cooldownSeconds: a.cooldownSeconds ?? 900,
-          enabled: a.enabled ?? true,
-        },
-        user.id
-      );
-    case 'update_alert_rule':
+      const input = {
+        name: a.name,
+        type: a.type,
+        category: a.category,
+        severity: a.severity,
+        metric: a.metric,
+        metricTarget: a.metricTarget,
+        operator: a.operator,
+        thresholdValue: a.thresholdValue,
+        durationSeconds: a.durationSeconds ?? 0,
+        fireThresholdPercent: a.fireThresholdPercent ?? 100,
+        resolveAfterSeconds: a.resolveAfterSeconds ?? 60,
+        resolveThresholdPercent: a.resolveThresholdPercent ?? 100,
+        eventPattern: a.eventPattern,
+        resourceIds: a.resourceIds ?? [],
+        messageTemplate: a.messageTemplate,
+        webhookIds: a.webhookIds ?? [],
+        cooldownSeconds: a.cooldownSeconds ?? 900,
+        enabled: a.enabled ?? true,
+      };
+      // Same source-access rule as the alert rule routes.
+      assertHostingAlertAccess(user.scopes, input);
+      return context.notifRuleService.create(input, user.id);
+    }
+    case 'update_alert_rule': {
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      return context.notifRuleService.update(
-        a.ruleId,
-        {
+      const ruleService = context.notifRuleService;
+      const input = Object.fromEntries(
+        Object.entries({
           name: a.name,
           enabled: a.enabled,
           severity: a.severity,
@@ -112,9 +115,31 @@ export async function executeNotificationTool(
           messageTemplate: a.messageTemplate,
           webhookIds: a.webhookIds,
           cooldownSeconds: a.cooldownSeconds,
-        },
-        user.id
+        }).filter(([, value]) => value !== undefined)
       );
+      // Mirrors the update route: the merged rule must stay within the caller's
+      // hosting access, hosting rules update behind the evaluator barrier and
+      // other rules reconcile firing states.
+      const previous = await ruleService.getById(a.ruleId);
+      assertHostingAlertAccess(user.scopes, { ...previous, ...input } as Parameters<
+        typeof assertHostingAlertAccess
+      >[1]);
+      const update = () => ruleService.update(a.ruleId, input, user.id);
+      const hostingRule = previous.category === 'hosting_account' || previous.category === 'hosting_vm';
+      const { NotificationEvaluatorService } = await import(
+        '@/modules/notifications/notification-evaluator.service.js'
+      );
+      const evaluator = container.isRegistered(NotificationEvaluatorService)
+        ? container.resolve(NotificationEvaluatorService)
+        : null;
+      const rule = hostingRule && evaluator ? await evaluator.updateHostingRule(previous, update) : await update();
+      if (!hostingRule && evaluator) {
+        await evaluator.reconcileRuleUpdate(previous, rule).catch(() => {
+          // The periodic sweep retries; the rule update itself already succeeded.
+        });
+      }
+      return rule;
+    }
     case 'delete_alert_rule':
       if (!context.notifRuleService) return { error: 'Notification service not available' };
       return context.notifRuleService.delete(a.ruleId, user.id);

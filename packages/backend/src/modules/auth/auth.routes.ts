@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { createRoute, OpenAPIHono, z } from '@hono/zod-openapi';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { getEnv } from '@/config/env.js';
@@ -30,7 +31,7 @@ import {
   updateCurrentUserAvatarRoute,
   updateCurrentUserPreferencesRoute,
 } from './auth.docs.js';
-import { authMiddleware, CSRF_HEADER_NAME, sessionOnly } from './auth.middleware.js';
+import { authMiddleware, CSRF_HEADER_NAME, rejectImpersonation, sessionOnly } from './auth.middleware.js';
 import { AuthService } from './auth.service.js';
 import {
   EmailCodeSchema,
@@ -42,6 +43,7 @@ import {
   MfaEnrollmentTokenSchema,
   MfaPasskeyOptionsSchema,
   MfaPasskeyVerifySchema,
+  MfaStepUpSchema,
   MfaVerifySchema,
   PasskeyAuthenticationSchema,
   PasskeyRegistrationSchema,
@@ -157,6 +159,20 @@ async function finishLocalPrimaryAuth(c: any, user: import('@/types.js').User, a
   return c.json({ ok: true });
 }
 
+export const OIDC_STATE_COOKIE_NAME = 'gateway_oidc_state';
+const OIDC_STATE_COOKIE_MAX_AGE_SECONDS = 5 * 60;
+
+export function hashOidcState(state: string): string {
+  return createHash('sha256').update(state).digest('base64url');
+}
+
+export function oidcStateMatchesBinding(state: string, binding: string | undefined): boolean {
+  if (!binding) return false;
+  const expected = Buffer.from(hashOidcState(state));
+  const actual = Buffer.from(binding);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
 function assertLocalMfaAccount(user: import('@/types.js').User) {
   if (user.authMethod === 'oidc') {
     throw new AppError(409, 'MFA_MANAGED_BY_IDP', 'MFA for OIDC accounts is managed by the identity provider');
@@ -188,6 +204,18 @@ authRoutes.openapi(loginRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const { return_to } = c.req.valid('query');
   const authUrl = await authService.getAuthorizationUrl(return_to);
+  const state = new URL(authUrl).searchParams.get('state');
+  if (!state) throw new AppError(500, 'AUTH_ERROR', 'Failed to initiate login');
+  // Bind the pending authorization to this browser. Without it, an attacker
+  // could start a login with their own IdP account and hand the victim the
+  // callback URL, signing the victim into the attacker's Gateway account.
+  setCookie(c, OIDC_STATE_COOKIE_NAME, hashOidcState(state), {
+    httpOnly: true,
+    secure: new URL(await getPublicUrl()).protocol === 'https:',
+    sameSite: 'Lax',
+    maxAge: OIDC_STATE_COOKIE_MAX_AGE_SECONDS,
+    path: '/',
+  });
   return c.redirect(authUrl, 302);
 });
 
@@ -215,6 +243,8 @@ authRoutes.openapi(callbackRoute, async (c) => {
   const authService = container.resolve(AuthService);
   const auditService = container.resolve(AuditService);
   const { state, error, error_description } = c.req.valid('query');
+  const stateBinding = getCookie(c, OIDC_STATE_COOKIE_NAME);
+  deleteCookie(c, OIDC_STATE_COOKIE_NAME, { path: '/' });
 
   if (error) {
     await auditService.log({
@@ -224,6 +254,19 @@ authRoutes.openapi(callbackRoute, async (c) => {
       details: { error, errorDescription: error_description || null },
     });
     return c.json({ code: 'AUTH_ERROR', message: error_description || error }, 400);
+  }
+
+  if (!oidcStateMatchesBinding(state, stateBinding)) {
+    await auditService.log({
+      userId: null,
+      action: 'auth.login_failed',
+      resourceType: 'session',
+      details: { error: 'OIDC state is not bound to this browser' },
+    });
+    return c.json(
+      { code: 'AUTH_ERROR', message: 'This sign-in was started in another browser or has expired. Try again.' },
+      400
+    );
   }
 
   try {
@@ -569,16 +612,22 @@ authRoutes.openapi(logoutRoute, async (c) => {
       details: { hasSession: true },
     });
   }
-  const logoutUrl = await authService.logout(sessionId);
-  const cookieHeader = c.req.header('Cookie') ?? '';
-  if (cookieHeader.includes('gateway_session_')) {
-    for (const cookieName of getAcceptedSessionCookieNames()) {
-      deleteCookie(c, cookieName, { path: '/' });
+  let logoutUrl: string | null = null;
+  try {
+    logoutUrl = await authService.logout(sessionId);
+  } finally {
+    // Always drop the browser cookie, even if the IdP logout URL could not
+    // be computed, so a signed-out browser never keeps a session reference.
+    const cookieHeader = c.req.header('Cookie') ?? '';
+    if (cookieHeader.includes('gateway_session_')) {
+      for (const cookieName of getAcceptedSessionCookieNames()) {
+        deleteCookie(c, cookieName, { path: '/' });
+      }
+    } else {
+      deleteCookie(c, 'session_id', { path: '/' });
     }
-  } else {
-    deleteCookie(c, 'session_id', { path: '/' });
   }
-  return c.json({ message: 'Logged out successfully', logoutUrl });
+  return c.json({ message: 'Logged out successfully', ...(logoutUrl ? { logoutUrl } : {}) });
 });
 
 // Get current user
@@ -692,34 +741,81 @@ authRoutes.openapi(getCurrentUserMfaRoute, async (c) => {
   return c.json({ ...status, required });
 });
 
+async function assertSecondFactorChangeAllowed(c: any, user: import('@/types.js').User): Promise<void> {
+  await container.resolve(MfaService).assertSecondFactorChangeAllowed(user.id, c.get('sessionId')!);
+}
+
+// Step-up: prove an existing second factor before adding, replacing or
+// removing one, so a stolen browser session cannot swap the account's factors.
+authRoutes.use('/me/mfa/step-up', authMiddleware);
+authRoutes.use('/me/mfa/step-up', sessionOnly);
+authRoutes.use('/me/mfa/step-up', rejectImpersonation);
+authRoutes.post('/me/mfa/step-up', async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  const input = MfaStepUpSchema.parse(await c.req.json());
+  if (!(await container.resolve(MfaService).verifyStepUpCode(user.id, c.get('sessionId')!, input))) {
+    throw new AppError(401, 'INVALID_MFA_CODE', 'Invalid authentication code');
+  }
+  return c.json({ ok: true });
+});
+
+authRoutes.use('/me/mfa/step-up/passkey/*', authMiddleware);
+authRoutes.use('/me/mfa/step-up/passkey/*', sessionOnly);
+authRoutes.use('/me/mfa/step-up/passkey/*', rejectImpersonation);
+authRoutes.post('/me/mfa/step-up/passkey/options', async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  return c.json(await container.resolve(PasskeyService).beginAuthenticationForUser(user.id));
+});
+
+authRoutes.post('/me/mfa/step-up/passkey/verify', async (c) => {
+  const user = c.get('user')!;
+  assertLocalMfaAccount(user);
+  const { challenge, response } = PasskeyAuthenticationSchema.parse(await c.req.json());
+  const verifiedUser = await container
+    .resolve(PasskeyService)
+    .verifyAuthentication(challenge, response, user.id, false);
+  if (!verifiedUser) throw new AppError(401, 'INVALID_PASSKEY', 'Passkey verification failed');
+  await container.resolve(MfaService).grantStepUp(user.id, c.get('sessionId')!);
+  return c.json({ ok: true });
+});
+
 authRoutes.use('/me/mfa/totp/setup', authMiddleware);
 authRoutes.use('/me/mfa/totp/setup', sessionOnly);
+authRoutes.use('/me/mfa/totp/setup', rejectImpersonation);
 authRoutes.openapi(beginCurrentUserTotpSetupRoute, async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
+  await assertSecondFactorChangeAllowed(c, user);
   return c.json(await container.resolve(MfaService).beginTotpSetup(user.id, user.email));
 });
 
 authRoutes.use('/me/mfa/totp/reset', authMiddleware);
 authRoutes.use('/me/mfa/totp/reset', sessionOnly);
+authRoutes.use('/me/mfa/totp/reset', rejectImpersonation);
 authRoutes.openapi(resetCurrentUserTotpRoute, async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
+  await assertSecondFactorChangeAllowed(c, user);
   await container.resolve(MfaService).resetTotp(user.id);
   return c.json({ ok: true });
 });
 
 authRoutes.use('/me/mfa/totp/confirm', authMiddleware);
 authRoutes.use('/me/mfa/totp/confirm', sessionOnly);
+authRoutes.use('/me/mfa/totp/confirm', rejectImpersonation);
 authRoutes.openapi(confirmCurrentUserTotpSetupRoute, async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
+  await assertSecondFactorChangeAllowed(c, user);
   const { code } = c.req.valid('json');
   return c.json({ recoveryCodes: await container.resolve(MfaService).confirmTotpSetup(user.id, code) });
 });
 
 authRoutes.use('/me/mfa/recovery-codes', authMiddleware);
 authRoutes.use('/me/mfa/recovery-codes', sessionOnly);
+authRoutes.use('/me/mfa/recovery-codes', rejectImpersonation);
 authRoutes.openapi(regenerateCurrentUserRecoveryCodesRoute, async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
@@ -732,6 +828,7 @@ authRoutes.openapi(regenerateCurrentUserRecoveryCodesRoute, async (c) => {
 
 authRoutes.use('/me/mfa/recovery-codes/passkey/*', authMiddleware);
 authRoutes.use('/me/mfa/recovery-codes/passkey/*', sessionOnly);
+authRoutes.use('/me/mfa/recovery-codes/passkey/*', rejectImpersonation);
 authRoutes.post('/me/mfa/recovery-codes/passkey/options', async (c) => {
   const user = c.get('user')!;
   assertLocalMfaAccount(user);
@@ -758,20 +855,23 @@ authRoutes.get('/me/passkeys', async (c) => {
   return c.json(await container.resolve(PasskeyService).listPasskeys(user.id));
 });
 
-authRoutes.post('/me/passkeys/options', async (c) => {
+authRoutes.post('/me/passkeys/options', rejectImpersonation, async (c) => {
   const user = c.get('user')!;
+  await assertSecondFactorChangeAllowed(c, user);
   return c.json(await container.resolve(PasskeyService).beginRegistration(user));
 });
 
-authRoutes.post('/me/passkeys', async (c) => {
+authRoutes.post('/me/passkeys', rejectImpersonation, async (c) => {
   const user = c.get('user')!;
+  await assertSecondFactorChangeAllowed(c, user);
   const { response, name } = PasskeyRegistrationSchema.parse(await c.req.json());
   await container.resolve(PasskeyService).finishRegistration(user, response, name ?? 'Passkey');
   return c.json({ ok: true });
 });
 
-authRoutes.delete('/me/passkeys/:id', async (c) => {
+authRoutes.delete('/me/passkeys/:id', rejectImpersonation, async (c) => {
   const user = c.get('user')!;
+  await assertSecondFactorChangeAllowed(c, user);
   if (!(await container.resolve(PasskeyService).removePasskey(user.id, c.req.param('id')!))) {
     throw new AppError(404, 'PASSKEY_NOT_FOUND', 'Passkey not found');
   }
@@ -792,6 +892,7 @@ authRoutes.openapi(listCurrentUserSessionsRoute, async (c) => {
 // authentication context before the route handler accesses `user.id`.
 authRoutes.use('/me/sessions/:id', authMiddleware);
 authRoutes.use('/me/sessions/:id', sessionOnly);
+authRoutes.use('/me/sessions/:id', rejectImpersonation);
 authRoutes.openapi(revokeCurrentUserSessionRoute, async (c) => {
   const sessionId = c.get('sessionId')!;
   const user = c.get('user')!;
@@ -813,6 +914,7 @@ authRoutes.openapi(revokeCurrentUserSessionRoute, async (c) => {
 
 authRoutes.use('/me/sessions/revoke-others', authMiddleware);
 authRoutes.use('/me/sessions/revoke-others', sessionOnly);
+authRoutes.use('/me/sessions/revoke-others', rejectImpersonation);
 authRoutes.openapi(revokeOtherCurrentUserSessionsRoute, async (c) => {
   const sessionId = c.get('sessionId')!;
   const user = c.get('user')!;

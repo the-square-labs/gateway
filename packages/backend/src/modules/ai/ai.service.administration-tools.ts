@@ -1,8 +1,10 @@
 import { container } from '@/container.js';
-import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
+import { canManageUser, hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
 import { UpdateAuthProvisioningSettingsSchema } from '@/modules/admin/admin.schemas.js';
+import { findIdentityTrustChanges } from '@/modules/admin/identity-trust-settings.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -310,6 +312,16 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
       }
       case 'update_gateway_settings': {
         const input = UpdateAuthProvisioningSettingsSchema.parse(args);
+        if (!hasScope(user.scopes, 'admin:system')) {
+          const privilegedChanges = await findIdentityTrustChanges(input, {
+            smtp: () => container.resolve(AuthMailService).getPublicConfig(),
+            generalSettings: () => container.resolve(GeneralSettingsService).getConfig(),
+            authSettings: () => container.resolve(AuthSettingsService).getConfig(),
+          });
+          if (privilegedChanges.length > 0) {
+            throw new Error(`PERMISSION_DENIED: Changing ${privilegedChanges.join(', ')} requires admin:system`);
+          }
+        }
         if (input.oidcDefaultGroupId) {
           const destGroup = await this.groupService.getGroup(input.oidcDefaultGroupId);
           if (!isScopeSubset(getEffectiveGroupScopes(destGroup), user.scopes)) {

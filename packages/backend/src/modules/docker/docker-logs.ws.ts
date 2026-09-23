@@ -1,5 +1,6 @@
 import type { WSContext } from 'hono/ws';
 import { container } from '@/container.js';
+import type { CommandResult } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { resolveWebSocketCredentialForScopeBase, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -11,6 +12,114 @@ import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
 
 const logger = createChildLogger('DockerLogStream');
+
+/**
+ * A non-follow logs request with a negative tail asks the daemon to cancel its
+ * follow stream for that container. Daemons without stop support treat it as a
+ * plain read of the last 100 lines, so it is safe to send to any daemon version.
+ */
+export const DOCKER_LOG_FOLLOW_STOP_TAIL = -1;
+const LOG_ACCESS_RECHECK_INTERVAL_MS = 30_000;
+
+type DockerLogChunkHandler = (lines: string[], ended: boolean) => void;
+
+export interface DockerLogFollowSubscription {
+  /** (Re)start the daemon follow stream, ordered after any pending stop for the same container. */
+  start(since: string | undefined): Promise<CommandResult>;
+  /** Detach this viewer. The last viewer of a container stops the daemon-side follow. Idempotent. */
+  unsubscribe(): void;
+}
+
+interface DockerLogFollowChannel {
+  subscribers: Set<DockerLogChunkHandler>;
+  unregister: () => void;
+}
+
+interface DockerLogFollowState {
+  channels: Map<string, DockerLogFollowChannel>;
+  commands: Map<string, Promise<void>>;
+}
+
+// The registry keeps one handler per `${nodeId}:${containerId}` key and the daemon keeps one
+// follow stream per container, so every log viewer of a container (single-container and
+// compose sockets alike) shares one registry handler that fans chunks out to all of them.
+const followStates = new WeakMap<NodeRegistryService, DockerLogFollowState>();
+
+function getFollowState(registry: NodeRegistryService): DockerLogFollowState {
+  let state = followStates.get(registry);
+  if (!state) {
+    state = { channels: new Map(), commands: new Map() };
+    followStates.set(registry, state);
+  }
+  return state;
+}
+
+// The daemon runs log commands concurrently, so a stop and a following restart for the same
+// container must reach it in order or the stop could cancel the new viewer's stream.
+function enqueueFollowCommand(
+  state: DockerLogFollowState,
+  key: string,
+  run: () => Promise<CommandResult>
+): Promise<CommandResult> {
+  const next = (state.commands.get(key) ?? Promise.resolve()).then(run);
+  const settled = next.then(
+    () => undefined,
+    () => undefined
+  );
+  state.commands.set(key, settled);
+  void settled.then(() => {
+    if (state.commands.get(key) === settled) state.commands.delete(key);
+  });
+  return next;
+}
+
+export function subscribeDockerLogFollow(
+  registry: NodeRegistryService,
+  dispatch: NodeDispatchService,
+  nodeId: string,
+  containerId: string,
+  handler: DockerLogChunkHandler
+): DockerLogFollowSubscription {
+  const key = `${nodeId}:${containerId}`;
+  const state = getFollowState(registry);
+  let channel = state.channels.get(key);
+  if (!channel) {
+    const subscribers = new Set<DockerLogChunkHandler>();
+    const unregister = registry.registerLogStreamHandler(key, (lines, ended) => {
+      for (const subscriber of [...subscribers]) subscriber(lines, ended === true);
+    });
+    channel = { subscribers, unregister };
+    state.channels.set(key, channel);
+  }
+  const joined = channel;
+  const subscriber: DockerLogChunkHandler = (lines, ended) => handler(lines, ended);
+  joined.subscribers.add(subscriber);
+  let subscribed = true;
+
+  return {
+    start: (since) =>
+      enqueueFollowCommand(state, key, () =>
+        dispatch.sendDockerLogsCommand(nodeId, containerId, { tailLines: 0, follow: true, timestamps: true, since })
+      ),
+    unsubscribe() {
+      if (!subscribed) return;
+      subscribed = false;
+      joined.subscribers.delete(subscriber);
+      if (joined.subscribers.size > 0 || state.channels.get(key) !== joined) return;
+      state.channels.delete(key);
+      joined.unregister();
+      enqueueFollowCommand(state, key, () =>
+        dispatch.sendDockerLogsCommand(nodeId, containerId, { tailLines: DOCKER_LOG_FOLLOW_STOP_TAIL, follow: false })
+      ).catch((error) => {
+        logger.debug('Failed to stop Docker log follow stream', {
+          nodeId,
+          containerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    },
+  };
+}
 
 async function authorizeLogAccess(
   credential: WebSocketCredential | null,
@@ -73,7 +182,7 @@ interface LogStreamWSState {
   user: User | null;
   authenticated: boolean;
   streaming: boolean;
-  unsubscribe: (() => void) | null;
+  subscription: DockerLogFollowSubscription | null;
   keepaliveInterval: ReturnType<typeof setInterval> | null;
   /** Oldest timestamp seen (for load_more pagination) */
   oldestTimestamp: string | undefined;
@@ -86,8 +195,8 @@ interface LogStreamWSState {
 const wsStates = new WeakMap<WSContext, LogStreamWSState>();
 
 function releaseLogHandler(state: LogStreamWSState): void {
-  state.unsubscribe?.();
-  state.unsubscribe = null;
+  state.subscription?.unsubscribe();
+  state.subscription = null;
   state.streaming = false;
 }
 
@@ -125,7 +234,7 @@ export function createDockerLogStreamWSHandlers(
         user: null,
         authenticated: false,
         streaming: false,
-        unsubscribe: null,
+        subscription: null,
         keepaliveInterval: null,
         oldestTimestamp: undefined,
         loadingMore: false,
@@ -134,9 +243,10 @@ export function createDockerLogStreamWSHandlers(
       };
       wsStates.set(ws, state);
 
+      // Access is checked once at open and re-checked here, never per log chunk.
       state.keepaliveInterval = setInterval(() => {
         void revalidateLogAccess(ws, state, credential, nodeId, true);
-      }, 30_000);
+      }, LOG_ACCESS_RECHECK_INTERVAL_MS);
 
       // Authenticate, fetch initial logs, then start follow stream
       authenticateAndStartStream(
@@ -195,7 +305,7 @@ export function createDockerLogStreamWSHandlers(
         }
         if (msg?.type === 'stop') {
           // Client requested stop — clean up follow stream handler
-          if (state.unsubscribe) {
+          if (state.subscription) {
             releaseLogHandler(state);
             send(ws, { type: 'stopped' });
           }
@@ -322,39 +432,29 @@ async function authenticateAndStartStream(
 
   // ── Step 2: Start follow stream ──
   if (wsStates.get(ws) !== state) return;
-  const handlerKey = `${nodeId}:${containerId}`;
 
-  const unsubscribe = registry.registerLogStreamHandler(handlerKey, (lines: string[], ended?: boolean) => {
-    void (async () => {
-      if (state.unsubscribe !== unsubscribe) return;
-      if (!(await revalidateLogAccess(ws, state, credential, nodeId))) return;
-      if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
-      if (ended) {
-        send(ws, { type: 'logs_ended' });
-        ws.close(1012, 'Log stream ended');
-        return;
-      }
-      if (lines.length > 0) {
-        send(ws, { type: 'new', lines });
-      }
-    })();
+  const subscription = subscribeDockerLogFollow(registry, dispatch, nodeId, containerId, (lines, ended) => {
+    // Access was checked at open and is re-checked by the keepalive timer, not per chunk.
+    if (wsStates.get(ws) !== state || state.subscription !== subscription || !state.authenticated) return;
+    if (ended) {
+      send(ws, { type: 'logs_ended' });
+      ws.close(1012, 'Log stream ended');
+      return;
+    }
+    if (lines.length > 0) {
+      send(ws, { type: 'new', lines });
+    }
   });
-  state.unsubscribe = unsubscribe;
+  state.subscription = subscription;
 
   // Start follow stream from newest timestamp to avoid duplicates
   // Use since with a tiny offset to skip the last line we already sent
   const newestTs = extractNewestTimestamp(initialLines);
-  let result: import('@/grpc/generated/types.js').CommandResult;
+  let result: CommandResult;
   try {
-    if (wsStates.get(ws) !== state) return;
-    result = await dispatch.sendDockerLogsCommand(nodeId, containerId, {
-      tailLines: 0,
-      follow: true,
-      timestamps: true,
-      since: newestTs,
-    });
+    result = await subscription.start(newestTs);
   } catch (err) {
-    if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
+    if (wsStates.get(ws) !== state || state.subscription !== subscription) return;
     releaseLogHandler(state);
     const message = err instanceof Error ? err.message : 'Failed to start log stream';
     send(ws, { type: 'error', message });
@@ -362,7 +462,7 @@ async function authenticateAndStartStream(
     return;
   }
 
-  if (wsStates.get(ws) !== state || state.unsubscribe !== unsubscribe) return;
+  if (wsStates.get(ws) !== state || state.subscription !== subscription) return;
   if (!result.success) {
     releaseLogHandler(state);
     send(ws, { type: 'error', message: result.error || 'Failed to start log stream' });

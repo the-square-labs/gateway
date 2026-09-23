@@ -47,7 +47,7 @@ func main() {
 		log.Fatalf("set control socket permissions: %v", err)
 	}
 
-	manager := newBindingManager(0, 0)
+	manager := newBindingManager(maxConnectorSessions, maxBindingSessions)
 	go func() {
 		<-ctx.Done()
 		listener.Close()

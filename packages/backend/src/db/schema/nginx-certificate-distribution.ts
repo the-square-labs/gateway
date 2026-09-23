@@ -80,6 +80,9 @@ export const nginxCertificateReplicas = pgTable(
     status: nginxCertificateReplicaStatusEnum('status').notNull().default('pending'),
     generation: integer('generation').notNull().default(0),
     lastError: text('last_error'),
+    // Consecutive automatic repair failures; drives retry backoff and resets
+    // once the replica is ready again.
+    repairAttempts: integer('repair_attempts').notNull().default(0),
     lastVerifiedAt: timestamp('last_verified_at', { withTimezone: true }),
     cleanupAfter: timestamp('cleanup_after', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

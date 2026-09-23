@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
@@ -7,6 +8,7 @@ import type { UpdateStatus } from "@/types";
 import {
   AppStatusGate,
   buildGatewayRestartTargetUrl,
+  GATEWAY_UPDATE_MAX_WAIT_MS,
   isGatewayUpdateTargetVersion,
   normalizeGatewayUpdateVersion,
 } from "./AppStatusGate";
@@ -166,6 +168,174 @@ describe("gateway update version matching", () => {
       expect(screen.getByRole("heading", { name: "Updating Gateway" })).toBeInTheDocument();
       expect(screen.queryByRole("list", { name: "Running operations" })).not.toBeInTheDocument();
     });
+  });
+
+  describe("when Gateway comes back on a version other than the update target", () => {
+    const { hasScope } = useAuthStore.getState();
+    afterEach(() => {
+      vi.restoreAllMocks();
+      useAuthStore.setState({ hasScope });
+    });
+
+    const health = (status: number, payload?: unknown) =>
+      new Response(payload === undefined ? "" : JSON.stringify(payload), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      });
+    const versionStatus = (gatewayOperation: UpdateStatus["gatewayOperation"]): UpdateStatus => ({
+      currentVersion: "v2.4.0",
+      latestVersion: "v2.5.0",
+      updateAvailable: true,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.4.0",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+      gatewayOperation,
+    });
+    const operation = (status: "updating" | "failed", error: string | null = null) => ({
+      status,
+      targetVersion: "v2.5.0",
+      startedAt: "2026-09-23T12:00:00.000Z",
+      waitDeadline: null,
+      operations: [],
+      error,
+    });
+
+    it("shows why the update was rolled back and releases the session", async () => {
+      vi.mocked(globalThis.fetch).mockImplementation(async () =>
+        health(200, { lifecycleState: "running", version: "2.4.0" })
+      );
+      vi.spyOn(api, "getVersionInfo").mockResolvedValue(
+        versionStatus(
+          operation("failed", "Gateway v2.5.0 did not start, so the update was rolled back.")
+        )
+      );
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+
+      render(<AppStatusGate />);
+
+      expect(await screen.findByRole("heading", { name: "Update Failed" })).toBeInTheDocument();
+      expect(
+        screen.getByText("Gateway v2.5.0 did not start, so the update was rolled back.")
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(
+          "Gateway could not complete the update to v2.5.0. The previous version is running."
+        )
+      ).toBeInTheDocument();
+      expect(useAppStatusStore.getState()).toMatchObject({
+        gatewayUpdatingActive: false,
+        gatewayUpdatingTargetVersion: null,
+      });
+    });
+
+    it("leaves the update screen after a restart when the server knows no update", async () => {
+      vi.useFakeTimers();
+      let healthChecks = 0;
+      vi.mocked(globalThis.fetch).mockImplementation(async () => {
+        healthChecks += 1;
+        return healthChecks === 1
+          ? health(502)
+          : health(200, { lifecycleState: "running", version: "2.4.0" });
+      });
+      vi.spyOn(api, "getVersionInfo").mockResolvedValue(versionStatus(null));
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+
+      render(<AppStatusGate />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+
+      expect(screen.getByRole("heading", { name: "Update Failed" })).toBeInTheDocument();
+      expect(
+        screen.getByText("Gateway 2.4.0 is running instead of v2.5.0.", { exact: false })
+      ).toBeInTheDocument();
+    });
+
+    it("keeps waiting while the server has not registered the accepted update yet", async () => {
+      vi.useFakeTimers();
+      vi.mocked(globalThis.fetch).mockImplementation(async () =>
+        health(200, { lifecycleState: "running", version: "2.4.0" })
+      );
+      vi.spyOn(api, "getVersionInfo").mockResolvedValue(versionStatus(null));
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+
+      render(<AppStatusGate />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(6_000);
+      });
+
+      expect(screen.getByRole("heading", { name: "Updating Gateway" })).toBeInTheDocument();
+    });
+
+    it("gives up after the maximum wait even if the server still reports the update", async () => {
+      vi.useFakeTimers();
+      vi.mocked(globalThis.fetch).mockImplementation(async () =>
+        health(200, { lifecycleState: "running", version: "2.4.0" })
+      );
+      vi.spyOn(api, "getVersionInfo").mockResolvedValue(versionStatus(operation("updating")));
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+      useAppStatusStore.setState({
+        gatewayUpdatingStartedAt: Date.now() - GATEWAY_UPDATE_MAX_WAIT_MS,
+      });
+
+      render(<AppStatusGate />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      expect(screen.getByRole("heading", { name: "Update Failed" })).toBeInTheDocument();
+    });
+
+    it("stops reporting the rolled-back update for other admins once one returns", async () => {
+      const acknowledge = vi
+        .spyOn(api, "acknowledgeUpdateFailure")
+        .mockResolvedValue({ acknowledged: true });
+      useAuthStore.setState({ hasScope: (scope: string) => scope === "admin:update" });
+      useAppStatusStore.setState({
+        gatewayUpdateError: { message: "rolled back", targetVersion: "v2.5.0", rolledBack: true },
+      });
+
+      render(<AppStatusGate />);
+      fireEvent.click(screen.getByRole("button", { name: "Return to Gateway" }));
+
+      await waitFor(() => expect(acknowledge).toHaveBeenCalledOnce());
+      expect(useAppStatusStore.getState().gatewayUpdateError).toBeNull();
+    });
+  });
+
+  it("lets an admin abandon a stuck Relay update", async () => {
+    const { abandonRelayUpdate } = useUpdateStore.getState();
+    const { hasScope } = useAuthStore.getState();
+    const abandon = vi.fn().mockResolvedValue(undefined);
+    useAuthStore.setState({ hasScope: (scope: string) => scope === "admin:update" });
+    useUpdateStore.setState({
+      isUpdating: true,
+      updatingComponent: "relay",
+      updatingTargetVersion: "v2.7.0",
+      abandonRelayUpdate: abandon,
+    });
+    try {
+      render(<AppStatusGate />);
+
+      fireEvent.click(screen.getByRole("button", { name: "Abandon update" }));
+      expect(
+        screen.getByText("Relays it drained return to service", { exact: false })
+      ).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("button", { name: "Abandon update" }));
+
+      await waitFor(() => expect(abandon).toHaveBeenCalledOnce());
+    } finally {
+      useUpdateStore.setState({ abandonRelayUpdate });
+      useAuthStore.setState({ hasScope });
+    }
   });
 
   it("uses the shared operation screen for a server-restored Relay update", () => {

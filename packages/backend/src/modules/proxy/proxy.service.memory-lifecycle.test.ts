@@ -16,6 +16,7 @@ function fixture() {
   Object.assign(service, {
     secureLinkRuntimeHistory: new Map(),
     secureLinkRuntimeSamplesInFlight: new Map(),
+    hostConfigEpochs: new Map(),
     db: {
       query: { proxyHosts: { findFirst: vi.fn().mockResolvedValue(host) } },
       delete: () => ({ where: deletion }),

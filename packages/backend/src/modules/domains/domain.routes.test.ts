@@ -139,7 +139,8 @@ describe('domain routes authorization', () => {
     expect(mocks.domainsService.resolveCloudflareMigration).toHaveBeenCalledWith(
       DOMAIN_ID,
       { action: 'keep_external' },
-      'user-1'
+      'user-1',
+      ['domains:edit']
     );
   });
 

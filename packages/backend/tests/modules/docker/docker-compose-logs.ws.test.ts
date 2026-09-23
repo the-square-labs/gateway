@@ -108,7 +108,7 @@ function sentMessages(ws: MockWebSocket): Array<Record<string, unknown>> {
 }
 
 async function settleAsyncWork(): Promise<void> {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
 }
 
 function result(overrides: Partial<CommandResult> = {}): CommandResult {
@@ -158,7 +158,11 @@ function registerServices(options: RegisterOptions = {}): Services {
   };
   const registry = {
     getNode: vi.fn().mockReturnValue({ nodeId: NODE_ID }),
-    registerLogStreamHandler: vi.fn((key, handler) => handlers.set(key, handler)),
+    // Returns the unregister callback the shared follow channel calls when its last viewer leaves.
+    registerLogStreamHandler: vi.fn((key, handler) => {
+      handlers.set(key, handler);
+      return () => registry.removeLogStreamHandler(key);
+    }),
     removeLogStreamHandler: vi.fn((key) => handlers.delete(key)),
     handleLogStream: vi.fn((key, lines, ended) => handlers.get(key)?.(lines, ended)),
   };

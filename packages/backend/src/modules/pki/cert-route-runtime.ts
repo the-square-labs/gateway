@@ -30,6 +30,8 @@ import { CRLService } from './crl.service.js';
 import { ExportService } from './export.service.js';
 import { OCSPService } from './ocsp.service.js';
 export const certRouteRuntime = {
+  /** CertService.revokeCertificate republishes the issuing CA's CRL itself. */
+  revokeCertificatePublishesCrl: true as const,
   OpenAPIHono,
   container,
   openApiValidationHook,

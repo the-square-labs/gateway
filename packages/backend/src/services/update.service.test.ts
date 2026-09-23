@@ -289,7 +289,7 @@ describe('UpdateService foundation migration', () => {
   });
   it('never migrates or replaces the running app when target-image license/core preparation fails', async () => {
     const dockerService = makeDockerService();
-    dockerService.runOneShot.mockResolvedValueOnce({
+    dockerService.runOneShot.mockResolvedValueOnce({ exitCode: 0, output: '' }).mockResolvedValueOnce({
       exitCode: 1,
       output: 'Private core signature verification failed',
     });
@@ -299,7 +299,12 @@ describe('UpdateService foundation migration', () => {
         makeArtifact('registry.example.com/wiolett/gateway@sha256:new')
       )
     ).rejects.toThrow('Private core signature verification failed');
-    expect(dockerService.runOneShot).toHaveBeenCalledOnce();
+    // Backup, the failed preparation, and restoring the untouched .env.
+    expect(dockerService.runOneShot).toHaveBeenCalledTimes(3);
+    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({ Env: [expect.stringMatching(PRE_UPDATE_BACKUP_ENV)] })
+    );
     expect(dockerService.runDetached).not.toHaveBeenCalled();
   });
   it('runs foundation migrations from the target image before validating and recreating compose', async () => {
@@ -314,6 +319,15 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
+        Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
+        Cmd: ['sh', '-c', expect.stringContaining('cp -p /host/.env "$backup/.env"')],
+        Env: [expect.stringMatching(/^FOUNDATION_BACKUP_DIR=\/host\/\.gateway-foundation-backups\/pre-update-/)],
+        HostConfig: { Binds: ['/srv/gateway:/host'] },
+      })
+    );
+    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
         Image: artifact.imageRef,
         Cmd: ['node', 'dist/cli/migrate-legacy-settings.js', '/host'],
         Env: expect.not.arrayContaining([
@@ -325,7 +339,7 @@ describe('UpdateService foundation migration', () => {
       })
     );
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         Image: artifact.imageRef,
         Cmd: [
@@ -347,7 +361,7 @@ describe('UpdateService foundation migration', () => {
       })
     );
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.objectContaining({
         Image: artifact.imageRef,
         Cmd: ['sh', '-c', 'set -eu\nmkdir -p "$SANDBOX_WORKSPACE_DIR"\nchmod 700 "$SANDBOX_WORKSPACE_DIR"'],
@@ -358,7 +372,7 @@ describe('UpdateService foundation migration', () => {
       })
     );
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      4,
+      5,
       expect.objectContaining({
         Cmd: [
           'docker',
@@ -375,7 +389,12 @@ describe('UpdateService foundation migration', () => {
     expect(dockerService.runDetached).toHaveBeenCalledWith(
       expect.objectContaining({
         Cmd: ['sh', '-c', expect.stringContaining('compose up -d --force-recreate app')],
-        Env: ['FOUNDATION_BACKUP_DIR=/srv/gateway/.gateway-foundation-backups/test'],
+        // The sidecar restores the files as they were before the legacy settings migration.
+        Env: [
+          expect.stringMatching(
+            /^FOUNDATION_BACKUP_DIR=\/srv\/gateway\/\.gateway-foundation-backups\/pre-update-[\w.-]+$/
+          ),
+        ],
         HostConfig: {
           Binds: ['/srv/gateway:/srv/gateway', '/var/run/docker.sock:/var/run/docker.sock'],
         },
@@ -580,6 +599,7 @@ describe('UpdateService foundation migration', () => {
   it('does not recreate the app when migrated compose validation fails', async () => {
     const dockerService = makeDockerService();
     dockerService.runOneShot
+      .mockResolvedValueOnce({ exitCode: 0, output: '' })
       .mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' })
       .mockResolvedValueOnce({
         exitCode: 0,
@@ -596,10 +616,10 @@ describe('UpdateService foundation migration', () => {
     ).rejects.toThrow('Migrated docker-compose.yml failed validation');
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      5,
+      6,
       expect.objectContaining({
         Image: 'registry.example.com/wiolett/gateway:v2.4.3',
-        Env: ['FOUNDATION_BACKUP_DIR=/host/.gateway-foundation-backups/test'],
+        Env: [expect.stringMatching(PRE_UPDATE_BACKUP_ENV)],
       })
     );
     expect(dockerService.runDetached).not.toHaveBeenCalled();
@@ -615,7 +635,7 @@ describe('UpdateService foundation migration', () => {
       makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', undefined, connectorImage)
     );
 
-    const command = dockerService.runOneShot.mock.calls[1]?.[0]?.Cmd ?? [];
+    const command = dockerService.runOneShot.mock.calls[2]?.[0]?.Cmd ?? [];
     expect(command).not.toContain('--database-connector-image');
     expect(command).not.toContain(connectorImage);
   });
@@ -628,7 +648,7 @@ describe('UpdateService foundation migration', () => {
     await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway:v2.4.3', connectorImage));
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      2,
+      3,
       expect.objectContaining({
         Cmd: expect.arrayContaining(['--secure-link-connector-image', connectorImage]),
       })
@@ -650,18 +670,21 @@ describe('UpdateService foundation migration', () => {
 
   it('prepares a custom sandbox workspace directory from the migrator output', async () => {
     const dockerService = makeDockerService();
-    dockerService.runOneShot.mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' }).mockResolvedValueOnce({
-      exitCode: 0,
-      output:
-        '{"ok":true,"changedFiles":[".env","docker-compose.yml"],"backupDir":"/host/.gateway-foundation-backups/test","sandboxWorkspaceDir":"/srv/gateway-workspaces"}',
-    });
+    dockerService.runOneShot
+      .mockResolvedValueOnce({ exitCode: 0, output: '' })
+      .mockResolvedValueOnce({ exitCode: 0, output: '{"ok":true}' })
+      .mockResolvedValueOnce({
+        exitCode: 0,
+        output:
+          '{"ok":true,"changedFiles":[".env","docker-compose.yml"],"backupDir":"/host/.gateway-foundation-backups/test","sandboxWorkspaceDir":"/srv/gateway-workspaces"}',
+      });
     const service = makeUpdateService(dockerService);
     const artifact = makeArtifact('registry.example.com/wiolett/gateway:v2.4.3');
 
     await service.performUpdate('v2.4.3', artifact);
 
     expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
-      3,
+      4,
       expect.objectContaining({
         Env: ['SANDBOX_WORKSPACE_DIR=/srv/gateway-workspaces'],
         HostConfig: { Binds: ['/srv/gateway-workspaces:/srv/gateway-workspaces'] },
@@ -777,6 +800,383 @@ describe('UpdateService orchestration gate', () => {
   });
 });
 
+describe('UpdateService interrupted updates', () => {
+  /** A drizzle-like chain resolving to `rows`; every builder method returns the chain. */
+  function chain(rows: unknown[]) {
+    const result = Promise.resolve(rows) as Promise<unknown[]> & Record<string, (...args: unknown[]) => unknown>;
+    for (const method of ['from', 'where', 'orderBy', 'limit', 'innerJoin', 'set', 'values', 'returning']) {
+      result[method] = () => result;
+    }
+    result.onConflictDoUpdate = () => Promise.resolve(undefined);
+    return result;
+  }
+
+  function scriptedDb(selects: unknown[][], transactionUpdates: unknown[][] = []) {
+    const writes: Array<{ key: string; value: any }> = [];
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      update: vi.fn(() => chain(transactionUpdates.shift() ?? [])),
+    };
+    const db = {
+      select: vi.fn(() => chain(selects.shift() ?? [])),
+      insert: vi.fn(() => ({
+        values: (row: { key: string; value: unknown }) => {
+          writes.push(row);
+          return { onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) };
+        },
+      })),
+      delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
+      transaction: vi.fn(async (write: (executor: typeof tx) => Promise<unknown>) => write(tx)),
+    };
+    return { db, tx, writes };
+  }
+
+  function serviceWith(db: unknown, appVersion = 'v2.4.2') {
+    const service = new UpdateService(
+      db as never,
+      makeDockerService() as never,
+      {
+        APP_VERSION: appVersion,
+        RELEASES_API_URL: 'https://updates.thesqlabs.com/gateway/releases',
+      } as never
+    );
+    const events = { publish: vi.fn() };
+    const audit = { log: vi.fn().mockResolvedValue(true) };
+    service.setOrchestrationGate(
+      { activeOrchestrationOperations: vi.fn(async () => []), setOrchestrationAdmissionHold: vi.fn(() => true) },
+      events
+    );
+    service.setAuditLog(audit);
+    return { service, events, audit };
+  }
+
+  const attempt = {
+    targetVersion: 'v2.5.0',
+    fromVersion: 'v2.4.2',
+    startedAt: '2026-09-23T12:00:00.000Z',
+    userId: 'admin-1',
+    sidecarId: 'abcdef0123456789',
+    failedAt: null,
+    error: null,
+  };
+
+  afterEach(() => vi.useRealTimers());
+
+  it('records the attempt and backs up .env before anything on the host changes', async () => {
+    const dockerService = makeDockerService();
+    const order: string[] = [];
+    const service = makeUpdateService(dockerService);
+    const db = (service as unknown as { db: { insert: ReturnType<typeof vi.fn> } }).db;
+    db.insert.mockImplementation(() => ({
+      values: (row: { key: string; value: { sidecarId?: string | null } }) => {
+        order.push(`record:${row.key}:${row.value.sidecarId ?? 'none'}`);
+        return { onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) };
+      },
+    }));
+    dockerService.runOneShot.mockImplementation(async (config: { Cmd: string[] }) => {
+      order.push(config.Cmd.includes('dist/cli/migrate-legacy-settings.js') ? 'legacy-settings' : config.Cmd[0]!);
+      return {
+        exitCode: 0,
+        output:
+          '{"ok":true,"changedFiles":[],"backupDir":null,"sandboxWorkspaceDir":"/var/lib/gateway/sandbox-workspaces"}',
+      };
+    });
+    dockerService.runDetached.mockImplementation(async () => {
+      order.push('sidecar');
+      return 'sidecar-1';
+    });
+
+    await service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'), 'admin-1');
+
+    expect(order.slice(0, 3)).toEqual(['record:update:gateway:attempt:none', 'sh', 'legacy-settings']);
+    expect(order.slice(-2)).toEqual(['sidecar', 'record:update:gateway:attempt:sidecar-1']);
+    // Even when the foundation migration changed nothing, the rollback restores the untouched .env.
+    expect(dockerService.runDetached).toHaveBeenCalledWith(
+      expect.objectContaining({
+        Env: [
+          expect.stringMatching(/^FOUNDATION_BACKUP_DIR=\/srv\/gateway\/\.gateway-foundation-backups\/pre-update-/),
+        ],
+      })
+    );
+  });
+
+  it('forgets the attempt when the update fails before the handoff', async () => {
+    const dockerService = makeDockerService();
+    dockerService.runOneShot
+      .mockResolvedValueOnce({ exitCode: 0, output: '' })
+      .mockResolvedValueOnce({ exitCode: 1, output: 'migration failed' });
+    const service = makeUpdateService(dockerService);
+    const db = (service as unknown as { db: { delete: ReturnType<typeof vi.fn> } }).db;
+
+    await expect(
+      service.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'))
+    ).rejects.toThrow('migration failed');
+    expect(db.delete).toHaveBeenCalledOnce();
+    expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toBeNull();
+  });
+
+  it('reports a rolled-back update as failed after the previous version restarts', async () => {
+    const { db, writes } = scriptedDb([[{ key: 'update:gateway:attempt', value: attempt }], []]);
+    const { service, events, audit } = serviceWith(db, 'v2.4.2');
+
+    await service.recoverInterruptedUpdates();
+
+    const operation = (service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation;
+    expect(operation).toMatchObject({
+      status: 'failed',
+      targetVersion: 'v2.5.0',
+      error: expect.stringContaining('rolled back'),
+    });
+    expect(writes).toEqual([
+      expect.objectContaining({
+        key: 'update:gateway:attempt',
+        value: expect.objectContaining({
+          failedAt: expect.any(String),
+          error: expect.stringContaining('abcdef012345'),
+        }),
+      }),
+    ]);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'admin-1',
+        action: 'system.update.failed',
+        details: expect.objectContaining({ targetVersion: 'v2.5.0', runningVersion: 'v2.4.2' }),
+      })
+    );
+    expect(events.publish).toHaveBeenCalledWith(
+      'system.update.changed',
+      expect.objectContaining({ updating: false, component: 'gateway', error: expect.any(String) })
+    );
+    expect(service.isGatewayUpdateInProgress()).toBe(false);
+
+    await expect(service.acknowledgeGatewayUpdateFailure()).resolves.toBe(true);
+    expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toBeNull();
+    expect(db.delete).toHaveBeenCalledOnce();
+    await expect(service.acknowledgeGatewayUpdateFailure()).resolves.toBe(false);
+  });
+
+  it('clears the attempt when the target version started', async () => {
+    const { db, writes } = scriptedDb([[{ key: 'update:gateway:attempt', value: attempt }], []]);
+    const { service, audit } = serviceWith(db, 'v2.5.0');
+
+    await service.recoverInterruptedUpdates();
+
+    expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toBeNull();
+    expect(db.delete).toHaveBeenCalledOnce();
+    expect(writes).toEqual([]);
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('stops reporting an old failure after a day', async () => {
+    const failedAt = new Date(Date.now() - 25 * 60 * 60_000).toISOString();
+    const { db } = scriptedDb([
+      [{ key: 'update:gateway:attempt', value: { ...attempt, failedAt, error: 'rolled back' } }],
+      [],
+    ]);
+    const { service } = serviceWith(db, 'v2.4.2');
+
+    await service.recoverInterruptedUpdates();
+
+    expect((service as unknown as { gatewayUpdateOperation: unknown }).gatewayUpdateOperation).toBeNull();
+    await vi.waitFor(() => expect(db.delete).toHaveBeenCalledOnce());
+  });
+
+  it('fails a Relay Pool run interrupted by a restart and resumes the relays it drained', async () => {
+    vi.useFakeTimers();
+    const remote = {
+      id: 'remote-1',
+      kind: 'remote',
+      nodeId: 'node-1',
+      manualDrainStartedAt: null,
+      state: 'draining',
+      health: { admissionState: 'draining' },
+    };
+    const { db, tx } = scriptedDb(
+      [[], [{ id: 'run-1', targetArtifact: { version: 'v2.4.3' } }], [remote], [], [remote], []],
+      [
+        [{ id: 'run-1' }],
+        [
+          { relayInstanceId: 'remote-1', drainDeadlineAt: new Date() },
+          { relayInstanceId: 'local', drainDeadlineAt: null },
+        ],
+      ]
+    );
+    const { service, audit } = serviceWith(db);
+    const runtime = {
+      drainInstance: vi.fn().mockRejectedValueOnce(new Error('node is not connected')).mockResolvedValue(undefined),
+      prepareWorkerUpdate: vi.fn(),
+      dispatchWorkerUpdate: vi.fn(),
+      prepareSupervisorUpdate: vi.fn(),
+      dispatchSupervisorUpdate: vi.fn(),
+    };
+    service.setRelayPoolUpdateRuntime(runtime);
+
+    await service.recoverInterruptedUpdates();
+
+    expect(tx.execute).toHaveBeenCalledOnce();
+    expect(tx.update).toHaveBeenNthCalledWith(1, relayPoolUpdateRuns);
+    expect(tx.update).toHaveBeenNthCalledWith(2, relayPoolUpdateSteps);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'system.relay_update.failed', resourceId: 'run-1' })
+    );
+    // The remote relay has not reconnected yet: the release retries.
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenCalledTimes(2));
+    expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', null, false);
+  });
+
+  it('abandons a stuck Relay Pool run, stops its rollout and releases its drains', async () => {
+    const remote = {
+      id: 'remote-1',
+      kind: 'remote',
+      nodeId: 'node-1',
+      manualDrainStartedAt: null,
+      state: 'draining',
+      health: {},
+    };
+    const { db } = scriptedDb(
+      [[{ id: 'run-1', state: 'updating', targetArtifact: { version: 'v2.4.3' } }], [remote], []],
+      [[{ id: 'run-1' }], [{ relayInstanceId: 'remote-1', drainDeadlineAt: new Date() }]]
+    );
+    const { service } = serviceWith(db);
+    const runtime = {
+      drainInstance: vi.fn().mockResolvedValue(undefined),
+      prepareWorkerUpdate: vi.fn(),
+      dispatchWorkerUpdate: vi.fn(),
+      prepareSupervisorUpdate: vi.fn(),
+      dispatchSupervisorUpdate: vi.fn(),
+    };
+    service.setRelayPoolUpdateRuntime(runtime);
+    service.startRelayUpdate('v2.4.3');
+    const rollout = new AbortController();
+    (service as unknown as { relayPoolRun: AbortController }).relayPoolRun = rollout;
+
+    await expect(service.abandonRelayUpdate('admin-1')).resolves.toEqual({ targetVersion: 'v2.4.3' });
+
+    expect(rollout.signal.aborted).toBe(true);
+    expect((service as unknown as { relayUpdateOperation: unknown }).relayUpdateOperation).toMatchObject({
+      status: 'failed',
+      error: 'Abandoned by an administrator',
+    });
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenCalledWith('remote-1', 'admin-1', false));
+  });
+
+  function rolloutHarness(options: { manualDrainStartedAt?: Date | null } = {}) {
+    const remote = {
+      id: 'remote-1',
+      kind: 'remote',
+      nodeId: 'node-1',
+      displayName: 'relay-1',
+      manualDrainStartedAt: options.manualDrainStartedAt ?? null,
+      state: 'draining',
+      health: { admissionState: 'draining' },
+    };
+    const { db } = scriptedDb([
+      [{ id: 'step-1', relayInstanceId: 'remote-1', state: 'pending', sequence: 1 }],
+      [remote],
+      [{ state: 'updating' }],
+      // Drain release: the relay row, then no newer run holding it.
+      [remote],
+      [],
+    ]);
+    const updates: unknown[] = [];
+    Object.assign(db, {
+      update: vi.fn((table: unknown) => {
+        updates.push(table);
+        return chain([]);
+      }),
+    });
+    const { service } = serviceWith(db);
+    const runtime = {
+      drainInstance: vi.fn().mockResolvedValue(undefined),
+      prepareWorkerUpdate: vi.fn().mockResolvedValue({}),
+      dispatchWorkerUpdate: vi.fn().mockResolvedValue(undefined),
+      prepareSupervisorUpdate: vi.fn().mockResolvedValue({}),
+      dispatchSupervisorUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+    service.setRelayPoolUpdateRuntime(runtime);
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    vi.spyOn(internals, 'ensureRelayPoolUpdateRun').mockResolvedValue({ id: 'run-1' });
+    vi.spyOn(internals, 'updatePoolStep').mockResolvedValue(undefined);
+    vi.spyOn(internals, 'waitForRelayInstanceDrain').mockResolvedValue(true);
+    vi.spyOn(internals, 'relayInstanceArchitecture').mockReturnValue('amd64');
+    vi.spyOn(internals, 'waitForRelaySupervisorVersion').mockResolvedValue(undefined);
+    const verify = vi.spyOn(internals, 'waitForRelayInstanceVersion');
+    return { service, runtime, verify, updates };
+  }
+
+  // Regression: a run that failed without a Gateway restart left the relay drained.
+  it('resumes the relay it drained when verification times out', async () => {
+    const { service, runtime, verify, updates } = rolloutHarness();
+    verify.mockRejectedValue(new Error('Relay relay-1 did not report v2.4.3 in time'));
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow('did not report');
+
+    expect(runtime.drainInstance).toHaveBeenNthCalledWith(1, 'remote-1', 'admin-1', true);
+    expect(updates).toEqual(expect.arrayContaining([relayPoolUpdateSteps, relayPoolUpdateRuns]));
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false));
+  });
+
+  it('leaves an operator drain in place when the run fails', async () => {
+    const { service, runtime, verify } = rolloutHarness({ manualDrainStartedAt: new Date() });
+    verify.mockRejectedValue(new Error('verify timed out'));
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow('verify timed out');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.drainInstance).toHaveBeenCalledTimes(1);
+    expect(runtime.drainInstance).not.toHaveBeenCalledWith('remote-1', expect.anything(), false);
+  });
+
+  it('refuses to abandon when no Relay Pool update runs', async () => {
+    const { db } = scriptedDb([[]]);
+    const { service } = serviceWith(db);
+
+    await expect(service.abandonRelayUpdate('admin-1')).rejects.toMatchObject({ code: 'RELAY_UPDATE_NOT_ACTIVE' });
+  });
+
+  it('keeps Gateway and Relay Pool updates from running at the same time', async () => {
+    const { db } = scriptedDb([[{ id: 'run-1' }]]);
+    const { service } = serviceWith(db);
+    service.setRelayPoolUpdateRuntime({
+      drainInstance: vi.fn(),
+      prepareWorkerUpdate: vi.fn(),
+      dispatchWorkerUpdate: vi.fn(),
+      prepareSupervisorUpdate: vi.fn(),
+      dispatchSupervisorUpdate: vi.fn(),
+    });
+
+    // A durable run from before a restart still counts until recovery fails it.
+    await expect(service.assertGatewayUpdateAllowed()).rejects.toMatchObject({ code: 'RELAY_UPDATE_IN_PROGRESS' });
+
+    const dockerService = makeDockerService();
+    const gateway = makeUpdateService(dockerService);
+    gateway.startRelayUpdate('v2.4.3');
+    await expect(
+      gateway.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'))
+    ).rejects.toMatchObject({ code: 'RELAY_UPDATE_IN_PROGRESS' });
+    expect(dockerService.pullImageRef).not.toHaveBeenCalled();
+    expect(gateway.isGatewayUpdateInProgress()).toBe(false);
+
+    const idle = makeUpdateService(makeDockerService());
+    let release!: () => void;
+    const pulling = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const idleDocker = (idle as unknown as { dockerService: ReturnType<typeof makeDockerService> }).dockerService;
+    idleDocker.pullImageRef.mockImplementationOnce(() => pulling);
+    const update = idle.performUpdate('v2.4.3', makeArtifact('registry.example.com/wiolett/gateway@sha256:new'));
+    expect(() => idle.startRelayUpdate('v2.4.3')).toThrow(
+      expect.objectContaining({ code: 'GATEWAY_UPDATE_IN_PROGRESS' })
+    );
+    release();
+    await update;
+  });
+});
+
+const PRE_UPDATE_BACKUP_ENV = /^FOUNDATION_BACKUP_DIR=\/host\/\.gateway-foundation-backups\/pre-update-[\w.-]+$/;
+
 function makeUpdateService(
   dockerService: ReturnType<typeof makeDockerService>,
   relayRuntime?: ConstructorParameters<typeof UpdateService>[3],
@@ -786,6 +1186,7 @@ function makeUpdateService(
     insert: vi.fn(() => ({
       values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
     })),
+    delete: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })),
   };
   return new UpdateService(
     db as never,

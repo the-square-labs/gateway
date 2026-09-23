@@ -30,6 +30,7 @@ import {
   type ProxyHostRuntimeAdapter,
 } from './additional-route.service.shared.js';
 import type { ProxyDockerUpstreamService } from './proxy-docker-upstream.service.js';
+import { withProxyHostLock } from './proxy-host-lock.js';
 import type { CreateProxyAdditionalSecureLinkInput, ProxySecureLinkService } from './proxy-secure-link.service.js';
 
 export abstract class AdditionalRouteServiceRuntime {
@@ -37,7 +38,6 @@ export abstract class AdditionalRouteServiceRuntime {
   protected hostRuntime?: ProxyHostRuntimeAdapter;
   protected pageRuntime?: PageNodeRuntimeService;
   protected pageRuntimeConfig?: PageRuntimeConfigService;
-  protected readonly hostLocks = new Map<string, Promise<void>>();
 
   constructor(
     protected readonly db: DrizzleClient,
@@ -85,21 +85,13 @@ export abstract class AdditionalRouteServiceRuntime {
     this.pageRuntimeConfig = runtimeConfig;
   }
 
+  /**
+   * Shares ProxyService's reentrant per-host lock. A separate lock would invert
+   * with it: a route change holds this lock while re-rendering the host, and a
+   * host update holds the proxy lock while staging route migrations.
+   */
   protected async withHostLock<T>(hostId: string, work: () => Promise<T>): Promise<T> {
-    const previous = this.hostLocks.get(hostId) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const queued = previous.then(() => current);
-    this.hostLocks.set(hostId, queued);
-    await previous;
-    try {
-      return await work();
-    } finally {
-      release();
-      if (this.hostLocks.get(hostId) === queued) this.hostLocks.delete(hostId);
-    }
+    return withProxyHostLock(hostId, work);
   }
 
   async getRenderConfig(hostId: string): Promise<ProxyAdditionalRouteConfig[]> {

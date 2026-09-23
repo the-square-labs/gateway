@@ -17,7 +17,10 @@ import { buildWhere } from '@/lib/utils.js';
 import { isFileProtocolConfig, toObjectStorageConnectionView } from './object-storage-connection-view.js';
 import { isStorageWarmupError, mapObjectStorageError } from './object-storage-error-mapping.js';
 import { isFileProtocolProvider, resolveFileProtocolPort } from './object-storage-protocol.js';
-import { assertStorageHasNoBackupReferences } from './storage-backup-references.js';
+import {
+  assertStorageBucketHasNoBackupReferences,
+  assertStorageHasNoBackupReferences,
+} from './storage-backup-references.js';
 
 /** Shared schema and resource primitives retain the host's runtime identity. */
 export const storageCommercialRuntime = {
@@ -44,4 +47,5 @@ export const storageCommercialRuntime = {
   isFileProtocolProvider,
   resolveFileProtocolPort,
   assertStorageHasNoBackupReferences,
+  assertStorageBucketHasNoBackupReferences,
 };

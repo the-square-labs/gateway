@@ -228,14 +228,13 @@ describe('Docker log WebSocket stream lifecycle', () => {
     const stream = await openStream();
     authMocks.resolveWebSocketCredentialForScopeBase.mockResolvedValue(null);
 
-    stream.registry.handleLogStream(STREAM_KEY, [FOLLOW_LINE]);
-    await settleAsyncWork();
+    // Access is re-checked every 30s rather than per chunk.
+    await vi.advanceTimersByTimeAsync(30_000);
 
     expect(readMessages(stream.ws)).toContainEqual({
       type: 'auth_error',
       message: 'Access revoked or token expired',
     });
-    expect(readMessages(stream.ws)).not.toContainEqual({ type: 'new', lines: [FOLLOW_LINE] });
     expect(stream.registry.removeLogStreamHandler).toHaveBeenCalledWith(STREAM_KEY);
     expect(stream.ws.close).toHaveBeenCalledWith(1008, 'Authentication failed');
 

@@ -1,6 +1,10 @@
+import { eq } from 'drizzle-orm';
 import type { WSContext } from 'hono/ws';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { compareSemver, parseSemver } from '@/lib/semver.js';
 import { resolveWebSocketCredential, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -14,6 +18,49 @@ function send(ws: WSContext, msg: Record<string, unknown>): void {
   } catch {
     // Connection may already be closed
   }
+}
+
+/**
+ * Daemons before this release keyed the node console by node only and ignored sessionKey, so
+ * every user got the same shell. The shared lifecycle gained per-user keys in the same release
+ * for every daemon type.
+ */
+export const NODE_CONSOLE_SESSION_ISOLATION_MIN_VERSION = 'v2.4.5';
+
+export function daemonIsolatesNodeConsoleSessions(daemonVersion: string | null | undefined): boolean {
+  // Local builds report "dev" and are built from current sources.
+  if (daemonVersion === 'dev') return true;
+  if (!daemonVersion || !parseSemver(daemonVersion)) return false;
+  return compareSemver(daemonVersion, NODE_CONSOLE_SESSION_ISOLATION_MIN_VERSION) >= 0;
+}
+
+async function nodeIsolatesConsoleSessions(nodeId: string): Promise<boolean> {
+  try {
+    const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+    const [node] = await db
+      .select({ daemonVersion: nodes.daemonVersion })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    return daemonIsolatesNodeConsoleSessions(node?.daemonVersion);
+  } catch (error) {
+    logger.warn('Failed to read daemon version for node console isolation; treating it as unisolated', {
+      nodeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Creators of node console sessions on daemons that do not isolate sessions per user, keyed by
+ * `${nodeId}\0${execId}`. Such a daemon hands every caller the node's existing shell, so only
+ * the Gateway user who created it may attach again.
+ */
+const unisolatedConsoleOwners = new Map<string, string>();
+
+function unisolatedConsoleKey(nodeId: string, execId: string): string {
+  return `${nodeId}\0${execId}`;
 }
 
 interface ExecWSState {
@@ -73,6 +120,7 @@ async function drainOutput(ws: WSContext, state: ExecWSState, nodeId: string): P
         send(ws, { type: 'output', data: Buffer.from(output.data).toString('base64') });
       }
       if (output.exited) {
+        if (state.execId) unisolatedConsoleOwners.delete(unisolatedConsoleKey(nodeId, state.execId));
         send(ws, { type: 'exit', exitCode: output.exitCode ?? 0 });
         closeExec(ws, state, 1000, 'Process exited');
         return;
@@ -226,6 +274,9 @@ async function authenticateAndCreateExec(
     return;
   }
 
+  const isolatesSessions = await nodeIsolatesConsoleSessions(nodeId);
+  if (wsStates.get(ws) !== state) return;
+
   // Create or reuse node-level exec session
   const command = shell && shell !== 'auto' ? [shell] : [];
   let result: import('@/grpc/generated/types.js').CommandResult;
@@ -268,6 +319,26 @@ async function authenticateAndCreateExec(
     send(ws, { type: 'error', message: 'No exec ID returned from daemon' });
     closeExec(ws, state, 1011, 'No exec ID');
     return;
+  }
+
+  if (!isolatesSessions) {
+    // This daemon ignores sessionKey and returns whichever console is already running on the
+    // node, so a reused session may belong to another user. Never attach to it or replay it.
+    const ownerKey = unisolatedConsoleKey(nodeId, execId);
+    if (isNew) {
+      unisolatedConsoleOwners.set(ownerKey, user.id);
+    } else if (unisolatedConsoleOwners.get(ownerKey) !== user.id) {
+      logger.warn('Refused to attach to a node console session this daemon cannot isolate', {
+        nodeId,
+        userId: user.id,
+      });
+      send(ws, {
+        type: 'auth_error',
+        message: `Another console session is already open on this node, and its daemon is too old to keep console sessions separate per user. Update the daemon to ${NODE_CONSOLE_SESSION_ISOLATION_MIN_VERSION} or later, or try again after that session exits.`,
+      });
+      closeExec(ws, state, 1008, 'Console session belongs to another user');
+      return;
+    }
   }
 
   state.execId = execId;

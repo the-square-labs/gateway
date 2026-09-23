@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { LicenseModuleService } from './license-module.service.js';
 
 function fixture(state: 'community' | 'ready' | 'unavailable' = 'community') {
@@ -12,6 +13,9 @@ function fixture(state: 'community' | 'ready' | 'unavailable' = 'community') {
   const artifact = { imageRef: 'signed-current-image' };
   const updates = {
     getCurrentVersion: () => 'v3.0.0-rc.1',
+    isGatewayUpdateInProgress: vi.fn(() => false),
+    assertGatewayUpdateAllowed: vi.fn(async () => undefined),
+    acknowledgeGatewayUpdateFailure: vi.fn(async () => false),
     prepareGatewayUpdate: vi.fn(async () => {
       calls.push('manifest');
       return artifact;
@@ -73,6 +77,51 @@ describe('paid module activation', () => {
     expect(f.jobs).toHaveLength(0);
     await expect(f.service.ensureAvailable()).resolves.toEqual({ restarting: true });
     expect(f.jobs).toHaveLength(1);
+  });
+
+  it('refuses activation while a Gateway update runs, without touching the update screen', async () => {
+    const f = fixture();
+    f.updates.isGatewayUpdateInProgress.mockReturnValue(true);
+
+    await expect(f.service.ensureAvailable()).rejects.toMatchObject({ statusCode: 409, code: 'UPDATE_IN_PROGRESS' });
+    expect(f.license.authorizeCommercialUpdate).not.toHaveBeenCalled();
+    expect(f.updates.prepareGatewayUpdate).not.toHaveBeenCalled();
+    expect(f.events.publish).not.toHaveBeenCalled();
+    expect(f.jobs).toHaveLength(0);
+
+    // Retry works once the update has finished.
+    f.updates.isGatewayUpdateInProgress.mockReturnValue(false);
+    await expect(f.service.ensureAvailable()).resolves.toEqual({ restarting: true });
+  });
+
+  it('refuses activation while a Relay Pool update runs', async () => {
+    const f = fixture();
+    f.updates.assertGatewayUpdateAllowed.mockRejectedValueOnce(
+      new AppError(409, 'RELAY_UPDATE_IN_PROGRESS', 'A Relay Pool update is in progress')
+    );
+
+    await expect(f.service.ensureAvailable()).rejects.toMatchObject({ code: 'RELAY_UPDATE_IN_PROGRESS' });
+    expect(f.events.publish).not.toHaveBeenCalled();
+    expect(f.jobs).toHaveLength(0);
+  });
+
+  it('never tells browsers an update ended when another update won the race', async () => {
+    const f = fixture();
+    f.updates.performUpdate.mockRejectedValueOnce(
+      new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress')
+    );
+    await f.service.ensureAvailable();
+    f.jobs[0]();
+
+    await vi.waitFor(() => expect(f.updates.performUpdate).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(f.events.publish).not.toHaveBeenCalledWith(
+      'system.update.changed',
+      expect.objectContaining({ updating: false })
+    );
+    // The activation can be retried after the running update.
+    await f.service.ensureAvailable();
+    expect(f.jobs).toHaveLength(2);
   });
 
   it('clears failed preparation for retry when private file verification or staging fails', async () => {

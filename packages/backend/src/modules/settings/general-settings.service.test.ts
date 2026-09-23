@@ -1,6 +1,57 @@
 import { describe, expect, it, vi } from 'vitest';
 import { GeneralSettingsService, normalizePublicUrl, normalizeShutdownSettings } from './general-settings.service.js';
 
+/** Runs the transaction callback on the same mock; the fake has no real lock. */
+function transactional<T extends object>(db: T) {
+  const execute = vi.fn().mockResolvedValue(undefined);
+  const transactionDb = Object.assign(db, { execute });
+  return Object.assign(transactionDb, {
+    transaction: vi.fn(async (write: (tx: typeof transactionDb) => Promise<unknown>) => write(transactionDb)),
+  });
+}
+
+/** A settings row that concurrent transactions read and write, serialized like an advisory lock. */
+function lockedSettingsStore(initial: Record<string, unknown>) {
+  let stored: unknown = initial;
+  let lock: Promise<void> = Promise.resolve();
+  const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+  const db = {
+    execute: vi.fn().mockResolvedValue(undefined),
+    select: vi.fn(() => ({
+      from: () => ({
+        where: () => ({
+          limit: async () => {
+            await tick();
+            return [{ value: structuredClone(stored) }];
+          },
+        }),
+      }),
+    })),
+    insert: vi.fn(() => ({
+      values: (row: { value: unknown }) => ({
+        onConflictDoUpdate: async () => {
+          await tick();
+          stored = structuredClone(row.value);
+        },
+      }),
+    })),
+    transaction: vi.fn(async (write: (tx: unknown) => Promise<unknown>) => {
+      const previous = lock;
+      let release!: () => void;
+      lock = new Promise((resolve) => {
+        release = resolve;
+      });
+      await previous;
+      try {
+        return await write(db);
+      } finally {
+        release();
+      }
+    }),
+  };
+  return { db, stored: () => stored as Record<string, any> };
+}
+
 describe('normalizePublicUrl', () => {
   it('stores only a canonical http(s) origin', () => {
     expect(normalizePublicUrl(' HTTPS://Gateway.Example.com:443/ ')).toBe('https://gateway.example.com');
@@ -26,7 +77,7 @@ describe('GeneralSettingsService feature settings', () => {
       })),
       insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })) })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
     expect((await service.getConfig()).autoAssignCreatedResourcePermissions).toBe(true);
     expect(
       (await service.updateConfig({ autoAssignCreatedResourcePermissions: false })).autoAssignCreatedResourcePermissions
@@ -40,7 +91,7 @@ describe('GeneralSettingsService feature settings', () => {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
       insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     await expect(service.getConfig()).resolves.toMatchObject({ updateChannel: 'stable' });
     await expect(service.updateConfig({ updateChannel: 'preview' })).resolves.toMatchObject({
@@ -53,7 +104,7 @@ describe('GeneralSettingsService feature settings', () => {
     const db = {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     expect(await service.getConfig()).not.toHaveProperty('gatewayPublicIps');
   });
@@ -65,7 +116,7 @@ describe('GeneralSettingsService feature settings', () => {
       select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit })) })) })),
       insert: vi.fn(() => ({ values: vi.fn(() => ({ onConflictDoUpdate })) })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     expect((await service.getConfig()).relayGrantTtlHours).toBe(4);
     expect((await service.getConfig()).hideExternalBranding).toBe(false);
@@ -97,7 +148,7 @@ describe('GeneralSettingsService feature settings', () => {
         values: vi.fn(() => ({ onConflictDoUpdate })),
       })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     expect((await service.getConfig()).features.siemEnabled).toBe(true);
     expect((await service.getConfig()).features.inferenceEnabled).toBe(false);
@@ -131,7 +182,7 @@ describe('GeneralSettingsService feature settings', () => {
         values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
       })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
     const fallback = vi.fn().mockResolvedValue(undefined);
     service.setInferenceDisabledHandler(fallback);
 
@@ -153,7 +204,7 @@ describe('GeneralSettingsService feature settings', () => {
       })),
     };
     const eventBus = { publish: vi.fn() };
-    const service = new GeneralSettingsService(db as never, undefined, eventBus as never);
+    const service = new GeneralSettingsService(transactional(db) as never, undefined, eventBus as never);
 
     await service.updateConfig({ features: { inferenceEnabled: true } });
 
@@ -171,7 +222,7 @@ describe('GeneralSettingsService feature settings', () => {
         values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
       })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     expect((await service.getConfig()).relay).toMatchObject({
       assignmentSpread: { mode: 'fixed', count: 2 },
@@ -194,6 +245,61 @@ describe('GeneralSettingsService feature settings', () => {
   });
 });
 
+describe('GeneralSettingsService concurrent writes', () => {
+  it('keeps both fields when two saves run at the same time', async () => {
+    const store = lockedSettingsStore({});
+    const service = new GeneralSettingsService(store.db as never);
+
+    await Promise.all([
+      service.updateConfig({ hideExternalBranding: true }),
+      service.updateConfig({ features: { siemEnabled: false } }),
+    ]);
+
+    expect(store.stored()).toMatchObject({ hideExternalBranding: true, features: { siemEnabled: false } });
+    expect(store.db.execute).toHaveBeenCalledTimes(2);
+    expect(await service.getConfig()).toMatchObject({
+      hideExternalBranding: true,
+      features: { siemEnabled: false },
+    });
+  });
+
+  it('merges into the stored row, not a cached copy another writer replaced', async () => {
+    const store = lockedSettingsStore({});
+    const admin = new GeneralSettingsService(store.db as never);
+    // The license reconciler and a CLI run their own writes against the same row.
+    const reconciler = new GeneralSettingsService(store.db as never);
+    expect((await admin.getConfig()).features.pkiEnabled).toBe(true);
+
+    await reconciler.updateConfig({ features: { pkiEnabled: false } });
+    await admin.updateConfig({ hideExternalBranding: true });
+
+    expect(store.stored()).toMatchObject({ hideExternalBranding: true, features: { pkiEnabled: false } });
+  });
+
+  it('restores only the requested fields, and only while they hold the value that was written', async () => {
+    const store = lockedSettingsStore({ publicUrl: 'https://old.example.com' });
+    const service = new GeneralSettingsService(store.db as never);
+    const previous = await service.getConfig();
+    const written = await service.updateConfig({
+      publicUrl: 'https://new.example.com',
+      gatewayGrpcPublicTarget: 'grpc.new.example.com',
+    });
+    // Someone else changes an unrelated field and the gRPC target meanwhile.
+    await new GeneralSettingsService(store.db as never).updateConfig({
+      hideExternalBranding: true,
+      gatewayGrpcPublicTarget: 'grpc.other.example.com',
+    });
+
+    await service.restoreFields(previous, ['publicUrl', 'gatewayGrpcPublicTarget'], { ifUnchangedFrom: written });
+
+    expect(store.stored()).toMatchObject({
+      publicUrl: 'https://old.example.com',
+      gatewayGrpcPublicTarget: 'grpc.other.example.com',
+      hideExternalBranding: true,
+    });
+  });
+});
+
 describe('graceful shutdown settings', () => {
   it('backfills defaults and merges a complete shutdown update', async () => {
     const limit = vi.fn().mockResolvedValue([{ value: {} }]);
@@ -203,7 +309,7 @@ describe('graceful shutdown settings', () => {
         values: vi.fn(() => ({ onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) })),
       })),
     };
-    const service = new GeneralSettingsService(db as never);
+    const service = new GeneralSettingsService(transactional(db) as never);
 
     expect((await service.getConfig()).shutdown).toEqual({
       userRequestDrainSeconds: 30,

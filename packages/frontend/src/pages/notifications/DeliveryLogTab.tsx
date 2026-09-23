@@ -196,6 +196,8 @@ export function DeliveryLogTab({
         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
       ) : s === "failed" ? (
         <XCircle className="h-4 w-4 text-red-500" />
+      ) : s === "pending" ? (
+        <Clock className="h-4 w-4 text-muted-foreground" aria-label="Pending" />
       ) : (
         <Clock className="h-4 w-4 text-warning" />
       );
@@ -250,6 +252,7 @@ export function DeliveryLogTab({
               <SelectItem value="success">Success</SelectItem>
               <SelectItem value="failed">Failed</SelectItem>
               <SelectItem value="retrying">Retrying</SelectItem>
+              <SelectItem value="pending">Pending</SelectItem>
             </SelectContent>
           </Select>
         }

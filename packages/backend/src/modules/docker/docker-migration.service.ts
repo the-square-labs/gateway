@@ -5,7 +5,11 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { DockerManagementService } from './docker.service.js';
-import type { DockerMigrationCreateInput, DockerMigrationPreflightInput } from './docker-migration.schemas.js';
+import type {
+  DockerMigrationCreateInput,
+  DockerMigrationPreflightInput,
+  DockerMigrationResolveInput,
+} from './docker-migration.schemas.js';
 import type { DockerMigrationCoordinator } from './docker-migration-coordinator.js';
 import type { DockerMigrationExecutor } from './docker-migration-executor.js';
 import type { DockerMigrationPreflightService } from './docker-migration-preflight.js';
@@ -239,6 +243,37 @@ export class DockerMigrationService {
   }
   async retryCleanup(
     _id: string,
+    _userId: string,
+    _scopes: string[]
+  ): Promise<{
+    id: string;
+    resourceType: import('@/db/schema/docker-migrations.js').DockerMigrationResourceType;
+    resourceName: string;
+    deploymentId: string | null;
+    sourceNodeId: string;
+    targetNodeId: string;
+    targetNodeSlug: string | null;
+    targetResourceId: string | null;
+    keepSource: boolean;
+    sourceState: string;
+    status: DockerMigrationStatus;
+    phase: DockerMigrationPhase;
+    progress: import('@/db/schema/docker-migrations.js').DockerMigrationProgress;
+    verification: Record<string, unknown>;
+    errorCode: string | null;
+    errorMessage: string | null;
+    cancellationRequestedAt: Date | null;
+    cutoverAt: Date | null;
+    createdAt: Date;
+    startedAt: Date | null;
+    updatedAt: Date;
+    completedAt: Date | null;
+  }> {
+    return commercialModuleUnavailable();
+  }
+  async resolve(
+    _id: string,
+    _input: DockerMigrationResolveInput,
     _userId: string,
     _scopes: string[]
   ): Promise<{

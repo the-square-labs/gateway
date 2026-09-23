@@ -1,5 +1,6 @@
 import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -13,6 +14,38 @@ import type {
 } from './resource-folder.schemas.js';
 
 const MAX_DEPTH = 2;
+
+/** Caller permissions for moving a whole folder subtree. */
+export interface FolderMoveAccess {
+  scopes: readonly string[];
+  /** Scope that authorizes changing where a resource lives, e.g. `databases:edit`. */
+  editScope: string;
+}
+
+/**
+ * A folder move re-parents every resource inside the folder and its
+ * subfolders. Folder-scoped grants on the destination (for example
+ * `databases:credentials:reveal:folder/F`) then extend to all of them, so the
+ * caller must be allowed to edit every moved resource and to place resources
+ * in the destination, exactly as for moving the resources one by one.
+ */
+export function assertFolderMoveAccess(
+  access: FolderMoveAccess,
+  resourceIds: readonly string[],
+  destinationFolderId: string | null
+): void {
+  const scopes = [...access.scopes];
+  if (!resourceIds.every((resourceId) => hasScopeForResource(scopes, access.editScope, resourceId))) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      `Missing ${access.editScope} for one or more resources inside the moved folder`
+    );
+  }
+  if (!hasScopeForCreation(scopes, access.editScope, destinationFolderId)) {
+    throw new AppError(403, 'FORBIDDEN', `Missing ${access.editScope} for the move destination`);
+  }
+}
 
 type FolderRow = {
   id: string;
@@ -141,14 +174,14 @@ export class FolderedResourceService {
     return folder;
   }
 
-  async moveFolder(id: string, input: MoveResourceFolderInput, userId: string) {
+  async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
     const folder = await this.getFolderOrThrow(id);
     if (folder.parentId === input.parentId) return folder;
 
+    const descendants = await this.getDescendantIds(id);
     let newDepth = 0;
     if (input.parentId) {
       const parent = await this.getFolderOrThrow(input.parentId);
-      const descendants = await this.getDescendantIds(id);
       if (descendants.includes(input.parentId)) {
         throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
       }
@@ -161,6 +194,20 @@ export class FolderedResourceService {
         400,
         'MAX_DEPTH_EXCEEDED',
         `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
+      );
+    }
+
+    if (access) {
+      const movedResources = (await this.db
+        .select({ id: this.config.resourceTable.id })
+        .from(this.config.resourceTable)
+        .where(
+          and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, [id, ...descendants]))
+        )) as Array<{ id: string }>;
+      assertFolderMoveAccess(
+        access,
+        movedResources.map((resource) => resource.id),
+        input.parentId
       );
     }
 

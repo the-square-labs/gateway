@@ -74,6 +74,244 @@ func validateClickHousePrincipalInput(input clickHousePrincipalCommand) error {
 	return nil
 }
 
+// postgresQueryPrincipalCommand provisions the non-superuser, read-only role
+// the control plane runs read-scoped interactive queries as.
+type postgresQueryPrincipalCommand struct {
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	DatabaseName  string `json:"databaseName"`
+	OwnerUsername string `json:"ownerUsername"`
+	OwnerPassword string `json:"ownerPassword"`
+}
+
+func validatePostgresQueryPrincipalInput(input postgresQueryPrincipalCommand) error {
+	if !managedDatabaseName.MatchString(input.Username) || !managedDatabaseName.MatchString(input.OwnerUsername) || !managedDatabaseName.MatchString(input.DatabaseName) {
+		return errors.New("PostgreSQL query principal names must be safe SQL identifiers")
+	}
+	// Applying the reader attributes to the owner would demote it, and pg_
+	// names are reserved for PostgreSQL's predefined roles.
+	if input.Username == input.OwnerUsername || strings.HasPrefix(strings.ToLower(input.Username), "pg_") {
+		return errors.New("PostgreSQL query principal must be a dedicated role")
+	}
+	if len(input.Password) < 16 || len(input.Password) > 512 || len(input.OwnerPassword) < 16 || len(input.OwnerPassword) > 512 {
+		return errors.New("PostgreSQL query principal passwords must be between 16 and 512 characters")
+	}
+	return nil
+}
+
+// applyPostgresQueryPrincipal converges the reader as the owner, then proves
+// it can log in and holds no write or administrative attribute. Passwords
+// travel only through stdin and the exec environment, never process args.
+func (m *managedDatabaseManager) applyPostgresQueryPrincipal(ctx context.Context, record managedDatabaseRecord, input postgresQueryPrincipalCommand) error {
+	if record.Type != "postgres" {
+		return errors.New("query principals are supported only for PostgreSQL")
+	}
+	if err := m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		postgresQueryPrincipalApplyCommand(input),
+		postgresQueryPrincipalApplySQL(input),
+		[]string{"PGPASSWORD=" + input.OwnerPassword},
+	); err != nil {
+		return err
+	}
+	return m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		postgresQueryPrincipalProbeCommand(input),
+		"",
+		[]string{"PGPASSWORD=" + input.Password},
+	)
+}
+
+func postgresQueryPrincipalApplyCommand(input postgresQueryPrincipalCommand) []string {
+	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", input.OwnerUsername, "-d", input.DatabaseName}
+}
+
+// postgresQueryPrincipalProbeSQL fails with a division by zero when the
+// session is not read-only by default or the role can write or administer.
+// The divisor depends on row data, so PostgreSQL cannot fold it at plan time.
+const postgresQueryPrincipalProbeSQL = `SELECT 1 / (CASE WHEN r.rolsuper OR r.rolcreaterole OR r.rolcreatedb OR r.rolreplication OR current_setting('transaction_read_only') <> 'on' THEN 0 ELSE 1 END) FROM pg_roles r WHERE r.rolname = current_user`
+
+func postgresQueryPrincipalProbeCommand(input postgresQueryPrincipalCommand) []string {
+	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-U", input.Username, "-d", input.DatabaseName, "-tAc", postgresQueryPrincipalProbeSQL}
+}
+
+// postgresQueryPrincipalApplySQL creates or updates the reader. BYPASSRLS
+// keeps its reads equal to the superuser path it replaces and grants no write
+// privilege. PostgreSQL 14+ grants pg_read_all_data; older servers get
+// SELECT on the tables and sequences that exist now, so re-apply after
+// schema changes there.
+func postgresQueryPrincipalApplySQL(input postgresQueryPrincipalCommand) string {
+	body := fmt.Sprintf(`
+DECLARE
+  reader text := %s;
+  reader_password text := %s;
+  database_name text := %s;
+  schema_name name;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = reader AND rolsuper) THEN
+    RAISE EXCEPTION 'query principal %% is an existing superuser', reader;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = reader) THEN
+    EXECUTE format('CREATE ROLE %%I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS PASSWORD %%L', reader, reader_password);
+  ELSE
+    EXECUTE format('ALTER ROLE %%I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS PASSWORD %%L', reader, reader_password);
+  END IF;
+  EXECUTE format('ALTER ROLE %%I SET default_transaction_read_only = on', reader);
+  EXECUTE format('GRANT CONNECT ON DATABASE %%I TO %%I', database_name, reader);
+  IF current_setting('server_version_num')::int >= 140000 THEN
+    EXECUTE format('GRANT pg_read_all_data TO %%I', reader);
+  ELSE
+    FOR schema_name IN
+      SELECT nspname FROM pg_namespace WHERE nspname !~ '^pg_' AND nspname <> 'information_schema'
+    LOOP
+      EXECUTE format('GRANT USAGE ON SCHEMA %%I TO %%I', schema_name, reader);
+      EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA %%I TO %%I', schema_name, reader);
+      EXECUTE format('GRANT SELECT ON ALL SEQUENCES IN SCHEMA %%I TO %%I', schema_name, reader);
+    END LOOP;
+  END IF;
+END
+`,
+		quoteSQLLiteral(input.Username),
+		quoteSQLLiteral(input.Password),
+		quoteSQLLiteral(input.DatabaseName),
+	)
+	return postgresDollarQuotedDO(body)
+}
+
+// postgresDollarQuotedDO wraps a PL/pgSQL body. Passwords are the only
+// free-form values in these bodies, so pick a dollar-quote tag the body cannot
+// contain; a password can then never close the block early.
+func postgresDollarQuotedDO(body string) string {
+	tag := "$gateway$"
+	for suffix := 0; strings.Contains(body, tag); suffix++ {
+		tag = fmt.Sprintf("$gateway%d$", suffix)
+	}
+	return "RESET ROLE;\nDO " + tag + body + tag + ";\n"
+}
+
+// postgresQueryWriterCommand provisions the non-superuser role the control
+// plane runs write-scoped interactive queries as. It reaches the application's
+// tables and sequences only through membership in the application role.
+type postgresQueryWriterCommand struct {
+	Username                 string `json:"username"`
+	Password                 string `json:"password"`
+	DatabaseName             string `json:"databaseName"`
+	ApplicationPrincipalName string `json:"applicationPrincipalName"`
+	OwnerUsername            string `json:"ownerUsername"`
+	OwnerPassword            string `json:"ownerPassword"`
+}
+
+func validatePostgresQueryWriterInput(input postgresQueryWriterCommand) error {
+	if !managedDatabaseName.MatchString(input.Username) ||
+		!managedDatabaseName.MatchString(input.ApplicationPrincipalName) ||
+		!managedDatabaseName.MatchString(input.OwnerUsername) ||
+		!managedDatabaseName.MatchString(input.DatabaseName) {
+		return errors.New("PostgreSQL query writer names must be safe SQL identifiers")
+	}
+	// The writer must be its own role, and it must never join the control
+	// owner (a superuser) or a predefined pg_ role.
+	if input.Username == input.OwnerUsername || input.Username == input.ApplicationPrincipalName ||
+		input.ApplicationPrincipalName == input.OwnerUsername ||
+		strings.HasPrefix(strings.ToLower(input.Username), "pg_") ||
+		strings.HasPrefix(strings.ToLower(input.ApplicationPrincipalName), "pg_") {
+		return errors.New("PostgreSQL query writer must be a dedicated role joined only to the application role")
+	}
+	if len(input.Password) < 16 || len(input.Password) > 512 || len(input.OwnerPassword) < 16 || len(input.OwnerPassword) > 512 {
+		return errors.New("PostgreSQL query writer passwords must be between 16 and 512 characters")
+	}
+	return nil
+}
+
+// applyPostgresQueryWriter converges the writer as the owner, then proves it
+// can log in, holds the application role's privileges and can reach no
+// administrative attribute. Passwords travel only through stdin and the exec
+// environment, never process args.
+func (m *managedDatabaseManager) applyPostgresQueryWriter(ctx context.Context, record managedDatabaseRecord, input postgresQueryWriterCommand) error {
+	if record.Type != "postgres" {
+		return errors.New("query principals are supported only for PostgreSQL")
+	}
+	if err := m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		postgresQueryWriterApplyCommand(input),
+		postgresQueryWriterApplySQL(input),
+		[]string{"PGPASSWORD=" + input.OwnerPassword},
+	); err != nil {
+		return err
+	}
+	return m.runManagedDatabaseExec(
+		ctx,
+		record.ContainerID,
+		postgresQueryWriterProbeCommand(input),
+		"",
+		[]string{"PGPASSWORD=" + input.Password},
+	)
+}
+
+func postgresQueryWriterApplyCommand(input postgresQueryWriterCommand) []string {
+	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", input.OwnerUsername, "-d", input.DatabaseName}
+}
+
+// postgresAdministrativeRoleSQL matches a role that is itself administrative
+// or is a predefined role that reads or writes server files or runs programs.
+const postgresAdministrativeRoleSQL = `(s.rolsuper OR s.rolcreaterole OR s.rolcreatedb OR s.rolreplication OR s.rolbypassrls OR s.rolname IN ('pg_read_server_files', 'pg_write_server_files', 'pg_execute_server_program'))`
+
+// postgresQueryWriterProbeSQL fails with a division by zero when the session
+// role, or any role it can reach through membership (SET ROLE included), is
+// administrative, or when the application role's privileges are not in
+// effect. The divisor depends on row data, so it cannot be folded at plan time.
+func postgresQueryWriterProbeSQL(applicationPrincipalName string) string {
+	return `SELECT 1 / (CASE WHEN NOT pg_has_role(r.oid, ` + quoteSQLLiteral(applicationPrincipalName) + `::name, 'USAGE') OR EXISTS (SELECT 1 FROM pg_roles s WHERE ` + postgresAdministrativeRoleSQL + ` AND pg_has_role(r.oid, s.oid, 'MEMBER')) THEN 0 ELSE 1 END) FROM pg_roles r WHERE r.rolname = session_user`
+}
+
+func postgresQueryWriterProbeCommand(input postgresQueryWriterCommand) []string {
+	return []string{"psql", "-v", "ON_ERROR_STOP=1", "-h", "127.0.0.1", "-U", input.Username, "-d", input.DatabaseName, "-tAc", postgresQueryWriterProbeSQL(input.ApplicationPrincipalName)}
+}
+
+// postgresQueryWriterApplySQL creates or updates the writer and grants it the
+// application role with INHERIT, so it reads and writes the application's
+// objects exactly as the application does while running under its own session
+// user (which keeps pg_cancel_backend working for its own queries). The
+// application role is refused when membership would hand over superuser,
+// role, database or replication administration, BYPASSRLS, or server file and
+// program access.
+func postgresQueryWriterApplySQL(input postgresQueryWriterCommand) string {
+	body := fmt.Sprintf(`
+DECLARE
+  writer text := %s;
+  writer_password text := %s;
+  application_owner text := %s;
+  database_name text := %s;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = application_owner) THEN
+    RAISE EXCEPTION 'application role %% does not exist', application_owner;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles s WHERE %s AND pg_has_role(application_owner::name, s.oid, 'MEMBER')) THEN
+    RAISE EXCEPTION 'application role %% can reach administrative privileges', application_owner;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = writer AND rolsuper) THEN
+    RAISE EXCEPTION 'query writer %% is an existing superuser', writer;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = writer) THEN
+    EXECUTE format('CREATE ROLE %%I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %%L', writer, writer_password);
+  ELSE
+    EXECUTE format('ALTER ROLE %%I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %%L', writer, writer_password);
+  END IF;
+  EXECUTE format('GRANT %%I TO %%I', application_owner, writer);
+  EXECUTE format('GRANT CONNECT ON DATABASE %%I TO %%I', database_name, writer);
+END
+`,
+		quoteSQLLiteral(input.Username),
+		quoteSQLLiteral(input.Password),
+		quoteSQLLiteral(input.ApplicationPrincipalName),
+		quoteSQLLiteral(input.DatabaseName),
+		postgresAdministrativeRoleSQL,
+	)
+	return postgresDollarQuotedDO(body)
+}
+
 func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {
 	var command []string
 	var stdin string
@@ -83,8 +321,9 @@ func (m *managedDatabaseManager) createBindingPrincipal(ctx context.Context, rec
 		stdin = postgresBindingCreateSQL(input)
 		command = []string{"psql", "-v", "ON_ERROR_STOP=1", "-U", input.OwnerUsername, "-d", input.DatabaseName}
 	case "redis":
-		// Redis accepts the ACL password only as an argument. The owner password
-		// stays in the exec environment, not in a process argument. Binding users
+		// Redis accepts the ACL password only as a command argument; the script
+		// feeds it to redis-cli through stdin, and the owner password stays in
+		// the exec environment, so neither is a process argument. Binding users
 		// may use normal data commands, but must never administer the server or
 		// mutate ACLs (which would let one binding take over another).
 		command = []string{"sh", "-ec", redisBindingACLCommand()}
@@ -568,9 +807,15 @@ func clickHouseBindingPrincipalV2ApplySQL(input managedDatabasePrincipalV2Comman
 	)
 }
 
+// The Redis ACL scripts pass the ">password" rule as redis-cli's last argument
+// through stdin (-x) from the printf shell builtin, so the password never
+// appears in a process argument list. ACL rules apply left to right, so
+// setting the password last is equivalent. printf adds no newline, which -x
+// would otherwise keep as part of the password.
+
 func redisBindingPrincipalV2ApplyCommand() string {
 	return fmt.Sprintf(`redis_major="$(redis-cli --no-auth-warning --user default INFO server 2>/dev/null | sed -n 's/^redis_version:\([0-9][0-9]*\)\..*/\1/p')"
-set -- redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_PRINCIPAL" reset on ">$GATEWAY_DB_PRINCIPAL_PASSWORD"
+set -- redis-cli --no-auth-warning --user default -x ACL SETUSER "$GATEWAY_DB_PRINCIPAL" reset on
 for acl_rule in %s; do
   set -- "$@" "$acl_rule"
 done
@@ -581,7 +826,7 @@ case "$redis_major" in
     done
     ;;
 esac
-result="$("$@" 2>&1 | tr -d '\r\n')"
+result="$(printf '%%s' ">$GATEWAY_DB_PRINCIPAL_PASSWORD" | "$@" 2>&1 | tr -d '\r\n')"
 [ "$result" = "OK" ] || { echo "$result" >&2; exit 1; }
 saved="$(redis-cli --no-auth-warning --user default ACL SAVE 2>&1 | tr -d '\r\n')"
 [ "$saved" = "OK" ] || { echo "$saved" >&2; exit 1; }`, redisBindingACLShellWords(redisBindingACLBaseRules()), redisBindingACLShellWords(redisBindingACLModernRules()))
@@ -628,7 +873,7 @@ if [ "$pending_probe" = "PONG" ]; then
 else
   export REDISCLI_AUTH="$GATEWAY_DB_CURRENT_OWNER_PASSWORD"
 fi
-rotated="$(redis-cli --no-auth-warning --user default ACL SETUSER default reset on ">$GATEWAY_DB_PENDING_OWNER_PASSWORD" '~*' '&*' '+@all' 2>&1 | tr -d '\r\n')"
+rotated="$(printf '%s' ">$GATEWAY_DB_PENDING_OWNER_PASSWORD" | redis-cli --no-auth-warning --user default -x ACL SETUSER default reset on '~*' '&*' '+@all' 2>&1 | tr -d '\r\n')"
 [ "$rotated" = "OK" ] || { echo "$rotated" >&2; exit 1; }
 export REDISCLI_AUTH="$GATEWAY_DB_PENDING_OWNER_PASSWORD"
 saved="$(redis-cli --no-auth-warning --user default ACL SAVE 2>&1 | tr -d '\r\n')"
@@ -655,7 +900,7 @@ func redisBindingACLShellWords(rules []string) string {
 
 func redisBindingACLCommand() string {
 	return fmt.Sprintf(`redis_major="$(redis-cli --no-auth-warning --user default INFO server 2>/dev/null | sed -n 's/^redis_version:\([0-9][0-9]*\)\..*/\1/p')"
-set -- redis-cli --no-auth-warning --user default ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on ">$GATEWAY_DB_BINDING_PASSWORD"
+set -- redis-cli --no-auth-warning --user default -x ACL SETUSER "$GATEWAY_DB_BINDING_USER" reset on
 for acl_rule in %s; do
   set -- "$@" "$acl_rule"
 done
@@ -666,7 +911,7 @@ case "$redis_major" in
     done
     ;;
 esac
-"$@"`, redisBindingACLShellWords(redisBindingACLBaseRules()), redisBindingACLShellWords(redisBindingACLModernRules()))
+printf '%%s' ">$GATEWAY_DB_BINDING_PASSWORD" | "$@"`, redisBindingACLShellWords(redisBindingACLBaseRules()), redisBindingACLShellWords(redisBindingACLModernRules()))
 }
 
 func (m *managedDatabaseManager) removeBindingPrincipal(ctx context.Context, record managedDatabaseRecord, input managedDatabaseBindingCommand) error {

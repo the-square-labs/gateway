@@ -255,6 +255,21 @@ export class RelayControlClient {
     await this.unary('BootstrapPolicyTrust', { keyId, publicKey, publicKeyFingerprint }, timeoutMs);
   }
 
+  /** Local combined relay only: replaces its pinned policy trust with one key. Remote relays refuse it. */
+  async resetLocalPolicyTrust(
+    keyId: string,
+    publicKey: Buffer,
+    publicKeyFingerprint: string,
+    timeoutMs = 5_000
+  ): Promise<{ replacedKeyIds: string[] }> {
+    const response = (await this.unary(
+      'ResetLocalPolicyTrust',
+      { keyId, publicKey, publicKeyFingerprint },
+      timeoutMs
+    )) as { replacedKeyIds?: string[] };
+    return { replacedKeyIds: response.replacedKeyIds ?? [] };
+  }
+
   async reloadIdentity(timeoutMs = 2_000): Promise<boolean> {
     if (!this.pendingIdentityReload) {
       const next = this.createClients();

@@ -218,6 +218,11 @@ message NetworkInterface {
 message GatewayCommand {
   reserved 61, 67;
   string command_id = 1;
+  // Optional absolute dispatch deadline in Unix milliseconds. Zero means no
+  // deadline (older gateways). A daemon rejects a command that has already
+  // expired when it is received instead of executing work the gateway no
+  // longer waits for; older daemons ignore the field.
+  int64 expires_at_unix_ms = 72;
   oneof payload {
     ApplyConfigCommand apply_config = 2;
     RemoveConfigCommand remove_config = 3;

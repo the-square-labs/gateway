@@ -81,7 +81,7 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 		Liveness:               true, Readiness: ready, Reason: reason,
 		PoolId: current.PoolID, RelayInstanceId: current.RelayInstanceID, Mode: current.Mode,
 		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: []string{policy.PoolCapability, "signed_policy_envelope_v1"},
-		Draining: runtime.Draining,
+		Draining:     runtime.Draining,
 		PolicyKeyIds: s.store.PolicyKeyIDs(),
 		AssignmentTunnels: func() []*relayv1.AssignmentTunnelCount {
 			result := make([]*relayv1.AssignmentTunnelCount, 0, len(runtime.AssignmentTunnels))
@@ -150,6 +150,23 @@ func (s *Service) BootstrapPolicyTrust(ctx context.Context, request *relayv1.Boo
 	}
 	return &relayv1.BootstrapPolicyTrustResponse{
 		KeyId: request.KeyId, PublicKeyFingerprint: request.PublicKeyFingerprint, Unchanged: unchanged,
+	}, nil
+}
+
+// ResetLocalPolicyTrust lets the co-located Gateway re-pin policy trust on the
+// local combined relay, for example after relay.db was restored from a backup
+// older than every key Gateway can still sign with. The store refuses it in
+// remote mode, where trust changes only through signed rotation.
+func (s *Service) ResetLocalPolicyTrust(ctx context.Context, request *relayv1.ResetLocalPolicyTrustRequest) (*relayv1.ResetLocalPolicyTrustResponse, error) {
+	if err := s.authorize(ctx); err != nil {
+		return nil, err
+	}
+	replaced, err := s.store.ResetLocalPolicyTrust(request.KeyId, request.PublicKey, request.PublicKeyFingerprint)
+	if err != nil {
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
+	}
+	return &relayv1.ResetLocalPolicyTrustResponse{
+		KeyId: request.KeyId, PublicKeyFingerprint: request.PublicKeyFingerprint, ReplacedKeyIds: replaced,
 	}, nil
 }
 

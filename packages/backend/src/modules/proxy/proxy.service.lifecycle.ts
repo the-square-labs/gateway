@@ -5,6 +5,7 @@ import { proxyHosts } from '@/db/schema/index.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { stripProxyHealthHistory } from './proxy.service-helpers.js';
+import { withProxyHostLock } from './proxy-host-lock.js';
 import type { CreateProxyAdditionalSecureLinkInput } from './proxy-secure-link.service.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
@@ -19,6 +20,10 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
   protected secureLinkRuntimeCollectionEpoch: object = {};
 
   async deleteProxyHost(id: string, userId: string, options: { abandonOfflineNode?: boolean } = {}) {
+    return withProxyHostLock(id, () => this.deleteProxyHostLocked(id, userId, options));
+  }
+
+  private async deleteProxyHostLocked(id: string, userId: string, options: { abandonOfflineNode?: boolean }) {
     // 1. Get existing host
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.id, id),
@@ -73,6 +78,7 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     }
 
     this.forgetSecureLinkRuntime(id);
+    this.hostConfigEpochs.delete(id);
     for (const binding of additionalLinks) this.forgetSecureLinkRuntime(`additional:${binding.id}`);
 
     // 5. Audit log

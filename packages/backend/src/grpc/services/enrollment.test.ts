@@ -26,8 +26,17 @@ xCpoMT/UAaLKU9twJ0mxAqrxb1eHj66tcC/GDTUIlghn5I42QxS2nE+/5/RHHSrc
 oD3IhAwaI3ht9c+zdQt5HFAXSA==
 -----END CERTIFICATE-----`;
 
+function updateResult(rows: any[] = [{ id: nodeId }]) {
+  return Object.assign(Promise.resolve(undefined), { returning: vi.fn(async () => rows) });
+}
+
 function makeDbNode(
-  node: null | { certificateSerial?: string | null; status?: string; hostname?: string },
+  node: null | {
+    certificateSerial?: string | null;
+    pendingCertificateSerial?: string | null;
+    status?: string;
+    hostname?: string;
+  },
   updateSet = vi.fn()
 ) {
   return {
@@ -39,6 +48,9 @@ function makeDbNode(
               ? [
                   {
                     certificateSerial: 'certificateSerial' in node ? node.certificateSerial : 'aa01',
+                    certificateFingerprint: null,
+                    pendingCertificateSerial: node.pendingCertificateSerial ?? null,
+                    pendingCertificateFingerprint: null,
                     hostname: node.hostname ?? 'node-1',
                     status: node.status ?? 'online',
                   },
@@ -52,7 +64,7 @@ function makeDbNode(
       set: vi.fn((value) => {
         updateSet(value);
         return {
-          where: vi.fn(async () => undefined),
+          where: vi.fn(() => updateResult()),
         };
       }),
     })),
@@ -65,7 +77,7 @@ function makeThenableRows(rows: any[]) {
   });
 }
 
-function makeEnrollDb(rows: any[], updateSet = vi.fn()) {
+function makeEnrollDb(rows: any[], updateSet = vi.fn(), boundRows: any[] = [{ id: nodeId }]) {
   return {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -76,7 +88,7 @@ function makeEnrollDb(rows: any[], updateSet = vi.fn()) {
       set: vi.fn((value) => {
         updateSet(value);
         return {
-          where: vi.fn(async () => undefined),
+          where: vi.fn(() => updateResult(boundRows)),
         };
       }),
     })),
@@ -227,7 +239,7 @@ describe('Enroll token lookup', () => {
       update: vi.fn(() => ({
         set: (value: unknown) => {
           updates.push(value);
-          return { where: vi.fn(async () => undefined) };
+          return { where: vi.fn(() => updateResult()) };
         },
       })),
     } as any;
@@ -317,7 +329,7 @@ describe('Enroll token lookup', () => {
         },
       })),
       update: vi.fn(() => ({
-        set: vi.fn(() => ({ where: vi.fn(async () => undefined) })),
+        set: vi.fn(() => ({ where: vi.fn(() => updateResult()) })),
       })),
     } as any;
     const deps = makeDeps(db);
@@ -395,6 +407,51 @@ describe('Enroll token lookup', () => {
     compareSpy.mockRestore();
   });
 
+  it('binds the token only while it is still pending so a concurrent enrollment fails', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    // The conditional UPDATE matched no row: another enrollment consumed it.
+    const deps = makeDeps(makeEnrollDb([makePendingNode(tokenHash, enrollmentToken.selector)], vi.fn(), []));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(makeEnrollCall(enrollmentToken.token), callback);
+
+    expect(callback).toHaveBeenCalledTimes(1);
+    expect(callback).toHaveBeenCalledWith({ code: 16, message: 'Invalid enrollment token' });
+    expect(deps.auditService.log).not.toHaveBeenCalled();
+  });
+
+  it('rejects an expired enrollment token before issuing a certificate', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const pending = {
+      ...makePendingNode(tokenHash, enrollmentToken.selector),
+      enrollmentTokenExpiresAt: new Date(Date.now() - 1000),
+    };
+    const deps = makeDeps(makeEnrollDb([pending]));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(makeEnrollCall(enrollmentToken.token), callback);
+
+    expect(deps.systemCA.issueNodeCert).not.toHaveBeenCalled();
+    expect(callback.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ code: 16 }));
+  });
+
+  it('accepts an enrollment token whose expiry is still in the future', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const pending = {
+      ...makePendingNode(tokenHash, enrollmentToken.selector),
+      enrollmentTokenExpiresAt: new Date(Date.now() + 60_000),
+    };
+    const deps = makeDeps(makeEnrollDb([pending]));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(makeEnrollCall(enrollmentToken.token), callback);
+
+    expect(callback).toHaveBeenCalledWith(null, expect.objectContaining({ nodeId }));
+  });
+
   it('rejects a builder enrollment token presented by a non-docker daemon', async () => {
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
@@ -460,7 +517,7 @@ describe('Enroll token lookup', () => {
 });
 
 describe('RenewCertificate daemon certificate identity', () => {
-  it('renews a certificate when authorized cert CN and serial match DB', async () => {
+  it('stages a renewed certificate as pending when authorized cert CN and serial match DB', async () => {
     const updateSet = vi.fn();
     const deps = makeDeps(makeDbNode({ certificateSerial: 'AA:01' }, updateSet));
     deps.relayPolicy = { refreshNodeIdentity: vi.fn().mockRejectedValue(new Error('relay unavailable')) };
@@ -468,10 +525,16 @@ describe('RenewCertificate daemon certificate identity', () => {
 
     await createEnrollmentHandlers(deps).RenewCertificate(makeCall({ serialNumber: 'aa01' }), callback);
 
-    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'node-1', expect.any(Function));
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'node-1', expect.any(Function), {
+      stage: 'pending',
+    });
+    // The current serial stays authoritative until the daemon registers with
+    // the new certificate, so a lost response cannot lock the node out.
     expect(updateSet).toHaveBeenCalledWith(
-      expect.objectContaining({ certificateSerial: 'new01', certificateExpiresAt: expiresAt })
+      expect.objectContaining({ pendingCertificateSerial: 'new01', pendingCertificateExpiresAt: expiresAt })
     );
+    expect(updateSet).not.toHaveBeenCalledWith(expect.objectContaining({ certificateSerial: expect.anything() }));
+    expect(deps.relayPolicy.refreshNodeIdentity).not.toHaveBeenCalled();
     expect(callback).toHaveBeenCalledWith(
       null,
       expect.objectContaining({
@@ -504,6 +567,30 @@ describe('RenewCertificate daemon certificate identity', () => {
       expect(deps.logStream.end).toHaveBeenCalled();
       expect(deps.logStream.destroy).toHaveBeenCalled();
     });
+  });
+
+  it('accepts a renewal retried with the staged certificate', async () => {
+    const deps = makeDeps(makeDbNode({ certificateSerial: 'aa01', pendingCertificateSerial: 'BB:02' }));
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).RenewCertificate(makeCall({ serialNumber: 'bb02' }), callback);
+
+    expect(deps.systemCA.issueNodeCert).toHaveBeenCalledWith(nodeId, 'node-1', expect.any(Function), {
+      stage: 'pending',
+    });
+    expect(callback).toHaveBeenCalledWith(null, expect.anything());
+  });
+
+  it('fails the renewal when the current certificate changed while staging', async () => {
+    const db = makeDbNode({ certificateSerial: 'aa01' });
+    db.update = vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(() => updateResult([])) })) }));
+    const deps = makeDeps(db);
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).RenewCertificate(makeCall({ serialNumber: 'aa01' }), callback);
+
+    expect(callback.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ code: 13 }));
+    expect(deps.commandStream.end).not.toHaveBeenCalled();
   });
 
   it('rejects renewal when cert serial does not match DB', async () => {

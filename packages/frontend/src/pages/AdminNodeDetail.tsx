@@ -5,6 +5,7 @@ import {
   Camera,
   Database,
   Folder,
+  KeyRound,
   LayoutDashboard,
   ListTodo,
   Minus,
@@ -33,6 +34,7 @@ import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { HostingResizeDialog } from "@/components/nodes/HostingResizeDialog";
+import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { NodeFirewallTab } from "@/components/nodes/NodeFirewallTab";
 import { NodeSnapshotsTab } from "@/components/nodes/NodeSnapshotsTab";
 import { Badge } from "@/components/ui/badge";
@@ -390,6 +392,8 @@ export function AdminNodeDetail({
 
   // Pin dialog
   const [pinOpen, setPinOpen] = useState(false);
+  const [reissueNode, setReissueNode] = useState<Node | null>(null);
+  const clearReissueNode = useCallback(() => setReissueNode(null), []);
   const { isPinnedDashboard, isPinnedSidebar, toggleDashboard, toggleSidebar } =
     usePinnedNodesStore();
   const nodeUpdating = node ? isNodeUpdating(node) : false;
@@ -956,6 +960,13 @@ export function AdminNodeDetail({
             </div>
           </div>
 
+          <NodeEnrollmentDialog
+            open={false}
+            onOpenChange={() => undefined}
+            reissueNode={reissueNode}
+            onReissueHandled={clearReissueNode}
+            onNodeEnrolled={() => void loadNode(true)}
+          />
           <HostingResizeDialog
             resource={resizeContext?.resource ?? null}
             catalog={resizeContext?.catalog}
@@ -997,6 +1008,19 @@ export function AdminNodeDetail({
                         : "Lock new services",
                       onClick: () => handleServiceCreationLock(!node.serviceCreationLocked),
                       disabled: lockSaving || nodeActionsLocked,
+                    },
+                  ]
+                : []),
+              ...(node.status === "pending" &&
+              !hosting &&
+              (hasScope("nodes:create") || hasScope(`nodes:create:${node.id}`))
+                ? [
+                    {
+                      label: "New enrollment token",
+                      icon: <KeyRound className="h-4 w-4" />,
+                      onClick: () => setReissueNode(node),
+                      disabled: reissueNode !== null,
+                      separatorBefore: true,
                     },
                   ]
                 : []),

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { DOCKER_EXEC_PREAUTH_MESSAGE_MAX_BYTES, createDockerExecWSHandlers } from '@/modules/docker/docker-exec.ws.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -63,7 +63,7 @@ function sentMessages(ws: MockWebSocket): Array<Record<string, unknown>> {
 }
 
 async function settleAsyncWork(): Promise<void> {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
 }
 
 function allowScopedAccess(): void {
@@ -103,6 +103,10 @@ function registerServices(options: {
   container.registerInstance(DockerManagementService, docker as never);
   container.registerInstance(DockerAvailabilityService, {
     resolveRuntimeAccessIdentity: vi.fn().mockResolvedValue(null),
+  } as never);
+  // A daemon that isolates console sessions per user (v2.4.5+), so the happy path can attach.
+  container.registerInstance(TOKENS.DrizzleClient, {
+    select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ daemonVersion: 'v2.4.5' }] }) }) }),
   } as never);
   return { dispatch, registry, docker };
 }

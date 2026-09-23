@@ -58,7 +58,9 @@ export function AvailabilityProgress({
       ]
         .filter(Boolean)
         .join(" · ")
-    : fallbackOperation?.progress?.replaceAll("_", " ") || "Operation in progress";
+    : fallbackOperation?.status === "reconciling"
+      ? "Reconciling: the node connection dropped, waiting for it to report its Compose state"
+      : fallbackOperation?.progress?.replaceAll("_", " ") || "Operation in progress";
   return (
     <PanelShell
       className="shrink-0 border-primary/20 bg-primary/5"

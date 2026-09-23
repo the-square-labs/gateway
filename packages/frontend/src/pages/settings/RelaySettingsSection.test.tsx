@@ -6,6 +6,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
 import { buttonVariants } from "@/components/ui/button";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type { AuthProvisioningSettings, DashboardRelaySnapshot } from "@/types";
 import { RelaySettingsSection } from "./RelaySettingsSection";
 
@@ -363,6 +364,65 @@ describe("RelaySettingsSection", () => {
       )
     );
     expect(force).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+  });
+
+  it("lets an admin abandon a paused Relay Pool update after confirming", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: { id: "admin-1", scopes: ["admin:update"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    const paused = {
+      ...relayStatus(),
+      poolId: "system",
+      instances: [],
+      update: { state: "paused", targetVersion: "v2.4.3", error: "relay-2 failed verification" },
+    };
+    vi.spyOn(api, "getRelayStatus")
+      .mockResolvedValueOnce(paused)
+      .mockResolvedValue({ ...paused, update: { ...paused.update, state: "failed" } });
+    const abandon = vi
+      .spyOn(api, "abandonRelayUpdate")
+      .mockResolvedValue({ targetVersion: "v2.4.3" });
+    vi.spyOn(api, "getVersionInfo").mockRejectedValue(new Error("offline"));
+    vi.mocked(confirm).mockResolvedValueOnce(false);
+
+    renderRelaySettings();
+    const button = await screen.findByRole("button", { name: "Abandon update" });
+    await user.click(button);
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Abandon Relay Pool update?", variant: "destructive" })
+    );
+    expect(abandon).not.toHaveBeenCalled();
+
+    await user.click(button);
+    await waitFor(() => expect(abandon).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Abandon update" })).not.toBeInTheDocument()
+    );
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+  });
+
+  it("hides the abandon action from users without admin:update", async () => {
+    useAuthStore.setState({
+      user: { id: "user-1", scopes: ["settings:gateway:edit"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      ...relayStatus(),
+      poolId: "system",
+      instances: [],
+      update: { state: "paused", targetVersion: "v2.4.3", error: null },
+    });
+
+    renderRelaySettings();
+    expect(await screen.findByText(/Pool update to v2.4.3: paused/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abandon update" })).not.toBeInTheDocument();
+    useAuthStore.setState({ user: null, isAuthenticated: false });
   });
 
   it("keeps the local relay first and sorts remote relays by name", async () => {

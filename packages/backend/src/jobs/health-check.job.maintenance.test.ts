@@ -31,15 +31,19 @@ describe('HealthCheckJob maintenance race', () => {
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning })) })),
       })),
     } as any;
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') }));
+    const request = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
     const publish = vi.fn();
     const observeStatefulEvent = vi.fn();
-    const job = new HealthCheckJob(db);
+    const job = new HealthCheckJob(db, undefined, {
+      checkTarget: async (url) => ({ url, allowed: true, resolvedAddresses: ['203.0.113.10'] }),
+      request,
+    });
     job.setEventBus({ publish } as any);
     job.setEvaluator({ observeStatefulEvent } as any);
 
     await job.run();
 
+    expect(request).toHaveBeenCalledOnce();
     expect(returning).toHaveBeenCalledOnce();
     expect(observeStatefulEvent).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();

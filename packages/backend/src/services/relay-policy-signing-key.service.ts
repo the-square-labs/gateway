@@ -6,15 +6,39 @@ import type { CryptoService } from './crypto.service.js';
 
 const KEY_ROTATION_MS = 30 * 24 * 60 * 60 * 1000;
 const KEY_OVERLAP_MS = 30 * 60 * 1000;
+/**
+ * How long a pending key waits for remote relays that stay in the pool but never report it.
+ * Promotion keeps the previous private key for any relay that still needs it, so a relay that
+ * lags past this point can still learn the new key; it just no longer holds rotation back.
+ */
+const REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS = 24 * 60 * 60 * 1000;
+/** Relays accept `validFrom` with the same leeway they give `issuedAt`. Send it early by that much. */
+export const RELAY_POLICY_KEY_VALID_FROM_SKEW_MS = 5 * 60 * 1000;
 
 type RotationCandidate = { kind: string; state: string; health: { policySigningKeyIds?: string[] } | null };
+
+type TrustCandidate = {
+  kind?: string;
+  policySigningKeyId: string | null;
+  health: { policySigningKeyIds?: string[] } | null;
+};
+
+type PolicyKeyRecord = {
+  keyId: string;
+  publicKey: string;
+  publicKeyFingerprint: string;
+  status: string;
+  activatedAt: Date | null;
+  verifyUntil: Date | null;
+  retiredAt: Date | null;
+  hasPrivateKey: boolean;
+};
 
 /**
  * Relays that must hold a pending key before it may sign. A remote relay counts while it
  * serves or is coming up. The local relay always counts, whatever its state: it pins its
  * trust on first use and learns a new key only from a snapshot signed by the old one, so
- * promoting without it destroys the only key that could still introduce its successor and
- * the relay then refuses every policy from this Gateway.
+ * promoting without it would leave the local relay depending on a retained old key.
  */
 function rotationParticipants<T extends RotationCandidate>(instances: T[]): T[] {
   return instances.filter(
@@ -27,6 +51,114 @@ function allPolicyKeysAcknowledged(
   keyId: string
 ): boolean {
   return instances.every(({ health }) => health?.policySigningKeyIds?.includes(keyId));
+}
+
+function mayPromote<T extends RotationCandidate>(
+  instances: T[],
+  pending: { keyId: string; createdAt: Date },
+  now: Date
+): boolean {
+  if (allPolicyKeysAcknowledged(rotationParticipants(instances), pending.keyId)) return true;
+  if (now.getTime() - pending.createdAt.getTime() < REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS) return false;
+  // A remote relay stuck in the pool must not freeze rotation for everyone. The local relay
+  // still has to acknowledge: it is the one relay every installation depends on.
+  return allPolicyKeysAcknowledged(
+    instances.filter((instance) => instance.kind === 'local'),
+    pending.keyId
+  );
+}
+
+/**
+ * Keys whose private half must survive because this relay can only be reached through them.
+ * A relay that reports the active key needs nothing old. A relay that reports other keys needs
+ * those: they are the only signers it will accept, and the next snapshot they sign carries the
+ * active key. A relay that has reported nothing yet will bootstrap from its enrollment key.
+ */
+function keysNeededByInstance(instance: TrustCandidate, activeKeyId: string): string[] {
+  const reported = instance.health?.policySigningKeyIds ?? [];
+  if (reported.includes(activeKeyId)) return [];
+  if (reported.length > 0) return reported;
+  return instance.policySigningKeyId ? [instance.policySigningKeyId] : [];
+}
+
+/**
+ * Picks the key that signs one relay's snapshot. That is the active key unless the relay has
+ * reported a trust set without it; then it is the newest formerly active key the relay trusts
+ * whose private key is still held. An empty report is treated as current: it is what a relay
+ * sends while its enrollment key cannot be re-bootstrapped, and such a relay already trusts
+ * the active key.
+ */
+function selectSigningKey(records: PolicyKeyRecord[], activeKeyId: string, reported: string[]): string {
+  if (reported.length === 0 || reported.includes(activeKeyId)) return activeKeyId;
+  const candidates = records
+    .filter(
+      (record) =>
+        record.keyId !== activeKeyId &&
+        record.status !== 'pending' &&
+        record.activatedAt !== null &&
+        record.hasPrivateKey &&
+        reported.includes(record.keyId)
+    )
+    .sort((left, right) => (right.activatedAt?.getTime() ?? 0) - (left.activatedAt?.getTime() ?? 0));
+  return candidates[0]?.keyId ?? activeKeyId;
+}
+
+function publishedKey(
+  record: PolicyKeyRecord,
+  status: RelayPublishedPolicyKey['status'],
+  verifyUntil: Date | null
+): RelayPublishedPolicyKey {
+  return {
+    keyId: record.keyId,
+    publicKey: Buffer.from(record.publicKey, 'base64'),
+    fingerprint: record.publicKeyFingerprint,
+    status,
+    activatedAt: record.activatedAt,
+    verifyUntil,
+  };
+}
+
+/**
+ * The trust set one relay receives. Every relay gets the published keys. A lagging relay also
+ * gets the old key that signs its snapshot, kept valid long enough to verify it again before
+ * its next report. Every relay also keeps its enrollment key as verification-only: supervisors
+ * re-bootstrap that key on every health loop, and a relay refuses it once it has left trust.
+ * Pinning an existing key checks only its material, never its validity window, so an expired
+ * entry is enough and cannot sign anything.
+ */
+function planInstancePolicyKeys(
+  records: PolicyKeyRecord[],
+  instance: TrustCandidate,
+  now: Date,
+  reportedOverride?: string[]
+): { signingKeyId: string; keys: RelayPublishedPolicyKey[] } {
+  const active = records.find((record) => record.status === 'active');
+  if (!active) throw new Error('Relay policy signing key is not initialized');
+  const byId = new Map(records.map((record) => [record.keyId, record]));
+  const keys = new Map<string, RelayPublishedPolicyKey>();
+  for (const record of records) {
+    if (record.status === 'pending' || record.status === 'active' || record.status === 'verification_only') {
+      keys.set(record.keyId, publishedKey(record, record.status, record.verifyUntil));
+    }
+  }
+  const reported = reportedOverride ?? instance.health?.policySigningKeyIds ?? [];
+  const signingKeyId = selectSigningKey(records, active.keyId, reported);
+  const signer = byId.get(signingKeyId);
+  if (signer && signingKeyId !== active.keyId) {
+    const minimum = now.getTime() + KEY_OVERLAP_MS;
+    const verifyUntil = new Date(Math.max(signer.verifyUntil?.getTime() ?? 0, minimum));
+    keys.set(signingKeyId, publishedKey(signer, 'verification_only', verifyUntil));
+  }
+  const enrollment = instance.policySigningKeyId ? byId.get(instance.policySigningKeyId) : undefined;
+  if (enrollment && !keys.has(enrollment.keyId) && enrollment.status !== 'pending') {
+    // Never publish a zero (unbounded) window for a key that no longer signs.
+    const verifyUntil = enrollment.verifyUntil ?? enrollment.retiredAt ?? now;
+    keys.set(enrollment.keyId, publishedKey(enrollment, 'verification_only', verifyUntil));
+  }
+  return {
+    signingKeyId,
+    keys: [...keys.values()].sort((left, right) => left.keyId.localeCompare(right.keyId)),
+  };
 }
 
 export interface RelayPolicyTrustAnchor {
@@ -79,45 +211,57 @@ export class RelayPolicySigningKeyService {
     };
   }
 
-  async listPublishedKeys(): Promise<RelayPublishedPolicyKey[]> {
-    const rows = await this.db
-      .select()
-      .from(relayPolicySigningKeys)
-      .where(inArray(relayPolicySigningKeys.status, ['pending', 'active', 'verification_only']));
-    return rows
-      .map((row) => ({
-        keyId: row.keyId,
-        publicKey: Buffer.from(row.publicKey, 'base64'),
-        fingerprint: row.publicKeyFingerprint,
-        status: row.status as RelayPublishedPolicyKey['status'],
-        activatedAt: row.activatedAt,
-        verifyUntil: row.verifyUntil,
-      }))
-      .sort((left, right) => left.keyId.localeCompare(right.keyId));
+  /**
+   * The signer and trust set for one relay's snapshot. `reportedKeyIds` overrides the stored
+   * report when the caller has fresher health, as the local sync path does.
+   */
+  async resolveInstancePolicyKeys(
+    instance: TrustCandidate,
+    now = new Date(),
+    reportedKeyIds?: string[]
+  ): Promise<{ signingKeyId: string; keys: RelayPublishedPolicyKey[] }> {
+    const records = await this.db
+      .select({
+        keyId: relayPolicySigningKeys.keyId,
+        publicKey: relayPolicySigningKeys.publicKey,
+        publicKeyFingerprint: relayPolicySigningKeys.publicKeyFingerprint,
+        status: relayPolicySigningKeys.status,
+        activatedAt: relayPolicySigningKeys.activatedAt,
+        verifyUntil: relayPolicySigningKeys.verifyUntil,
+        retiredAt: relayPolicySigningKeys.retiredAt,
+        hasPrivateKey: sql<boolean>`(${relayPolicySigningKeys.encryptedPrivateKey} is not null and ${relayPolicySigningKeys.encryptedDek} is not null)`,
+      })
+      .from(relayPolicySigningKeys);
+    return planInstancePolicyKeys(records, instance, now, reportedKeyIds);
   }
 
-  async signPayload(payload: Buffer): Promise<{ signingKeyId: string; signature: Buffer }> {
-    const [active] = await this.db
+  /** Signs with the active key, or with `keyId` when a lagging relay needs an older signer. */
+  async signPayload(payload: Buffer, keyId?: string): Promise<{ signingKeyId: string; signature: Buffer }> {
+    const [signer] = await this.db
       .select()
       .from(relayPolicySigningKeys)
       .where(
         and(
-          eq(relayPolicySigningKeys.status, 'active'),
+          keyId ? eq(relayPolicySigningKeys.keyId, keyId) : eq(relayPolicySigningKeys.status, 'active'),
           sql`${relayPolicySigningKeys.encryptedPrivateKey} is not null`,
           sql`${relayPolicySigningKeys.encryptedDek} is not null`
         )
       )
       .limit(1);
-    if (!active?.encryptedPrivateKey || !active.encryptedDek) {
-      throw new Error('Active relay policy signing private key is unavailable');
+    if (!signer?.encryptedPrivateKey || !signer.encryptedDek) {
+      throw new Error(
+        keyId
+          ? `Relay policy signing private key ${keyId} is unavailable`
+          : 'Active relay policy signing private key is unavailable'
+      );
     }
     const privateKeyPem = this.cryptoService.decryptPrivateKey({
-      encryptedPrivateKey: active.encryptedPrivateKey,
-      encryptedDek: active.encryptedDek,
+      encryptedPrivateKey: signer.encryptedPrivateKey,
+      encryptedDek: signer.encryptedDek,
       dekIv: '',
     });
     return {
-      signingKeyId: active.keyId,
+      signingKeyId: signer.keyId,
       signature: sign(null, payload, createPrivateKey(privateKeyPem)),
     };
   }
@@ -147,7 +291,11 @@ export class RelayPolicySigningKeyService {
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-key-rotation'))`);
       const [pending] = await tx
-        .select({ id: relayPolicySigningKeys.id, keyId: relayPolicySigningKeys.keyId })
+        .select({
+          id: relayPolicySigningKeys.id,
+          keyId: relayPolicySigningKeys.keyId,
+          createdAt: relayPolicySigningKeys.createdAt,
+        })
         .from(relayPolicySigningKeys)
         .where(eq(relayPolicySigningKeys.status, 'pending'))
         .limit(1);
@@ -155,21 +303,59 @@ export class RelayPolicySigningKeyService {
       const instances = await tx
         .select({ kind: relayInstances.kind, state: relayInstances.state, health: relayInstances.health })
         .from(relayInstances);
-      if (!allPolicyKeysAcknowledged(rotationParticipants(instances), pending.keyId)) return false;
+      if (!mayPromote(instances, pending, now)) return false;
+      // The previous key keeps its private half: relays that were away during the rotation can
+      // learn the new key only from a snapshot it signs. destroyUnneededPrivateKeys drops it once
+      // no enrolled relay still depends on it.
       await tx
         .update(relayPolicySigningKeys)
-        .set({
-          status: 'verification_only',
-          verifyUntil: new Date(now.getTime() + KEY_OVERLAP_MS),
-          encryptedPrivateKey: null,
-          encryptedDek: null,
-          privateKeyDestroyedAt: now,
-        })
+        .set({ status: 'verification_only', verifyUntil: new Date(now.getTime() + KEY_OVERLAP_MS) })
         .where(eq(relayPolicySigningKeys.status, 'active'));
       await tx
         .update(relayPolicySigningKeys)
         .set({ status: 'active', activatedAt: now })
         .where(eq(relayPolicySigningKeys.id, pending.id));
+      return true;
+    });
+  }
+
+  /**
+   * Destroys old private keys that no enrolled relay needs any more. A relay stops needing an
+   * old key once it reports the active key, or when an admin removes it from the pool.
+   */
+  async destroyUnneededPrivateKeys(now = new Date()): Promise<boolean> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-key-rotation'))`);
+      const [active] = await tx
+        .select({ keyId: relayPolicySigningKeys.keyId })
+        .from(relayPolicySigningKeys)
+        .where(eq(relayPolicySigningKeys.status, 'active'))
+        .limit(1);
+      if (!active) return false;
+      const held = await tx
+        .select({ id: relayPolicySigningKeys.id, keyId: relayPolicySigningKeys.keyId })
+        .from(relayPolicySigningKeys)
+        .where(
+          and(
+            inArray(relayPolicySigningKeys.status, ['verification_only', 'retired']),
+            sql`(${relayPolicySigningKeys.encryptedPrivateKey} is not null or ${relayPolicySigningKeys.encryptedDek} is not null)`
+          )
+        );
+      if (held.length === 0) return false;
+      const instances = await tx
+        .select({
+          kind: relayInstances.kind,
+          policySigningKeyId: relayInstances.policySigningKeyId,
+          health: relayInstances.health,
+        })
+        .from(relayInstances);
+      const needed = new Set(instances.flatMap((instance) => keysNeededByInstance(instance, active.keyId)));
+      const destroy = held.filter(({ keyId }) => !needed.has(keyId)).map(({ id }) => id);
+      if (destroy.length === 0) return false;
+      await tx
+        .update(relayPolicySigningKeys)
+        .set({ encryptedPrivateKey: null, encryptedDek: null, privateKeyDestroyedAt: now })
+        .where(inArray(relayPolicySigningKeys.id, destroy));
       return true;
     });
   }
@@ -206,4 +392,13 @@ export class RelayPolicySigningKeyService {
   }
 }
 
-export const relayPolicySigningKeyInternals = { allPolicyKeysAcknowledged, rotationParticipants };
+export const relayPolicySigningKeyInternals = {
+  allPolicyKeysAcknowledged,
+  keysNeededByInstance,
+  mayPromote,
+  planInstancePolicyKeys,
+  rotationParticipants,
+  selectSigningKey,
+  KEY_OVERLAP_MS,
+  REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS,
+};

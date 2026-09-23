@@ -1,3 +1,4 @@
+import { status as GrpcStatus } from '@grpc/grpc-js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
@@ -36,7 +37,11 @@ import {
   reconcileManagedDatabaseRelayPolicy,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
-import { RelayPolicySigningKeyService } from './relay-policy-signing-key.service.js';
+import {
+  RELAY_POLICY_KEY_VALID_FROM_SKEW_MS,
+  RelayPolicySigningKeyService,
+  type RelayPolicyTrustAnchor,
+} from './relay-policy-signing-key.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
@@ -95,6 +100,11 @@ function relayRoutePolicy(ownerKind: string): {
     return { disableIdleTimeout: true, trafficClass: 'proxy' };
   }
   return { disableIdleTimeout: false, trafficClass: 'database' };
+}
+
+function isSignedRotationRefusal(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? '');
+  return message.includes('require signed rotation');
 }
 
 export class RelayPolicyService {
@@ -320,9 +330,8 @@ export class RelayPolicyService {
           })
           .where(eq(relayInstances.id, local.id));
       }
-      const trust = await this.policyKeys.getEnrollmentTrust();
-      await this.relay.bootstrapPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint);
-      const signed = await this.buildInstanceSnapshot(local.id);
+      const trustedKeyIds = await this.ensureLocalPolicyTrust(health.policyKeyIds ?? []);
+      const signed = await this.buildInstanceSnapshot(local.id, trustedKeyIds);
       const response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
       const applied = Number(response.appliedRevision);
       if (!Number.isSafeInteger(applied) || applied !== signed.revision) {
@@ -341,6 +350,55 @@ export class RelayPolicyService {
     }
     this.grantIssuer.acknowledgeRevision(applied);
     return applied;
+  }
+
+  /**
+   * Pins the active policy key on the local relay and returns the key ids it trusts, which
+   * choose the signer of its next snapshot. The local relay refuses an unsigned new key once
+   * it trusts any key. If it still trusts an old key whose private half Gateway retains, that
+   * key signs a snapshot carrying the active one. If it trusts none that Gateway can sign
+   * with, typically because relay.db was restored from a backup older than the active key,
+   * the local-only reset re-pins the active key. Remote relays never take that path.
+   */
+  private async ensureLocalPolicyTrust(reportedKeyIds: string[]): Promise<string[]> {
+    const trust = await this.policyKeys.getEnrollmentTrust();
+    try {
+      await this.relay.bootstrapPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint);
+      return [trust.keyId];
+    } catch (error) {
+      if (!isSignedRotationRefusal(error)) throw error;
+      const plan = await this.policyKeys.resolveInstancePolicyKeys(
+        { kind: 'local', policySigningKeyId: null, health: null },
+        new Date(),
+        reportedKeyIds
+      );
+      if (plan.signingKeyId !== trust.keyId) return reportedKeyIds;
+      await this.resetLocalPolicyTrust(trust, reportedKeyIds, error);
+      return [trust.keyId];
+    }
+  }
+
+  private async resetLocalPolicyTrust(
+    trust: RelayPolicyTrustAnchor,
+    reportedKeyIds: string[],
+    refusal: unknown
+  ): Promise<void> {
+    if (typeof this.relay.resetLocalPolicyTrust !== 'function') throw refusal;
+    try {
+      const { replacedKeyIds } = await this.relay.resetLocalPolicyTrust(
+        trust.keyId,
+        trust.publicKey,
+        trust.fingerprint
+      );
+      logger.warn('Local relay trusted no policy key Gateway can sign with; re-pinned the active key', {
+        activeKeyId: trust.keyId,
+        replacedKeyIds: replacedKeyIds.length ? replacedKeyIds : reportedKeyIds,
+      });
+    } catch (error) {
+      // A relay built before the reset call cannot recover here; keep the original refusal.
+      if ((error as { code?: number } | null)?.code === GrpcStatus.UNIMPLEMENTED) throw refusal;
+      throw error;
+    }
   }
 
   async reconcileAndSync(): Promise<number> {
@@ -375,6 +433,7 @@ export class RelayPolicyService {
   async finalizePolicySigningKeyRotation(now = new Date()): Promise<boolean> {
     const promoted = await this.policyKeys.promoteAcknowledgedPending(now);
     const retired = await this.policyKeys.retireExpiredVerificationKeys(now);
+    await this.policyKeys.destroyUnneededPrivateKeys(now);
     if (promoted || retired) await this.syncAllRemoteInstancePolicies();
     return promoted || retired;
   }
@@ -1295,14 +1354,16 @@ export class RelayPolicyService {
     });
   }
 
-  private async buildInstanceSnapshot(instanceId: string): Promise<{
+  private async buildInstanceSnapshot(
+    instanceId: string,
+    reportedPolicyKeyIds?: string[]
+  ): Promise<{
     encodedRequest: Buffer;
     revision: number;
     globalRevision: number;
     expiresAtUnix: number;
   }> {
     const relaySettings = (await this.settings.getConfig()).relay;
-    const publishedPolicyKeys = await this.policyKeys.listPublishedKeys();
     const issuedAt = new Date();
     const expiresAtUnix = Math.floor((issuedAt.getTime() + 15 * 60 * 1000) / 1000);
     const projection = await this.db.transaction(async (tx) => {
@@ -1366,6 +1427,13 @@ export class RelayPolicyService {
       return { instance, state, grantKeys, selectedAssignments, endpoints, routes, revision: poolRevision.revision };
     });
 
+    // The relay's own trust decides the signer: a relay that missed a rotation gets its snapshot
+    // signed by an old key it still trusts, and learns the active key from that snapshot.
+    const policyKeys = await this.policyKeys.resolveInstancePolicyKeys(
+      projection.instance,
+      issuedAt,
+      reportedPolicyKeyIds
+    );
     const endpointById = new Map(projection.endpoints.map((endpoint) => [endpoint.id, endpoint]));
     const payload = encodeRelayV1Message('PolicyEnvelopePayload', {
       schemaVersion: 2,
@@ -1419,16 +1487,19 @@ export class RelayPolicyService {
         hardPressurePercent: relaySettings.hardPressurePercent,
       },
       capabilities: ['relay_pool_v1'],
-      policySigningKeys: publishedPolicyKeys.map((key) => ({
+      policySigningKeys: policyKeys.keys.map((key) => ({
         keyId: key.keyId,
         publicKey: key.publicKey,
         publicKeyFingerprint: key.fingerprint,
         status: key.status === 'pending' ? 'active' : key.status,
-        validFromUnix: String(key.activatedAt ? Math.floor(key.activatedAt.getTime() / 1000) : 0),
+        // Relays check validFrom against their own clock; start it early by the skew they allow.
+        validFromUnix: String(
+          key.activatedAt ? Math.floor((key.activatedAt.getTime() - RELAY_POLICY_KEY_VALID_FROM_SKEW_MS) / 1000) : 0
+        ),
         verifyUntilUnix: String(key.verifyUntil ? Math.floor(key.verifyUntil.getTime() / 1000) : 0),
       })),
     });
-    const signed = await this.policyKeys.signPayload(payload);
+    const signed = await this.policyKeys.signPayload(payload, policyKeys.signingKeyId);
     return {
       encodedRequest: encodeRelayV1Message('ApplySnapshotRequest', {
         signedEnvelope: { signingKeyId: signed.signingKeyId, payload, signature: signed.signature },

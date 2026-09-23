@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { AIService } from './ai.service.js';
 
+// Compose-managed containers are covered by the guard's own tests; these tests focus on scope routing.
+vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
+  assertComposeChildMutationAllowed: vi.fn().mockResolvedValue(undefined),
+}));
+
 const BASE_USER = {
   id: 'user-1',
   oidcSubject: 'oidc-user',

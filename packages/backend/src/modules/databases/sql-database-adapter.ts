@@ -99,6 +99,12 @@ export interface SqlExecutionOptions {
   deadlineMs?: number;
   /** Cancels the active database operation when the HTTP client disconnects. */
   signal?: AbortSignal;
+  /**
+   * Access level that authorized this request. `read` runs in a read-only
+   * transaction as a non-owner principal when the provider supports one.
+   * Omitted means the caller already holds administrative query access.
+   */
+  queryAccess?: 'read' | 'write' | 'admin';
 }
 
 export interface SqlRowMutationResult {

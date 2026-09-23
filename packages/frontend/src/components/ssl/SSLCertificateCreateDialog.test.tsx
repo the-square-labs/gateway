@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { useAuthStore } from "@/stores/auth";
 import { SSLCertificateCreateDialog } from "./SSLCertificateCreateDialog";
 
 function renderDialog(props: Partial<ComponentProps<typeof SSLCertificateCreateDialog>> = {}) {
@@ -302,5 +303,66 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     expect(screen.queryByRole("tab", { name: "Let's Encrypt" })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Upload" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Internal CA" })).toBeInTheDocument();
+  });
+});
+
+describe("SSLCertificateCreateDialog internal PKI linking", () => {
+  function setScopes(scopes: string[]) {
+    useAuthStore.setState({
+      user: { id: "user-1", scopes } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+  }
+
+  beforeEach(() => {
+    vi.spyOn(api, "listCertificates").mockResolvedValue({
+      data: [
+        { id: "pki-1", commonName: "api.internal" },
+        { id: "pki-2", commonName: "db.internal" },
+      ],
+    } as any);
+    vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    vi.restoreAllMocks();
+  });
+
+  it("disables linking without any PKI key export permission", async () => {
+    setScopes(["ssl:cert:issue", "pki:cert:view"]);
+    renderDialog({ hasDomains: false, initialTab: "internal" });
+
+    expect(
+      await screen.findByText(/Linking requires the PKI certificate export permission/)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "PKI certificate" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Link Certificate" })).toBeDisabled();
+  });
+
+  it("only offers certificates whose private key the user may export", async () => {
+    setScopes(["ssl:cert:issue", "pki:cert:export:pki-2"]);
+    const link = vi.spyOn(api, "linkInternalCert").mockResolvedValue({ id: "ssl-1" } as any);
+    renderDialog({ hasDomains: false, initialTab: "internal" });
+
+    await waitFor(() => expect(api.listCertificates).toHaveBeenCalled());
+    expect(
+      screen.queryByText(/Linking requires the PKI certificate export permission/)
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("combobox", { name: "PKI certificate" }));
+    expect(
+      await screen.findByRole("option", { name: "api.internal (no export permission)" })
+    ).toHaveAttribute("aria-disabled", "true");
+    fireEvent.click(screen.getByRole("option", { name: "db.internal" }));
+    fireEvent.click(screen.getByRole("button", { name: "Link Certificate" }));
+
+    await waitFor(() =>
+      expect(link).toHaveBeenCalledWith({
+        internalCertId: "pki-2",
+        name: undefined,
+        folderId: null,
+      })
+    );
   });
 });

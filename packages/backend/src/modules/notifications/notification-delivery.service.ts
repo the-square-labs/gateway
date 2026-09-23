@@ -1,7 +1,8 @@
-import { and, count, desc, eq, lt, ne, type SQL, sql } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, lt, lte, notInArray, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { notificationDeliveryLog, notificationWebhooks } from '@/db/schema/index.js';
 import { buildWhere } from '@/lib/utils.js';
+import { OPEN_DELIVERY_STATUSES } from './notification-dispatcher.service.js';
 import { redactWebhookUrl } from './notification-webhook.service.js';
 
 const DELIVERY_BODY_PREVIEW_CHARS = 2048;
@@ -113,12 +114,18 @@ export class NotificationDeliveryService {
     };
   }
 
-  /** Get deliveries pending retry (nextRetryAt <= now) */
+  /** Deliveries due to be sent: queued by the alert outbox, or waiting for a retry (nextRetryAt <= now). */
   async getPendingRetries(limit: number) {
     return this.db
       .select()
       .from(notificationDeliveryLog)
-      .where(and(eq(notificationDeliveryLog.status, 'retrying'), lt(notificationDeliveryLog.nextRetryAt, new Date())))
+      .where(
+        and(
+          inArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES]),
+          lte(notificationDeliveryLog.nextRetryAt, new Date())
+        )
+      )
+      .orderBy(notificationDeliveryLog.nextRetryAt)
       .limit(limit);
   }
 
@@ -129,7 +136,12 @@ export class NotificationDeliveryService {
 
     const result = await this.db
       .delete(notificationDeliveryLog)
-      .where(and(lt(notificationDeliveryLog.createdAt, threshold), ne(notificationDeliveryLog.status, 'retrying')))
+      .where(
+        and(
+          lt(notificationDeliveryLog.createdAt, threshold),
+          notInArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES])
+        )
+      )
       .returning({ id: notificationDeliveryLog.id });
 
     return result.length;

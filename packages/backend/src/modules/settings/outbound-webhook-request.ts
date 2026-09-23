@@ -9,11 +9,14 @@ export interface OutboundWebhookFetchOptions {
   headers: Record<string, string>;
   body?: string;
   signal: AbortSignal;
+  /** Response bytes kept for text(); defaults to the webhook log preview size. */
+  maxResponseBytes?: number;
 }
 
 export interface OutboundWebhookFetchResponse {
   status: number;
   text: () => Promise<string>;
+  headers?: Record<string, string | string[] | undefined>;
 }
 
 /**
@@ -76,14 +79,15 @@ export function fetchWithPinnedAddress(
     lookup,
   };
 
+  const maxResponseBody = options.maxResponseBytes ?? MAX_RESPONSE_BODY;
   return new Promise((resolve, reject) => {
     const req = requester(requestOptions, (res) => {
       const chunks: Buffer[] = [];
       let received = 0;
       res.on('data', (chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (received <= MAX_RESPONSE_BODY) {
-          chunks.push(buffer.subarray(0, Math.max(0, MAX_RESPONSE_BODY + 1 - received)));
+        if (received <= maxResponseBody) {
+          chunks.push(buffer.subarray(0, Math.max(0, maxResponseBody + 1 - received)));
         }
         received += buffer.length;
       });
@@ -92,6 +96,7 @@ export function fetchWithPinnedAddress(
         resolve({
           status: res.statusCode ?? 0,
           text: async () => body,
+          headers: res.headers,
         });
       });
       res.on('error', reject);

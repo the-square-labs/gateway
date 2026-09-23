@@ -98,7 +98,7 @@ import { DockerResourceGitTabs } from "./docker-detail/DockerResourceGitTabs";
 import { LogsTab, type LogsTabSource } from "./docker-detail/LogsTab";
 import { MultiContainerMonitoring } from "./docker-detail/MultiContainerMonitoring";
 
-const ACTIVE_STATUSES = new Set(["pending", "running", "cancelling"]);
+const ACTIVE_STATUSES = new Set(["pending", "running", "cancelling", "reconciling"]);
 
 function formatCompactRelativeTime(value: string) {
   const elapsedMs = Math.max(0, Date.now() - new Date(value).getTime());
@@ -140,7 +140,7 @@ function projectStatusVariant(status: DockerComposeProject["status"]) {
 function operationStatusVariant(status: DockerComposeOperation["status"]) {
   if (status === "succeeded") return "success" as const;
   if (status === "failed") return "destructive" as const;
-  if (status === "running") return "warning" as const;
+  if (status === "running" || status === "reconciling") return "warning" as const;
   return "secondary" as const;
 }
 

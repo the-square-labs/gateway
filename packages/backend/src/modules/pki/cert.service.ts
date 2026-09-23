@@ -17,6 +17,19 @@ import type { CertificateListQuery, IssueCertFromCSRInput, IssueCertificateInput
 
 const logger = createChildLogger('CertService');
 
+/** Strip the envelope-encrypted key before a certificate row leaves the service. */
+function sanitizeCertificate<T extends { encryptedPrivateKey?: unknown; encryptedDek?: unknown; dekIv?: unknown }>(
+  certificate: T
+): Omit<T, 'encryptedPrivateKey' | 'encryptedDek' | 'dekIv'> {
+  const {
+    encryptedPrivateKey: _encryptedPrivateKey,
+    encryptedDek: _encryptedDek,
+    dekIv: _dekIv,
+    ...rest
+  } = certificate;
+  return rest;
+}
+
 interface IssueCertificateOptions {
   allowSystem?: boolean;
   /**
@@ -199,7 +212,7 @@ export class CertService {
     this.emitCert(certificate.id, certificate.caId, 'created');
 
     return {
-      certificate,
+      certificate: sanitizeCertificate(certificate),
       privateKeyPem, // Returned ONCE at issuance for server-generated keys
     };
   }
@@ -331,7 +344,7 @@ export class CertService {
     });
 
     this.emitCert(certificate.id, certificate.caId, 'created');
-    return certificate;
+    return sanitizeCertificate(certificate);
   }
 
   async getCertificate(id: string, options?: { includeSystem?: boolean }) {
@@ -477,7 +490,9 @@ export class CertService {
 
     logger.info('Revoked certificate', { certId: id, reason });
     this.emitCert(cert.id, cert.caId, 'revoked');
-    return cert.caId; // Return CA ID for CRL regeneration
+    // Every revocation path (REST, AI/MCP tools) republishes the CRL here.
+    await this.caService.publishCRL(cert.caId);
+    return cert.caId;
   }
 
   async getExpiringCertificates(withinDays: number) {

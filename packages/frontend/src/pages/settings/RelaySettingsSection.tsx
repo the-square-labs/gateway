@@ -35,6 +35,8 @@ import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
+import { useUpdateStore } from "@/stores/update";
 import type {
   AuthProvisioningSettings,
   DashboardRelayInstance,
@@ -46,6 +48,16 @@ const RELAY_SETTINGS_CACHE_KEY = "req:/api/admin/auth-settings";
 const RELAY_STATUS_CACHE_KEY = "req:/api/system/relay";
 
 type CachedRelayStatusResponse = { data: DashboardRelaySnapshot | null };
+
+/** Relay Pool update run states that the backend can still abandon. */
+const UNFINISHED_RELAY_UPDATE_STATES = new Set([
+  "preflight",
+  "draining",
+  "updating",
+  "verifying",
+  "rolling_back",
+  "paused",
+]);
 
 function percent(value: number, total: number) {
   if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
@@ -135,6 +147,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [saving, setSaving] = useState(false);
   const [poolAction, setPoolAction] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [abandoningUpdate, setAbandoningUpdate] = useState(false);
+  const canAbandonRelayUpdate = useAuthStore((state) => state.hasScope("admin:update"));
+  const abandonRelayUpdate = useUpdateStore((state) => state.abandonRelayUpdate);
 
   const recordStatus = useCallback((next: DashboardRelaySnapshot | null) => {
     setStatus(next);
@@ -187,6 +202,29 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     }, 5000);
     return () => window.clearInterval(timer);
   }, [load, recordStatus]);
+
+  const handleAbandonUpdate = async () => {
+    const ok = await confirm({
+      title: "Abandon Relay Pool update?",
+      description:
+        "Gateway fails this update run and returns the relays it drained to service. Relays that already updated keep the new version.",
+      confirmLabel: "Abandon update",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    setAbandoningUpdate(true);
+    try {
+      await abandonRelayUpdate();
+      toast.success("Relay Pool update abandoned");
+      recordStatus(await api.getRelayStatus());
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to abandon the Relay Pool update"
+      );
+    } finally {
+      setAbandoningUpdate(false);
+    }
+  };
 
   const save = async () => {
     setSaving(true);
@@ -599,10 +637,23 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           </p>
         )}
         {status?.update && (
-          <p className="border-t border-border p-3 text-sm text-muted-foreground">
-            Pool update to {status.update.targetVersion}: {status.update.state}
-            {status.update.error ? ` · ${status.update.error}` : ""}
-          </p>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border p-3">
+            <p className="min-w-0 text-sm text-muted-foreground">
+              Pool update to {status.update.targetVersion}: {status.update.state}
+              {status.update.error ? ` · ${status.update.error}` : ""}
+            </p>
+            {canAbandonRelayUpdate && UNFINISHED_RELAY_UPDATE_STATES.has(status.update.state) && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void handleAbandonUpdate()}
+                disabled={abandoningUpdate}
+              >
+                <Ban className="h-4 w-4" />
+                {abandoningUpdate ? "Abandoning..." : "Abandon update"}
+              </Button>
+            )}
+          </div>
         )}
       </PanelShell>
 

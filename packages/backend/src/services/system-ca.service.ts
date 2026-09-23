@@ -404,7 +404,8 @@ export class SystemCAService {
   async issueNodeCert(
     nodeId: string,
     hostname: string,
-    bindCurrent?: SystemCertificateCurrentBinding
+    bindCurrent?: SystemCertificateCurrentBinding,
+    options?: { stage?: 'current' | 'pending' }
   ): Promise<{
     caCertPem: string;
     certPem: string;
@@ -428,12 +429,13 @@ export class SystemCAService {
       keyAlgorithm: 'ecdsa-p256' as const,
       validityDays: 365,
     };
-    const result = await this.requireSystemCertificateLifecycle().issueCurrent(
-      issueInput,
-      SYSTEM_USER_ID,
-      { type: 'node', id: nodeId },
-      bindCurrent
-    );
+    // A renewal is staged as `pending` so the current leaf stays valid until
+    // the daemon proves it received the replacement.
+    const lifecycle = this.requireSystemCertificateLifecycle();
+    const result =
+      options?.stage === 'pending'
+        ? await lifecycle.issuePending(issueInput, SYSTEM_USER_ID, { type: 'node', id: nodeId }, bindCurrent)
+        : await lifecycle.issueCurrent(issueInput, SYSTEM_USER_ID, { type: 'node', id: nodeId }, bindCurrent);
 
     return {
       caCertPem: ca!.certificatePem,

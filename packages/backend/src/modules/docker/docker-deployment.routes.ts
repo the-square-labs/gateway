@@ -42,7 +42,7 @@ import {
   DockerDeploymentUpdateSchema,
 } from './docker-deployment.schemas.js';
 import { DockerDeploymentService } from './docker-deployment.service.js';
-import { redactDeploymentWebhookToken } from './docker-deployment-helpers.js';
+import { presentDeploymentForCaller } from './docker-deployment-redaction.js';
 import { ImageCleanupUpsertSchema } from './docker-image-cleanup.schemas.js';
 import { DockerImageCleanupService } from './docker-image-cleanup.service.js';
 import { resolveDockerDeploymentIdByName } from './docker-route-resolvers.js';
@@ -161,13 +161,10 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi({ ...createDeploymentRoute, middleware: requireScopeBase('docker:containers:create') }, async (c) => {
     const service = container.resolve(DockerDeploymentService);
     const user = c.get('user')!;
-    const data = await service.create(
-      c.req.param('nodeId')!,
-      DockerDeploymentCreateSchema.parse(await c.req.json()),
-      user.id,
-      c.get('effectiveScopes') || []
-    );
-    return c.json({ data }, 201);
+    const nodeId = c.req.param('nodeId')!;
+    const scopes = c.get('effectiveScopes') || [];
+    const data = await service.create(nodeId, DockerDeploymentCreateSchema.parse(await c.req.json()), user.id, scopes);
+    return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, data.id) }, 201);
   });
 
   router.openapi({ ...getDeploymentByNameRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
@@ -189,13 +186,13 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     const availability = container.resolve(NodeRegistryService).getNode(c.req.param('nodeId')!)
       ? 'available'
       : 'unavailable';
-    const canRevealWebhookToken = hasDockerResourceScope(
+    const presented = presentDeploymentForCaller(
+      data,
       c.get('effectiveScopes') || [],
-      'docker:containers:webhooks',
       c.req.param('nodeId')!,
       deploymentId
     );
-    return c.json({ data: { ...redactDeploymentWebhookToken(data, canRevealWebhookToken), availability } });
+    return c.json({ data: { ...presented, availability } });
   });
 
   router.openapi(
@@ -206,13 +203,8 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const deploymentId = c.req.param('deploymentId')!;
       const data = await service.get(nodeId, deploymentId);
       const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
-      const canRevealWebhookToken = hasDockerResourceScope(
-        c.get('effectiveScopes') || [],
-        'docker:containers:webhooks',
-        nodeId,
-        deploymentId
-      );
-      return c.json({ data: { ...redactDeploymentWebhookToken(data, canRevealWebhookToken), availability } });
+      const presented = presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId);
+      return c.json({ data: { ...presented, availability } });
     }
   );
 
@@ -221,14 +213,17 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const scopes = c.get('effectiveScopes') || [];
       const data = await service.update(
-        c.req.param('nodeId')!,
-        c.req.param('deploymentId')!,
+        nodeId,
+        deploymentId,
         DockerDeploymentUpdateSchema.parse(await c.req.json()),
         user.id,
-        c.get('effectiveScopes') || []
+        scopes
       );
-      return c.json({ data });
+      return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
 
@@ -247,8 +242,10 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
-      const data = await service.start(c.req.param('nodeId')!, c.req.param('deploymentId')!, user.id);
-      return c.json({ data });
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const data = await service.start(nodeId, deploymentId, user.id);
+      return c.json({ data: presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId) });
     }
   );
 
@@ -257,8 +254,10 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
-      const data = await service.stop(c.req.param('nodeId')!, c.req.param('deploymentId')!, user.id);
-      return c.json({ data });
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const data = await service.stop(nodeId, deploymentId, user.id);
+      return c.json({ data: presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId) });
     }
   );
 
@@ -267,8 +266,10 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
-      const data = await service.restart(c.req.param('nodeId')!, c.req.param('deploymentId')!, user.id);
-      return c.json({ data });
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const data = await service.restart(nodeId, deploymentId, user.id);
+      return c.json({ data: presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId) });
     }
   );
 
@@ -277,8 +278,10 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
-      const data = await service.kill(c.req.param('nodeId')!, c.req.param('deploymentId')!, user.id);
-      return c.json({ data });
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const data = await service.kill(nodeId, deploymentId, user.id);
+      return c.json({ data: presentDeploymentForCaller(data, c.get('effectiveScopes') || [], nodeId, deploymentId) });
     }
   );
 
@@ -287,15 +290,18 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const scopes = c.get('effectiveScopes') || [];
       const data = await service.deploy(
-        c.req.param('nodeId')!,
-        c.req.param('deploymentId')!,
+        nodeId,
+        deploymentId,
         DockerDeploymentDeploySchema.parse(await c.req.json().catch(() => ({}))),
         user.id,
         'manual',
-        c.get('effectiveScopes') || []
+        scopes
       );
-      return c.json({ data });
+      return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
 
@@ -304,15 +310,18 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
     async (c) => {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const scopes = c.get('effectiveScopes') || [];
       const data = await service.switchToSlot(
-        c.req.param('nodeId')!,
-        c.req.param('deploymentId')!,
+        nodeId,
+        deploymentId,
         DockerDeploymentSwitchSchema.parse(await c.req.json()),
         user.id,
         undefined,
-        c.get('effectiveScopes') || []
+        scopes
       );
-      return c.json({ data });
+      return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
 
@@ -322,14 +331,11 @@ export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
       const service = container.resolve(DockerDeploymentService);
       const user = c.get('user')!;
       const body = await c.req.json().catch(() => ({}));
-      const data = await service.rollback(
-        c.req.param('nodeId')!,
-        c.req.param('deploymentId')!,
-        body.force === true,
-        user.id,
-        c.get('effectiveScopes') || []
-      );
-      return c.json({ data });
+      const nodeId = c.req.param('nodeId')!;
+      const deploymentId = c.req.param('deploymentId')!;
+      const scopes = c.get('effectiveScopes') || [];
+      const data = await service.rollback(nodeId, deploymentId, body.force === true, user.id, scopes);
+      return c.json({ data: presentDeploymentForCaller(data, scopes, nodeId, deploymentId) });
     }
   );
 

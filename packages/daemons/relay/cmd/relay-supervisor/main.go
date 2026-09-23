@@ -62,7 +62,7 @@ func main() {
 		logger.Error("initialize relay supervisor", "error", err)
 		os.Exit(1)
 	}
-	lifecycle.NotifyLauncherLocalReady(Version)
+	lifecycle.NotifyLauncherLocalReadyAwaitingControl(Version)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	if err := daemon.Run(ctx); err != nil {

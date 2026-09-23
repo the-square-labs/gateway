@@ -637,6 +637,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
       query: {
         proxyHosts: {
           findMany: vi.fn().mockResolvedValue([host]),
+          findFirst: vi.fn().mockResolvedValue(host),
         },
         accessLists: {
           findFirst: vi.fn().mockResolvedValue({
@@ -674,7 +675,7 @@ describe('ProxyService legacy Docker link compatibility', () => {
     const host = makeActiveSecureHost({ accessListId: 'access-list-1' });
     const db = {
       query: {
-        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]) },
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([host]), findFirst: vi.fn().mockResolvedValue(host) },
         accessLists: {
           findFirst: vi.fn().mockResolvedValue({
             id: 'access-list-1',
@@ -753,6 +754,67 @@ describe('ProxyService legacy Docker link compatibility', () => {
 
     expect(result).toEqual({});
     expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['omits the Compose fields', {}],
+    ['sends explicit Compose nulls', { dockerComposeProjectId: null, dockerComposeServiceName: null }],
+  ])('switches a Compose target to a named container when the request %s', async (_label, composeFields) => {
+    const resolve = vi.fn().mockImplementation(async (reference) => ({
+      upstreamKind: 'docker_container',
+      forwardHost: '127.0.0.1',
+      forwardPort: 1,
+      dockerNodeId: reference.dockerNodeId,
+      dockerContainerName: reference.dockerContainerName,
+      dockerComposeProjectId: reference.dockerComposeProjectId ?? null,
+      dockerComposeServiceName: reference.dockerComposeServiceName ?? null,
+      dockerDeploymentId: null,
+      dockerContainerPort: 8080,
+      dockerHostPort: null,
+      dockerProtocol: 'tcp',
+    }));
+    const service = new ProxyService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      { resolve } as any,
+      {} as any
+    );
+    const existing = makeActiveSecureHost({
+      dockerContainerName: 'stack-web-1',
+      dockerComposeProjectId: '22222222-2222-4222-8222-222222222222',
+      dockerComposeServiceName: 'web',
+    });
+
+    const result = await (service as any).prepareUpdateUpstream(
+      existing,
+      {
+        upstreamKind: 'docker_container',
+        dockerNodeId: existing.dockerNodeId,
+        dockerContainerName: 'standalone',
+        ...composeFields,
+      },
+      {}
+    );
+
+    expect(resolve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dockerContainerName: 'standalone',
+        dockerComposeProjectId: null,
+        dockerComposeServiceName: null,
+      }),
+      expect.anything()
+    );
+    expect(result).toEqual(
+      expect.objectContaining({
+        dockerContainerName: 'standalone',
+        dockerComposeProjectId: null,
+        dockerComposeServiceName: null,
+      })
+    );
   });
 
   it('keeps the legacy endpoint durable when a Docker target change is staged', async () => {
@@ -839,7 +901,12 @@ describe('ProxyService legacy Docker link compatibility', () => {
   it('tears down a Secure Link left active by a crash after raw cutover', async () => {
     const raw = makeActiveSecureHost({ rawConfigEnabled: true, rawConfig: 'server {}', healthCheckEnabled: false });
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([raw]) } },
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([raw]),
+          findFirst: vi.fn().mockResolvedValue(raw),
+        },
+      },
     } as any;
     const secureLinks = { cleanup: vi.fn().mockResolvedValue(undefined) } as any;
     const dockerUpstreams = { resolve: vi.fn() } as any;
@@ -863,7 +930,12 @@ describe('ProxyService legacy Docker link compatibility', () => {
   it('does not force an E2E probe for an unchanged active link on a Docker snapshot', async () => {
     const active = makeActiveSecureHost();
     const db = {
-      query: { proxyHosts: { findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([active]) } },
+      query: {
+        proxyHosts: {
+          findMany: vi.fn().mockResolvedValueOnce([]).mockResolvedValueOnce([active]),
+          findFirst: vi.fn().mockResolvedValue(active),
+        },
+      },
     } as any;
     const dockerUpstreams = {
       resolve: vi.fn().mockResolvedValue({

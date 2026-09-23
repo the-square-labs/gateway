@@ -66,9 +66,9 @@ export function withBackupApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         { method: "DELETE" }
       );
     }
-    async cancelBackup(databaseId: string, runId: string) {
+    async cancelBackup(databaseId: string, runId: string, options: { force?: boolean } = {}) {
       await this.request(
-        `/databases/${encodeURIComponent(databaseId)}/backups/runs/${encodeURIComponent(runId)}/cancel`,
+        `/databases/${encodeURIComponent(databaseId)}/backups/runs/${encodeURIComponent(runId)}/cancel${options.force ? "?force=true" : ""}`,
         { method: "POST" }
       );
     }

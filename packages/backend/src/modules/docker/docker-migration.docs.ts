@@ -5,6 +5,7 @@ import {
   DockerMigrationListQuerySchema,
   DockerMigrationPreflightInputSchema,
   DockerMigrationPreflightSchema,
+  DockerMigrationResolveInputSchema,
   DockerMigrationSchema,
 } from './docker-migration.schemas.js';
 
@@ -82,5 +83,18 @@ export const retryDockerMigrationCleanupRoute = appRoute({
   request: { params: migrationParams },
   responses: {
     200: { description: 'Cleanup retry accepted', content: jsonContent(dataResponseSchema(DockerMigrationSchema)) },
+  },
+});
+
+export const resolveDockerMigrationRoute = appRoute({
+  method: 'post',
+  path: '/migrations/{id}/resolve',
+  tags: ['Docker Migrations'],
+  summary: 'Resolve a migration that needs attention',
+  description:
+    'Confirms which node is authoritative after an operator reconciled both nodes, then releases the migration lock and the maintenance mode the migration entered. Resolving to the source restores the restart policy the migration replaced on the source. No container is started or removed.',
+  request: { params: migrationParams, ...jsonBody(DockerMigrationResolveInputSchema) },
+  responses: {
+    200: { description: 'Migration resolved', content: jsonContent(dataResponseSchema(DockerMigrationSchema)) },
   },
 });

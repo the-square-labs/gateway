@@ -8,6 +8,7 @@ import {
   relayPolicyState,
   relayRoutes,
 } from '@/db/schema/index.js';
+import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
 import { managedDatabaseListenerConfigsEqual, RelayPolicyService } from './relay-policy.service.js';
 
@@ -19,6 +20,7 @@ function createService(
     getRouteRuntime?: ReturnType<typeof vi.fn>;
     bootstrapPolicyTrust?: ReturnType<typeof vi.fn>;
     applyEncodedSnapshot?: ReturnType<typeof vi.fn>;
+    resetLocalPolicyTrust?: ReturnType<typeof vi.fn>;
   }
 ) {
   return new RelayPolicyService(
@@ -212,7 +214,7 @@ describe('RelayPolicyService route runtime', () => {
     const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
     db.transaction = (fn: any) => fn(db);
     const service = createService(db, { applySnapshot: vi.fn() });
-    (service as any).policyKeys.listPublishedKeys = async () => [];
+    (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });
     (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
     expect(await (service as any).buildInstanceSnapshot('local')).toMatchObject({ revision: 901, globalRevision: 900 });
     const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].desiredPolicyRevision);
@@ -415,7 +417,7 @@ describe('RelayPolicyService snapshots', () => {
       applyEncodedSnapshot,
     });
     const keys = (service as any).policyKeys;
-    keys.listPublishedKeys = async () => [];
+    keys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'policy-key', keys: [] });
     keys.getEnrollmentTrust = async () => ({ keyId: 'policy-key', publicKey: '', fingerprint: '' });
     keys.signPayload = async () => ({ signingKeyId: 'policy-key', signature: Buffer.alloc(64) });
     const issuer = (service as any).grantIssuer;
@@ -814,5 +816,187 @@ describe('RelayPolicyService gateway tunnels', () => {
       'awaiting lifecycle reconciliation'
     );
     expect(update).not.toHaveBeenCalled();
+  });
+});
+
+describe('RelayPolicyService policy signing trust', () => {
+  const ACTIVE = { keyId: 'active', publicKey: Buffer.alloc(32, 1), fingerprint: 'sha256:active' };
+  const signedRotationRefusal = () =>
+    Object.assign(new Error('9 FAILED_PRECONDITION: new policy signing keys require signed rotation'), { code: 9 });
+
+  function localPoolFixture(relayOverrides: Record<string, ReturnType<typeof vi.fn>> = {}) {
+    let transportRevision = 100;
+    const local = {
+      id: 'local',
+      poolId: 'system',
+      kind: 'local',
+      policySigningKeyId: null,
+      health: null,
+      buildVersion: 'test',
+      protocolMajor: 1,
+      capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] },
+    };
+    const db: any = {
+      select: () => {
+        let table: unknown;
+        const query: any = {
+          from: (value: unknown) => {
+            table = value;
+            return query;
+          },
+          // biome-ignore lint/suspicious/noThenProperty: emulate Drizzle's lazy thenable query
+          then: (resolve: (rows: unknown[]) => unknown) =>
+            Promise.resolve(
+              table === relayPolicyState
+                ? [{ revision: 10, gatewayInstanceId: 'gateway' }]
+                : table === relayInstances
+                  ? [local]
+                  : []
+            ).then(resolve),
+        };
+        for (const method of ['where', 'limit', 'innerJoin', 'for']) query[method] = () => query;
+        return query;
+      },
+      execute: vi.fn(),
+      update: () => ({
+        set: () => ({ where: () => ({ returning: async () => [{ revision: ++transportRevision }] }) }),
+      }),
+    };
+    db.transaction = (fn: any) => fn(db);
+    const relay = {
+      applySnapshot: vi.fn(),
+      getHealth: vi.fn().mockResolvedValue({
+        ...local,
+        relayInstanceId: local.id,
+        capabilities: local.capabilities.features,
+        policyKeyIds: ['stale'],
+      }),
+      bootstrapPolicyTrust: vi.fn().mockResolvedValue(undefined),
+      applyEncodedSnapshot: vi.fn(async () => ({ appliedRevision: String(transportRevision) })),
+      resetLocalPolicyTrust: vi.fn().mockResolvedValue({ replacedKeyIds: ['stale'] }),
+      ...relayOverrides,
+    };
+    const service = createService(db, relay);
+    const keys = (service as any).policyKeys;
+    keys.getEnrollmentTrust = vi.fn().mockResolvedValue(ACTIVE);
+    keys.resolveInstancePolicyKeys = vi.fn().mockResolvedValue({ signingKeyId: 'active', keys: [] });
+    keys.signPayload = vi.fn(async () => ({ signingKeyId: 'active', signature: Buffer.alloc(64) }));
+    return { service, relay, keys, local };
+  }
+
+  it("signs each relay's snapshot with the key its own trust selects and starts validFrom early", async () => {
+    const { service, keys, local } = localPoolFixture();
+    const activatedAt = new Date('2026-09-23T12:00:00Z');
+    const verifyUntil = new Date('2026-09-23T12:30:00Z');
+    keys.resolveInstancePolicyKeys.mockResolvedValue({
+      signingKeyId: 'old',
+      keys: [
+        {
+          keyId: 'active',
+          publicKey: Buffer.alloc(32, 1),
+          fingerprint: 'sha256:a',
+          status: 'active',
+          activatedAt,
+          verifyUntil: null,
+        },
+        {
+          keyId: 'old',
+          publicKey: Buffer.alloc(32, 2),
+          fingerprint: 'sha256:o',
+          status: 'verification_only',
+          activatedAt: null,
+          verifyUntil,
+        },
+      ],
+    });
+
+    await (service as any).buildInstanceSnapshot('local', ['old']);
+
+    expect(keys.resolveInstancePolicyKeys).toHaveBeenCalledWith(
+      expect.objectContaining({ id: local.id, policySigningKeyId: null }),
+      expect.any(Date),
+      ['old']
+    );
+    const [payload, signingKeyId] = keys.signPayload.mock.calls[0] as unknown as [Buffer, string];
+    expect(signingKeyId).toBe('old');
+    const decoded = decodeRelayV1Message('PolicyEnvelopePayload', payload) as {
+      policySigningKeys: Array<{ keyId: string; status: string; validFromUnix: string; verifyUntilUnix: string }>;
+    };
+    expect(decoded.policySigningKeys).toEqual([
+      expect.objectContaining({
+        keyId: 'active',
+        status: 'active',
+        validFromUnix: String(activatedAt.getTime() / 1000 - 300),
+        verifyUntilUnix: '0',
+      }),
+      expect.objectContaining({
+        keyId: 'old',
+        status: 'verification_only',
+        validFromUnix: '0',
+        verifyUntilUnix: String(verifyUntil.getTime() / 1000),
+      }),
+    ]);
+  });
+
+  it('pins the active key on the local relay and signs with it', async () => {
+    const { service, relay, keys } = localPoolFixture();
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(relay.bootstrapPolicyTrust).toHaveBeenCalledWith('active', ACTIVE.publicKey, ACTIVE.fingerprint);
+    expect(relay.resetLocalPolicyTrust).not.toHaveBeenCalled();
+    expect(keys.resolveInstancePolicyKeys).toHaveBeenCalledWith(expect.anything(), expect.any(Date), ['active']);
+  });
+
+  it('lets a retained old key introduce the active key to a lagging local relay without a reset', async () => {
+    const { service, relay, keys } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(signedRotationRefusal()),
+    });
+    keys.resolveInstancePolicyKeys.mockResolvedValue({ signingKeyId: 'stale', keys: [] });
+
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(relay.resetLocalPolicyTrust).not.toHaveBeenCalled();
+    expect(keys.resolveInstancePolicyKeys).toHaveBeenLastCalledWith(expect.anything(), expect.any(Date), ['stale']);
+    expect(relay.applyEncodedSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-pins a local relay restored from a backup older than every key Gateway can sign with', async () => {
+    const { service, relay, keys } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(signedRotationRefusal()),
+    });
+
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(relay.resetLocalPolicyTrust).toHaveBeenCalledWith('active', ACTIVE.publicKey, ACTIVE.fingerprint);
+    expect(keys.resolveInstancePolicyKeys).toHaveBeenLastCalledWith(expect.anything(), expect.any(Date), ['active']);
+    expect(relay.applyEncodedSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the original refusal when the local relay predates the reset call', async () => {
+    const refusal = signedRotationRefusal();
+    const { service, relay } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(refusal),
+      resetLocalPolicyTrust: vi.fn().mockRejectedValue(Object.assign(new Error('unimplemented'), { code: 12 })),
+    });
+
+    await expect(service.syncSnapshot()).rejects.toBe(refusal);
+    expect(relay.applyEncodedSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('never resets trust for other bootstrap failures', async () => {
+    const { service, relay } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(new Error('14 UNAVAILABLE: connection refused')),
+    });
+
+    await expect(service.syncSnapshot()).rejects.toThrow('connection refused');
+    expect(relay.resetLocalPolicyTrust).not.toHaveBeenCalled();
+  });
+
+  it('destroys unneeded old private keys on every rotation pass', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const keys = (service as any).policyKeys;
+    keys.promoteAcknowledgedPending = vi.fn().mockResolvedValue(false);
+    keys.retireExpiredVerificationKeys = vi.fn().mockResolvedValue(false);
+    keys.destroyUnneededPrivateKeys = vi.fn().mockResolvedValue(true);
+
+    await expect(service.finalizePolicySigningKeyRotation()).resolves.toBe(false);
+    expect(keys.destroyUnneededPrivateKeys).toHaveBeenCalledTimes(1);
   });
 });

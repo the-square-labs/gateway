@@ -421,14 +421,110 @@ exit 1
 	}
 }
 
+func writeControlAwareLauncherTestExecutable(t *testing.T, path, version string, controlReady bool) {
+	t.Helper()
+	controlLine := ""
+	if controlReady {
+		controlLine = `printf '%s\n' '{"type":"control_ready","version":"` + version + `"}' >"/dev/fd/$GATEWAY_DAEMON_LAUNCHER_READY_FD"` + "\n"
+	}
+	contents := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"version) echo test-daemon " + version + "; exit 0 ;;\n" +
+		"launcher-probe) echo gateway-daemon-launcher 1; exit 0 ;;\n" +
+		"esac\n" +
+		`printf '%s\n' '{"type":"local_ready","version":"` + version + `","awaitControl":true}' >"/dev/fd/$GATEWAY_DAEMON_LAUNCHER_READY_FD"` + "\n" +
+		controlLine +
+		"trap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n"
+	if err := os.WriteFile(path, []byte(contents), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLauncherRollsBackCandidateThatNeverReachesGatewayControl(t *testing.T) {
+	restore := useFastLauncherTimings()
+	defer restore()
+	stateDir := t.TempDir()
+	binary := filepath.Join(t.TempDir(), "test-daemon")
+	writeLauncherTestExecutable(t, binary, "v1", true)
+	if _, err := stageLauncherUpdate(stateDir, "docker", binary, "v1", "v2", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	// Locally ready (and stable) but never accepted by the gateway.
+	writeControlAwareLauncherTestExecutable(t, binary, "v2", false)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runLauncher(ctx, LauncherSpec{DaemonType: "docker", StateDir: stateDir, BinaryPath: binary, ChildArgs: []string{"run"}}, discardLauncherLogger())
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		version, err := readDaemonBinaryVersion(binary)
+		if err == nil && version == "v1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("candidate without gateway control was not rolled back: version=%q err=%v", version, err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The binary is restored before the outcome is recorded and the journal removed.
+	waitForLauncherPath(t, launcherStatePath(stateDir), false)
+	outcome, err := os.ReadFile(launcherOutcomePath(stateDir))
+	cancel()
+	if err != nil || !strings.Contains(string(outcome), "gateway control readiness timeout") {
+		<-done
+		t.Fatalf("rollback outcome = %s, %v", outcome, err)
+	}
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("launcher did not stop")
+	}
+}
+
+func TestLauncherCommitsCandidateAfterGatewayControlReady(t *testing.T) {
+	restore := useFastLauncherTimings()
+	defer restore()
+	stateDir := t.TempDir()
+	binary := filepath.Join(t.TempDir(), "test-daemon")
+	writeLauncherTestExecutable(t, binary, "v1", true)
+	if _, err := stageLauncherUpdate(stateDir, "docker", binary, "v1", "v2", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	writeControlAwareLauncherTestExecutable(t, binary, "v2", true)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- runLauncher(ctx, LauncherSpec{DaemonType: "docker", StateDir: stateDir, BinaryPath: binary, ChildArgs: []string{"run"}}, discardLauncherLogger())
+	}()
+	waitForLauncherPath(t, launcherStatePath(stateDir), false)
+	if version, err := readDaemonBinaryVersion(binary); err != nil || version != "v2" {
+		t.Fatalf("candidate version = %q, %v", version, err)
+	}
+	if _, err := os.Stat(launcherOutcomePath(stateDir)); !os.IsNotExist(err) {
+		t.Fatalf("unexpected rollback outcome: %v", err)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("launcher did not stop")
+	}
+}
+
 func useFastLauncherTimings() func() {
 	oldReady := launcherLocalReadyLimit
+	oldControl := launcherControlReadyLimit
 	oldStable := launcherStabilityWindow
 	oldGrace := launcherStopGrace
 	oldBackoff := launcherRestartBackoff
 	oldMax := launcherRestartMax
 	oldStateRetry := launcherStateRetry
 	launcherLocalReadyLimit = 40 * time.Millisecond
+	launcherControlReadyLimit = 150 * time.Millisecond
 	launcherStabilityWindow = 60 * time.Millisecond
 	launcherStopGrace = 100 * time.Millisecond
 	launcherRestartBackoff = 10 * time.Millisecond
@@ -436,6 +532,7 @@ func useFastLauncherTimings() func() {
 	launcherStateRetry = 20 * time.Millisecond
 	return func() {
 		launcherLocalReadyLimit = oldReady
+		launcherControlReadyLimit = oldControl
 		launcherStabilityWindow = oldStable
 		launcherStopGrace = oldGrace
 		launcherRestartBackoff = oldBackoff

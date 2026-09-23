@@ -521,6 +521,38 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 			return "", err
 		}
 		return `{"status":"ok"}`, nil
+	case "postgres_query_principal_apply_v1":
+		var input postgresQueryPrincipalCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse PostgreSQL query principal config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := validatePostgresQueryPrincipalInput(input); err != nil {
+			return "", err
+		}
+		if err := m.applyPostgresQueryPrincipal(ctx, record, input); err != nil {
+			return "", err
+		}
+		return `{"status":"ok"}`, nil
+	case "postgres_query_writer_apply_v1":
+		var input postgresQueryWriterCommand
+		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
+			return "", fmt.Errorf("parse PostgreSQL query writer config: %w", err)
+		}
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		if err := validatePostgresQueryWriterInput(input); err != nil {
+			return "", err
+		}
+		if err := m.applyPostgresQueryWriter(ctx, record, input); err != nil {
+			return "", err
+		}
+		return `{"status":"ok"}`, nil
 	case "binding_principal_apply_v2", "binding_principal_probe_v2", "binding_principal_drop_v2":
 		var input managedDatabasePrincipalV2Command
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {

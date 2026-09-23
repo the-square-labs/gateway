@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Loader2,
   RotateCcw,
+  ShieldCheck,
   Truck,
   X,
 } from "lucide-react";
@@ -275,6 +276,7 @@ export function DockerMigrationReviewDialog({
   onStart,
   onCancel,
   onRetryCleanup,
+  onResolve,
   onClose,
 }: {
   open: boolean;
@@ -287,6 +289,7 @@ export function DockerMigrationReviewDialog({
   onStart: () => void;
   onCancel: () => void;
   onRetryCleanup: () => void;
+  onResolve?: () => void;
   onClose: () => void;
 }) {
   const canCancel =
@@ -326,6 +329,12 @@ export function DockerMigrationReviewDialog({
             <Button variant="outline" onClick={onRetryCleanup} disabled={loading}>
               <RotateCcw className="h-4 w-4" />
               Retry cleanup
+            </Button>
+          ) : null}
+          {migration?.status === "needs_attention" && onResolve ? (
+            <Button variant="outline" onClick={onResolve} disabled={loading}>
+              <ShieldCheck className="h-4 w-4" />
+              Resolve
             </Button>
           ) : null}
           {!migration && preflight ? (

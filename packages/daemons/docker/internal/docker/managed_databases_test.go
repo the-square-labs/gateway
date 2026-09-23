@@ -1028,6 +1028,41 @@ func TestRedisIdentityV2PersistsACLChangesAndDoesNotHideDeleteErrors(t *testing.
 	}
 }
 
+func TestRedisACLPasswordsNeverReachRedisCLIArguments(t *testing.T) {
+	for name, test := range map[string]struct {
+		command  string
+		password string
+	}{
+		"legacy binding":   {redisBindingACLCommand(), "$GATEWAY_DB_BINDING_PASSWORD"},
+		"identity-v2":      {redisBindingPrincipalV2ApplyCommand(), "$GATEWAY_DB_PRINCIPAL_PASSWORD"},
+		"owner separation": {redisOwnerRotateCommand(), "$GATEWAY_DB_PENDING_OWNER_PASSWORD"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// printf is a shell builtin, so the expanded password only reaches
+			// redis-cli through its stdin; -x appends it as the last argument.
+			piped := `printf '%s' ">` + test.password + `" | `
+			if strings.Count(test.command, `">$`) != 1 || !strings.Contains(test.command, piped) {
+				t.Fatalf("ACL password must only be piped from printf: %s", test.command)
+			}
+			if !strings.Contains(test.command, " -x ACL SETUSER ") {
+				t.Fatalf("redis-cli must read the ACL password from stdin: %s", test.command)
+			}
+			if strings.Contains(test.command, `%!`) || strings.Contains(test.command, `'%%s'`) {
+				t.Fatalf("ACL script has a broken format verb: %s", test.command)
+			}
+			for _, line := range strings.Split(test.command, "\n") {
+				if strings.Contains(line, "set -- redis-cli") && strings.Contains(line, "PASSWORD") {
+					t.Fatalf("redis-cli argument list includes a password: %s", line)
+				}
+			}
+		})
+	}
+	rotate := redisOwnerRotateCommand()
+	if !strings.Contains(rotate, `-x ACL SETUSER default reset on '~*' '&*' '+@all' 2>&1`) {
+		t.Fatalf("owner rotation must apply the owner rules before the piped password: %s", rotate)
+	}
+}
+
 func TestManagedRedisConfigUsesPersistentACLFile(t *testing.T) {
 	config := managedRedisConfigText(managedDatabaseCommand{Type: "redis", MemoryBytes: 1024 * 1024})
 	if !strings.Contains(config, "aclfile /data/users.acl\n") {

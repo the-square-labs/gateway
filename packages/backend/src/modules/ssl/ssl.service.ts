@@ -1,8 +1,17 @@
 import crypto from 'node:crypto';
-import { and, count, desc, eq, ilike, inArray, lte, or } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { certificates, pageWildcardProfiles, proxyHosts, sslCertificates } from '@/db/schema/index.js';
+import {
+  certificateAuthorities,
+  certificates,
+  pageWildcardProfiles,
+  permissionGroups,
+  proxyHosts,
+  sslCertificates,
+  users,
+} from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import { buildWhere, escapeLike, sleep } from '@/lib/utils.js';
 import { x509 } from '@/lib/x509.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -11,7 +20,10 @@ import type { IntegrationsService } from '@/modules/integrations/integrations.se
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import type { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
+import {
+  type NginxCertificateDistributionService,
+  SSL_DISTRIBUTION_ERROR_PREFIX,
+} from '@/services/nginx-certificate-distribution.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { ACMEService } from './acme.service.js';
 import type {
@@ -24,6 +36,16 @@ import type {
 
 const logger = createChildLogger('SSLService');
 const CLOUDFLARE_DNS01_PROPAGATION_DELAY_MS = process.env.NODE_ENV === 'test' ? 0 : 10_000;
+const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+
+/** Prefix of a renewalError that reports incomplete delivery rather than a failed renewal. */
+export { SSL_DISTRIBUTION_ERROR_PREFIX };
+/** PKI scope that allows a caller to put an internal certificate's private key into service. */
+export const INTERNAL_CERT_KEY_USE_SCOPE = 'pki:cert:export';
+
+type ProxyHostSyncFailure = { hostId: string; error: string };
+
+const RENEWABLE_STATUSES: ReadonlySet<string> = new Set(['active', 'error', 'expired']);
 
 type DNSChallenge = {
   domain: string;
@@ -58,6 +80,8 @@ export class SSLService {
   private eventBus?: EventBusService;
   private integrationsService?: IntegrationsService;
   private proxyService?: ProxyService;
+  /** Errors whose renewal failure is already persisted by an inner step. */
+  private readonly recordedRenewalFailures = new WeakSet<object>();
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
   }
@@ -66,6 +90,11 @@ export class SSLService {
   }
   setProxyService(service: ProxyService) {
     this.proxyService = service;
+    // Lets periodic reconciliation re-render (and so reload) a host on a
+    // legacy Nginx daemon after it retried a legacy certificate push.
+    this.certificateDistribution.setLegacyHostConfigReapplier?.((hostId) =>
+      service.reconcileAdditionalRouteHost(hostId)
+    );
   }
 
   /**
@@ -74,32 +103,94 @@ export class SSLService {
    * hosts that predate deployment records; failures remain a distribution
    * status on that host instead of invalidating an otherwise valid renewal.
    */
-  private async refreshGatewayAssetAndSyncProxyHosts(certId: string, userId: string): Promise<number> {
+  private async refreshGatewayAssetAndSyncProxyHosts(
+    certId: string,
+    userId: string
+  ): Promise<{ synchronized: number; failures: ProxyHostSyncFailure[] }> {
     await this.certificateDistribution.upsertGatewayAsset({ type: 'ssl', id: certId });
     return this.resyncActiveProxyHosts(certId, userId);
   }
 
-  private async resyncActiveProxyHosts(certId: string, userId: string): Promise<number> {
-    if (!this.proxyService) return 0;
+  private async resyncActiveProxyHosts(
+    certId: string,
+    userId: string
+  ): Promise<{ synchronized: number; failures: ProxyHostSyncFailure[] }> {
+    if (!this.proxyService) return { synchronized: 0, failures: [] };
 
     const activeHosts = await this.db.query.proxyHosts.findMany({
-      where: and(eq(proxyHosts.sslCertificateId, certId), eq(proxyHosts.enabled, true)),
-      columns: { id: true },
+      where: and(
+        eq(proxyHosts.sslCertificateId, certId),
+        eq(proxyHosts.enabled, true),
+        eq(proxyHosts.sslEnabled, true)
+      ),
+      columns: { id: true, nodeId: true, sslEnabled: true, sslCertificateId: true, internalCertificateId: true },
     });
     let synchronized = 0;
+    const failures: ProxyHostSyncFailure[] = [];
     for (const host of activeHosts) {
       try {
         await this.proxyService.resyncTlsHost(host.id, userId);
         synchronized += 1;
       } catch (error) {
-        logger.warn('TLS certificate refresh could not yet synchronize a proxy host', {
-          certId,
-          hostId: host.id,
-          error: error instanceof Error ? error.message : 'unknown error',
-        });
+        if (!(error instanceof AppError) || error.code !== 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') {
+          failures.push(this.recordHostSyncFailure(certId, host.id, error));
+          continue;
+        }
+        // A daemon without TLS distribution v2 cannot take an atomic bundle.
+        // Push the certificate with the legacy command; the distribution
+        // service then re-applies the host config so nginx reloads it.
+        try {
+          const legacy = await this.certificateDistribution.deployLegacyCertificateForHost(host);
+          if (legacy === 'not_legacy') {
+            // A v2 daemon that is offline receives the bundle through its
+            // reconnect reconciliation.
+            logger.warn('TLS certificate refresh deferred until the Nginx node reconnects', {
+              certId,
+              hostId: host.id,
+            });
+            continue;
+          }
+          synchronized += 1;
+        } catch (legacyError) {
+          failures.push(this.recordHostSyncFailure(certId, host.id, legacyError));
+        }
       }
     }
-    return synchronized;
+    return { synchronized, failures };
+  }
+
+  private recordHostSyncFailure(certId: string, hostId: string, error: unknown): ProxyHostSyncFailure {
+    const message = error instanceof Error ? error.message : 'unknown error';
+    logger.error('TLS certificate could not be delivered to a proxy host', { certId, hostId, error: message });
+    return { hostId, error: message };
+  }
+
+  /**
+   * Make an incomplete delivery visible on the certificate. A later complete
+   * delivery clears only this kind of message, never a renewal failure.
+   */
+  private async recordDistributionOutcome(certId: string, failures: ProxyHostSyncFailure[]): Promise<void> {
+    if (failures.length === 0) {
+      await this.db
+        .update(sslCertificates)
+        .set({ renewalError: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(sslCertificates.id, certId),
+            sql`${sslCertificates.renewalError} LIKE ${`${SSL_DISTRIBUTION_ERROR_PREFIX}%`}`
+          )
+        );
+      return;
+    }
+    const first = failures[0]!;
+    await this.db
+      .update(sslCertificates)
+      .set({
+        renewalError: `${SSL_DISTRIBUTION_ERROR_PREFIX}${failures.length} proxy host(s) did not receive the current certificate (${first.error})`,
+        updatedAt: new Date(),
+      })
+      .where(eq(sslCertificates.id, certId));
+    this.emitCert(certId, 'updated');
   }
 
   private emitCert(
@@ -334,7 +425,7 @@ export class SSLService {
   async completeDNS01Verification(
     certId: string,
     userId: string,
-    options: { cleanupCloudflare?: boolean; clearPendingOnFailure?: boolean } = {}
+    options: { cleanupCloudflare?: boolean; clearPendingOnFailure?: boolean; contactEmail?: string } = {}
   ) {
     const cert = await this.db.query.sslCertificates.findFirst({
       where: eq(sslCertificates.id, certId),
@@ -353,7 +444,7 @@ export class SSLService {
     if (pendingOperation === 'issue' && cert.status !== 'pending' && cert.status !== 'error') {
       throw new AppError(400, 'NOT_PENDING', 'Certificate is not pending DNS verification');
     }
-    if (pendingOperation === 'renewal' && cert.status !== 'active' && cert.status !== 'error') {
+    if (pendingOperation === 'renewal' && !RENEWABLE_STATUSES.has(cert.status)) {
       throw new AppError(400, 'CERT_NOT_RENEWABLE', 'Certificate is not in a renewable state');
     }
 
@@ -366,6 +457,8 @@ export class SSLService {
         encryptedDek: acmeKeyBlob.encryptedDek,
         dekIv: acmeKeyBlob.dekIv,
       });
+      // Orders started on v2.9.x or earlier have no contact in the blob.
+      const contactEmail = await this.resolveAcmeContactEmail(cert, options.contactEmail);
 
       const dns01IsStaging = cert.acmeProvider === 'letsencrypt-staging';
       const result = await this.acmeService.requestCertDNS01Verify(
@@ -373,7 +466,7 @@ export class SSLService {
         cert.acmeOrderUrl,
         cert.domainNames,
         dns01IsStaging,
-        typeof acmeKeyBlob.contactEmail === 'string' ? acmeKeyBlob.contactEmail : undefined
+        contactEmail
       );
 
       // Encrypt private key
@@ -394,6 +487,11 @@ export class SSLService {
             status: 'active',
             lastRenewedAt: pendingOperation === 'renewal' ? new Date() : cert.lastRenewedAt,
             renewalError: null,
+            renewalFailureCount: 0,
+            ...(pendingOperation === 'renewal' ? { lastRenewalAttemptAt: new Date() } : {}),
+            ...(contactEmail && contactEmail !== this.getStoredAcmeContactEmail(cert.acmeAccountKey)
+              ? { acmeAccountKey: JSON.stringify({ ...acmeKeyBlob, contactEmail }) }
+              : {}),
             acmeOrderUrl: null, // Clear order URL after completion
             acmePendingOperation: null,
             acmePendingChallenges: null,
@@ -403,7 +501,8 @@ export class SSLService {
 
         // Deploy to nginx — separate try/catch since cert is already valid at this point
         try {
-          await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
+          const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
+          await this.recordDistributionOutcome(certId, delivery.failures);
         } catch (deployError) {
           const deployMsg = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
           logger.error('Certificate obtained but deploy to nginx failed', { certId, error: deployMsg });
@@ -444,24 +543,23 @@ export class SSLService {
       if (options.cleanupCloudflare && !cloudflareCleanupDone) {
         await this.cleanupCloudflareDnsChallenges((cert.acmePendingChallenges ?? []) as DNSChallenge[]);
       }
-      if (error instanceof AppError) throw error;
+      // DEPLOY_FAILED means the certificate itself was obtained and stored.
+      if (error instanceof AppError && (pendingOperation !== 'renewal' || error.code === 'DEPLOY_FAILED')) throw error;
       const message = error instanceof Error ? error.message : 'Unknown verification error';
       if (pendingOperation === 'renewal') {
-        await this.db
-          .update(sslCertificates)
-          .set({
-            renewalError: `Renewal failed: ${message}`,
-            ...(options.clearPendingOnFailure
-              ? {
-                  acmeOrderUrl: null,
-                  acmePendingOperation: null,
-                  acmePendingChallenges: null,
-                }
-              : {}),
-            updatedAt: new Date(),
-          })
-          .where(eq(sslCertificates.id, certId));
-        this.emitCert(certId, 'renewal_failed', cert.name);
+        await this.recordRenewalFailure(
+          cert,
+          `Renewal failed: ${message}`,
+          options.clearPendingOnFailure
+            ? { acmeOrderUrl: null, acmePendingOperation: null, acmePendingChallenges: null }
+            : {}
+        );
+        const failure =
+          error instanceof AppError
+            ? error
+            : new AppError(400, 'DNS01_VERIFICATION_FAILED', `DNS-01 verification failed: ${message}`);
+        this.recordedRenewalFailures.add(failure);
+        throw failure;
       } else {
         await this.db
           .update(sslCertificates)
@@ -536,7 +634,8 @@ export class SSLService {
 
     // Deploy cert files to nginx
     try {
-      await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
+      const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
+      await this.recordDistributionOutcome(cert.id, delivery.failures);
     } catch (deployError) {
       const deployMessage = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
       await this.db
@@ -568,15 +667,36 @@ export class SSLService {
   // Link internal CA certificate
   // ---------------------------------------------------------------------------
 
-  async linkInternalCert(input: LinkInternalCertInput, userId: string) {
+  async linkInternalCert(input: LinkInternalCertInput, userId: string, actorScopes: string[]) {
+    // Linking copies the PKI private key into TLS service, so the caller must
+    // be allowed to take that key out of PKI, not merely to create SSL entries.
+    if (!hasScopeForResource(actorScopes, INTERNAL_CERT_KEY_USE_SCOPE, input.internalCertId)) {
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        `Missing required scope: ${INTERNAL_CERT_KEY_USE_SCOPE}:${input.internalCertId}`
+      );
+    }
+
     // Look up PKI certificate
     const pkiCert = await this.db.query.certificates.findFirst({
       where: eq(certificates.id, input.internalCertId),
     });
 
     if (!pkiCert) throw new AppError(404, 'PKI_CERT_NOT_FOUND', 'Internal PKI certificate not found');
-    if (pkiCert.status !== 'active')
+    const [issuer] = await this.db
+      .select({ isSystem: certificateAuthorities.isSystem })
+      .from(certificateAuthorities)
+      .where(eq(certificateAuthorities.id, pkiCert.caId))
+      .limit(1);
+    if (!issuer || issuer.isSystem) {
+      throw new AppError(403, 'SYSTEM_CERT', 'Certificates issued by a system CA cannot be used as SSL certificates');
+    }
+    if (pkiCert.status !== 'active' || pkiCert.notAfter.getTime() <= Date.now())
       throw new AppError(400, 'PKI_CERT_NOT_ACTIVE', 'Internal PKI certificate is not active');
+    if (pkiCert.type !== 'tls-server') {
+      throw new AppError(400, 'PKI_CERT_NOT_SERVER', 'Only TLS server certificates can be used as SSL certificates');
+    }
 
     // Auto-generate name from cert CN if not provided
     const name = input.name || pkiCert.commonName;
@@ -632,7 +752,8 @@ export class SSLService {
     // Store the linked certificate canonically. Active hosts are synchronized
     // through their atomic TLS bundle; no default-node predeployment occurs.
     if (privateKeyPem) {
-      await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
+      const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(cert.id, userId);
+      await this.recordDistributionOutcome(cert.id, delivery.failures);
     }
 
     await this.auditService.log({
@@ -653,107 +774,186 @@ export class SSLService {
   // Renew certificate
   // ---------------------------------------------------------------------------
 
-  async renewCert(certId: string, userId: string) {
+  async renewCert(certId: string, userId: string, requesterEmail?: string) {
     const cert = await this.db.query.sslCertificates.findFirst({
       where: eq(sslCertificates.id, certId),
     });
 
     if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
     if (cert.type !== 'acme') throw new AppError(400, 'NOT_ACME', 'Only ACME certificates can be renewed');
-    if (cert.status !== 'active' && cert.status !== 'error') {
+    if (!RENEWABLE_STATUSES.has(cert.status)) {
       throw new AppError(400, 'CERT_NOT_RENEWABLE', 'Certificate is not in a renewable state');
     }
 
+    let result: {
+      certificatePem: string;
+      privateKeyPem: string;
+      chainPem: string;
+      notBefore: Date;
+      notAfter: Date;
+      accountKey?: string;
+    };
+    let contactEmail: string | undefined;
     try {
-      let result: {
-        certificatePem: string;
-        privateKeyPem: string;
-        chainPem: string;
-        notBefore: Date;
-        notAfter: Date;
-        accountKey?: string;
-      };
-
-      if (cert.acmeChallengeType === 'http-01') {
-        const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
-        result = await this.acmeService.requestCertHTTP01(
-          cert.domainNames,
-          renewIsStaging,
-          this.getStoredAcmeContactEmail(cert.acmeAccountKey)
-        );
-      } else {
-        const dnsRenewal = await this.startDNS01Renewal(cert, userId);
-        return dnsRenewal;
+      contactEmail = await this.resolveAcmeContactEmail(cert, requesterEmail);
+      if (cert.acmeChallengeType !== 'http-01') {
+        return await this.startDNS01Renewal(cert, userId, contactEmail);
       }
-
-      // Encrypt private key
-      const encrypted = this.cryptoService.encryptPrivateKey(result.privateKeyPem);
-
-      // Encrypt updated ACME account key if present
-      const renewUpdateData: Record<string, unknown> = {
-        certificatePem: result.certificatePem,
-        privateKeyPem: encrypted.encryptedPrivateKey,
-        encryptedDek: encrypted.encryptedDek,
-        dekIv: encrypted.dekIv,
-        chainPem: result.chainPem,
-        notBefore: result.notBefore,
-        notAfter: result.notAfter,
-        status: 'active',
-        lastRenewedAt: new Date(),
-        renewalError: null,
-        acmeOrderUrl: null,
-        acmePendingOperation: null,
-        acmePendingChallenges: null,
-        updatedAt: new Date(),
-      };
-
-      if (result.accountKey) {
-        const renewAcmeKeyEncrypted = this.cryptoService.encryptPrivateKey(result.accountKey);
-        renewUpdateData.acmeAccountKey = JSON.stringify({
-          encrypted: renewAcmeKeyEncrypted.encryptedPrivateKey,
-          encryptedDek: renewAcmeKeyEncrypted.encryptedDek,
-          dekIv: renewAcmeKeyEncrypted.dekIv,
-          contactEmail: this.getStoredAcmeContactEmail(cert.acmeAccountKey),
-        });
-      }
-
-      // Update cert data in DB
-      await this.db.update(sslCertificates).set(renewUpdateData).where(eq(sslCertificates.id, certId));
-
-      // Refresh the canonical asset and atomically synchronize active hosts.
-      await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
-
-      await this.auditService.log({
-        userId,
-        action: 'ssl.renew',
-        resourceType: 'ssl_certificate',
-        resourceId: certId,
-        details: { domains: cert.domainNames },
-      });
-
-      logger.info('Certificate renewed', { certId, domains: cert.domainNames });
-      this.emitCert(certId, 'renewed', cert.name);
-
-      const updated = await this.db.query.sslCertificates.findFirst({
-        where: eq(sslCertificates.id, certId),
-      });
-
-      return this.sanitizeCert(updated!);
+      const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
+      result = await this.acmeService.requestCertHTTP01(cert.domainNames, renewIsStaging, contactEmail);
     } catch (error) {
-      if (error instanceof AppError) throw error;
-
+      // DEPLOY_FAILED: the new certificate was obtained and stored already.
+      if (error instanceof AppError && (error.code === 'DEPLOY_FAILED' || this.recordedRenewalFailures.has(error))) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : 'Unknown renewal error';
+      await this.recordRenewalFailure(cert, `Renewal failed: ${message}`);
+      if (error instanceof AppError) throw error;
+      throw new AppError(500, 'RENEWAL_FAILED', `Certificate renewal failed: ${message}`);
+    }
 
+    // Encrypt private key
+    const encrypted = this.cryptoService.encryptPrivateKey(result.privateKeyPem);
+
+    // Encrypt updated ACME account key if present
+    const renewUpdateData: Partial<typeof sslCertificates.$inferInsert> = {
+      certificatePem: result.certificatePem,
+      privateKeyPem: encrypted.encryptedPrivateKey,
+      encryptedDek: encrypted.encryptedDek,
+      dekIv: encrypted.dekIv,
+      chainPem: result.chainPem,
+      notBefore: result.notBefore,
+      notAfter: result.notAfter,
+      status: 'active',
+      lastRenewedAt: new Date(),
+      lastRenewalAttemptAt: new Date(),
+      renewalError: null,
+      renewalFailureCount: 0,
+      acmeOrderUrl: null,
+      acmePendingOperation: null,
+      acmePendingChallenges: null,
+      updatedAt: new Date(),
+    };
+
+    if (result.accountKey) {
+      const renewAcmeKeyEncrypted = this.cryptoService.encryptPrivateKey(result.accountKey);
+      renewUpdateData.acmeAccountKey = JSON.stringify({
+        encrypted: renewAcmeKeyEncrypted.encryptedPrivateKey,
+        encryptedDek: renewAcmeKeyEncrypted.encryptedDek,
+        dekIv: renewAcmeKeyEncrypted.dekIv,
+        contactEmail,
+      });
+    }
+
+    // Update cert data in DB
+    await this.db.update(sslCertificates).set(renewUpdateData).where(eq(sslCertificates.id, certId));
+
+    // Refresh the canonical asset and atomically synchronize active hosts.
+    // The certificate is renewed at this point; a delivery problem must not
+    // be recorded as a renewal failure.
+    try {
+      const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
+      await this.recordDistributionOutcome(certId, delivery.failures);
+    } catch (deployError) {
+      const deployMsg = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
+      logger.error('Certificate renewed but deploy to nginx failed', { certId, error: deployMsg });
       await this.db
         .update(sslCertificates)
-        .set({
-          status: 'error',
-          renewalError: `Renewal failed: ${message}`,
-          updatedAt: new Date(),
-        })
+        .set({ renewalError: `Deploy failed: ${deployMsg}`, updatedAt: new Date() })
         .where(eq(sslCertificates.id, certId));
+      throw new AppError(500, 'DEPLOY_FAILED', `Certificate renewed but deploy failed: ${deployMsg}`);
+    }
 
-      throw new AppError(500, 'RENEWAL_FAILED', `Certificate renewal failed: ${message}`);
+    await this.auditService.log({
+      userId,
+      action: 'ssl.renew',
+      resourceType: 'ssl_certificate',
+      resourceId: certId,
+      details: { domains: cert.domainNames },
+    });
+
+    logger.info('Certificate renewed', { certId, domains: cert.domainNames });
+    this.emitCert(certId, 'renewed', cert.name);
+
+    const updated = await this.db.query.sslCertificates.findFirst({
+      where: eq(sslCertificates.id, certId),
+    });
+
+    return this.sanitizeCert(updated!);
+  }
+
+  /**
+   * A failed renewal never demotes a certificate that is still valid: it stays
+   * `active` so auto-renewal and expiry alerts keep selecting it. Only a
+   * certificate past notAfter leaves `active`.
+   */
+  private async recordRenewalFailure(
+    cert: Pick<typeof sslCertificates.$inferSelect, 'id' | 'name' | 'notAfter'>,
+    message: string,
+    extra: Partial<typeof sslCertificates.$inferInsert> = {}
+  ): Promise<void> {
+    const now = new Date();
+    const status = !cert.notAfter ? 'error' : cert.notAfter.getTime() > now.getTime() ? 'active' : 'expired';
+    await this.db
+      .update(sslCertificates)
+      .set({
+        ...extra,
+        status,
+        renewalError: message,
+        renewalFailureCount: sql`${sslCertificates.renewalFailureCount} + 1`,
+        lastRenewalAttemptAt: now,
+        updatedAt: now,
+      })
+      .where(eq(sslCertificates.id, cert.id));
+    this.emitCert(cert.id, 'renewal_failed', cert.name);
+  }
+
+  /**
+   * Contact for an ACME account. Blobs written by v2.9.x or earlier carry
+   * none, so fall back to the renewing user, the certificate creator, and
+   * finally the first active system administrator.
+   */
+  private async resolveAcmeContactEmail(
+    cert: Pick<typeof sslCertificates.$inferSelect, 'acmeAccountKey' | 'createdById'>,
+    requesterEmail?: string
+  ): Promise<string | undefined> {
+    const stored = this.getStoredAcmeContactEmail(cert.acmeAccountKey);
+    if (stored) return stored;
+    const requester = requesterEmail?.trim();
+    if (requester) return requester;
+
+    try {
+      if (cert.createdById && cert.createdById !== GATEWAY_SYSTEM_USER_ID) {
+        const [creator] = await this.db
+          .select({ email: users.email })
+          .from(users)
+          .where(and(eq(users.id, cert.createdById), isNull(users.deletedAt), eq(users.isBlocked, false)))
+          .limit(1);
+        if (creator?.email?.trim()) return creator.email.trim();
+      }
+
+      const [admin] = await this.db
+        .select({ email: users.email })
+        .from(users)
+        .innerJoin(permissionGroups, eq(users.groupId, permissionGroups.id))
+        .where(
+          and(
+            eq(permissionGroups.name, 'system-admin'),
+            ne(users.id, GATEWAY_SYSTEM_USER_ID),
+            isNull(users.deletedAt),
+            eq(users.isBlocked, false)
+          )
+        )
+        .orderBy(asc(users.createdAt))
+        .limit(1);
+      return admin?.email?.trim() || undefined;
+    } catch (error) {
+      // The ACME client reports a missing contact precisely; do not let a
+      // lookup failure mask that.
+      logger.warn('Could not resolve a fallback ACME contact email', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
     }
   }
 
@@ -858,7 +1058,11 @@ export class SSLService {
     }
   }
 
-  private async startDNS01Renewal(cert: typeof sslCertificates.$inferSelect, userId: string) {
+  private async startDNS01Renewal(
+    cert: typeof sslCertificates.$inferSelect,
+    userId: string,
+    contactEmail: string | undefined
+  ) {
     const cloudflareAutoRenewBindings =
       cert.autoRenewProvider === 'cloudflare'
         ? await this.resolveCloudflareAutoRenewBindings(cert, { requireExistingMatch: true }).catch(async (error) => {
@@ -867,7 +1071,6 @@ export class SSLService {
           })
         : null;
     const renewIsStaging = cert.acmeProvider === 'letsencrypt-staging';
-    const contactEmail = this.getStoredAcmeContactEmail(cert.acmeAccountKey);
     const result = await this.acmeService.requestCertDNS01Start(cert.domainNames, renewIsStaging, contactEmail);
 
     const acmeKeyEncrypted = this.cryptoService.encryptPrivateKey(result.accountKey);
@@ -1216,7 +1419,9 @@ export class SSLService {
     });
     if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
     const result = await this.certificateDistribution.syncCertificate({ type: 'ssl', id: certId });
-    const synchronized = Math.max(result.synchronized, await this.resyncActiveProxyHosts(certId, userId));
+    const delivery = await this.resyncActiveProxyHosts(certId, userId);
+    await this.recordDistributionOutcome(certId, delivery.failures);
+    const synchronized = Math.max(result.synchronized, delivery.synchronized);
     await this.auditService.log({
       userId,
       action: 'ssl.distribution_resync',
@@ -1315,9 +1520,13 @@ export class SSLService {
     return this.db.query.sslCertificates.findMany({
       where: and(
         options?.allowedIds ? inArray(sslCertificates.id, options.allowedIds) : undefined,
-        eq(sslCertificates.status, 'active'),
         eq(sslCertificates.autoRenew, true),
-        lte(sslCertificates.notAfter, threshold)
+        lte(sslCertificates.notAfter, threshold),
+        or(
+          eq(sslCertificates.status, 'active'),
+          // A failed renewal on v2.9.x or earlier left still-valid rows in `error`.
+          and(eq(sslCertificates.status, 'error'), gt(sslCertificates.notAfter, new Date()))
+        )
       ),
       columns: {
         privateKeyPem: false,

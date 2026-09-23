@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -5,25 +6,49 @@ import { z } from 'zod';
 // ---------------------------------------------------------------------------
 
 /**
- * Basic regex that accepts IPv4, IPv6, and CIDR notation.
+ * nginx `allow`/`deny` accept an IPv4/IPv6 address, a CIDR range with a prefix
+ * inside the family's bounds, or the literal `all`.
  *
  * Examples:
- *   192.168.1.0/24   10.0.0.1   ::1   2001:db8::/32   fe80::1
+ *   192.168.1.0/24   10.0.0.1   ::1   2001:db8::/32   fe80::1   all
  */
-const ipOrCidrRegex = /^(?:(?:\d{1,3}\.){3}\d{1,3}(?:\/\d{1,2})?|[0-9a-fA-F:]+(?:\/\d{1,3})?)$/;
+export function isValidAccessListIpRuleValue(value: string): boolean {
+  if (value === 'all') return true;
+  const slash = value.indexOf('/');
+  const address = slash === -1 ? value : value.slice(0, slash);
+  const family = isIP(address);
+  if (family === 0 || address.includes('%')) return false;
+  if (slash === -1) return true;
+  const prefix = value.slice(slash + 1);
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  return Number(prefix) <= (family === 4 ? 32 : 128);
+}
 
 const IPRuleSchema = z.object({
   type: z.enum(['allow', 'deny']),
-  value: z.string().min(1).regex(ipOrCidrRegex, 'Must be a valid IP address or CIDR notation'),
+  value: z
+    .string()
+    .trim()
+    .min(1)
+    .refine(isValidAccessListIpRuleValue, 'Must be a valid IP address, CIDR range, or "all"'),
 });
 
+// htpasswd lines are `username:hash`; a colon or control character in the
+// username would corrupt the file (RFC 7617 forbids ':' in user-ids).
+const BasicAuthUsernameSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(255)
+  .regex(/^[^:\p{Cc}]+$/u, 'Username cannot contain ":" or control characters');
+
 const BasicAuthUserInputSchema = z.object({
-  username: z.string().min(1).max(255),
+  username: BasicAuthUsernameSchema,
   password: z.string().min(1).max(255),
 });
 
 const UpdateBasicAuthUserInputSchema = z.object({
-  username: z.string().min(1).max(255),
+  username: BasicAuthUsernameSchema,
   password: z.string().max(255).optional(),
 });
 
@@ -31,13 +56,23 @@ const UpdateBasicAuthUserInputSchema = z.object({
 // Create
 // ---------------------------------------------------------------------------
 
-export const CreateAccessListSchema = z.object({
-  name: z.string().min(1).max(255),
-  description: z.string().max(2000).optional(),
-  ipRules: z.array(IPRuleSchema).default([]),
-  basicAuthEnabled: z.boolean().default(false),
-  basicAuthUsers: z.array(BasicAuthUserInputSchema).default([]),
-});
+export const CreateAccessListSchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    description: z.string().max(2000).optional(),
+    ipRules: z.array(IPRuleSchema).default([]),
+    basicAuthEnabled: z.boolean().default(false),
+    basicAuthUsers: z.array(BasicAuthUserInputSchema).default([]),
+  })
+  .superRefine((data, ctx) => {
+    if (data.basicAuthEnabled && data.basicAuthUsers.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Add at least one user to enable basic authentication',
+        path: ['basicAuthUsers'],
+      });
+    }
+  });
 
 // ---------------------------------------------------------------------------
 // Update — partial version (all fields optional)

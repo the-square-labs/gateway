@@ -1,7 +1,8 @@
 import { createHash, createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto';
-import { and, asc, eq, inArray, lte } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, like, lte } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
+  certificateAuthorities,
   certificates,
   nginxCertificateAssets,
   nginxCertificateReplicas,
@@ -21,6 +22,13 @@ const logger = createChildLogger('NginxCertificateDistribution');
 
 export const NGINX_CERTIFICATE_DISTRIBUTION_CAPABILITY = 'nginx_certificate_distribution_v2';
 export const NGINX_CERTIFICATE_REPLICA_GRACE_MS = 24 * 60 * 60 * 1000;
+/** First automatic retry of a failed replica push; doubles per failure. */
+export const NGINX_CERTIFICATE_REPAIR_BASE_DELAY_MS = 5 * 60 * 1000;
+export const NGINX_CERTIFICATE_REPAIR_MAX_DELAY_MS = 6 * 60 * 60 * 1000;
+/** Prefix of the certificate status message for a renewal that did not reach every proxy host. */
+export const SSL_DISTRIBUTION_ERROR_PREFIX = 'Distribution incomplete: ';
+const LEGACY_DAEMON_REPLICA_MESSAGE =
+  'The Nginx daemon must support TLS certificate distribution v2 before this TLS configuration can change';
 
 export type CertificateReference = {
   type: 'ssl' | 'internal';
@@ -64,6 +72,10 @@ type DistributionStatus = {
 };
 
 type ReplicaRow = typeof nginxCertificateReplicas.$inferSelect;
+type ReplicaChanges = Partial<typeof nginxCertificateReplicas.$inferInsert> & {
+  incrementGeneration?: boolean;
+  incrementRepairAttempts?: boolean;
+};
 type ReplicaNode = Pick<typeof nodes.$inferSelect, 'id' | 'hostname' | 'displayName' | 'slug'>;
 
 function daemonCertId(reference: CertificateReference): string {
@@ -124,6 +136,32 @@ function nodeHasDistributionCapability(capabilities: unknown): boolean {
   return Array.isArray(reported) && reported.includes(NGINX_CERTIFICATE_DISTRIBUTION_CAPABILITY);
 }
 
+function repairDelayMs(repairAttempts: number): number {
+  return Math.min(
+    NGINX_CERTIFICATE_REPAIR_BASE_DELAY_MS * 2 ** Math.max(0, Math.min(repairAttempts, 16)),
+    NGINX_CERTIFICATE_REPAIR_MAX_DELAY_MS
+  );
+}
+
+/** A failed/pending replica is retried only after its backoff elapsed. */
+/** A legacy replica that received an older version than the canonical Gateway asset. */
+function isLegacyReplicaOutdated(
+  replica: Pick<ReplicaRow, 'appliedVersion' | 'desiredVersion'>,
+  asset: Pick<AssetRow, 'state' | 'version'>
+): boolean {
+  if (replica.desiredVersion && replica.desiredVersion !== replica.appliedVersion) return true;
+  return !!(
+    asset.state === 'ready' &&
+    asset.version &&
+    replica.appliedVersion &&
+    replica.appliedVersion !== asset.version
+  );
+}
+
+function isRepairDue(replica: Pick<ReplicaRow, 'repairAttempts' | 'updatedAt'>, now = Date.now()): boolean {
+  return now - replica.updatedAt.getTime() >= repairDelayMs(replica.repairAttempts ?? 0);
+}
+
 function stableNodeOrder(nodeIds: Array<string | null | undefined>): string[] {
   return [...new Set(nodeIds.filter((id): id is string => Boolean(id)))].sort();
 }
@@ -139,6 +177,7 @@ function deployedReplicasOnly<T extends Pick<ReplicaRow, 'cleanupAfter' | 'statu
  */
 export class NginxCertificateDistributionService {
   private eventBus?: EventBusService;
+  private legacyHostConfigReapplier?: (hostId: string) => Promise<void>;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -149,6 +188,80 @@ export class NginxCertificateDistributionService {
 
   setEventBus(eventBus: EventBusService) {
     this.eventBus = eventBus;
+  }
+
+  /** Re-renders a host config (and so reloads nginx) after a legacy certificate push. */
+  setLegacyHostConfigReapplier(reapplier: (hostId: string) => Promise<void>) {
+    this.legacyHostConfigReapplier = reapplier;
+  }
+
+  /**
+   * Delivers Gateway material to a daemon without TLS distribution v2 using
+   * the legacy deployCert command, which writes the fixed legacy paths the
+   * host config already references, then re-applies the host config(s) so
+   * nginx reloads. Returns `not_legacy` when the node has the v2 capability
+   * (its reconnect reconciliation delivers bundles). A failure is recorded on
+   * the replica, which periodic reconciliation retries, and is thrown.
+   */
+  async deployLegacyCertificateForHost(
+    host: Pick<ProxyHostRow, 'id' | 'sslEnabled' | 'sslCertificateId' | 'internalCertificateId' | 'nodeId'>,
+    options: { reapplyHostIds?: string[] } = {}
+  ): Promise<'delivered' | 'not_legacy'> {
+    const reference = referenceForHost(host);
+    if (!reference) return 'not_legacy';
+    const nodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
+    const node = await this.getNode(nodeId);
+    if (!node || node.type !== 'nginx' || nodeHasDistributionCapability(node.capabilities)) return 'not_legacy';
+
+    const material = await this.loadGatewayMaterial(reference);
+    const version = fingerprintFor(material.certificatePem, material.keyPem, material.chainPem);
+    const asset = (await this.findAsset(reference)) ?? (await this.upsertGatewayAsset(reference));
+    try {
+      if (node.status !== 'online' || !this.nodeDispatch.isNodeConnected(nodeId)) {
+        throw new Error('The Nginx node is offline; the certificate is delivered after it reconnects');
+      }
+      // The legacy daemon writes privkey.pem and then restricts it to 0600;
+      // the command carries no mode, so the file mode is daemon-controlled.
+      const result = await this.nodeDispatch.deployCertificate(
+        nodeId,
+        daemonCertId(reference),
+        Buffer.from(material.certificatePem),
+        Buffer.from(material.keyPem),
+        material.chainPem ? Buffer.from(material.chainPem) : undefined
+      );
+      if (!result.success) throw new Error(result.error || 'Legacy certificate deploy failed');
+      // nginx keeps serving the previous files until the config is reloaded.
+      if (!this.legacyHostConfigReapplier) {
+        throw new Error('The host configuration could not be re-applied to reload nginx');
+      }
+      for (const hostId of options.reapplyHostIds ?? [host.id]) {
+        await this.legacyHostConfigReapplier(hostId);
+      }
+    } catch (error) {
+      await this.markReplicaById(asset.id, nodeId, {
+        status: 'failed',
+        desiredVersion: version,
+        cleanupAfter: null,
+        lastError: safeError(error),
+      });
+      this.emitReferenceChanged(reference);
+      throw new AppError(
+        502,
+        'NGINX_TLS_LEGACY_DEPLOY_FAILED',
+        `The certificate could not be delivered to the legacy Nginx daemon: ${safeError(error)}`
+      );
+    }
+    await this.markReplicaById(asset.id, nodeId, {
+      status: 'daemon_update_required',
+      desiredVersion: version,
+      appliedVersion: version,
+      observedFingerprint: version,
+      cleanupAfter: null,
+      lastError: LEGACY_DAEMON_REPLICA_MESSAGE,
+      lastVerifiedAt: new Date(),
+    });
+    this.emitReferenceChanged(reference);
+    return 'delivered';
   }
 
   referenceForHost(host: Pick<ProxyHostRow, 'sslEnabled' | 'sslCertificateId' | 'internalCertificateId'>) {
@@ -530,8 +643,13 @@ export class NginxCertificateDistributionService {
     return result;
   }
 
-  /** On reconnect: no polling retry exists; this is the only repair trigger for an offline node. */
-  async reconcileIntegrity(nodeId?: string): Promise<void> {
+  /**
+   * Runs on reconnect and periodically. Verifies ready replicas and retries
+   * failed or stuck pending pushes that still back an active deployment,
+   * with exponential backoff per replica. Legacy daemons get their failed
+   * legacy pushes retried the same way.
+   */
+  async reconcileIntegrity(nodeId?: string, options: { reconnect?: boolean } = {}): Promise<void> {
     const targets = nodeId
       ? [nodeId]
       : (
@@ -543,9 +661,19 @@ export class NginxCertificateDistributionService {
 
     for (const targetNodeId of targets) {
       const node = await this.getNode(targetNodeId);
-      if (!node || !nodeHasDistributionCapability(node.capabilities)) continue;
+      if (!node) continue;
+      if (!nodeHasDistributionCapability(node.capabilities)) {
+        if (node.type === 'nginx') {
+          await this.retryLegacyReplicas(targetNodeId, { ignoreBackoff: options.reconnect === true });
+        }
+        continue;
+      }
       const replicas = await this.db.query.nginxCertificateReplicas.findMany({
-        where: and(eq(nginxCertificateReplicas.nodeId, targetNodeId), eq(nginxCertificateReplicas.status, 'ready')),
+        where: and(
+          eq(nginxCertificateReplicas.nodeId, targetNodeId),
+          inArray(nginxCertificateReplicas.status, ['ready', 'failed', 'pending']),
+          isNull(nginxCertificateReplicas.cleanupAfter)
+        ),
       });
       if (replicas.length === 0) continue;
       const assets = await this.db.query.nginxCertificateAssets.findMany({
@@ -555,14 +683,29 @@ export class NginxCertificateDistributionService {
         ),
       });
       const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+
+      // Failed pushes, and pending ones whose command can no longer be in
+      // flight, are re-applied from the active deployment once due.
+      for (const replica of replicas) {
+        if (replica.status === 'ready' || !isRepairDue(replica)) continue;
+        const asset = assetsById.get(replica.assetId);
+        if (!asset?.fingerprint || !asset.version) continue;
+        await this.repairReplica(asset, targetNodeId);
+      }
+
+      const readyReplicas = replicas.filter((replica) => replica.status === 'ready');
+      if (readyReplicas.length === 0) continue;
+      const readyAssets = [...new Set(readyReplicas.map((replica) => replica.assetId))]
+        .map((assetId) => assetsById.get(assetId))
+        .filter((asset): asset is AssetRow => Boolean(asset));
       try {
         const inventory = await this.nodeDispatch.inspectCertificates(
           targetNodeId,
-          assets.map((asset) => daemonCertId({ type: asset.referenceType, id: asset.referenceId }))
+          readyAssets.map((asset) => daemonCertId({ type: asset.referenceType, id: asset.referenceId }))
         );
         if (!inventory.success) throw new Error(inventory.error || 'Certificate inventory failed');
         const observed = this.parseInventory(inventory.data);
-        for (const replica of replicas) {
+        for (const replica of readyReplicas) {
           const asset = assetsById.get(replica.assetId);
           if (!asset?.fingerprint || !asset.version) continue;
           const item = observed.get(daemonCertId({ type: asset.referenceType, id: asset.referenceId }));
@@ -577,14 +720,110 @@ export class NginxCertificateDistributionService {
           await this.repairReplica(asset, targetNodeId);
         }
       } catch (error) {
-        // A reconnect/periodic invocation must not create a retry loop. Keep
-        // the last ready state for a node that disappeared between selection
-        // and dispatch; the next reconnect will invoke this path again.
+        // Keep the last ready state for a node that disappeared between
+        // selection and dispatch; the next reconnect or periodic pass runs
+        // this path again.
         logger.debug('Skipping integrity reconciliation for unavailable node', {
           nodeId: targetNodeId,
           error: safeError(error),
         });
       }
+    }
+  }
+
+  /**
+   * Retry legacy pushes that failed or never ran (e.g. the node was offline at
+   * renewal) and replicas whose delivered version is older than the canonical
+   * asset. On reconnect the backoff is skipped: the node was simply unreachable.
+   */
+  private async retryLegacyReplicas(nodeId: string, options: { ignoreBackoff?: boolean } = {}): Promise<void> {
+    const replicas = await this.db.query.nginxCertificateReplicas.findMany({
+      where: and(
+        eq(nginxCertificateReplicas.nodeId, nodeId),
+        inArray(nginxCertificateReplicas.status, ['failed', 'pending', 'daemon_update_required']),
+        isNull(nginxCertificateReplicas.cleanupAfter)
+      ),
+    });
+    for (const replica of replicas) {
+      if (!options.ignoreBackoff && !isRepairDue(replica)) continue;
+      const asset = await this.db.query.nginxCertificateAssets.findFirst({
+        where: eq(nginxCertificateAssets.id, replica.assetId),
+      });
+      if (!asset) continue;
+      if (replica.status === 'daemon_update_required' && !isLegacyReplicaOutdated(replica, asset)) continue;
+      const hosts = await this.db
+        .select({
+          id: proxyHosts.id,
+          nodeId: proxyHosts.nodeId,
+          sslEnabled: proxyHosts.sslEnabled,
+          sslCertificateId: proxyHosts.sslCertificateId,
+          internalCertificateId: proxyHosts.internalCertificateId,
+        })
+        .from(proxyHosts)
+        .where(
+          and(
+            eq(proxyHosts.nodeId, nodeId),
+            eq(proxyHosts.enabled, true),
+            eq(proxyHosts.sslEnabled, true),
+            asset.referenceType === 'ssl'
+              ? eq(proxyHosts.sslCertificateId, asset.referenceId)
+              : and(isNull(proxyHosts.sslCertificateId), eq(proxyHosts.internalCertificateId, asset.referenceId))
+          )
+        );
+      if (hosts.length === 0) continue;
+      try {
+        await this.deployLegacyCertificateForHost(hosts[0]!, { reapplyHostIds: hosts.map((host) => host.id) });
+      } catch (error) {
+        await this.markReplicaById(asset.id, nodeId, { incrementRepairAttempts: true });
+        logger.warn('Legacy TLS certificate delivery retry failed', {
+          nodeId,
+          assetId: asset.id,
+          error: safeError(error),
+        });
+        continue;
+      }
+      await this.clearDistributionIncompleteIfSettled(asset);
+    }
+  }
+
+  /**
+   * An automatic retry delivered the certificate: once no replica of it is
+   * still failed or pending, drop the certificate's "Distribution incomplete"
+   * message. A renewal failure message is never touched.
+   */
+  private async clearDistributionIncompleteIfSettled(asset: Pick<AssetRow, 'id' | 'referenceType' | 'referenceId'>) {
+    if (asset.referenceType !== 'ssl') return;
+    try {
+      const [unsettled] = await this.db
+        .select({ id: nginxCertificateReplicas.id })
+        .from(nginxCertificateReplicas)
+        .where(
+          and(
+            eq(nginxCertificateReplicas.assetId, asset.id),
+            inArray(nginxCertificateReplicas.status, ['failed', 'pending']),
+            isNull(nginxCertificateReplicas.cleanupAfter)
+          )
+        )
+        .limit(1);
+      if (unsettled) return;
+      const cleared = await this.db
+        .update(sslCertificates)
+        .set({ renewalError: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(sslCertificates.id, asset.referenceId),
+            like(sslCertificates.renewalError, `${SSL_DISTRIBUTION_ERROR_PREFIX}%`)
+          )
+        )
+        .returning({ id: sslCertificates.id });
+      if (cleared.length > 0) {
+        this.eventBus?.publish('ssl.cert.changed', { id: asset.referenceId, action: 'updated' });
+      }
+    } catch (error) {
+      logger.debug('Could not clear the certificate distribution status', {
+        assetId: asset.id,
+        error: safeError(error),
+      });
     }
   }
 
@@ -741,9 +980,15 @@ export class NginxCertificateDistributionService {
       });
       this.eventBus?.publish('proxy.host.changed', { id: deployment.hostId, action: 'tls_distribution_repaired' });
     } catch (error) {
-      await this.markReplicaById(asset.id, nodeId, { status: 'failed', lastError: safeError(error) });
+      await this.markReplicaById(asset.id, nodeId, {
+        status: 'failed',
+        lastError: safeError(error),
+        incrementRepairAttempts: true,
+      });
       this.eventBus?.publish('proxy.host.changed', { id: deployment.hostId, action: 'tls_distribution_failed' });
+      return;
     }
+    await this.clearDistributionIncompleteIfSettled(asset);
   }
 
   private async removeOrphanedSslAsset(asset: AssetRow): Promise<void> {
@@ -910,6 +1155,20 @@ export class NginxCertificateDistributionService {
         'Gateway does not have usable certificate material'
       );
     }
+    // Only an active TLS server leaf from a user CA may be put into service;
+    // never decrypt a revoked, client or system-CA key for Nginx.
+    const [issuer] = await this.db
+      .select({ isSystem: certificateAuthorities.isSystem })
+      .from(certificateAuthorities)
+      .where(eq(certificateAuthorities.id, cert.caId))
+      .limit(1);
+    if (cert.status !== 'active' || cert.type !== 'tls-server' || !issuer || issuer.isSystem) {
+      throw new AppError(
+        409,
+        'TLS_CERTIFICATE_NOT_DEPLOYABLE',
+        'Only an active TLS server certificate from a non-system CA can be deployed to Nginx'
+      );
+    }
     const keyPem = this.cryptoService.decryptPrivateKey({
       encryptedPrivateKey: cert.encryptedPrivateKey,
       encryptedDek: cert.encryptedDek,
@@ -984,11 +1243,7 @@ export class NginxCertificateDistributionService {
     }
   }
 
-  private async markReplica(
-    asset: AssetRow,
-    nodeId: string,
-    changes: Partial<typeof nginxCertificateReplicas.$inferInsert> & { incrementGeneration?: boolean }
-  ): Promise<number> {
+  private async markReplica(asset: AssetRow, nodeId: string, changes: ReplicaChanges): Promise<number> {
     return this.markReplicaById(asset.id, nodeId, changes);
   }
 
@@ -1012,12 +1267,10 @@ export class NginxCertificateDistributionService {
     });
   }
 
-  private async markReplicaById(
-    assetId: string,
-    nodeId: string,
-    changes: Partial<typeof nginxCertificateReplicas.$inferInsert> & { incrementGeneration?: boolean }
-  ): Promise<number> {
-    const { incrementGeneration, ...update } = changes;
+  private async markReplicaById(assetId: string, nodeId: string, changes: ReplicaChanges): Promise<number> {
+    const { incrementGeneration, incrementRepairAttempts, ...update } = changes;
+    // A replica that becomes ready starts a fresh backoff sequence.
+    if (update.status === 'ready' && update.repairAttempts === undefined) update.repairAttempts = 0;
     const existing = await this.db.query.nginxCertificateReplicas.findFirst({
       where: and(eq(nginxCertificateReplicas.assetId, assetId), eq(nginxCertificateReplicas.nodeId, nodeId)),
     });
@@ -1027,13 +1280,19 @@ export class NginxCertificateDistributionService {
         nodeId,
         generation: incrementGeneration ? 1 : 0,
         ...update,
+        ...(incrementRepairAttempts ? { repairAttempts: 1 } : {}),
       });
       return incrementGeneration ? 1 : 0;
     }
     const nextGeneration = incrementGeneration ? existing.generation + 1 : existing.generation;
     await this.db
       .update(nginxCertificateReplicas)
-      .set({ ...update, ...(incrementGeneration ? { generation: nextGeneration } : {}), updatedAt: new Date() })
+      .set({
+        ...update,
+        ...(incrementGeneration ? { generation: nextGeneration } : {}),
+        ...(incrementRepairAttempts ? { repairAttempts: (existing.repairAttempts ?? 0) + 1 } : {}),
+        updatedAt: new Date(),
+      })
       .where(eq(nginxCertificateReplicas.id, existing.id));
     return nextGeneration;
   }
@@ -1177,6 +1436,9 @@ export class NginxCertificateDistributionService {
 
 export const __testOnly = {
   deploymentGenerationFor,
+  isLegacyReplicaOutdated,
+  isRepairDue,
+  repairDelayMs,
   fingerprintFor,
   nodeHasDistributionCapability,
   safeError,

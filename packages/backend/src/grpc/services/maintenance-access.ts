@@ -3,19 +3,27 @@ import { eq } from 'drizzle-orm';
 import { container } from '@/container.js';
 import { nodes } from '@/db/schema/index.js';
 import { ProxyMaintenanceAccessService } from '@/modules/proxy/proxy-maintenance-access.service.js';
-import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
+import { extractDaemonCertificateIdentity } from '../interceptors/auth.js';
+import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
 
 async function nginxNodeId(call: grpc.ServerUnaryCall<any, any>, deps: GrpcServerDeps): Promise<string | null> {
   const identity = extractDaemonCertificateIdentity(call);
   if (!identity) return null;
   const [node] = await deps.db
-    .select({ type: nodes.type, certificateSerial: nodes.certificateSerial, status: nodes.status })
+    .select({
+      type: nodes.type,
+      certificateSerial: nodes.certificateSerial,
+      certificateFingerprint: nodes.certificateFingerprint,
+      pendingCertificateSerial: nodes.pendingCertificateSerial,
+      pendingCertificateFingerprint: nodes.pendingCertificateFingerprint,
+      status: nodes.status,
+    })
     .from(nodes)
     .where(eq(nodes.id, identity.nodeId))
     .limit(1);
   if (!node || node.type !== 'nginx' || node.status === 'pending' || !node.certificateSerial) return null;
-  return normalizeCertificateSerial(node.certificateSerial) === identity.serialNumber ? identity.nodeId : null;
+  return matchEnrolledNodeCertificate(node, identity) ? identity.nodeId : null;
 }
 
 export function createMaintenanceAccessHandlers(deps: GrpcServerDeps) {

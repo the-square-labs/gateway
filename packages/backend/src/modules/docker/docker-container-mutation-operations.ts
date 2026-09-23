@@ -1,6 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
+import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -11,6 +11,7 @@ import type { DockerAccessResourceService } from './docker-access-resource.servi
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
+import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import type { ContainerAction } from './docker-lifecycle-watch.js';
 import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
@@ -19,6 +20,7 @@ import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docke
 import {
   applyPersistedDockerRuntimeSettingsToConfig,
   type DockerRuntimeOperationContext,
+  mergePersistedDockerRuntimeSettingsIntoConfig,
   persistDockerRuntimeSettings,
   validateDockerRuntimeResourceConfig,
 } from './docker-runtime-operations.js';
@@ -30,8 +32,12 @@ import {
   normalizeMountDefinitionsFromInspect,
 } from './docker-socket-mount.guard.js';
 import type { DockerTaskService } from './docker-task.service.js';
+import { resolveNetworkIdentity } from './docker-volume-network-operations.js';
 
 const logger = createChildLogger('DockerContainerMutationOperations');
+
+/** Placeholder that inspect returns for secret-backed env values. */
+const MASKED_ENV_VALUE = '********';
 
 export interface DockerContainerMutationContext {
   db: DrizzleClient;
@@ -188,6 +194,135 @@ async function renameManagedBindingTargets(
   });
 }
 
+async function deleteContainerWebhooks(db: DrizzleClient, nodeId: string, containerName: string): Promise<void> {
+  await db
+    .delete(dockerWebhooks)
+    .where(
+      and(
+        eq(dockerWebhooks.nodeId, nodeId),
+        eq(dockerWebhooks.containerName, containerName),
+        eq(dockerWebhooks.targetType, 'container')
+      )
+    );
+}
+
+async function renameContainerWebhooks(
+  db: DrizzleClient,
+  nodeId: string,
+  oldName: string,
+  newName: string
+): Promise<void> {
+  if (oldName === newName) return;
+  await db
+    .update(dockerWebhooks)
+    .set({ containerName: newName, updatedAt: new Date() })
+    .where(
+      and(
+        eq(dockerWebhooks.nodeId, nodeId),
+        eq(dockerWebhooks.containerName, oldName),
+        eq(dockerWebhooks.targetType, 'container')
+      )
+    );
+}
+
+/**
+ * Validate create-time networks with the same rules as the network connect
+ * route: only existing, user-attachable networks. Shared namespaces
+ * (`host`, `container:<id>`) and Gateway-managed networks are rejected.
+ */
+async function resolveCreateNetworks(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  requested: unknown
+): Promise<Array<{ id: string; name: string }>> {
+  if (!Array.isArray(requested)) return [];
+  const names = requested.filter((value): value is string => typeof value === 'string').map((value) => value.trim());
+  const networkContext = {
+    db: ctx.db,
+    nodeDispatch: ctx.nodeDispatch,
+    auditService: ctx.auditService,
+    parseResult: ctx.parseResult,
+  };
+  const resolved: Array<{ id: string; name: string }> = [];
+  for (const name of names) {
+    if (!name) continue;
+    if (name === 'host' || name.includes(':')) {
+      throw new AppError(400, 'NETWORK_MODE_NOT_ALLOWED', `Network mode "${name}" is not allowed for containers`);
+    }
+    if (name === 'default') {
+      resolved.push({ id: name, name });
+      continue;
+    }
+    const network = await resolveNetworkIdentity(networkContext, nodeId, name);
+    if (isGatewayManagedDockerNetwork(network.name)) {
+      throw new AppError(409, 'MANAGED_NETWORK', 'Gateway-managed networks cannot be connected manually');
+    }
+    if (network.name === 'host') {
+      throw new AppError(400, 'NETWORK_MODE_NOT_ALLOWED', 'Host networking is not allowed for containers');
+    }
+    resolved.push(network);
+  }
+  if (resolved.length > 1 && resolved.some((network) => network.name === 'none')) {
+    throw new AppError(400, 'NETWORK_MODE_NOT_ALLOWED', 'The none network cannot be combined with other networks');
+  }
+  return resolved;
+}
+
+/**
+ * Baseline for the persisted user env. Once Gateway stores an env it is the
+ * source of truth and runtime-only values (image defaults) are not re-added.
+ * A container without stored env starts from its runtime env, exactly as the
+ * environment view seeds it, so nothing set outside Gateway is dropped.
+ */
+async function storedEnvBaseline(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  containerId: string,
+  storedEnv: Record<string, string>,
+  inspect?: Record<string, any>
+): Promise<Record<string, string>> {
+  if (Object.keys(storedEnv).length > 0) return storedEnv;
+  const runtime = inspect ?? (await ctx.inspectContainer(nodeId, containerId));
+  return envListToMap(Array.isArray(runtime?.Config?.Env) ? runtime.Config.Env : []);
+}
+
+/** User-set environment that may be persisted: never secret keys or masked placeholders. */
+function persistableUserEnv(env: Record<string, string>, secretKeys: ReadonlySet<string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key, value]) => !secretKeys.has(key) && value !== MASKED_ENV_VALUE)
+  );
+}
+
+/**
+ * After an image change the daemon drops env values inherited from the
+ * previous image. Stored env entries that only mirrored such an inherited
+ * value would otherwise pin the old image default on the next env edit, so
+ * align them with the new runtime.
+ */
+async function reconcileStoredEnvAfterImageChange(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  name: string,
+  previousRuntimeEnv: Record<string, string>,
+  newContainerId: string
+): Promise<void> {
+  if (!ctx.environmentService) return;
+  const stored = await ctx.environmentService.getDecryptedMap(nodeId, name);
+  if (Object.keys(stored).length === 0) return;
+  const inspect = await ctx.inspectContainer(nodeId, newContainerId);
+  const nextRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
+  const next = { ...stored };
+  let changed = false;
+  for (const [key, value] of Object.entries(stored)) {
+    if (previousRuntimeEnv[key] !== value || nextRuntimeEnv[key] === value) continue;
+    changed = true;
+    if (Object.hasOwn(nextRuntimeEnv, key) && nextRuntimeEnv[key] !== MASKED_ENV_VALUE)
+      next[key] = nextRuntimeEnv[key]!;
+    else delete next[key];
+  }
+  if (changed) await ctx.environmentService.replace(nodeId, name, next);
+}
+
 function asyncDaemonTaskId(data: any, expectedType: string): string | undefined {
   const status = String(data?.status ?? '');
   return data?.type === expectedType && ['pending', 'running', 'succeeded', 'failed'].includes(status)
@@ -217,6 +352,8 @@ export async function createContainer(
     current: [],
     next: normalizeMountDefinitionsFromConfig(config),
   });
+  const createNetworks = await resolveCreateNetworks(ctx, nodeId, config.networks);
+  if (Array.isArray(config.networks)) config.networks = createNetworks.map((network) => network.name);
   const registryId = typeof config.registryId === 'string' ? config.registryId : null;
   delete config.registryId;
   const requestedName = (config.name as string | undefined)?.trim();
@@ -245,6 +382,14 @@ export async function createContainer(
   let createdName = (requestedName || data?.name || data?.Name || '') as string;
   const newId = (data?.Id ?? data?.id ?? '') as string;
   try {
+    // Docker attaches only the primary network at create time.
+    for (const network of createNetworks.slice(1)) {
+      const connectResult = await ctx.nodeDispatch.sendDockerNetworkCommand(nodeId, 'connect', {
+        networkId: network.id,
+        containerId: newId || createdName,
+      });
+      ctx.parseResult(connectResult);
+    }
     if (!createdName && newId) {
       const inspect = await ctx.inspectContainer(nodeId, newId);
       createdName = String(inspect?.Name ?? inspect?.name ?? '').replace(/^\//, '');
@@ -580,6 +725,8 @@ export async function removeContainer(
     ctx.secretService?.deleteImported(nodeId, name),
     ctx.folderService?.deleteContainerAssignment(nodeId, name),
     ctx.accessResourceService?.removeContainer(nodeId, name),
+    // A later container with the same name must not inherit the webhook token.
+    deleteContainerWebhooks(ctx.db, nodeId, name),
   ]);
   const removedScopeResourceId = accessResult;
   ctx.emitContainer(nodeId, name, containerId, 'removed', {
@@ -610,6 +757,7 @@ export async function renameContainer(
       ctx.secretService?.deleteImported(nodeId, newName),
       ctx.folderService?.deleteContainerAssignment(nodeId, newName),
       ctx.accessResourceService?.removeContainer(nodeId, newName),
+      deleteContainerWebhooks(ctx.db, nodeId, newName),
     ]);
 
     try {
@@ -639,6 +787,8 @@ export async function renameContainer(
       }
       await renameManagedBindingTargets(ctx.db, nodeId, oldName, newName);
       metadataRollbacks.unshift(() => renameManagedBindingTargets(ctx.db, nodeId, newName, oldName));
+      await renameContainerWebhooks(ctx.db, nodeId, oldName, newName);
+      metadataRollbacks.unshift(() => renameContainerWebhooks(ctx.db, nodeId, newName, oldName));
       if (ctx.accessResourceService) {
         await ctx.accessResourceService.renameContainer(nodeId, oldName, newName);
         metadataRollbacks.unshift(() => ctx.accessResourceService!.renameContainer(nodeId, newName, oldName));
@@ -812,20 +962,27 @@ export async function updateContainer(
     next: nextMounts,
   });
   const expectedState = await ctx.resolveExpectedRecreateState(nodeId, containerId);
-  if (ctx.environmentService) {
-    const storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
-    if (Object.keys(storedEnv).length > 0) {
-      config.env = { ...storedEnv, ...(normalizeEnvRecord(config.env) || {}) };
-    }
-  }
-  if (ctx.secretService) {
-    const secrets = await ctx.secretService.getDecryptedMap(nodeId, name);
-    if (Object.keys(secrets).length > 0) {
-      config.env = { ...(normalizeEnvRecord(config.env) || {}), ...secrets };
-    }
-  }
+  const requestedEnv = normalizeEnvRecord(config.env);
+  const requestedRemovals = Array.isArray(config.removeEnv) ? config.removeEnv.map(String) : undefined;
+  const hasEnvChange = requestedEnv !== undefined || requestedRemovals !== undefined;
+  const storedEnv = ctx.environmentService ? await ctx.environmentService.getDecryptedMap(nodeId, name) : {};
+  const secrets = ctx.secretService ? await ctx.secretService.getDecryptedMap(nodeId, name) : {};
+  const secretKeys = new Set(Object.keys(secrets));
+  const envBaseline = hasEnvChange ? await storedEnvBaseline(ctx, nodeId, containerId, storedEnv, inspect) : storedEnv;
+  const desiredUserEnv = persistableUserEnv({ ...envBaseline, ...(requestedEnv ?? {}) }, secretKeys);
+  for (const key of requestedRemovals ?? []) delete desiredUserEnv[key];
+  const daemonEnv = { ...desiredUserEnv, ...secrets };
+  if (Object.keys(daemonEnv).length > 0) config.env = daemonEnv;
+  else delete config.env;
+  // Never allow removing a secret key via removeEnv.
+  if (requestedRemovals) config.removeEnv = requestedRemovals.filter((key) => !secretKeys.has(key));
   config = await applyPersistedDockerRuntimeSettingsToConfig(ctx.runtimeOperationContext(), nodeId, name, config);
   const hasImageChange = typeof config.tag === 'string' && config.tag.length > 0;
+  if (hasImageChange) {
+    // The daemon pulls the new tag itself with the registry credentials it holds.
+    await ctx.registryService?.syncRegistriesToNode?.(nodeId);
+  }
+  const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
   const updateStopTimeout = ctx.resolveStopTimeoutFromInspect(inspect as Record<string, any>, config);
   const updateTimeoutMs = hasImageChange
     ? ctx.longDockerOperationTimeoutMs
@@ -836,6 +993,9 @@ export async function updateContainer(
   const task = await ctx.createTask(nodeId, containerId, name, 'update');
   let data: any;
   try {
+    // Persist the user-set env with the mutation itself, not from the in-memory
+    // completion watcher, so a backend restart cannot lose it.
+    if (hasEnvChange) await ctx.environmentService?.replace(nodeId, name, desiredUserEnv);
     const result = await ctx.nodeDispatch.sendDockerContainerCommand(
       nodeId,
       'update',
@@ -849,6 +1009,7 @@ export async function updateContainer(
       await ctx.accessResourceService?.preserveContainerRuntimeId(nodeId, name, newRuntimeId);
     }
   } catch (err) {
+    if (hasEnvChange) await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     await ctx.failTask(task?.id, err instanceof Error ? err.message : 'Failed to update container', nodeId, name);
     throw err;
   }
@@ -861,7 +1022,12 @@ export async function updateContainer(
     'Container updated',
     expectedState,
     daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : updateTimeoutMs,
-    undefined,
+    hasImageChange
+      ? (newContainerId) =>
+          reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId).catch((error) => {
+            logger.warn('Failed to reconcile stored env after image update', { nodeId, name, error });
+          })
+      : undefined,
     daemonTaskId
   );
   await ctx.auditService.log({
@@ -933,7 +1099,9 @@ export async function recreateWithConfig(
   const name = await ctx.resolveContainerName(nodeId, containerId);
   const expectedState = options?.expectedState ?? (await ctx.resolveExpectedRecreateState(nodeId, containerId));
   ctx.requireNoTransition(nodeId, name);
-  config = await applyPersistedDockerRuntimeSettingsToConfig(ctx.runtimeOperationContext(), nodeId, name, config);
+  // Merge persisted runtime settings without saving the request yet: it is
+  // persisted only after validation below succeeds.
+  config = await mergePersistedDockerRuntimeSettingsIntoConfig(ctx.runtimeOperationContext(), nodeId, name, config);
   const normalizedEnv = normalizeEnvRecord(config.env);
   if (normalizedEnv) {
     config.env = normalizedEnv;
@@ -976,6 +1144,8 @@ export async function recreateWithConfig(
     next: nextMounts,
   });
   await validateDockerRuntimeResourceConfig(ctx.runtimeOperationContext(), nodeId, containerId, config);
+  await persistDockerRuntimeSettings(ctx.runtimeOperationContext(), nodeId, name, config);
+  const previousRuntimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
   ctx.setTransition(nodeId, name, 'recreating');
   ctx.emitTransition(nodeId, name, containerId, 'recreating');
   const task = await ctx.createTask(nodeId, containerId, name, 'recreate');
@@ -985,9 +1155,10 @@ export async function recreateWithConfig(
       // Inject decrypted values in the task so image-changing requests can return immediately.
       if (ctx.environmentService) {
         const storedEnv = await ctx.environmentService.getDecryptedMap(nodeId, name);
-        if (Object.keys(storedEnv).length > 0) {
+        const userEnv = persistableUserEnv(storedEnv, new Set());
+        if (Object.keys(userEnv).length > 0) {
           const existingEnv = normalizeEnvRecord(config.env) || {};
-          config.env = { ...storedEnv, ...existingEnv };
+          config.env = { ...userEnv, ...existingEnv };
         }
       }
       if (ctx.secretService) {
@@ -1044,7 +1215,14 @@ export async function recreateWithConfig(
         'Container recreated',
         expectedState,
         daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(recreateStopTimeout, 60),
-        options?.onComplete,
+        hasRequestedImage
+          ? async (newContainerId) => {
+              await reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId).catch(
+                (error) => logger.warn('Failed to reconcile stored env after image change', { nodeId, name, error })
+              );
+              await options?.onComplete?.(newContainerId);
+            }
+          : options?.onComplete,
         daemonTaskId
       );
       return data && typeof data === 'object'
@@ -1200,31 +1378,27 @@ export async function updateContainerEnv(
   const updateStopTimeout = await ctx.resolveContainerStopTimeout(nodeId, containerId, undefined);
   ctx.requireNoTransition(nodeId, name);
 
-  const inspect = await ctx.inspectContainer(nodeId, containerId);
-  const runtimeEnv = envListToMap(Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : []);
+  // Persist only user-set env on top of the stored baseline. The runtime env
+  // also carries image defaults and masked secret placeholders; the daemon
+  // keeps runtime entries that are not overridden, so they are not re-sent.
   const storedEnv = ctx.environmentService ? await ctx.environmentService.getDecryptedMap(nodeId, name) : {};
-  const desiredVisibleEnv = { ...runtimeEnv, ...storedEnv, ...(env ?? {}) };
-  for (const key of removeEnv ?? []) delete desiredVisibleEnv[key];
-
-  // Merge decrypted secrets into the full desired env so secrets persist across recreate.
-  let mergedEnv = desiredVisibleEnv;
-  if (ctx.secretService) {
-    const secrets = await ctx.secretService.getDecryptedMap(nodeId, name);
-    if (Object.keys(secrets).length > 0) {
-      mergedEnv = { ...desiredVisibleEnv, ...secrets };
-      // Never allow removing a secret key via removeEnv
-      if (removeEnv) {
-        const secretKeys = new Set(Object.keys(secrets));
-        removeEnv = removeEnv.filter((k) => !secretKeys.has(k));
-      }
-    }
-  }
+  const secrets = ctx.secretService ? await ctx.secretService.getDecryptedMap(nodeId, name) : {};
+  const secretKeys = new Set(Object.keys(secrets));
+  const envBaseline = await storedEnvBaseline(ctx, nodeId, containerId, storedEnv);
+  const desiredUserEnv = persistableUserEnv({ ...envBaseline, ...(env ?? {}) }, secretKeys);
+  for (const key of removeEnv ?? []) delete desiredUserEnv[key];
+  // Merge decrypted secrets so secrets persist across the recreate.
+  const mergedEnv = { ...desiredUserEnv, ...secrets };
+  // Never allow removing a secret key via removeEnv.
+  if (removeEnv) removeEnv = removeEnv.filter((key) => !secretKeys.has(key));
 
   ctx.setTransition(nodeId, name, 'updating');
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   const task = await ctx.createTask(nodeId, containerId, name, 'update');
   let data: any;
   try {
+    // Persist with the mutation itself; a completion watcher is lost on restart.
+    await ctx.environmentService?.replace(nodeId, name, desiredUserEnv);
     const result = await ctx.nodeDispatch.sendDockerContainerCommand(
       nodeId,
       'update',
@@ -1233,6 +1407,7 @@ export async function updateContainerEnv(
     );
     data = ctx.parseResult(result);
   } catch (err) {
+    await ctx.environmentService?.replace(nodeId, name, storedEnv).catch(() => undefined);
     ctx.clearTransition(nodeId, name);
     if (task && ctx.taskService) {
       await ctx.taskService
@@ -1254,9 +1429,7 @@ export async function updateContainerEnv(
     'Container env updated',
     expectedState,
     daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60),
-    async () => {
-      await ctx.environmentService?.replace(nodeId, name, desiredVisibleEnv);
-    },
+    undefined,
     daemonTaskId
   );
   await ctx.auditService.log({

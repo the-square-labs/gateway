@@ -107,6 +107,27 @@ describe('Docker webhook trigger resource resolution', () => {
     expect(service.triggerUpdate).not.toHaveBeenCalled();
   });
 
+  it('does not return deployment config or env to the webhook caller', async () => {
+    const { service, request } = setup(null);
+    service.getByToken.mockResolvedValue({
+      id: 'deployment-hook',
+      enabled: true,
+      targetType: 'deployment',
+      nodeId: 'origin-node',
+      containerName: 'app',
+    });
+    service.triggerWebhookToken.mockResolvedValue({
+      deploymentId: 'deployment-1',
+      message: 'Deploying app',
+      deployment: { id: 'deployment-1', desiredConfig: { image: 'app:v2', env: { API_KEY: 'secret-value' } } },
+    });
+    const response = await request();
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toEqual({ data: { deploymentId: 'deployment-1', message: 'Deploying app' } });
+    expect(JSON.stringify(body)).not.toContain('secret-value');
+  });
+
   it('rejects disabled tokens before any resource resolution', async () => {
     const { docker, service, request } = setup(null);
     service.getByToken.mockResolvedValue({

@@ -9,7 +9,7 @@ import { DockerAvailabilityService } from './availability/docker-availability.se
 import { DockerManagementService } from './docker.service.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { inspectUserContainer } from './docker-internal-containers.js';
-import { createDockerLogStreamWSHandlers } from './docker-logs.ws.js';
+import { createDockerLogStreamWSHandlers, DOCKER_LOG_FOLLOW_STOP_TAIL } from './docker-logs.ws.js';
 
 vi.mock('@/modules/auth/websocket-auth.js', () => ({
   resolveWebSocketCredentialForScopeBase: vi.fn(),
@@ -70,7 +70,14 @@ function setup() {
   };
   const flush = () => vi.advanceTimersByTimeAsync(0);
   const messages = (ws: WSContext) => vi.mocked(ws.send).mock.calls.map(([value]) => JSON.parse(String(value)));
-  return { registry, register, dispatch, availability, handlers, open, flush, messages };
+  const followCalls = () => logCommandOptions(dispatch).filter((options) => options.follow);
+  const stopCalls = () =>
+    logCommandOptions(dispatch).filter((options) => options.tailLines === DOCKER_LOG_FOLLOW_STOP_TAIL);
+  return { registry, register, dispatch, availability, handlers, open, flush, messages, followCalls, stopCalls };
+}
+
+function logCommandOptions(dispatch: { sendDockerLogsCommand: ReturnType<typeof vi.fn> }) {
+  return dispatch.sendDockerLogsCommand.mock.calls.map(([, , options]) => options as Record<string, unknown>);
 }
 
 describe('Docker log WebSocket ownership', () => {
@@ -138,21 +145,22 @@ describe('Docker log WebSocket ownership', () => {
     expect(test.messages(current)).toContainEqual({ type: 'new', lines: ['replacement'] });
   });
 
-  it('delayed revocation removes only the old handler and preserves logical authorization scope', async () => {
+  it('revocation removes only the revoked viewer and preserves logical authorization scope', async () => {
     const test = setup();
     const old = test.open();
     await test.flush();
-    const pending = deferred<null>();
-    auth.mockReturnValueOnce(pending.promise);
-    test.registry.handleLogStream('node:container', ['old']);
     const current = test.open();
     await test.flush();
-    pending.resolve(null);
-    await test.flush();
+    // The first periodic re-check belongs to the older socket.
+    auth.mockResolvedValueOnce(null as never);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(old.close).toHaveBeenCalledWith(1008, 'Authentication failed');
+    expect(current.close).not.toHaveBeenCalled();
     test.registry.handleLogStream('node:container', ['replacement']);
     await test.flush();
     expect(test.messages(current)).toContainEqual({ type: 'new', lines: ['replacement'] });
+    expect(test.messages(old)).not.toContainEqual({ type: 'new', lines: ['replacement'] });
+    expect(test.stopCalls()).toHaveLength(0);
     expect(hasDockerResourceScope).toHaveBeenLastCalledWith(
       allowed.scopes,
       'docker:containers:view',
@@ -168,7 +176,7 @@ describe('Docker log WebSocket ownership', () => {
     await test.flush();
     const pending = deferred<null>();
     auth.mockReturnValueOnce(pending.promise);
-    test.registry.handleLogStream('node:container', ['old']);
+    await vi.advanceTimersByTimeAsync(30_000);
     test.handlers.onClose({}, old);
     vi.mocked(old.send).mockClear();
     pending.resolve(null);
@@ -197,6 +205,108 @@ describe('Docker log WebSocket ownership', () => {
     await test.flush();
     expect(auth).toHaveBeenCalledTimes(authCalls);
     expect(test.messages(ws)).not.toContainEqual({ type: 'new', lines: ['forbidden'] });
+    expect(test.stopCalls()).toHaveLength(1);
+  });
+
+  it('checks access at open and on the timer, never per log chunk', async () => {
+    const test = setup();
+    const ws = test.open();
+    await test.flush();
+    const authCalls = auth.mock.calls.length;
+    for (let index = 0; index < 5; index += 1) test.registry.handleLogStream('node:container', [`line ${index}`]);
+    await test.flush();
+    expect(auth).toHaveBeenCalledTimes(authCalls);
+    expect(test.messages(ws).filter((message) => message.type === 'new')).toHaveLength(5);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(auth).toHaveBeenCalledTimes(authCalls + 1);
+  });
+
+  it('fans live chunks out to every viewer of the same container', async () => {
+    const test = setup();
+    const first = test.open();
+    await test.flush();
+    const second = test.open();
+    await test.flush();
+    expect(test.register).toHaveBeenCalledTimes(1);
+    test.registry.handleLogStream('node:container', ['shared']);
+    await test.flush();
+    expect(test.messages(first)).toContainEqual({ type: 'new', lines: ['shared'] });
+    expect(test.messages(second)).toContainEqual({ type: 'new', lines: ['shared'] });
+  });
+
+  it.each([
+    'close',
+    'stop',
+  ] as const)('one viewer %s keeps the other viewer and the daemon follow alive', async (action) => {
+    const test = setup();
+    const first = test.open();
+    await test.flush();
+    const second = test.open();
+    await test.flush();
+    if (action === 'close') test.handlers.onClose({}, first);
+    else await test.handlers.onMessage(new MessageEvent('message', { data: '{"type":"stop"}' }), first);
+    await test.flush();
+    test.registry.handleLogStream('node:container', ['still live']);
+    await test.flush();
+    expect(test.messages(second)).toContainEqual({ type: 'new', lines: ['still live'] });
+    expect(test.messages(first)).not.toContainEqual({ type: 'new', lines: ['still live'] });
+    expect(test.stopCalls()).toHaveLength(0);
+  });
+
+  it('stops the daemon follow once the last viewer leaves', async () => {
+    const test = setup();
+    const first = test.open();
+    await test.flush();
+    const second = test.open();
+    await test.flush();
+    test.handlers.onClose({}, first);
+    test.handlers.onError(new Event('error'), second);
+    await test.flush();
+    expect(test.dispatch.sendDockerLogsCommand).toHaveBeenLastCalledWith('node', 'container', {
+      tailLines: DOCKER_LOG_FOLLOW_STOP_TAIL,
+      follow: false,
+    });
+    expect(test.stopCalls()).toHaveLength(1);
+    test.registry.handleLogStream('node:container', ['after stop']);
+    await test.flush();
+    expect(test.messages(first)).not.toContainEqual({ type: 'new', lines: ['after stop'] });
+    expect(test.messages(second)).not.toContainEqual({ type: 'new', lines: ['after stop'] });
+  });
+
+  it('tolerates daemons that reject the follow stop', async () => {
+    const test = setup();
+    const ws = test.open();
+    await test.flush();
+    test.dispatch.sendDockerLogsCommand.mockRejectedValueOnce(new Error('unsupported'));
+    test.handlers.onClose({}, ws);
+    await test.flush();
+    expect(test.stopCalls()).toHaveLength(1);
+    const next = test.open();
+    await test.flush();
+    expect(test.messages(next)).toContainEqual({ type: 'connected', streaming: true });
+  });
+
+  it('restarts the daemon follow only after a pending stop has been handled', async () => {
+    const test = setup();
+    const first = test.open();
+    await test.flush();
+    const stop = deferred<typeof success>();
+    test.dispatch.sendDockerLogsCommand.mockImplementation((_node: string, _container: string, options) =>
+      options.tailLines === DOCKER_LOG_FOLLOW_STOP_TAIL ? stop.promise : Promise.resolve(success)
+    );
+    test.handlers.onClose({}, first);
+    const next = test.open();
+    await test.flush();
+    expect(test.stopCalls()).toHaveLength(1);
+    expect(test.followCalls()).toHaveLength(1);
+    expect(test.messages(next)).not.toContainEqual({ type: 'connected', streaming: true });
+    stop.resolve(success);
+    await test.flush();
+    expect(test.followCalls()).toHaveLength(2);
+    expect(test.messages(next)).toContainEqual({ type: 'connected', streaming: true });
+    test.registry.handleLogStream('node:container', ['resumed']);
+    await test.flush();
+    expect(test.messages(next)).toContainEqual({ type: 'new', lines: ['resumed'] });
   });
 
   it('does not reconnect a follow start that was stopped while its dispatch was pending', async () => {

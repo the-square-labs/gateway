@@ -11,6 +11,7 @@ import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { dockerScopedNodeIds, hasDockerResourceScope } from './docker-access-resource.service.js';
+import { type DockerLogFollowSubscription, subscribeDockerLogFollow } from './docker-logs.ws.js';
 
 const logger = createChildLogger('ComposeLogStream');
 const DOCKER_TS_RE = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s/;
@@ -63,7 +64,7 @@ function send(ws: WSContext, msg: Record<string, unknown>): void {
 
 interface ComposeLogState {
   authenticated: boolean;
-  handlerKeys: string[];
+  subscriptions: DockerLogFollowSubscription[];
   keepaliveInterval: ReturnType<typeof setInterval> | null;
   credential: WebSocketCredential | null;
   scopeResourceIds: string[];
@@ -90,7 +91,7 @@ export function createComposeLogsWSHandlers(nodeId: string, project: string, cre
     onOpen(_event: Event, ws: WSContext) {
       const state: ComposeLogState = {
         authenticated: false,
-        handlerKeys: [],
+        subscriptions: [],
         keepaliveInterval: null,
         credential,
         scopeResourceIds: [],
@@ -142,7 +143,7 @@ export function createComposeLogsWSHandlers(nodeId: string, project: string, cre
           });
         }
         if (msg?.type === 'stop' && state.streaming) {
-          stopFollowing(state, registry);
+          stopFollowing(state);
           send(ws, { type: 'stopped' });
         }
       } catch {
@@ -151,27 +152,27 @@ export function createComposeLogsWSHandlers(nodeId: string, project: string, cre
     },
 
     onClose(_event: unknown, ws: WSContext) {
-      cleanup(ws, registry);
+      cleanup(ws);
     },
 
     onError(_error: Event, ws: WSContext) {
-      cleanup(ws, registry);
+      cleanup(ws);
     },
   };
 }
 
-function cleanup(ws: WSContext, registry: NodeRegistryService) {
+function cleanup(ws: WSContext) {
   const state = wsStates.get(ws);
   if (state) {
-    stopFollowing(state, registry);
+    stopFollowing(state);
     if (state.keepaliveInterval) clearInterval(state.keepaliveInterval);
     wsStates.delete(ws);
   }
 }
 
-function stopFollowing(state: ComposeLogState, registry: NodeRegistryService): void {
-  for (const key of state.handlerKeys) registry.removeLogStreamHandler(key);
-  state.handlerKeys = [];
+function stopFollowing(state: ComposeLogState): void {
+  for (const subscription of state.subscriptions) subscription.unsubscribe();
+  state.subscriptions = [];
   state.streaming = false;
 }
 
@@ -312,41 +313,33 @@ async function startComposeStream(
     const cid = c.id ?? c.Id;
     const cname = c.name ?? c.Name ?? cid.slice(0, 12);
     const service = (c.labels ?? c.Labels)?.['com.docker.compose.service'] ?? cname;
-    const handlerKey = `${nodeId}:${cid}`;
-
-    const handler = (lines: string[], ended?: boolean) => {
-      void (async () => {
-        if (!(await revalidateComposeLogAccess(ws, state, nodeId))) return;
-        if (ended) {
-          send(ws, { type: 'logs_ended', service });
-          ws.close(1012, 'Compose container log stream ended');
-          return;
-        }
-        if (lines.length > 0) {
-          send(ws, { type: 'new', lines: lines.map((l: string) => `${service} | ${l}`) });
-        }
-      })();
-    };
-
-    registry.registerLogStreamHandler(handlerKey, handler);
-    state.handlerKeys.push(handlerKey);
+    // A socket closed mid-start must not leave a viewer attached to the shared follow stream.
+    if (wsStates.get(ws) !== state) return;
+    // Access was checked at open and is re-checked by the keepalive timer, not per chunk.
+    const subscription = subscribeDockerLogFollow(registry, dispatch, nodeId, cid, (lines, ended) => {
+      if (wsStates.get(ws) !== state || !state.authenticated) return;
+      if (ended) {
+        send(ws, { type: 'logs_ended', service });
+        ws.close(1012, 'Compose container log stream ended');
+        return;
+      }
+      if (lines.length > 0) {
+        send(ws, { type: 'new', lines: lines.map((l: string) => `${service} | ${l}`) });
+      }
+    });
+    state.subscriptions.push(subscription);
 
     // Start follow
     try {
-      const result = await dispatch.sendDockerLogsCommand(nodeId, cid, {
-        tailLines: 0,
-        follow: true,
-        timestamps: true,
-        since: newestTs,
-      });
+      const result = await subscription.start(newestTs);
       if (!result.success) {
-        stopFollowing(state, registry);
+        stopFollowing(state);
         send(ws, { type: 'error', message: result.error || 'Failed to start log stream' });
         ws.close(1011, 'Stream start failed');
         return;
       }
     } catch (error) {
-      stopFollowing(state, registry);
+      stopFollowing(state);
       send(ws, { type: 'error', message: error instanceof Error ? error.message : 'Failed to start log stream' });
       ws.close(1011, 'Stream start failed');
       return;
@@ -403,7 +396,7 @@ async function revalidateComposeLogAccess(
   const auth = await authorizeComposeLogAccess(state.credential, nodeId, state.projectId, state.scopeResourceIds);
   if (!auth) {
     state.authenticated = false;
-    stopFollowing(state, container.resolve(NodeRegistryService));
+    stopFollowing(state);
     send(ws, { type: 'auth_error', message: 'Access revoked or token expired' });
     try {
       ws.close(1008, 'Authentication failed');

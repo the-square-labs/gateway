@@ -3,6 +3,7 @@ import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 
 function createHarness() {
   let stored: unknown;
+  const issuerPins: unknown[] = [];
   const db = {
     select: vi.fn(() => ({
       from: vi.fn(() => ({
@@ -16,6 +17,13 @@ function createHarness() {
         }),
       })),
     })),
+    update: vi.fn(() => ({
+      set: vi.fn((values: unknown) => ({
+        where: vi.fn(async () => {
+          issuerPins.push(values);
+        }),
+      })),
+    })),
   } as any;
   const secrets = new Map<string, string>();
   const crypto = {
@@ -26,7 +34,7 @@ function createHarness() {
     }),
     decryptString: vi.fn((value: { encryptedKey: string }) => secrets.get(value.encryptedKey) ?? ''),
   } as any;
-  return { service: new OidcSettingsService(db, crypto), getStored: () => stored };
+  return { service: new OidcSettingsService(db, crypto), getStored: () => stored, issuerPins };
 }
 
 describe('OidcSettingsService', () => {
@@ -66,5 +74,6 @@ describe('OidcSettingsService', () => {
     });
 
     await expect(harness.service.getRuntimeConfig()).resolves.toMatchObject({ clientSecret: 'first-secret' });
+    expect(harness.issuerPins).toEqual([{ oidcIssuer: 'https://id.example.com' }]);
   });
 });

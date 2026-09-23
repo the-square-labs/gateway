@@ -34,7 +34,7 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import type { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
-import { createNodeEnrollmentToken } from './node-enrollment-token.js';
+import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from './node-enrollment-token.js';
 import {
   abortNodeFileUpload,
   appendNodeFileUploadChunk,
@@ -337,6 +337,7 @@ export class NodesService {
     // Generate enrollment token
     const enrollmentToken = createNodeEnrollmentToken();
     const tokenHash = await bcrypt.hash(enrollmentToken.token, 10);
+    const enrollmentTokenExpiresAt = nodeEnrollmentTokenExpiresAt();
 
     const createNode = (executor: DrizzleExecutor) =>
       writeWithAllocatedSlug({
@@ -355,6 +356,7 @@ export class NodesService {
               slug,
               enrollmentTokenSelector: enrollmentToken.selector,
               enrollmentTokenHash: tokenHash,
+              enrollmentTokenExpiresAt,
               status: 'pending',
               serviceAddresses: input.type === 'relay' ? input.serviceAddresses : [],
             })
@@ -377,6 +379,50 @@ export class NodesService {
     return {
       node,
       enrollmentToken: enrollmentToken.token,
+      enrollmentTokenExpiresAt: enrollmentTokenExpiresAt.toISOString(),
+      gatewayCertSha256: await this.grpcIdentityService.getGatewayCertSha256(),
+      gatewayEnrollmentTargets: await this.getGatewayEnrollmentTargets(),
+    };
+  }
+
+  /**
+   * Replace the enrollment token of a node that has never enrolled. The old
+   * token stops working immediately; the new one expires after the default TTL.
+   */
+  async regenerateEnrollmentToken(id: string, userId: string) {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 10);
+    const expiresAt = nodeEnrollmentTokenExpiresAt();
+    const [node] = await this.db
+      .update(nodes)
+      .set({
+        enrollmentTokenSelector: enrollmentToken.selector,
+        enrollmentTokenHash: tokenHash,
+        enrollmentTokenExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(nodes.id, id), eq(nodes.status, 'pending'), sql`${nodes.certificateSerial} is null`))
+      .returning();
+    if (!node) {
+      const [existing] = await this.db.select({ id: nodes.id }).from(nodes).where(eq(nodes.id, id)).limit(1);
+      if (!existing) throw new AppError(404, 'NOT_FOUND', 'Node not found');
+      throw new AppError(409, 'NODE_ALREADY_ENROLLED', 'Only a node that has not enrolled yet can get a new token');
+    }
+
+    await this.auditService.log({
+      userId,
+      action: 'node.enrollment_token.regenerate',
+      resourceType: 'node',
+      resourceId: node.id,
+      details: { hostname: node.hostname, type: node.type },
+    });
+    this.emitNode(node.id, 'updated');
+
+    const { enrollmentTokenHash: _hash, enrollmentTokenSelector: _selector, ...publicNode } = node;
+    return {
+      node: publicNode,
+      enrollmentToken: enrollmentToken.token,
+      enrollmentTokenExpiresAt: expiresAt.toISOString(),
       gatewayCertSha256: await this.grpcIdentityService.getGatewayCertSha256(),
       gatewayEnrollmentTargets: await this.getGatewayEnrollmentTargets(),
     };

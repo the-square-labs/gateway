@@ -998,13 +998,13 @@ export class RelayPoolService {
     return probe ? this.tryActivate(probe.generationId) : false;
   }
 
-  async drainInstance(instanceId: string, userId: string, enabled = true, options: { manual?: boolean } = {}) {
+  async drainInstance(instanceId: string, userId: string | null, enabled = true, options: { manual?: boolean } = {}) {
     return this.withDrainAction(instanceId, () =>
       this.setInstanceDrain(instanceId, userId, enabled, options.manual !== false)
     );
   }
 
-  private async setInstanceDrain(instanceId: string, userId: string, enabled: boolean, manual: boolean) {
+  private async setInstanceDrain(instanceId: string, userId: string | null, enabled: boolean, manual: boolean) {
     const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
     if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
     if (instance.kind === 'local')

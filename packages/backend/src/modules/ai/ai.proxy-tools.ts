@@ -5,6 +5,7 @@ import { LicensePolicyService } from '@/modules/license/license-policy.service.j
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { FolderService } from '@/modules/proxy/folder.service.js';
 import type { ProxyService } from '@/modules/proxy/proxy.service.js';
+import { reservedTemplateVariableNames } from '@/modules/proxy/proxy-template-variables.js';
 import type { User } from '@/types.js';
 import {
   agentPage,
@@ -56,7 +57,7 @@ export async function executeProxyTool(
     }
     case 'get_route':
       return compactProxyHostForAgent(await context.proxyService.getProxyHost(a.routeId));
-    case 'create_route':
+    case 'create_route': {
       if (!hasScopeForCreation(user.scopes, 'proxy:create', a.folderId, a.nodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
       }
@@ -65,6 +66,11 @@ export async function executeProxyTool(
         throw new Error('Advanced config requires proxy:advanced scope');
       }
       if (a.upstreamKind === 'pages') await requirePagesRouteAccess(user, a.pageProjectId);
+      if (togglesRawMode(a) && !hasScope(user.scopes, 'proxy:raw:toggle')) {
+        throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:toggle scope');
+      }
+      assertNoReservedTemplateVariables(a.templateVariables);
+      await context.proxyService.assertReferenceAccess(user.scopes, a);
       return compactProxyHostForAgent(
         await context.proxyService.createProxyHost(
           {
@@ -121,15 +127,38 @@ export async function executeProxyTool(
           }
         )
       );
+    }
     case 'update_route': {
-      const { routeId, advancedConfig } = a;
-      if ('rawConfig' in a || 'rawConfigEnabled' in a || a.type === 'raw') {
+      const { routeId } = a;
+      if ('rawConfig' in a) {
         throw new Error('Raw config changes require dedicated raw config tools');
       }
-      if (advancedConfig && !hasScope(user.scopes, `proxy:advanced:${routeId}`)) {
-        throw new Error('Advanced config requires proxy:advanced scope');
-      }
       const existing = await context.proxyService.getProxyHost(routeId);
+      const updateFields = PROXY_HOST_UPDATE_FIELDS.reduce<Record<string, unknown>>((fields, field) => {
+        if (a[field] !== undefined) fields[field] = a[field];
+        return fields;
+      }, {});
+      // Moving a route between folders goes through the same checks as the
+      // move endpoint. An unchanged folderId is ignored.
+      if (updateFields.folderId !== undefined) {
+        const folderId = (updateFields.folderId as string | null) ?? null;
+        if (folderId === ((existing as { folderId?: string | null }).folderId ?? null)) {
+          delete updateFields.folderId;
+        } else {
+          if (!hasScope(user.scopes, 'proxy:folders:manage')) {
+            throw new AppError(403, 'FORBIDDEN', 'Moving a route requires proxy:folders:manage scope', {
+              requiredScope: 'proxy:folders:manage',
+            });
+          }
+          if (
+            !hasScope(user.scopes, `proxy:edit:${routeId}`) ||
+            !hasScopeForCreation(user.scopes, 'proxy:edit', folderId)
+          ) {
+            throw new AppError(403, 'FORBIDDEN', 'Missing route edit access for the move destination');
+          }
+          await context.folderService.assertFolderExists(folderId ?? undefined);
+        }
+      }
       if (a.upstreamKind === 'pages' || a.pageProjectId != null || a.pageTagId != null) {
         await requirePagesAvailable();
       }
@@ -143,16 +172,45 @@ export async function executeProxyTool(
         }
         requirePageProjectAccess(user, a.pageProjectId);
       }
-      const updateFields = PROXY_HOST_UPDATE_FIELDS.reduce<Record<string, unknown>>((fields, field) => {
-        if (a[field] !== undefined) fields[field] = a[field];
-        return fields;
-      }, {});
+      // Setting or clearing the advanced config both need the scope; echoing
+      // the stored value (or the redacted null) does not.
+      if (a.advancedConfig !== undefined) {
+        if (
+          !hasScope(user.scopes, `proxy:advanced:${routeId}`) &&
+          normalizedAdvancedConfig(a.advancedConfig) !== normalizedAdvancedConfig(existing.advancedConfig)
+        ) {
+          if (normalizedAdvancedConfig(a.advancedConfig) !== null) {
+            throw new Error('Advanced config requires proxy:advanced scope');
+          }
+        } else {
+          updateFields.advancedConfig = a.advancedConfig;
+        }
+      }
+      // A raw-mode toggle is an actual change of the stored mode; echoing the
+      // stored type/flag does not need the raw scopes.
+      const rawToggle = togglesRawMode(a, existing as RawModeState);
+      if (rawToggle) {
+        if (!hasScope(user.scopes, `proxy:raw:toggle:${routeId}`)) {
+          throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:toggle scope');
+        }
+        if (a.rawConfigEnabled !== undefined) updateFields.rawConfigEnabled = a.rawConfigEnabled;
+      }
+      if (
+        typeof a.nodeId === 'string' &&
+        a.nodeId &&
+        a.nodeId !== existing.nodeId &&
+        !hasScopeForResource(user.scopes, 'proxy:create', a.nodeId)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${a.nodeId}`);
+      }
+      assertNoReservedTemplateVariables(a.templateVariables);
+      await context.proxyService.assertReferenceAccess(user.scopes, updateFields, existing);
       const bypassAdvancedValidation = hasScope(user.scopes, `proxy:advanced:bypass:${routeId}`);
-      const fields = advancedConfig !== undefined ? { ...updateFields, advancedConfig } : updateFields;
       return compactProxyHostForAgent(
-        await context.proxyService.updateProxyHost(routeId, fields, user.id, {
+        await context.proxyService.updateProxyHost(routeId, updateFields, user.id, {
           actorScopes: user.scopes,
           bypassAdvancedValidation,
+          ...(rawToggle ? { bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${routeId}`) } : {}),
         })
       );
     }
@@ -171,12 +229,46 @@ export async function executeProxyTool(
           throw new Error(`PERMISSION_DENIED: Missing required scope proxy:edit:${routeId}`);
         }
       }
+      if (!hasScopeForCreation(user.scopes, 'proxy:edit', a.folderId ?? null)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing route edit access for the move destination');
+      }
       return context.folderService.moveHostsToFolder({ hostIds: a.routeIds, folderId: a.folderId }, user.id);
     case 'delete_route_folder':
       await context.folderService.deleteFolder(a.folderId, user.id);
       return { success: true };
     default:
       throw new Error(`Unsupported proxy tool: ${toolName}`);
+  }
+}
+
+type RawModeState = { type?: string | null; rawConfigEnabled?: boolean | null };
+
+/** Mirrors proxy.routes.ts: only an actual change of the stored raw mode counts as a toggle. */
+function togglesRawMode(input: { type?: unknown; rawConfigEnabled?: unknown }, existing: RawModeState = {}): boolean {
+  const becomesRawType = input.type === 'raw' && existing.type !== 'raw';
+  const leavesRawType = existing.type === 'raw' && input.type !== undefined && input.type !== 'raw';
+  const changesFlag =
+    input.rawConfigEnabled !== undefined && input.rawConfigEnabled !== (existing.rawConfigEnabled ?? false);
+  return becomesRawType || leavesRawType || changesFlag;
+}
+
+function normalizedAdvancedConfig(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/** Same rule as the proxy host schemas: Gateway-managed render keys cannot be overridden. */
+function assertNoReservedTemplateVariables(variables: unknown) {
+  if (variables === undefined || variables === null) return;
+  if (typeof variables !== 'object' || Array.isArray(variables)) {
+    throw new AppError(400, 'VALIDATION_ERROR', 'templateVariables must be an object');
+  }
+  const reserved = reservedTemplateVariableNames(variables as Record<string, unknown>);
+  if (reserved.length > 0) {
+    throw new AppError(
+      400,
+      'VALIDATION_ERROR',
+      `Template variables cannot override Gateway-managed values: ${reserved.join(', ')}`
+    );
   }
 }
 

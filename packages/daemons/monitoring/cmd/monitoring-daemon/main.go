@@ -79,7 +79,7 @@ func main() {
 		logger.Error("failed to initialize daemon", "error", err)
 		os.Exit(1)
 	}
-	lifecycle.NotifyLauncherLocalReady(Version)
+	lifecycle.NotifyLauncherLocalReadyAwaitingControl(Version)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

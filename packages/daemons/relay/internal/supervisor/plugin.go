@@ -183,16 +183,22 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 		status.Error = err.Error()
 		return status
 	}
-	if err := p.worker.bootstrapTrust(ctx); err != nil {
-		status.State = "synchronizing"
-		status.Error = err.Error()
-		return status
-	}
 	health, err := p.worker.health(ctx)
 	if err != nil {
 		status.State = "offline"
 		status.Error = err.Error()
 		return status
+	}
+	// Bootstrap only a relay without policy trust, and keep reporting when it
+	// fails: an early return here hid the relay's real state and trusted keys,
+	// which dropped it from placement and stalled key rotation for the pool.
+	var bootstrapErr error
+	if len(health.GetPolicyKeyIds()) == 0 {
+		if bootstrapErr = p.worker.ensurePolicyTrust(ctx, health); bootstrapErr == nil {
+			if refreshed, refreshErr := p.worker.health(ctx); refreshErr == nil {
+				health = refreshed
+			}
+		}
 	}
 	status.BuildVersion = health.GetBuildVersion()
 	status.ProtocolMajor = health.GetProtocolMajor()
@@ -211,6 +217,11 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 		})
 	}
 	status.Error = health.GetReason()
+	if bootstrapErr != nil && status.Error == "" {
+		status.Error = "bootstrap policy trust: " + bootstrapErr.Error()
+	} else if bootstrapErr != nil {
+		status.Error += "; bootstrap policy trust: " + bootstrapErr.Error()
+	}
 	switch {
 	case health.GetDraining():
 		status.State = "draining"

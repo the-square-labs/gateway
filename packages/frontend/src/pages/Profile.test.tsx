@@ -4,12 +4,16 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { DEFAULT_SYSTEM_CONFIG, useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
 import { Profile } from "./Profile";
 
-vi.mock("@simplewebauthn/browser", () => ({ startRegistration: vi.fn() }));
+vi.mock("@simplewebauthn/browser", () => ({
+  startAuthentication: vi.fn(),
+  startRegistration: vi.fn(),
+}));
 
 vi.mock("@/pages/inference/InferenceUsagePanels", () => ({
   InferenceUsage: ({ previewOverview }: { previewOverview?: unknown }) => (
@@ -508,6 +512,46 @@ describe("Profile", () => {
     await user.click(screen.getByRole("button", { name: "Reset & reconfigure" }));
 
     expect(api.resetCurrentUserTotp).toHaveBeenCalledOnce();
+    expect(await screen.findByTitle("TOTP setup QR code")).toBeInTheDocument();
+  });
+
+  it("asks for a current second factor before resetting TOTP, then retries", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: makeUser({ authMethod: "password" }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getCurrentUserMfaStatus").mockResolvedValue({
+      totpConfigured: true,
+      passkeyCount: 0,
+      recoveryCodeCount: 10,
+      required: false,
+    });
+    vi.spyOn(api, "listCurrentUserPasskeys").mockResolvedValue([]);
+    vi.spyOn(api, "resetCurrentUserTotp")
+      .mockRejectedValueOnce(
+        new ApiRequestError("Confirm first", { status: 403, code: "MFA_STEP_UP_REQUIRED" })
+      )
+      .mockResolvedValueOnce();
+    vi.spyOn(api, "verifyCurrentUserStepUp").mockResolvedValue();
+    vi.spyOn(api, "beginCurrentUserTotpSetup").mockResolvedValue({
+      secret: "NEXT123",
+      uri: "otpauth://totp/Gateway:test@example.com?secret=NEXT123",
+    });
+
+    renderProfile("/profile");
+
+    await user.click(await screen.findByRole("button", { name: "Manage TOTP" }));
+    await user.click(screen.getByRole("button", { name: "Reset & reconfigure" }));
+    expect(await screen.findByRole("heading", { name: "Confirm it's you" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use a passkey" })).not.toBeInTheDocument();
+
+    await user.type(screen.getByRole("textbox", { name: "Authentication code" }), "654321");
+    await user.click(screen.getByRole("button", { name: "Verify" }));
+
+    expect(api.verifyCurrentUserStepUp).toHaveBeenCalledWith({ totpCode: "654321" });
+    await waitFor(() => expect(api.resetCurrentUserTotp).toHaveBeenCalledTimes(2));
     expect(await screen.findByTitle("TOTP setup QR code")).toBeInTheDocument();
   });
 });

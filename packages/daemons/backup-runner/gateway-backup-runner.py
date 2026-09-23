@@ -22,6 +22,10 @@ import urllib.request
 CONFIG = pathlib.Path("/run/gateway-backup/config.json")
 WORK = pathlib.Path("/work")
 RESULT = WORK / "result.json"
+STARTED_AT = time.time()
+# Leaves time to detach replication, restore masterauth and report a result
+# before the executor enforces the run's deadline.
+DEADLINE_RESERVE_SECONDS = 30
 
 
 class BackupError(Exception):
@@ -55,7 +59,7 @@ def load_config():
         raise BackupError("backup config permissions are unsafe")
     config = json.loads(CONFIG.read_text())
     required = {"runId", "version", "direction", "engine", "destination", "limits", "toolImage"}
-    if set(config) - (required | {"source", "staging", "restoreTarget", "restoreArtifact", "redisStaging", "redisStageImage", "redisStageAdvertiseHost"}):
+    if set(config) - (required | {"source", "staging", "restoreTarget", "restoreArtifact", "redisStaging", "redisStageImage", "redisStageAdvertiseHost", "deadlineAt"}):
         raise BackupError("backup config has unrecognized fields")
     if required - set(config) or config["version"] != 1:
         raise BackupError("backup config is incomplete")
@@ -79,6 +83,25 @@ def result(config, status, phase, manifest=None, bytes_written=0, error=None):
     temp.write_text(json.dumps(payload, separators=(",", ":")))
     os.chmod(temp, 0o600)
     temp.replace(RESULT)
+
+
+def run_deadline(config):
+    """Absolute time (epoch seconds) by which this run must finish."""
+    deadline = STARTED_AT + int(config.get("limits", {}).get("timeoutSeconds", 3600))
+    value = config.get("deadlineAt")
+    if isinstance(value, str) and value:
+        try:
+            from datetime import datetime
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            deadline = min(deadline, parsed)
+        except ValueError:
+            raise BackupError("backup deadline is invalid")
+    return deadline
+
+
+def remaining_seconds(config, minimum=1):
+    """Time left for a wait inside the run, keeping a reserve for cleanup."""
+    return max(minimum, run_deadline(config) - time.time() - DEADLINE_RESERVE_SECONDS)
 
 
 def run(args, env=None, input_text=None):
@@ -222,10 +245,40 @@ def restore(config):
         artifact = next(artifact_dir.glob("*.dump"))
         target = config["restoreTarget"]
         run(db_args(target, postgres_restore_tool(target, artifact)) + ["-d", target["database"], "--no-owner", "--no-privileges", "--exit-on-error", str(artifact)], postgres_env(target))
+        if target.get("managedDatabaseId"):
+            transfer_postgres_ownership(target)
     elif config["engine"] == "redis":
         restore_redis(config, next(artifact_dir.glob("*.rdb")))
     else:
         restore_clickhouse(config, manifest)
+
+
+# A managed PostgreSQL database is owned by a NOLOGIN application role that
+# binding and direct-access principals SET ROLE to, while Gateway restores as
+# its superuser control account. --no-owner makes every restored object owned
+# by that control account, which the application role cannot use. Hand them to
+# the database owner. Legacy managed databases (owner == restoring account) and
+# superuser-owned databases are left unchanged.
+POSTGRES_OWNERSHIP_TRANSFER_SQL = """
+DO $gateway$
+DECLARE
+  database_owner name;
+  owner_is_superuser boolean;
+BEGIN
+  SELECT r.rolname, r.rolsuper INTO database_owner, owner_is_superuser
+  FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
+  WHERE d.datname = current_database();
+  IF database_owner IS NULL OR database_owner = current_user OR owner_is_superuser THEN
+    RETURN;
+  END IF;
+  EXECUTE format('REASSIGN OWNED BY %I TO %I', current_user, database_owner);
+END
+$gateway$;
+"""
+
+
+def transfer_postgres_ownership(target):
+    run(db_args(target, "psql") + ["-d", target["database"], "-v", "ON_ERROR_STOP=1", "-Atq"], postgres_env(target), POSTGRES_OWNERSHIP_TRANSFER_SQL)
 
 
 def upload_artifacts(config, artifact_dir, engine_version):
@@ -242,7 +295,7 @@ def upload_artifacts(config, artifact_dir, engine_version):
     return manifest
 
 
-def redis_command(endpoint, command):
+def redis_command(endpoint, command, last_argument=None):
     args = ["redis-cli", "--no-auth-warning", "-h", endpoint["host"], "-p", str(endpoint["port"])]
     if endpoint.get("username"): args.extend(["--user", endpoint["username"]])
     if endpoint.get("tls"): args.append("--tls")
@@ -253,7 +306,15 @@ def redis_command(endpoint, command):
         env["REDISCLI_AUTH"] = endpoint["password"]
     else:
         env.pop("REDISCLI_AUTH", None)
+    if last_argument is not None:
+        # -x reads the final argument from stdin, keeping it out of argv.
+        return run(args + ["-x"] + command, env, last_argument)
     return run(args + command, env)
+
+
+def redis_command_secret_last(endpoint, command, secret):
+    """Runs a Redis command whose last argument is a secret without exposing it in the process arguments."""
+    return redis_command(endpoint, command, last_argument=secret)
 
 
 def redis_version(endpoint):
@@ -371,7 +432,7 @@ def restore_clickhouse(config, manifest):
         if not isinstance(source_database, str) or not source_database:
             raise BackupError("clickhouse artifact source database is missing")
         target_database = quote_identifier(target.get("database", "default"))
-        clickhouse_query(target, f"RESTORE DATABASE {quote_identifier(source_database)} AS {target_database} FROM {clickhouse_s3(stage, restore_prefix.removeprefix(safe_part(stage.get('prefix', 'database-backups')) + '/'))}", timeout=config["limits"]["timeoutSeconds"])
+        clickhouse_query(target, f"RESTORE DATABASE {quote_source_identifier(source_database)} AS {target_database} FROM {clickhouse_s3(stage, restore_prefix.removeprefix(safe_part(stage.get('prefix', 'database-backups')) + '/'))}", timeout=config["limits"]["timeoutSeconds"])
     finally:
         delete_prefix(stage, restore_prefix)
 
@@ -384,7 +445,9 @@ def restore_redis(config, artifact):
     # The staged Redis starts as soon as dump.rdb exists, so it must appear complete.
     shutil.copyfile(artifact, stage_dir / "dump.rdb.tmp")
     os.replace(stage_dir / "dump.rdb.tmp", stage_dir / "dump.rdb")
-    deadline = time.time() + 60
+    # A large dump takes long to load and to replicate: both waits use the
+    # run's remaining time rather than fixed limits.
+    deadline = time.time() + remaining_seconds(config)
     while time.time() < deadline:
         try:
             redis_command(stage, ["PING"]); break
@@ -395,10 +458,10 @@ def restore_redis(config, artifact):
     replication_started = False
     try:
         if stage.get("password"):
-            redis_command(target, ["CONFIG", "SET", "masterauth", stage["password"]])
+            redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], stage["password"])
         redis_command(target, ["REPLICAOF", stage["host"], str(stage["port"])])
         replication_started = True
-        deadline = time.time() + 300
+        deadline = time.time() + remaining_seconds(config)
         while time.time() < deadline:
             info = redis_command(target, ["INFO", "replication"])
             if "master_sync_in_progress:0" in info and "master_link_status:up" in info and "role:slave" in info:
@@ -411,7 +474,7 @@ def restore_redis(config, artifact):
             try:
                 redis_command(target, ["REPLICAOF", "NO", "ONE"])
             finally:
-                redis_command(target, ["CONFIG", "SET", "masterauth", previous_masterauth])
+                redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], previous_masterauth)
                 redis_command(target, ["SAVE"])
 
 
@@ -659,6 +722,15 @@ def sha256(path):
     with path.open("rb") as source:
         for block in iter(lambda: source.read(1024 * 1024), b""): digest.update(block)
     return digest.hexdigest()
+
+
+def quote_source_identifier(value):
+    # The source name comes from the backup itself and may be any name the
+    # source server accepted (for example `my-app`); quote it rather than
+    # requiring a plain identifier.
+    if not isinstance(value, str) or not value or len(value) > 255 or any(ord(character) < 32 or character in "`\\" for character in value):
+        raise BackupError("database identifier is invalid")
+    return "`" + value + "`"
 
 
 def quote_identifier(value):

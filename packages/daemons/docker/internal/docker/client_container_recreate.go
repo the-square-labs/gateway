@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/distribution/reference"
@@ -70,6 +71,12 @@ func (c *Client) UpdateContainer(ctx context.Context, id string, newTag string, 
 		// Drain the pull response to complete the pull.
 		_, _ = io.Copy(io.Discard, pullResp)
 		pullResp.Close()
+
+		// Values baked into the previous image must not pin the new image to
+		// the old image's defaults.
+		if previousImage := c.replacedImageConfig(ctx, insp.Image, imageRef); previousImage != nil {
+			envOverrides = dropInheritedImageDefaults(insp.Config, previousImage, envOverrides)
+		}
 	}
 
 	return c.recreateContainer(ctx, &insp, imageRef, envOverrides, envRemovals, rollbackSnapshot, requestedExpectedRunning)
@@ -226,6 +233,14 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 		return fmt.Errorf("clone container for rollback: %w", err)
 	}
 
+	// When the image changes, drop values inherited from the previous image
+	// before applying the explicit overrides of this request.
+	if requestedImage := strings.TrimSpace(params.Image); requestedImage != "" {
+		if previousImage := c.replacedImageConfig(ctx, insp.Image, requestedImage); previousImage != nil {
+			params.Env = dropInheritedImageDefaults(insp.Config, previousImage, params.Env)
+		}
+	}
+
 	// Apply port binding overrides
 	if params.Ports != nil {
 		exposedPorts, portBindings, mappingErr := dockerPortMappings(params.Ports)
@@ -238,6 +253,9 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 
 	// Apply mount overrides
 	if params.Mounts != nil {
+		// Anonymous volumes are not part of the editable mount list; keep them
+		// so they are re-attached instead of replaced by new empty volumes.
+		anonymousVolumes := anonymousVolumeMountPoints(&insp)
 		var binds []string
 		for _, m := range params.Mounts {
 			if m.HostPath != "" {
@@ -255,8 +273,9 @@ func (c *Client) RecreateWithConfig(ctx context.Context, id string, configJSON s
 			}
 		}
 		insp.HostConfig.Binds = binds
-		// Clear Mounts field since we're using Binds
-		insp.Mounts = nil
+		// Only anonymous volumes remain eligible for carry-over; explicit
+		// mounts are now described by Binds.
+		insp.Mounts = anonymousVolumes
 	}
 	// Apply entrypoint override
 	if params.Entrypoint != nil {
@@ -398,6 +417,10 @@ func (c *Client) recreateContainer(
 
 	if _, err := c.createContainerFromInspect(ctx, insp, imageRef, envOverrides, envRemovals, expectedRunning); err != nil {
 		if rollbackSnapshot != nil {
+			// The original container is already removed: restore it even when the
+			// task context was cancelled or its deadline expired.
+			rollbackCtx, cancelRollback := recreateRollbackContext(ctx)
+			defer cancelRollback()
 			rollbackImage := rollbackSnapshot.Config.Image
 			if rollbackImage == "" {
 				rollbackImage = rollbackSnapshot.Image
@@ -405,7 +428,7 @@ func (c *Client) recreateContainer(
 			if rollbackImage == "" {
 				rollbackImage = imageRef
 			}
-			if _, rollbackErr := c.createContainerFromInspect(ctx, rollbackSnapshot, rollbackImage, nil, nil, expectedRunning); rollbackErr != nil {
+			if _, rollbackErr := c.createContainerFromInspect(rollbackCtx, rollbackSnapshot, rollbackImage, nil, nil, expectedRunning); rollbackErr != nil {
 				return fmt.Errorf("create container: %w (rollback failed: %v)", err, rollbackErr)
 			}
 			if clearErr := c.clearRecreateExpectedRunning(name); clearErr != nil {
@@ -448,6 +471,9 @@ func (c *Client) createContainerFromInspect(
 	}
 	netNames = prioritizeNetworkNames(netNames, currentInspectNetworkMode(insp))
 	hostConfig := *insp.HostConfig
+	if preserved := preservedVolumeMounts(insp); len(preserved) > 0 {
+		hostConfig.Mounts = append(slices.Clone(hostConfig.Mounts), preserved...)
+	}
 	managedDatabaseHosts, err := c.managedDatabaseHostEntries(ctx, netNames)
 	if err != nil {
 		return "", err
@@ -468,14 +494,14 @@ func (c *Client) createContainerFromInspect(
 	}
 
 	if err := c.connectContainerToAdditionalNetworks(ctx, createResult.ID, insp, netNames); err != nil {
-		_, _ = c.cli.ContainerRemove(ctx, createResult.ID, client.ContainerRemoveOptions{Force: true})
+		c.removeContainerQuietly(ctx, createResult.ID)
 		return "", fmt.Errorf("connect container networks: %w", err)
 	}
 
 	// Preserve the original running state. A stopped container should stay stopped.
 	if expectedRunning {
 		if _, err := c.cli.ContainerStart(ctx, createResult.ID, client.ContainerStartOptions{}); err != nil {
-			_, _ = c.cli.ContainerRemove(ctx, createResult.ID, client.ContainerRemoveOptions{Force: true})
+			c.removeContainerQuietly(ctx, createResult.ID)
 			return "", fmt.Errorf("start container: %w", err)
 		}
 	}

@@ -24,9 +24,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  MANAGED_DATABASE_NAME_PATTERN,
+  normalizeManagedDatabaseName,
+} from "@/lib/managed-database-name";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { BackupPolicy, BackupPolicyInput, BackupRun, BackupRunStatus } from "@/types/backups";
+import type {
+  BackupPolicy,
+  BackupPolicyInput,
+  BackupRestoreInput,
+  BackupRun,
+  BackupRunStatus,
+} from "@/types/backups";
 import type { DatabaseConnection } from "@/types/databases";
 
 const defaultLimits = {
@@ -126,10 +136,10 @@ export function DatabaseBackupsTab({
     [database.id, refresh]
   );
   const cancel = useCallback(
-    async (run: BackupRun) => {
+    async (run: BackupRun, force = false) => {
       try {
-        await api.cancelBackup(database.id, run.id);
-        toast.success("Cancellation requested");
+        await api.cancelBackup(database.id, run.id, { force });
+        toast.success(force ? "Run ended" : "Cancellation requested");
         await refresh();
       } catch (error) {
         toast.error(errorMessage(error, "Failed to request cancellation"));
@@ -202,10 +212,20 @@ export function DatabaseBackupsTab({
               </Button>
             ) : null}
             {(run.status === "queued" || run.status === "running") && canRun ? (
-              <Button size="sm" variant="ghost" onClick={() => void cancel(run)}>
-                <X />
-                Cancel
-              </Button>
+              run.phase === "cancelling" ? (
+                // The executor has not confirmed the cancel (for example, its node
+                // is offline). Ending the run releases the node and the schedule;
+                // the node stops the runner when it reconnects.
+                <Button size="sm" variant="ghost" onClick={() => void cancel(run, true)}>
+                  <X />
+                  Force cancel
+                </Button>
+              ) : (
+                <Button size="sm" variant="ghost" onClick={() => void cancel(run)}>
+                  <X />
+                  Cancel
+                </Button>
+              )
             ) : null}
           </div>
         ),
@@ -285,7 +305,7 @@ export function DatabaseBackupsTab({
                   ? `Schedule ${policy.schedule} (${policy.timezone})`
                   : "Manual backups"
               }
-              description={`${destinationLabel(policy)} / ${policy.bucket}${policy.prefix ? ` / ${policy.prefix}` : ""} · keeps ${policy.retentionCount} backup${policy.retentionCount === 1 ? "" : "s"}${policy.schedule && !policy.enabled ? " · schedule disabled" : ""}`}
+              description={`${destinationLabel(policy)} / ${policy.bucket}${policy.prefix ? ` / ${policy.prefix}` : ""} · keeps ${policy.retentionCount} backup${policy.retentionCount === 1 ? "" : "s"}${policy.schedule && !policy.enabled ? " · schedule disabled" : ""}${policy.lastError ? ` · ${policy.lastError}` : ""}`}
             >
               <div className="flex items-center gap-2">
                 {canManage && policy.schedule ? (
@@ -356,6 +376,7 @@ export function DatabaseBackupsTab({
       />
       <RestoreDialog
         run={restoreRun}
+        sourceDatabaseName={database.databaseName}
         onOpenChange={(open) => !open && setRestoreRun(null)}
         executors={executors}
         onRestore={async (input) => {
@@ -649,34 +670,63 @@ function PolicyDialog({
   );
 }
 
-function RestoreDialog({
+export function RestoreDialog({
   run,
+  sourceDatabaseName,
   onOpenChange,
   executors,
   onRestore,
 }: {
   run: BackupRun | null;
+  /** Database name of the source connection, used when the backup manifest does not record one. */
+  sourceDatabaseName?: string | null;
   onOpenChange: (open: boolean) => void;
   executors: BackupSelectionOption[];
-  onRestore: (input: { executorNodeId: string; newManagedDatabaseName: string }) => Promise<void>;
+  onRestore: (
+    input: Pick<
+      BackupRestoreInput,
+      "executorNodeId" | "newManagedDatabaseName" | "targetDatabaseName"
+    >
+  ) => Promise<void>;
 }) {
   const [executorNodeId, setExecutorNodeId] = useState("");
   const [newManagedDatabaseName, setNewManagedDatabaseName] = useState("");
+  const [targetDatabaseName, setTargetDatabaseName] = useState("");
   const [restoring, setRestoring] = useState(false);
   const runId = run?.id;
+  // Redis has no named databases, so the new managed Redis target ignores this name.
+  const hasDatabaseName = run?.engine !== "redis";
+  const defaultTargetDatabaseName = normalizeManagedDatabaseName(
+    run?.manifest?.sourceDatabase ?? sourceDatabaseName
+  );
+  const trimmedTargetDatabaseName = targetDatabaseName.trim();
+  const targetDatabaseNameError =
+    hasDatabaseName &&
+    trimmedTargetDatabaseName &&
+    !MANAGED_DATABASE_NAME_PATTERN.test(trimmedTargetDatabaseName)
+      ? "Use letters, digits and underscores, starting with a letter or underscore (up to 63 characters)"
+      : null;
   useEffect(() => {
     if (!runId) return;
     setExecutorNodeId("");
     setNewManagedDatabaseName("");
-  }, [runId]);
+    setTargetDatabaseName(defaultTargetDatabaseName);
+  }, [defaultTargetDatabaseName, runId]);
   const restore = async () => {
     if (!executorNodeId || !newManagedDatabaseName.trim()) {
       toast.error("Choose the Storage node and a name for the new database");
       return;
     }
+    if (targetDatabaseNameError) return;
     setRestoring(true);
     try {
-      await onRestore({ executorNodeId, newManagedDatabaseName: newManagedDatabaseName.trim() });
+      await onRestore({
+        executorNodeId,
+        newManagedDatabaseName: newManagedDatabaseName.trim(),
+        ...(hasDatabaseName && trimmedTargetDatabaseName
+          ? { targetDatabaseName: trimmedTargetDatabaseName }
+          : {}),
+      });
     } catch (error) {
       toast.error(errorMessage(error, "Failed to queue restore"));
     } finally {
@@ -714,6 +764,36 @@ function RestoreDialog({
               disabled={restoring}
             />
           </div>
+          {hasDatabaseName && (
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium" htmlFor="backup-restore-target-database-name">
+                Database name (optional)
+              </label>
+              <Input
+                id="backup-restore-target-database-name"
+                value={targetDatabaseName}
+                placeholder={defaultTargetDatabaseName}
+                onChange={(event) => setTargetDatabaseName(event.target.value)}
+                disabled={restoring}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                aria-invalid={targetDatabaseNameError ? true : undefined}
+                aria-describedby="backup-restore-target-database-name-hint"
+              />
+              <p
+                id="backup-restore-target-database-name-hint"
+                className={
+                  targetDatabaseNameError
+                    ? "text-xs text-destructive"
+                    : "text-xs text-muted-foreground"
+                }
+              >
+                {targetDatabaseNameError ??
+                  "Database created inside the new managed database. Defaults to the source name."}
+              </p>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button
@@ -724,7 +804,11 @@ function RestoreDialog({
           >
             Cancel
           </Button>
-          <Button type="button" disabled={restoring} onClick={() => void restore()}>
+          <Button
+            type="button"
+            disabled={restoring || Boolean(targetDatabaseNameError)}
+            onClick={() => void restore()}
+          >
             {restoring && <Loader2 className="animate-spin" />}
             {restoring ? "Queueing..." : "Queue restore"}
           </Button>

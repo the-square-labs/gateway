@@ -27,4 +27,7 @@ export class DockerMigrationExecutor {
   async rollback(_row: MigrationRow): Promise<void> {
     return commercialModuleUnavailable();
   }
+  async restoreSourceRestartPolicy(_row: MigrationRow): Promise<void> {
+    return commercialModuleUnavailable();
+  }
 }

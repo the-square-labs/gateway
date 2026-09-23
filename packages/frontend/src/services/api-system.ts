@@ -88,11 +88,29 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
       );
     }
 
+    /** Stop reporting a Gateway update that was rolled back. */
+    async acknowledgeUpdateFailure(): Promise<{ acknowledged: boolean }> {
+      return this.unwrapData(
+        this.request<{ data: { acknowledged: boolean } }>("/system/update/acknowledge", {
+          method: "POST",
+        })
+      );
+    }
+
     async triggerRelayUpdate(version: string): Promise<{ status: string; targetVersion: string }> {
       return this.unwrapData(
         this.request<{ data: { status: string; targetVersion: string } }>("/system/relay-update", {
           method: "POST",
           body: JSON.stringify({ version }),
+        })
+      );
+    }
+
+    /** Fail a stuck or paused Relay Pool update and resume the relays it drained. */
+    async abandonRelayUpdate(): Promise<{ targetVersion: string | null }> {
+      return this.unwrapData(
+        this.request<{ data: { targetVersion: string | null } }>("/system/relay-update/abandon", {
+          method: "POST",
         })
       );
     }

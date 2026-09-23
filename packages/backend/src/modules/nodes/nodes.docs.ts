@@ -63,6 +63,9 @@ const CreateNodeResponseSchema = dataResponseSchema(
       description: 'One-time enrollment token. Returned only once.',
       example: 'gw_node_v2_0123456789abcdef_0123456789abcdef0123456789abcdef0123456789abcdef',
     }),
+    enrollmentTokenExpiresAt: z.string().datetime().optional().openapi({
+      description: 'Time after which the unused enrollment token is rejected.',
+    }),
     gatewayCertSha256: z
       .string()
       .regex(/^sha256:[0-9a-f]{64}$/)
@@ -308,6 +311,15 @@ export const createNodeRoute = appRoute({
   summary: 'Create node enrollment',
   request: jsonBody(CreateNodeSchema),
   responses: createdJson(CreateNodeResponseSchema),
+});
+
+export const regenerateNodeEnrollmentTokenRoute = appRoute({
+  method: 'post',
+  path: '/{id}/enrollment-token',
+  tags: ['Nodes'],
+  summary: 'Regenerate the enrollment token of a node that has not enrolled yet',
+  request: { params: IdParamSchema },
+  responses: okJson(CreateNodeResponseSchema),
 });
 
 export const updateNodeRoute = appRoute({

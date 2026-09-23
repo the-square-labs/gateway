@@ -189,6 +189,7 @@ const (
 	RelayAdmin_GetRouteRuntime_FullMethodName        = "/relay.v1.RelayAdmin/GetRouteRuntime"
 	RelayAdmin_ApplySnapshot_FullMethodName          = "/relay.v1.RelayAdmin/ApplySnapshot"
 	RelayAdmin_BootstrapPolicyTrust_FullMethodName   = "/relay.v1.RelayAdmin/BootstrapPolicyTrust"
+	RelayAdmin_ResetLocalPolicyTrust_FullMethodName  = "/relay.v1.RelayAdmin/ResetLocalPolicyTrust"
 	RelayAdmin_ReloadIdentity_FullMethodName         = "/relay.v1.RelayAdmin/ReloadIdentity"
 	RelayAdmin_CommitIdentityRotation_FullMethodName = "/relay.v1.RelayAdmin/CommitIdentityRotation"
 	RelayAdmin_SetDrain_FullMethodName               = "/relay.v1.RelayAdmin/SetDrain"
@@ -205,6 +206,9 @@ type RelayAdminClient interface {
 	GetRouteRuntime(ctx context.Context, in *RouteRuntimeRequest, opts ...grpc.CallOption) (*RouteRuntimeResponse, error)
 	ApplySnapshot(ctx context.Context, in *ApplySnapshotRequest, opts ...grpc.CallOption) (*ApplySnapshotResponse, error)
 	BootstrapPolicyTrust(ctx context.Context, in *BootstrapPolicyTrustRequest, opts ...grpc.CallOption) (*BootstrapPolicyTrustResponse, error)
+	// Local combined mode only: replaces pinned policy trust with one key. A remote relay
+	// never accepts an unsigned trust change.
+	ResetLocalPolicyTrust(ctx context.Context, in *ResetLocalPolicyTrustRequest, opts ...grpc.CallOption) (*ResetLocalPolicyTrustResponse, error)
 	ReloadIdentity(ctx context.Context, in *ReloadIdentityRequest, opts ...grpc.CallOption) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(ctx context.Context, in *CommitIdentityRotationRequest, opts ...grpc.CallOption) (*CommitIdentityRotationResponse, error)
 	SetDrain(ctx context.Context, in *SetDrainRequest, opts ...grpc.CallOption) (*SetDrainResponse, error)
@@ -258,6 +262,16 @@ func (c *relayAdminClient) BootstrapPolicyTrust(ctx context.Context, in *Bootstr
 	return out, nil
 }
 
+func (c *relayAdminClient) ResetLocalPolicyTrust(ctx context.Context, in *ResetLocalPolicyTrustRequest, opts ...grpc.CallOption) (*ResetLocalPolicyTrustResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResetLocalPolicyTrustResponse)
+	err := c.cc.Invoke(ctx, RelayAdmin_ResetLocalPolicyTrust_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *relayAdminClient) ReloadIdentity(ctx context.Context, in *ReloadIdentityRequest, opts ...grpc.CallOption) (*ReloadIdentityResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ReloadIdentityResponse)
@@ -299,6 +313,9 @@ type RelayAdminServer interface {
 	GetRouteRuntime(context.Context, *RouteRuntimeRequest) (*RouteRuntimeResponse, error)
 	ApplySnapshot(context.Context, *ApplySnapshotRequest) (*ApplySnapshotResponse, error)
 	BootstrapPolicyTrust(context.Context, *BootstrapPolicyTrustRequest) (*BootstrapPolicyTrustResponse, error)
+	// Local combined mode only: replaces pinned policy trust with one key. A remote relay
+	// never accepts an unsigned trust change.
+	ResetLocalPolicyTrust(context.Context, *ResetLocalPolicyTrustRequest) (*ResetLocalPolicyTrustResponse, error)
 	ReloadIdentity(context.Context, *ReloadIdentityRequest) (*ReloadIdentityResponse, error)
 	CommitIdentityRotation(context.Context, *CommitIdentityRotationRequest) (*CommitIdentityRotationResponse, error)
 	SetDrain(context.Context, *SetDrainRequest) (*SetDrainResponse, error)
@@ -323,6 +340,9 @@ func (UnimplementedRelayAdminServer) ApplySnapshot(context.Context, *ApplySnapsh
 }
 func (UnimplementedRelayAdminServer) BootstrapPolicyTrust(context.Context, *BootstrapPolicyTrustRequest) (*BootstrapPolicyTrustResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method BootstrapPolicyTrust not implemented")
+}
+func (UnimplementedRelayAdminServer) ResetLocalPolicyTrust(context.Context, *ResetLocalPolicyTrustRequest) (*ResetLocalPolicyTrustResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResetLocalPolicyTrust not implemented")
 }
 func (UnimplementedRelayAdminServer) ReloadIdentity(context.Context, *ReloadIdentityRequest) (*ReloadIdentityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReloadIdentity not implemented")
@@ -426,6 +446,24 @@ func _RelayAdmin_BootstrapPolicyTrust_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RelayAdmin_ResetLocalPolicyTrust_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResetLocalPolicyTrustRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RelayAdminServer).ResetLocalPolicyTrust(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RelayAdmin_ResetLocalPolicyTrust_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RelayAdminServer).ResetLocalPolicyTrust(ctx, req.(*ResetLocalPolicyTrustRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _RelayAdmin_ReloadIdentity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ReloadIdentityRequest)
 	if err := dec(in); err != nil {
@@ -502,6 +540,10 @@ var RelayAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BootstrapPolicyTrust",
 			Handler:    _RelayAdmin_BootstrapPolicyTrust_Handler,
+		},
+		{
+			MethodName: "ResetLocalPolicyTrust",
+			Handler:    _RelayAdmin_ResetLocalPolicyTrust_Handler,
 		},
 		{
 			MethodName: "ReloadIdentity",

@@ -4,13 +4,19 @@ import { proxyHosts } from '@/db/schema/index.js';
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { NotificationEvaluatorService } from '@/modules/notifications/notification-evaluator.service.js';
-import { resolvePagesRouteProbeDomain, resolveProxyHealthCheckUrl } from '@/modules/proxy/proxy-health-check.js';
+import {
+  type DirectProxyProbeDeps,
+  daemonProbeOutcome,
+  PROXY_HEALTH_CHECK_TIMEOUT_MS,
+  probeDirectProxyUpstream,
+  resolvePagesRouteProbeDomain,
+} from '@/modules/proxy/proxy-health-check.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
 const logger = createChildLogger('HealthCheckJob');
 
-const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+const HEALTH_CHECK_TIMEOUT_MS = PROXY_HEALTH_CHECK_TIMEOUT_MS;
 const HEALTH_CHECK_CONCURRENCY = 8;
 // A daemon accepts at most four asynchronous commands at once. Reserve one slot
 // for interactive/synchronization work while scheduled probes are in flight.
@@ -62,7 +68,8 @@ export class HealthCheckJob {
 
   constructor(
     private readonly db: DrizzleClient,
-    private readonly nodeDispatch?: NodeDispatchService
+    private readonly nodeDispatch?: NodeDispatchService,
+    private readonly probeDeps?: DirectProxyProbeDeps
   ) {}
 
   setEventBus(bus: EventBusService) {
@@ -185,7 +192,10 @@ export class HealthCheckJob {
             id: host.id,
             name: host.domainNames?.[0] ?? host.id,
           },
-          { health_status: newStatus }
+          { health_status: newStatus },
+          undefined,
+          // Alert windows need the previous sample as an anchor; keep it for at least the check interval.
+          Math.max(5, host.healthCheckInterval ?? 30) * 1000
         );
       }
 
@@ -382,7 +392,7 @@ export class HealthCheckJob {
             error: result.error,
           });
         }
-        return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+        return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
       } catch (error) {
         logger.warn('Pages Route health probe command failed', {
           hostId: host.id,
@@ -425,7 +435,7 @@ export class HealthCheckJob {
             error: result.error,
           });
         }
-        return { status: result.ok ? 'online' : 'offline', responseMs: result.responseMs };
+        return { status: daemonProbeOutcome(result), responseMs: result.responseMs };
       } catch (error) {
         logger.warn('Secure Link health probe command failed', {
           hostId: host.id,
@@ -436,56 +446,24 @@ export class HealthCheckJob {
         return { status: 'offline' };
       }
     }
-    const url = resolveProxyHealthCheckUrl(host);
-    if (!url) return { status: 'offline' };
-
-    const start = performance.now();
-    try {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), HEALTH_CHECK_TIMEOUT_MS);
-
-      try {
-        const response = await fetch(url, {
-          method: 'GET',
-          signal: controller.signal,
-          redirect: 'follow',
-        });
-
-        const responseMs = Math.round(performance.now() - start);
-
-        let passed = true;
-
-        if (host.healthCheckExpectedStatus) {
-          // Custom expected status code
-          if (response.status !== host.healthCheckExpectedStatus) passed = false;
-        } else {
-          // Default: 2xx = pass
-          if (response.status < 200 || response.status >= 300) passed = false;
-        }
-
-        // Body content matching
-        if (passed && host.healthCheckExpectedBody) {
-          try {
-            const body = await response.text();
-            if (!body.includes(host.healthCheckExpectedBody)) passed = false;
-          } catch {
-            passed = false;
-          }
-        }
-
-        return { status: passed ? 'online' : 'offline', responseMs };
-      } finally {
-        clearTimeout(timeout);
-      }
-    } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        logger.debug(`Health check timed out for ${host.forwardHost}:${host.forwardPort}`);
-      } else {
-        logger.debug(`Health check failed for ${host.forwardHost}:${host.forwardPort}`, {
-          error: error instanceof Error ? error.message : 'Unknown error',
+    const probe = await probeDirectProxyUpstream(host, this.probeDeps);
+    if (probe.status === 'blocked') {
+      // Not an upstream failure: the Gateway is not allowed to reach this target, so the health is unknown.
+      if (host.healthStatus !== 'unknown') {
+        logger.warn('Health check target blocked by outbound network policy', {
+          hostId: host.id,
+          domain: host.domainNames?.[0],
+          reason: probe.reason,
         });
       }
-      return { status: 'offline' };
+      return { status: 'unknown' };
     }
+    if (probe.status === 'offline') {
+      logger.debug(`Health check failed for ${host.forwardHost}:${host.forwardPort}`, {
+        httpStatus: probe.httpStatus,
+        error: probe.error,
+      });
+    }
+    return { status: probe.status, responseMs: probe.responseMs };
   }
 }

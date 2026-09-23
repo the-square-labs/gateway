@@ -19,6 +19,9 @@ service RelayAdmin {
   rpc GetRouteRuntime(RouteRuntimeRequest) returns (RouteRuntimeResponse);
   rpc ApplySnapshot(ApplySnapshotRequest) returns (ApplySnapshotResponse);
   rpc BootstrapPolicyTrust(BootstrapPolicyTrustRequest) returns (BootstrapPolicyTrustResponse);
+  // Local combined mode only: replaces pinned policy trust with one key. A remote relay
+  // never accepts an unsigned trust change.
+  rpc ResetLocalPolicyTrust(ResetLocalPolicyTrustRequest) returns (ResetLocalPolicyTrustResponse);
   rpc ReloadIdentity(ReloadIdentityRequest) returns (ReloadIdentityResponse);
   rpc CommitIdentityRotation(CommitIdentityRotationRequest) returns (CommitIdentityRotationResponse);
   rpc SetDrain(SetDrainRequest) returns (SetDrainResponse);
@@ -183,6 +186,16 @@ message BootstrapPolicyTrustResponse {
   string key_id = 1;
   string public_key_fingerprint = 2;
   bool unchanged = 3;
+}
+message ResetLocalPolicyTrustRequest {
+  string key_id = 1;
+  bytes public_key = 2;
+  string public_key_fingerprint = 3;
+}
+message ResetLocalPolicyTrustResponse {
+  string key_id = 1;
+  string public_key_fingerprint = 2;
+  repeated string replaced_key_ids = 3;
 }
 
 message HealthRequest {}

@@ -26,7 +26,18 @@ export type DockerComposeOperationAction =
   | 'down'
   | 'delete_volumes'
   | 'cancel';
-export type DockerComposeOperationStatus = 'pending' | 'running' | 'cancelling' | 'succeeded' | 'failed' | 'cancelled';
+/**
+ * `reconciling`: the node connection was lost after the operation was sent, so
+ * its outcome is unknown until the node reports its actual Compose state.
+ */
+export type DockerComposeOperationStatus =
+  | 'pending'
+  | 'running'
+  | 'cancelling'
+  | 'reconciling'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled';
 
 export interface DockerComposeNormalizedPort {
   target: number;

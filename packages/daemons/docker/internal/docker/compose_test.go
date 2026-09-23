@@ -107,14 +107,39 @@ func TestComposeExecutorCancelTargetsMatchingOperation(t *testing.T) {
 	firstDone := make(chan error, 1)
 	go func() { _, err := executor.handle(validComposeCommand("apply", "operation-1")); firstDone <- err }()
 	<-sidecar.started
+	if _, err := executor.handle(validComposeCommand("cancel", "operation-2")); err == nil || !strings.Contains(err.Error(), "no active") {
+		t.Fatalf("mismatched cancel error = %v", err)
+	}
 	if _, err := executor.handle(validComposeCommand("cancel", "operation-1")); err != nil {
 		t.Fatalf("cancel: %v", err)
 	}
 	if err := <-firstDone; err == nil || !strings.Contains(err.Error(), "canceled") {
 		t.Fatalf("first operation error = %v", err)
 	}
-	if _, err := executor.handle(validComposeCommand("cancel", "operation-2")); err == nil || !strings.Contains(err.Error(), "no active") {
-		t.Fatalf("mismatched cancel error = %v", err)
+	if _, err := executor.handle(validComposeCommand("cancel", "operation-1")); err == nil || !strings.Contains(err.Error(), "no active") {
+		t.Fatalf("cancel of a finished operation error = %v", err)
+	}
+}
+
+func TestComposeExecutorRefusesOperationWhoseCancelArrivedFirst(t *testing.T) {
+	sidecar := &fakeComposeSidecar{}
+	executor := newTestComposeExecutor(sidecar)
+	// Concurrent dispatch can deliver the cancel before its operation starts.
+	if _, err := executor.handle(validComposeCommand("cancel", "operation-1")); err != nil {
+		t.Fatalf("early cancel: %v", err)
+	}
+	if _, err := executor.handle(validComposeCommand("apply", "operation-1")); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("operation after early cancel error = %v", err)
+	}
+	if got := sidecar.callCount(); got != 0 {
+		t.Fatalf("sidecar calls = %d, want 0", got)
+	}
+	// A retry of the same operation stays refused; other operations still run.
+	if _, err := executor.handle(validComposeCommand("apply", "operation-1")); err == nil || !strings.Contains(err.Error(), "canceled") {
+		t.Fatalf("retried operation error = %v", err)
+	}
+	if _, err := executor.handle(validComposeCommand("apply", "operation-2")); err != nil {
+		t.Fatalf("unrelated operation: %v", err)
 	}
 }
 

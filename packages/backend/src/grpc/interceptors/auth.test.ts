@@ -119,7 +119,7 @@ describe('relay-forwarded daemon identity', () => {
     expect(extractDaemonCertificateIdentity(forwardedCall(Buffer.from('daemon-certificate')))).toBeNull();
   });
 
-  it('accepts old and new relay leaves only during the bounded rotation window', () => {
+  it('accepts old and new relay leaves until the rotation is committed', () => {
     const nextRaw = Buffer.from('next-relay-certificate');
     const nextFingerprint = `sha256:${createHash('sha256').update(nextRaw).digest('hex')}`;
     configureRelayForwardedIdentityTrust(fingerprint);
@@ -133,7 +133,7 @@ describe('relay-forwarded daemon identity', () => {
     expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
   });
 
-  it('rolls back staged relay trust when rotation is not acknowledged', () => {
+  it('keeps trusting the rotated relay leaf when the reload is never acknowledged', () => {
     vi.useFakeTimers();
     try {
       const nextRaw = Buffer.from('unacknowledged-relay-certificate');
@@ -141,14 +141,27 @@ describe('relay-forwarded daemon identity', () => {
       configureRelayForwardedIdentityTrust(fingerprint);
 
       stageRelayForwardedIdentityTrust(nextFingerprint);
-      expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
 
-      vi.advanceTimersByTime(5 * 60 * 1000);
+      // The relay has the new files on disk; a later restart presents them.
+      vi.advanceTimersByTime(60 * 60 * 1000);
       expect(extractDaemonCertificateIdentity(forwardedCall(raw))).not.toBeNull();
-      expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).toBeNull();
+      expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('commits the rotated relay leaf once the relay presents it', () => {
+    const nextRaw = Buffer.from('reloaded-relay-certificate');
+    const nextFingerprint = `sha256:${createHash('sha256').update(nextRaw).digest('hex')}`;
+    configureRelayForwardedIdentityTrust(fingerprint);
+
+    stageRelayForwardedIdentityTrust(nextFingerprint);
+    expect(extractDaemonCertificateIdentity(forwardedCall(raw))).not.toBeNull();
+    expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
+
+    expect(extractDaemonCertificateIdentity(forwardedCall(raw))).toBeNull();
+    expect(extractDaemonCertificateIdentity(forwardedCall(nextRaw))).not.toBeNull();
   });
 });
 

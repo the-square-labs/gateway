@@ -223,6 +223,17 @@ describe('DockerRegistryService image registry mappings', () => {
     expect(candidates.map((candidate) => candidate.registryId)).toEqual(['team-registry', 'generic-registry']);
   });
 
+  it('does not send a learned mapping to a different image registry host', async () => {
+    const service = createService();
+
+    const candidates = await service.resolveAuthCandidatesForImagePull(
+      'node-1',
+      'old-registry.example.net/team/app:new'
+    );
+
+    expect(candidates).toEqual([]);
+  });
+
   it('uses a learned mapping for unqualified image repositories', async () => {
     const service = createService();
 
@@ -718,5 +729,32 @@ describe('DockerRegistryService connection tests', () => {
     expect(result.status).toBe(401);
     expect(result.statusText).toContain('Bearer realm');
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('DockerRegistryService daemon credential sync', () => {
+  it('pushes host-keyed credentials without replacing the daemon container allowlist', async () => {
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([registryRow({ url: 'https://registry.example.com:5000/v2/' })]),
+        })),
+      })),
+    };
+    const nodeDispatch = { sendDockerConfigPush: vi.fn().mockResolvedValue({ success: true }) };
+    const service = new DockerRegistryService(
+      db as never,
+      {} as never,
+      { decryptString: vi.fn().mockReturnValue('password') } as never,
+      nodeDispatch as never
+    );
+
+    await service.syncRegistriesToNode('node-1');
+
+    expect(nodeDispatch.sendDockerConfigPush).toHaveBeenCalledWith(
+      'node-1',
+      [{ url: 'registry.example.com:5000', username: 'user', password: 'password' }],
+      []
+    );
   });
 });

@@ -99,6 +99,26 @@ export function withAuthApi<TBase extends ApiClientBaseConstructor>(Base: TBase)
       return response.recoveryCodes;
     }
 
+    /** Prove an existing second factor before adding, replacing, or removing one. */
+    async verifyCurrentUserStepUp(
+      input: { totpCode: string } | { recoveryCode: string }
+    ): Promise<void> {
+      await this.request("/auth/me/mfa/step-up", { method: "POST", body: JSON.stringify(input) });
+    }
+
+    async beginCurrentUserStepUpPasskey(): Promise<
+      { challenge: string } & Record<string, unknown>
+    > {
+      return this.request("/auth/me/mfa/step-up/passkey/options", { method: "POST" });
+    }
+
+    async finishCurrentUserStepUpPasskey(challenge: string, response: unknown): Promise<void> {
+      await this.request("/auth/me/mfa/step-up/passkey/verify", {
+        method: "POST",
+        body: JSON.stringify({ challenge, response }),
+      });
+    }
+
     async listCurrentUserPasskeys(): Promise<
       Array<{ id: string; name: string; lastUsedAt: string | null; createdAt: string }>
     > {

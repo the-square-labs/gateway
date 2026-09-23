@@ -1380,6 +1380,162 @@ describe('CommandStream daemon certificate identity', () => {
     expect(stream.end).toHaveBeenCalled();
   });
 
+  it('replays non-log messages that arrive while registration is still validating', async () => {
+    const delayed = makeDelayedDbNode({ certificateSerial: 'aa01' });
+    const deps = makeDeps(delayed.db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    stream.emit('data', {
+      register: {
+        nodeId,
+        hostname: 'node-1',
+        nginxVersion: '1.27.0',
+        configVersionHash: 'hash-daemon',
+        daemonVersion: 'dev',
+        daemonType: 'nginx',
+        capabilities: [],
+      },
+    });
+    stream.emit('data', { commandResult: { commandId: 'cmd-1', success: true, error: '', detail: '' } });
+    stream.emit('data', { commandResult: { commandId: 'cmd-2', success: true, error: '', detail: '' } });
+    delayed.resolveRows();
+
+    await vi.waitFor(() => expect(deps.registry.handleCommandResult).toHaveBeenCalledTimes(2));
+    expect(deps.registry.register).toHaveBeenCalledTimes(1);
+    expect(deps.registry.handleCommandResult.mock.calls.map((call: any[]) => call[1].commandId)).toEqual([
+      'cmd-1',
+      'cmd-2',
+    ]);
+    expect(stream.end).not.toHaveBeenCalled();
+    expect(deps.registry.deregister).not.toHaveBeenCalled();
+  });
+
+  it('tells a removed daemon to stop reconnecting before closing its stream', async () => {
+    const deps = makeDeps(makeDbNode(null));
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    await emitRegister(stream);
+    await vi.waitFor(() => expect(stream.end).toHaveBeenCalled());
+
+    expect(stream.write).toHaveBeenCalledWith(
+      expect.objectContaining({
+        commandId: '__registration_rejected__',
+        applyConfig: expect.objectContaining({ configContent: expect.any(String) }),
+      })
+    );
+    expect(stream.write.mock.invocationCallOrder[0]).toBeLessThan(stream.end.mock.invocationCallOrder[0]);
+    expect(deps.registry.register).not.toHaveBeenCalled();
+  });
+
+  it('does not send the terminal rejection for a certificate mismatch', async () => {
+    const deps = makeDeps(makeDbNode({ certificateSerial: 'bb01' }));
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    await emitRegister(stream);
+
+    expect(stream.end).toHaveBeenCalled();
+    expect(stream.write).not.toHaveBeenCalled();
+  });
+
+  it('promotes a staged renewal certificate when the daemon first registers with it', async () => {
+    const rows = [
+      {
+        type: 'nginx',
+        configVersionHash: null,
+        certificateSerial: 'aa01',
+        certificateFingerprint: 'sha256:old',
+        pendingCertificateSerial: 'BB:02',
+        pendingCertificateFingerprint: 'sha256:new',
+        hostIdentityId: null,
+        status: 'online',
+      },
+    ];
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => rows) })) })) })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
+    } as any;
+    const promotedSet = vi.fn();
+    const tx = {
+      update: vi.fn(() => ({
+        set: vi.fn((value: unknown) => {
+          promotedSet(value);
+          return {
+            where: vi.fn(() => ({ returning: vi.fn(async () => [{ certificateFingerprint: 'sha256:new' }]) })),
+          };
+        }),
+      })),
+    };
+    const promotePending = vi.fn(async (_owner: unknown, _serial: string, bind: (tx: unknown, c: null) => unknown) => {
+      await bind(tx, null);
+      return true;
+    });
+    const resolve = vi.mocked(container.resolve);
+    resolve.mockImplementation(
+      () =>
+        ({
+          promotePending,
+          clearNodeUpdateInProgressOnReconnect: vi.fn(),
+          resyncAllHostsOnNode: vi.fn(),
+        }) as any
+    );
+    try {
+      const deps = makeDeps(db);
+      deps.relayPolicy = { refreshNodeIdentity: vi.fn(async () => undefined) };
+      const stream = makeStream({ serialNumber: 'bb02' });
+
+      createControlHandlers(deps).CommandStream(stream);
+      await emitRegister(stream);
+      await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+
+      expect(promotePending).toHaveBeenCalledWith({ type: 'node', id: nodeId }, 'BB:02', expect.any(Function));
+      expect(promotedSet).toHaveBeenCalledWith(
+        expect.objectContaining({ pendingCertificateSerial: null, pendingCertificateFingerprint: null })
+      );
+      expect(deps.relayPolicy.refreshNodeIdentity).toHaveBeenCalledWith(nodeId, 'sha256:new');
+    } finally {
+      resolve.mockReset();
+      resolve.mockImplementation(
+        () =>
+          ({
+            clearNodeUpdateInProgressOnReconnect: vi.fn(),
+            resyncAllHostsOnNode: vi.fn(),
+            evaluateHealthReport: vi.fn().mockResolvedValue(undefined),
+            observeStatefulEvent: vi.fn().mockResolvedValue(undefined),
+          }) as any
+      );
+    }
+  });
+
+  it('keeps accepting the current certificate while a renewal is staged', async () => {
+    const rows = [
+      {
+        type: 'nginx',
+        configVersionHash: null,
+        certificateSerial: 'aa01',
+        certificateFingerprint: null,
+        pendingCertificateSerial: 'bb02',
+        pendingCertificateFingerprint: null,
+        hostIdentityId: null,
+        status: 'online',
+      },
+    ];
+    const db = {
+      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => rows) })) })) })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn(async () => undefined) })) })),
+    } as any;
+    const deps = makeDeps(db);
+    const stream = makeStream({ serialNumber: 'aa01' });
+
+    createControlHandlers(deps).CommandStream(stream);
+    await emitRegister(stream);
+
+    await vi.waitFor(() => expect(deps.registry.register).toHaveBeenCalledTimes(1));
+    expect(stream.end).not.toHaveBeenCalled();
+  });
+
   it('rejects registration when mTLS authorization state is ambiguous', async () => {
     const db = makeDbNode({ certificateSerial: 'aa01' });
     const deps = makeDeps(db);
@@ -1390,5 +1546,80 @@ describe('CommandStream daemon certificate identity', () => {
 
     expect(deps.registry.register).not.toHaveBeenCalled();
     expect(stream.end).toHaveBeenCalled();
+  });
+});
+
+describe('CommandStream post-registration reconciliation', () => {
+  const resolve = vi.mocked(container.resolve);
+
+  function withServices(services: Record<string, unknown>) {
+    resolve.mockImplementation(
+      () =>
+        ({
+          clearNodeUpdateInProgressOnReconnect: vi.fn(),
+          resyncAllHostsOnNode: vi.fn(),
+          ...services,
+        }) as any
+    );
+  }
+
+  function restoreDefaultServices() {
+    resolve.mockReset();
+    resolve.mockImplementation(
+      () =>
+        ({
+          clearNodeUpdateInProgressOnReconnect: vi.fn(),
+          resyncAllHostsOnNode: vi.fn(),
+          evaluateHealthReport: vi.fn().mockResolvedValue(undefined),
+          observeStatefulEvent: vi.fn().mockResolvedValue(undefined),
+        }) as any
+    );
+  }
+
+  it('retries certificate pushes immediately when a legacy Nginx node reconnects', async () => {
+    const reconcileIntegrity = vi.fn(async () => undefined);
+    withServices({ reconcileIntegrity });
+    try {
+      const deps = makeDeps(makeDbNode({ type: 'nginx', configVersionHash: 'hash-daemon' }));
+      const stream = makeStream({ serialNumber: 'aa01' });
+
+      createControlHandlers(deps).CommandStream(stream);
+      await emitRegister(stream);
+
+      await vi.waitFor(() => expect(reconcileIntegrity).toHaveBeenCalledWith(nodeId, { reconnect: true }));
+    } finally {
+      restoreDefaultServices();
+    }
+  });
+
+  it('re-pushes registry credentials when a Docker node connects without blocking registration', async () => {
+    const syncRegistriesToNode = vi.fn(() => new Promise<void>(() => undefined));
+    withServices({ syncRegistriesToNode });
+    try {
+      const deps = makeDeps(makeDbNode({ type: 'docker' }));
+      const stream = makeStream({ serialNumber: 'aa01' });
+
+      createControlHandlers(deps).CommandStream(stream);
+      stream.emit('data', {
+        register: {
+          nodeId,
+          hostname: 'node-1',
+          configVersionHash: '',
+          daemonVersion: 'dev',
+          cpuModel: 'cpu',
+          cpuCores: 2,
+          architecture: 'x64',
+          kernelVersion: '6.0',
+          daemonType: 'docker',
+          capabilities: [],
+        },
+      });
+
+      await vi.waitFor(() => expect(syncRegistriesToNode).toHaveBeenCalledWith(nodeId));
+      expect(deps.registry.register).toHaveBeenCalledTimes(1);
+      expect(stream.end).not.toHaveBeenCalled();
+    } finally {
+      restoreDefaultServices();
+    }
   });
 });

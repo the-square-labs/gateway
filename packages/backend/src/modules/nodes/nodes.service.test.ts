@@ -79,6 +79,70 @@ describe('NodesService enrollment token creation', () => {
     expect(result.gatewayCertSha256).toBe('sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
   });
 
+  it('gives a new enrollment token a seven-day expiry', async () => {
+    const { service, insertedValues } = createService();
+    const before = Date.now();
+
+    const result = await service.create({ type: 'docker', hostname: 'node.local' }, 'user-1');
+
+    const expiresAt = insertedValues.mock.calls[0]?.[0]?.enrollmentTokenExpiresAt as Date;
+    expect(expiresAt.getTime()).toBeGreaterThanOrEqual(before + 7 * 24 * 60 * 60 * 1000);
+    expect(result.enrollmentTokenExpiresAt).toBe(expiresAt.toISOString());
+  });
+
+  it('regenerates the token of a node that has not enrolled yet', async () => {
+    const updatedValues = vi.fn();
+    const pending = {
+      id: 'node-1',
+      type: 'docker',
+      hostname: 'pending',
+      status: 'pending',
+      enrollmentTokenHash: 'hash',
+      enrollmentTokenSelector: 'selector',
+    };
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn((value) => {
+          updatedValues(value);
+          return { where: vi.fn(() => ({ returning: vi.fn(async () => [pending]) })) };
+        }),
+      })),
+    } as any;
+    const auditService = { log: vi.fn(async () => undefined) } as any;
+    const grpcIdentityService = { getGatewayCertSha256: vi.fn(async () => `sha256:${'a'.repeat(64)}`) } as any;
+    const service = new NodesService(db, auditService, { getNode: vi.fn() } as any, grpcIdentityService, {} as any);
+
+    const result = await service.regenerateEnrollmentToken('node-1', 'user-1');
+
+    const persisted = updatedValues.mock.calls[0]?.[0];
+    expect(result.enrollmentToken).toMatch(/^gw_node_v2_[0-9a-f]{16}_[0-9a-f]{48}$/);
+    expect(persisted.enrollmentTokenSelector).toBe(result.enrollmentToken.split('_')[3]);
+    expect(await bcrypt.compare(result.enrollmentToken, persisted.enrollmentTokenHash)).toBe(true);
+    expect(persisted.enrollmentTokenExpiresAt).toBeInstanceOf(Date);
+    expect(result.node).not.toHaveProperty('enrollmentTokenHash');
+    expect(result.node).not.toHaveProperty('enrollmentTokenSelector');
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'node.enrollment_token.regenerate', resourceId: 'node-1' })
+    );
+  });
+
+  it('refuses to regenerate the token of an enrolled node', async () => {
+    const db = {
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn(async () => []) })) })),
+      })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => [{ id: 'node-1' }]) })) })),
+      })),
+    } as any;
+    const service = new NodesService(db, { log: vi.fn() } as any, { getNode: vi.fn() } as any, {} as any, {} as any);
+
+    await expect(service.regenerateEnrollmentToken('node-1', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'NODE_ALREADY_ENROLLED',
+    });
+  });
+
   it('keeps a new Relay as a plain pending node until the supervisor enrolls', async () => {
     const insertedTables: unknown[] = [];
     const insertedValues: unknown[] = [];

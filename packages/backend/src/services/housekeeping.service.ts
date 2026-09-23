@@ -117,6 +117,8 @@ const KEYS = {
   internalRegistryRetention: 'housekeeping:internal_registry:retention_successful_artifacts',
   orphanedVolumesEnabled: 'housekeeping:orphaned_volumes:enabled',
   orphanedVolumesRetention: 'housekeeping:orphaned_volumes:retention_days',
+  /** { [nodeId]: { [volumeName]: ISO time the volume was first seen unused } } */
+  orphanedVolumesUnusedSince: 'housekeeping:orphaned_volumes:unused_since',
   dockerPruneEnabled: 'housekeeping:docker_prune:enabled',
   orphanedCertsEnabled: 'housekeeping:orphaned_certs:enabled',
   acmeCleanupEnabled: 'housekeeping:acme_cleanup:enabled',
@@ -154,6 +156,9 @@ type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P];
 };
 
+type UnusedVolumeState = Record<string, Record<string, string>>;
+type OrphanedVolumeCandidate = { nodeId: string; name: string; sizeBytes?: number };
+
 // ── Service ─────────────────────────────────────────────────────────
 
 export class HousekeepingService {
@@ -162,6 +167,10 @@ export class HousekeepingService {
     run(): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }>;
   };
   private internalRegistryMaintenanceService?: DockerInternalRegistryService;
+  /** Serializes orphaned-volume scans so concurrent stats/run scans cannot lose each other's tracking updates. */
+  private orphanedVolumeScanQueue: Promise<void> = Promise.resolve();
+  /** Latest tracking state when persisting it failed; preferred over the stale stored copy until a write succeeds. */
+  private unsavedUnusedVolumeState: UnusedVolumeState | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -580,7 +589,7 @@ export class HousekeepingService {
     userId: string | null
   ): Promise<{ itemsCleaned: number; spaceFreedBytes?: number }> {
     if (!this.dockerManagementService) return { itemsCleaned: 0 };
-    const candidates = await this.findOrphanedVolumes(retentionDays);
+    const candidates = await this.findOrphanedVolumes(retentionDays, 'cleanup');
     let itemsCleaned = 0;
     let spaceFreedBytes = 0;
 
@@ -770,7 +779,7 @@ export class HousekeepingService {
 
   private async getOrphanedVolumeStats(): Promise<HousekeepingStats['orphanedVolumes']> {
     const config = await this.getConfig();
-    const candidates = await this.findOrphanedVolumes(config.orphanedVolumes.retentionDays);
+    const candidates = await this.findOrphanedVolumes(config.orphanedVolumes.retentionDays, 'preview');
     return {
       count: candidates.length,
       reclaimableBytes: candidates.reduce((sum, candidate) => sum + (candidate.sizeBytes ?? 0), 0),
@@ -848,16 +857,35 @@ export class HousekeepingService {
     return candidates;
   }
 
-  private async findOrphanedVolumes(
-    retentionDays: number
-  ): Promise<Array<{ nodeId: string; name: string; sizeBytes?: number }>> {
+  /**
+   * Anonymous volumes become eligible only after they have been observed unused for the full retention
+   * period (tracked per node+volume since the first unused sighting), never based on their creation time.
+   * `preview` scans (stats) record observations too, but never fail on a tracking write error.
+   */
+  private findOrphanedVolumes(retentionDays: number, mode: 'cleanup' | 'preview'): Promise<OrphanedVolumeCandidate[]> {
+    const scan = this.orphanedVolumeScanQueue.then(() => this.scanOrphanedVolumes(retentionDays, mode));
+    this.orphanedVolumeScanQueue = scan.then(
+      () => undefined,
+      () => undefined
+    );
+    return scan;
+  }
+
+  private async scanOrphanedVolumes(
+    retentionDays: number,
+    mode: 'cleanup' | 'preview'
+  ): Promise<OrphanedVolumeCandidate[]> {
+    const candidates: OrphanedVolumeCandidate[] = [];
+    if (!this.dockerManagementService) return candidates;
     const dockerNodes = await this.db
       .select({ id: nodes.id })
       .from(nodes)
       .where(and(eq(nodes.type, 'docker'), eq(nodes.status, 'online')));
-    const threshold = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
-    const candidates: Array<{ nodeId: string; name: string; sizeBytes?: number }> = [];
-    if (!this.dockerManagementService) return candidates;
+    const now = Date.now();
+    const retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+    const previous = this.unsavedUnusedVolumeState ?? (await this.loadUnusedVolumeState());
+    // Nodes that are offline or fail to list keep their records untouched, so an outage never resets the clock.
+    const next: UnusedVolumeState = { ...previous };
 
     for (const node of dockerNodes) {
       let volumes: unknown;
@@ -869,19 +897,52 @@ export class HousekeepingService {
       }
 
       if (!Array.isArray(volumes)) continue;
+      // Successful scan: rebuild this node's records, dropping volumes that are in use or gone.
+      const previousForNode = previous[node.id] ?? {};
+      const unusedSince: Record<string, string> = {};
       for (const volume of volumes) {
         const candidate = normalizeHousekeepingVolume(volume);
         if (!candidate) continue;
         if (!isAnonymousDockerVolumeName(candidate.name)) continue;
         if (candidate.usedBy.length > 0 || candidate.usedByCount > 0) continue;
         if (candidate.labels[VOLUME_CLEANUP_PROTECTED_LABEL] === 'true') continue;
-        const createdAtMs = candidate.createdAt ? Date.parse(candidate.createdAt) : Number.NaN;
-        if (!Number.isFinite(createdAtMs) || createdAtMs > threshold) continue;
+        // Placeholders for volumes missing on the node carry no creation time; never track or remove them.
+        if (!candidate.createdAt || !Number.isFinite(Date.parse(candidate.createdAt))) continue;
+        const since = previousForNode[candidate.name] ?? new Date(now).toISOString();
+        unusedSince[candidate.name] = since;
+        if (now - Date.parse(since) < retentionMs) continue;
         candidates.push({ nodeId: node.id, name: candidate.name, sizeBytes: candidate.sizeBytes });
       }
+      if (Object.keys(unusedSince).length > 0) next[node.id] = unusedSince;
+      else delete next[node.id];
     }
 
+    await this.saveUnusedVolumeState(previous, next, mode);
     return candidates;
+  }
+
+  private async loadUnusedVolumeState(): Promise<UnusedVolumeState> {
+    const row = await this.db.select().from(settings).where(eq(settings.key, KEYS.orphanedVolumesUnusedSince)).limit(1);
+    return parseUnusedVolumeState(row[0]?.value);
+  }
+
+  private async saveUnusedVolumeState(
+    previous: UnusedVolumeState,
+    next: UnusedVolumeState,
+    mode: 'cleanup' | 'preview'
+  ): Promise<void> {
+    if (!this.unsavedUnusedVolumeState && sameUnusedVolumeState(previous, next)) return;
+    try {
+      await this.upsertSetting(KEYS.orphanedVolumesUnusedSince, next);
+      this.unsavedUnusedVolumeState = null;
+    } catch (error) {
+      // Keep the observations in memory so a lost write cannot resurrect an older unused-since time.
+      this.unsavedUnusedVolumeState = next;
+      logger.warn('Failed to save orphaned Docker volume tracking', { error });
+      if (mode === 'cleanup') {
+        throw new Error('Failed to save orphaned volume tracking; no volumes were removed');
+      }
+    }
   }
 
   // ── Helpers ─────────────────────────────────────────────────────
@@ -972,6 +1033,36 @@ export class HousekeepingService {
 
 function isAnonymousDockerVolumeName(name: string): boolean {
   return /^[a-f0-9]{64}$/i.test(name);
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** Invalid entries are dropped, which only restarts their clock. */
+function parseUnusedVolumeState(value: unknown): UnusedVolumeState {
+  const state: UnusedVolumeState = {};
+  if (!isPlainRecord(value)) return state;
+  for (const [nodeId, volumes] of Object.entries(value)) {
+    if (!isPlainRecord(volumes)) continue;
+    const entries = Object.entries(volumes).filter(
+      (entry): entry is [string, string] => typeof entry[1] === 'string' && Number.isFinite(Date.parse(entry[1]))
+    );
+    if (entries.length > 0) state[nodeId] = Object.fromEntries(entries);
+  }
+  return state;
+}
+
+function sameUnusedVolumeState(a: UnusedVolumeState, b: UnusedVolumeState): boolean {
+  const nodeIds = Object.keys(a);
+  if (nodeIds.length !== Object.keys(b).length) return false;
+  return nodeIds.every((nodeId) => {
+    const left = a[nodeId];
+    const right = b[nodeId];
+    if (!right) return false;
+    const names = Object.keys(left);
+    return names.length === Object.keys(right).length && names.every((name) => left[name] === right[name]);
+  });
 }
 
 function normalizeHousekeepingVolume(volume: unknown): {

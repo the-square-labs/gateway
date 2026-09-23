@@ -107,7 +107,16 @@ export const CreateManagedDatabaseSchema = z
     publishedPort: z.number().int().min(1).max(65535).optional(),
     publishedNativePort: z.number().int().min(1).max(65535).optional(),
     tlsEnabled: z.boolean().default(true),
-    databaseName: z.string().trim().min(1).max(63).optional(),
+    // The database daemon accepts only plain SQL identifiers; reject others
+    // here instead of failing the deployment after the record exists.
+    databaseName: z
+      .string()
+      .trim()
+      .regex(
+        /^[a-zA-Z_][a-zA-Z0-9_]{0,62}$/,
+        'Use letters, digits and underscores, starting with a letter or underscore'
+      )
+      .optional(),
     ownerUsername: z.string().trim().min(1).max(63).optional(),
     clickhouseConfigXml: z.string().trim().min(1).max(32_768).optional(),
     redisConfig: ManagedRedisConfigSchema.optional(),

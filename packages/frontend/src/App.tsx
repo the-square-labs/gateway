@@ -1227,6 +1227,9 @@ export function RealtimeBridge() {
             component?: "gateway" | "relay";
             targetVersion?: string | null;
             statusChanged?: boolean;
+            /** Why a Gateway update ended without reaching its target. */
+            error?: string;
+            rolledBack?: boolean;
           }
         | undefined;
       if (typeof ev?.updating === "boolean") {
@@ -1238,7 +1241,15 @@ export function RealtimeBridge() {
           setGatewayUpdatingActive(true, ev.targetVersion ?? null);
         } else {
           useUpdateStore.getState().clearUpdating();
-          clearGatewayUpdating();
+          const appStatus = useAppStatusStore.getState();
+          if (ev.error && appStatus.gatewayUpdatingActive) {
+            // Sessions waiting for the update leave its screen with the reason.
+            appStatus.setGatewayUpdateError(ev.error, ev.targetVersion ?? null, {
+              rolledBack: ev.rolledBack === true,
+            });
+          } else {
+            clearGatewayUpdating();
+          }
         }
       }
       if (ev?.statusChanged) void useUpdateStore.getState().fetchStatus();

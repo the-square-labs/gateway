@@ -164,5 +164,63 @@ class FileProtocolKeyTests(unittest.TestCase):
         runner.POSTGRES_TOOLS = original_tools
 
 
+class RestoreHardeningTests(unittest.TestCase):
+    def test_managed_postgres_restore_hands_objects_to_the_database_owner(self):
+        original_work = runner.WORK
+        with tempfile.TemporaryDirectory() as directory:
+            runner.WORK = pathlib.Path(directory)
+            payload = b"dump"
+            config = {
+                "runId": "run-1",
+                "engine": "postgres",
+                "limits": {"timeoutSeconds": 3600},
+                "destination": {"provider": "s3"},
+                "restoreTarget": {"host": "127.0.0.1", "port": 5432, "database": "app", "username": "gw_admin_x", "password": "pw", "managedDatabaseId": "m-1"},
+                "restoreArtifact": {"artifactKeys": ["owned/run-1/database.dump"], "fileChecksums": {"owned/run-1/database.dump": hashlib.sha256(payload).hexdigest()}},
+            }
+
+            def download(_, __, local):
+                local.write_bytes(payload)
+
+            with patch.object(runner, "download", side_effect=download), patch.object(runner, "assert_empty_target"), patch.object(runner, "postgres_restore_tool", return_value="pg_restore"), patch.object(runner, "run") as ran:
+                runner.restore(config)
+            statements = [call.args[2] for call in ran.call_args_list if len(call.args) > 2 and call.args[2]]
+            self.assertTrue(any("REASSIGN OWNED BY" in statement for statement in statements))
+            # External targets keep the restoring account as owner.
+            ran.reset_mock()
+            config["restoreTarget"].pop("managedDatabaseId")
+            with patch.object(runner, "download", side_effect=download), patch.object(runner, "assert_empty_target"), patch.object(runner, "postgres_restore_tool", return_value="pg_restore"), patch.object(runner, "run") as ran:
+                runner.restore(config)
+            self.assertFalse(any(len(call.args) > 2 and call.args[2] for call in ran.call_args_list))
+        runner.WORK = original_work
+
+    def test_clickhouse_restore_quotes_a_non_identifier_source_database(self):
+        self.assertEqual(runner.quote_source_identifier("my-app"), "`my-app`")
+        for value in ("", "a`b", "a\\b", "a\nb"):
+            with self.subTest(value=value), self.assertRaises(runner.BackupError):
+                runner.quote_source_identifier(value)
+
+    def test_waits_follow_the_remaining_run_time(self):
+        config = {"limits": {"timeoutSeconds": 7200}}
+        with patch.object(runner, "STARTED_AT", 1000.0), patch.object(runner.time, "time", return_value=1000.0):
+            self.assertEqual(runner.remaining_seconds(config), 7200 - runner.DEADLINE_RESERVE_SECONDS)
+            # A control-plane deadline earlier than the local timeout wins.
+            config["deadlineAt"] = "1970-01-01T00:26:40Z"  # epoch 1600
+            self.assertEqual(runner.remaining_seconds(config), 600 - runner.DEADLINE_RESERVE_SECONDS)
+        with patch.object(runner, "STARTED_AT", 1000.0), patch.object(runner.time, "time", return_value=99999.0):
+            self.assertEqual(runner.remaining_seconds({"limits": {"timeoutSeconds": 60}}), 1)
+
+    def test_masterauth_is_passed_on_stdin_not_in_arguments(self):
+        target = {"host": "redis.example.test", "port": 6379, "password": "owner-secret"}
+        with patch.object(runner, "run", return_value="OK") as ran:
+            runner.redis_command_secret_last(target, ["CONFIG", "SET", "masterauth"], "stage-secret")
+        args, env, stdin = ran.call_args.args
+        self.assertIn("-x", args)
+        self.assertNotIn("stage-secret", args)
+        self.assertNotIn("owner-secret", args)
+        self.assertEqual(stdin, "stage-secret")
+        self.assertEqual(env["REDISCLI_AUTH"], "owner-secret")
+
+
 if __name__ == "__main__":
     unittest.main()

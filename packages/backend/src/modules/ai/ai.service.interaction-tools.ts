@@ -199,7 +199,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
-        return this.sslService.linkInternalCert(input, user.id);
+        return this.sslService.linkInternalCert(input, user.id, user.scopes);
       }
       case 'request_acme_cert': {
         const input = RequestACMECertSchema.parse(args);

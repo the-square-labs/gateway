@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { runWithAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { TokensService } from './tokens.service.js';
 
 const USER_ID = '11111111-1111-4111-8111-111111111111';
@@ -143,5 +144,30 @@ describe('TokensService.updateToken', () => {
     });
 
     expect(set).toHaveBeenCalledWith({ scopes: ['proxy:view'] });
+  });
+});
+
+describe('TokensService impersonation guard', () => {
+  it('refuses to mint or widen API tokens inside an impersonated request', async () => {
+    const db = { insert: vi.fn(), update: vi.fn(), query: { apiTokens: { findFirst: vi.fn() } } };
+    const service = createService(db);
+    const impersonation = {
+      actorUserId: 'actor-1',
+      subjectUserId: USER_ID,
+      subjectEmail: 'subject@example.com',
+      subjectName: 'Subject',
+    };
+
+    await runWithAuditRequestContext({ impersonation }, async () => {
+      await expect(service.createToken(USER_ID, { name: 'CI', scopes: ['nodes:details'] })).rejects.toMatchObject({
+        statusCode: 403,
+        code: 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+      });
+      await expect(
+        service.updateToken(USER_ID, '22222222-2222-4222-8222-222222222222', { scopes: ['nodes:details'] })
+      ).rejects.toMatchObject({ code: 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN' });
+    });
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(db.update).not.toHaveBeenCalled();
   });
 });

@@ -6,6 +6,10 @@ import type { DockerMigration, DockerMigrationPreflight, Node } from "@/types";
 import { DockerMigrationDialog } from "./DockerMigrationDialog";
 
 vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
+vi.mock("@/components/common/ConfirmDialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/common/ConfirmDialog")>()),
+  confirm: vi.fn().mockResolvedValue(true),
+}));
 
 const targetNode = {
   id: "node-2",
@@ -230,5 +234,39 @@ describe("DockerMigrationDialog", () => {
 
     expect(await screen.findByText("Cutover")).toBeInTheDocument();
     expect(screen.queryByText("Proxy cutover")).not.toBeInTheDocument();
+  });
+
+  it("resolves a migration that needs attention with the side Gateway treats as authoritative", async () => {
+    const resolved = { ...runningMigration, status: "failed" as const, phase: "done" };
+    vi.spyOn(api, "resolveDockerMigration").mockResolvedValue(resolved);
+    render(
+      <DockerMigrationDialog
+        open
+        onOpenChange={vi.fn()}
+        initialMigration={{
+          ...runningMigration,
+          status: "needs_attention",
+          phase: "rollback",
+          errorCode: "MIGRATION_ROLLBACK_FAILED",
+          errorMessage: "Migration rollback could not confirm the target was removed",
+        }}
+        resource={{
+          type: "container",
+          nodeId: "node-1",
+          containerName: "worker",
+          displayName: "worker",
+          sourceState: "running",
+        }}
+      />
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /resolve/i }));
+
+    await waitFor(() =>
+      expect(api.resolveDockerMigration).toHaveBeenCalledWith("migration-1", "source")
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: /resolve/i })).not.toBeInTheDocument()
+    );
   });
 });

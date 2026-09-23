@@ -1,11 +1,12 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import type { AuthProvisioningSettings } from "@/types";
 import { AuthProvisioningSection } from "./AuthProvisioningSection";
@@ -53,7 +54,19 @@ const SETTINGS: AuthProvisioningSettings = {
   availableGroups: [],
 };
 
+function setUserScopes(scopes: string[]) {
+  useAuthStore.setState({
+    user: { id: "user-1", scopes } as never,
+    isAuthenticated: true,
+    isLoading: false,
+  });
+}
+
 describe("AuthProvisioningSection inference setting", () => {
+  beforeEach(() => {
+    setUserScopes(["admin:system", "settings:gateway:edit"]);
+  });
+
   afterEach(() => {
     api.invalidateCache("settings:auth-provisioning");
     useConfirmDialog.getState().close();
@@ -580,5 +593,47 @@ describe("AuthProvisioningSection inference setting", () => {
       "SMTP configuration"
     );
     expect(screen.getByLabelText("Test recipient")).toBeInTheDocument();
+  });
+  it("keeps identity-trust settings read-only without admin:system", async () => {
+    setUserScopes(["settings:gateway:edit"]);
+    const settings = {
+      ...SETTINGS,
+      smtp: {
+        configured: true,
+        host: "smtp.example.com",
+        port: 587,
+        tlsMode: "starttls" as const,
+        username: "mailer",
+        passwordLast4: "1234",
+        senderName: "Gateway",
+        senderEmail: "security@example.com",
+        verifiedAt: null,
+      },
+    };
+    api.setCache("settings:auth-provisioning", settings);
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(settings);
+
+    render(<AuthProvisioningSection canEdit />);
+
+    const oidcPanel = (await screen.findByText("OIDC provider")).closest(
+      "div.border"
+    ) as HTMLElement;
+    const smtpPanel = screen
+      .getByText("Authentication email (SMTP)")
+      .closest("div.border") as HTMLElement;
+    expect(screen.getByDisplayValue("https://gateway.example.com")).toBeDisabled();
+    expect(within(oidcPanel).getByPlaceholderText(/id\.example\.com/)).toBeDisabled();
+    expect(within(smtpPanel).getByLabelText("Sender email")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save SMTP settings" })).toBeDisabled();
+    expect(
+      screen.getAllByText(/Requires the admin:system permission to change this/).length
+    ).toBeGreaterThanOrEqual(3);
+    expect(
+      screen.getByText(/Requires the admin:system permission to turn this off/)
+    ).toBeInTheDocument();
+    // Unchanged SMTP settings may still be resubmitted to send a test message.
+    expect(screen.getByRole("button", { name: "Send test" })).toBeEnabled();
+    // Other access settings stay editable.
+    expect(screen.getByRole("spinbutton", { name: /relay grant/i })).toBeEnabled();
   });
 });

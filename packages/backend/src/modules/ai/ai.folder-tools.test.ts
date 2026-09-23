@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
+import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
@@ -187,5 +188,97 @@ describe('AI folder tools', () => {
       allowedNodeIds: [],
       allowedResourceRefs: [{ nodeId: 'node-1', resourceKey: 'project-1' }],
     });
+  });
+  it('requires the module edit scope on every moved resource and on the destination', async () => {
+    const domainOne = '11111111-1111-4111-8111-111111111111';
+    const domainTwo = '22222222-2222-4222-8222-222222222222';
+    const folderId = '33333333-3333-4333-8333-333333333333';
+    const domainFolderService = { moveResourcesToFolder: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DomainFolderService) return domainFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const move = (scopes: string[], destination: string | null) =>
+      executeFolderTool({ ...BASE_USER, scopes: ['domains:folders:manage', ...scopes] }, 'manage_resource_folder', {
+        resourceType: 'domains',
+        operation: 'move_resources',
+        resourceIds: [domainOne, domainTwo],
+        folderId: destination,
+      });
+
+    await expect(move([`domains:edit:${domainOne}`, `domains:edit:folder/${folderId}`], folderId)).rejects.toThrow(
+      `PERMISSION_DENIED: Missing required scope domains:edit:${domainTwo}`
+    );
+    await expect(move([`domains:edit:${domainOne}`, `domains:edit:${domainTwo}`], folderId)).rejects.toThrow(
+      'PERMISSION_DENIED: Missing domains:edit for the move destination'
+    );
+    // Moving to the root needs broad edit access.
+    await expect(
+      move([`domains:edit:${domainOne}`, `domains:edit:${domainTwo}`, `domains:edit:folder/${folderId}`], null)
+    ).rejects.toThrow('PERMISSION_DENIED: Missing domains:edit for the move destination');
+    expect(domainFolderService.moveResourcesToFolder).not.toHaveBeenCalled();
+
+    await expect(
+      move([`domains:edit:${domainOne}`, `domains:edit:${domainTwo}`, `domains:edit:folder/${folderId}`], folderId)
+    ).resolves.toEqual({ success: true });
+    expect(domainFolderService.moveResourcesToFolder).toHaveBeenCalledWith(
+      { ids: [domainOne, domainTwo], folderId },
+      'user-1'
+    );
+  });
+
+  it('requires route edit access on the destination when moving routes into a folder', async () => {
+    const routeId = '11111111-1111-4111-8111-111111111111';
+    const folderId = '33333333-3333-4333-8333-333333333333';
+    const proxyFolderService = { moveHostsToFolder: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === FolderService) return proxyFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const move = (scopes: string[]) =>
+      executeFolderTool({ ...BASE_USER, scopes: ['proxy:folders:manage', ...scopes] }, 'manage_resource_folder', {
+        resourceType: 'routes',
+        operation: 'move_resources',
+        resourceIds: [routeId],
+        folderId,
+      });
+
+    await expect(move([`proxy:edit:${routeId}`])).rejects.toThrow(
+      'PERMISSION_DENIED: Missing proxy:edit for the move destination'
+    );
+    await expect(move([`proxy:edit:${routeId}`, `proxy:edit:folder/${folderId}`])).resolves.toEqual({ success: true });
+    expect(proxyFolderService.moveHostsToFolder).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the Docker folder route scopes to network moves and their destination', async () => {
+    const folderId = '33333333-3333-4333-8333-333333333333';
+    const nodeId = '44444444-4444-4444-8444-444444444444';
+    const dockerFolderService = { moveResourcesToFolder: vi.fn().mockResolvedValue(undefined) };
+    const networkResources = { resolveNetwork: vi.fn().mockResolvedValue('net-resource-1') };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DockerFolderService) return dockerFolderService as never;
+      if (token === DockerNetworkAccessResourceService) return networkResources as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const move = (scopes: string[]) =>
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['docker:containers:folders:manage', ...scopes] },
+        'manage_resource_folder',
+        {
+          resourceType: 'docker',
+          dockerResourceType: 'network',
+          operation: 'move_resources',
+          items: [{ nodeId, resourceKey: 'backend' }],
+          folderId,
+        }
+      );
+
+    await expect(move([])).rejects.toThrow('Missing required scope: docker:networks:edit');
+    await expect(move([`docker:networks:edit:${nodeId}/net-resource-1`])).rejects.toThrow(
+      'PERMISSION_DENIED: Missing required destination scope docker:networks:edit'
+    );
+    expect(dockerFolderService.moveResourcesToFolder).not.toHaveBeenCalled();
+    await expect(move([`docker:networks:edit:${nodeId}`])).resolves.toEqual({ success: true });
+    expect(networkResources.resolveNetwork).toHaveBeenCalledWith(nodeId, 'backend');
   });
 });

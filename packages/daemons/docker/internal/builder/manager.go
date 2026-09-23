@@ -49,6 +49,10 @@ type Manager struct {
 	jobs                  map[string]context.CancelFunc
 	secrets               map[string][]string
 	attempts              map[string]uint32
+	generations           map[string]uint64
+	liveAttempts          map[string]*atomic.Uint32
+	statuses              map[string]string
+	nextGeneration        uint64
 	terminalEvents        map[string]*pb.DockerBuildEvent
 	terminalAcks          map[string]chan string
 	cleanupOnce           sync.Once
@@ -73,7 +77,9 @@ type buildMetadata struct {
 func NewManager(config RuntimeConfig, workspace, askpass string, emit EventSink) *Manager {
 	manager := &Manager{
 		config: config, workspace: workspace, askpass: askpass, emit: emit, jobs: map[string]context.CancelFunc{}, secrets: map[string][]string{},
-		attempts: map[string]uint32{}, terminalEvents: map[string]*pb.DockerBuildEvent{}, terminalAcks: map[string]chan string{},
+		attempts: map[string]uint32{}, generations: map[string]uint64{}, liveAttempts: map[string]*atomic.Uint32{},
+		statuses:       map[string]string{},
+		terminalEvents: map[string]*pb.DockerBuildEvent{}, terminalAcks: map[string]chan string{},
 		executable: resolveBuilderExecutable, terminalRetryInterval: terminalEventRetryInterval, terminalAckTimeout: terminalEventAckTimeout,
 	}
 	manager.cleanupAfterJob = manager.pruneAfterJob
@@ -105,6 +111,11 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	if err := m.validate(command); err != nil {
 		return err
 	}
+	m.mu.Lock()
+	if _, exists := m.jobs[command.GetBuildId()]; exists {
+		return m.continueRunningLocked(command)
+	}
+	m.mu.Unlock()
 	if err := m.Ready(); err != nil {
 		return err
 	}
@@ -122,10 +133,9 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	ctx, cancelBuild := context.WithTimeout(jobCtx, time.Duration(command.GetTimeoutSeconds())*time.Second)
 	m.mu.Lock()
 	if _, exists := m.jobs[command.GetBuildId()]; exists {
-		m.mu.Unlock()
 		cancelBuild()
 		cancelJob()
-		return errors.New("build is already running")
+		return m.continueRunningLocked(command)
 	}
 	capacity := int(command.GetWorkerParallelism())
 	if capacity == 0 {
@@ -139,8 +149,16 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	}
 	// Cancellation stops build execution, while the parent job context keeps
 	// heartbeats alive through cleanup and terminal acknowledgement.
+	m.nextGeneration++
+	generation := m.nextGeneration
 	m.jobs[command.GetBuildId()] = cancelBuild
 	m.attempts[command.GetBuildId()] = command.GetAttempt()
+	m.generations[command.GetBuildId()] = generation
+	// Heartbeats outlive the job's slot (they run through terminal delivery), so
+	// they follow the attempt through this reference rather than the maps.
+	liveAttempt := &atomic.Uint32{}
+	liveAttempt.Store(command.GetAttempt())
+	m.liveAttempts[command.GetBuildId()] = liveAttempt
 	secretValues := make([]string, 0, len(command.GetBuildSecrets())+1)
 	for _, value := range command.GetBuildSecrets() {
 		secretValues = append(secretValues, string(value))
@@ -155,12 +173,12 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 		defer func() {
 			cancelBuild()
 			cancelJob()
-			m.releaseAttemptState(command.GetBuildId(), command.GetAttempt())
+			m.releaseJobState(command.GetBuildId(), generation)
 		}()
 		heartbeatDone := make(chan struct{})
-		go m.emitHeartbeats(jobCtx, command.GetBuildId(), command.GetAttempt(), heartbeatDone)
+		go m.emitHeartbeats(jobCtx, command.GetBuildId(), liveAttempt, heartbeatDone)
 		m.run(ctx, command)
-		terminal := m.prepareCompletedJob(command.GetBuildId(), command.GetAttempt())
+		terminal := m.prepareCompletedJob(command.GetBuildId(), generation)
 		if terminal != nil {
 			m.deliverTerminal(terminal)
 		}
@@ -169,27 +187,83 @@ func (m *Manager) Start(command *pb.DockerBuildCommand) error {
 	return nil
 }
 
-func (m *Manager) prepareCompletedJob(buildID string, attempt uint32) *pb.DockerBuildEvent {
+// continueRunningLocked answers a dispatch for a build this worker already
+// runs. A newer attempt is adopted and succeeds; a duplicate or stale one keeps
+// the legacy "already running" answer. Callers hold m.mu; it is released here.
+func (m *Manager) continueRunningLocked(command *pb.DockerBuildCommand) error {
+	adopted, status := m.adoptAttemptLocked(command.GetBuildId(), command.GetAttempt())
+	m.mu.Unlock()
+	if !adopted {
+		return errors.New("build is already running")
+	}
+	m.announceAdoptedAttempt(command.GetBuildId(), command.GetAttempt(), status)
+	return nil
+}
+
+// adoptAttemptLocked moves a running job to a newer attempt of the same build.
+// Gateway claims a new attempt when the lease of a running build expires, for
+// example across a Gateway restart; the job keeps running and reports under the
+// attempt Gateway now owns. Callers hold m.mu.
+func (m *Manager) adoptAttemptLocked(buildID string, attempt uint32) (bool, string) {
+	current := m.attempts[buildID]
+	if attempt == 0 || attempt <= current {
+		return false, ""
+	}
+	m.attempts[buildID] = attempt
+	if live := m.liveAttempts[buildID]; live != nil {
+		live.Store(attempt)
+	}
+	return true, m.statuses[buildID]
+}
+
+// announceAdoptedAttempt reports the progress the job already reached under
+// the adopted attempt, so Gateway can advance the freshly claimed build.
+func (m *Manager) announceAdoptedAttempt(buildID string, attempt uint32, status string) {
+	now := time.Now().UnixMilli()
+	if status != "" {
+		_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: status, Attempt: attempt, OccurredAtUnixMs: now})
+	}
+	_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "heartbeat", Attempt: attempt, OccurredAtUnixMs: now})
+}
+
+func (m *Manager) prepareCompletedJob(buildID string, generation uint64) *pb.DockerBuildEvent {
 	m.cleanupAfterJob(buildID)
-	terminal := m.takeTerminal(buildID)
-	m.releaseAttemptState(buildID, attempt)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if current, exists := m.generations[buildID]; !exists || current != generation {
+		return nil
+	}
+	terminal := m.terminalEvents[buildID]
+	// The job may have adopted a newer attempt after its result was recorded.
+	if terminal != nil && terminal.GetAttempt() != 0 && m.attempts[buildID] > terminal.GetAttempt() {
+		terminal.Attempt = m.attempts[buildID]
+	}
+	m.releaseJobStateLocked(buildID)
 	return terminal
 }
 
-func (m *Manager) releaseAttemptState(buildID string, attempt uint32) {
+// releaseJobState frees the job's slot unless a replacement job for the same
+// build (a later generation) already owns it.
+func (m *Manager) releaseJobState(buildID string, generation uint64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	currentAttempt, exists := m.attempts[buildID]
-	if !exists || currentAttempt != attempt {
+	if current, exists := m.generations[buildID]; !exists || current != generation {
 		return
 	}
+	m.releaseJobStateLocked(buildID)
+}
+
+func (m *Manager) releaseJobStateLocked(buildID string) {
 	delete(m.jobs, buildID)
 	delete(m.secrets, buildID)
 	delete(m.attempts, buildID)
+	delete(m.generations, buildID)
+	delete(m.liveAttempts, buildID)
+	delete(m.statuses, buildID)
 	delete(m.terminalEvents, buildID)
 }
 
-func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, attempt uint32, done <-chan struct{}) {
+func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, attempt *atomic.Uint32, done <-chan struct{}) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -199,7 +273,7 @@ func (m *Manager) emitHeartbeats(ctx context.Context, buildID string, attempt ui
 		case <-done:
 			return
 		case <-ticker.C:
-			_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "heartbeat", Attempt: attempt, OccurredAtUnixMs: time.Now().UnixMilli()})
+			_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: buildID, Status: "heartbeat", Attempt: attempt.Load(), OccurredAtUnixMs: time.Now().UnixMilli()})
 		}
 	}
 }

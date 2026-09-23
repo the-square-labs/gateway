@@ -111,6 +111,42 @@ describe("DeliveryLogTab", () => {
     });
   });
 
+  it("filters pending outbox deliveries and marks them as pending", async () => {
+    const listDeliveries = vi
+      .spyOn(api, "listDeliveries")
+      .mockResolvedValueOnce({ data: [], total: 0, page: 1, limit: 100, totalPages: 1 })
+      .mockResolvedValueOnce({
+        data: [
+          makeDelivery({
+            status: "pending",
+            responseStatus: null,
+            completedAt: null,
+            error: null,
+          }),
+        ],
+        total: 1,
+        page: 1,
+        limit: 100,
+        totalPages: 1,
+      });
+
+    renderWithRouter(<DeliveryLogTab refreshToken={0} />);
+    await waitFor(() => expect(listDeliveries).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole("button", { name: /filters/i }));
+    fireEvent.click(screen.getByRole("combobox"));
+    fireEvent.click(screen.getByRole("option", { name: "Pending" }));
+
+    await waitFor(() => {
+      expect(listDeliveries).toHaveBeenNthCalledWith(2, {
+        page: 1,
+        limit: 100,
+        status: "pending",
+      });
+    });
+    expect(await screen.findByLabelText("Pending")).toBeInTheDocument();
+  });
+
   it("keeps the end-of-log sentinel compact and centered after the final page", async () => {
     vi.spyOn(api, "listDeliveries").mockResolvedValue({
       data: [makeDelivery()],

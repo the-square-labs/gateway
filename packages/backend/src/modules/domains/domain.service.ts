@@ -5,7 +5,7 @@ import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
-import { buildWhere } from '@/lib/utils.js';
+import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
 import { probeDnsRecords } from './dns.utils.js';
@@ -29,6 +29,9 @@ function hasIngressResourceScope(scopes: string[], baseScope: string, resourceId
 export class DomainsService extends DomainsServiceRuntime {
   async listDomains(params: DomainListQuery, options?: { allowedIds?: string[] }) {
     const conditions = [];
+    if (options?.allowedIds?.length === 0) {
+      return { data: [], pagination: { page: params.page, limit: params.limit, total: 0, totalPages: 0 } };
+    }
     if (options?.allowedIds) {
       conditions.push(inArray(domains.id, options.allowedIds));
     }
@@ -722,9 +725,10 @@ export class DomainsService extends DomainsServiceRuntime {
   async getUsage(domainName: string): Promise<DomainUsage> {
     const normalized = domainName.trim().toLowerCase();
     const base = normalized.startsWith('*.') ? normalized.slice(2) : normalized;
-    const proxyDomainNames = [base, `*.${base}`];
 
-    const [hosts, certs] = await Promise.all([
+    const [candidateHosts, certs] = await Promise.all([
+      // Pre-filter to names at or below the base; coverage itself is decided
+      // below with the same rule proxy hosts are validated against.
       this.db
         .select({
           id: proxyHosts.id,
@@ -738,7 +742,8 @@ export class DomainsService extends DomainsServiceRuntime {
           sql`EXISTS (
             SELECT 1
             FROM jsonb_array_elements_text(${proxyHosts.domainNames}) AS proxy_domain(value)
-            WHERE ${inArray(sql`lower(proxy_domain.value)`, proxyDomainNames)}
+            WHERE lower(proxy_domain.value) = ${base}
+              OR lower(proxy_domain.value) LIKE ${`%.${escapeLike(base)}`}
           )`
         ),
       this.db
@@ -758,6 +763,9 @@ export class DomainsService extends DomainsServiceRuntime {
         ),
     ]);
 
+    // A registered `*.example.com` governs `app.example.com` as well (see
+    // proxy-domain-node.ts), so usage must include every covered host.
+    const hosts = candidateHosts.filter((host) => getRegisteredDomainCandidates(host.domainNames).includes(normalized));
     return { proxyHosts: hosts, sslCertificates: certs };
   }
 
@@ -842,13 +850,13 @@ export class DomainsService extends DomainsServiceRuntime {
     while (changed) {
       changed = false;
       const registeredNames = new Set(
-        allDomains
-          .filter((domain) => domainIds.has(domain.id))
-          .flatMap((domain) => getRegisteredDomainCandidates([domain.domain]))
+        allDomains.filter((domain) => domainIds.has(domain.id)).map((domain) => domain.domain.trim().toLowerCase())
       );
       for (const host of allHosts) {
         if (hostIds.has(host.id)) continue;
-        if (host.domainNames.some((name) => registeredNames.has(name.trim().toLowerCase()))) {
+        // Same coverage rule as proxy host validation: a wildcard domain
+        // covers every host name beneath it.
+        if (getRegisteredDomainCandidates(host.domainNames).some((candidate) => registeredNames.has(candidate))) {
           hostIds.add(host.id);
           changed = true;
         }

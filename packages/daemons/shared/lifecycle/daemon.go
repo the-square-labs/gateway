@@ -33,6 +33,9 @@ type DaemonBase struct {
 	logger                *slog.Logger
 	baseHandler           slog.Handler // original handler, never wrapped
 	tunnelIdentityChanged chan struct{}
+	// sessionReceivedCommand is set by runSession once the gateway sent a
+	// command, i.e. accepted the registration. Only the Run loop reads it.
+	sessionReceivedCommand bool
 }
 
 // NewDaemonBase creates a new DaemonBase with the given plugin.
@@ -99,7 +102,10 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 	}
 
 	// Step 4: Connect and run (with reconnection loop)
+	backoff := controlSessionBackoff{}
 	for {
+		d.sessionReceivedCommand = false
+		startedAt := time.Now()
 		err := d.runSessionCycle(ctx)
 		if ctx.Err() != nil {
 			d.logger.Info("shutting down")
@@ -114,15 +120,70 @@ func (d *DaemonBase) Run(ctx context.Context) error {
 			d.logger.Info(restart.Message, "action", "restarting")
 			return restart
 		}
-		d.logger.Warn("session ended, reconnecting", "error", err)
-		// The relay can remain reachable while its app upstream is restarting.
-		// In that state a control RPC fails immediately with EOF, so the
-		// transport-level connector backoff is never reached. Bound the retry
-		// rate here to avoid a CPU and log storm during normal Gateway updates.
-		if !waitForControlSessionReconnect(ctx) {
+		var delay time.Duration
+		if rejected, ok := err.(*RegistrationRejectedError); ok {
+			// Exiting would only let the supervisor restart us every few
+			// seconds. Stay up and retry rarely: an operator may restore the
+			// node (or re-enroll this host) without touching the daemon.
+			delay = backoff.nextRejected()
+			d.logger.Error("gateway rejected registration; retrying later", "reason", rejected.Message, "retry_in", delay)
+		} else {
+			// The relay can remain reachable while its app upstream is
+			// restarting, and a gateway can refuse a registration outright.
+			// Both end the session immediately without any command, so the
+			// transport-level connector backoff is never reached. Back off
+			// exponentially until a session is accepted again.
+			delay = backoff.next(d.sessionReceivedCommand, time.Since(startedAt))
+			d.logger.Warn("session ended, reconnecting", "error", err, "retry_in", delay)
+		}
+		if !waitForControlSessionReconnectDelay(ctx, delay) {
 			return nil
 		}
 	}
+}
+
+const (
+	controlSessionMaxReconnectDelay = 60 * time.Second
+	// A session shorter than this that never received a command counts as a
+	// failed attempt for backoff purposes.
+	controlSessionQuickFailure      = 10 * time.Second
+	controlSessionRejectedBaseDelay = time.Minute
+	controlSessionRejectedMaxDelay  = 30 * time.Minute
+)
+
+// controlSessionBackoff grows the reconnect delay while sessions keep failing
+// quickly without the gateway ever sending a command, and resets once a
+// session was accepted.
+type controlSessionBackoff struct {
+	failures int
+	rejected int
+}
+
+func (b *controlSessionBackoff) next(receivedCommand bool, lasted time.Duration) time.Duration {
+	b.rejected = 0
+	if receivedCommand || lasted >= controlSessionQuickFailure {
+		b.failures = 0
+		return controlSessionReconnectDelay
+	}
+	b.failures++
+	return exponentialDelay(controlSessionReconnectDelay, b.failures-1, controlSessionMaxReconnectDelay)
+}
+
+func (b *controlSessionBackoff) nextRejected() time.Duration {
+	b.failures = 0
+	b.rejected++
+	return exponentialDelay(controlSessionRejectedBaseDelay, b.rejected-1, controlSessionRejectedMaxDelay)
+}
+
+func exponentialDelay(base time.Duration, exponent int, max time.Duration) time.Duration {
+	delay := base
+	for i := 0; i < exponent && delay < max; i++ {
+		delay *= 2
+	}
+	if delay > max {
+		return max
+	}
+	return delay
 }
 
 func runProcessRelayPool(
@@ -231,7 +292,11 @@ type relayTunnelConnect func(context.Context) (*grpc.ClientConn, error)
 const controlSessionReconnectDelay = time.Second
 
 func waitForControlSessionReconnect(ctx context.Context) bool {
-	timer := time.NewTimer(controlSessionReconnectDelay)
+	return waitForControlSessionReconnectDelay(ctx, controlSessionReconnectDelay)
+}
+
+func waitForControlSessionReconnectDelay(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():

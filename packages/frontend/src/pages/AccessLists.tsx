@@ -56,6 +56,31 @@ const ROW_ANIMATION = {
   transition: { duration: 0.18, ease: [0.25, 0.1, 0.25, 1] as const },
 };
 
+/**
+ * Rows left completely blank are ignored. Every other row needs a username, and
+ * a password unless it keeps an existing user's stored password. Basic auth
+ * without any user would lock every visitor out, so it is rejected too.
+ */
+export function validateBasicAuthUsers(
+  rows: { username: string; password: string }[],
+  existingUsernames: string[]
+): { users: { username: string; password: string }[] } | { error: string } {
+  const users: { username: string; password: string }[] = [];
+  for (const row of rows) {
+    const username = row.username.trim();
+    if (!username && !row.password) continue;
+    if (!username) return { error: "Enter a username for every basic auth user" };
+    if (!row.password && !existingUsernames.includes(username)) {
+      return { error: `Enter a password for basic auth user "${username}"` };
+    }
+    users.push({ username, password: row.password });
+  }
+  if (users.length === 0) {
+    return { error: "Add at least one user to enable basic authentication" };
+  }
+  return { users };
+}
+
 let accessListRowSequence = 0;
 const nextRowKey = (prefix: string) => `${prefix}-${++accessListRowSequence}`;
 
@@ -165,16 +190,25 @@ export function AccessLists() {
       return;
     }
 
+    let nextBasicAuthUsers: { username: string; password: string }[] | undefined;
+    if (basicAuthEnabled) {
+      const validation = validateBasicAuthUsers(
+        basicAuthUsers,
+        editing ? (editing.basicAuthUsers ?? []).map((user) => user.username) : []
+      );
+      if ("error" in validation) {
+        toast.error(validation.error);
+        return;
+      }
+      nextBasicAuthUsers = validation.users;
+    }
+
     setIsSaving(true);
     try {
-      const nextBasicAuthUsers = basicAuthEnabled
-        ? basicAuthUsers
-            .filter((u) => u.username.trim() !== "" && (editing || u.password.trim() !== ""))
-            .map((u) => ({ username: u.username.trim(), password: u.password }))
-        : undefined;
       const data = {
         name,
-        description: description || undefined,
+        // An empty string clears the stored description on edit.
+        description: editing ? description.trim() : description.trim() || undefined,
         ipRules: ipRules
           .filter((r) => r.value.trim() !== "")
           .map(({ _key: _discarded, ...rule }) => rule),

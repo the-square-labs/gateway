@@ -387,6 +387,8 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_databases_v1",
 				"managed_database_storage_images_v1",
 				"managed_clickhouse_principals_v1",
+				"managed_postgres_query_principal_v1",
+				"managed_postgres_query_writer_v1",
 				"managed_database_binding_principals_v2",
 				"managed_storage_v1",
 				"managed_storage_ext4_quota_v1",
@@ -396,7 +398,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"relay_pool_v1",
 			}
 			if p.backupHandler != nil {
-				values = append(values, "database_backups_v1")
+				values = append(values, "database_backups_v1", "database_backups_deadline_v1")
 			}
 			return values
 		}

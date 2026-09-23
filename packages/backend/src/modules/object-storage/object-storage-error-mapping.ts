@@ -66,6 +66,10 @@ export function mapObjectStorageError(error: unknown, operation: ObjectStorageOp
     return new AppError(401, 'STORAGE_AUTH_FAILED', message);
   }
 
+  if (name === 'BucketNotEmpty') {
+    return new AppError(409, 'STORAGE_BUCKET_NOT_EMPTY', message);
+  }
+
   if (NOT_FOUND_NAMES.has(name) || lower.includes('does not exist')) {
     return new AppError(404, 'STORAGE_NOT_FOUND', message);
   }

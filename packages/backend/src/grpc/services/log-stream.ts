@@ -5,6 +5,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { logRelay, NGINX_LOG_SUBSCRIBE_ACK_EVENT } from '@/modules/monitoring/log-relay.service.js';
 import type { LogStreamControl, LogStreamMessage } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
+import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcLogStream');
@@ -65,6 +66,8 @@ export function createLogStreamHandlers(deps: GrpcServerDeps) {
           .select({
             certificateSerial: nodes.certificateSerial,
             certificateFingerprint: nodes.certificateFingerprint,
+            pendingCertificateSerial: nodes.pendingCertificateSerial,
+            pendingCertificateFingerprint: nodes.pendingCertificateFingerprint,
             status: nodes.status,
             type: nodes.type,
           })
@@ -77,21 +80,14 @@ export function createLogStreamHandlers(deps: GrpcServerDeps) {
           stream.end();
           return;
         }
-        const storedSerial = normalizeCertificateSerial(node.certificateSerial);
-        if (storedSerial !== certIdentity.serialNumber) {
-          logger.warn('Log stream rejected: certificate serial does not match enrolled node', {
+        // A staged renewal certificate is as valid as the current one until
+        // the command stream promotes it.
+        if (!matchEnrolledNodeCertificate(node, certIdentity)) {
+          logger.warn('Log stream rejected: certificate does not match enrolled node', {
             nodeId,
             presentedSerial: certIdentity.serialNumber,
-            storedSerial,
+            storedSerial: normalizeCertificateSerial(node.certificateSerial),
           });
-          stream.end();
-          return;
-        }
-        if (
-          certIdentity.certificateFingerprint &&
-          node.certificateFingerprint !== certIdentity.certificateFingerprint
-        ) {
-          logger.warn('Log stream rejected: certificate fingerprint does not match enrolled node', { nodeId });
           stream.end();
           return;
         }

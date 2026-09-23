@@ -14,6 +14,38 @@ import type { CreateIntermediateCAInput, CreateRootCAInput } from './ca.schemas.
 
 const logger = createChildLogger('CAService');
 
+type CARow = typeof certificateAuthorities.$inferSelect;
+
+/** Publishes CRLs for CAService; implemented by CRLService, which attaches itself. */
+export interface CAServiceCrlPublisher {
+  generateCRL(caId: string, options?: { allowSystem?: boolean; allowInactive?: boolean }): Promise<Buffer>;
+  invalidateCache(caId: string): Promise<void>;
+}
+
+/** Strip key material and the stored CRL blob before a CA row leaves the service. */
+type CASecretField =
+  | 'encryptedPrivateKey'
+  | 'encryptedDek'
+  | 'dekIv'
+  | 'encryptedOcspKey'
+  | 'encryptedOcspDek'
+  | 'ocspDekIv'
+  | 'lastCrlDer';
+
+export function sanitizeCA<T extends Partial<CARow>>(ca: T): Omit<T, CASecretField> {
+  const {
+    encryptedPrivateKey: _encryptedPrivateKey,
+    encryptedDek: _encryptedDek,
+    dekIv: _dekIv,
+    encryptedOcspKey: _encryptedOcspKey,
+    encryptedOcspDek: _encryptedOcspDek,
+    ocspDekIv: _ocspDekIv,
+    lastCrlDer: _lastCrlDer,
+    ...rest
+  } = ca;
+  return rest;
+}
+
 @injectable()
 export class CAService {
   constructor(
@@ -23,8 +55,32 @@ export class CAService {
   ) {}
 
   private eventBus?: EventBusService;
+  private crlPublisher?: CAServiceCrlPublisher;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+  setCrlPublisher(publisher: CAServiceCrlPublisher) {
+    this.crlPublisher = publisher;
+  }
+
+  /**
+   * Regenerate and cache a CA's CRL. A revocation is durable before this
+   * runs, so a publication failure only drops the cached copy (the next
+   * request regenerates it) instead of failing the revocation.
+   */
+  async publishCRL(caId: string, options?: { allowSystem?: boolean; allowInactive?: boolean }): Promise<boolean> {
+    if (!this.crlPublisher) return false;
+    try {
+      await this.crlPublisher.generateCRL(caId, options);
+      return true;
+    } catch (error) {
+      logger.error('CRL publication failed after revocation', {
+        caId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      await this.crlPublisher.invalidateCache(caId).catch(() => undefined);
+      return false;
+    }
   }
   private emitCa(id: string, action: 'created' | 'updated' | 'revoked' | 'deleted', type: 'root' | 'intermediate') {
     this.eventBus?.publish('ca.changed', { id, action, type });
@@ -100,7 +156,7 @@ export class CAService {
 
     logger.info('Created root CA', { caId: ca.id, cn: input.commonName });
     this.emitCa(ca.id, 'created', ca.type);
-    return ca;
+    return sanitizeCA(ca);
   }
 
   async createIntermediateCA(parentId: string, input: CreateIntermediateCAInput, userId: string) {
@@ -206,7 +262,7 @@ export class CAService {
 
     logger.info('Created intermediate CA', { caId: ca.id, parentId, cn: input.commonName });
     this.emitCa(ca.id, 'created', ca.type);
-    return ca;
+    return sanitizeCA(ca);
   }
 
   async getCATree(showSystem = false) {
@@ -224,15 +280,8 @@ export class CAService {
     const countMap = new Map(certCounts.map((c) => [c.caId, Number(c.count)]));
 
     return allCAs.map((ca) => ({
-      ...ca,
+      ...sanitizeCA(ca),
       certCount: countMap.get(ca.id) || 0,
-      // Remove sensitive fields
-      encryptedPrivateKey: undefined,
-      encryptedDek: undefined,
-      dekIv: undefined,
-      encryptedOcspKey: undefined,
-      encryptedOcspDek: undefined,
-      ocspDekIv: undefined,
     }));
   }
 
@@ -252,14 +301,8 @@ export class CAService {
       .where(eq(certificates.caId, id));
 
     return {
-      ...ca,
+      ...sanitizeCA(ca),
       certCount: Number(certCount),
-      encryptedPrivateKey: undefined,
-      encryptedDek: undefined,
-      dekIv: undefined,
-      encryptedOcspKey: undefined,
-      encryptedOcspDek: undefined,
-      ocspDekIv: undefined,
     };
   }
 
@@ -314,6 +357,8 @@ export class CAService {
     if (ca.isSystem) throw new AppError(403, 'SYSTEM_CA', 'System CAs cannot be revoked');
     if (ca.status !== 'active') throw new AppError(400, 'CA_NOT_ACTIVE', 'CA is already revoked or expired');
 
+    // Flip the status first so no new certificate is issued under this CA
+    // while its final CRL is assembled.
     await this.db
       .update(certificateAuthorities)
       .set({ status: 'revoked', revokedAt: new Date(), revocationReason: reason, updatedAt: new Date() })
@@ -332,6 +377,13 @@ export class CAService {
       .update(certificates)
       .set({ status: 'revoked', revokedAt: new Date(), revocationReason: 'caCompromise', updatedAt: new Date() })
       .where(and(eq(certificates.caId, id), eq(certificates.status, 'active')));
+
+    // Publish this CA's final CRL (its leaves and child CAs are revoked now);
+    // it keeps being served after revocation. The parent then lists this CA.
+    await this.publishCRL(id, { allowInactive: true });
+    if (_depth === 0 && ca.parentId) {
+      await this.publishCRL(ca.parentId);
+    }
 
     await this.auditService.log({
       userId,
@@ -382,9 +434,11 @@ export class CAService {
   }
 
   /**
-   * Get CA's decrypted signing key — internal use only
+   * Get CA's decrypted signing key — internal use only. `allowInactive`
+   * exists only for CRL signing: a revoked CA publishes a final CRL, but
+   * never issues or exports anything.
    */
-  async getCASigningMaterials(caId: string, options?: { allowSystem?: boolean }) {
+  async getCASigningMaterials(caId: string, options?: { allowSystem?: boolean; allowInactive?: boolean }) {
     const ca = await this.db.query.certificateAuthorities.findFirst({
       where: eq(certificateAuthorities.id, caId),
     });
@@ -393,7 +447,9 @@ export class CAService {
     if (ca.isSystem && !options?.allowSystem) {
       throw new AppError(403, 'SYSTEM_CA', 'System CAs are read-only');
     }
-    if (ca.status !== 'active') throw new AppError(400, 'CA_NOT_ACTIVE', 'CA is not active');
+    if (ca.status !== 'active' && !options?.allowInactive) {
+      throw new AppError(400, 'CA_NOT_ACTIVE', 'CA is not active');
+    }
 
     const privateKeyPem = this.cryptoService.decryptPrivateKey({
       encryptedPrivateKey: ca.encryptedPrivateKey,

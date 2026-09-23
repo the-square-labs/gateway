@@ -16,10 +16,18 @@ import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import type { DaemonMessage, GatewayCommand } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
+import { matchEnrolledNodeCertificate, promotePendingNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
 import { decodeHealthDiskMounts } from './health-report.js';
 
 const logger = createChildLogger('GrpcControl');
+/**
+ * Command id the daemon treats as a terminal registration rejection. It stops
+ * the tight reconnect loop for causes that a retry cannot fix.
+ */
+export const REGISTRATION_REJECTED_COMMAND_ID = '__registration_rejected__';
+// Bound for messages buffered while a Register is being validated.
+const MAX_MESSAGES_DURING_REGISTRATION = 1000;
 const pendingCommandRegistrations = new Map<string, { token: symbol; sequence: number }>();
 let commandRegistrationSequence = 0;
 
@@ -347,7 +355,21 @@ export function createControlHandlers(deps: GrpcServerDeps) {
       let nodeId: string | null = null;
       let closed = false;
       let registering = false;
-      const pendingDaemonLogs: Array<NonNullable<DaemonMessage['daemonLog']>> = [];
+      // A daemon starts streaming (logs, build events, results) right after
+      // Register. Those messages are held until the async registration
+      // validation finishes and replayed in order; ending the stream instead
+      // made every Gateway restart flap the node and fail running builds.
+      const messagesDuringRegistration: DaemonMessage[] = [];
+      let droppedDuringRegistration = 0;
+      const rejectRegistration = (reason: string) => {
+        // Terminal causes: tell the daemon to stop reconnecting in a tight loop.
+        try {
+          stream.write({ commandId: REGISTRATION_REJECTED_COMMAND_ID, applyConfig: { configContent: reason } } as any);
+        } catch {
+          // The stream may already be closing.
+        }
+        stream.end();
+      };
       const isCurrentCommandStream = () =>
         !!nodeId && !closed && deps.registry.getNode(nodeId)?.commandStream === stream;
       const endStaleStream = async () => {
@@ -390,20 +412,23 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         });
       };
 
-      stream.on('data', async (msg: DaemonMessage) => {
+      const handleMessage = async (msg: DaemonMessage) => {
         try {
           if (closed) return;
-          // A daemon can log from an auxiliary stream while its registration
-          // is still awaiting database/certificate validation. Keep those
-          // operational logs until the command stream has an identity. The
-          // Relay supervisor also publishes an immediate runtime snapshot from
-          // OnSessionStart; ignore that replaceable snapshot until registration
-          // commits instead of racing it against the async identity lookup.
-          if (registering && msg.daemonLog) {
-            pendingDaemonLogs.push(msg.daemonLog);
+          // Messages that arrive while the Register is still awaiting
+          // database/certificate validation are queued and replayed once the
+          // stream has an identity. The Relay supervisor also publishes an
+          // immediate runtime snapshot from OnSessionStart; that replaceable
+          // snapshot is dropped instead, the next periodic one supersedes it.
+          if (registering && !msg.register) {
+            if (msg.relayRuntimeStatus) return;
+            if (messagesDuringRegistration.length >= MAX_MESSAGES_DURING_REGISTRATION) {
+              droppedDuringRegistration += 1;
+              return;
+            }
+            messagesDuringRegistration.push(msg);
             return;
           }
-          if (registering && msg.relayRuntimeStatus) return;
           if (msg.register) {
             const registrationObservedAt = new Date();
             // First message must be RegisterMessage
@@ -424,6 +449,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 claimedNodeId,
               });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -434,6 +460,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 claimedNodeId,
               });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -462,6 +489,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 configVersionHash: nodes.configVersionHash,
                 certificateSerial: nodes.certificateSerial,
                 certificateFingerprint: nodes.certificateFingerprint,
+                pendingCertificateSerial: nodes.pendingCertificateSerial,
+                pendingCertificateFingerprint: nodes.pendingCertificateFingerprint,
                 hostIdentityId: nodes.hostIdentityId,
                 status: nodes.status,
               })
@@ -472,14 +501,16 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             if (!node) {
               logger.error('Unknown node ID during registration', { nodeId: claimedNodeId });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
-              stream.end();
+              rejectRegistration('node is not registered with this Gateway (it may have been removed)');
               return;
             }
 
             if (node.status === 'pending') {
               logger.error('Node registration rejected: enrollment is not complete', { nodeId: claimedNodeId });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -489,30 +520,23 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 nodeId: claimedNodeId,
               });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
-              stream.end();
+              rejectRegistration('node has no enrolled certificate; re-enroll the daemon');
               return;
             }
-            const storedSerial = normalizeCertificateSerial(node.certificateSerial);
-            if (storedSerial !== certIdentity.serialNumber) {
-              logger.error('Node registration rejected: certificate serial does not match enrolled node', {
+            // Accept the current certificate or a staged renewal. The staged
+            // one is promoted (and the old leaf revoked) below, only once the
+            // daemon has proven it actually holds it.
+            const certificateMatch = matchEnrolledNodeCertificate(node, certIdentity);
+            if (!certificateMatch) {
+              logger.error('Node registration rejected: certificate does not match enrolled node', {
                 nodeId: claimedNodeId,
                 presentedSerial: certIdentity.serialNumber,
-                storedSerial,
+                storedSerial: normalizeCertificateSerial(node.certificateSerial),
               });
               registering = false;
-              clearPendingCommandRegistration(claimedNodeId, registrationToken);
-              stream.end();
-              return;
-            }
-            if (
-              certIdentity.certificateFingerprint &&
-              node.certificateFingerprint !== certIdentity.certificateFingerprint
-            ) {
-              logger.error('Node registration rejected: certificate fingerprint does not match enrolled node', {
-                nodeId: claimedNodeId,
-              });
-              registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -528,6 +552,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               currentRegistration.sequence !== registrationSequence
             ) {
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -549,8 +574,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             if (profileError) {
               logger.error('Node registration profile mismatch', { nodeId: claimedNodeId, error: profileError });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
-              stream.end();
+              rejectRegistration(`daemon profile does not match this node: ${profileError}`);
               return;
             }
             if (nodeType === 'relay') {
@@ -570,12 +596,44 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               ) {
                 logger.error('Relay registration identity or capability mismatch', { nodeId: claimedNodeId });
                 registering = false;
+                messagesDuringRegistration.length = 0;
                 clearPendingCommandRegistration(claimedNodeId, registrationToken);
                 stream.end();
                 return;
               }
             }
             const gatewayHash = node.configVersionHash;
+
+            if (certificateMatch === 'pending') {
+              try {
+                const promotedFingerprint = await promotePendingNodeCertificate(
+                  claimedNodeId,
+                  node.pendingCertificateSerial!
+                );
+                logger.info('Promoted renewed node certificate after first registration with it', {
+                  nodeId: claimedNodeId,
+                  serial: certIdentity.serialNumber,
+                });
+                if (deps.relayPolicy && promotedFingerprint) {
+                  void deps.relayPolicy.refreshNodeIdentity(claimedNodeId, promotedFingerprint).catch((error) => {
+                    logger.warn('Relay policy identity refresh deferred after certificate promotion', {
+                      nodeId: claimedNodeId,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                  });
+                }
+              } catch (err) {
+                logger.error('Node registration rejected: renewed certificate could not be promoted', {
+                  nodeId: claimedNodeId,
+                  error: err instanceof Error ? err.message : String(err),
+                });
+                registering = false;
+                messagesDuringRegistration.length = 0;
+                clearPendingCommandRegistration(claimedNodeId, registrationToken);
+                stream.end();
+                return;
+              }
+            }
 
             try {
               await deps.registry.register(
@@ -594,6 +652,7 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               const reason = (err as Error).message;
               logger.error('Registration rejected', { nodeId: claimedNodeId, error: reason });
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               stream.end();
               return;
@@ -601,13 +660,23 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             if (closed) {
               await deps.registry.deregister(claimedNodeId, stream as any);
               registering = false;
+              messagesDuringRegistration.length = 0;
               clearPendingCommandRegistration(claimedNodeId, registrationToken);
               return;
             }
             nodeId = claimedNodeId;
             registering = false;
             clearPendingCommandRegistration(claimedNodeId, registrationToken);
-            for (const daemonLog of pendingDaemonLogs.splice(0)) relayDaemonLog(claimedNodeId, daemonLog);
+            if (droppedDuringRegistration > 0) {
+              logger.warn('Dropped daemon messages that exceeded the registration buffer', {
+                nodeId: claimedNodeId,
+                dropped: droppedDuringRegistration,
+              });
+              droppedDuringRegistration = 0;
+            }
+            // Replay in arrival order; each handler starts synchronously, so
+            // per-build event serialization keeps the original order.
+            for (const queued of messagesDuringRegistration.splice(0)) void handleMessage(queued);
 
             // Update DB with latest info — do NOT overwrite configVersionHash
             // (the gateway's stored hash is authoritative, set by FullSync)
@@ -713,6 +782,23 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                 }
               });
             }
+            if (nodeType === 'docker') {
+              // Re-push registry credentials on every connect so private-registry
+              // pulls work after a daemon restart, not only after the next tag
+              // update. Best-effort and never blocks registration.
+              setImmediate(async () => {
+                try {
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  const { DockerRegistryService } = await import('@/modules/docker/docker-registry.service.js');
+                  await container.resolve(DockerRegistryService).syncRegistriesToNode(claimedNodeId);
+                } catch (error) {
+                  logger.warn('Failed to sync Docker registries after daemon connect', {
+                    nodeId: claimedNodeId,
+                    error: error instanceof Error ? error.message : String(error),
+                  });
+                }
+              });
+            }
             if (deps.relayPolicy && nodeType === 'relay') {
               setImmediate(async () => {
                 try {
@@ -728,11 +814,38 @@ export function createControlHandlers(deps: GrpcServerDeps) {
             }
 
             // A v2 Nginx daemon reconciles on every reconnect; an older daemon
-            // retains the established hash-mismatch-only resync path.
+            // retains the established hash-mismatch-only resync path, and
+            // receives certificates renewed while it was offline through the
+            // legacy deployCert retry below.
             const supportsTlsDistribution =
               msg.register.capabilities?.includes('nginx_certificate_distribution_v2') ?? false;
             const configHashMismatch = !!gatewayHash && gatewayHash !== msg.register.configVersionHash;
-            if (nodeType === 'nginx' && (supportsTlsDistribution || configHashMismatch)) {
+            if (nodeType === 'nginx' && !supportsTlsDistribution) {
+              setImmediate(async () => {
+                try {
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  if (configHashMismatch) {
+                    await container.resolve(ProxyService).resyncAllHostsOnNode(claimedNodeId);
+                  }
+                  if (!isClaimedStreamCurrent(claimedNodeId)) return;
+                  await container
+                    .resolve(NginxCertificateDistributionService)
+                    .reconcileIntegrity(claimedNodeId, { reconnect: true });
+                } catch (err) {
+                  logger.error('Legacy Nginx reconnect reconciliation failed', {
+                    nodeId: claimedNodeId,
+                    error: (err as Error).message,
+                  });
+                }
+              });
+              if (configHashMismatch) {
+                logger.info('Config hash mismatch, triggering full resync', {
+                  nodeId: claimedNodeId,
+                  daemonHash: msg.register.configVersionHash,
+                  gatewayHash,
+                });
+              }
+            } else if (nodeType === 'nginx' && (supportsTlsDistribution || configHashMismatch)) {
               logger.info(
                 supportsTlsDistribution
                   ? 'TLS distribution reconnect reconciliation'
@@ -1157,6 +1270,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
         } catch (err) {
           logger.error('Error processing daemon message', { nodeId, error: (err as Error).message });
         }
+      };
+
+      stream.on('data', (msg: DaemonMessage) => {
+        void handleMessage(msg);
       });
 
       stream.on('end', async () => {

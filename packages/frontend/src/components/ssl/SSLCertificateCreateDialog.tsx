@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import type {
   ACMEChallengeType,
@@ -113,6 +114,12 @@ export function SSLCertificateCreateDialog({
   const [selectedPkiCertId, setSelectedPkiCertId] = useState("");
   const [internalName, setInternalName] = useState("");
   const [isLinking, setIsLinking] = useState(false);
+  // Linking puts the PKI private key into service, so the backend requires key export access.
+  const hasScope = useAuthStore((state) => state.hasScope);
+  const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  const canExportAnyPkiCert = hasScopedAccess("pki:cert:export");
+  const canExportPkiCert = (certId: string) => hasScope(`pki:cert:export:${certId}`);
+  const canLinkSelectedPkiCert = !!selectedPkiCertId && canExportPkiCert(selectedPkiCertId);
   const folders = useResourceFolderStore((state) => state.foldersByType["ssl-certificate"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["ssl-certificate"]);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
@@ -356,6 +363,10 @@ export function SSLCertificateCreateDialog({
   const handleLinkInternal = async () => {
     if (!selectedPkiCertId) {
       toast.error("Select a PKI certificate");
+      return;
+    }
+    if (!canExportPkiCert(selectedPkiCertId)) {
+      toast.error("You need permission to export this certificate's private key to link it");
       return;
     }
     setIsLinking(true);
@@ -634,10 +645,20 @@ export function SSLCertificateCreateDialog({
                       Link an existing PKI certificate from your internal Certificate Authorities
                       for use as an SSL certificate.
                     </p>
+                    {!canExportAnyPkiCert && (
+                      <p className="text-xs text-muted-foreground">
+                        Linking requires the PKI certificate export permission (pki:cert:export)
+                        because the certificate's private key is deployed to nginx.
+                      </p>
+                    )}
                     <div className="space-y-1.5">
                       <label className="text-sm font-medium">PKI Certificate</label>
-                      <Select value={selectedPkiCertId} onValueChange={setSelectedPkiCertId}>
-                        <SelectTrigger>
+                      <Select
+                        value={selectedPkiCertId}
+                        onValueChange={setSelectedPkiCertId}
+                        disabled={!canExportAnyPkiCert}
+                      >
+                        <SelectTrigger aria-label="PKI certificate">
                           <SelectValue placeholder="Select a certificate..." />
                         </SelectTrigger>
                         <SelectContent>
@@ -646,11 +667,15 @@ export function SSLCertificateCreateDialog({
                               No active TLS server certificates
                             </SelectItem>
                           ) : (
-                            pkiCerts.map((cert) => (
-                              <SelectItem key={cert.id} value={cert.id}>
-                                {cert.commonName}
-                              </SelectItem>
-                            ))
+                            pkiCerts.map((cert) => {
+                              const canExport = canExportPkiCert(cert.id);
+                              return (
+                                <SelectItem key={cert.id} value={cert.id} disabled={!canExport}>
+                                  {cert.commonName}
+                                  {!canExport && " (no export permission)"}
+                                </SelectItem>
+                              );
+                            })
                           )}
                         </SelectContent>
                       </Select>
@@ -701,7 +726,7 @@ export function SSLCertificateCreateDialog({
             </Button>
           )}
           {activeTab === "internal" && (
-            <Button onClick={handleLinkInternal} disabled={isLinking || !selectedPkiCertId}>
+            <Button onClick={handleLinkInternal} disabled={isLinking || !canLinkSelectedPkiCert}>
               {isLinking ? "Linking..." : "Link Certificate"}
             </Button>
           )}

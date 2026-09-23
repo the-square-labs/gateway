@@ -78,6 +78,11 @@ type composeExecutor struct {
 	active         map[string]*composeOperation
 	completed      map[string]composeOperationResult
 	completedOrder []string
+	// Commands run concurrently, so a cancel can reach the executor before
+	// the operation it cancels started. Such a cancel is remembered and the
+	// operation is refused when it arrives.
+	cancelledEarly      map[string]struct{}
+	cancelledEarlyOrder []string
 }
 
 func newComposeExecutor(cfg *config.Config, dockerClient *Client, logger *slog.Logger) (*composeExecutor, error) {
@@ -155,6 +160,13 @@ func (e *composeExecutor) handle(cmd *pb.DockerComposeCommand) (string, error) {
 		}
 		return completed.detail, completed.err
 	}
+	if _, cancelled := e.cancelledEarly[cacheKey]; cancelled {
+		delete(e.cancelledEarly, cacheKey)
+		result := composeOperationResult{fingerprint: fingerprint, err: redactComposeExecutionError(context.Canceled)}
+		e.recordCompletedLocked(cacheKey, result)
+		e.mu.Unlock()
+		return result.detail, result.err
+	}
 	if active, ok := e.active[request.projectID]; ok {
 		if active.fingerprint != fingerprint {
 			e.mu.Unlock()
@@ -180,6 +192,13 @@ func (e *composeExecutor) handle(cmd *pb.DockerComposeCommand) (string, error) {
 	e.mu.Lock()
 	operation.result = result
 	delete(e.active, request.projectID)
+	e.recordCompletedLocked(cacheKey, result)
+	close(operation.done)
+	e.mu.Unlock()
+	return result.detail, result.err
+}
+
+func (e *composeExecutor) recordCompletedLocked(cacheKey string, result composeOperationResult) {
 	e.completed[cacheKey] = result
 	e.completedOrder = append(e.completedOrder, cacheKey)
 	if len(e.completedOrder) > composeOperationCacheLimit {
@@ -187,17 +206,32 @@ func (e *composeExecutor) handle(cmd *pb.DockerComposeCommand) (string, error) {
 		e.completedOrder = e.completedOrder[1:]
 		delete(e.completed, oldest)
 	}
-	close(operation.done)
-	e.mu.Unlock()
-	return result.detail, result.err
 }
 
 func (e *composeExecutor) cancel(request composeRequest) error {
 	e.mu.Lock()
 	operation, ok := e.active[request.projectID]
 	if !ok {
+		cacheKey := composeOperationKey(request.projectID, request.operationID)
+		if _, completed := e.completed[cacheKey]; completed {
+			e.mu.Unlock()
+			return errors.New("no active docker compose operation matches this project")
+		}
+		// The operation has not started here yet: refuse it when it arrives.
+		if e.cancelledEarly == nil {
+			e.cancelledEarly = make(map[string]struct{})
+		}
+		if _, exists := e.cancelledEarly[cacheKey]; !exists {
+			e.cancelledEarly[cacheKey] = struct{}{}
+			e.cancelledEarlyOrder = append(e.cancelledEarlyOrder, cacheKey)
+			if len(e.cancelledEarlyOrder) > composeOperationCacheLimit {
+				oldest := e.cancelledEarlyOrder[0]
+				e.cancelledEarlyOrder = e.cancelledEarlyOrder[1:]
+				delete(e.cancelledEarly, oldest)
+			}
+		}
 		e.mu.Unlock()
-		return errors.New("no active docker compose operation matches this project")
+		return nil
 	}
 	if operation.fingerprint == "" || !strings.Contains(operation.fingerprint, "\x00"+request.operationID+"\x00") {
 		e.mu.Unlock()

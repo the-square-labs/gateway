@@ -17,6 +17,61 @@ import (
 
 const maxAsyncCommandHandlers = 4
 
+// Long-running command families get their own bounded slots so they neither
+// block the receive loop nor starve each other or the generic handlers. A
+// command waits for a free slot of its family until it expires.
+const (
+	maxAsyncComposeHandlers = 2
+	// Managed storage and backup commands keep the one-at-a-time execution
+	// they had inline: storage serializes on its manager lock anyway, and
+	// the backup runtime is initialized lazily by its first command.
+	maxAsyncStorageHandlers = 1
+	maxAsyncBackupHandlers  = 1
+)
+
+// commandExpiryClockSkew tolerates a small clock offset between the gateway
+// and this host before a command deadline is enforced.
+const commandExpiryClockSkew = 5 * time.Second
+
+const registrationRejectedCommandID = "__registration_rejected__"
+
+// RegistrationRejectedError reports that the gateway terminally rejected this
+// daemon's registration (for example the node was removed). Retrying quickly
+// cannot succeed, so the daemon backs off for a long time instead.
+type RegistrationRejectedError struct {
+	Message string
+}
+
+func (e *RegistrationRejectedError) Error() string {
+	return "registration rejected by gateway: " + e.Message
+}
+
+// asyncCommandPool bounds concurrent handlers for one command family. A pool
+// that waits queues commands for a slot; otherwise a full pool rejects.
+type asyncCommandPool struct {
+	slots chan struct{}
+	wait  bool
+}
+
+func newAsyncCommandPool(size int, wait bool) *asyncCommandPool {
+	return &asyncCommandPool{slots: make(chan struct{}, size), wait: wait}
+}
+
+// commandDeadline returns the command's dispatch deadline including the clock
+// skew allowance, and false when the gateway did not set one.
+func commandDeadline(cmd *pb.GatewayCommand) (time.Time, bool) {
+	expiresAt := cmd.GetExpiresAtUnixMs()
+	if expiresAt <= 0 {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(expiresAt).Add(commandExpiryClockSkew), true
+}
+
+func commandExpired(cmd *pb.GatewayCommand, now time.Time) bool {
+	deadline, ok := commandDeadline(cmd)
+	return ok && now.After(deadline)
+}
+
 // runSession connects to the gateway, registers, and runs the command loop.
 func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error {
 	// Enable log streaming by default — backend can disable via SetDaemonLogStream command
@@ -65,41 +120,65 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 	if migrationStreamer, ok := d.plugin.(MigrationStreamPlugin); ok {
 		go migrationStreamer.RunMigrationStream(sessionCtx, conn, d.state.NodeID)
 	}
-	asyncCommandSlots := make(chan struct{}, maxAsyncCommandHandlers)
-	sendAsyncCommandResult := func(c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
-		select {
-		case asyncCommandSlots <- struct{}{}:
-		default:
-			go func() {
-				result := &pb.CommandResult{
+	sendAsyncResult := func(result *pb.CommandResult, what string) {
+		if err := writer.Send(&pb.DaemonMessage{
+			Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
+		}); err != nil {
+			d.logger.Warn("failed to send "+what, "command_id", result.CommandId, "error", err)
+			sessionCancel()
+			_ = cmdStream.CloseSend()
+		}
+	}
+	genericPool := newAsyncCommandPool(maxAsyncCommandHandlers, false)
+	composePool := newAsyncCommandPool(maxAsyncComposeHandlers, true)
+	storagePool := newAsyncCommandPool(maxAsyncStorageHandlers, true)
+	backupPool := newAsyncCommandPool(maxAsyncBackupHandlers, true)
+	// dispatchAsync runs handle off the receive loop. A nil pool runs it
+	// immediately without a slot (reserved for short, urgent commands).
+	dispatchAsync := func(pool *asyncCommandPool, c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
+		if pool != nil && !pool.wait {
+			select {
+			case pool.slots <- struct{}{}:
+			default:
+				go sendAsyncResult(&pb.CommandResult{
 					CommandId: c.CommandId,
 					Success:   false,
 					Error:     "daemon is busy handling long-running commands; retry shortly",
-				}
-				if err := writer.Send(&pb.DaemonMessage{
-					Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-				}); err != nil {
-					d.logger.Warn("failed to send async command overload result", "command_id", c.CommandId, "error", err)
-					sessionCancel()
-					_ = cmdStream.CloseSend()
-				}
-			}()
-			return
-		}
-
-		go func() {
-			defer func() { <-asyncCommandSlots }()
-
-			result := handle(c)
-			if err := writer.Send(&pb.DaemonMessage{
-				Payload: &pb.DaemonMessage_CommandResult{CommandResult: result},
-			}); err != nil {
-				d.logger.Warn("failed to send async command result", "command_id", c.CommandId, "error", err)
-				sessionCancel()
-				_ = cmdStream.CloseSend()
+				}, "async command overload result")
+				return
 			}
+		}
+		go func() {
+			if pool != nil {
+				if pool.wait {
+					var expired <-chan time.Time
+					if deadline, ok := commandDeadline(c); ok {
+						timer := time.NewTimer(time.Until(deadline))
+						defer timer.Stop()
+						expired = timer.C
+					}
+					select {
+					case pool.slots <- struct{}{}:
+					case <-sessionCtx.Done():
+						return
+					case <-expired:
+						sendAsyncResult(&pb.CommandResult{
+							CommandId: c.CommandId,
+							Success:   false,
+							Error:     "command expired while waiting for a free handler slot",
+						}, "async command expiry result")
+						return
+					}
+				}
+				defer func() { <-pool.slots }()
+			}
+			sendAsyncResult(handle(c), "async command result")
 		}()
 	}
+	sendAsyncCommandResult := func(c *pb.GatewayCommand, handle func(*pb.GatewayCommand) *pb.CommandResult) {
+		dispatchAsync(genericPool, c, handle)
+	}
+	controlReady := false
 
 	// Start health reporter in background
 	go runHealthReporter(sessionCtx, d, writer)
@@ -114,12 +193,38 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			return err
 		}
 
-		// Check for registration rejection (fatal — daemon must exit)
-		if cmd.CommandId == "__registration_rejected__" {
-			if ac, ok := cmd.Payload.(*pb.GatewayCommand_ApplyConfig); ok && ac.ApplyConfig != nil {
-				return &FatalError{Message: ac.ApplyConfig.ConfigContent}
+		// Terminal registration rejection: stop this session and back off.
+		if cmd.CommandId == registrationRejectedCommandID {
+			if ac, ok := cmd.Payload.(*pb.GatewayCommand_ApplyConfig); ok && ac.ApplyConfig != nil && ac.ApplyConfig.ConfigContent != "" {
+				return &RegistrationRejectedError{Message: ac.ApplyConfig.ConfigContent}
 			}
-			return &FatalError{Message: "registration rejected by gateway"}
+			return &RegistrationRejectedError{Message: "no reason given"}
+		}
+
+		// Any other command proves the gateway accepted this registration
+		// (it always sends SetDaemonLogStream right after Register). A pending
+		// daemon update commits only after this.
+		if !controlReady {
+			controlReady = true
+			d.sessionReceivedCommand = true
+			notifyLauncherControlReady(d.logger)
+		}
+
+		// A command the gateway already stopped waiting for must not run.
+		if commandExpired(cmd, time.Now()) {
+			d.logger.Warn("dropping expired gateway command", "command_id", cmd.CommandId)
+			if cmd.CommandId != "" {
+				if err := writer.Send(&pb.DaemonMessage{
+					Payload: &pb.DaemonMessage_CommandResult{CommandResult: &pb.CommandResult{
+						CommandId: cmd.CommandId,
+						Success:   false,
+						Error:     "command expired before the daemon received it",
+					}},
+				}); err != nil {
+					return err
+				}
+			}
+			continue
 		}
 
 		// Handle RequestHealth and RequestStats inline
@@ -168,6 +273,21 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 			*pb.GatewayCommand_DockerDatabase:
 			// Long-running Docker I/O must not block the command receive loop.
 			sendAsyncCommandResult(cmd, d.plugin.HandleCommand)
+			continue
+		case *pb.GatewayCommand_DockerCompose:
+			if cmd.GetDockerCompose().GetAction() == "cancel" {
+				// Cancellation must reach the executor while the operation it
+				// cancels still holds a compose slot.
+				dispatchAsync(nil, cmd, d.plugin.HandleCommand)
+			} else {
+				dispatchAsync(composePool, cmd, d.plugin.HandleCommand)
+			}
+			continue
+		case *pb.GatewayCommand_DockerStorage:
+			dispatchAsync(storagePool, cmd, d.plugin.HandleCommand)
+			continue
+		case *pb.GatewayCommand_DockerBackup:
+			dispatchAsync(backupPool, cmd, d.plugin.HandleCommand)
 			continue
 		case *pb.GatewayCommand_SyncRelayGrants:
 			result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}

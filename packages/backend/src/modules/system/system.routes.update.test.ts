@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
@@ -17,7 +17,10 @@ const mocks = vi.hoisted(() => ({
     failRelayUpdate: vi.fn(),
     checkForUpdates: vi.fn(),
     isGatewayUpdateInProgress: vi.fn(),
+    assertGatewayUpdateAllowed: vi.fn(),
     proceedWithoutWaiting: vi.fn(),
+    acknowledgeGatewayUpdateFailure: vi.fn(),
+    abandonRelayUpdate: vi.fn(),
   },
   daemonUpdateService: {
     getLatestRelease: vi.fn(),
@@ -74,6 +77,8 @@ describe('System RC update routes', () => {
     mocks.updateService.prepareGatewayUpdate.mockResolvedValue({ imageRef: 'gateway@sha256:test' });
     mocks.updateService.prepareRelayUpdate.mockResolvedValue({ imageRef: 'relay@sha256:test' });
     mocks.updateService.isGatewayUpdateInProgress.mockReturnValue(false);
+    mocks.updateService.assertGatewayUpdateAllowed.mockResolvedValue(undefined);
+    mocks.updateService.acknowledgeGatewayUpdateFailure.mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -96,6 +101,10 @@ describe('System RC update routes', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.updateService.prepareGatewayUpdate).toHaveBeenCalledWith('v2.10.0-rc.2');
+    // The new attempt supersedes a rolled-back one before sessions enter the update screen.
+    expect(mocks.updateService.acknowledgeGatewayUpdateFailure.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.eventBus.publish.mock.invocationCallOrder[0]!
+    );
   });
 
   it('refuses a second Gateway update while one is waiting or running', async () => {
@@ -110,6 +119,60 @@ describe('System RC update routes', () => {
     expect(response.status).toBe(409);
     await expect(response.json()).resolves.toMatchObject({ code: 'UPDATE_IN_PROGRESS' });
     expect(mocks.updateService.prepareGatewayUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Gateway update while a Relay Pool update runs', async () => {
+    mocks.updateService.assertGatewayUpdateAllowed.mockRejectedValue(
+      new AppError(409, 'RELAY_UPDATE_IN_PROGRESS', 'A Relay Pool update is in progress')
+    );
+
+    const response = await app().request('/update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 'v2.10.0-rc.2' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'RELAY_UPDATE_IN_PROGRESS' });
+    expect(mocks.updateService.prepareGatewayUpdate).not.toHaveBeenCalled();
+    expect(mocks.eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('refuses a Relay update while Gateway updates', async () => {
+    mocks.updateService.isGatewayUpdateInProgress.mockReturnValue(true);
+
+    const response = await app().request('/relay-update', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ version: 'v2.10.0-rc.3' }),
+    });
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: 'GATEWAY_UPDATE_IN_PROGRESS' });
+    expect(mocks.updateService.prepareRelayUpdate).not.toHaveBeenCalled();
+    expect(mocks.updateService.startRelayUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets an admin abandon a stuck Relay Pool update', async () => {
+    mocks.updateService.abandonRelayUpdate.mockResolvedValueOnce({ targetVersion: 'v2.10.0-rc.3' });
+
+    const response = await app().request('/relay-update/abandon', { method: 'POST' });
+
+    expect(response.status).toBe(200);
+    expect(mocks.updateService.abandonRelayUpdate).toHaveBeenCalledWith('user-1');
+    expect(mocks.eventBus.publish).toHaveBeenCalledWith(
+      'system.update.changed',
+      expect.objectContaining({ updating: false, component: 'relay', statusChanged: true })
+    );
+  });
+
+  it('acknowledges a Gateway update that was rolled back', async () => {
+    mocks.updateService.acknowledgeGatewayUpdateFailure.mockResolvedValueOnce(true);
+
+    const response = await app().request('/update/acknowledge', { method: 'POST' });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ data: { acknowledged: true } });
   });
 
   it('lets an admin update now instead of waiting for running operations', async () => {

@@ -561,6 +561,23 @@ describe('normalizeOidcClaims', () => {
     );
   });
 
+  it('rejects subjects that collide with pre-created Gateway placeholders', () => {
+    for (const sub of ['manual:victim@example.com', 'MANUAL:victim@example.com', 'System:gateway-setup']) {
+      expect(() => normalizeOidcClaims({ sub, email: 'victim@example.com', email_verified: true })).toThrow(
+        'OIDC subject uses a reserved Gateway namespace'
+      );
+    }
+  });
+
+  it('records the issuer that asserted the subject', () => {
+    expect(normalizeOidcClaims({ sub: 'oidc-sub', iss: 'https://idp.example.com/realms/main/' }).oidcIssuer).toBe(
+      'https://idp.example.com/realms/main'
+    );
+    expect(normalizeOidcClaims({ sub: 'oidc-sub' }, 'https://idp.example.com/').oidcIssuer).toBe(
+      'https://idp.example.com'
+    );
+  });
+
   it('normalizes email and treats only boolean true as verified', () => {
     expect(
       normalizeOidcClaims({
@@ -572,6 +589,7 @@ describe('normalizeOidcClaims', () => {
       })
     ).toEqual({
       oidcSubject: 'oidc-sub',
+      oidcIssuer: null,
       email: 'user@example.com',
       emailVerified: true,
       name: 'User',
@@ -912,6 +930,73 @@ describe('AuthService OIDC identity binding', () => {
     });
   });
 
+  it('binds a legacy subject to the issuer on its next login', async () => {
+    const existingUser = dbUser({ oidcSubject: 'real-sub', oidcIssuer: null, name: 'User' });
+    const harness = createAuthServiceHarness({
+      authSettings: { oidcAutoCreateUsers: false, oidcDefaultGroupId: 'viewer-group', oidcRequireVerifiedEmail: true },
+      existingBySubject: existingUser,
+      updateReturning: { ...existingUser, oidcIssuer: 'https://idp.example.com' },
+    });
+
+    await harness.loginWithClaims({
+      oidcSubject: 'real-sub',
+      oidcIssuer: 'https://idp.example.com/',
+      email: existingUser.email,
+      emailVerified: true,
+      name: 'User',
+      avatarUrl: null,
+    });
+
+    expect(harness.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ oidcIssuer: 'https://idp.example.com' })
+    );
+  });
+
+  it('rejects the same subject asserted by a different issuer', async () => {
+    const sessionService = { createSession: vi.fn() };
+    const harness = createAuthServiceHarness({
+      authSettings: { oidcAutoCreateUsers: true, oidcDefaultGroupId: 'viewer-group', oidcRequireVerifiedEmail: false },
+      existingBySubject: dbUser({ oidcSubject: 'shared-sub', oidcIssuer: 'https://old-idp.example.com' }),
+      sessionService,
+    });
+
+    await expect(
+      harness.loginWithClaims({
+        oidcSubject: 'shared-sub',
+        oidcIssuer: 'https://new-idp.example.com',
+        email: 'someone-else@example.com',
+        emailVerified: true,
+        name: 'Someone Else',
+        avatarUrl: null,
+      })
+    ).rejects.toMatchObject({ statusCode: 403, code: 'OIDC_ISSUER_MISMATCH' });
+    expect(harness.updateSet).not.toHaveBeenCalled();
+    expect(sessionService.createSession).not.toHaveBeenCalled();
+  });
+
+  it('stores the issuer when claiming a pre-created account', async () => {
+    const precreated = dbUser({ oidcSubject: 'manual:user@example.com', email: 'user@example.com' });
+    const harness = createAuthServiceHarness({
+      authSettings: { oidcAutoCreateUsers: false, oidcDefaultGroupId: 'viewer-group', oidcRequireVerifiedEmail: true },
+      existingBySubject: null,
+      existingByEmail: precreated,
+      updateReturning: { ...precreated, oidcSubject: 'real-sub', oidcIssuer: 'https://idp.example.com' },
+    });
+
+    await harness.loginWithClaims({
+      oidcSubject: 'real-sub',
+      oidcIssuer: 'https://idp.example.com',
+      email: 'user@example.com',
+      emailVerified: true,
+      name: 'User',
+      avatarUrl: null,
+    });
+
+    expect(harness.updateSet).toHaveBeenCalledWith(
+      expect.objectContaining({ oidcSubject: 'real-sub', oidcIssuer: 'https://idp.example.com' })
+    );
+  });
+
   it('never grants the first arbitrary OIDC user the system-admin group', async () => {
     const createdUser = dbUser({
       id: 'user-1',
@@ -953,6 +1038,45 @@ describe('AuthService OIDC identity binding', () => {
   });
 });
 
+describe('AuthService.logout', () => {
+  it('ends a local session without OIDC configured', async () => {
+    const sessionService = {
+      getSession: vi.fn().mockResolvedValue({ authMethod: 'password' }),
+      destroySession: vi.fn().mockResolvedValue(undefined),
+    };
+    const oidcSettingsService = { getRuntimeConfig: vi.fn().mockResolvedValue(null) };
+    const service = new AuthService(
+      {} as never,
+      sessionService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      oidcSettingsService as never
+    );
+
+    await expect(service.logout('session-1')).resolves.toBeNull();
+    expect(sessionService.destroySession).toHaveBeenCalledWith('session-1');
+  });
+
+  it('ends an OIDC-method session when OIDC is no longer configured', async () => {
+    const sessionService = {
+      getSession: vi.fn().mockResolvedValue({ authMethod: 'oidc' }),
+      destroySession: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = new AuthService(
+      {} as never,
+      sessionService as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      { getRuntimeConfig: vi.fn().mockResolvedValue(null) } as never
+    );
+
+    await expect(service.logout('session-1')).resolves.toBeNull();
+    expect(sessionService.destroySession).toHaveBeenCalledWith('session-1');
+  });
+});
+
 function dbUser(overrides: Partial<DbUser> = {}): DbUser {
   return {
     id: 'user-1',
@@ -970,6 +1094,7 @@ function dbUser(overrides: Partial<DbUser> = {}): DbUser {
 interface DbUser {
   id: string;
   oidcSubject: string;
+  oidcIssuer?: string | null;
   authMethod: 'oidc' | 'password' | 'email_otp';
   email: string;
   name: string | null;
@@ -1065,6 +1190,7 @@ function createAuthServiceHarness(options: {
         refresh_token: 'refresh-token',
         claims: () => ({
           sub: claims.oidcSubject,
+          ...(claims.oidcIssuer ? { iss: claims.oidcIssuer } : {}),
           email: claims.email,
           email_verified: claims.emailVerified,
           name: claims.name,

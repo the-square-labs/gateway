@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { syncGatewayOperationStatus, useAppStatusStore } from "./app-status";
 
 describe("app status cross-tab synchronization", () => {
@@ -63,5 +63,30 @@ describe("app status cross-tab synchronization", () => {
       gatewayRestartingActive: true,
       maintenanceActive: false,
     });
+  });
+
+  it("remembers when the update screen started, across repeated announcements of the same update", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-23T12:00:00Z"));
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+      const startedAt = useAppStatusStore.getState().gatewayUpdatingStartedAt;
+      expect(startedAt).toBe(Date.now());
+
+      vi.setSystemTime(new Date("2026-09-23T12:10:00Z"));
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+      expect(useAppStatusStore.getState().gatewayUpdatingStartedAt).toBe(startedAt);
+
+      useAppStatusStore
+        .getState()
+        .setGatewayUpdateError("rolled back", "v2.5.0", { rolledBack: true });
+      expect(useAppStatusStore.getState()).toMatchObject({
+        gatewayUpdatingActive: false,
+        gatewayUpdatingStartedAt: null,
+        gatewayUpdateError: { message: "rolled back", targetVersion: "v2.5.0", rolledBack: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

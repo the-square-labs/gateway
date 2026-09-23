@@ -40,8 +40,32 @@ describe("proxy Docker upstream selection", () => {
       dockerProtocol: "tcp",
     });
     expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerHostPort");
-    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerComposeProjectId");
-    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerComposeServiceName");
+    // Explicit nulls clear a previously stored Compose target on update.
+    expect(proxyUpstreamRequest(selected)).toMatchObject({
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
+    });
+  });
+
+  it("switches a stored Compose target to a named container", () => {
+    const selected = proxyUpstreamForDockerTarget(
+      {
+        ...DEFAULT_PROXY_UPSTREAM,
+        kind: "docker_container",
+        dockerNodeId: "node-1",
+        composeProjectId: "project-1",
+        composeServiceName: "web",
+        containerPort: 8080,
+      },
+      container()
+    );
+
+    expect(proxyUpstreamRequest(selected)).toMatchObject({
+      upstreamKind: "docker_container",
+      dockerContainerName: "api",
+      dockerComposeProjectId: null,
+      dockerComposeServiceName: null,
+    });
   });
 
   it("requires an explicit choice when multiple mappings exist", () => {
@@ -111,6 +135,6 @@ describe("proxy Docker upstream selection", () => {
       dockerComposeServiceName: "api",
       dockerContainerPort: 8080,
     });
-    expect(proxyUpstreamRequest(selected)).not.toHaveProperty("dockerContainerName");
+    expect(proxyUpstreamRequest(selected)).toMatchObject({ dockerContainerName: null });
   });
 });

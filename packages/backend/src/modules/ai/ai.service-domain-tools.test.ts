@@ -56,7 +56,10 @@ describe('AIService domain tool routing', () => {
         limit: 25,
       })
     ).resolves.toEqual({ result: { data: [{ id: 'domain-1' }], total: 1 }, invalidateStores: [] });
-    expect(domainsService.listDomains).toHaveBeenCalledWith({ search: 'example', page: 2, limit: 25 });
+    expect(domainsService.listDomains).toHaveBeenCalledWith(
+      { search: 'example', page: 2, limit: 25 },
+      { allowedIds: undefined }
+    );
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['integrations:cloudflare:manage'] }, 'create_domain', {

@@ -49,7 +49,7 @@ export function resolveClientIp(
   const remote = normalizeIp(remoteAddress);
   const cfIp = normalizeIp(headers.get('cf-connecting-ip'));
   const xRealIp = normalizeIp(headers.get('x-real-ip'));
-  const forwardedIp = firstForwardedIp(headers.get('x-forwarded-for'));
+  const forwardedIp = clientFromForwardedFor(headers.get('x-forwarded-for'), settings.trustedProxyCidrs);
   const remoteIsTrustedProxy = remote ? ipInAnyCidr(remote, settings.trustedProxyCidrs) : false;
   const remoteIsCloudflare = remote ? ipInAnyCidr(remote, CLOUDFLARE_CIDRS) : false;
   const configuredProxyRequired = settings.trustedProxyCidrs.length > 0;
@@ -131,9 +131,18 @@ function fallbackRemote(remote: string | undefined, warning?: string): ClientIpR
     : { source: 'unknown', warning };
 }
 
-function firstForwardedIp(value: string | null): string | undefined {
-  return value
-    ?.split(',')
-    .map((part) => normalizeIp(part))
-    .find((part): part is string => Boolean(part));
+/**
+ * Each proxy appends the peer it saw, so only the right end of X-Forwarded-For is
+ * trustworthy. Walk from the right past our own trusted proxies and take the first
+ * hop they did not vouch for; anything further left is client-controlled.
+ */
+function clientFromForwardedFor(value: string | null, trustedProxyCidrs: string[]): string | undefined {
+  const hops = (value?.split(',') ?? [])
+    .map((part) => normalizeIp(part.trim()))
+    .filter((part): part is string => Boolean(part));
+  for (let index = hops.length - 1; index >= 0; index--) {
+    const hop = hops[index]!;
+    if (trustedProxyCidrs.length === 0 || !ipInAnyCidr(hop, trustedProxyCidrs)) return hop;
+  }
+  return hops[0];
 }

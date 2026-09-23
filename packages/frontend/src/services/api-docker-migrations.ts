@@ -53,6 +53,18 @@ export function withDockerMigrationApi<TBase extends ApiClientBaseConstructor>(B
       );
     }
 
+    async resolveDockerMigration(
+      id: string,
+      authoritativeSide: "source" | "target"
+    ): Promise<DockerMigration> {
+      return this.unwrapData(
+        this.request<{ data: DockerMigration }>(`/docker/migrations/${id}/resolve`, {
+          method: "POST",
+          body: JSON.stringify({ authoritativeSide }),
+        })
+      );
+    }
+
     async retryDockerMigrationCleanup(id: string): Promise<DockerMigration> {
       return this.unwrapData(
         this.request<{ data: DockerMigration }>(`/docker/migrations/${id}/retry-cleanup`, {

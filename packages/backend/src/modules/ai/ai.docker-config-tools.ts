@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { container } from '@/container.js';
 import { hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import {
   DockerHealthCheckUpsertSchema,
   EnvUpdateSchema,
@@ -101,6 +102,8 @@ export async function manageDockerContainerConfigTool(
       await authorizationResourceId('docker:containers:environment')
     );
     const input = EnvUpdateSchema.parse(args);
+    // Same guard as the env route: Compose-managed containers change through their project.
+    await assertComposeChildMutationAllowed(nodeId, containerId);
     return context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id);
   }
   if (operation === 'list_files') {
@@ -147,6 +150,7 @@ export async function manageDockerContainerConfigTool(
     if (operation === 'list_secrets') {
       return secretService.list(nodeId, secretContainerName, Boolean(args.reveal));
     }
+    if (targetType === 'container') await assertComposeChildMutationAllowed(nodeId, containerId);
     if (operation === 'create_secret') {
       const input = SecretCreateSchema.parse(args);
       return secretService.create(nodeId, secretContainerName, input.key, input.value, user.id);

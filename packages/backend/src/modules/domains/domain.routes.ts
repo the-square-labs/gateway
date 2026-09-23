@@ -291,7 +291,14 @@ domainRoutes.openapi(
     const input = ResolveCloudflareMigrationSchema.parse(await c.req.json());
     const domainsService = container.resolve(DomainsService);
     try {
-      return c.json({ data: await domainsService.resolveCloudflareMigration(c.req.param('id')!, input, user.id) });
+      return c.json({
+        data: await domainsService.resolveCloudflareMigration(
+          c.req.param('id')!,
+          input,
+          user.id,
+          c.get('effectiveScopes') || []
+        ),
+      });
     } catch (err) {
       if (err instanceof AppError) {
         return c.json({ code: err.code, message: err.message, details: err.details }, err.statusCode as never);

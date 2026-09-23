@@ -1254,7 +1254,8 @@ export class NodeDispatchService {
       targetPath?: string;
       maxBytes?: number;
       content?: string | Buffer;
-    } = {}
+    } = {},
+    timeoutMs?: number
   ): Promise<CommandResult> {
     if (!['list', 'read'].includes(action)) {
       await this.assertNodeMutable(nodeId);
@@ -1266,9 +1267,10 @@ export class NodeDispatchService {
     } else if (content != null) {
       payload.content = Buffer.from(content);
     }
-    return this.registry.sendCommand(nodeId, {
-      nodeFile: payload as any,
-    });
+    const command = { nodeFile: payload as any };
+    return timeoutMs === undefined
+      ? this.registry.sendCommand(nodeId, command)
+      : this.registry.sendCommand(nodeId, command, timeoutMs);
   }
 
   async sendDockerFileCommand(
@@ -1280,7 +1282,8 @@ export class NodeDispatchService {
       targetPath?: string;
       maxBytes?: number;
       content?: string | Buffer;
-    } = {}
+    } = {},
+    timeoutMs?: number
   ): Promise<CommandResult> {
     await this.assertGenericDockerNode(nodeId);
     if (!['list', 'read'].includes(action)) {
@@ -1293,9 +1296,10 @@ export class NodeDispatchService {
     } else if (content != null) {
       payload.content = Buffer.from(content);
     }
-    return this.registry.sendCommand(nodeId, {
-      dockerFile: payload as any,
-    });
+    const command = { dockerFile: payload as any };
+    return timeoutMs === undefined
+      ? this.registry.sendCommand(nodeId, command)
+      : this.registry.sendCommand(nodeId, command, timeoutMs);
   }
 
   async sendDockerLogsCommand(

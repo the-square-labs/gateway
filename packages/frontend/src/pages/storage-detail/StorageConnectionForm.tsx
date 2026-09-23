@@ -44,6 +44,14 @@ export interface StorageConnectionDraft {
   hasStoredPassword?: boolean;
   hasStoredPrivateKey?: boolean;
   hasStoredCaPem?: boolean;
+  /** The saved target the stored secrets belong to; absent when creating. */
+  storedTarget?: {
+    provider: ObjectStorageProvider;
+    endpoint: string;
+    host: string;
+    port: string;
+    username: string;
+  };
 }
 
 interface ProviderPreset {
@@ -183,7 +191,39 @@ export function draftFromConnection(
     hasStoredPassword: connection.hasStoredPassword,
     hasStoredPrivateKey: connection.hasStoredPrivateKey,
     hasStoredCaPem: connection.hasStoredCaPem,
+    storedTarget: {
+      provider: connection.provider,
+      endpoint: connection.endpoint ?? "",
+      host: connection.host ?? "",
+      port: connection.port ? String(connection.port) : "",
+      username: connection.username ?? "",
+    },
   };
+}
+
+/**
+ * Mirrors the API rule: a stored secret is never sent to a target the editor
+ * just changed (provider, endpoint, or host/port/username), so the secret has
+ * to be re-entered in the same save.
+ */
+export function secretReentryRequired(draft: StorageConnectionDraft): boolean {
+  const stored = draft.storedTarget;
+  if (!stored) return false;
+  if (!isFileProtocolProvider(draft.provider)) {
+    const endpoint = draft.endpoint.trim();
+    return (
+      Boolean(draft.hasStoredSecret) &&
+      (draft.provider !== stored.provider || (endpoint !== "" && endpoint !== stored.endpoint))
+    );
+  }
+  if (!draft.hasStoredPassword && !draft.hasStoredPrivateKey) return false;
+  const port = Number.parseInt(draft.port.trim(), 10);
+  return (
+    draft.provider !== stored.provider ||
+    draft.host.trim() !== stored.host ||
+    (Number.isFinite(port) && String(port) !== stored.port) ||
+    draft.username.trim() !== stored.username
+  );
 }
 
 export function buildStoragePayload(draft: StorageConnectionDraft): Record<string, unknown> {
@@ -255,6 +295,9 @@ export function StorageConnectionForm({
   const metadataOnly = mode === "metadata";
   const preset = PROVIDER_PRESETS[draft.provider];
   const fileProtocol = isFileProtocolProvider(draft.provider);
+  const reenterSecret = secretReentryRequired(draft);
+  const keepPassword = draft.hasStoredPassword && !reenterSecret;
+  const keepPrivateKey = draft.hasStoredPrivateKey && !reenterSecret;
 
   const handleProviderChange = (value: ObjectStorageProvider) => {
     const next = PROVIDER_PRESETS[value];
@@ -378,7 +421,7 @@ export function StorageConnectionForm({
             <Input
               type="password"
               placeholder={
-                draft.hasStoredPassword
+                keepPassword
                   ? "Leave blank to keep current password"
                   : draft.provider === "sftp"
                     ? "Optional if a private key is set"
@@ -387,8 +430,14 @@ export function StorageConnectionForm({
               value={draft.password}
               onChange={(e) => set("password", e.target.value)}
             />
-            {draft.hasStoredPassword && draft.password === "" && (
+            {keepPassword && draft.password === "" && (
               <Badge variant="secondary">Existing password preserved</Badge>
+            )}
+            {reenterSecret && draft.password === "" && draft.privateKey === "" && (
+              <p className="text-xs text-destructive">
+                Re-enter the {draft.provider === "sftp" ? "password or private key" : "password"}{" "}
+                when changing the host, port, username or protocol.
+              </p>
             )}
           </div>
 
@@ -411,7 +460,7 @@ export function StorageConnectionForm({
                   rows={4}
                   className="font-mono text-xs"
                   placeholder={
-                    draft.hasStoredPrivateKey
+                    keepPrivateKey
                       ? "Leave blank to keep current key"
                       : "-----BEGIN OPENSSH PRIVATE KEY-----"
                   }
@@ -422,7 +471,7 @@ export function StorageConnectionForm({
                   Saving a private key clears any stored password, and vice versa — they are
                   alternative authentication methods.
                 </p>
-                {draft.hasStoredPrivateKey && draft.privateKey === "" && (
+                {keepPrivateKey && draft.privateKey === "" && (
                   <Badge variant="secondary">Existing key preserved</Badge>
                 )}
               </div>
@@ -527,12 +576,19 @@ export function StorageConnectionForm({
             <label className="text-sm font-medium">Secret Access Key</label>
             <Input
               type="password"
-              placeholder={draft.hasStoredSecret ? "Leave blank to keep current secret" : ""}
+              placeholder={
+                draft.hasStoredSecret && !reenterSecret ? "Leave blank to keep current secret" : ""
+              }
               value={draft.secretAccessKey}
               onChange={(e) => set("secretAccessKey", e.target.value)}
             />
-            {draft.hasStoredSecret && draft.secretAccessKey === "" && (
+            {draft.hasStoredSecret && !reenterSecret && draft.secretAccessKey === "" && (
               <Badge variant="secondary">Existing secret preserved</Badge>
+            )}
+            {reenterSecret && draft.secretAccessKey === "" && (
+              <p className="text-xs text-destructive">
+                Re-enter the secret access key when changing the endpoint or provider.
+              </p>
             )}
           </div>
 
@@ -541,14 +597,14 @@ export function StorageConnectionForm({
             <Input
               type="password"
               placeholder={
-                draft.hasStoredSessionToken
+                draft.hasStoredSessionToken && !reenterSecret
                   ? "Leave blank to keep current token"
                   : "Optional (temporary credentials)"
               }
               value={draft.sessionToken}
               onChange={(e) => set("sessionToken", e.target.value)}
             />
-            {draft.hasStoredSessionToken && draft.sessionToken === "" && (
+            {draft.hasStoredSessionToken && !reenterSecret && draft.sessionToken === "" && (
               <Badge variant="secondary">Existing session token preserved</Badge>
             )}
           </div>

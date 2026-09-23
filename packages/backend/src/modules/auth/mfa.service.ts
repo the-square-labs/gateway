@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import * as OTPAuth from 'otpauth';
@@ -52,6 +52,22 @@ interface PendingMfaLogin {
 interface PendingMfaEnrollment {
   userId: string;
   authMethod: 'password' | 'email_otp';
+}
+
+interface PendingStepUp {
+  userId: string;
+}
+
+const STEP_UP_TTL_SECONDS = 5 * 60;
+const MAX_STEP_UP_FAILURES = 5;
+const STEP_UP_FAILURE_WINDOW_SECONDS = 15 * 60;
+
+function stepUpKey(sessionId: string): string {
+  return `mfa:step-up:${createHash('sha256').update(sessionId).digest('base64url')}`;
+}
+
+function stepUpFailuresKey(userId: string): string {
+  return `mfa:step-up:failures:${userId}`;
 }
 
 function createTotp(secret?: string, label?: string) {
@@ -264,6 +280,56 @@ export class MfaService {
     await this.db.delete(userRecoveryCodes).where(eq(userRecoveryCodes.userId, userId));
     await this.db.delete(userPasskeys).where(eq(userPasskeys.userId, userId));
     await this.cacheService.delete(`mfa:totp:setup:${userId}`);
+  }
+
+  /**
+   * Record that this browser session just proved possession of an existing
+   * second factor. Second-factor changes accept the proof for a short window
+   * so a reset-and-reconfigure or passkey ceremony needs only one prompt.
+   */
+  async grantStepUp(userId: string, sessionId: string): Promise<void> {
+    await this.cacheService.delete(stepUpFailuresKey(userId));
+    await this.cacheService.set<PendingStepUp>(stepUpKey(sessionId), { userId }, STEP_UP_TTL_SECONDS);
+  }
+
+  /** Verify a TOTP or recovery code as a step-up proof for the current session. */
+  async verifyStepUpCode(
+    userId: string,
+    sessionId: string,
+    input: { totpCode?: string; recoveryCode?: string }
+  ): Promise<boolean> {
+    const failuresKey = stepUpFailuresKey(userId);
+    const failures = Number((await this.cacheService.get<number>(failuresKey)) ?? 0);
+    if (failures >= MAX_STEP_UP_FAILURES) {
+      throw new AppError(429, 'MFA_STEP_UP_LOCKED', 'Too many failed verification attempts. Try again later.');
+    }
+    const valid = input.totpCode
+      ? await this.verifyTotp(userId, input.totpCode)
+      : input.recoveryCode
+        ? await this.useRecoveryCode(userId, input.recoveryCode)
+        : false;
+    if (!valid) {
+      const attempts = await this.cacheService.incr(failuresKey);
+      if (attempts === 1) await this.cacheService.expire(failuresKey, STEP_UP_FAILURE_WINDOW_SECONDS);
+      return false;
+    }
+    await this.grantStepUp(userId, sessionId);
+    return true;
+  }
+
+  /**
+   * Adding, replacing or removing a second factor requires a fresh proof of an
+   * existing one. An account without any factor may enroll its first one.
+   */
+  async assertSecondFactorChangeAllowed(userId: string, sessionId: string): Promise<void> {
+    if (!(await this.requiresLocalMfa(userId))) return;
+    const grant = await this.cacheService.get<PendingStepUp>(stepUpKey(sessionId));
+    if (grant?.userId === userId) return;
+    throw new AppError(
+      403,
+      'MFA_STEP_UP_REQUIRED',
+      'Confirm with your authenticator app, a recovery code or a passkey before changing second factors'
+    );
   }
 
   async resetTotp(userId: string): Promise<void> {

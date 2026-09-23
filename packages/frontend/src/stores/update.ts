@@ -11,11 +11,14 @@ interface UpdateState {
   updatingComponent: "gateway" | "relay" | null;
   updatingTargetVersion: string | null;
 
-  fetchStatus: () => Promise<void>;
+  /** Resolves to the fetched status, or null when the request failed. */
+  fetchStatus: () => Promise<UpdateStatus | null>;
   checkForUpdates: () => Promise<void>;
   triggerUpdate: (version: string) => Promise<void>;
   triggerRelayUpdate: (version: string) => Promise<void>;
   proceedWithUpdate: () => Promise<void>;
+  /** Fails a stuck Relay Pool update; relays it drained return to service. */
+  abandonRelayUpdate: () => Promise<void>;
   setUpdating: (
     component: "gateway" | "relay",
     active: boolean,
@@ -61,13 +64,30 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
       const status = applyForcedGatewayUpdateStatus(await api.getVersionInfo());
       api.setCache("system:version", status);
       set((state) => ({ status, ...relayStatusState(status, state) }));
-      // A session that missed the update event still shows the update screen.
       const gatewayOperation = status.gatewayOperation;
-      if (gatewayOperation && !useAppStatusStore.getState().gatewayUpdatingActive) {
-        useAppStatusStore.getState().setGatewayUpdatingActive(true, gatewayOperation.targetVersion);
+      const appStatus = useAppStatusStore.getState();
+      if (gatewayOperation?.status === "failed") {
+        // The update was rolled back. Only sessions still waiting for it learn
+        // that; everyone else keeps working without a screen.
+        if (appStatus.gatewayUpdatingActive) {
+          appStatus.setGatewayUpdateError(
+            gatewayOperation.error ?? "The Gateway update did not complete.",
+            gatewayOperation.targetVersion,
+            { rolledBack: true }
+          );
+          set((state) =>
+            state.updatingComponent === "gateway"
+              ? { isUpdating: false, updatingComponent: null, updatingTargetVersion: null }
+              : {}
+          );
+        }
+      } else if (gatewayOperation && !appStatus.gatewayUpdatingActive) {
+        // A session that missed the update event still shows the update screen.
+        appStatus.setGatewayUpdatingActive(true, gatewayOperation.targetVersion);
       }
+      return status;
     } catch {
-      // ignore
+      return null;
     }
   },
 
@@ -87,6 +107,13 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
   triggerUpdate: async (version: string) => {
     set({ isUpdating: true, updatingComponent: "gateway" });
     try {
+      // A new attempt replaces the report of a rolled-back one, before the
+      // update screen can read that report as this attempt's outcome.
+      try {
+        await api.acknowledgeUpdateFailure();
+      } catch {
+        // The server clears it too when it accepts the update.
+      }
       useAppStatusStore.getState().setGatewayUpdatingActive(true, version);
       await api.triggerUpdate(version);
     } catch (error) {
@@ -112,6 +139,16 @@ export const useUpdateStore = create<UpdateState>()((set) => ({
 
   proceedWithUpdate: async () => {
     await api.proceedWithUpdate();
+    await useUpdateStore.getState().fetchStatus();
+  },
+
+  abandonRelayUpdate: async () => {
+    await api.abandonRelayUpdate();
+    set((state) =>
+      state.updatingComponent === "relay"
+        ? { isUpdating: false, updatingComponent: null, updatingTargetVersion: null }
+        : {}
+    );
     await useUpdateStore.getState().fetchStatus();
   },
 

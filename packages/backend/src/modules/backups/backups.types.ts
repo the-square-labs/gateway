@@ -24,6 +24,11 @@ export interface BackupPolicyInput {
 export interface BackupRestoreInput {
   executorNodeId: string;
   newManagedDatabaseName?: string;
+  /**
+   * Database name inside a new managed restore target. Defaults to the backup's
+   * source database name, normalized to a plain identifier.
+   */
+  targetDatabaseName?: string;
   restoreTargetConnectionId?: string;
   /** Restore never overwrites an existing nonempty target. */
   overwrite?: false;
@@ -33,7 +38,9 @@ export interface BackupRestoreInput {
 export interface BackupRunView {
   id: string;
   policyId: string | null;
-  databaseConnectionId: string;
+  /** Null once the source connection was deleted; history is retained. */
+  databaseConnectionId: string | null;
+  databaseConnectionName: string | null;
   destinationId: string;
   destinationBucket: string;
   destinationPrefix: string;
@@ -127,4 +134,9 @@ export interface BackupRuntimePayload {
   /** Server-approved executor address reachable from an external Redis target. */
   redisStageAdvertiseHost?: string;
   restoreArtifact?: BackupManifest;
+  /**
+   * Absolute run deadline (ISO 8601). Sent only to executors that report the
+   * database_backups_deadline_v1 capability; older daemons reject unknown fields.
+   */
+  deadlineAt?: string;
 }

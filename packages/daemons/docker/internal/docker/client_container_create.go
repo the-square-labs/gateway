@@ -388,6 +388,9 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	if hasHostBind(cfg.Binds) {
 		return "", "", fmt.Errorf("host bind mounts are not allowed for new user workloads")
 	}
+	if err := validateUserWorkloadNetworkMode(cfg.NetworkMode); err != nil {
+		return "", "", err
+	}
 	containerCfg := &container.Config{
 		Image:       cfg.Image,
 		Cmd:         cfg.Cmd,
@@ -464,6 +467,22 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 	}
 
 	return result.ID, cfg.Name, nil
+}
+
+// validateUserWorkloadNetworkMode rejects network modes that would share
+// another namespace or join a Gateway-managed network. Those networks can
+// only be attached by Gateway itself.
+func validateUserWorkloadNetworkMode(mode string) error {
+	mode = strings.TrimSpace(mode)
+	switch {
+	case mode == "host":
+		return errors.New("host networking is not allowed for user workloads")
+	case strings.Contains(mode, ":"):
+		return fmt.Errorf("network mode %q is not allowed for user workloads", mode)
+	case mode == "gateway-secure-links" || strings.HasPrefix(mode, "gateway-db-"):
+		return fmt.Errorf("Gateway-managed network %q cannot be attached to user workloads", mode)
+	}
+	return nil
 }
 
 func (c *Client) networkingConfigForCreate(cfg ContainerCreateConfig) (*network.NetworkingConfig, error) {

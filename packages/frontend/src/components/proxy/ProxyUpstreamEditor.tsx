@@ -102,14 +102,21 @@ export function proxyUpstreamRequest(
     };
   }
   if (selection.kind === "docker_container") {
+    // Clear the other target mode explicitly: omitted fields keep their stored
+    // value on update, so a Compose -> named container switch would be ignored.
     return {
       upstreamKind: "docker_container",
       forwardScheme: selection.scheme,
       ...(selection.dockerNodeId ? { dockerNodeId: selection.dockerNodeId } : {}),
       ...(selection.containerName
-        ? { dockerContainerName: selection.containerName }
+        ? {
+            dockerContainerName: selection.containerName,
+            dockerComposeProjectId: null,
+            dockerComposeServiceName: null,
+          }
         : selection.composeProjectId && selection.composeServiceName
           ? {
+              dockerContainerName: null,
               dockerComposeProjectId: selection.composeProjectId,
               dockerComposeServiceName: selection.composeServiceName,
             }

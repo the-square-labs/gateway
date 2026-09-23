@@ -1,7 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { assertNotImpersonating, authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import {
@@ -69,6 +69,7 @@ inferenceManagementRoutes.openapi(listInferenceTokensRoute, async (c) => {
 });
 
 inferenceManagementRoutes.openapi(createInferenceTokenRoute, async (c) => {
+  assertNotImpersonating(c, 'Inference tokens cannot be created while impersonating');
   const user = c.get('user')!;
   const input = CreateInferenceTokenSchema.parse(await c.req.json());
   const token = await container.resolve(InferenceTokenService).createToken(user.id, input);

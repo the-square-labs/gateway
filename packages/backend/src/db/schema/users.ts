@@ -22,6 +22,9 @@ export const users = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     oidcSubject: varchar('oidc_subject', { length: 255 }),
+    // Issuer that asserted oidcSubject. Null for pre-created/local accounts and
+    // for OIDC accounts that have not signed in since issuers were recorded.
+    oidcIssuer: varchar('oidc_issuer', { length: 2048 }),
     authMethod: varchar('auth_method', { length: 32 }).$type<UserAuthMethod>().notNull().default('oidc'),
     email: varchar('email', { length: 255 }).notNull(),
     name: varchar('name', { length: 255 }).notNull(),

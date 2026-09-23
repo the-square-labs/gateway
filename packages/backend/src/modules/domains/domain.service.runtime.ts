@@ -244,7 +244,12 @@ export abstract class DomainsServiceRuntime {
     }
   }
 
-  async resolveCloudflareMigration(id: string, input: ResolveCloudflareMigrationInput, userId: string) {
+  async resolveCloudflareMigration(
+    id: string,
+    input: ResolveCloudflareMigrationInput,
+    userId: string,
+    actorScopes: string[] = []
+  ) {
     const [row] = await this.db.select().from(domains).where(eq(domains.id, id)).limit(1);
     if (!row) throw new AppError(404, 'DOMAIN_NOT_FOUND', 'Domain not found');
     if (row.dnsProvider !== 'legacy') {
@@ -273,6 +278,19 @@ export abstract class DomainsServiceRuntime {
       throw new AppError(409, 'CLOUDFLARE_DNS_NOT_CONFIGURED', 'Cloudflare DNS integration is not configured');
     }
     const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
+    // Re-pointing DNS and the domain's ingress node moves traffic for every
+    // covered proxy host, so this needs the same grants as migrateIngress.
+    const hasIngressScope = (baseScope: string, resourceId: string) =>
+      actorScopes.includes(baseScope) || actorScopes.includes(`${baseScope}:${resourceId}`);
+    if (!hasIngressScope('proxy:create', nginxNode.id)) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${nginxNode.id}`);
+    }
+    const unauthorizedHost = (await this.getUsage(row.domain)).proxyHosts.find(
+      (host) => !hasIngressScope('proxy:edit', host.id)
+    );
+    if (unauthorizedHost) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:edit:${unauthorizedHost.id}`);
+    }
     const context = await this.integrationsService.resolveCloudflareDnsContext(row.domain);
     const providerRecords = (await context.client.listDnsRecords(context.zone.remoteId, row.domain)).filter(
       (record) => record.name.toLowerCase() === row.domain.toLowerCase()

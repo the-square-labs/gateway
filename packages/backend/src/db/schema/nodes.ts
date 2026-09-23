@@ -161,9 +161,16 @@ export const nodes = pgTable(
     // Enrollment
     enrollmentTokenSelector: varchar('enrollment_token_selector', { length: 32 }),
     enrollmentTokenHash: varchar('enrollment_token_hash', { length: 255 }),
+    // NULL keeps a legacy token without an expiry; new tokens always set it.
+    enrollmentTokenExpiresAt: timestamp('enrollment_token_expires_at', { withTimezone: true }),
     certificateSerial: varchar('certificate_serial', { length: 255 }),
     certificateFingerprint: varchar('certificate_fingerprint', { length: 71 }),
     certificateExpiresAt: timestamp('certificate_expires_at', { withTimezone: true }),
+    // A renewed client certificate is staged here until the daemon first
+    // registers with it; only then does it replace the current certificate.
+    pendingCertificateSerial: varchar('pending_certificate_serial', { length: 255 }),
+    pendingCertificateFingerprint: varchar('pending_certificate_fingerprint', { length: 71 }),
+    pendingCertificateExpiresAt: timestamp('pending_certificate_expires_at', { withTimezone: true }),
 
     // Stable opaque identity of the physical host. Colocated daemon roles have
     // distinct node identities but share this value for fault-domain accounting.

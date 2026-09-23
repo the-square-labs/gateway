@@ -9,6 +9,7 @@ import {
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import { buildStatusPageSystemHostRollbackData, getStatusPageUpstream } from './proxy.service-helpers.js';
 import { clearDockerUpstreamFields } from './proxy-docker-upstream.service.js';
+import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
@@ -21,7 +22,40 @@ import {
 import { ProxyServiceReconciliation } from './proxy.service.reconciliation.js';
 
 export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
+  /**
+   * Serialize one system-host kind and fence the host plus its target node
+   * against concurrent edits and reconnect cleanup. Keys are taken together in
+   * sorted order, so the current host id is read before locking.
+   */
+  private async withSystemHostLocks<T>(
+    kind: 'status_page' | 'docker_registry',
+    targetNodeId: string | null,
+    fn: () => Promise<T>
+  ): Promise<T> {
+    const existing = await this.db.query.proxyHosts.findFirst({
+      where: eq(proxyHosts.systemKind, kind),
+      columns: { id: true },
+    });
+    return withProxyLocks(
+      [
+        `proxy-system:${kind}`,
+        existing && proxyHostLockKey(existing.id),
+        targetNodeId && proxyNodeLockKey(targetNodeId),
+      ],
+      fn
+    );
+  }
+
   async upsertStatusPageSystemHost(input: StatusPageSystemHostInput, userId: string): Promise<ProxyHostRow> {
+    return this.withSystemHostLocks('status_page', input.nodeId, () =>
+      this.upsertStatusPageSystemHostLocked(input, userId)
+    );
+  }
+
+  private async upsertStatusPageSystemHostLocked(
+    input: StatusPageSystemHostInput,
+    userId: string
+  ): Promise<ProxyHostRow> {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, 'status_page'),
     });
@@ -143,6 +177,10 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
   }
 
   async disableStatusPageSystemHost(userId: string): Promise<ProxyHostRow | null> {
+    return this.withSystemHostLocks('status_page', null, () => this.disableStatusPageSystemHostLocked(userId));
+  }
+
+  private async disableStatusPageSystemHostLocked(userId: string): Promise<ProxyHostRow | null> {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, 'status_page'),
     });
@@ -176,6 +214,15 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
   }
 
   async upsertRegistrySystemHost(input: RegistrySystemHostInput, userId: string | null): Promise<ProxyHostRow> {
+    return this.withSystemHostLocks('docker_registry', input.nodeId, () =>
+      this.upsertRegistrySystemHostLocked(input, userId)
+    );
+  }
+
+  private async upsertRegistrySystemHostLocked(
+    input: RegistrySystemHostInput,
+    userId: string | null
+  ): Promise<ProxyHostRow> {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, 'docker_registry'),
     });
@@ -310,6 +357,10 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
   }
 
   async disableRegistrySystemHost(userId: string | null): Promise<ProxyHostRow | null> {
+    return this.withSystemHostLocks('docker_registry', null, () => this.disableRegistrySystemHostLocked(userId));
+  }
+
+  private async disableRegistrySystemHostLocked(userId: string | null): Promise<ProxyHostRow | null> {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.systemKind, 'docker_registry'),
     });

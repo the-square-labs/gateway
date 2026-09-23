@@ -228,7 +228,15 @@ func (m *Manager) failForContext(command *pb.DockerBuildCommand, ctx context.Con
 }
 
 func (m *Manager) status(command *pb.DockerBuildCommand, status string) {
-	_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: status, Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli()})
+	m.mu.Lock()
+	attempt, tracked := m.attempts[command.GetBuildId()]
+	if tracked {
+		m.statuses[command.GetBuildId()] = status
+	} else {
+		attempt = command.GetAttempt()
+	}
+	m.mu.Unlock()
+	_ = m.emitEvent(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: status, Attempt: attempt, OccurredAtUnixMs: time.Now().UnixMilli()})
 }
 func (m *Manager) fail(command *pb.DockerBuildCommand, code string, err error) {
 	m.emitTerminal(&pb.DockerBuildEvent{BuildId: command.GetBuildId(), Status: "failed", ErrorCode: code, ErrorMessage: err.Error(), Attempt: command.GetAttempt(), OccurredAtUnixMs: time.Now().UnixMilli()})
@@ -273,14 +281,6 @@ func (m *Manager) emitTerminal(event *pb.DockerBuildEvent) {
 	m.mu.Lock()
 	m.terminalEvents[event.GetBuildId()] = event
 	m.mu.Unlock()
-}
-
-func (m *Manager) takeTerminal(buildID string) *pb.DockerBuildEvent {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	event := m.terminalEvents[buildID]
-	delete(m.terminalEvents, buildID)
-	return event
 }
 
 func (m *Manager) deliverTerminal(event *pb.DockerBuildEvent) {

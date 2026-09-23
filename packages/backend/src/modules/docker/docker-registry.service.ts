@@ -381,7 +381,9 @@ export class DockerRegistryService {
   }
 
   /**
-   * Called when a docker node comes online: sync global + node-specific registries.
+   * Push global + node-specific registry credentials to the Docker daemon.
+   * Daemon-side pulls (for example a container tag update) resolve their
+   * credentials from this set by image registry host.
    */
   async syncRegistriesToNode(nodeId: string) {
     try {
@@ -395,8 +397,11 @@ export class DockerRegistryService {
           rows.map(async (row) => {
             const credentials = await this.resolveRegistryCredentials(row);
             if (!credentials) return null;
+            // The daemon matches credentials by the image reference host.
+            const url = this.normalizeRegistryHost(row.url);
+            if (!url) return null;
             return {
-              url: row.url,
+              url,
               username: credentials.username,
               password: credentials.password,
             };
@@ -406,10 +411,9 @@ export class DockerRegistryService {
 
       if (registries.length === 0) return;
 
-      // Collect all unique registry URLs as allowlist
-      const allowlist = rows.map((r) => r.url);
-
-      await this.nodeDispatch.sendDockerConfigPush(nodeId, registries, allowlist);
+      // The config push allowlist is the daemon's container-name allowlist, not
+      // a registry list: an empty list leaves it unchanged.
+      await this.nodeDispatch.sendDockerConfigPush(nodeId, registries, []);
       logger.info(`Synced ${registries.length} registries to node ${nodeId}`);
     } catch (error) {
       logger.error('Failed to sync registries to node', { nodeId, error });
@@ -953,7 +957,10 @@ export class DockerRegistryService {
     const mappedRegistryId = await this.resolveMappedRegistryId(nodeId, imageRepository);
     if (mappedRegistryId) {
       const mapped = rows.find((row) => row.id === mappedRegistryId);
-      const auth = mapped ? await this.authCandidateFromRegistry(mapped) : null;
+      // A remembered mapping must not send credentials to a different host,
+      // e.g. after the registry URL changed.
+      const hostMatches = !mapped || !imageRegistryHost || this.normalizeRegistryHost(mapped.url) === imageRegistryHost;
+      const auth = mapped && hostMatches ? await this.authCandidateFromRegistry(mapped) : null;
       if (auth) candidates.push(auth);
     }
 

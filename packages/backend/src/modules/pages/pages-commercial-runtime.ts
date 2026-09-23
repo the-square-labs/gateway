@@ -55,6 +55,7 @@ import {
   sslCertificates,
 } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
@@ -118,4 +119,5 @@ export const pagesCommercialRuntime = {
   canAccessEveryPageProject,
   visiblePageProjectIds,
   PageProjectFolderService,
+  createChildLogger,
 };

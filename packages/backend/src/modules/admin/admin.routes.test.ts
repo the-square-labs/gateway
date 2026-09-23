@@ -13,13 +13,15 @@ import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
-import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import { DEFAULT_GENERAL_SETTINGS, GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { SessionService } from '@/services/session.service.js';
+import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
-import { adminRoutes } from './admin.routes.js';
+import { adminRoutes, generalSettingsRollbackFields, generalSettingsRollbackPatch } from './admin.routes.js';
+import { findIdentityTrustChanges } from './identity-trust-settings.js';
 
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = 'http://localhost/db';
@@ -672,7 +674,7 @@ describe('admin Gateway settings route permissions', () => {
   });
 
   it('never writes an SMTP password into the auth-settings audit event', async () => {
-    registerSession(['settings:gateway:edit']);
+    registerSession(['settings:gateway:edit', 'admin:system']);
     const auditLog = vi.fn().mockResolvedValue(undefined);
     container.registerInstance(AuthSettingsService, {
       updateConfig: vi.fn().mockResolvedValue({}),
@@ -856,7 +858,7 @@ describe('admin Gateway settings route permissions', () => {
   });
 
   it('sends the selected SMTP test email template', async () => {
-    registerSession(['settings:gateway:edit']);
+    registerSession(['settings:gateway:edit', 'admin:system']);
     const saveConfig = vi.fn().mockResolvedValue(undefined);
     const sendTestEmail = vi.fn().mockResolvedValue(undefined);
     const smtp = {
@@ -1234,5 +1236,169 @@ describe('deleted user administration', () => {
     expect(auditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.restore', details: expect.objectContaining({ remainsBlocked: true }) })
     );
+  });
+});
+
+describe('identity-trust settings require admin:system', () => {
+  const currentSmtp = {
+    configured: true,
+    host: 'smtp.example.com',
+    port: 587,
+    tlsMode: 'starttls',
+    username: 'gateway',
+    senderName: 'Gateway',
+    senderEmail: 'security@example.com',
+  };
+  const current = {
+    smtp: async () => currentSmtp,
+    generalSettings: async () => ({ publicUrl: 'https://gateway.example.com' }),
+    authSettings: async () => ({ oidcRequireVerifiedEmail: true }),
+  };
+  const smtpInput = {
+    host: 'smtp.example.com',
+    port: 587,
+    tlsMode: 'starttls' as const,
+    username: 'gateway',
+    senderName: 'Gateway',
+    senderEmail: 'Security@Example.com',
+  };
+
+  it('flags SMTP, OIDC, public URL and verified-email relaxations', async () => {
+    await expect(
+      findIdentityTrustChanges({ smtp: { ...smtpInput, host: 'smtp.attacker.example' } }, current)
+    ).resolves.toEqual(['SMTP']);
+    await expect(findIdentityTrustChanges({ smtp: { ...smtpInput, password: 'new' } }, current)).resolves.toEqual([
+      'SMTP',
+    ]);
+    await expect(
+      findIdentityTrustChanges(
+        {
+          oidc: {
+            issuer: 'https://idp.attacker.example',
+            clientId: 'gateway',
+            redirectUri: 'https://gateway.example.com/auth/callback',
+          },
+        },
+        current
+      )
+    ).resolves.toEqual(['the OIDC provider']);
+    await expect(
+      findIdentityTrustChanges({ generalSettings: { publicUrl: 'https://attacker.example' } }, current)
+    ).resolves.toEqual(['the public URL']);
+    await expect(findIdentityTrustChanges({ oidcRequireVerifiedEmail: false }, current)).resolves.toEqual([
+      'OIDC verified-email enforcement',
+    ]);
+  });
+
+  it('allows resubmitting unchanged values and unrelated settings', async () => {
+    await expect(
+      findIdentityTrustChanges(
+        {
+          smtp: { ...smtpInput, testRecipient: 'ops@example.com' },
+          generalSettings: { publicUrl: 'https://gateway.example.com/', hideExternalBranding: true },
+          oidcRequireVerifiedEmail: true,
+          mcpServerEnabled: false,
+        },
+        current
+      )
+    ).resolves.toEqual([]);
+  });
+
+  it('rejects an SMTP change from a settings:gateway:edit holder before anything is saved', async () => {
+    registerSession(['settings:gateway:edit']);
+    const saveConfig = vi.fn();
+    container.registerInstance(AuthMailService, {
+      saveConfig,
+      getPublicConfig: vi.fn().mockResolvedValue({ ...currentSmtp, passwordLast4: '1234', verifiedAt: null }),
+    } as unknown as AuthMailService);
+    container.registerInstance(AuthSettingsService, { updateConfig: vi.fn() } as unknown as AuthSettingsService);
+    container.registerInstance(GeneralSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({ publicUrl: 'https://gateway.example.com' }),
+    } as unknown as GeneralSettingsService);
+    for (const service of [McpSettingsService, NetworkSettingsService, OutboundWebhookPolicyService, GroupService]) {
+      container.registerInstance(service as never, {} as never);
+    }
+    container.registerInstance(AuditService, { log: vi.fn() } as unknown as AuditService);
+
+    const response = await createApp().request('/api/admin/auth-settings', {
+      method: 'PUT',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ smtp: { ...smtpInput, host: 'smtp.attacker.example', password: 'secret' } }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'ADMIN_SYSTEM_REQUIRED' });
+    expect(saveConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe('general settings rollback', () => {
+  it('rolls back only requested fields, and only if nothing changed them since', async () => {
+    registerSession(['settings:gateway:edit', 'admin:system']);
+    const previous = { ...DEFAULT_GENERAL_SETTINGS, publicUrl: 'https://old.example.com' };
+    const applied = { ...previous, publicUrl: 'https://new.example.com' };
+    const restoreFields = vi.fn().mockResolvedValue(previous);
+    const updateConfig = vi.fn().mockResolvedValue(applied);
+    container.registerInstance(AuthSettingsService, {
+      updateConfig: vi.fn().mockResolvedValue({}),
+      getConfig: vi.fn().mockResolvedValue({}),
+    } as unknown as AuthSettingsService);
+    container.registerInstance(McpSettingsService, {
+      updateConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: false }),
+    } as unknown as McpSettingsService);
+    container.registerInstance(GeneralSettingsService, {
+      getConfig: vi.fn().mockResolvedValue(previous),
+      updateConfig,
+      restoreFields,
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({}),
+    } as unknown as NetworkSettingsService);
+    container.registerInstance(OutboundWebhookPolicyService, {
+      getConfig: vi.fn().mockResolvedValue({}),
+    } as unknown as OutboundWebhookPolicyService);
+    container.registerInstance(WebTransportSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({ tlsEnabled: true }),
+    } as unknown as WebTransportSettingsService);
+    container.registerInstance(WebIdentityService, {
+      refresh: vi.fn().mockRejectedValue(new Error('certificate issuance failed')),
+    } as unknown as WebIdentityService);
+    container.registerInstance(AuditService, { log: vi.fn() } as unknown as AuditService);
+
+    const response = await createApp().request('/api/admin/auth-settings', {
+      method: 'PUT',
+      headers: sessionHeaders(),
+      body: JSON.stringify({ generalSettings: { publicUrl: 'https://new.example.com' } }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(updateConfig).toHaveBeenCalledOnce();
+    expect(restoreFields).toHaveBeenCalledWith(previous, ['publicUrl'], { ifUnchangedFrom: applied });
+  });
+
+  it('never rolls back a field the request did not ask to change', () => {
+    const previous = { ...DEFAULT_GENERAL_SETTINGS, publicUrl: 'https://old.example.com' };
+    const applied = { ...previous, publicUrl: 'https://new.example.com', hideExternalBranding: true };
+
+    expect(generalSettingsRollbackFields(previous, applied, { publicUrl: 'https://new.example.com' })).toEqual([
+      'publicUrl',
+    ]);
+    expect(generalSettingsRollbackFields(previous, applied, undefined)).toEqual([]);
+  });
+
+  it('restores only the fields the failed request changed', () => {
+    const previous = { ...DEFAULT_GENERAL_SETTINGS, publicUrl: 'https://old.example.com', hideExternalBranding: false };
+    const applied = {
+      ...previous,
+      publicUrl: 'https://new.example.com',
+      gatewayGrpcPublicTarget: 'grpc.example.com:443',
+      relay: { ...previous.relay, dataLanes: previous.relay.dataLanes + 1 },
+    };
+
+    expect(generalSettingsRollbackPatch(previous, applied)).toEqual({
+      publicUrl: 'https://old.example.com',
+      gatewayGrpcPublicTarget: null,
+      relay: { dataLanes: previous.relay.dataLanes },
+    });
   });
 });

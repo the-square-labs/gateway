@@ -62,6 +62,9 @@ export const certificateAuthorities = pgTable(
     // CRL tracking
     crlNumber: integer('crl_number').notNull().default(0),
     lastCrlAt: timestamp('last_crl_at', { withTimezone: true }),
+    // Base64 DER of the most recently published CRL. A revoked CA can no longer
+    // sign, so its final CRL is served from here once the cache expires.
+    lastCrlDer: text('last_crl_der'),
     // A revocation remains durable even if the CRL endpoint is temporarily
     // unavailable. This marker makes the CRL retry explicit and restart-safe.
     crlRefreshPendingAt: timestamp('crl_refresh_pending_at', { withTimezone: true }),

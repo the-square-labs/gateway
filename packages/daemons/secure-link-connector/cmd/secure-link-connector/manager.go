@@ -38,6 +38,15 @@ type bindingListener struct {
 	closeOnce sync.Once
 }
 
+// Bounds on concurrently proxied sessions so a flood of connections cannot
+// exhaust the connector's file descriptors. Excess connections are closed at
+// accept time. Dead peers are detected by the default TCP keepalive on both
+// legs, and idle-but-alive sessions are closed by nginx's upstream timeouts.
+const (
+	maxConnectorSessions = 8192
+	maxBindingSessions   = 2048
+)
+
 func newBindingManager(globalLimit, perBindingLimit int) *bindingManager {
 	var globalSessions chan struct{}
 	if globalLimit > 0 {

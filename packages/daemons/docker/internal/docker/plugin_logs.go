@@ -26,7 +26,20 @@ type logStreamOwner struct {
 // before invoking it. Entries exist only until their current stream finishes.
 var logStreamOwners sync.Map // logStreamOwnerKey -> logStreamOwner
 
+// isLogFollowStop reports whether a logs command asks to stop the container's
+// follow stream: a non-follow request with a negative tail. The gateway sends it
+// when the last viewer leaves; older daemons read 100 lines for it instead.
+func isLogFollowStop(cmd *pb.DockerLogsCommand) bool {
+	return !cmd.Follow && cmd.TailLines < 0
+}
+
 func (p *DockerPlugin) handleLogsCommand(cmd *pb.DockerLogsCommand, result *pb.CommandResult) {
+	if isLogFollowStop(cmd) {
+		p.stopLogStream(cmd.ContainerId)
+		result.Detail = `{"streaming":false}`
+		return
+	}
+
 	ctx := context.Background()
 	if p.sessionCtx != nil {
 		ctx = p.sessionCtx

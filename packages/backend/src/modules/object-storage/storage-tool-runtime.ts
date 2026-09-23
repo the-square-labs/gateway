@@ -1,6 +1,7 @@
 import { container } from '@/container.js';
 import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { assertWorkloadBindingTargetAccess } from '@/modules/ai/ai.binding-target-access.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import {
@@ -52,4 +53,5 @@ export const storageToolRuntime = {
   ManagedStorageService,
   ManagedStorageBindingsService,
   directResourceIdsForScopes,
+  assertWorkloadBindingTargetAccess,
 };

@@ -1852,6 +1852,126 @@ func (x *BootstrapPolicyTrustResponse) GetUnchanged() bool {
 	return false
 }
 
+type ResetLocalPolicyTrustRequest struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	KeyId                string                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	PublicKey            []byte                 `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	PublicKeyFingerprint string                 `protobuf:"bytes,3,opt,name=public_key_fingerprint,json=publicKeyFingerprint,proto3" json:"public_key_fingerprint,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ResetLocalPolicyTrustRequest) Reset() {
+	*x = ResetLocalPolicyTrustRequest{}
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResetLocalPolicyTrustRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResetLocalPolicyTrustRequest) ProtoMessage() {}
+
+func (x *ResetLocalPolicyTrustRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResetLocalPolicyTrustRequest.ProtoReflect.Descriptor instead.
+func (*ResetLocalPolicyTrustRequest) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *ResetLocalPolicyTrustRequest) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *ResetLocalPolicyTrustRequest) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
+func (x *ResetLocalPolicyTrustRequest) GetPublicKeyFingerprint() string {
+	if x != nil {
+		return x.PublicKeyFingerprint
+	}
+	return ""
+}
+
+type ResetLocalPolicyTrustResponse struct {
+	state                protoimpl.MessageState `protogen:"open.v1"`
+	KeyId                string                 `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	PublicKeyFingerprint string                 `protobuf:"bytes,2,opt,name=public_key_fingerprint,json=publicKeyFingerprint,proto3" json:"public_key_fingerprint,omitempty"`
+	ReplacedKeyIds       []string               `protobuf:"bytes,3,rep,name=replaced_key_ids,json=replacedKeyIds,proto3" json:"replaced_key_ids,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
+}
+
+func (x *ResetLocalPolicyTrustResponse) Reset() {
+	*x = ResetLocalPolicyTrustResponse{}
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResetLocalPolicyTrustResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResetLocalPolicyTrustResponse) ProtoMessage() {}
+
+func (x *ResetLocalPolicyTrustResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResetLocalPolicyTrustResponse.ProtoReflect.Descriptor instead.
+func (*ResetLocalPolicyTrustResponse) Descriptor() ([]byte, []int) {
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ResetLocalPolicyTrustResponse) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *ResetLocalPolicyTrustResponse) GetPublicKeyFingerprint() string {
+	if x != nil {
+		return x.PublicKeyFingerprint
+	}
+	return ""
+}
+
+func (x *ResetLocalPolicyTrustResponse) GetReplacedKeyIds() []string {
+	if x != nil {
+		return x.ReplacedKeyIds
+	}
+	return nil
+}
+
 type HealthRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1860,7 +1980,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1872,7 +1992,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[25]
+	mi := &file_relay_v1_relay_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1885,7 +2005,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{25}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{27}
 }
 
 type HealthResponse struct {
@@ -1927,7 +2047,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	mi := &file_relay_v1_relay_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1939,7 +2059,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[26]
+	mi := &file_relay_v1_relay_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1952,7 +2072,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{26}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *HealthResponse) GetBuildVersion() string {
@@ -2183,7 +2303,7 @@ type AssignmentTunnelCount struct {
 
 func (x *AssignmentTunnelCount) Reset() {
 	*x = AssignmentTunnelCount{}
-	mi := &file_relay_v1_relay_proto_msgTypes[27]
+	mi := &file_relay_v1_relay_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2195,7 +2315,7 @@ func (x *AssignmentTunnelCount) String() string {
 func (*AssignmentTunnelCount) ProtoMessage() {}
 
 func (x *AssignmentTunnelCount) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[27]
+	mi := &file_relay_v1_relay_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2208,7 +2328,7 @@ func (x *AssignmentTunnelCount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AssignmentTunnelCount.ProtoReflect.Descriptor instead.
 func (*AssignmentTunnelCount) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{27}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AssignmentTunnelCount) GetEndpointId() string {
@@ -2241,7 +2361,7 @@ type RouteRuntimeRequest struct {
 
 func (x *RouteRuntimeRequest) Reset() {
 	*x = RouteRuntimeRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[28]
+	mi := &file_relay_v1_relay_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2253,7 +2373,7 @@ func (x *RouteRuntimeRequest) String() string {
 func (*RouteRuntimeRequest) ProtoMessage() {}
 
 func (x *RouteRuntimeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[28]
+	mi := &file_relay_v1_relay_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2266,7 +2386,7 @@ func (x *RouteRuntimeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteRuntimeRequest.ProtoReflect.Descriptor instead.
 func (*RouteRuntimeRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{28}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RouteRuntimeRequest) GetRouteId() string {
@@ -2296,7 +2416,7 @@ type RouteRuntimeResponse struct {
 
 func (x *RouteRuntimeResponse) Reset() {
 	*x = RouteRuntimeResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[29]
+	mi := &file_relay_v1_relay_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2308,7 +2428,7 @@ func (x *RouteRuntimeResponse) String() string {
 func (*RouteRuntimeResponse) ProtoMessage() {}
 
 func (x *RouteRuntimeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[29]
+	mi := &file_relay_v1_relay_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2321,7 +2441,7 @@ func (x *RouteRuntimeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RouteRuntimeResponse.ProtoReflect.Descriptor instead.
 func (*RouteRuntimeResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{29}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RouteRuntimeResponse) GetRouteId() string {
@@ -2417,7 +2537,7 @@ type ReloadIdentityRequest struct {
 
 func (x *ReloadIdentityRequest) Reset() {
 	*x = ReloadIdentityRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[30]
+	mi := &file_relay_v1_relay_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2429,7 +2549,7 @@ func (x *ReloadIdentityRequest) String() string {
 func (*ReloadIdentityRequest) ProtoMessage() {}
 
 func (x *ReloadIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[30]
+	mi := &file_relay_v1_relay_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2442,7 +2562,7 @@ func (x *ReloadIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadIdentityRequest.ProtoReflect.Descriptor instead.
 func (*ReloadIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{30}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ReloadIdentityRequest) GetOperationId() string {
@@ -2461,7 +2581,7 @@ type ReloadIdentityResponse struct {
 
 func (x *ReloadIdentityResponse) Reset() {
 	*x = ReloadIdentityResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[31]
+	mi := &file_relay_v1_relay_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2473,7 +2593,7 @@ func (x *ReloadIdentityResponse) String() string {
 func (*ReloadIdentityResponse) ProtoMessage() {}
 
 func (x *ReloadIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[31]
+	mi := &file_relay_v1_relay_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2486,7 +2606,7 @@ func (x *ReloadIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReloadIdentityResponse.ProtoReflect.Descriptor instead.
 func (*ReloadIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{31}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *ReloadIdentityResponse) GetReloaded() bool {
@@ -2505,7 +2625,7 @@ type CommitIdentityRotationRequest struct {
 
 func (x *CommitIdentityRotationRequest) Reset() {
 	*x = CommitIdentityRotationRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[32]
+	mi := &file_relay_v1_relay_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2517,7 +2637,7 @@ func (x *CommitIdentityRotationRequest) String() string {
 func (*CommitIdentityRotationRequest) ProtoMessage() {}
 
 func (x *CommitIdentityRotationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[32]
+	mi := &file_relay_v1_relay_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2530,7 +2650,7 @@ func (x *CommitIdentityRotationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitIdentityRotationRequest.ProtoReflect.Descriptor instead.
 func (*CommitIdentityRotationRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{32}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CommitIdentityRotationRequest) GetOperationId() string {
@@ -2549,7 +2669,7 @@ type CommitIdentityRotationResponse struct {
 
 func (x *CommitIdentityRotationResponse) Reset() {
 	*x = CommitIdentityRotationResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[33]
+	mi := &file_relay_v1_relay_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2561,7 +2681,7 @@ func (x *CommitIdentityRotationResponse) String() string {
 func (*CommitIdentityRotationResponse) ProtoMessage() {}
 
 func (x *CommitIdentityRotationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[33]
+	mi := &file_relay_v1_relay_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2574,7 +2694,7 @@ func (x *CommitIdentityRotationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitIdentityRotationResponse.ProtoReflect.Descriptor instead.
 func (*CommitIdentityRotationResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{33}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *CommitIdentityRotationResponse) GetCommitted() bool {
@@ -2595,7 +2715,7 @@ type SetDrainRequest struct {
 
 func (x *SetDrainRequest) Reset() {
 	*x = SetDrainRequest{}
-	mi := &file_relay_v1_relay_proto_msgTypes[34]
+	mi := &file_relay_v1_relay_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2607,7 +2727,7 @@ func (x *SetDrainRequest) String() string {
 func (*SetDrainRequest) ProtoMessage() {}
 
 func (x *SetDrainRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[34]
+	mi := &file_relay_v1_relay_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2620,7 +2740,7 @@ func (x *SetDrainRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDrainRequest.ProtoReflect.Descriptor instead.
 func (*SetDrainRequest) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{34}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *SetDrainRequest) GetDraining() bool {
@@ -2654,7 +2774,7 @@ type SetDrainResponse struct {
 
 func (x *SetDrainResponse) Reset() {
 	*x = SetDrainResponse{}
-	mi := &file_relay_v1_relay_proto_msgTypes[35]
+	mi := &file_relay_v1_relay_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2666,7 +2786,7 @@ func (x *SetDrainResponse) String() string {
 func (*SetDrainResponse) ProtoMessage() {}
 
 func (x *SetDrainResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_relay_v1_relay_proto_msgTypes[35]
+	mi := &file_relay_v1_relay_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2679,7 +2799,7 @@ func (x *SetDrainResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetDrainResponse.ProtoReflect.Descriptor instead.
 func (*SetDrainResponse) Descriptor() ([]byte, []int) {
-	return file_relay_v1_relay_proto_rawDescGZIP(), []int{35}
+	return file_relay_v1_relay_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SetDrainResponse) GetDraining() bool {
@@ -2842,7 +2962,16 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x1cBootstrapPolicyTrustResponse\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x124\n" +
 	"\x16public_key_fingerprint\x18\x02 \x01(\tR\x14publicKeyFingerprint\x12\x1c\n" +
-	"\tunchanged\x18\x03 \x01(\bR\tunchanged\"\x0f\n" +
+	"\tunchanged\x18\x03 \x01(\bR\tunchanged\"\x8a\x01\n" +
+	"\x1cResetLocalPolicyTrustRequest\x12\x15\n" +
+	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x02 \x01(\fR\tpublicKey\x124\n" +
+	"\x16public_key_fingerprint\x18\x03 \x01(\tR\x14publicKeyFingerprint\"\x96\x01\n" +
+	"\x1dResetLocalPolicyTrustResponse\x12\x15\n" +
+	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x124\n" +
+	"\x16public_key_fingerprint\x18\x02 \x01(\tR\x14publicKeyFingerprint\x12(\n" +
+	"\x10replaced_key_ids\x18\x03 \x03(\tR\x0ereplacedKeyIds\"\x0f\n" +
 	"\rHealthRequest\"\xd6\n" +
 	"\n" +
 	"\x0eHealthResponse\x12#\n" +
@@ -2922,13 +3051,14 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x10RegisterEndpoint\x12\x19.relay.v1.EndpointControl\x1a\x19.relay.v1.EndpointControl(\x010\x01\x12>\n" +
 	"\n" +
 	"OpenTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x01\x12@\n" +
-	"\fAcceptTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x012\xdc\x04\n" +
+	"\fAcceptTunnel\x12\x15.relay.v1.TunnelFrame\x1a\x15.relay.v1.TunnelFrame(\x010\x012\xc6\x05\n" +
 	"\n" +
 	"RelayAdmin\x12>\n" +
 	"\tGetHealth\x12\x17.relay.v1.HealthRequest\x1a\x18.relay.v1.HealthResponse\x12P\n" +
 	"\x0fGetRouteRuntime\x12\x1d.relay.v1.RouteRuntimeRequest\x1a\x1e.relay.v1.RouteRuntimeResponse\x12P\n" +
 	"\rApplySnapshot\x12\x1e.relay.v1.ApplySnapshotRequest\x1a\x1f.relay.v1.ApplySnapshotResponse\x12e\n" +
-	"\x14BootstrapPolicyTrust\x12%.relay.v1.BootstrapPolicyTrustRequest\x1a&.relay.v1.BootstrapPolicyTrustResponse\x12S\n" +
+	"\x14BootstrapPolicyTrust\x12%.relay.v1.BootstrapPolicyTrustRequest\x1a&.relay.v1.BootstrapPolicyTrustResponse\x12h\n" +
+	"\x15ResetLocalPolicyTrust\x12&.relay.v1.ResetLocalPolicyTrustRequest\x1a'.relay.v1.ResetLocalPolicyTrustResponse\x12S\n" +
 	"\x0eReloadIdentity\x12\x1f.relay.v1.ReloadIdentityRequest\x1a .relay.v1.ReloadIdentityResponse\x12k\n" +
 	"\x16CommitIdentityRotation\x12'.relay.v1.CommitIdentityRotationRequest\x1a(.relay.v1.CommitIdentityRotationResponse\x12A\n" +
 	"\bSetDrain\x12\x19.relay.v1.SetDrainRequest\x1a\x1a.relay.v1.SetDrainResponseB=Z;github.com/wiolett-industries/gateway/daemon-shared/relayv1b\x06proto3"
@@ -2946,7 +3076,7 @@ func file_relay_v1_relay_proto_rawDescGZIP() []byte {
 }
 
 var file_relay_v1_relay_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 36)
+var file_relay_v1_relay_proto_msgTypes = make([]protoimpl.MessageInfo, 38)
 var file_relay_v1_relay_proto_goTypes = []any{
 	(RelayMode)(0),                         // 0: relay.v1.RelayMode
 	(*SignedGrant)(nil),                    // 1: relay.v1.SignedGrant
@@ -2974,17 +3104,19 @@ var file_relay_v1_relay_proto_goTypes = []any{
 	(*ApplySnapshotResponse)(nil),          // 23: relay.v1.ApplySnapshotResponse
 	(*BootstrapPolicyTrustRequest)(nil),    // 24: relay.v1.BootstrapPolicyTrustRequest
 	(*BootstrapPolicyTrustResponse)(nil),   // 25: relay.v1.BootstrapPolicyTrustResponse
-	(*HealthRequest)(nil),                  // 26: relay.v1.HealthRequest
-	(*HealthResponse)(nil),                 // 27: relay.v1.HealthResponse
-	(*AssignmentTunnelCount)(nil),          // 28: relay.v1.AssignmentTunnelCount
-	(*RouteRuntimeRequest)(nil),            // 29: relay.v1.RouteRuntimeRequest
-	(*RouteRuntimeResponse)(nil),           // 30: relay.v1.RouteRuntimeResponse
-	(*ReloadIdentityRequest)(nil),          // 31: relay.v1.ReloadIdentityRequest
-	(*ReloadIdentityResponse)(nil),         // 32: relay.v1.ReloadIdentityResponse
-	(*CommitIdentityRotationRequest)(nil),  // 33: relay.v1.CommitIdentityRotationRequest
-	(*CommitIdentityRotationResponse)(nil), // 34: relay.v1.CommitIdentityRotationResponse
-	(*SetDrainRequest)(nil),                // 35: relay.v1.SetDrainRequest
-	(*SetDrainResponse)(nil),               // 36: relay.v1.SetDrainResponse
+	(*ResetLocalPolicyTrustRequest)(nil),   // 26: relay.v1.ResetLocalPolicyTrustRequest
+	(*ResetLocalPolicyTrustResponse)(nil),  // 27: relay.v1.ResetLocalPolicyTrustResponse
+	(*HealthRequest)(nil),                  // 28: relay.v1.HealthRequest
+	(*HealthResponse)(nil),                 // 29: relay.v1.HealthResponse
+	(*AssignmentTunnelCount)(nil),          // 30: relay.v1.AssignmentTunnelCount
+	(*RouteRuntimeRequest)(nil),            // 31: relay.v1.RouteRuntimeRequest
+	(*RouteRuntimeResponse)(nil),           // 32: relay.v1.RouteRuntimeResponse
+	(*ReloadIdentityRequest)(nil),          // 33: relay.v1.ReloadIdentityRequest
+	(*ReloadIdentityResponse)(nil),         // 34: relay.v1.ReloadIdentityResponse
+	(*CommitIdentityRotationRequest)(nil),  // 35: relay.v1.CommitIdentityRotationRequest
+	(*CommitIdentityRotationResponse)(nil), // 36: relay.v1.CommitIdentityRotationResponse
+	(*SetDrainRequest)(nil),                // 37: relay.v1.SetDrainRequest
+	(*SetDrainResponse)(nil),               // 38: relay.v1.SetDrainResponse
 }
 var file_relay_v1_relay_proto_depIdxs = []int32{
 	3,  // 0: relay.v1.EndpointControl.register:type_name -> relay.v1.RegisterEndpoint
@@ -3013,29 +3145,31 @@ var file_relay_v1_relay_proto_depIdxs = []int32{
 	19, // 23: relay.v1.ApplySnapshotRequest.admission_policy:type_name -> relay.v1.AdmissionPolicy
 	21, // 24: relay.v1.ApplySnapshotRequest.signed_envelope:type_name -> relay.v1.SignedPolicyEnvelope
 	0,  // 25: relay.v1.HealthResponse.mode:type_name -> relay.v1.RelayMode
-	28, // 26: relay.v1.HealthResponse.assignment_tunnels:type_name -> relay.v1.AssignmentTunnelCount
+	30, // 26: relay.v1.HealthResponse.assignment_tunnels:type_name -> relay.v1.AssignmentTunnelCount
 	2,  // 27: relay.v1.TunnelBroker.RegisterEndpoint:input_type -> relay.v1.EndpointControl
 	7,  // 28: relay.v1.TunnelBroker.OpenTunnel:input_type -> relay.v1.TunnelFrame
 	7,  // 29: relay.v1.TunnelBroker.AcceptTunnel:input_type -> relay.v1.TunnelFrame
-	26, // 30: relay.v1.RelayAdmin.GetHealth:input_type -> relay.v1.HealthRequest
-	29, // 31: relay.v1.RelayAdmin.GetRouteRuntime:input_type -> relay.v1.RouteRuntimeRequest
+	28, // 30: relay.v1.RelayAdmin.GetHealth:input_type -> relay.v1.HealthRequest
+	31, // 31: relay.v1.RelayAdmin.GetRouteRuntime:input_type -> relay.v1.RouteRuntimeRequest
 	22, // 32: relay.v1.RelayAdmin.ApplySnapshot:input_type -> relay.v1.ApplySnapshotRequest
 	24, // 33: relay.v1.RelayAdmin.BootstrapPolicyTrust:input_type -> relay.v1.BootstrapPolicyTrustRequest
-	31, // 34: relay.v1.RelayAdmin.ReloadIdentity:input_type -> relay.v1.ReloadIdentityRequest
-	33, // 35: relay.v1.RelayAdmin.CommitIdentityRotation:input_type -> relay.v1.CommitIdentityRotationRequest
-	35, // 36: relay.v1.RelayAdmin.SetDrain:input_type -> relay.v1.SetDrainRequest
-	2,  // 37: relay.v1.TunnelBroker.RegisterEndpoint:output_type -> relay.v1.EndpointControl
-	7,  // 38: relay.v1.TunnelBroker.OpenTunnel:output_type -> relay.v1.TunnelFrame
-	7,  // 39: relay.v1.TunnelBroker.AcceptTunnel:output_type -> relay.v1.TunnelFrame
-	27, // 40: relay.v1.RelayAdmin.GetHealth:output_type -> relay.v1.HealthResponse
-	30, // 41: relay.v1.RelayAdmin.GetRouteRuntime:output_type -> relay.v1.RouteRuntimeResponse
-	23, // 42: relay.v1.RelayAdmin.ApplySnapshot:output_type -> relay.v1.ApplySnapshotResponse
-	25, // 43: relay.v1.RelayAdmin.BootstrapPolicyTrust:output_type -> relay.v1.BootstrapPolicyTrustResponse
-	32, // 44: relay.v1.RelayAdmin.ReloadIdentity:output_type -> relay.v1.ReloadIdentityResponse
-	34, // 45: relay.v1.RelayAdmin.CommitIdentityRotation:output_type -> relay.v1.CommitIdentityRotationResponse
-	36, // 46: relay.v1.RelayAdmin.SetDrain:output_type -> relay.v1.SetDrainResponse
-	37, // [37:47] is the sub-list for method output_type
-	27, // [27:37] is the sub-list for method input_type
+	26, // 34: relay.v1.RelayAdmin.ResetLocalPolicyTrust:input_type -> relay.v1.ResetLocalPolicyTrustRequest
+	33, // 35: relay.v1.RelayAdmin.ReloadIdentity:input_type -> relay.v1.ReloadIdentityRequest
+	35, // 36: relay.v1.RelayAdmin.CommitIdentityRotation:input_type -> relay.v1.CommitIdentityRotationRequest
+	37, // 37: relay.v1.RelayAdmin.SetDrain:input_type -> relay.v1.SetDrainRequest
+	2,  // 38: relay.v1.TunnelBroker.RegisterEndpoint:output_type -> relay.v1.EndpointControl
+	7,  // 39: relay.v1.TunnelBroker.OpenTunnel:output_type -> relay.v1.TunnelFrame
+	7,  // 40: relay.v1.TunnelBroker.AcceptTunnel:output_type -> relay.v1.TunnelFrame
+	29, // 41: relay.v1.RelayAdmin.GetHealth:output_type -> relay.v1.HealthResponse
+	32, // 42: relay.v1.RelayAdmin.GetRouteRuntime:output_type -> relay.v1.RouteRuntimeResponse
+	23, // 43: relay.v1.RelayAdmin.ApplySnapshot:output_type -> relay.v1.ApplySnapshotResponse
+	25, // 44: relay.v1.RelayAdmin.BootstrapPolicyTrust:output_type -> relay.v1.BootstrapPolicyTrustResponse
+	27, // 45: relay.v1.RelayAdmin.ResetLocalPolicyTrust:output_type -> relay.v1.ResetLocalPolicyTrustResponse
+	34, // 46: relay.v1.RelayAdmin.ReloadIdentity:output_type -> relay.v1.ReloadIdentityResponse
+	36, // 47: relay.v1.RelayAdmin.CommitIdentityRotation:output_type -> relay.v1.CommitIdentityRotationResponse
+	38, // 48: relay.v1.RelayAdmin.SetDrain:output_type -> relay.v1.SetDrainResponse
+	38, // [38:49] is the sub-list for method output_type
+	27, // [27:38] is the sub-list for method input_type
 	27, // [27:27] is the sub-list for extension type_name
 	27, // [27:27] is the sub-list for extension extendee
 	0,  // [0:27] is the sub-list for field type_name
@@ -3068,7 +3202,7 @@ func file_relay_v1_relay_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_relay_v1_relay_proto_rawDesc), len(file_relay_v1_relay_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   36,
+			NumMessages:   38,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

@@ -100,6 +100,7 @@ type EnrollmentResult = {
   gatewayCertSha256: string;
   targets?: EnrollmentTargets;
   relayAddress?: string;
+  reissued?: boolean;
 };
 
 type HostingRequest = {
@@ -118,6 +119,8 @@ export function NodeEnrollmentDialog({
   onNodeCreated,
   onNodeEnrolled,
   onHostingCreated,
+  reissueNode,
+  onReissueHandled,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -129,6 +132,9 @@ export function NodeEnrollmentDialog({
   onNodeCreated?: (node: Node) => void;
   onNodeEnrolled?: (nodeId: string) => void;
   onHostingCreated?: (operation: HostingOperation) => void;
+  /** A pending node to issue a fresh enrollment token for; shows its setup command. */
+  reissueNode?: Node | null;
+  onReissueHandled?: () => void;
 }) {
   const user = useAuthStore((state) => state.user);
   const [mode, setMode] = useState<"external" | "hosting">(initialMode);
@@ -257,6 +263,42 @@ export function NodeEnrollmentDialog({
       setCreating(false);
     }
   };
+
+  const onReissueHandledRef = useRef(onReissueHandled);
+  onReissueHandledRef.current = onReissueHandled;
+  useEffect(() => {
+    if (!reissueNode) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const response = await api.regenerateNodeEnrollmentToken(reissueNode.id);
+        if (cancelled) return;
+        setResult({
+          nodeId: reissueNode.id,
+          displayName: reissueNode.displayName || reissueNode.hostname,
+          type: reissueNode.type,
+          token: response.enrollmentToken,
+          gatewayCertSha256: response.gatewayCertSha256,
+          targets: response.gatewayEnrollmentTargets,
+          relayAddress:
+            reissueNode.type === "relay" ? reissueNode.serviceAddresses?.[0] : undefined,
+          reissued: true,
+        });
+        completedNodeRef.current = null;
+        setTargetId("public");
+        setTransport("curl");
+      } catch (error) {
+        if (!cancelled) {
+          toast.error(error instanceof Error ? error.message : "Failed to generate a new token");
+        }
+      } finally {
+        if (!cancelled) onReissueHandledRef.current?.();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [reissueNode, setResult]);
 
   const fallbackGateway = `${window.location.hostname}:9443`;
   const targets = useMemo(
@@ -472,7 +514,7 @@ export function NodeEnrollmentDialog({
       <Dialog open={resultOpen} onOpenChange={onResultOpenChange}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Node Created</DialogTitle>
+            <DialogTitle>{result?.reissued ? "New Enrollment Token" : "Node Created"}</DialogTitle>
             <DialogDescription>
               This dialog closes automatically when the node completes enrollment.
             </DialogDescription>
@@ -481,7 +523,9 @@ export function NodeEnrollmentDialog({
             <div className="space-y-4">
               <div className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning-foreground">
                 <p className="font-medium">
-                  The enrollment token is single-use and will not be shown again.
+                  The enrollment token is single-use, expires after 7 days, and will not be shown
+                  again.
+                  {result.reissued ? " Any earlier token for this node no longer works." : ""}
                 </p>
               </div>
               <div className="space-y-1.5">

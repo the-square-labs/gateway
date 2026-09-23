@@ -153,6 +153,19 @@ func (m *workerManager) bootstrapTrust(ctx context.Context) error {
 	return err
 }
 
+// ensurePolicyTrust pins the enrollment key only on a relay that trusts no
+// policy key yet. Once the relay holds signed trust, Gateway rotates keys
+// through signed snapshots and the enrollment key may have aged out of trust;
+// re-bootstrapping it then fails on older Gateways even though the relay is
+// healthy, so it is skipped. A relay that does not report its trusted keys
+// (an older worker) is bootstrapped on every call, as before.
+func (m *workerManager) ensurePolicyTrust(ctx context.Context, health *relayv1.HealthResponse) error {
+	if len(health.GetPolicyKeyIds()) > 0 {
+		return nil
+	}
+	return m.bootstrapTrust(ctx)
+}
+
 func (m *workerManager) applyPolicy(ctx context.Context, encoded []byte) (*relayv1.ApplySnapshotResponse, error) {
 	request := &relayv1.ApplySnapshotRequest{}
 	if err := proto.Unmarshal(encoded, request); err != nil {
@@ -225,10 +238,10 @@ func (m *workerManager) waitReadyVersion(ctx context.Context, targetVersion stri
 	for time.Now().Before(deadline) {
 		if err := m.ensureRunning(); err != nil {
 			lastErr = err
-		} else if err := m.bootstrapTrust(ctx); err != nil {
-			lastErr = err
 		} else if health, err := m.health(ctx); err != nil {
 			lastErr = err
+		} else if err := m.ensurePolicyTrust(ctx, health); err != nil && !health.GetReadiness() {
+			lastErr = fmt.Errorf("bootstrap policy trust: %w", err)
 		} else if !health.GetReadiness() {
 			lastErr = fmt.Errorf("worker is not ready: %s", health.GetReason())
 		} else if targetVersion != "" && health.GetBuildVersion() != targetVersion {

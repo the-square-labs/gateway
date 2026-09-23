@@ -149,7 +149,16 @@ dockerWebhookTriggerRoutes.openapi(triggerDockerWebhookRoute, async (c) => {
   }
 
   if (webhook.targetType === 'deployment') {
-    const data = await service.triggerWebhookToken(token, tag);
+    const result = (await service.triggerWebhookToken(token, tag)) as Record<string, unknown> | null | undefined;
+    // The token authorizes a deploy, not a read: never echo the deployment
+    // detail (desired config, env, slot snapshots) to the caller.
+    const data = result
+      ? {
+          ...(typeof result.deploymentId === 'string' ? { deploymentId: result.deploymentId } : {}),
+          ...(typeof result.message === 'string' ? { message: result.message } : {}),
+          ...(typeof result.taskId === 'string' ? { taskId: result.taskId } : {}),
+        }
+      : result;
     return c.json({ data });
   }
 

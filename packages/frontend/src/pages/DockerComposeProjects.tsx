@@ -58,7 +58,7 @@ type ComposeProjectTransition = {
   startedAt: number;
 };
 
-const ACTIVE_OPERATION_STATUSES = new Set(["pending", "running", "cancelling"]);
+const ACTIVE_OPERATION_STATUSES = new Set(["pending", "running", "cancelling", "reconciling"]);
 
 function statusVariant(status: string) {
   if (status === "running" || status === "healthy" || status === "online")

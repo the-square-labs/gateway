@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DockerManagementService } from './docker.service.js';
+import { DOCKER_FILE_READ_MAX_BYTES, dockerFileTransferTimeoutMs } from './docker-read-operations.js';
+
+const READ_TIMEOUT_MS = dockerFileTransferTimeoutMs(DOCKER_FILE_READ_MAX_BYTES + 1);
 
 function dbWithOnlineDockerNode() {
   const limit = vi.fn().mockResolvedValue([
@@ -18,6 +21,7 @@ function createService(dispatch: {
   sendDockerContainerCommand?: ReturnType<typeof vi.fn>;
   sendDockerFileCommand?: ReturnType<typeof vi.fn>;
   sendDockerLogsCommand?: ReturnType<typeof vi.fn>;
+  sendDockerVolumeCommand?: ReturnType<typeof vi.fn>;
 }) {
   const effectiveDispatch = {
     sendDockerContainerCommand: vi.fn().mockResolvedValue({
@@ -139,11 +143,17 @@ describe('DockerManagementService read and file operations', () => {
       containerId: 'container-1',
       path: '/var/log',
     });
-    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(2, 'node-1', 'read', {
-      containerId: 'container-1',
-      path: '/var/log/app.log',
-      maxBytes: 104857600,
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(
+      2,
+      'node-1',
+      'read',
+      {
+        containerId: 'container-1',
+        path: '/var/log/app.log',
+        maxBytes: 104857601,
+      },
+      READ_TIMEOUT_MS
+    );
   });
 
   it('returns empty bytes when reading an empty file', async () => {
@@ -153,11 +163,16 @@ describe('DockerManagementService read and file operations', () => {
     const { service } = createService(dispatch);
 
     await expect(service.readFile('node-1', 'container-1', '/tmp/empty.txt')).resolves.toEqual(Buffer.alloc(0));
-    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith('node-1', 'read', {
-      containerId: 'container-1',
-      path: '/tmp/empty.txt',
-      maxBytes: 104857600,
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith(
+      'node-1',
+      'read',
+      {
+        containerId: 'container-1',
+        path: '/tmp/empty.txt',
+        maxBytes: 104857601,
+      },
+      READ_TIMEOUT_MS
+    );
   });
 
   it('decodes protobuf bytes strings when reading files', async () => {
@@ -178,11 +193,16 @@ describe('DockerManagementService read and file operations', () => {
 
     await service.writeFile('node-1', 'container-1', '/etc/app.conf', 'enabled=true', 'user-1');
 
-    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith('node-1', 'write', {
-      containerId: 'container-1',
-      path: '/etc/app.conf',
-      content: 'enabled=true',
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith(
+      'node-1',
+      'write',
+      {
+        containerId: 'container-1',
+        path: '/etc/app.conf',
+        content: 'enabled=true',
+      },
+      dockerFileTransferTimeoutMs(Buffer.byteLength('enabled=true'))
+    );
     expect(audit.log).toHaveBeenCalledWith({
       action: 'docker.file.write',
       userId: 'user-1',
@@ -209,11 +229,16 @@ describe('DockerManagementService read and file operations', () => {
 
     await service.writeFile('node-1', 'container-1', '/tmp/blob.bin', content, 'user-1');
 
-    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith('node-1', 'write', {
-      containerId: 'container-1',
-      path: '/tmp/blob.bin',
-      content,
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenCalledWith(
+      'node-1',
+      'write',
+      {
+        containerId: 'container-1',
+        path: '/tmp/blob.bin',
+        content,
+      },
+      dockerFileTransferTimeoutMs(content.byteLength)
+    );
   });
 
   it('creates and deletes files through explicit file actions', async () => {
@@ -227,11 +252,17 @@ describe('DockerManagementService read and file operations', () => {
     await service.deleteFile('node-1', 'container-1', '/tmp/new.txt', 'user-1');
     await service.moveFile('node-1', 'container-1', '/tmp/new-dir', '/var/new-dir', 'user-1');
 
-    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(1, 'node-1', 'create-file', {
-      containerId: 'container-1',
-      path: '/tmp/new.txt',
-      content: 'Hello',
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(
+      1,
+      'node-1',
+      'create-file',
+      {
+        containerId: 'container-1',
+        path: '/tmp/new.txt',
+        content: 'Hello',
+      },
+      dockerFileTransferTimeoutMs(5)
+    );
     expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(2, 'node-1', 'create-dir', {
       containerId: 'container-1',
       path: '/tmp/new-dir',
@@ -335,20 +366,32 @@ describe('DockerManagementService read and file operations', () => {
       targetPath: '/tmp/big.bin',
       maxBytes: 11,
     });
-    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(2, 'node-1', 'upload-chunk', {
-      containerId: 'container-1',
-      path: upload.uploadId,
-      targetPath: '/tmp/big.bin',
-      maxBytes: 0,
-      content: firstChunk,
-    });
-    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(3, 'node-1', 'upload-chunk', {
-      containerId: 'container-1',
-      path: upload.uploadId,
-      targetPath: '/tmp/big.bin',
-      maxBytes: 6,
-      content: secondChunk,
-    });
+    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(
+      2,
+      'node-1',
+      'upload-chunk',
+      {
+        containerId: 'container-1',
+        path: upload.uploadId,
+        targetPath: '/tmp/big.bin',
+        maxBytes: 0,
+        content: firstChunk,
+      },
+      dockerFileTransferTimeoutMs(firstChunk.byteLength)
+    );
+    expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(
+      3,
+      'node-1',
+      'upload-chunk',
+      {
+        containerId: 'container-1',
+        path: upload.uploadId,
+        targetPath: '/tmp/big.bin',
+        maxBytes: 6,
+        content: secondChunk,
+      },
+      dockerFileTransferTimeoutMs(secondChunk.byteLength)
+    );
     expect(dispatch.sendDockerFileCommand).toHaveBeenNthCalledWith(4, 'node-1', 'upload-complete', {
       containerId: 'container-1',
       path: upload.uploadId,
@@ -384,5 +427,51 @@ describe('DockerManagementService read and file operations', () => {
     await expect(
       service.appendFileUploadChunk('node-1', 'container-1', upload.uploadId, 6, Buffer.from('world'))
     ).rejects.toThrow('Unexpected upload offset');
+  });
+
+  it('rejects container file reads larger than the read limit instead of truncating them', async () => {
+    const atLimit = Buffer.allocUnsafe(DOCKER_FILE_READ_MAX_BYTES);
+    const overLimit = Buffer.allocUnsafe(DOCKER_FILE_READ_MAX_BYTES + 1);
+    const dispatch = {
+      sendDockerFileCommand: vi
+        .fn()
+        .mockResolvedValueOnce({ success: true, data: atLimit })
+        .mockResolvedValueOnce({ success: true, data: overLimit }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.readFile('node-1', 'container-1', '/data/exact.bin')).resolves.toBe(atLimit);
+    await expect(service.readFile('node-1', 'container-1', '/data/huge.bin')).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'FILE_TOO_LARGE',
+    });
+  });
+
+  it('rejects volume file reads larger than the read limit instead of truncating them', async () => {
+    const dispatch = {
+      sendDockerVolumeCommand: vi
+        .fn()
+        .mockResolvedValue({ success: true, data: Buffer.allocUnsafe(DOCKER_FILE_READ_MAX_BYTES + 1) }),
+    };
+    const { service } = createService(dispatch);
+
+    await expect(service.readVolumeFile('node-1', 'data', '/huge.bin')).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'FILE_TOO_LARGE',
+    });
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith(
+      'node-1',
+      'read-file',
+      { name: 'data', path: '/huge.bin', maxBytes: DOCKER_FILE_READ_MAX_BYTES + 1 },
+      READ_TIMEOUT_MS
+    );
+  });
+
+  it('sizes file transfer dispatch timeouts by payload with a floor and a cap', () => {
+    expect(dockerFileTransferTimeoutMs(0)).toBe(30_000);
+    // A full 50 MiB upload chunk gets 200s of transfer time at the 256 KiB/s floor on top of the base.
+    expect(dockerFileTransferTimeoutMs(50 * 1024 * 1024)).toBe(230_000);
+    expect(READ_TIMEOUT_MS).toBeGreaterThan(400_000);
+    expect(dockerFileTransferTimeoutMs(10 * 1024 * 1024 * 1024)).toBe(600_000);
   });
 });

@@ -99,3 +99,74 @@ describe('MfaService login challenge consumption', () => {
     expect(service.regenerateRecoveryCodes).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('MfaService second-factor step-up', () => {
+  function createStepUpHarness(options: { hasFactor: boolean; validTotp?: boolean }) {
+    const store = new Map<string, unknown>();
+    const cache = {
+      get: vi.fn(async (key: string) => store.get(key) ?? null),
+      set: vi.fn(async (key: string, value: unknown) => {
+        store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
+      }),
+      incr: vi.fn(async (key: string) => {
+        const next = Number(store.get(key) ?? 0) + 1;
+        store.set(key, next);
+        return next;
+      }),
+      expire: vi.fn().mockResolvedValue(undefined),
+    } as unknown as CacheService;
+    const service = new MfaService({} as never, cache, {} as never);
+    vi.spyOn(service, 'requiresLocalMfa').mockResolvedValue(options.hasFactor);
+    vi.spyOn(service, 'verifyTotp').mockResolvedValue(options.validTotp ?? true);
+    return { service, store };
+  }
+
+  it('lets an account without any second factor enroll its first one', async () => {
+    const { service } = createStepUpHarness({ hasFactor: false });
+
+    await expect(service.assertSecondFactorChangeAllowed('user-1', 'session-1')).resolves.toBeUndefined();
+  });
+
+  it('requires a fresh proof before an existing factor can be changed', async () => {
+    const { service } = createStepUpHarness({ hasFactor: true });
+
+    await expect(service.assertSecondFactorChangeAllowed('user-1', 'session-1')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'MFA_STEP_UP_REQUIRED',
+    });
+  });
+
+  it('accepts a verified TOTP proof only for the session that produced it', async () => {
+    const { service, store } = createStepUpHarness({ hasFactor: true });
+
+    await expect(service.verifyStepUpCode('user-1', 'session-1', { totpCode: '123456' })).resolves.toBe(true);
+
+    await expect(service.assertSecondFactorChangeAllowed('user-1', 'session-1')).resolves.toBeUndefined();
+    await expect(service.assertSecondFactorChangeAllowed('user-1', 'session-2')).rejects.toMatchObject({
+      code: 'MFA_STEP_UP_REQUIRED',
+    });
+    await expect(service.assertSecondFactorChangeAllowed('user-2', 'session-1')).rejects.toMatchObject({
+      code: 'MFA_STEP_UP_REQUIRED',
+    });
+    // The raw session id is never used as a cache key.
+    expect([...store.keys()].some((key) => key.includes('session-1'))).toBe(false);
+  });
+
+  it('locks step-up verification after repeated invalid codes', async () => {
+    const { service } = createStepUpHarness({ hasFactor: true, validTotp: false });
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await expect(service.verifyStepUpCode('user-1', 'session-1', { totpCode: '000000' })).resolves.toBe(false);
+    }
+    await expect(service.verifyStepUpCode('user-1', 'session-1', { totpCode: '000000' })).rejects.toMatchObject({
+      statusCode: 429,
+      code: 'MFA_STEP_UP_LOCKED',
+    });
+    await expect(service.assertSecondFactorChangeAllowed('user-1', 'session-1')).rejects.toMatchObject({
+      code: 'MFA_STEP_UP_REQUIRED',
+    });
+  });
+});

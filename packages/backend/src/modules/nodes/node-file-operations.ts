@@ -2,7 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { commandResultDataToBuffer } from '@/lib/command-result-data.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
-import { DOCKER_FILE_READ_MAX_BYTES, DOCKER_FILE_UPLOAD_CHUNK_BYTES } from '@/modules/docker/docker-read-operations.js';
+import {
+  assertDockerFileReadWithinLimit,
+  DOCKER_FILE_READ_REQUEST_BYTES,
+  DOCKER_FILE_UPLOAD_CHUNK_BYTES,
+  dockerFileTransferTimeoutMs,
+} from '@/modules/docker/docker-read-operations.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 
@@ -25,6 +30,11 @@ interface NodeFileUploadSession {
   expectedOffset: number;
   userId: string;
   expiresAt: number;
+}
+
+function contentByteLength(content: string | Buffer | undefined) {
+  if (content == null) return 0;
+  return Buffer.isBuffer(content) ? content.byteLength : Buffer.byteLength(content);
 }
 
 const uploadSessions = new Map<string, NodeFileUploadSession>();
@@ -85,14 +95,19 @@ export async function listNodeFiles(context: NodeFileOperationContext, nodeId: s
 }
 
 export async function readNodeFile(context: NodeFileOperationContext, nodeId: string, path: string) {
-  const result = await context.nodeDispatch.sendNodeFileCommand(nodeId, 'read', {
-    path,
-    maxBytes: DOCKER_FILE_READ_MAX_BYTES,
-  });
+  // One byte over the limit tells an oversized file apart from one exactly at it (any daemon version).
+  const result = await context.nodeDispatch.sendNodeFileCommand(
+    nodeId,
+    'read',
+    { path, maxBytes: DOCKER_FILE_READ_REQUEST_BYTES },
+    dockerFileTransferTimeoutMs(DOCKER_FILE_READ_REQUEST_BYTES)
+  );
   if (!result.success) {
     return context.parseResult(result);
   }
-  return commandResultDataToBuffer(result.data);
+  const data = commandResultDataToBuffer(result.data);
+  assertDockerFileReadWithinLimit(data);
+  return data;
 }
 
 export async function writeNodeFile(
@@ -102,7 +117,12 @@ export async function writeNodeFile(
   content: string | Buffer,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendNodeFileCommand(nodeId, 'write', { path, content });
+  const result = await context.nodeDispatch.sendNodeFileCommand(
+    nodeId,
+    'write',
+    { path, content },
+    dockerFileTransferTimeoutMs(contentByteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'node.file.write',
@@ -121,10 +141,12 @@ export async function createNodeFile(
   content: string | Buffer | undefined,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendNodeFileCommand(nodeId, 'create-file', {
-    path,
-    content: content ?? '',
-  });
+  const result = await context.nodeDispatch.sendNodeFileCommand(
+    nodeId,
+    'create-file',
+    { path, content: content ?? '' },
+    dockerFileTransferTimeoutMs(contentByteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'node.file.create',
@@ -185,12 +207,12 @@ export async function appendNodeFileUploadChunk(
   if (session.expectedOffset + content.length > session.totalBytes) {
     throw new AppError(400, 'UPLOAD_SIZE_EXCEEDED', 'Upload chunk exceeds declared file size');
   }
-  const result = await context.nodeDispatch.sendNodeFileCommand(session.nodeId, 'upload-chunk', {
-    path: uploadId,
-    targetPath: session.path,
-    maxBytes: offset,
-    content,
-  });
+  const result = await context.nodeDispatch.sendNodeFileCommand(
+    session.nodeId,
+    'upload-chunk',
+    { path: uploadId, targetPath: session.path, maxBytes: offset, content },
+    dockerFileTransferTimeoutMs(content.byteLength)
+  );
   context.parseResult(result);
   session.expectedOffset += content.length;
   session.expiresAt = Date.now() + NODE_FILE_UPLOAD_SESSION_TTL_MS;

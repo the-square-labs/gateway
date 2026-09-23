@@ -22,6 +22,9 @@ export interface BackupPolicy {
   retentionCount: number;
   limits: BackupLimits;
   enabled: boolean;
+  /** Last skipped schedule slot or retention failure; cleared by the next scheduled start. */
+  lastError?: string | null;
+  lastErrorAt?: string | null;
 }
 
 export interface BackupManifest {
@@ -41,7 +44,9 @@ export interface BackupManifest {
 export interface BackupRun {
   id: string;
   policyId: string | null;
-  databaseConnectionId: string;
+  /** Null after the source connection was deleted; the history is kept. */
+  databaseConnectionId: string | null;
+  databaseConnectionName?: string | null;
   destinationId: string;
   destinationBucket: string;
   destinationPrefix: string;
@@ -79,6 +84,8 @@ export interface BackupPolicyInput {
 export interface BackupRestoreInput {
   executorNodeId: string;
   newManagedDatabaseName?: string;
+  /** Database name inside a new managed target; defaults to the normalized source name. */
+  targetDatabaseName?: string;
   restoreTargetConnectionId?: string;
   overwrite?: false;
   limits?: Partial<BackupLimits>;

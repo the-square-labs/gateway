@@ -1,6 +1,10 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { __testOnly, NginxCertificateDistributionService } from './nginx-certificate-distribution.service.js';
+import {
+  __testOnly,
+  NGINX_CERTIFICATE_DISTRIBUTION_CAPABILITY as CAPABILITY,
+  NginxCertificateDistributionService,
+} from './nginx-certificate-distribution.service.js';
 
 describe('NginxCertificateDistributionService helpers', () => {
   it('uses deterministic nodeId ordering for legacy canonical-source selection', () => {
@@ -147,5 +151,316 @@ describe('NginxCertificateDistributionService helpers', () => {
       'node-1',
       expect.objectContaining({ status: 'ready', appliedVersion: 'a'.repeat(64) })
     );
+  });
+});
+
+describe('NginxCertificateDistributionService replica retries', () => {
+  const capable = { id: 'node-1', type: 'nginx', status: 'online', capabilities: { capabilities: [CAPABILITY] } };
+  const asset = {
+    id: 'asset-1',
+    referenceType: 'ssl',
+    referenceId: '11111111-1111-4111-8111-111111111111',
+    fingerprint: 'f'.repeat(64),
+    version: 'v'.repeat(64),
+  };
+
+  function retryHarness(replica: Record<string, unknown>) {
+    const db = {
+      query: {
+        nginxCertificateReplicas: { findMany: vi.fn().mockResolvedValue([replica]) },
+        nginxCertificateAssets: { findMany: vi.fn().mockResolvedValue([asset]) },
+      },
+    };
+    const service = new NginxCertificateDistributionService(db as never, {} as never, {} as never, {} as never);
+    vi.spyOn(service as any, 'getNode').mockResolvedValue(capable);
+    const repair = vi.spyOn(service as any, 'repairReplica').mockResolvedValue(undefined);
+    return { service, repair };
+  }
+
+  it('backs off exponentially up to the periodic cadence', () => {
+    expect(__testOnly.repairDelayMs(0)).toBe(5 * 60 * 1000);
+    expect(__testOnly.repairDelayMs(2)).toBe(20 * 60 * 1000);
+    expect(__testOnly.repairDelayMs(40)).toBe(6 * 60 * 60 * 1000);
+  });
+
+  it('retries a failed replica push once its backoff elapsed', async () => {
+    const { service, repair } = retryHarness({
+      assetId: 'asset-1',
+      nodeId: 'node-1',
+      status: 'failed',
+      repairAttempts: 1,
+      updatedAt: new Date(Date.now() - 11 * 60 * 1000),
+    });
+
+    await service.reconcileIntegrity('node-1');
+
+    expect(repair).toHaveBeenCalledWith(asset, 'node-1');
+  });
+
+  it('does not retry a replica inside its backoff window', async () => {
+    const { service, repair } = retryHarness({
+      assetId: 'asset-1',
+      nodeId: 'node-1',
+      status: 'pending',
+      repairAttempts: 0,
+      updatedAt: new Date(),
+    });
+
+    await service.reconcileIntegrity('node-1');
+
+    expect(repair).not.toHaveBeenCalled();
+  });
+});
+
+describe('NginxCertificateDistributionService legacy daemon delivery', () => {
+  const host = {
+    id: 'host-1',
+    nodeId: 'node-1',
+    sslEnabled: true,
+    sslCertificateId: '11111111-1111-4111-8111-111111111111',
+    internalCertificateId: null,
+  };
+
+  function legacyHarness(node: Record<string, unknown>, deployResult: { success: boolean; error?: string }) {
+    const nodeDispatch = {
+      resolveNodeId: vi.fn().mockResolvedValue('node-1'),
+      isNodeConnected: vi.fn().mockReturnValue(true),
+      deployCertificate: vi.fn().mockResolvedValue(deployResult),
+    };
+    const service = new NginxCertificateDistributionService(
+      {} as never,
+      {} as never,
+      {} as never,
+      nodeDispatch as never
+    );
+    vi.spyOn(service as any, 'getNode').mockResolvedValue(node);
+    vi.spyOn(service as any, 'loadGatewayMaterial').mockResolvedValue({
+      certificatePem: 'cert',
+      keyPem: 'key',
+      chainPem: 'chain',
+    });
+    vi.spyOn(service as any, 'findAsset').mockResolvedValue({ id: 'asset-1' });
+    const markReplica = vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(0);
+    const reapply = vi.fn().mockResolvedValue(undefined);
+    service.setLegacyHostConfigReapplier(reapply);
+    return { service, nodeDispatch, markReplica, reapply };
+  }
+
+  const legacyNode = { id: 'node-1', type: 'nginx', status: 'online', capabilities: { capabilities: [] } };
+
+  it('pushes the certificate with deployCert and re-applies the host config', async () => {
+    const { service, nodeDispatch, markReplica, reapply } = legacyHarness(legacyNode, { success: true });
+
+    await expect(service.deployLegacyCertificateForHost(host)).resolves.toBe('delivered');
+
+    expect(nodeDispatch.deployCertificate).toHaveBeenCalledWith(
+      'node-1',
+      host.sslCertificateId,
+      Buffer.from('cert'),
+      Buffer.from('key'),
+      Buffer.from('chain')
+    );
+    expect(reapply).toHaveBeenCalledWith('host-1');
+    expect(markReplica).toHaveBeenCalledWith(
+      'asset-1',
+      'node-1',
+      expect.objectContaining({ status: 'daemon_update_required', appliedVersion: expect.any(String) })
+    );
+  });
+
+  it('records a retryable failure when the legacy daemon rejects the push', async () => {
+    const { service, markReplica, reapply } = legacyHarness(legacyNode, { success: false, error: 'disk full' });
+
+    await expect(service.deployLegacyCertificateForHost(host)).rejects.toMatchObject({
+      code: 'NGINX_TLS_LEGACY_DEPLOY_FAILED',
+    });
+    expect(reapply).not.toHaveBeenCalled();
+    expect(markReplica).toHaveBeenCalledWith(
+      'asset-1',
+      'node-1',
+      expect.objectContaining({ status: 'failed', lastError: 'disk full' })
+    );
+  });
+
+  it('leaves v2 daemons to the bundle path', async () => {
+    const { service, nodeDispatch } = legacyHarness(
+      { ...legacyNode, status: 'offline', capabilities: { capabilities: [CAPABILITY] } },
+      { success: true }
+    );
+
+    await expect(service.deployLegacyCertificateForHost(host)).resolves.toBe('not_legacy');
+    expect(nodeDispatch.deployCertificate).not.toHaveBeenCalled();
+  });
+});
+
+describe('NginxCertificateDistributionService legacy reconnect retries', () => {
+  const legacyNode = { id: 'node-1', type: 'nginx', status: 'online', capabilities: { capabilities: [] } };
+  const certId = '11111111-1111-4111-8111-111111111111';
+  const asset = { id: 'asset-1', referenceType: 'ssl', referenceId: certId, state: 'ready', version: 'v2'.repeat(32) };
+  const hostRow = {
+    id: 'host-1',
+    nodeId: 'node-1',
+    sslEnabled: true,
+    sslCertificateId: certId,
+    internalCertificateId: null,
+  };
+
+  function harness(replicas: Array<Record<string, unknown>>, unsettled: Array<{ id: string }> = []) {
+    const clearedWhere = vi.fn();
+    const updateSet = vi.fn(() => ({
+      where: vi.fn((condition: unknown) => {
+        clearedWhere(condition);
+        return { returning: vi.fn(async () => [{ id: certId }]) };
+      }),
+    }));
+    let selectCall = 0;
+    const db = {
+      query: {
+        nginxCertificateReplicas: { findMany: vi.fn().mockResolvedValue(replicas) },
+        nginxCertificateAssets: { findFirst: vi.fn().mockResolvedValue(asset) },
+      },
+      // 1st select: hosts using the certificate on the node; 2nd: unsettled replicas.
+      select: vi.fn(() => {
+        selectCall += 1;
+        const rows = selectCall === 1 ? [hostRow] : unsettled;
+        return {
+          from: vi.fn(() => ({
+            where: vi.fn(() => Object.assign(Promise.resolve(rows), { limit: vi.fn(async () => rows) })),
+          })),
+        };
+      }),
+      update: vi.fn(() => ({ set: updateSet })),
+    };
+    const service = new NginxCertificateDistributionService(db as never, {} as never, {} as never, {} as never);
+    const eventBus = { publish: vi.fn() };
+    service.setEventBus(eventBus as never);
+    vi.spyOn(service as any, 'getNode').mockResolvedValue(legacyNode);
+    const deploy = vi.spyOn(service, 'deployLegacyCertificateForHost').mockResolvedValue('delivered');
+    return { service, deploy, db, updateSet, eventBus };
+  }
+
+  const offlineAtRenewal = {
+    assetId: 'asset-1',
+    nodeId: 'node-1',
+    status: 'failed',
+    repairAttempts: 0,
+    desiredVersion: 'v2'.repeat(32),
+    appliedVersion: 'v1'.repeat(32),
+    updatedAt: new Date(),
+  };
+
+  it('pushes a certificate renewed while the node was offline as soon as it reconnects', async () => {
+    const { service, deploy } = harness([offlineAtRenewal]);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(deploy).toHaveBeenCalledWith(hostRow, { reapplyHostIds: ['host-1'] });
+  });
+
+  it('keeps the backoff for the periodic pass', async () => {
+    const { service, deploy } = harness([offlineAtRenewal]);
+
+    await service.reconcileIntegrity('node-1');
+
+    expect(deploy).not.toHaveBeenCalled();
+  });
+
+  it('pushes a legacy replica whose delivered version is older than the canonical asset', async () => {
+    const { service, deploy } = harness([
+      {
+        ...offlineAtRenewal,
+        status: 'daemon_update_required',
+        desiredVersion: 'v1'.repeat(32),
+        appliedVersion: 'v1'.repeat(32),
+      },
+    ]);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(deploy).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves an up-to-date legacy replica alone', async () => {
+    const { service, deploy } = harness([
+      {
+        ...offlineAtRenewal,
+        status: 'daemon_update_required',
+        desiredVersion: asset.version,
+        appliedVersion: asset.version,
+      },
+    ]);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(deploy).not.toHaveBeenCalled();
+  });
+
+  it('clears the "Distribution incomplete" status once the automatic retry delivered everywhere', async () => {
+    const { service, updateSet, eventBus } = harness([offlineAtRenewal]);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(updateSet).toHaveBeenCalledWith(expect.objectContaining({ renewalError: null }));
+    expect(eventBus.publish).toHaveBeenCalledWith('ssl.cert.changed', { id: certId, action: 'updated' });
+  });
+
+  it('keeps the status while another replica of the certificate is still failing', async () => {
+    const { service, updateSet } = harness([offlineAtRenewal], [{ id: 'replica-2' }]);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(updateSet).not.toHaveBeenCalled();
+  });
+
+  it('does not clear the status when the retry fails', async () => {
+    const { service, deploy, updateSet } = harness([offlineAtRenewal]);
+    deploy.mockRejectedValueOnce(new Error('offline'));
+    vi.spyOn(service as any, 'markReplicaById').mockResolvedValue(0);
+
+    await service.reconcileIntegrity('node-1', { reconnect: true });
+
+    expect(updateSet).not.toHaveBeenCalled();
+  });
+});
+
+describe('NginxCertificateDistributionService internal certificate guards', () => {
+  function materialHarness(cert: Record<string, unknown>, issuer: Record<string, unknown>) {
+    const chain: Record<string, unknown> = {};
+    for (const method of ['from', 'where']) chain[method] = vi.fn(() => chain);
+    chain.limit = vi.fn().mockResolvedValue([issuer]);
+    const db = {
+      query: { certificates: { findFirst: vi.fn().mockResolvedValue(cert) } },
+      select: vi.fn(() => chain),
+    };
+    const cryptoService = { decryptPrivateKey: vi.fn() };
+    const service = new NginxCertificateDistributionService(
+      db as never,
+      cryptoService as never,
+      {} as never,
+      {} as never
+    );
+    return { service, cryptoService };
+  }
+
+  const internal = {
+    caId: 'ca-1',
+    certificatePem: 'cert',
+    encryptedPrivateKey: 'enc',
+    encryptedDek: 'dek',
+    status: 'active',
+    type: 'tls-server',
+  };
+
+  it.each([
+    ['a revoked certificate', { ...internal, status: 'revoked' }, { isSystem: false }],
+    ['a client certificate', { ...internal, type: 'tls-client' }, { isSystem: false }],
+    ['a system-CA certificate', internal, { isSystem: true }],
+  ])('never decrypts %s for Nginx', async (_label, cert, issuer) => {
+    const { service, cryptoService } = materialHarness(cert, issuer);
+
+    await expect(
+      (service as any).loadGatewayMaterial({ type: 'internal', id: '11111111-1111-4111-8111-111111111111' })
+    ).rejects.toMatchObject({ code: 'TLS_CERTIFICATE_NOT_DEPLOYABLE' });
+    expect(cryptoService.decryptPrivateKey).not.toHaveBeenCalled();
   });
 });

@@ -59,7 +59,14 @@ describe('DockerManagementService volume and network operations', () => {
     const { service } = createService(dispatch);
 
     await expect(service.exportVolume('node-1', 'data')).resolves.toEqual(archive);
-    expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith('node-1', 'export', { name: 'data' });
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenCalledWith(
+      'node-1',
+      'export',
+      { name: 'data' },
+      expect.any(Number)
+    );
+    // A 512 MiB export must not be held to the 30s default dispatch timeout.
+    expect(dispatch.sendDockerVolumeCommand.mock.calls[0][3]).toBeGreaterThan(30_000);
   });
 
   it('creates volumes with audit and volume change events', async () => {
@@ -211,21 +218,39 @@ describe('DockerManagementService volume and network operations', () => {
     await service.deleteVolumeFile('node-1', 'data', '/old.txt', 'user-1');
     await service.moveVolumeFile('node-1', 'data', '/dir', '/dir2', 'user-1');
 
-    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(1, 'node-1', 'read-file', {
-      name: 'data',
-      path: '/app.txt',
-      maxBytes: 104857600,
-    });
-    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(2, 'node-1', 'write-file', {
-      name: 'data',
-      path: '/app.txt',
-      content,
-    });
-    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(3, 'node-1', 'create-file', {
-      name: 'data',
-      path: '/new.txt',
-      content: '',
-    });
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(
+      1,
+      'node-1',
+      'read-file',
+      {
+        name: 'data',
+        path: '/app.txt',
+        maxBytes: 104857601,
+      },
+      expect.any(Number)
+    );
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(
+      2,
+      'node-1',
+      'write-file',
+      {
+        name: 'data',
+        path: '/app.txt',
+        content,
+      },
+      expect.any(Number)
+    );
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(
+      3,
+      'node-1',
+      'create-file',
+      {
+        name: 'data',
+        path: '/new.txt',
+        content: '',
+      },
+      expect.any(Number)
+    );
     expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(4, 'node-1', 'create-dir', {
       name: 'data',
       path: '/dir',
@@ -304,13 +329,19 @@ describe('DockerManagementService volume and network operations', () => {
       targetPath: '/big.bin',
       maxBytes: content.length,
     });
-    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(2, 'node-1', 'upload-chunk', {
-      name: 'data',
-      path: upload.uploadId,
-      targetPath: '/big.bin',
-      maxBytes: 0,
-      content,
-    });
+    expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(
+      2,
+      'node-1',
+      'upload-chunk',
+      {
+        name: 'data',
+        path: upload.uploadId,
+        targetPath: '/big.bin',
+        maxBytes: 0,
+        content,
+      },
+      expect.any(Number)
+    );
     expect(dispatch.sendDockerVolumeCommand).toHaveBeenNthCalledWith(3, 'node-1', 'upload-complete', {
       name: 'data',
       path: upload.uploadId,

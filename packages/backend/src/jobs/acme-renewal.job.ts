@@ -1,9 +1,9 @@
-import { and, eq, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { AlertService } from '@/modules/audit/alert.service.js';
-import type { SSLService } from '@/modules/ssl/ssl.service.js';
+import { SSL_DISTRIBUTION_ERROR_PREFIX, type SSLService } from '@/modules/ssl/ssl.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 
 const logger = createChildLogger('ACMERenewalJob');
@@ -35,7 +35,9 @@ export class ACMERenewalJob {
       where: and(
         eq(sslCertificates.autoRenew, true),
         eq(sslCertificates.type, 'acme'),
-        eq(sslCertificates.status, 'active'),
+        // A failed renewal keeps a still-valid certificate `active`; rows left in
+        // `error` by v2.9.x or earlier, and expired ones, are retried as well.
+        inArray(sslCertificates.status, ['active', 'error', 'expired']),
         or(isNull(sslCertificates.acmePendingOperation), eq(sslCertificates.acmePendingOperation, 'renewal')),
         lte(sslCertificates.notAfter, threshold)
       ),
@@ -62,7 +64,7 @@ export class ACMERenewalJob {
       try {
         if (cert.acmePendingOperation === 'renewal') {
           if (cert.acmeChallengeType === 'dns-01' && hasCloudflareChallenges(cert.acmePendingChallenges)) {
-            await this.sslService.completeDNS01Verification(cert.id, SYSTEM_USER_ID, {
+            const result = await this.sslService.completeDNS01Verification(cert.id, SYSTEM_USER_ID, {
               cleanupCloudflare: true,
               clearPendingOnFailure: true,
             });
@@ -71,6 +73,7 @@ export class ACMERenewalJob {
               certId: cert.id,
               domains: cert.domainNames,
             });
+            await this.alertOnIncompleteDelivery(cert, result);
           } else {
             await this.alertService.createAlert({
               type: 'expiry_warning',
@@ -86,9 +89,10 @@ export class ACMERenewalJob {
 
         if (cert.acmeChallengeType === 'http-01') {
           // Automatic renewal via HTTP-01 challenge
-          await this.sslService.renewCert(cert.id, SYSTEM_USER_ID);
+          const result = await this.sslService.renewCert(cert.id, SYSTEM_USER_ID);
           renewed++;
           logger.info(`Renewed certificate: ${cert.name}`, { certId: cert.id, domains: cert.domainNames });
+          await this.alertOnIncompleteDelivery(cert, result);
         } else if (cert.acmeChallengeType === 'dns-01') {
           if (cert.autoRenewProvider !== 'cloudflare') {
             await this.alertService.createAlert({
@@ -107,6 +111,7 @@ export class ACMERenewalJob {
           if (result.status === 'active') {
             renewed++;
             logger.info(`Renewed DNS-01 certificate: ${cert.name}`, { certId: cert.id, domains: cert.domainNames });
+            await this.alertOnIncompleteDelivery(cert, result);
           } else {
             await this.alertService.createAlert({
               type: 'expiry_warning',
@@ -135,6 +140,21 @@ export class ACMERenewalJob {
     }
 
     logger.info('ACME renewal job completed', { renewed, failed, manualRequired, total: certsToRenew.length });
+  }
+
+  /** A renewed certificate that did not reach every proxy host still expires there. */
+  private async alertOnIncompleteDelivery(
+    cert: { id: string; name: string },
+    result: { renewalError?: string | null } | unknown
+  ): Promise<void> {
+    const renewalError = (result as { renewalError?: string | null } | null)?.renewalError;
+    if (!renewalError?.startsWith(SSL_DISTRIBUTION_ERROR_PREFIX)) return;
+    await this.alertService.createAlert({
+      type: 'expiry_warning',
+      resourceType: 'ssl_certificate',
+      resourceId: cert.id,
+      message: `Certificate "${cert.name}" was renewed, but not every proxy host received it: ${renewalError.slice(SSL_DISTRIBUTION_ERROR_PREFIX.length)}`,
+    });
   }
 }
 

@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireAnyScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -21,6 +22,8 @@ import { NotificationAlertRuleService } from './notification-alert-rule.service.
 import { NotificationEvaluatorService } from './notification-evaluator.service.js';
 import { assertHostingAlertAccess } from './notification-hosting-access.js';
 
+const logger = createChildLogger('AlertRuleRoutes');
+
 export const alertRuleRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 alertRuleRoutes.use('*', authMiddleware);
@@ -30,6 +33,18 @@ function invalidateCache() {
     container.resolve(NotificationEvaluatorService).invalidateRuleCache();
   } catch {
     /* not yet registered */
+  }
+}
+
+/** Disabled, re-scoped or re-targeted rules must not leave firing states behind (they block later alerts). */
+async function reconcileRuleStates(previous: unknown, next: unknown) {
+  try {
+    await container.resolve(NotificationEvaluatorService).reconcileRuleUpdate(previous, next);
+  } catch (error) {
+    // The periodic sweep retries; the rule update itself already succeeded.
+    logger.warn('Failed to reconcile alert states after rule update', {
+      error: error instanceof Error ? error.message : String(error),
+    });
   }
 }
 
@@ -141,11 +156,12 @@ alertRuleRoutes.openapi(
     const previous = await service.getById(c.req.param('id')!);
     assertHostingAlertAccess(c.get('effectiveScopes') ?? user.scopes, { ...previous, ...body });
     const update = () => service.update(c.req.param('id')!, body, user.id);
-    const rule =
-      previous.category === 'hosting_account' || previous.category === 'hosting_vm'
-        ? await container.resolve(NotificationEvaluatorService).updateHostingRule(previous, update)
-        : await update();
+    const hostingRule = previous.category === 'hosting_account' || previous.category === 'hosting_vm';
+    const rule = hostingRule
+      ? await container.resolve(NotificationEvaluatorService).updateHostingRule(previous, update)
+      : await update();
     invalidateCache();
+    if (!hostingRule) await reconcileRuleStates(previous, rule);
     triggerCertificateExpiryEvaluation(rule);
     triggerMaintenanceEvaluation(rule);
     return c.json({ data: rule });

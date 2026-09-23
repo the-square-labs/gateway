@@ -1,5 +1,5 @@
 import bcrypt from 'bcryptjs';
-import { count, desc, eq, ilike, inArray } from 'drizzle-orm';
+import { and, count, desc, eq, ilike, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { BasicAuthUser } from '@/db/schema/access-lists.js';
 import { accessLists } from '@/db/schema/index.js';
@@ -9,9 +9,10 @@ import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
+import { accessListLockKey, withProxyLocks } from '@/modules/proxy/proxy-host-lock.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
-import type { NginxConfigGenerator, ProxyHostConfig } from '@/services/nginx-config-generator.service.js';
+import type { NginxConfigGenerator } from '@/services/nginx-config-generator.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { AccessListQuery, CreateAccessListInput, UpdateAccessListInput } from './access-list.schemas.js';
@@ -29,15 +30,25 @@ type AccessListRow = typeof accessLists.$inferSelect;
 // Service
 // ---------------------------------------------------------------------------
 
+/** The per-host re-apply entry point of ProxyService (see reapplyHostConfig). */
+export interface AccessListHostRuntime {
+  reapplyHostConfig(hostId: string): Promise<unknown>;
+}
+
 export class AccessListService {
   constructor(
     private readonly db: DrizzleClient,
     readonly _configGenerator: NginxConfigGenerator,
-    private readonly nginxTemplateService: NginxTemplateService,
+    readonly _nginxTemplateService: NginxTemplateService,
     private readonly auditService: AuditService,
     private readonly nodeDispatch: NodeDispatchService,
-    private readonly certificateDistribution: NginxCertificateDistributionService
+    readonly _certificateDistribution: NginxCertificateDistributionService
   ) {}
+
+  private hostRuntime?: AccessListHostRuntime;
+  setHostRuntime(runtime: AccessListHostRuntime) {
+    this.hostRuntime = runtime;
+  }
 
   private eventBus?: EventBusService;
   setEventBus(bus: EventBusService) {
@@ -52,6 +63,9 @@ export class AccessListService {
   // -----------------------------------------------------------------------
 
   async create(input: CreateAccessListInput, userId: string) {
+    if (input.basicAuthEnabled && input.basicAuthUsers.length === 0) {
+      throw new AppError(400, 'BASIC_AUTH_USERS_REQUIRED', 'Add at least one user to enable basic authentication');
+    }
     // 1. Hash basic auth passwords before storing
     const hashedUsers = input.basicAuthUsers.length > 0 ? await this.hashPasswords(input.basicAuthUsers) : [];
 
@@ -60,7 +74,7 @@ export class AccessListService {
       .insert(accessLists)
       .values({
         name: input.name,
-        description: input.description ?? null,
+        description: input.description?.trim() || null,
         ipRules: input.ipRules,
         basicAuthEnabled: input.basicAuthEnabled,
         basicAuthUsers: hashedUsers,
@@ -93,24 +107,31 @@ export class AccessListService {
   // -----------------------------------------------------------------------
 
   async update(id: string, input: UpdateAccessListInput, userId: string) {
+    // Serialize edits of one list so two updates cannot interleave their
+    // re-apply and rollback phases.
+    return withProxyLocks([accessListLockKey(id)], () => this.updateLocked(id, input, userId));
+  }
+
+  private async updateLocked(id: string, input: UpdateAccessListInput, userId: string) {
     // 1. Get existing access list
     const existing = await this.db.query.accessLists.findFirst({
       where: eq(accessLists.id, id),
     });
     if (!existing) throw new AppError(404, 'ACCESS_LIST_NOT_FOUND', 'Access list not found');
 
-    // 2. Hash passwords if basic auth users are being updated
+    // 2. Build and validate the complete next state before any side effect.
     const updateData: Record<string, unknown> = {
       updatedAt: new Date(),
     };
 
     if (input.name !== undefined) updateData.name = input.name;
-    if (input.description !== undefined) updateData.description = input.description;
+    if (input.description !== undefined) updateData.description = input.description?.trim() || null;
     if (input.ipRules !== undefined) updateData.ipRules = input.ipRules;
     if (input.basicAuthEnabled !== undefined) updateData.basicAuthEnabled = input.basicAuthEnabled;
 
+    const existingBasicAuthUsers = (existing.basicAuthUsers as BasicAuthUser[]) ?? [];
+    let nextBasicAuthUsers = existingBasicAuthUsers;
     if (input.basicAuthUsers !== undefined) {
-      const existingBasicAuthUsers = (existing.basicAuthUsers as BasicAuthUser[]) ?? [];
       const hashedUsers: BasicAuthUser[] = [];
 
       for (const user of input.basicAuthUsers) {
@@ -134,101 +155,64 @@ export class AccessListService {
       }
 
       updateData.basicAuthUsers = hashedUsers;
+      nextBasicAuthUsers = hashedUsers;
+    }
+    const nextBasicAuthEnabled = input.basicAuthEnabled ?? existing.basicAuthEnabled;
+    if (nextBasicAuthEnabled && nextBasicAuthUsers.length === 0) {
+      throw new AppError(400, 'BASIC_AUTH_USERS_REQUIRED', 'Add at least one user to enable basic authentication');
     }
 
-    // 3. Update DB
+    const affectedHosts = await this.db.query.proxyHosts.findMany({
+      where: and(eq(proxyHosts.accessListId, id), eq(proxyHosts.enabled, true)),
+      columns: { id: true, domainNames: true },
+    });
+    if (affectedHosts.length > 0 && !this.hostRuntime) {
+      throw new AppError(503, 'PROXY_SERVICE_UNAVAILABLE', 'Proxy host re-apply is unavailable');
+    }
+
+    // 3. Commit, then re-apply every enabled host through the normal proxy
+    // build/apply path. That path also deploys the list's credentials to the
+    // host's node before the config that references them.
     const [updated] = await this.db.update(accessLists).set(updateData).where(eq(accessLists.id, id)).returning();
 
-    // 4. Regenerate htpasswd file if basic auth changed
-    const basicAuthEnabled = updated.basicAuthEnabled;
-    const basicAuthUsers = updated.basicAuthUsers as BasicAuthUser[];
-
-    const shouldDeployHtpasswd = basicAuthEnabled && basicAuthUsers.length > 0;
-    if (shouldDeployHtpasswd) {
-      await this.writeHtpasswd(id, basicAuthUsers);
-    }
-
-    // 5. Find all proxy hosts using this access list and regenerate their nginx configs
-    const affectedHosts = await this.db.query.proxyHosts.findMany({
-      where: eq(proxyHosts.accessListId, id),
-    });
-
     if (affectedHosts.length > 0) {
-      logger.info('Regenerating nginx configs for affected proxy hosts', {
+      logger.info('Re-applying proxy hosts that use the updated access list', {
         accessListId: id,
         hostCount: affectedHosts.length,
       });
-
-      const updatedAccessListConfig: ProxyHostConfig['accessList'] = {
-        id,
-        ipRules: updated.ipRules as { type: string; value: string }[],
-        basicAuthEnabled: updated.basicAuthEnabled,
-      };
-
+      const failures: { id: string; domainNames: string[]; error: string }[] = [];
       for (const host of affectedHosts) {
-        if (!host.enabled) continue;
-
-        const supportsDistribution = await this.certificateDistribution.supportsNode(host.nodeId);
-        const preparedTls =
-          host.sslEnabled && supportsDistribution ? await this.certificateDistribution.prepareForHost(host) : null;
-        const certPaths = preparedTls
-          ? preparedTls
-          : host.sslEnabled && !supportsDistribution
-            ? await this.certificateDistribution.legacyPathsForHost(host)
-            : { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
-
-        const config: ProxyHostConfig = {
-          id: host.id,
-          type: host.type,
-          domainNames: host.domainNames,
-          enabled: host.enabled,
-          forwardHost: host.forwardHost,
-          forwardPort: host.forwardPort,
-          forwardScheme: host.forwardScheme ?? 'http',
-          upstreamIpv6Enabled: host.upstreamIpv6Enabled,
-          sslEnabled: host.sslEnabled && !!certPaths.sslCertPath && !!certPaths.sslKeyPath,
-          sslForced: host.sslForced,
-          http2Support: host.http2Support,
-          websocketSupport: host.websocketSupport,
-          redirectUrl: host.redirectUrl,
-          redirectStatusCode: host.redirectStatusCode ?? 301,
-          customHeaders: (host.customHeaders ?? []) as { name: string; value: string }[],
-          cacheEnabled: host.cacheEnabled,
-          cacheOptions: host.cacheOptions as Record<string, unknown> | null,
-          rateLimitEnabled: host.rateLimitEnabled,
-          rateLimitOptions: host.rateLimitOptions as Record<string, unknown> | null,
-          customRewrites: (host.customRewrites ?? []) as { source: string; destination: string; type: string }[],
-          advancedConfig: host.advancedConfig,
-          accessList: updatedAccessListConfig,
-          sslCertPath: certPaths.sslCertPath,
-          sslKeyPath: certPaths.sslKeyPath,
-          sslChainPath: certPaths.sslChainPath,
-          templateVariables: (host.templateVariables ?? {}) as Record<string, string | number | boolean>,
-        };
-
-        const generatedConfig = await this.nginxTemplateService.renderForHost(config, host.nginxTemplateId ?? null);
-        if (preparedTls) {
-          await this.certificateDistribution.applyHostBundle(
-            { id: host.id, nodeId: host.nodeId },
-            generatedConfig,
-            preparedTls
-          );
-        } else {
-          const nodeId = await this.nodeDispatch.resolveNodeId(host.nodeId);
-          const result = await this.nodeDispatch.applyConfig(nodeId, host.id, generatedConfig);
-          if (!result.success) throw new Error(result.error || 'Daemon config apply failed');
+        try {
+          await this.hostRuntime!.reapplyHostConfig(host.id);
+        } catch (error) {
+          failures.push({
+            id: host.id,
+            domainNames: host.domainNames as string[],
+            error: error instanceof Error ? error.message : 'unknown error',
+          });
         }
+      }
+      if (failures.length > 0) {
+        await this.rollbackUpdate(existing, affectedHosts);
+        const names = failures.map((failure) => failure.domainNames[0] ?? failure.id).join(', ');
+        throw new AppError(
+          502,
+          'ACCESS_LIST_APPLY_FAILED',
+          `Access list was not changed: it could not be applied to ${names}`,
+          { failedHosts: failures }
+        );
       }
     }
 
     // Remove credentials only after every affected host config has stopped
     // referencing the file. Removing first creates an avoidable 403 window if
     // config application is delayed or fails.
-    if (!shouldDeployHtpasswd) {
+    const basicAuthUsers = updated.basicAuthUsers as BasicAuthUser[];
+    if (!(updated.basicAuthEnabled && basicAuthUsers.length > 0)) {
       await this.removeHtpasswd(id);
     }
 
-    // 6. Audit log
+    // 4. Audit log
     await this.auditService.log({
       userId,
       action: 'access_list.update',
@@ -241,6 +225,41 @@ export class AccessListService {
     this.emitAcl(id, 'updated');
 
     return updated;
+  }
+
+  /**
+   * Restore the previous list and re-apply it (config and credentials) to every
+   * host the failed update touched. Hosts whose apply failed are re-applied too:
+   * their node may have accepted the new credentials before the config failed.
+   */
+  private async rollbackUpdate(existing: AccessListRow, hosts: { id: string }[]): Promise<void> {
+    try {
+      await this.db
+        .update(accessLists)
+        .set({
+          name: existing.name,
+          description: existing.description,
+          ipRules: existing.ipRules,
+          basicAuthEnabled: existing.basicAuthEnabled,
+          basicAuthUsers: existing.basicAuthUsers,
+          updatedAt: existing.updatedAt,
+        })
+        .where(eq(accessLists.id, existing.id));
+    } catch (error) {
+      logger.error('Failed to roll back access list after apply failure', { accessListId: existing.id, error });
+      return;
+    }
+    for (const host of hosts) {
+      try {
+        await this.hostRuntime?.reapplyHostConfig(host.id);
+      } catch (error) {
+        logger.error('Failed to restore proxy host config after access list rollback', {
+          accessListId: existing.id,
+          hostId: host.id,
+          error,
+        });
+      }
+    }
   }
 
   // -----------------------------------------------------------------------

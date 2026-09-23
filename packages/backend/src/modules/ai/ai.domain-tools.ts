@@ -5,7 +5,7 @@ import { UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import type { User } from '@/types.js';
-import { agentPage, agentPageLimit } from './ai.service-helpers.js';
+import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
 
 export const DOMAIN_TOOL_NAMES = new Set(['list_domains', 'create_domain', 'delete_domain', 'manage_domain']);
 
@@ -24,11 +24,14 @@ export async function executeDomainTool(
 
   switch (toolName) {
     case 'list_domains':
-      return context.domainsService.listDomains({
-        search: a.search,
-        page: agentPage(a.page),
-        limit: agentPageLimit(a.limit),
-      });
+      return context.domainsService.listDomains(
+        {
+          search: a.search,
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+        },
+        { allowedIds: allowedResourceIdsForScopes(user.scopes, 'domains:view') }
+      );
     case 'create_domain':
       if (!hasScopeForCreation(user.scopes, 'domains:create', a.folderId, a.nginxNodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');

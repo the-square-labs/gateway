@@ -3,7 +3,13 @@ import { z } from 'zod';
 import { container } from '@/container.js';
 import { API_TOKEN_SCOPES, MCP_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, optionalAuthMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import {
+  assertNotImpersonating,
+  authMiddleware,
+  optionalAuthMiddleware,
+  sessionOnly,
+} from '@/modules/auth/auth.middleware.js';
+import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { isDemoMode } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -184,6 +190,23 @@ oauthRoutes.post('/register', async (c) => {
   return c.json(await oauthService().registerClient(input), 201);
 });
 
+/**
+ * Send a signed-out browser to sign in and come back to this authorization
+ * request. `/auth/login` only speaks OIDC, so it is used only when OIDC is the
+ * sole interactive method; every other install goes through the login page,
+ * which offers every enabled method and forwards `return_to` itself.
+ */
+export async function oauthLoginRedirectUrl(requestUrl: string): Promise<string> {
+  const issuer = oauthService().getIssuerUrl();
+  const request = new URL(requestUrl);
+  const returnTo = new URL(`${request.pathname}${request.search}`, issuer).href;
+  const methods = await getPublicAuthMethods().catch(() => null);
+  const oidcOnly = Boolean(methods?.oidc && !methods.password && !methods.emailOtp && !methods.passkeyLogin);
+  const loginUrl = new URL(oidcOnly ? '/auth/login' : '/login', issuer);
+  loginUrl.searchParams.set('return_to', returnTo);
+  return loginUrl.href;
+}
+
 async function handleAuthorize(c: Context<AppEnv>, defaultResource?: string) {
   const parsedQuery = OAuthAuthorizeQuerySchema.safeParse(Object.fromEntries(new URL(c.req.url).searchParams));
   if (!parsedQuery.success) {
@@ -194,9 +217,7 @@ async function handleAuthorize(c: Context<AppEnv>, defaultResource?: string) {
   if (defaultResource && !query.resource) query.resource = defaultResource;
   const user = c.get('user');
   if (!user || c.get('authType') !== 'session') {
-    const loginUrl = new URL('/auth/login', oauthService().getIssuerUrl());
-    loginUrl.searchParams.set('return_to', c.req.url);
-    return c.redirect(loginUrl.href, 302);
+    return c.redirect(await oauthLoginRedirectUrl(c.req.url), 302);
   }
   if (user.isBlocked) return c.redirect(oauthBrowserErrorUrl('ACCOUNT_BLOCKED', 'Account is blocked'), 302);
   if (c.get('impersonation')) {
@@ -334,13 +355,7 @@ oauthRoutes.get('/consent/:requestId', async (c) => {
 });
 
 oauthRoutes.post('/consent/:requestId/approve', async (c) => {
-  if (c.get('impersonation')) {
-    throw new AppError(
-      403,
-      'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
-      'OAuth authorization is unavailable while impersonating'
-    );
-  }
+  assertNotImpersonating(c, 'OAuth authorization is unavailable while impersonating');
   const requestId = z.string().min(1).parse(c.req.param('requestId'));
   const input = OAuthConsentDecisionSchema.parse(await c.req.json().catch(() => ({})));
   const redirectUrl = await oauthService().approveConsent(requestId, c.get('user')!, input.scopes);

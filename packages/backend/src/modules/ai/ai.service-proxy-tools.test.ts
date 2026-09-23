@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { AIService } from './ai.service.js';
@@ -104,6 +105,7 @@ describe('AIService proxy tool routing', () => {
       getProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       createProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       deleteProxyHost: vi.fn().mockResolvedValue(undefined),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(proxyService);
 
@@ -196,6 +198,7 @@ describe('AIService proxy tool routing', () => {
     const proxyService = {
       getProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       updateProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(proxyService);
 
@@ -207,6 +210,7 @@ describe('AIService proxy tool routing', () => {
             `proxy:edit:${COMPACT_HOST.id}`,
             `proxy:advanced:${COMPACT_HOST.id}`,
             `proxy:advanced:bypass:${COMPACT_HOST.id}`,
+            'proxy:create:node-2',
           ],
         },
         'update_route',
@@ -263,7 +267,6 @@ describe('AIService proxy tool routing', () => {
         sslCertificateId: null,
         internalCertificateId: null,
         accessListId: null,
-        folderId: null,
         nginxTemplateId: null,
         templateVariables: { upstreamName: 'new-app' },
         customHeaders: [{ name: 'X-Test', value: 'true' }],
@@ -287,6 +290,7 @@ describe('AIService proxy tool routing', () => {
           `proxy:edit:${COMPACT_HOST.id}`,
           `proxy:advanced:${COMPACT_HOST.id}`,
           `proxy:advanced:bypass:${COMPACT_HOST.id}`,
+          'proxy:create:node-2',
         ],
         bypassAdvancedValidation: true,
       }
@@ -295,7 +299,7 @@ describe('AIService proxy tool routing', () => {
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`proxy:edit:${COMPACT_HOST.id}`] }, 'update_route', {
         routeId: COMPACT_HOST.id,
-        advancedConfig: 'proxy_set_header X-Test true;',
+        advancedConfig: 'proxy_set_header X-Other true;',
       })
     ).resolves.toEqual({ error: 'Advanced config requires proxy:advanced scope', invalidateStores: [] });
 
@@ -358,6 +362,7 @@ describe('AIService proxy tool routing', () => {
     };
     const proxyService = {
       createProxyHost: vi.fn().mockResolvedValueOnce(dockerHost).mockResolvedValueOnce(pagesHost),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
@@ -471,6 +476,7 @@ describe('AIService proxy tool routing', () => {
     const proxyService = {
       getProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
       updateProxyHost: vi.fn().mockResolvedValue(pagesHost),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(proxyService);
     const scopes = [`proxy:edit:${COMPACT_HOST.id}`, 'pages:view:project-1'];
@@ -514,18 +520,31 @@ describe('AIService proxy tool routing', () => {
 
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['proxy:folders:manage', 'proxy:edit:proxy-1', 'proxy:edit:proxy-2'] },
+        {
+          ...BASE_USER,
+          scopes: ['proxy:folders:manage', 'proxy:edit:proxy-1', 'proxy:edit:proxy-2', 'proxy:edit:folder/folder-1'],
+        },
         'move_routes_to_folder',
         {
           routeIds: ['proxy-1', 'proxy-2'],
-          folderId: null,
+          folderId: 'folder-1',
         }
       )
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['proxy'] });
     expect(folderService.moveHostsToFolder).toHaveBeenCalledWith(
-      { hostIds: ['proxy-1', 'proxy-2'], folderId: null },
+      { hostIds: ['proxy-1', 'proxy-2'], folderId: 'folder-1' },
       'user-1'
     );
+
+    // Like the move route, the destination needs route edit access too (root needs broad proxy:edit).
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['proxy:folders:manage', 'proxy:edit:proxy-1', 'proxy:edit:proxy-2'] },
+        'move_routes_to_folder',
+        { routeIds: ['proxy-1', 'proxy-2'], folderId: null }
+      )
+    ).resolves.toEqual({ error: 'Missing route edit access for the move destination', invalidateStores: [] });
+    expect(folderService.moveHostsToFolder).toHaveBeenCalledTimes(1);
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'move_routes_to_folder', {
@@ -543,5 +562,159 @@ describe('AIService proxy tool routing', () => {
       })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['proxy'] });
     expect(folderService.deleteFolder).toHaveBeenCalledWith('folder-1', 'user-1');
+  });
+  it('applies the proxy route reference, template-variable and raw-mode checks on create_route', async () => {
+    const assertReferenceAccess = vi.fn().mockResolvedValue(undefined);
+    const proxyService = { createProxyHost: vi.fn().mockResolvedValue(FULL_HOST), assertReferenceAccess };
+    const service = createService(proxyService);
+    const input = {
+      nodeId: 'node-1',
+      domainNames: ['app.example.com'],
+      internalCertificateId: 'pki-1',
+      nginxTemplateId: 'template-1',
+    };
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', input)
+    ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
+    expect(assertReferenceAccess).toHaveBeenCalledWith(['proxy:create'], expect.objectContaining(input));
+
+    assertReferenceAccess.mockRejectedValueOnce(
+      new AppError(
+        403,
+        'FORBIDDEN',
+        'Deploying a PKI certificate to a proxy route requires permission to export its private key'
+      )
+    );
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', input)
+    ).resolves.toEqual({
+      error: 'Deploying a PKI certificate to a proxy route requires permission to export its private key',
+      invalidateStores: [],
+    });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', {
+        nodeId: 'node-1',
+        domainNames: ['app.example.com'],
+        templateVariables: { accessList: '', upstreamName: 'app' },
+      })
+    ).resolves.toEqual({
+      error: 'Template variables cannot override Gateway-managed values: accessList',
+      invalidateStores: [],
+    });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'create_route', {
+        nodeId: 'node-1',
+        domainNames: ['app.example.com'],
+        type: 'raw',
+      })
+    ).resolves.toEqual({ error: 'Enabling raw mode requires proxy:raw:toggle scope', invalidateStores: [] });
+    expect(proxyService.createProxyHost).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the proxy route move, reference, raw-toggle and template checks on update_route', async () => {
+    const existing = { ...FULL_HOST, type: 'proxy', rawConfigEnabled: false, folderId: 'folder-1' };
+    const assertReferenceAccess = vi.fn().mockResolvedValue(undefined);
+    const assertFolderExists = vi.fn().mockResolvedValue(undefined);
+    const proxyService = {
+      getProxyHost: vi.fn().mockResolvedValue(existing),
+      updateProxyHost: vi.fn().mockResolvedValue(FULL_HOST),
+      assertReferenceAccess,
+    };
+    const service = createService(proxyService, { assertFolderExists });
+    const editScope = `proxy:edit:${COMPACT_HOST.id}`;
+    const run = (scopes: string[], args: Record<string, unknown>) =>
+      service.executeTool({ ...BASE_USER, scopes }, 'update_route', { routeId: COMPACT_HOST.id, ...args });
+
+    // An unchanged folder and an echoed raw flag are ignored, like a full-object PUT.
+    await expect(run([editScope], { folderId: 'folder-1', rawConfigEnabled: false, type: 'proxy' })).resolves.toEqual({
+      result: COMPACT_HOST,
+      invalidateStores: ['proxy'],
+    });
+    expect(proxyService.updateProxyHost).toHaveBeenLastCalledWith(COMPACT_HOST.id, { type: 'proxy' }, 'user-1', {
+      actorScopes: [editScope],
+      bypassAdvancedValidation: false,
+    });
+    expect(assertReferenceAccess).toHaveBeenLastCalledWith([editScope], { type: 'proxy' }, existing);
+
+    // Moving to another folder needs folder management and edit access on the destination.
+    await expect(run([editScope], { folderId: 'folder-2' })).resolves.toEqual({
+      error: 'Moving a route requires proxy:folders:manage scope. Required permission: proxy:folders:manage',
+      invalidateStores: [],
+    });
+    await expect(run([editScope, 'proxy:folders:manage'], { folderId: 'folder-2' })).resolves.toEqual({
+      error: 'Missing route edit access for the move destination',
+      invalidateStores: [],
+    });
+    const moveScopes = [editScope, 'proxy:folders:manage', 'proxy:edit:folder/folder-2'];
+    await expect(run(moveScopes, { folderId: 'folder-2' })).resolves.toEqual({
+      result: COMPACT_HOST,
+      invalidateStores: ['proxy'],
+    });
+    expect(assertFolderExists).toHaveBeenCalledWith('folder-2');
+    expect(proxyService.updateProxyHost).toHaveBeenLastCalledWith(
+      COMPACT_HOST.id,
+      { folderId: 'folder-2' },
+      'user-1',
+      expect.anything()
+    );
+
+    // Changing the stored raw mode needs proxy:raw:toggle.
+    await expect(run([editScope], { rawConfigEnabled: true })).resolves.toEqual({
+      error: 'Toggling raw mode requires proxy:raw:toggle scope',
+      invalidateStores: [],
+    });
+    await expect(run([editScope, `proxy:raw:toggle:${COMPACT_HOST.id}`], { rawConfigEnabled: true })).resolves.toEqual({
+      result: COMPACT_HOST,
+      invalidateStores: ['proxy'],
+    });
+    expect(proxyService.updateProxyHost).toHaveBeenLastCalledWith(
+      COMPACT_HOST.id,
+      { rawConfigEnabled: true },
+      'user-1',
+      {
+        actorScopes: [editScope, `proxy:raw:toggle:${COMPACT_HOST.id}`],
+        bypassAdvancedValidation: false,
+        bypassRawValidation: false,
+      }
+    );
+
+    // Echoing the stored advanced config is allowed; clearing it without the scope is dropped.
+    await expect(run([editScope], { advancedConfig: FULL_HOST.advancedConfig })).resolves.toMatchObject({
+      result: COMPACT_HOST,
+    });
+    await expect(run([editScope], { advancedConfig: null, sslCertificateId: 'ssl-2' })).resolves.toMatchObject({
+      result: COMPACT_HOST,
+    });
+    expect(proxyService.updateProxyHost).toHaveBeenLastCalledWith(
+      COMPACT_HOST.id,
+      { sslCertificateId: 'ssl-2' },
+      'user-1',
+      expect.anything()
+    );
+    expect(assertReferenceAccess).toHaveBeenLastCalledWith([editScope], { sslCertificateId: 'ssl-2' }, existing);
+
+    // Node moves need proxy:create on the new node; reserved template variables are rejected.
+    await expect(run([editScope], { nodeId: 'node-9' })).resolves.toEqual({
+      error: 'Missing required scope: proxy:create:node-9',
+      invalidateStores: [],
+    });
+    await expect(run([editScope], { templateVariables: { sslCertPath: '/etc/passwd' } })).resolves.toEqual({
+      error: 'Template variables cannot override Gateway-managed values: sslCertPath',
+      invalidateStores: [],
+    });
+
+    // A reference the caller cannot use stops the update before the service runs.
+    const calls = proxyService.updateProxyHost.mock.calls.length;
+    assertReferenceAccess.mockRejectedValueOnce(
+      new AppError(403, 'FORBIDDEN', 'Viewing the selected access list is required')
+    );
+    await expect(run([editScope], { accessListId: 'acl-9' })).resolves.toEqual({
+      error: 'Viewing the selected access list is required',
+      invalidateStores: [],
+    });
+    expect(proxyService.updateProxyHost).toHaveBeenCalledTimes(calls);
   });
 });

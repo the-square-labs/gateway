@@ -32,6 +32,14 @@ function host(overrides: Record<string, unknown> = {}) {
   };
 }
 
+/** Direct probes go through the outbound policy; tests allow the target and stub the pinned request. */
+function probeDeps(request: (...args: any[]) => Promise<unknown>) {
+  return {
+    checkTarget: async (url: string) => ({ url, allowed: true, resolvedAddresses: ['203.0.113.10'] }),
+    request: request as any,
+  };
+}
+
 function database(hosts: ReturnType<typeof host>[]) {
   const writes: Array<Record<string, unknown>> = [];
   const whereResult = Object.assign(Promise.resolve(undefined), {
@@ -58,9 +66,8 @@ describe('HealthCheckJob storm protection', () => {
     const waiting = host({ id: 'waiting', lastHealthCheckAt: new Date(now - 5_000) });
     const { db, writes } = database([due, waiting]);
     const fetchMock = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') });
-    vi.stubGlobal('fetch', fetchMock);
 
-    await new HealthCheckJob(db).run();
+    await new HealthCheckJob(db, undefined, probeDeps(fetchMock)).run();
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(writes).toHaveLength(1);
@@ -71,22 +78,19 @@ describe('HealthCheckJob storm protection', () => {
     const { db } = database(hosts);
     let active = 0;
     let maximum = 0;
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            active++;
-            maximum = Math.max(maximum, active);
-            setTimeout(() => {
-              active--;
-              resolve({ status: 200, text: vi.fn().mockResolvedValue('ok') });
-            }, 2);
-          })
-      )
+    const request = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          active++;
+          maximum = Math.max(maximum, active);
+          setTimeout(() => {
+            active--;
+            resolve({ status: 200, text: vi.fn().mockResolvedValue('ok') });
+          }, 2);
+        })
     );
 
-    await new HealthCheckJob(db).run();
+    await new HealthCheckJob(db, undefined, probeDeps(request)).run();
 
     expect(maximum).toBeLessThanOrEqual(8);
   });
@@ -240,10 +244,10 @@ describe('HealthCheckJob storm protection', () => {
   it('requires two consecutive failures before a healthy host becomes offline', async () => {
     const first = host();
     const firstRun = database([first]);
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')));
+    const failing = probeDeps(vi.fn().mockRejectedValue(new Error('timeout')));
     const firstObserve = vi.fn();
     const firstPublish = vi.fn();
-    const firstJob = new HealthCheckJob(firstRun.db);
+    const firstJob = new HealthCheckJob(firstRun.db, undefined, failing);
     firstJob.setEvaluator({ observeStatefulEvent: firstObserve } as any);
     firstJob.setEventBus({ publish: firstPublish } as any);
 
@@ -260,7 +264,7 @@ describe('HealthCheckJob storm protection', () => {
     const secondRun = database([second]);
     const secondObserve = vi.fn();
     const secondPublish = vi.fn();
-    const secondJob = new HealthCheckJob(secondRun.db);
+    const secondJob = new HealthCheckJob(secondRun.db, undefined, failing);
     secondJob.setEvaluator({ observeStatefulEvent: secondObserve } as any);
     secondJob.setEventBus({ publish: secondPublish } as any);
 
@@ -278,8 +282,11 @@ describe('HealthCheckJob storm protection', () => {
     });
     const failedRun = database([failed]);
     const failedPublish = vi.fn();
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('timeout')));
-    const failedJob = new HealthCheckJob(failedRun.db);
+    const failedJob = new HealthCheckJob(
+      failedRun.db,
+      undefined,
+      probeDeps(vi.fn().mockRejectedValue(new Error('timeout')))
+    );
     failedJob.setEventBus({ publish: failedPublish } as any);
 
     await failedJob.run();
@@ -292,8 +299,11 @@ describe('HealthCheckJob storm protection', () => {
 
     const recoveredRun = database([failed]);
     const recoveredPublish = vi.fn();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') }));
-    const recoveredJob = new HealthCheckJob(recoveredRun.db);
+    const recoveredJob = new HealthCheckJob(
+      recoveredRun.db,
+      undefined,
+      probeDeps(vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('ok') }))
+    );
     recoveredJob.setEventBus({ publish: recoveredPublish } as any);
 
     await recoveredJob.run();
@@ -337,5 +347,37 @@ describe('HealthCheckJob storm protection', () => {
       expect.objectContaining({ id: secure.id, action: 'health.sampled', health_status: 'online' })
     );
     expect(observeStatefulEvent).not.toHaveBeenCalled();
+  });
+  it('records a policy-blocked upstream as unknown without probing or alerting', async () => {
+    const blocked = host({ forwardHost: '169.254.169.254', forwardPort: 80 });
+    const { db, writes } = database([blocked]);
+    const request = vi.fn();
+    const observeStatefulEvent = vi.fn();
+    const job = new HealthCheckJob(db, undefined, {
+      checkTarget: async (url) => ({ url, allowed: false, reason: 'metadata', resolvedAddresses: ['169.254.169.254'] }),
+      request,
+    });
+    job.setEvaluator({ observeStatefulEvent } as any);
+
+    await job.run();
+
+    expect(request).not.toHaveBeenCalled();
+    expect(writes[0]?.healthStatus).toBe('unknown');
+    expect(observeStatefulEvent).not.toHaveBeenCalled();
+  });
+
+  it('applies the configured body match mode like the immediate check does', async () => {
+    const exact = host({
+      healthStatus: 'offline',
+      healthHistory: [{ ts: new Date(Date.now() - 30_000).toISOString(), status: 'offline' }],
+      healthCheckExpectedBody: 'ok',
+      healthCheckBodyMatchMode: 'exact',
+    });
+    const { db, writes } = database([exact]);
+    const request = vi.fn().mockResolvedValue({ status: 200, text: vi.fn().mockResolvedValue('not ok') });
+
+    await new HealthCheckJob(db, undefined, probeDeps(request)).run();
+
+    expect(writes[0]?.healthStatus).toBe('offline');
   });
 });

@@ -1,5 +1,16 @@
 import { describe, expect, it, vi } from 'vitest';
-import { listNodeFiles, readNodeFile, writeNodeFile } from './node-file-operations.js';
+import {
+  DOCKER_FILE_READ_MAX_BYTES,
+  DOCKER_FILE_READ_REQUEST_BYTES,
+  dockerFileTransferTimeoutMs,
+} from '@/modules/docker/docker-read-operations.js';
+import {
+  appendNodeFileUploadChunk,
+  initNodeFileUpload,
+  listNodeFiles,
+  readNodeFile,
+  writeNodeFile,
+} from './node-file-operations.js';
 
 function createContext(dispatchResult: unknown) {
   const nodeDispatch = {
@@ -43,10 +54,12 @@ describe('node file operations', () => {
     });
 
     await expect(readNodeFile(context as never, 'node-1', '/tmp/empty.txt')).resolves.toEqual(Buffer.alloc(0));
-    expect(nodeDispatch.sendNodeFileCommand).toHaveBeenCalledWith('node-1', 'read', {
-      path: '/tmp/empty.txt',
-      maxBytes: 104857600,
-    });
+    expect(nodeDispatch.sendNodeFileCommand).toHaveBeenCalledWith(
+      'node-1',
+      'read',
+      { path: '/tmp/empty.txt', maxBytes: DOCKER_FILE_READ_MAX_BYTES + 1 },
+      dockerFileTransferTimeoutMs(DOCKER_FILE_READ_REQUEST_BYTES)
+    );
   });
 
   it('decodes protobuf bytes strings when reading node files', async () => {
@@ -65,10 +78,12 @@ describe('node file operations', () => {
 
     await writeNodeFile(context as never, 'node-1', '/tmp/hello.txt', content, 'user-1');
 
-    expect(nodeDispatch.sendNodeFileCommand).toHaveBeenCalledWith('node-1', 'write', {
-      path: '/tmp/hello.txt',
-      content,
-    });
+    expect(nodeDispatch.sendNodeFileCommand).toHaveBeenCalledWith(
+      'node-1',
+      'write',
+      { path: '/tmp/hello.txt', content },
+      dockerFileTransferTimeoutMs(content.byteLength)
+    );
     expect(auditService.log).toHaveBeenCalledWith({
       action: 'node.file.write',
       userId: 'user-1',
@@ -85,5 +100,35 @@ describe('node file operations', () => {
       fromParentPath: undefined,
       toParentPath: undefined,
     });
+  });
+
+  // Regression: reads over 100 MB were silently truncated to the limit.
+  it('rejects a file over the read limit with 413 instead of returning it truncated', async () => {
+    const { context } = createContext({ success: true, data: Buffer.alloc(DOCKER_FILE_READ_REQUEST_BYTES) });
+
+    await expect(readNodeFile(context as never, 'node-1', '/var/big.img')).rejects.toMatchObject({
+      statusCode: 413,
+      code: 'FILE_TOO_LARGE',
+    });
+  });
+
+  it('returns a file exactly at the read limit', async () => {
+    const { context } = createContext({ success: true, data: Buffer.alloc(DOCKER_FILE_READ_MAX_BYTES) });
+
+    await expect(readNodeFile(context as never, 'node-1', '/var/at-limit.img')).resolves.toHaveLength(
+      DOCKER_FILE_READ_MAX_BYTES
+    );
+  });
+
+  it('sizes the dispatch timeout by the payload instead of a fixed 30 seconds', async () => {
+    const { context, nodeDispatch } = createContext({ success: true });
+    const chunk = Buffer.alloc(8 * 1024 * 1024);
+    const { uploadId } = await initNodeFileUpload(context as never, 'node-1', '/tmp/up.bin', chunk.length, 'user-1');
+
+    await appendNodeFileUploadChunk(context as never, 'node-1', uploadId, 0, chunk);
+
+    const timeout = nodeDispatch.sendNodeFileCommand.mock.calls.at(-1)?.[3];
+    expect(timeout).toBe(dockerFileTransferTimeoutMs(chunk.length));
+    expect(timeout).toBeGreaterThan(30_000);
   });
 });

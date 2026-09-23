@@ -28,6 +28,17 @@ export const MfaVerifySchema = z
   .refine((value) => Number(Boolean(value.totpCode)) + Number(Boolean(value.recoveryCode)) === 1, {
     message: 'Provide exactly one verification method',
   });
+export const MfaStepUpSchema = z
+  .object({
+    totpCode: z
+      .string()
+      .regex(/^\d{6}$/)
+      .optional(),
+    recoveryCode: z.string().min(6).max(64).optional(),
+  })
+  .refine((value) => Number(Boolean(value.totpCode)) + Number(Boolean(value.recoveryCode)) === 1, {
+    message: 'Provide exactly one verification method',
+  });
 export const MfaEnrollmentTokenSchema = z.object({ token: z.string().min(16).max(128) });
 export const MfaEnrollmentConfirmSchema = MfaEnrollmentTokenSchema.extend({ code: z.string().regex(/^\d{6}$/) });
 export const PasskeyResponseSchema = z.object({ response: z.any() });

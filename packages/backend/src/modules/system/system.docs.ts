@@ -55,12 +55,28 @@ export const proceedSystemUpdateRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const acknowledgeSystemUpdateFailureRoute = appRoute({
+  method: 'post',
+  path: '/update/acknowledge',
+  tags: ['System'],
+  summary: 'Stop reporting a Gateway update that did not complete',
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const performRelayUpdateRoute = appRoute({
   method: 'post',
   path: '/relay-update',
   tags: ['System'],
   summary: 'Trigger relay self-update',
   request: jsonBody(UpdateRequestSchema),
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const abandonRelayUpdateRoute = appRoute({
+  method: 'post',
+  path: '/relay-update/abandon',
+  tags: ['System'],
+  summary: 'Abandon a stuck or paused Relay Pool update and resume the relays it drained',
   responses: okJson(UnknownDataResponseSchema),
 });
 

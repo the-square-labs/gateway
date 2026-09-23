@@ -1,4 +1,5 @@
 import {
+  CircleCheck,
   Download,
   GitBranch,
   ListTodo,
@@ -16,6 +17,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
+import { confirmDockerMigrationResolve } from "@/components/docker/confirm-docker-migration-resolve";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
@@ -376,6 +378,22 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
     }
   };
 
+  const handleResolveMigration = async (task: DockerTaskRow) => {
+    if (!task.migration) return;
+    const side = await confirmDockerMigrationResolve(task.migration);
+    if (!side) return;
+    setForceCancellingTaskId(task.id);
+    try {
+      setSelectedTask(migrationToTask(await api.resolveDockerMigration(task.migration.id, side)));
+      await loadTasks();
+      toast.success("Migration resolved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to resolve migration");
+    } finally {
+      setForceCancellingTaskId(null);
+    }
+  };
+
   const handleRetryCleanup = async (task: DockerTaskRow) => {
     if (!task.migration) return;
     setForceCancellingTaskId(task.id);
@@ -645,6 +663,18 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
               >
                 <RotateCcw className="h-4 w-4" />
                 Retry cleanup
+              </Button>
+            </DialogFooter>
+          )}
+          {selectedTask?.migration?.status === "needs_attention" && canManageTask(selectedTask) && (
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => handleResolveMigration(selectedTask)}
+                disabled={forceCancellingTaskId === selectedTask.id}
+              >
+                <CircleCheck className="h-4 w-4" />
+                {forceCancellingTaskId === selectedTask.id ? "Resolving..." : "Resolve"}
               </Button>
             </DialogFooter>
           )}

@@ -1,4 +1,4 @@
-import { and, eq, lte } from 'drizzle-orm';
+import { and, eq, inArray, lte } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { alerts, certificateAuthorities, certificates, sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -33,8 +33,13 @@ export class ExpiryAlertJob {
     let alertsCreated = 0;
 
     // 1. Check SSL certificates
+    // A certificate whose renewal failed is still served until it expires, so
+    // `error` (rows from v2.9.x or earlier) and `expired` rows are alerted too.
     const expiringSSL = await this.db.query.sslCertificates.findMany({
-      where: and(eq(sslCertificates.status, 'active'), lte(sslCertificates.notAfter, warningThreshold)),
+      where: and(
+        inArray(sslCertificates.status, ['active', 'error', 'expired']),
+        lte(sslCertificates.notAfter, warningThreshold)
+      ),
       columns: {
         id: true,
         name: true,

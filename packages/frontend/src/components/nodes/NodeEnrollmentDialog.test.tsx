@@ -254,4 +254,41 @@ describe("NodeEnrollmentDialog", () => {
     await waitFor(() => expect(screen.queryByText("Node Created")).not.toBeInTheDocument());
     expect(onNodeEnrolled).toHaveBeenCalledWith("relay-node-1");
   });
+
+  it("issues a fresh token for a pending node and shows its setup command", async () => {
+    const pendingNode = makeNode({ id: "docker-node-1", type: "docker", status: "pending" });
+    vi.spyOn(api, "regenerateNodeEnrollmentToken").mockResolvedValue({
+      node: pendingNode,
+      enrollmentToken: "fresh-token",
+      enrollmentTokenExpiresAt: "2026-09-30T00:00:00.000Z",
+      gatewayCertSha256: `sha256:${"b".repeat(64)}`,
+      gatewayEnrollmentTargets: {
+        public: { label: "Public node", gateway: "gateway.example.com:9443" },
+      },
+    });
+    vi.spyOn(api, "getNode").mockResolvedValue({
+      ...pendingNode,
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    const onReissueHandled = vi.fn();
+
+    render(
+      <NodeEnrollmentDialog
+        open={false}
+        onOpenChange={vi.fn()}
+        reissueNode={pendingNode}
+        onReissueHandled={onReissueHandled}
+      />
+    );
+
+    expect(await screen.findByText("New Enrollment Token")).toBeInTheDocument();
+    expect(api.regenerateNodeEnrollmentToken).toHaveBeenCalledTimes(1);
+    expect(api.regenerateNodeEnrollmentToken).toHaveBeenCalledWith("docker-node-1");
+    expect(screen.getByText(/setup-docker-node\.sh/)).toHaveTextContent("--token fresh-token");
+    expect(screen.getByText(/earlier token for this node no longer works/)).toBeInTheDocument();
+    await waitFor(() => expect(onReissueHandled).toHaveBeenCalledTimes(1));
+  });
 });

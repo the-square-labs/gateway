@@ -10,6 +10,7 @@ import { ApiRequestError } from "@/services/api-base";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { DockerMigration, DockerMigrationPreflight, Node } from "@/types";
 import { isNodeIncompatible, isNodeUpdating } from "@/types";
+import { confirmDockerMigrationResolve } from "./confirm-docker-migration-resolve";
 import { DockerMigrationReviewDialog } from "./DockerMigrationReviewDialog";
 import { DockerMigrationSetupDialog } from "./DockerMigrationSetupDialog";
 
@@ -226,6 +227,21 @@ export function DockerMigrationDialog({
     }
   };
 
+  const resolveMigration = async () => {
+    if (!migration) return;
+    const side = await confirmDockerMigrationResolve(migration);
+    if (!side) return;
+    setLoadingAction(true);
+    try {
+      setMigration(await api.resolveDockerMigration(migration.id, side));
+      toast.success("Migration resolved");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to resolve migration");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
   const changeTargetNode = (value: string) => {
     setTargetNodeId(value);
     setPreflight(null);
@@ -279,6 +295,7 @@ export function DockerMigrationDialog({
         onStart={() => void startMigration()}
         onCancel={() => void cancelMigration()}
         onRetryCleanup={() => void retryCleanup()}
+        onResolve={() => void resolveMigration()}
         onClose={closeDialog}
       />
     </>

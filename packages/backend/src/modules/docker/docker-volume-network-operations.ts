@@ -11,7 +11,12 @@ import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { isGatewayInternalContainer } from './docker-internal-containers.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
-import { DOCKER_FILE_READ_MAX_BYTES, DOCKER_FILE_UPLOAD_CHUNK_BYTES } from './docker-read-operations.js';
+import {
+  assertDockerFileReadWithinLimit,
+  DOCKER_FILE_READ_REQUEST_BYTES,
+  DOCKER_FILE_UPLOAD_CHUNK_BYTES,
+  dockerFileTransferTimeoutMs,
+} from './docker-read-operations.js';
 
 type DockerDispatchResult = { success: boolean; error?: string; detail?: string; data?: Buffer | Uint8Array | string };
 
@@ -50,6 +55,8 @@ interface DockerVolumeFileUploadSession {
 }
 
 const volumeUploadSessions = new Map<string, DockerVolumeFileUploadSession>();
+// The daemon caps a volume export archive at 512 MiB.
+const DOCKER_VOLUME_EXPORT_MAX_BYTES = 512 * 1024 * 1024;
 const DOCKER_VOLUME_FILE_UPLOAD_SESSION_TTL_MS = 30 * 60 * 1000;
 
 function cleanupExpiredVolumeUploadSessions(now = Date.now()) {
@@ -155,6 +162,27 @@ export async function listVolumes(context: DockerVolumeNetworkOperationContext, 
   return visible;
 }
 
+/**
+ * Per-volume user operations must apply the same visibility as listVolumes:
+ * Gateway's own volumes (used only by Gateway-internal containers) are not
+ * user resources, even for callers with broad volume scopes.
+ */
+export async function assertUserVolumeVisible(
+  context: DockerVolumeNetworkOperationContext,
+  nodeId: string,
+  name: string
+) {
+  const [managed] = await context.db
+    .select({ volumeName: dockerManagedVolumes.volumeName })
+    .from(dockerManagedVolumes)
+    .where(and(eq(dockerManagedVolumes.nodeId, nodeId), eq(dockerManagedVolumes.volumeName, name)))
+    .limit(1);
+  if (managed) return;
+  const visible = await listVolumes(context, nodeId);
+  if (Array.isArray(visible) && visible.some((volume) => String(volume?.Name ?? volume?.name ?? '') === name)) return;
+  throw new AppError(404, 'VOLUME_NOT_FOUND', 'Volume not found');
+}
+
 export async function inspectVolume(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
   const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'inspect', { name });
   const volume = context.parseResult(result);
@@ -195,7 +223,12 @@ export async function listVolumeFiles(
 }
 
 export async function exportVolume(context: DockerVolumeNetworkOperationContext, nodeId: string, name: string) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'export', { name });
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    nodeId,
+    'export',
+    { name },
+    dockerFileTransferTimeoutMs(DOCKER_VOLUME_EXPORT_MAX_BYTES)
+  );
   if (!result.success) return context.parseResult(result);
   const data = commandResultDataToBuffer(result.data);
   if (data.byteLength === 0 && result.detail) {
@@ -214,11 +247,16 @@ export async function readVolumeFile(
   name: string,
   path: string
 ) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'read-file', {
-    name,
-    path,
-    maxBytes: DOCKER_FILE_READ_MAX_BYTES,
-  });
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    nodeId,
+    'read-file',
+    {
+      name,
+      path,
+      maxBytes: DOCKER_FILE_READ_REQUEST_BYTES,
+    },
+    dockerFileTransferTimeoutMs(DOCKER_FILE_READ_REQUEST_BYTES)
+  );
   if (!result.success) {
     return context.parseResult(result);
   }
@@ -230,6 +268,7 @@ export async function readVolumeFile(
       'Docker daemon returned a legacy volume file payload. Update and restart the Docker daemon.'
     );
   }
+  assertDockerFileReadWithinLimit(data);
   return data;
 }
 
@@ -241,7 +280,12 @@ export async function writeVolumeFile(
   content: string | Buffer,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'write-file', { name, path, content });
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    nodeId,
+    'write-file',
+    { name, path, content },
+    dockerFileTransferTimeoutMs(Buffer.byteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.volume.file.write',
@@ -261,7 +305,12 @@ export async function createVolumeFile(
   content: string | Buffer,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(nodeId, 'create-file', { name, path, content });
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    nodeId,
+    'create-file',
+    { name, path, content },
+    dockerFileTransferTimeoutMs(Buffer.byteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.volume.file.create',
@@ -326,13 +375,18 @@ export async function appendVolumeFileUploadChunk(
   if (session.expectedOffset + content.length > session.totalBytes) {
     throw new AppError(400, 'UPLOAD_SIZE_EXCEEDED', 'Upload chunk exceeds declared file size');
   }
-  const result = await context.nodeDispatch.sendDockerVolumeCommand(session.nodeId, 'upload-chunk', {
-    name: session.volumeName,
-    path: uploadId,
-    targetPath: session.path,
-    maxBytes: offset,
-    content,
-  });
+  const result = await context.nodeDispatch.sendDockerVolumeCommand(
+    session.nodeId,
+    'upload-chunk',
+    {
+      name: session.volumeName,
+      path: uploadId,
+      targetPath: session.path,
+      maxBytes: offset,
+      content,
+    },
+    dockerFileTransferTimeoutMs(content.byteLength)
+  );
   context.parseResult(result);
   session.expectedOffset += content.length;
   session.expiresAt = Date.now() + DOCKER_VOLUME_FILE_UPLOAD_SESSION_TTL_MS;

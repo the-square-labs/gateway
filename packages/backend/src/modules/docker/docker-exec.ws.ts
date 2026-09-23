@@ -1,6 +1,10 @@
+import { eq } from 'drizzle-orm';
 import type { WSContext } from 'hono/ws';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { compareSemver, parseSemver } from '@/lib/semver.js';
 import { resolveWebSocketCredentialForScopeBase, type WebSocketCredential } from '@/modules/auth/websocket-auth.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
@@ -40,23 +44,71 @@ function send(ws: WSContext, msg: Record<string, unknown>): void {
   }
 }
 
+/**
+ * Resolve the user a console runs as: the container's configured user, or root when the image
+ * sets none (Docker's own default). Fails closed when the container cannot be inspected, so an
+ * inspect failure never silently escalates a console to root.
+ */
 export async function resolveDockerExecUser(
   docker: Pick<DockerManagementService, 'inspectContainer'>,
   nodeId: string,
   containerId: string
 ): Promise<string> {
+  let inspectData: unknown;
   try {
-    const inspectData = await docker.inspectContainer(nodeId, containerId);
-    const configuredUser = (inspectData as { Config?: { User?: unknown } } | null | undefined)?.Config?.User;
-    return typeof configuredUser === 'string' && configuredUser.trim().length > 0 ? configuredUser.trim() : 'root';
+    inspectData = await docker.inspectContainer(nodeId, containerId);
   } catch (error) {
-    logger.warn('Failed to inspect container user for Docker exec; falling back to root', {
+    logger.warn('Failed to inspect container user for Docker exec; refusing console', {
       nodeId,
       containerId,
       error: error instanceof Error ? error.message : String(error),
     });
-    return 'root';
+    throw new Error('Could not inspect the container to determine its user, so the console was not opened');
   }
+  if (!inspectData || typeof inspectData !== 'object') {
+    throw new Error('Could not inspect the container to determine its user, so the console was not opened');
+  }
+  const configuredUser = (inspectData as { Config?: { User?: unknown } }).Config?.User;
+  return typeof configuredUser === 'string' && configuredUser.trim().length > 0 ? configuredUser.trim() : 'root';
+}
+
+/** Docker daemons before this release keyed console sessions by container only and ignored sessionKey. */
+export const DOCKER_EXEC_SESSION_ISOLATION_MIN_VERSION = 'v2.4.5';
+
+export function dockerDaemonIsolatesExecSessions(daemonVersion: string | null | undefined): boolean {
+  // Local builds report "dev" and are built from current sources.
+  if (daemonVersion === 'dev') return true;
+  if (!daemonVersion || !parseSemver(daemonVersion)) return false;
+  return compareSemver(daemonVersion, DOCKER_EXEC_SESSION_ISOLATION_MIN_VERSION) >= 0;
+}
+
+async function nodeIsolatesExecSessions(nodeId: string): Promise<boolean> {
+  try {
+    const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+    const [node] = await db
+      .select({ daemonVersion: nodes.daemonVersion })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    return dockerDaemonIsolatesExecSessions(node?.daemonVersion);
+  } catch (error) {
+    logger.warn('Failed to read Docker daemon version for console isolation; treating it as unisolated', {
+      nodeId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
+/**
+ * Creators of console sessions on daemons that do not isolate sessions per user, keyed by
+ * `${nodeId}\0${execId}`. Such a daemon hands every caller the container's existing session, so
+ * only the Gateway user who created it may attach again.
+ */
+const unisolatedExecSessionOwners = new Map<string, string>();
+
+function unisolatedExecSessionKey(nodeId: string, execId: string): string {
+  return `${nodeId}\0${execId}`;
 }
 
 interface ExecWSState {
@@ -149,6 +201,7 @@ async function drainOutput(ws: WSContext, state: ExecWSState, nodeId: string): P
         send(ws, { type: 'output', data: Buffer.from(output.data).toString('base64') });
       }
       if (output.exited) {
+        if (state.execId) unisolatedExecSessionOwners.delete(unisolatedExecSessionKey(nodeId, state.execId));
         send(ws, { type: 'exit', exitCode: output.exitCode ?? 0 });
         closeExec(ws, state, 1000, 'Process exited');
         return;
@@ -422,11 +475,22 @@ async function authenticateAndCreateExec(
     logger.info('Auto-detected shell', { nodeId, containerId, shell: usedShell });
   }
 
+  let execUser: string;
+  try {
+    execUser = await resolveDockerExecUser(docker, nodeId, containerId);
+  } catch (err) {
+    if (wsStates.get(ws) !== state) return;
+    send(ws, { type: 'error', message: err instanceof Error ? err.message : 'Could not determine the container user' });
+    closeExec(ws, state, 1011, 'Container user unavailable');
+    return;
+  }
+  if (wsStates.get(ws) !== state) return;
+  const isolatesSessions = await nodeIsolatesExecSessions(nodeId);
+  if (wsStates.get(ws) !== state) return;
+
   // Create or reuse exec session on daemon
   let result: import('@/grpc/generated/types.js').CommandResult;
   try {
-    const execUser = await resolveDockerExecUser(docker, nodeId, containerId);
-    if (wsStates.get(ws) !== state) return;
     const initialSize = state.terminalSize;
     result = await dispatch.sendDockerExecCommand(nodeId, 'create', {
       containerId,
@@ -474,6 +538,27 @@ async function authenticateAndCreateExec(
     send(ws, { type: 'error', message: 'No exec ID returned from daemon' });
     closeExec(ws, state, 1011, 'No exec ID');
     return;
+  }
+
+  if (!isolatesSessions) {
+    // This daemon ignores sessionKey and returns whichever session is already running in the
+    // container, so a reused session may belong to another user. Never attach to it.
+    const ownerKey = unisolatedExecSessionKey(nodeId, execId);
+    if (isNew) {
+      unisolatedExecSessionOwners.set(ownerKey, user.id);
+    } else if (unisolatedExecSessionOwners.get(ownerKey) !== user.id) {
+      logger.warn('Refused to attach to a console session this daemon cannot isolate', {
+        nodeId,
+        containerId,
+        userId: user.id,
+      });
+      send(ws, {
+        type: 'auth_error',
+        message: `Another console session is already open in this container, and this node's Docker daemon is too old to keep console sessions separate per user. Update the Docker daemon to ${DOCKER_EXEC_SESSION_ISOLATION_MIN_VERSION} or later, or try again after that session exits.`,
+      });
+      closeExec(ws, state, 1008, 'Console session belongs to another user');
+      return;
+    }
   }
 
   state.execId = execId;

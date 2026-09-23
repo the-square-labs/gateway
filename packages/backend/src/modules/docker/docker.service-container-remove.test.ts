@@ -14,7 +14,8 @@ function dbWithOnlineDockerNode() {
   const where = vi.fn(() => ({ limit }));
   const from = vi.fn(() => ({ where, innerJoin }));
   const select = vi.fn(() => ({ from }));
-  return { select };
+  const deleteWhere = vi.fn().mockResolvedValue(undefined);
+  return { select, delete: vi.fn(() => ({ where: deleteWhere })) };
 }
 
 function inspectResult(state: string, statePatch: Record<string, unknown> = {}) {

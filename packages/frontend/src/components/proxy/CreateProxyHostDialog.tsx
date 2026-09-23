@@ -114,6 +114,8 @@ export function CreateProxyHostDialog({
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
   const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
+  const hasScope = useAuthStore((state) => state.hasScope);
+  const canToggleRawConfig = !!existingHost && hasScope(`proxy:raw:toggle:${existingHost.id}`);
   const maintenanceLocked = !!existingHost?.maintenanceEnabled;
 
   // Step navigation
@@ -183,9 +185,11 @@ export function CreateProxyHostDialog({
     setDockerContainers([]);
   }, []);
 
-  // Pre-fill from existingHost when it changes
+  // Pre-fill from existingHost every time the dialog opens for editing. The
+  // close animation resets the form, so keying only on existingHost would leave
+  // a blank form (and a destructive save) the second time the same host is edited.
   useEffect(() => {
-    if (!existingHost) return;
+    if (!open || !existingHost) return;
     setType(existingHost.type);
     setNodeId((existingHost as any).nodeId || "");
     setDomainNames(existingHost.domainNames.length > 0 ? [...existingHost.domainNames] : [""]);
@@ -203,7 +207,7 @@ export function CreateProxyHostDialog({
     setTemplateVariables(existingHost.templateVariables || {});
     setRawConfigEnabled(existingHost.rawConfigEnabled ?? false);
     setStep(1);
-  }, [existingHost]);
+  }, [existingHost, open]);
 
   useEffect(() => {
     if (!open || existingHost) return;
@@ -307,6 +311,28 @@ export function CreateProxyHostDialog({
     onOpenChange(value);
   };
 
+  // Build the edit payload. The dialog only edits the entrypoint (type, node,
+  // domains, raw mode), so it sends only those fields: echoing TLS, template or
+  // raw settings would overwrite them or require unrelated scopes.
+  const buildUpdateRequest = (host: ProxyHost): Partial<CreateProxyHostRequest> => {
+    const req: Partial<CreateProxyHostRequest> = {
+      type,
+      nodeId,
+      domainNames: domainNames.filter((d) => d.trim() !== ""),
+    };
+    if (rawConfigEnabled !== (host.rawConfigEnabled ?? false)) {
+      req.rawConfigEnabled = rawConfigEnabled;
+    }
+    if (type === "proxy" && host.type !== "proxy") {
+      Object.assign(req, proxyUpstreamRequest(upstream));
+    }
+    if (type === "redirect" && redirectUrl.trim()) {
+      req.redirectUrl = redirectUrl;
+      req.redirectStatusCode = redirectStatusCode;
+    }
+    return req;
+  };
+
   // Build request payload
   const buildRequest = (): CreateProxyHostRequest => {
     const domains = domainNames.filter((d) => d.trim() !== "");
@@ -320,13 +346,12 @@ export function CreateProxyHostDialog({
       http2Support,
       sslCertificateId: sslCertificateId || undefined,
       internalCertificateId: internalCertificateId || undefined,
-      rawConfigEnabled: isEditing ? rawConfigEnabled : undefined,
       nginxTemplateId: nginxTemplateId || undefined,
       templateVariables: Object.keys(templateVariables).length > 0 ? templateVariables : undefined,
-      healthCheckEnabled: isEditing ? undefined : false,
+      healthCheckEnabled: false,
     };
 
-    if (type === "proxy" && (!isEditing || existingHost?.type !== "proxy")) {
+    if (type === "proxy") {
       Object.assign(req, proxyUpstreamRequest(upstream));
     }
     if (type === "redirect") {
@@ -343,7 +368,7 @@ export function CreateProxyHostDialog({
 
     setIsSaving(true);
     try {
-      const data = buildRequest();
+      const data = isEditing && existingHost ? buildUpdateRequest(existingHost) : buildRequest();
 
       // When enabling raw mode: seed rawConfig, set type to raw, disable healthcheck
       if (isEditing && existingHost && rawConfigEnabled && !existingHost.rawConfigEnabled) {
@@ -372,7 +397,7 @@ export function CreateProxyHostDialog({
         toast.success("Route updated");
         onSuccess?.(existingHost.id, updated);
       } else {
-        const created = await api.createProxyHost(data);
+        const created = await api.createProxyHost(data as CreateProxyHostRequest);
         toast.success("Route created");
         onSuccess?.(created.id, created);
       }
@@ -560,8 +585,8 @@ export function CreateProxyHostDialog({
                   </div>
                 </div>
 
-                {/* Raw mode toggle — only when editing */}
-                {isEditing && (
+                {/* Raw mode toggle — only when editing with the raw toggle scope */}
+                {isEditing && canToggleRawConfig && (
                   <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
                     <div>
                       <p className="text-sm font-medium">Raw Config Mode</p>

@@ -191,7 +191,7 @@ func (c *Client) connectContainerToAdditionalNetworks(
 	insp *container.InspectResponse,
 	netNames []string,
 ) error {
-	if insp == nil || insp.NetworkSettings == nil {
+	if insp == nil || insp.NetworkSettings == nil || len(netNames) < 2 {
 		return nil
 	}
 

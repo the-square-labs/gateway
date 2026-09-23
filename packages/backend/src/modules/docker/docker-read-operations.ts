@@ -46,6 +46,36 @@ function publishFileChanged(
 
 export const DOCKER_FILE_READ_MAX_BYTES = 100 * 1024 * 1024;
 export const DOCKER_FILE_UPLOAD_CHUNK_BYTES = 50 * 1024 * 1024;
+// Daemons read up to maxBytes and stop, so asking for one extra byte tells an oversized file apart from one
+// that is exactly at the limit. This works with every daemon version, no protocol change needed.
+export const DOCKER_FILE_READ_REQUEST_BYTES = DOCKER_FILE_READ_MAX_BYTES + 1;
+
+const DOCKER_FILE_TRANSFER_BASE_TIMEOUT_MS = 30_000;
+// Conservative node link throughput floor (~2 Mbit/s) used to size the dispatch timeout for file payloads.
+const DOCKER_FILE_TRANSFER_MIN_BYTES_PER_SECOND = 256 * 1024;
+const DOCKER_FILE_TRANSFER_MAX_TIMEOUT_MS = 10 * 60 * 1000;
+
+/** Dispatch timeout for a file command that moves `bytes` between the gateway and a node. */
+export function dockerFileTransferTimeoutMs(bytes: number) {
+  const transferMs = Math.ceil((Math.max(0, bytes) / DOCKER_FILE_TRANSFER_MIN_BYTES_PER_SECOND) * 1000);
+  return Math.min(DOCKER_FILE_TRANSFER_BASE_TIMEOUT_MS + transferMs, DOCKER_FILE_TRANSFER_MAX_TIMEOUT_MS);
+}
+
+function contentByteLength(content: string | Buffer | undefined) {
+  if (content == null) return 0;
+  return Buffer.isBuffer(content) ? content.byteLength : Buffer.byteLength(content);
+}
+
+/** Rejects file reads that came back larger than the read limit instead of returning truncated content. */
+export function assertDockerFileReadWithinLimit(data: Buffer) {
+  if (data.byteLength > DOCKER_FILE_READ_MAX_BYTES) {
+    throw new AppError(
+      413,
+      'FILE_TOO_LARGE',
+      `File is larger than the ${DOCKER_FILE_READ_MAX_BYTES / (1024 * 1024)} MB read limit`
+    );
+  }
+}
 
 export interface DockerFileUploadSession {
   uploadId: string;
@@ -120,11 +150,16 @@ export async function listDirectory(
 }
 
 export async function readFile(context: DockerReadOperationContext, nodeId: string, containerId: string, path: string) {
-  const result = await context.nodeDispatch.sendDockerFileCommand(nodeId, 'read', {
-    containerId,
-    path,
-    maxBytes: DOCKER_FILE_READ_MAX_BYTES,
-  });
+  const result = await context.nodeDispatch.sendDockerFileCommand(
+    nodeId,
+    'read',
+    {
+      containerId,
+      path,
+      maxBytes: DOCKER_FILE_READ_REQUEST_BYTES,
+    },
+    dockerFileTransferTimeoutMs(DOCKER_FILE_READ_REQUEST_BYTES)
+  );
   if (!result.success) {
     return context.parseResult(result);
   }
@@ -136,6 +171,7 @@ export async function readFile(context: DockerReadOperationContext, nodeId: stri
       'Docker daemon returned a legacy file payload. Update and restart the Docker daemon.'
     );
   }
+  assertDockerFileReadWithinLimit(data);
   return data;
 }
 
@@ -147,11 +183,16 @@ export async function writeFile(
   content: string | Buffer,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendDockerFileCommand(nodeId, 'write', {
-    containerId,
-    path,
-    content,
-  });
+  const result = await context.nodeDispatch.sendDockerFileCommand(
+    nodeId,
+    'write',
+    {
+      containerId,
+      path,
+      content,
+    },
+    dockerFileTransferTimeoutMs(contentByteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.file.write',
@@ -171,11 +212,16 @@ export async function createFile(
   content: string | Buffer | undefined,
   userId: string
 ) {
-  const result = await context.nodeDispatch.sendDockerFileCommand(nodeId, 'create-file', {
-    containerId,
-    path,
-    content: content ?? '',
-  });
+  const result = await context.nodeDispatch.sendDockerFileCommand(
+    nodeId,
+    'create-file',
+    {
+      containerId,
+      path,
+      content: content ?? '',
+    },
+    dockerFileTransferTimeoutMs(contentByteLength(content))
+  );
   context.parseResult(result);
   await context.auditService.log({
     action: 'docker.file.create',
@@ -240,13 +286,18 @@ export async function appendFileUploadChunk(
   if (session.expectedOffset + content.length > session.totalBytes) {
     throw new AppError(400, 'UPLOAD_SIZE_EXCEEDED', 'Upload chunk exceeds declared file size');
   }
-  const result = await context.nodeDispatch.sendDockerFileCommand(session.nodeId, 'upload-chunk', {
-    containerId: session.containerId,
-    path: uploadId,
-    targetPath: session.path,
-    maxBytes: offset,
-    content,
-  });
+  const result = await context.nodeDispatch.sendDockerFileCommand(
+    session.nodeId,
+    'upload-chunk',
+    {
+      containerId: session.containerId,
+      path: uploadId,
+      targetPath: session.path,
+      maxBytes: offset,
+      content,
+    },
+    dockerFileTransferTimeoutMs(content.byteLength)
+  );
   context.parseResult(result);
   session.expectedOffset += content.length;
   session.expiresAt = Date.now() + DOCKER_FILE_UPLOAD_SESSION_TTL_MS;

@@ -825,6 +825,13 @@ class ApiClient extends withPagesDomainsApi(
     );
   }
 
+  /** Replaces the enrollment token of a node that has not enrolled yet. */
+  async regenerateNodeEnrollmentToken(id: string): Promise<import("@/types").CreateNodeResponse> {
+    return this.unwrapData(
+      this.request(`/nodes/${encodeURIComponent(id)}/enrollment-token`, { method: "POST" })
+    );
+  }
+
   async updateNode(
     id: string,
     data: {

@@ -16,6 +16,8 @@ import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
+  abandonRelayUpdateRoute,
+  acknowledgeSystemUpdateFailureRoute,
   checkDaemonUpdatesRoute,
   checkSystemUpdateRoute,
   daemonUpdatesRoute,
@@ -127,7 +129,14 @@ systemRoutes.openapi({ ...checkSystemUpdateRoute, middleware: sessionOnly }, asy
   if (forbidden) return forbidden;
   const updateService = container.resolve(UpdateService);
   const status = await updateService.checkForUpdates();
-  container.resolve(EventBusService).publish('system.update.changed', { updating: false, statusChanged: true });
+  // A manual check must not end the update screens of an update that is still running.
+  const updateRunning = await updateService.isAnyUpdateRunning();
+  container
+    .resolve(EventBusService)
+    .publish(
+      'system.update.changed',
+      updateRunning ? { statusChanged: true } : { updating: false, component: 'gateway', statusChanged: true }
+    );
   return c.json({ data: status });
 });
 
@@ -147,6 +156,8 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
   if (updateService.isGatewayUpdateInProgress()) {
     return c.json({ code: 'UPDATE_IN_PROGRESS', message: 'A Gateway update is already in progress' }, 409);
   }
+  // A running Relay Pool update refuses the Gateway update with a 409.
+  await updateService.assertGatewayUpdateAllowed();
 
   // Verify update is actually available and version matches
   const status = await updateService.getCachedStatus();
@@ -157,6 +168,9 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     return c.json({ code: 'VERSION_MISMATCH', message: 'Requested version does not match available update' }, 400);
   }
   const artifact = await updateService.prepareGatewayUpdate(version);
+  const userId = c.get('user')?.id ?? null;
+  // A new attempt supersedes the report of a previous rolled-back one.
+  await updateService.acknowledgeGatewayUpdateFailure();
 
   // Respond immediately, then trigger the update asynchronously.
   // The container will be replaced — the response must be sent first.
@@ -166,10 +180,16 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
     targetVersion: version,
   });
   setTimeout(() => {
-    updateService.performUpdate(version, artifact).catch((err) => {
+    updateService.performUpdate(version, artifact, userId).catch((err) => {
       // A concurrent request lost the race; the accepted update keeps running.
       if (err instanceof AppError && err.code === 'UPDATE_IN_PROGRESS') return;
-      eventBus.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion: version });
+      eventBus.publish('system.update.changed', {
+        updating: false,
+        component: 'gateway',
+        targetVersion: version,
+        // Only curated messages; raw migration output stays in the server log.
+        ...(err instanceof AppError ? { error: err.message } : {}),
+      });
       logger.error('Update failed', {
         error: err instanceof Error ? err.message : String(err),
         stack: err instanceof Error ? err.stack : undefined,
@@ -192,6 +212,14 @@ systemRoutes.openapi({ ...proceedSystemUpdateRoute, middleware: sessionOnly }, a
   return c.json({ data: { status: 'updating' } });
 });
 
+// POST /update/acknowledge — stop reporting a Gateway update that was rolled back (admin only)
+systemRoutes.openapi({ ...acknowledgeSystemUpdateFailureRoute, middleware: sessionOnly }, async (c) => {
+  const forbidden = requireUpdateScope(c);
+  if (forbidden) return forbidden;
+  const acknowledged = await container.resolve(UpdateService).acknowledgeGatewayUpdateFailure();
+  return c.json({ data: { acknowledged } });
+});
+
 systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
@@ -200,6 +228,15 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
     .parse(await c.req.json());
   const updateService = container.resolve(UpdateService);
   const eventBus = container.resolve(EventBusService);
+  if (updateService.isGatewayUpdateInProgress()) {
+    return c.json(
+      {
+        code: 'GATEWAY_UPDATE_IN_PROGRESS',
+        message: 'Gateway is updating. Update the Relay Pool after the Gateway update has finished.',
+      },
+      409
+    );
+  }
   const status = await updateService.getCachedStatus();
   if (!status.relay.updateAvailable || !status.relay.latestVersion) {
     return c.json({ code: 'NO_UPDATE', message: 'No relay update available' }, 400);
@@ -232,6 +269,22 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
       });
   }, 500);
   return c.json({ data: { status: 'updating', targetVersion: version } });
+});
+
+// POST /relay-update/abandon — fail a stuck or paused Relay Pool update (admin only)
+systemRoutes.openapi({ ...abandonRelayUpdateRoute, middleware: sessionOnly }, async (c) => {
+  const forbidden = requireUpdateScope(c);
+  if (forbidden) return forbidden;
+  const data = await container.resolve(UpdateService).abandonRelayUpdate(c.get('user')!.id);
+  const eventBus = container.resolve(EventBusService);
+  eventBus.publish('system.update.changed', {
+    updating: false,
+    component: 'relay',
+    targetVersion: data.targetVersion,
+    statusChanged: true,
+  });
+  eventBus.publish('system.relay.health.changed', { poolId: 'system', action: 'update_abandoned' });
+  return c.json({ data });
 });
 
 // GET /release-notes/:version — fetch release notes for a specific version

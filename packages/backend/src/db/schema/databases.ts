@@ -184,6 +184,17 @@ export const managedDatabaseInstances = pgTable(
     // ClickHouse reader and writer principals. Non-admin access fails closed
     // until this marker is present.
     clickhouseQueryPrincipalVersion: integer('clickhouse_query_principal_version'),
+    // Managed PostgreSQL stores its non-superuser read-only query principal in
+    // encryptedQueryCredentials. Set only after the daemon has applied and
+    // probed that role; until then reads fall back to a read-only transaction
+    // with a server-function denylist on the owner connection.
+    postgresQueryPrincipalVersion: integer('postgres_query_principal_version'),
+    // Managed PostgreSQL non-superuser writer for write-scoped queries: a
+    // member of the application role, never of the control owner. Set only
+    // after the daemon has applied and probed it; until then write-scoped
+    // queries run as the owner behind the server-function denylist.
+    encryptedQueryWriterCredentials: text('encrypted_query_writer_credentials'),
+    postgresQueryWriterVersion: integer('postgres_query_writer_version'),
     // Identity v2 separates the Gateway control account from the stable
     // application role used by direct-access and binding principals.
     bindingIdentityVersion: integer('binding_identity_version').notNull().default(0),

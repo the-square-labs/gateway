@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { settings } from '@/db/schema/index.js';
 import type { InferenceSetupEventsService } from '@/modules/inference/inference-setup-events.service.js';
@@ -241,6 +241,7 @@ export class GeneralSettingsService {
   private licensePolicy?: LicensePolicyService;
   private cached: GeneralSettings | null = null;
   private cachedAt = 0;
+  private writeGeneration = 0;
   private inferenceDisabledHandler?: () => Promise<void>;
 
   constructor(
@@ -261,10 +262,14 @@ export class GeneralSettingsService {
     const now = Date.now();
     if (this.cached && now - this.cachedAt < 5000) return this.cached;
 
+    // A read that started before a write must not cache the value it replaced.
+    const generation = this.writeGeneration;
     const [row] = await this.db.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).limit(1);
     const config = this.normalize(row?.value);
-    this.cached = config;
-    this.cachedAt = now;
+    if (generation === this.writeGeneration) {
+      this.cached = config;
+      this.cachedAt = now;
+    }
     return config;
   }
 
@@ -277,29 +282,78 @@ export class GeneralSettingsService {
       // LICENSE ENFORCEMENT: Enabling SIEM export requires Enterprise under the project license/TOS.
       await requireConfiguredLicensePolicy(this.licensePolicy).requireFeature('siem-export');
     }
-    const current = await this.getConfig();
-    const next = this.normalize({
-      ...current,
-      ...updates,
-      features: {
-        ...current.features,
-        ...updates.features,
-      },
-      shutdown: updates.shutdown ?? current.shutdown,
-      relay: {
-        ...current.relay,
-        ...updates.relay,
-      },
+    const { current, next } = await this.writeConfig((current) =>
+      this.normalize({
+        ...current,
+        ...updates,
+        features: {
+          ...current.features,
+          ...updates.features,
+        },
+        shutdown: updates.shutdown ?? current.shutdown,
+        relay: {
+          ...current.relay,
+          ...updates.relay,
+        },
+      })
+    );
+    await this.afterConfigChanged(current, next);
+    return next;
+  }
+
+  /**
+   * Restores only the given top-level fields from `previous`, e.g. to undo a
+   * save whose side effect failed, without overwriting fields someone else
+   * changed meanwhile. With `ifUnchangedFrom`, a field is restored only while
+   * it still holds the value from that snapshot (the value the save wrote).
+   */
+  async restoreFields(
+    previous: GeneralSettings,
+    fields: readonly (keyof GeneralSettings)[],
+    options: { ifUnchangedFrom?: GeneralSettings } = {}
+  ): Promise<GeneralSettings> {
+    const { current, next } = await this.writeConfig((current) => {
+      const patch: Record<string, unknown> = {};
+      for (const field of fields) {
+        const expected = options.ifUnchangedFrom;
+        if (expected && JSON.stringify(current[field]) !== JSON.stringify(expected[field])) continue;
+        patch[field] = previous[field];
+      }
+      return this.normalize({ ...current, ...patch });
     });
-    await this.db
-      .insert(settings)
-      .values({ key: SETTINGS_KEY, value: next, updatedAt: new Date() })
-      .onConflictDoUpdate({
-        target: settings.key,
-        set: { value: next, updatedAt: new Date() },
-      });
-    this.cached = next;
+    await this.afterConfigChanged(current, next);
+    return next;
+  }
+
+  /**
+   * Read-merge-write under a transaction-scoped lock, reading the stored row
+   * rather than the cache, so concurrent writers (admin saves, the license
+   * reconciler) never lose each other's fields.
+   */
+  private async writeConfig(
+    merge: (current: GeneralSettings) => GeneralSettings
+  ): Promise<{ current: GeneralSettings; next: GeneralSettings }> {
+    const result = await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${SETTINGS_KEY}))`);
+      const [row] = await tx.select().from(settings).where(eq(settings.key, SETTINGS_KEY)).limit(1);
+      const current = this.normalize(row?.value);
+      const next = merge(current);
+      await tx
+        .insert(settings)
+        .values({ key: SETTINGS_KEY, value: next, updatedAt: new Date() })
+        .onConflictDoUpdate({
+          target: settings.key,
+          set: { value: next, updatedAt: new Date() },
+        });
+      return { current, next };
+    });
+    this.writeGeneration += 1;
+    this.cached = result.next;
     this.cachedAt = Date.now();
+    return result;
+  }
+
+  private async afterConfigChanged(current: GeneralSettings, next: GeneralSettings): Promise<void> {
     // No configuration is carried by this event. It only lets cached,
     // permission-filtered read models refresh immediately.
     this.eventBus?.publish('system.config.changed', {
@@ -312,7 +366,6 @@ export class GeneralSettingsService {
     if (current.features.inferenceEnabled && !next.features.inferenceEnabled) {
       await this.inferenceDisabledHandler?.();
     }
-    return next;
   }
 
   async getFileUploadMaxBodyBytes(): Promise<number> {

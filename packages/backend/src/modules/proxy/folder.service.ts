@@ -6,6 +6,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { assertFolderMoveAccess, type FolderMoveAccess } from '@/modules/resource-folders/resource-folder.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type {
   CreateFolderInput,
@@ -190,7 +191,7 @@ export class FolderService {
   // Move folder to new parent
   // -----------------------------------------------------------------------
 
-  async moveFolder(id: string, input: MoveFolderInput, userId: string) {
+  async moveFolder(id: string, input: MoveFolderInput, userId: string, access?: FolderMoveAccess) {
     const folder = await this.db.query.proxyHostFolders.findFirst({
       where: eq(proxyHostFolders.id, id),
     });
@@ -224,6 +225,18 @@ export class FolderService {
         400,
         'MAX_DEPTH_EXCEEDED',
         `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
+      );
+    }
+
+    if (access) {
+      const movedHosts = await this.db
+        .select({ id: proxyHosts.id })
+        .from(proxyHosts)
+        .where(inArray(proxyHosts.folderId, [id, ...(await this.getDescendantIds(id))]));
+      assertFolderMoveAccess(
+        access,
+        movedHosts.map((host) => host.id),
+        input.parentId
       );
     }
 

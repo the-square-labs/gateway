@@ -45,19 +45,34 @@ export interface UpdateStatus {
   gatewayOperation: GatewayUpdateOperation | null;
 }
 
-/** A Gateway self-update this process accepted and has not handed off yet. */
+/**
+ * A Gateway self-update this process accepted and has not handed off yet, or
+ * (`failed`) a handed-off update that did not replace this version.
+ */
 export interface GatewayUpdateOperation {
   /** `waiting_for_operations` until running orchestration work finishes. */
-  status: 'waiting_for_operations' | 'updating';
+  status: 'waiting_for_operations' | 'updating' | 'failed';
   targetVersion: string;
   startedAt: string;
   /** When the update proceeds even if operations still run. */
   waitDeadline: string | null;
   operations: PendingOrchestrationOperation[];
+  /** Why the update did not complete; set only when `failed`. */
+  error?: string | null;
 }
 
 export interface UpdateEvents {
   publish(channel: string, payload: unknown): void;
+}
+
+export interface UpdateAuditLog {
+  log(entry: {
+    userId: string | null;
+    action: string;
+    resourceType: string;
+    resourceId?: string;
+    details?: Record<string, unknown>;
+  }): Promise<unknown>;
 }
 
 /**
@@ -65,6 +80,41 @@ export interface UpdateEvents {
  * alive after this, the handoff failed: accept orchestration work again.
  */
 const UPDATE_HANDOFF_SETTLE_MS = 20 * 60_000;
+
+/**
+ * Written before anything on the host changes. The process that starts next
+ * reads it: the target version clears it, any other version reports a failure.
+ */
+const GATEWAY_UPDATE_ATTEMPT_KEY = 'update:gateway:attempt';
+/** A failed update stays reported this long unless an admin acknowledges it. */
+const FAILED_GATEWAY_UPDATE_REPORT_MS = 24 * 60 * 60_000;
+
+interface GatewayUpdateAttempt {
+  targetVersion: string;
+  fromVersion: string;
+  startedAt: string;
+  userId: string | null;
+  sidecarId: string | null;
+  failedAt: string | null;
+  error: string | null;
+}
+
+/** States in which a Relay Pool update run is being driven by a Gateway process. */
+const ACTIVE_RELAY_POOL_RUN_STATES = ['preflight', 'draining', 'updating', 'verifying', 'rolling_back'] as const;
+/** Active runs plus paused ones, which wait for an operator to retry or abandon them. */
+const UNFINISHED_RELAY_POOL_RUN_STATES = [...ACTIVE_RELAY_POOL_RUN_STATES, 'paused'] as const;
+/** Step states in which the update may hold the relay drained. */
+const IN_FLIGHT_RELAY_POOL_STEP_STATES = ['draining', 'updating', 'verifying', 'rolling_back'] as const;
+const RELAY_DRAIN_RELEASE_RETRY_MS = 30_000;
+const RELAY_DRAIN_RELEASE_ATTEMPTS = 20;
+const RELAY_UPDATE_BLOCKS_GATEWAY_MESSAGE =
+  'A Relay Pool update is in progress. Update Gateway after it finishes, or abandon the Relay Pool update first.';
+
+class RelayPoolUpdateAbandonedError extends Error {
+  constructor() {
+    super('The Relay Pool update was abandoned');
+  }
+}
 
 export interface RelayUpdateOperation {
   status: 'updating' | 'failed';
@@ -97,7 +147,7 @@ export interface RelayUpdateRuntime {
 }
 
 export interface RelayPoolUpdateRuntime {
-  drainInstance(instanceId: string, userId: string, enabled: boolean): Promise<void>;
+  drainInstance(instanceId: string, userId: string | null, enabled: boolean): Promise<void>;
   prepareWorkerUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
   dispatchWorkerUpdate(nodeId: string, artifact: TrustedDaemonUpdateArtifact): Promise<void>;
   prepareSupervisorUpdate(version: string, arch: string): Promise<TrustedDaemonUpdateArtifact>;
@@ -160,11 +210,15 @@ export class UpdateService {
   private gatewayUpdateOperation: GatewayUpdateOperation | null = null;
   private orchestration?: OrchestrationActivitySource;
   private events?: UpdateEvents;
+  private audit?: UpdateAuditLog;
   private operationWaitOverride: AbortController | null = null;
   private handoffSettleTimer?: ReturnType<typeof setTimeout>;
+  private failedReportTimer?: ReturnType<typeof setTimeout>;
   private readonly releasesUrl: string;
   private relayUpdateOperation: RelayUpdateOperation | null = null;
   private relayPoolRuntime?: RelayPoolUpdateRuntime;
+  /** Set while this process drives a Relay Pool run; aborting it abandons the run. */
+  private relayPoolRun: AbortController | null = null;
 
   constructor(
     private readonly db: DrizzleClient,
@@ -248,8 +302,44 @@ export class UpdateService {
     this.events = events;
   }
 
+  setAuditLog(audit: UpdateAuditLog): void {
+    this.audit = audit;
+  }
+
   isGatewayUpdateInProgress(): boolean {
     return this.gatewayUpdateInProgress;
+  }
+
+  /** Refuses a Gateway update (or paid-feature activation) that would interrupt another update. */
+  async assertGatewayUpdateAllowed(): Promise<void> {
+    if (this.gatewayUpdateInProgress) {
+      throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress');
+    }
+    if (await this.isRelayUpdateRunning()) {
+      throw new AppError(409, 'RELAY_UPDATE_IN_PROGRESS', RELAY_UPDATE_BLOCKS_GATEWAY_MESSAGE);
+    }
+  }
+
+  /** True while a Gateway update or a running Relay update is in flight. */
+  async isAnyUpdateRunning(): Promise<boolean> {
+    return this.gatewayUpdateInProgress || (await this.isRelayUpdateRunning());
+  }
+
+  /** A Relay update that runs now; a paused Relay Pool run waits for the operator and does not count. */
+  private async isRelayUpdateRunning(): Promise<boolean> {
+    if (this.relayUpdateOperation?.status === 'updating' || this.relayPoolRun) return true;
+    if (!this.relayPoolRuntime) return false;
+    const [run] = await this.db
+      .select({ id: relayPoolUpdateRuns.id })
+      .from(relayPoolUpdateRuns)
+      .where(
+        and(
+          eq(relayPoolUpdateRuns.poolId, 'system'),
+          inArray(relayPoolUpdateRuns.state, [...ACTIVE_RELAY_POOL_RUN_STATES])
+        )
+      )
+      .limit(1);
+    return Boolean(run);
   }
 
   /** The operator's "update now": stop waiting for running orchestration work. */
@@ -264,7 +354,14 @@ export class UpdateService {
   }
 
   startRelayUpdate(targetVersion: string): void {
-    if (this.relayUpdateOperation?.status === 'updating') {
+    if (this.gatewayUpdateInProgress) {
+      throw new AppError(
+        409,
+        'GATEWAY_UPDATE_IN_PROGRESS',
+        'Gateway is updating. Update the Relay Pool after the Gateway update has finished.'
+      );
+    }
+    if (this.relayUpdateOperation?.status === 'updating' || this.relayPoolRun) {
       throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A relay update is already in progress');
     }
     this.relayUpdateOperation = {
@@ -514,7 +611,11 @@ export class UpdateService {
     return artifact;
   }
 
-  async performUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
+  async performUpdate(
+    targetVersion: string,
+    artifact: TrustedGatewayUpdateArtifact,
+    userId: string | null = null
+  ): Promise<void> {
     if (this.gatewayUpdateInProgress)
       throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Gateway update is already in progress');
     this.gatewayUpdateInProgress = true;
@@ -526,11 +627,19 @@ export class UpdateService {
       operations: [],
     });
     try {
-      await this.performGatewayUpdate(targetVersion, artifact);
+      // Checked after the flag is set: a Relay update cannot start from here on.
+      if (await this.isRelayUpdateRunning()) {
+        throw new AppError(409, 'RELAY_UPDATE_IN_PROGRESS', RELAY_UPDATE_BLOCKS_GATEWAY_MESSAGE);
+      }
+      await this.performGatewayUpdate(targetVersion, artifact, userId);
     } catch (error) {
       this.gatewayUpdateInProgress = false;
       this.setGatewayUpdateOperation(null);
       this.orchestration?.setOrchestrationAdmissionHold(null);
+      // This process reports the failure itself; the next start must not.
+      await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]).catch((clearError) =>
+        logger.warn('Could not clear the Gateway update attempt record', { error: formatError(clearError) })
+      );
       throw error;
     }
     this.handoffSettleTimer = setTimeout(() => {
@@ -538,14 +647,138 @@ export class UpdateService {
         targetVersion,
       });
       this.gatewayUpdateInProgress = false;
-      this.setGatewayUpdateOperation(null);
       this.orchestration?.setOrchestrationAdmissionHold(null);
-      this.events?.publish('system.update.changed', { updating: false, component: 'gateway', targetVersion });
+      void this.reportFailedGatewayUpdate(
+        `The update to ${normalizeVersionTag(targetVersion)} did not replace Gateway ${this.getCurrentVersion()}, which keeps running. Check the update container logs on the Gateway host.`
+      ).catch((error) => logger.error('Could not report the failed Gateway update', { error: formatError(error) }));
     }, UPDATE_HANDOFF_SETTLE_MS);
     this.handoffSettleTimer.unref?.();
   }
 
+  /**
+   * Runs once at startup. No update runs in a process that just started, so an
+   * unfinished Gateway attempt or Relay Pool run in the database was
+   * interrupted: report it and release what it holds.
+   */
+  async recoverInterruptedUpdates(): Promise<void> {
+    await this.recoverGatewayUpdateAttempt().catch((error) =>
+      logger.error('Could not recover the Gateway update attempt', { error: formatError(error) })
+    );
+    await this.recoverInterruptedRelayPoolUpdates().catch((error) =>
+      logger.error('Could not recover interrupted Relay Pool updates', { error: formatError(error) })
+    );
+  }
+
+  private async readGatewayUpdateAttempt(): Promise<GatewayUpdateAttempt | null> {
+    const [row] = await this.db.select().from(settings).where(eq(settings.key, GATEWAY_UPDATE_ATTEMPT_KEY)).limit(1);
+    return parseGatewayUpdateAttempt(row?.value);
+  }
+
+  private async recoverGatewayUpdateAttempt(): Promise<void> {
+    const attempt = await this.readGatewayUpdateAttempt();
+    if (!attempt) {
+      await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]);
+      return;
+    }
+    const runningVersion = this.getCurrentVersion();
+    if (normalizeVersionTag(runningVersion) === normalizeVersionTag(attempt.targetVersion)) {
+      logger.info('Gateway update completed', { from: attempt.fromVersion, to: attempt.targetVersion });
+      await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]);
+      return;
+    }
+    if (!attempt.failedAt) {
+      const container = attempt.sidecarId ? ` (docker logs ${attempt.sidecarId.slice(0, 12)})` : '';
+      await this.reportFailedGatewayUpdate(
+        `Gateway ${attempt.targetVersion} did not start, so the update was rolled back and Gateway ${runningVersion} is running again. Check the update container logs on the Gateway host${container}.`,
+        attempt
+      );
+      return;
+    }
+    this.restoreFailedGatewayUpdateReport(attempt);
+  }
+
+  /** Persists, audits and reports a Gateway update that did not replace this version. */
+  private async reportFailedGatewayUpdate(error: string, known?: GatewayUpdateAttempt): Promise<void> {
+    const attempt = known ?? (await this.readGatewayUpdateAttempt());
+    const targetVersion = attempt?.targetVersion ?? this.gatewayUpdateOperation?.targetVersion;
+    if (!targetVersion) return;
+    const failed: GatewayUpdateAttempt = {
+      targetVersion,
+      fromVersion: attempt?.fromVersion ?? this.getCurrentVersion(),
+      startedAt: attempt?.startedAt ?? this.gatewayUpdateOperation?.startedAt ?? new Date().toISOString(),
+      userId: attempt?.userId ?? null,
+      sidecarId: attempt?.sidecarId ?? null,
+      failedAt: new Date().toISOString(),
+      error,
+    };
+    await this.upsertSetting(GATEWAY_UPDATE_ATTEMPT_KEY, failed);
+    logger.error('Gateway update failed', {
+      targetVersion,
+      runningVersion: this.getCurrentVersion(),
+      error,
+    });
+    await this.audit
+      ?.log({
+        userId: failed.userId,
+        action: 'system.update.failed',
+        resourceType: 'system-update',
+        details: {
+          targetVersion,
+          fromVersion: failed.fromVersion,
+          runningVersion: this.getCurrentVersion(),
+          startedAt: failed.startedAt,
+          sidecarId: failed.sidecarId,
+          error,
+        },
+      })
+      .catch(() => undefined);
+    this.restoreFailedGatewayUpdateReport(failed);
+  }
+
+  private restoreFailedGatewayUpdateReport(attempt: GatewayUpdateAttempt): void {
+    const remaining = Date.parse(attempt.failedAt ?? '') + FAILED_GATEWAY_UPDATE_REPORT_MS - Date.now();
+    if (!(remaining > 0)) {
+      void this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]).catch(() => undefined);
+      return;
+    }
+    const operation: GatewayUpdateOperation = {
+      status: 'failed',
+      targetVersion: attempt.targetVersion,
+      startedAt: attempt.startedAt,
+      waitDeadline: null,
+      operations: [],
+      error: attempt.error,
+    };
+    this.gatewayUpdateOperation = operation;
+    clearTimeout(this.failedReportTimer);
+    this.failedReportTimer = setTimeout(() => {
+      if (this.gatewayUpdateOperation === operation) void this.acknowledgeGatewayUpdateFailure();
+    }, remaining);
+    this.failedReportTimer.unref?.();
+    // Sessions that still show the update screen leave it with this error.
+    this.events?.publish('system.update.changed', {
+      updating: false,
+      component: 'gateway',
+      targetVersion: attempt.targetVersion,
+      error: attempt.error,
+      rolledBack: true,
+      statusChanged: true,
+    });
+  }
+
+  /** An admin saw the failed update, or starts a new one: stop reporting it. */
+  async acknowledgeGatewayUpdateFailure(): Promise<boolean> {
+    if (this.gatewayUpdateOperation?.status !== 'failed') return false;
+    clearTimeout(this.failedReportTimer);
+    this.gatewayUpdateOperation = null;
+    await this.deleteSettings([GATEWAY_UPDATE_ATTEMPT_KEY]);
+    // No `updating` flag: this must not end the update screen of a new attempt.
+    this.events?.publish('system.update.changed', { component: 'gateway', statusChanged: true });
+    return true;
+  }
+
   private setGatewayUpdateOperation(operation: GatewayUpdateOperation | null): void {
+    if (operation) clearTimeout(this.failedReportTimer);
     this.gatewayUpdateOperation = operation;
     if (operation) {
       this.events?.publish('system.update.changed', {
@@ -610,7 +843,11 @@ export class UpdateService {
     }
   }
 
-  private async performGatewayUpdate(targetVersion: string, artifact: TrustedGatewayUpdateArtifact): Promise<void> {
+  private async performGatewayUpdate(
+    targetVersion: string,
+    artifact: TrustedGatewayUpdateArtifact,
+    userId: string | null
+  ): Promise<void> {
     logger.info('Starting self-update', { targetVersion });
 
     const selfInfo = await this.dockerService.inspectSelf();
@@ -652,6 +889,23 @@ export class UpdateService {
     // Before anything on the host changes: a restart during the wait keeps the current version.
     await this.waitForOrchestrationOperations(tag);
 
+    // From here on a restart can leave the previous version running. The next
+    // process reads this record and reports the attempt instead of hiding it.
+    const attempt: GatewayUpdateAttempt = {
+      targetVersion: tag,
+      fromVersion: this.getCurrentVersion(),
+      startedAt: this.gatewayUpdateOperation?.startedAt ?? new Date().toISOString(),
+      userId,
+      sidecarId: null,
+      failedAt: null,
+      error: null,
+    };
+    await this.upsertSetting(GATEWAY_UPDATE_ATTEMPT_KEY, attempt);
+
+    // The legacy settings migration below rewrites .env. Keep the untouched
+    // files, so every rollback (here and in the sidecar) restores them.
+    const backupDir = await this.backupFoundationFiles(composeDir);
+
     logger.info('Migrating legacy environment-owned Gateway settings');
     const settingsMigration = await this.dockerService.runOneShot({
       Image: artifact.imageRef,
@@ -663,6 +917,7 @@ export class UpdateService {
       },
     });
     if (settingsMigration.exitCode !== 0) {
+      await this.restoreAfterFailedMigration(artifact.imageRef, composeDir, backupDir);
       throw new Error(`Legacy settings migration failed: ${settingsMigration.output}`);
     }
 
@@ -693,6 +948,7 @@ export class UpdateService {
     });
 
     if (migrationResult.exitCode !== 0) {
+      await this.restoreAfterFailedMigration(artifact.imageRef, composeDir, backupDir);
       throw new Error(`Foundation migration failed: ${migrationResult.output}`);
     }
     const migrationOutput = parseFoundationMigrationOutput(migrationResult.output);
@@ -700,7 +956,7 @@ export class UpdateService {
     const workspaceResult = await this.prepareSandboxWorkspaceDir(
       artifact.imageRef,
       composeDir,
-      migrationOutput.backupDir,
+      backupDir,
       migrationOutput.sandboxWorkspaceDir
     );
     if (workspaceResult) throw workspaceResult;
@@ -722,11 +978,9 @@ export class UpdateService {
     });
 
     if (composeConfigResult.exitCode !== 0) {
-      const rollbackError = await this.rollbackFoundationMigration(
-        artifact.imageRef,
-        composeDir,
-        migrationOutput.backupDir
-      ).catch((error) => error as Error);
+      const rollbackError = await this.rollbackFoundationMigration(artifact.imageRef, composeDir, backupDir).catch(
+        (error) => error as Error
+      );
       if (rollbackError) {
         throw new Error(
           `Migrated docker-compose.yml failed validation and rollback failed: ${composeConfigResult.output}; rollback: ${formatError(rollbackError)}`
@@ -737,17 +991,18 @@ export class UpdateService {
 
     logger.info('Foundation files migrated, launching compose sidecar');
 
-    const sidecarBackupDir = migrationOutput.backupDir?.replace(/^\/host(?=\/)/, composeDir) ?? '';
+    // The pre-update backup holds .env and docker-compose.yml as they were
+    // before any migration, including the legacy settings removal.
+    const sidecarBackupDir = backupDir.replace(/^\/host(?=\/)/, composeDir);
     const expectedBackupPrefix = `${composeDir}/.gateway-foundation-backups/`;
     if (
-      sidecarBackupDir &&
-      (!sidecarBackupDir.startsWith(expectedBackupPrefix) ||
-        !/^[a-zA-Z0-9_.-]+$/.test(sidecarBackupDir.slice(expectedBackupPrefix.length)))
+      !sidecarBackupDir.startsWith(expectedBackupPrefix) ||
+      !/^[a-zA-Z0-9_.-]+$/.test(sidecarBackupDir.slice(expectedBackupPrefix.length))
     ) {
       throw new Error(`Refusing to launch update with unexpected foundation backup path: ${sidecarBackupDir}`);
     }
 
-    await this.dockerService.runDetached({
+    const sidecarId = await this.dockerService.runDetached({
       Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
       Cmd: [
         'sh',
@@ -864,6 +1119,41 @@ exit 1`,
     });
 
     logger.info('Update sidecar launched — container will be replaced shortly');
+    // Lets a failure report point at the sidecar logs; the attempt is already recorded.
+    await this.upsertSetting(GATEWAY_UPDATE_ATTEMPT_KEY, { ...attempt, sidecarId }).catch(() => undefined);
+  }
+
+  /** Copies .env and docker-compose.yml into a new backup directory; returns it as seen under /host. */
+  private async backupFoundationFiles(composeDir: string): Promise<string> {
+    const name = `pre-update-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+    const backupDir = `/host/.gateway-foundation-backups/${name}`;
+    const result = await this.dockerService.runOneShot({
+      Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
+      Cmd: [
+        'sh',
+        '-c',
+        `set -eu
+backup="$FOUNDATION_BACKUP_DIR"
+mkdir -p "$backup"
+chmod 700 "$backup"
+[ ! -f /host/.env ] || cp -p /host/.env "$backup/.env"
+[ ! -f /host/docker-compose.yml ] || cp -p /host/docker-compose.yml "$backup/docker-compose.yml"`,
+      ],
+      Env: [`FOUNDATION_BACKUP_DIR=${backupDir}`],
+      HostConfig: { Binds: [`${composeDir}:/host`] },
+    });
+    if (result.exitCode !== 0) throw new Error(`Pre-update backup failed: ${result.output}`);
+    return backupDir;
+  }
+
+  /** A failed migration may have rewritten .env already. Restore it, keep the original error. */
+  private async restoreAfterFailedMigration(imageRef: string, composeDir: string, backupDir: string): Promise<void> {
+    await this.rollbackFoundationMigration(imageRef, composeDir, backupDir).catch((error) =>
+      logger.error('Could not restore the Gateway foundation files after a failed migration', {
+        backupDir,
+        error: formatError(error),
+      })
+    );
   }
 
   async performRelayUpdate(
@@ -875,8 +1165,30 @@ exit 1`,
       await this.performLocalRelayUpdate(targetVersion, artifact, true);
       return;
     }
+    if (this.relayPoolRun) throw new AppError(409, 'UPDATE_IN_PROGRESS', 'A Relay Pool update is already in progress');
+    const control = new AbortController();
+    this.relayPoolRun = control;
+    try {
+      await this.performRelayPoolUpdate(this.relayPoolRuntime, targetVersion, artifact, userId, control.signal);
+    } finally {
+      if (this.relayPoolRun === control) this.relayPoolRun = null;
+    }
+  }
+
+  private async performRelayPoolUpdate(
+    runtime: RelayPoolUpdateRuntime,
+    targetVersion: string,
+    artifact: TrustedRelayUpdateArtifact,
+    userId: string,
+    signal: AbortSignal
+  ): Promise<void> {
     const run = await this.ensureRelayPoolUpdateRun(targetVersion, artifact);
     let currentStepId: string | null = null;
+    // Drained by this call and not resumed yet; released if the run is abandoned.
+    let drainedInstanceId: string | null = null;
+    const throwIfAbandoned = () => {
+      if (signal.aborted) throw new RelayPoolUpdateAbandonedError();
+    };
     try {
       await this.db
         .update(relayPoolUpdateRuns)
@@ -888,6 +1200,7 @@ exit 1`,
         .where(eq(relayPoolUpdateSteps.runId, run.id))
         .orderBy(relayPoolUpdateSteps.sequence);
       for (const step of steps.filter(({ state }) => !['ready', 'rolled_back'].includes(state))) {
+        throwIfAbandoned();
         currentStepId = step.id;
         const [instance] = await this.db
           .select()
@@ -904,8 +1217,9 @@ exit 1`,
         }
         if (!instance.nodeId) throw new Error(`Relay instance ${instance.id} is not enrolled`);
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + 30 * 60 * 1000));
-        await this.relayPoolRuntime.drainInstance(instance.id, userId, true);
-        const drained = await this.waitForRelayInstanceDrain(instance.id, 30 * 60 * 1000);
+        drainedInstanceId = instance.id;
+        await runtime.drainInstance(instance.id, userId, true);
+        const drained = await this.waitForRelayInstanceDrain(instance.id, 30 * 60 * 1000, signal);
         if (!drained) {
           await this.db
             .update(relayPoolUpdateRuns)
@@ -913,27 +1227,31 @@ exit 1`,
             .where(eq(relayPoolUpdateRuns.id, run.id));
           throw new Error(`Relay ${instance.displayName} still has active streams; rollout paused`);
         }
+        throwIfAbandoned();
         await this.updatePoolStep(step.id, 'updating');
         const architecture = this.relayInstanceArchitecture(instance);
         const normalizedVersion = normalizeVersionTag(targetVersion);
-        const workerArtifact = await this.relayPoolRuntime.prepareWorkerUpdate(normalizedVersion, architecture);
-        await this.relayPoolRuntime.dispatchWorkerUpdate(instance.nodeId, workerArtifact);
-        const supervisorArtifact = await this.relayPoolRuntime.prepareSupervisorUpdate(normalizedVersion, architecture);
-        await this.relayPoolRuntime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
+        const workerArtifact = await runtime.prepareWorkerUpdate(normalizedVersion, architecture);
+        await runtime.dispatchWorkerUpdate(instance.nodeId, workerArtifact);
+        const supervisorArtifact = await runtime.prepareSupervisorUpdate(normalizedVersion, architecture);
+        await runtime.dispatchSupervisorUpdate(instance.nodeId, supervisorArtifact);
         await this.updatePoolStep(step.id, 'verifying');
         await Promise.all([
-          this.waitForRelayInstanceVersion(instance.id, normalizedVersion),
-          this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion),
+          this.waitForRelayInstanceVersion(instance.id, normalizedVersion, signal),
+          this.waitForRelaySupervisorVersion(instance.nodeId, normalizedVersion, signal),
         ]);
-        await this.relayPoolRuntime.drainInstance(instance.id, userId, false);
+        await runtime.drainInstance(instance.id, userId, false);
+        drainedInstanceId = null;
         await this.updatePoolStep(step.id, 'ready', true);
         currentStepId = null;
       }
+      throwIfAbandoned();
       await this.promoteRelayConnectorImages(artifact);
+      // An abandoned or recovered run stays failed.
       await this.db
         .update(relayPoolUpdateRuns)
         .set({ state: 'complete', completedAt: new Date(), terminalError: null, updatedAt: new Date() })
-        .where(eq(relayPoolUpdateRuns.id, run.id));
+        .where(and(eq(relayPoolUpdateRuns.id, run.id), eq(relayPoolUpdateRuns.state, 'updating')));
     } catch (error) {
       const message = formatError(error);
       const [current] = await this.db
@@ -941,7 +1259,7 @@ exit 1`,
         .from(relayPoolUpdateRuns)
         .where(eq(relayPoolUpdateRuns.id, run.id))
         .limit(1);
-      if (current?.state !== 'paused') {
+      if (current?.state !== 'paused' && current?.state !== 'failed') {
         if (currentStepId) {
           await this.db
             .update(relayPoolUpdateSteps)
@@ -952,6 +1270,12 @@ exit 1`,
           .update(relayPoolUpdateRuns)
           .set({ state: 'failed', terminalError: message, updatedAt: new Date() })
           .where(eq(relayPoolUpdateRuns.id, run.id));
+      }
+      // A failed run (verify timeout, dispatch error, abandon) gives back the drain it took, as
+      // restart recovery does; operator drains stay. A paused run keeps draining toward a resume.
+      // Abandoning released the drains it knew about; an aborted run's drain may have begun meanwhile.
+      if (drainedInstanceId && (signal.aborted || current?.state !== 'paused')) {
+        this.scheduleRelayDrainRelease([drainedInstanceId], userId);
       }
       throw error;
     }
@@ -1121,7 +1445,11 @@ exit 1`,
       .limit(1);
     if (existing) {
       if (existing.targetArtifact.version !== normalizeVersionTag(targetVersion)) {
-        throw new AppError(409, 'UPDATE_IN_PROGRESS', 'Another Relay Pool update is already in progress');
+        throw new AppError(
+          409,
+          'UPDATE_IN_PROGRESS',
+          `The Relay Pool update to ${existing.targetArtifact.version} has not finished. Retry or abandon it before updating to ${normalizeVersionTag(targetVersion)}.`
+        );
       }
       return existing;
     }
@@ -1199,9 +1527,14 @@ exit 1`,
     return instance.capabilities?.architecture || 'amd64';
   }
 
-  private async waitForRelayInstanceDrain(instanceId: string, timeoutMs: number): Promise<boolean> {
+  private async waitForRelayInstanceDrain(
+    instanceId: string,
+    timeoutMs: number,
+    signal?: AbortSignal
+  ): Promise<boolean> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new RelayPoolUpdateAbandonedError();
       const [instance] = await this.db
         .select({ activeTunnels: relayInstances.health })
         .from(relayInstances)
@@ -1214,9 +1547,14 @@ exit 1`,
     return false;
   }
 
-  private async waitForRelayInstanceVersion(instanceId: string, targetVersion: string): Promise<void> {
+  private async waitForRelayInstanceVersion(
+    instanceId: string,
+    targetVersion: string,
+    signal?: AbortSignal
+  ): Promise<void> {
     const deadline = Date.now() + 3 * 60 * 1000;
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new RelayPoolUpdateAbandonedError();
       const [instance] = await this.db
         .select({
           state: relayInstances.state,
@@ -1232,9 +1570,14 @@ exit 1`,
     throw new Error(`Relay instance ${instanceId} did not become ready after update`);
   }
 
-  private async waitForRelaySupervisorVersion(nodeId: string, targetVersion: string): Promise<void> {
+  private async waitForRelaySupervisorVersion(
+    nodeId: string,
+    targetVersion: string,
+    signal?: AbortSignal
+  ): Promise<void> {
     const deadline = Date.now() + 3 * 60 * 1000;
     while (Date.now() < deadline) {
+      if (signal?.aborted) throw new RelayPoolUpdateAbandonedError();
       const [node] = await this.db
         .select({ status: nodes.status, daemonVersion: nodes.daemonVersion, lastSeenAt: nodes.lastSeenAt })
         .from(nodes)
@@ -1244,6 +1587,167 @@ exit 1`,
       await new Promise((resolve) => setTimeout(resolve, 2_000));
     }
     throw new Error(`Relay supervisor node ${nodeId} did not reconnect after update`);
+  }
+
+  /**
+   * The operator's way out of a stuck or paused Relay Pool update: fail the
+   * run, stop the rollout this process drives, and put drained relays back
+   * into service. Relays drained by an operator stay drained.
+   */
+  async abandonRelayUpdate(userId: string): Promise<{ targetVersion: string | null }> {
+    const [run] = await this.db
+      .select()
+      .from(relayPoolUpdateRuns)
+      .where(
+        and(
+          eq(relayPoolUpdateRuns.poolId, 'system'),
+          inArray(relayPoolUpdateRuns.state, [...UNFINISHED_RELAY_POOL_RUN_STATES])
+        )
+      )
+      .orderBy(desc(relayPoolUpdateRuns.startedAt))
+      .limit(1);
+    const operation = this.relayUpdateOperation;
+    if (!run && operation?.status !== 'updating' && !this.relayPoolRun) {
+      throw new AppError(409, 'RELAY_UPDATE_NOT_ACTIVE', 'No Relay Pool update is in progress');
+    }
+    const message = 'Abandoned by an administrator';
+    this.relayPoolRun?.abort();
+    const drained = run ? await this.failRelayPoolRun(run.id, message, UNFINISHED_RELAY_POOL_RUN_STATES) : [];
+    if (operation?.status === 'updating')
+      this.relayUpdateOperation = { ...operation, status: 'failed', error: message };
+    if (drained.length) this.scheduleRelayDrainRelease(drained, userId);
+    logger.warn('Relay Pool update abandoned', { runId: run?.id, userId, drainedInstances: drained });
+    return { targetVersion: run?.targetArtifact.version ?? operation?.targetVersion ?? null };
+  }
+
+  private async recoverInterruptedRelayPoolUpdates(): Promise<void> {
+    const interrupted = await this.db
+      .select({ id: relayPoolUpdateRuns.id, targetArtifact: relayPoolUpdateRuns.targetArtifact })
+      .from(relayPoolUpdateRuns)
+      .where(
+        and(
+          eq(relayPoolUpdateRuns.poolId, 'system'),
+          inArray(relayPoolUpdateRuns.state, [...ACTIVE_RELAY_POOL_RUN_STATES])
+        )
+      );
+    const drained = new Set<string>();
+    for (const run of interrupted) {
+      const message = 'Interrupted by a Gateway restart. Start the Relay Pool update again.';
+      for (const instanceId of await this.failRelayPoolRun(run.id, message, ACTIVE_RELAY_POOL_RUN_STATES)) {
+        drained.add(instanceId);
+      }
+      logger.warn('Failed a Relay Pool update interrupted by a Gateway restart', {
+        runId: run.id,
+        targetVersion: run.targetArtifact.version,
+      });
+      await this.audit
+        ?.log({
+          userId: null,
+          action: 'system.relay_update.failed',
+          resourceType: 'relay-update',
+          resourceId: run.id,
+          details: { targetVersion: run.targetArtifact.version, error: message },
+        })
+        .catch(() => undefined);
+    }
+    // Remote relays reconnect after this process starts; the release retries until they do.
+    if (drained.size) this.scheduleRelayDrainRelease([...drained], null);
+  }
+
+  /** Fails the run and its in-flight steps. Returns the relays whose drain the update owned. */
+  private async failRelayPoolRun(
+    runId: string,
+    message: string,
+    fromStates: readonly (typeof UNFINISHED_RELAY_POOL_RUN_STATES)[number][]
+  ): Promise<string[]> {
+    return this.db.transaction(async (tx) => {
+      // The fence that serializes run creation and rebalance placement.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
+      const failed = await tx
+        .update(relayPoolUpdateRuns)
+        .set({ state: 'failed', terminalError: message, updatedAt: new Date() })
+        .where(and(eq(relayPoolUpdateRuns.id, runId), inArray(relayPoolUpdateRuns.state, [...fromStates])))
+        .returning({ id: relayPoolUpdateRuns.id });
+      if (!failed.length) return [];
+      const steps = await tx
+        .update(relayPoolUpdateSteps)
+        .set({ state: 'failed', error: message, completedAt: new Date(), updatedAt: new Date() })
+        .where(
+          and(
+            eq(relayPoolUpdateSteps.runId, runId),
+            inArray(relayPoolUpdateSteps.state, [...IN_FLIGHT_RELAY_POOL_STEP_STATES])
+          )
+        )
+        .returning({
+          relayInstanceId: relayPoolUpdateSteps.relayInstanceId,
+          drainDeadlineAt: relayPoolUpdateSteps.drainDeadlineAt,
+        });
+      // Only remote steps drain; they record a drain deadline when they do.
+      return steps.filter(({ drainDeadlineAt }) => drainDeadlineAt).map(({ relayInstanceId }) => relayInstanceId);
+    });
+  }
+
+  private scheduleRelayDrainRelease(instanceIds: string[], userId: string | null, attempt = 1): void {
+    void this.releaseRelayUpdateDrains(instanceIds, userId).then((pending) => {
+      if (!pending.length) return;
+      if (attempt >= RELAY_DRAIN_RELEASE_ATTEMPTS) {
+        logger.error('Relays drained by a failed Relay Pool update are still drained; resume them on the Relay page', {
+          instanceIds: pending,
+        });
+        return;
+      }
+      const timer = setTimeout(
+        () => this.scheduleRelayDrainRelease(pending, userId, attempt + 1),
+        RELAY_DRAIN_RELEASE_RETRY_MS
+      );
+      timer.unref?.();
+    });
+  }
+
+  /** Resumes relays a failed update left drained. Returns those to retry. */
+  private async releaseRelayUpdateDrains(instanceIds: string[], userId: string | null): Promise<string[]> {
+    const runtime = this.relayPoolRuntime;
+    if (!runtime) return [];
+    const pending: string[] = [];
+    for (const instanceId of instanceIds) {
+      try {
+        const [instance] = await this.db
+          .select()
+          .from(relayInstances)
+          .where(eq(relayInstances.id, instanceId))
+          .limit(1);
+        // Operator drains are not the update's to release.
+        if (!instance || instance.kind !== 'remote' || !instance.nodeId || instance.manualDrainStartedAt) continue;
+        if (instance.state === 'ready' && instance.health?.admissionState !== 'draining') continue;
+        if (await this.isRelayInstanceHeldByUnfinishedRun(instanceId)) continue;
+        await runtime.drainInstance(instanceId, userId, false);
+        logger.info('Resumed a relay drained by a failed Relay Pool update', { instanceId });
+      } catch (error) {
+        logger.warn('Could not resume a relay drained by a failed Relay Pool update yet', {
+          instanceId,
+          error: formatError(error),
+        });
+        pending.push(instanceId);
+      }
+    }
+    return pending;
+  }
+
+  /** A newer run that drains the relay owns it now. */
+  private async isRelayInstanceHeldByUnfinishedRun(instanceId: string): Promise<boolean> {
+    const [held] = await this.db
+      .select({ id: relayPoolUpdateSteps.id })
+      .from(relayPoolUpdateSteps)
+      .innerJoin(relayPoolUpdateRuns, eq(relayPoolUpdateSteps.runId, relayPoolUpdateRuns.id))
+      .where(
+        and(
+          eq(relayPoolUpdateSteps.relayInstanceId, instanceId),
+          inArray(relayPoolUpdateSteps.state, [...IN_FLIGHT_RELAY_POOL_STEP_STATES]),
+          inArray(relayPoolUpdateRuns.state, [...UNFINISHED_RELAY_POOL_RUN_STATES])
+        )
+      )
+      .limit(1);
+    return Boolean(held);
   }
 
   private async getDurableRelayOperation(): Promise<RelayUpdateOperation | null> {
@@ -1358,6 +1862,24 @@ function legacySettingsMigrationEnv(env: Env): string[] {
   return Object.entries(values)
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
     .map(([key, value]) => `${key}=${String(value)}`);
+}
+
+function parseGatewayUpdateAttempt(value: unknown): GatewayUpdateAttempt | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const text = (key: string) => (typeof record[key] === 'string' ? (record[key] as string) : null);
+  const targetVersion = text('targetVersion');
+  const startedAt = text('startedAt');
+  if (!targetVersion || !startedAt) return null;
+  return {
+    targetVersion,
+    fromVersion: text('fromVersion') ?? 'unknown',
+    startedAt,
+    userId: text('userId'),
+    sidecarId: text('sidecarId'),
+    failedAt: text('failedAt'),
+    error: text('error'),
+  };
 }
 
 function parseFoundationMigrationOutput(output: string): FoundationMigrationOutput {

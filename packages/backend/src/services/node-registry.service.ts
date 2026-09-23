@@ -486,6 +486,9 @@ export class NodeRegistryService {
     const fullCommand: GatewayCommand = {
       commandId,
       ...command,
+      // The daemon drops a command that is already past the point where the
+      // gateway stops waiting for it. Older daemons ignore the field.
+      expiresAtUnixMs: String(Date.now() + timeoutMs),
     };
 
     let resolveAccepted!: () => void;

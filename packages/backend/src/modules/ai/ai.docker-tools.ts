@@ -1,6 +1,7 @@
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
 import {
   ComposeAdoptInputSchema,
   ComposeCreateInputSchema,
@@ -14,6 +15,7 @@ import {
   ComposeYamlInputSchema,
 } from '@/modules/docker/compose/compose.schemas.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
+import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import {
   ContainerCreateSchema,
   ContainerStopSchema,
@@ -45,7 +47,9 @@ import {
   DockerDeploymentSwitchSchema,
 } from '@/modules/docker/docker-deployment.schemas.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
+import { presentDeploymentForCaller } from '@/modules/docker/docker-deployment-redaction.js';
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
+import { sanitizeContainerInspect } from '@/modules/docker/docker-snapshot.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -184,9 +188,19 @@ export async function executeDockerTool(
           )
         : containers;
     }
-    case 'get_docker_container':
-      await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
-      return inspectUserContainer(context.dockerService, a.nodeId, a.containerId);
+    case 'get_docker_container': {
+      const inspected = await ensureDockerContainerScopes(
+        context,
+        user,
+        ['docker:containers:view'],
+        a.nodeId,
+        a.containerId
+      );
+      // Same rule as the inspect route: the live inspect carries the environment.
+      return hasDockerContainerScope(user, 'docker:containers:environment', a.nodeId, inspected)
+        ? inspected
+        : sanitizeContainerInspect(inspected);
+    }
     case 'execute_docker_container_console_command':
       return executeDockerContainerConsoleCommand(context, user, args);
     case 'list_docker_deployments': {
@@ -205,31 +219,32 @@ export async function executeDockerTool(
     case 'get_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:view', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
-      return container.resolve(DockerDeploymentService).get(a.nodeId, a.deploymentId);
+      const deployment = await container.resolve(DockerDeploymentService).get(a.nodeId, a.deploymentId);
+      return presentDeploymentForCaller(deployment, user.scopes, a.nodeId, a.deploymentId);
     }
     case 'start_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const data = await container.resolve(DockerDeploymentService).start(a.nodeId, a.deploymentId, user.id);
-      return { success: true, message: 'Deployment started', data };
+      return { success: true, message: 'Deployment started', data: presentDeployment(user, a, data) };
     }
     case 'stop_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const data = await container.resolve(DockerDeploymentService).stop(a.nodeId, a.deploymentId, user.id);
-      return { success: true, message: 'Deployment stopped', data };
+      return { success: true, message: 'Deployment stopped', data: presentDeployment(user, a, data) };
     }
     case 'restart_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const data = await container.resolve(DockerDeploymentService).restart(a.nodeId, a.deploymentId, user.id);
-      return { success: true, message: 'Deployment restarted', data };
+      return { success: true, message: 'Deployment restarted', data: presentDeployment(user, a, data) };
     }
     case 'kill_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
       const { DockerDeploymentService } = await import('@/modules/docker/docker-deployment.service.js');
       const data = await container.resolve(DockerDeploymentService).kill(a.nodeId, a.deploymentId, user.id);
-      return { success: true, message: 'Deployment killed', data };
+      return { success: true, message: 'Deployment killed', data: presentDeployment(user, a, data) };
     }
     case 'deploy_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
@@ -238,7 +253,7 @@ export async function executeDockerTool(
       const data = await container
         .resolve(DockerDeploymentService)
         .deploy(a.nodeId, a.deploymentId, input, user.id, 'manual', user.scopes);
-      return { success: true, message: 'Deployment rollout started', data };
+      return { success: true, message: 'Deployment rollout started', data: presentDeployment(user, a, data) };
     }
     case 'switch_docker_deployment_slot': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
@@ -247,7 +262,7 @@ export async function executeDockerTool(
       const data = await container
         .resolve(DockerDeploymentService)
         .switchToSlot(a.nodeId, a.deploymentId, input, user.id, undefined, user.scopes);
-      return { success: true, message: `Deployment switched to ${input.slot}`, data };
+      return { success: true, message: `Deployment switched to ${input.slot}`, data: presentDeployment(user, a, data) };
     }
     case 'rollback_docker_deployment': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
@@ -255,7 +270,7 @@ export async function executeDockerTool(
       const data = await container
         .resolve(DockerDeploymentService)
         .rollback(a.nodeId, a.deploymentId, a.force === true, user.id, user.scopes);
-      return { success: true, message: 'Deployment rolled back', data };
+      return { success: true, message: 'Deployment rolled back', data: presentDeployment(user, a, data) };
     }
     case 'stop_docker_deployment_slot': {
       ensureDockerDeploymentScope(context, user, 'docker:containers:manage', a.nodeId, a.deploymentId);
@@ -317,8 +332,26 @@ export async function executeDockerTool(
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
       return context.dockerService.getContainerStats(a.nodeId, a.containerId);
     case 'update_docker_container_image': {
-      await ensureDockerContainerScope(context, user, 'docker:containers:edit', a.nodeId, a.containerId);
-      const inspectData = await context.dockerService.inspectContainer(a.nodeId, a.containerId);
+      // Mirrors the recreate route: an image change can expose the container's
+      // environment and secrets, so it needs the same scopes as duplicate.
+      const inspectData = await ensureDockerContainerScopes(
+        context,
+        user,
+        [
+          'docker:containers:manage',
+          'docker:containers:edit',
+          'docker:containers:config',
+          'docker:containers:environment',
+          'docker:containers:secrets',
+        ],
+        a.nodeId,
+        a.containerId
+      );
+      // The recreate route's `assertDockerCreationAccess(..., 'docker:images:pull', nodeId, undefined)`.
+      if (!hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, a.nodeId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
+      }
+      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       const currentImage: string = (inspectData as any)?.Config?.Image ?? '';
       if (!currentImage) return { error: 'Cannot determine current container image' };
       if (currentImage.includes('@') || /^[a-f0-9]{64}$/i.test(currentImage)) {
@@ -654,10 +687,34 @@ async function ensureDockerContainerScope(
   nodeId: string,
   containerId: string
 ): Promise<void> {
+  await ensureDockerContainerScopes(context, user, [baseScope], nodeId, containerId);
+}
+
+/** Inspect once, require every scope on the container, and return the inspect data. */
+async function ensureDockerContainerScopes(
+  context: DockerToolContext,
+  user: User,
+  baseScopes: readonly string[],
+  nodeId: string,
+  containerId: string
+): Promise<any> {
   const inspected = await inspectUserContainer(context.dockerService, nodeId, containerId);
   const resourceId = String(inspected?.scopeResourceId ?? '');
   if (!resourceId) throw new Error('PERMISSION_DENIED: Container authorization identity is unavailable');
-  context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${resourceId}`);
+  for (const baseScope of baseScopes) {
+    context.ensureToolScopeForResource(user, baseScope, `${nodeId}/${resourceId}`);
+  }
+  return inspected;
+}
+
+function hasDockerContainerScope(user: User, baseScope: string, nodeId: string, inspected: any): boolean {
+  const resourceId = String(inspected?.scopeResourceId ?? '');
+  return !!resourceId && hasScopeForResource(user.scopes, baseScope, `${nodeId}/${resourceId}`);
+}
+
+/** Deployment results carry env and the webhook token; shape them like the deployment routes do. */
+function presentDeployment<T>(user: User, a: { nodeId: string; deploymentId: string }, data: T): T {
+  return presentDeploymentForCaller(data, user.scopes, a.nodeId, a.deploymentId);
 }
 
 function ensureDockerDeploymentScope(

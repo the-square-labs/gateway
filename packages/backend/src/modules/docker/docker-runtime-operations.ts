@@ -105,6 +105,26 @@ export async function applyPersistedDockerRuntimeSettingsToConfig(
   return { ...persisted, ...config };
 }
 
+/**
+ * Same result as applyPersistedDockerRuntimeSettingsToConfig without saving
+ * the request, so callers can validate before persisting.
+ */
+export async function mergePersistedDockerRuntimeSettingsIntoConfig(
+  context: DockerRuntimeOperationContext,
+  nodeId: string,
+  containerName: string,
+  config: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  if (!context.runtimeSettingsService) return config;
+  const existing = await context.runtimeSettingsService.get(nodeId, containerName);
+  const incoming = extractRuntimeConfig(config);
+  const merged = Object.values(incoming).every((value) => value === undefined)
+    ? existing
+    : mergeRuntimeConfig(existing ?? {}, incoming);
+  if (!merged || Object.keys(merged).length === 0) return config;
+  return { ...merged, ...config };
+}
+
 export async function validateDockerRuntimeResourceConfig(
   context: DockerRuntimeOperationContext,
   nodeId: string,

@@ -8,6 +8,7 @@ import { createChildLogger } from '@/lib/logger.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { inferenceTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -66,6 +67,14 @@ export class InferenceTokenService {
   }
 
   async createToken(userId: string, input: CreateInferenceTokenInput) {
+    // Covers AI-tool issuance too: impersonation must not mint lasting credentials.
+    if (getAuditRequestContext()?.impersonation) {
+      throw new AppError(
+        403,
+        'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+        'Inference tokens cannot be created while impersonating'
+      );
+    }
     const raw = `gwi_${randomBytes(32).toString('hex')}`;
     const [token] = await this.db
       .insert(inferenceTokens)

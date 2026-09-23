@@ -3,6 +3,7 @@ import { getCookie } from 'hono/cookie';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
 import { getAuditRequestContext, setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
@@ -383,6 +384,27 @@ export const sessionOnly: MiddlewareHandler<AppEnv> = async (c, next) => {
 };
 
 export const requireBrowserSession = sessionOnly;
+
+export const IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN = 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN';
+
+/**
+ * Impersonation lets an administrator act as another user for the lifetime of
+ * that session only. Anything that outlives the session (tokens, passkeys,
+ * TOTP factors, recovery codes) or ends the subject's own sessions is refused.
+ */
+export function assertNotImpersonating(
+  c: Context<AppEnv>,
+  message = 'This action is unavailable while impersonating'
+): void {
+  if (c.get('impersonation')) {
+    throw new AppError(403, IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN, message);
+  }
+}
+
+export const rejectImpersonation: MiddlewareHandler<AppEnv> = async (c, next) => {
+  assertNotImpersonating(c);
+  await next();
+};
 
 export function isProgrammaticAuth(c: Context<AppEnv>): boolean {
   return c.get('authType') === 'api-token' || c.get('authType') === 'oauth-token';

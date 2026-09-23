@@ -137,7 +137,8 @@ export class NotificationWebhookService {
       action: 'notification_webhook_created',
       resourceType: 'notification_webhook',
       resourceId: webhook.id,
-      details: { name: input.name, url: input.url },
+      // Webhook URLs routinely embed bearer tokens (Slack, Discord, Telegram); audit only the redacted form.
+      details: { name: input.name, url: redactWebhookUrl(input.url) },
     });
 
     logger.info('Webhook created', { id: webhook.id, name: input.name });

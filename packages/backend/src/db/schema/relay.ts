@@ -136,6 +136,11 @@ export const relayPolicySigningKeys = pgTable(
   (table) => ({
     keyIdUnique: unique('relay_policy_signing_keys_key_id_unique').on(table.keyId),
     statusIdx: index('relay_policy_signing_keys_status_idx').on(table.status),
+    // Exactly one key signs relay policy. Two active rows would make the signer
+    // depend on row order and could hand relays a key they have never pinned.
+    singleActiveIdx: uniqueIndex('relay_policy_signing_keys_single_active_idx')
+      .on(table.status)
+      .where(sql`${table.status} = 'active'`),
   })
 );
 

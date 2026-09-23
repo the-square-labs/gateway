@@ -129,6 +129,10 @@ export const DockerMigrationSchema = z.object({
   completedAt: z.coerce.date().nullable(),
 });
 
+export const DockerMigrationResolveInputSchema = z.object({
+  authoritativeSide: z.enum(['source', 'target']),
+});
+
 export const DockerMigrationListQuerySchema = z.object({
   status: DockerMigrationStatusSchema.optional(),
   nodeId: z.string().uuid().optional(),
@@ -138,3 +142,4 @@ export const DockerMigrationListQuerySchema = z.object({
 export type DockerMigrationPreflightInput = z.infer<typeof DockerMigrationPreflightInputSchema>;
 export type DockerMigrationCreateInput = z.infer<typeof DockerMigrationCreateInputSchema>;
 export type DockerMigrationPreflight = z.infer<typeof DockerMigrationPreflightSchema>;
+export type DockerMigrationResolveInput = z.infer<typeof DockerMigrationResolveInputSchema>;

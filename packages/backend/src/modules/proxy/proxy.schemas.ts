@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reservedTemplateVariableNames } from './proxy-template-variables.js';
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -35,6 +36,18 @@ const RewriteRuleSchema = z.object({
   destination: z.string().min(1).max(1024),
   type: z.enum(['permanent', 'temporary']),
 });
+
+const TemplateVariablesSchema = z
+  .record(z.union([z.string(), z.number(), z.boolean()]))
+  .superRefine((variables, ctx) => {
+    const reserved = reservedTemplateVariableNames(variables);
+    if (reserved.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Template variables cannot override Gateway-managed values: ${reserved.join(', ')}`,
+      });
+    }
+  });
 
 const HealthCheckBodyMatchModeSchema = z.enum(['includes', 'exact', 'starts_with', 'ends_with']);
 const RelaySpreadModeSchema = z.enum(['inherit', 'fixed', 'all']);
@@ -118,7 +131,7 @@ export const CreateProxyHostSchema = z
 
     // Nginx config template
     nginxTemplateId: z.string().uuid().optional(),
-    templateVariables: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+    templateVariables: TemplateVariablesSchema.optional(),
 
     // Health check
     healthCheckEnabled: z.boolean().default(false),
@@ -308,10 +321,7 @@ export const UpdateProxyHostSchema = z.object({
   folderId: z.string().uuid().optional().nullable(),
 
   nginxTemplateId: z.string().uuid().optional().nullable(),
-  templateVariables: z
-    .record(z.union([z.string(), z.number(), z.boolean()]))
-    .optional()
-    .nullable(),
+  templateVariables: TemplateVariablesSchema.optional().nullable(),
 
   healthCheckEnabled: z.boolean().optional(),
   healthCheckUrl: z.string().max(500).regex(/^\//, 'Must start with /').optional().nullable(),

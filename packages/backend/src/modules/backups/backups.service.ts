@@ -178,6 +178,8 @@ export class BackupService {
       schedule: string | null;
       timezone: string;
       lastScheduledAt: Date | null;
+      lastError: string | null;
+      lastErrorAt: Date | null;
       retentionCount: number;
       limits: {
         workspaceBytes: number;
@@ -213,7 +215,7 @@ export class BackupService {
   }> {
     return commercialModuleUnavailable();
   }
-  async cancel(_databaseId: string, _runId: string, _userId: string): Promise<void> {
+  async cancel(_databaseId: string, _runId: string, _userId: string, _options?: { force?: boolean }): Promise<void> {
     return commercialModuleUnavailable();
   }
   async reconcileActiveRuns(): Promise<void> {

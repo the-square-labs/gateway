@@ -16,6 +16,7 @@ import {
   storedRawConfigForRawModeEnablement,
 } from './proxy.service-helpers.js';
 import { assertRegisteredDomainsUseNode } from './proxy-domain-node.js';
+import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -127,93 +128,99 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       },
     });
 
-    // 2. Resolve SSL cert paths and build nginx config
-    try {
-      if (host.upstreamKind === 'pages') {
-        if (!this.pageRoutes || !input.pageProjectId || !input.pageTagId) {
-          throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
+    // 2. Resolve SSL cert paths and build nginx config. The host and node locks
+    // fence reconnect cleanup and concurrent edits until the create settles.
+    await withProxyLocks([proxyHostLockKey(host.id), host.nodeId && proxyNodeLockKey(host.nodeId)], async () => {
+      try {
+        if (host.upstreamKind === 'pages') {
+          if (!this.pageRoutes || !input.pageProjectId || !input.pageTagId) {
+            throw new AppError(503, 'PAGES_ROUTE_UNAVAILABLE', 'Pages Route service is unavailable');
+          }
+          await this.pageRoutes.activateNewHost(host.id, host.nodeId!, input.pageProjectId, input.pageTagId);
+        } else if (isDockerUpstream(host.upstreamKind)) {
+          if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
+          host = await this.secureLinks.prepare(host, true);
+          host = (await this.secureLinks.commitCutover(host.id)) ?? host;
         }
-        await this.pageRoutes.activateNewHost(host.id, host.nodeId!, input.pageProjectId, input.pageTagId);
-      } else if (isDockerUpstream(host.upstreamKind)) {
-        if (!this.secureLinks) throw new Error('Proxy Secure Links are unavailable');
-        host = await this.secureLinks.prepare(host, true);
-        host = (await this.secureLinks.commitCutover(host.id)) ?? host;
-      }
-      const certPaths = await this.resolveCertPaths(host);
-      const accessList = await this.resolveAccessList(host.accessListId);
-      const config = await this.buildNginxConfig(host, certPaths, accessList);
+        const certPaths = await this.resolveCertPaths(host);
+        const accessList = await this.resolveAccessList(host.accessListId);
+        const config = await this.buildNginxConfig(host, certPaths, accessList);
 
-      // 3. Apply config via daemon or legacy docker
-      await this.applyConfigToNode(
-        host.id,
-        config,
-        host.nodeId,
-        certPaths.preparedTls,
-        this.configOwnershipForHost(host),
-        host.accessListId
-      );
-      if (isDockerUpstream(host.upstreamKind)) {
-        await this.secureLinks?.activate(host.id);
-        const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
-        if (!availabilityManaged) this.queueSecureLinkRuntimeSample(host);
-      }
-    } catch (error) {
-      // 4. If nginx fails, delete the DB row and throw
-      logger.error('Failed to apply nginx config for new proxy host, rolling back DB insert', {
-        hostId: host.id,
-        error,
-      });
-      // Fence the failed row before any network cleanup. Docker upstream
-      // reconciliation runs concurrently and must not be able to re-apply a
-      // config after removeConfigFromNode but before the row is deleted.
-      await this.db.update(proxyHosts).set({ enabled: false, updatedAt: new Date() }).where(eq(proxyHosts.id, host.id));
-      // Applying a config can fail after nginx-daemon has already persisted the
-      // file (for example while the relay policy is being committed). Remove
-      // that partial deployment before deleting the row or a stale server_name
-      // can shadow the next successful create for the same domain.
-      await this.removeConfigFromNode(host.id, host.nodeId).catch((cleanupError) => {
-        logger.warn('Failed to remove partially applied proxy config after create rollback', {
+        // 3. Apply config via daemon or legacy docker
+        await this.applyConfigToNode(
+          host.id,
+          config,
+          host.nodeId,
+          certPaths.preparedTls,
+          this.configOwnershipForHost(host),
+          host.accessListId
+        );
+        if (isDockerUpstream(host.upstreamKind)) {
+          await this.secureLinks?.activate(host.id);
+          const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
+          if (!availabilityManaged) this.queueSecureLinkRuntimeSample(host);
+        }
+      } catch (error) {
+        // 4. If nginx fails, delete the DB row and throw
+        logger.error('Failed to apply nginx config for new proxy host, rolling back DB insert', {
           hostId: host.id,
-          cleanupError,
+          error,
         });
-      });
-      await this.secureLinks?.cleanup(host).catch((cleanupError) => {
-        logger.warn('Failed to cleanup secure link after proxy create rollback', { hostId: host.id, cleanupError });
-      });
-      let preservePageRouteOwnership = false;
-      if (host.upstreamKind === 'pages') {
-        try {
-          // activateNewHost can return after its own best-effort marker write
-          // failed. Persist the failed-create claim before attempting another
-          // daemon cleanup so reconciliation never infers ownership from a
-          // generic staging row.
-          await this.pageRoutes?.claimFailedCreateCleanup(host.id);
-          await this.pageRoutes?.removeHost(host.id, host.nodeId);
-        } catch (cleanupError) {
-          preservePageRouteOwnership = true;
-          logger.warn('Preserving Pages Route ownership after proxy create rollback cleanup failure', {
+        // Fence the failed row before any network cleanup. Docker upstream
+        // reconciliation runs concurrently and must not be able to re-apply a
+        // config after removeConfigFromNode but before the row is deleted.
+        await this.db
+          .update(proxyHosts)
+          .set({ enabled: false, updatedAt: new Date() })
+          .where(eq(proxyHosts.id, host.id));
+        // Applying a config can fail after nginx-daemon has already persisted the
+        // file (for example while the relay policy is being committed). Remove
+        // that partial deployment before deleting the row or a stale server_name
+        // can shadow the next successful create for the same domain.
+        await this.removeConfigFromNode(host.id, host.nodeId).catch((cleanupError) => {
+          logger.warn('Failed to remove partially applied proxy config after create rollback', {
             hostId: host.id,
             cleanupError,
           });
-          await this.disablePageHostForDeferredCleanup(host.id, cleanupError);
+        });
+        await this.secureLinks?.cleanup(host).catch((cleanupError) => {
+          logger.warn('Failed to cleanup secure link after proxy create rollback', { hostId: host.id, cleanupError });
+        });
+        let preservePageRouteOwnership = false;
+        if (host.upstreamKind === 'pages') {
+          try {
+            // activateNewHost can return after its own best-effort marker write
+            // failed. Persist the failed-create claim before attempting another
+            // daemon cleanup so reconciliation never infers ownership from a
+            // generic staging row.
+            await this.pageRoutes?.claimFailedCreateCleanup(host.id);
+            await this.pageRoutes?.removeHost(host.id, host.nodeId);
+          } catch (cleanupError) {
+            preservePageRouteOwnership = true;
+            logger.warn('Preserving Pages Route ownership after proxy create rollback cleanup failure', {
+              hostId: host.id,
+              cleanupError,
+            });
+            await this.disablePageHostForDeferredCleanup(host.id, cleanupError);
+          }
         }
-      }
-      if (!preservePageRouteOwnership) {
-        try {
-          await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
-        } catch (deleteError) {
-          if (host.upstreamKind !== 'pages') throw deleteError;
-          preservePageRouteOwnership = true;
-          await this.disablePageHostForDeferredCleanup(host.id, deleteError);
+        if (!preservePageRouteOwnership) {
+          try {
+            await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
+          } catch (deleteError) {
+            if (host.upstreamKind !== 'pages') throw deleteError;
+            preservePageRouteOwnership = true;
+            await this.disablePageHostForDeferredCleanup(host.id, deleteError);
+          }
         }
+        if (error instanceof AppError) throw error;
+        throw new AppError(
+          500,
+          'NGINX_CONFIG_FAILED',
+          `Failed to apply Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
+        );
       }
-      if (error instanceof AppError) throw error;
-      throw new AppError(
-        500,
-        'NGINX_CONFIG_FAILED',
-        `Failed to apply Nginx config: ${error instanceof Error ? error.message : 'unknown error'}`
-      );
-    }
+    });
 
     // 5. Audit log
     await this.auditService.log({
@@ -242,6 +249,20 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
   // -----------------------------------------------------------------------
 
   async updateProxyHost(
+    id: string,
+    input: UpdateProxyHostInput,
+    userId: string,
+    validationOptions: ProxyValidationInput = {}
+  ) {
+    // Serialize the DB write and node apply with every other change to this
+    // host, so the node always serves the last committed row. A move also
+    // fences reconnect cleanup on the target node.
+    return withProxyLocks([proxyHostLockKey(id), input.nodeId && proxyNodeLockKey(input.nodeId)], () =>
+      this.updateProxyHostLocked(id, input, userId, validationOptions)
+    );
+  }
+
+  private async updateProxyHostLocked(
     id: string,
     input: UpdateProxyHostInput,
     userId: string,

@@ -136,6 +136,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
   it('authorizes proxy host creation from a node-scoped proxy:create grant', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const proxyService = {
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
       createProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1' }),
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
@@ -296,6 +297,13 @@ describe('AIService MCP delegated scope audit behavior', () => {
   it('uses delegated MCP scopes for proxy advanced-config secondary checks', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const proxyService = {
+      getProxyHost: vi.fn().mockResolvedValue({
+        id: 'proxy-1',
+        upstreamKind: 'manual',
+        pageTarget: null,
+        advancedConfig: null,
+      }),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
       updateProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1' }),
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
@@ -315,6 +323,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const proxyService = {
       getProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1', upstreamKind: 'manual', pageTarget: null }),
+      assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
       updateProxyHost: vi.fn().mockResolvedValue({ id: 'proxy-1' }),
     };
     const service = createService({ nodesService: {}, proxyService, auditService });

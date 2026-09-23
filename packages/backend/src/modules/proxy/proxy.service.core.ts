@@ -32,7 +32,9 @@ import {
   type DockerUpstreamReference,
   type ProxyDockerUpstreamService,
 } from './proxy-docker-upstream.service.js';
+import { withProxyHostLock } from './proxy-host-lock.js';
 import type { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
+import { assertProxyReferenceAccess, type ProxyReferenceInput } from './proxy-reference-access.js';
 import type { ProxySecureLinkService } from './proxy-secure-link.service.js';
 import type { WithDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
@@ -67,6 +69,7 @@ export function normalizedHostname(value: string): string {
 // ---------------------------------------------------------------------------
 
 export type ProxyHostRow = typeof proxyHosts.$inferSelect;
+type CertPathOptions = { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean };
 export type ProxyHostView = WithDockerUpstreamDisplay<ProxyHostRow>;
 
 export interface ProxyHostTrafficRuntime {
@@ -149,6 +152,8 @@ export abstract class ProxyServiceCore {
   protected dockerReconcileForce = false;
   protected dockerReconcileRetry?: ReturnType<typeof setTimeout>;
   protected dockerReconcileBackoffMs = 5_000;
+  /** Bumped on every config push/removal; reconnect cleanup uses it to detect concurrent writes. */
+  protected readonly hostConfigEpochs = new Map<string, number>();
   protected readonly secureLinkRuntimeHistory = new Map<string, ProxySecureLinkRuntimeSnapshot[]>();
   protected readonly secureLinkRuntimeSamplesInFlight = new Map<string, Promise<ProxySecureLinkRuntimeSample>>();
   protected secureLinkRuntimeBackgroundInFlight: Promise<void> | null = null;
@@ -217,22 +222,52 @@ export abstract class ProxyServiceCore {
     this.queueDockerReconciliation(true);
   }
 
+  /** Require access to referenced certificates, access lists and templates (see proxy-reference-access). */
+  async assertReferenceAccess(
+    scopes: string[],
+    input: ProxyReferenceInput,
+    existing?: ProxyReferenceInput
+  ): Promise<void> {
+    await assertProxyReferenceAccess(this.db, scopes, input, existing);
+  }
+
   /** Re-render a host after an Additional Route lifecycle transition. */
   async reconcileAdditionalRouteHost(hostId: string): Promise<void> {
-    const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
-    if (!host) return;
-    if (!host.enabled) return;
-    const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
+    await this.reapplyHostConfig(hostId);
+  }
+
+  /**
+   * Re-render and apply the current DB state of one enabled host through the
+   * normal build/apply path (raw configs, maintenance, Secure Links, Pages,
+   * Additional Routes, access-list credentials and config ownership).
+   * Returns the applied host, or null when the host is missing or disabled.
+   */
+  async reapplyHostConfig(hostId: string): Promise<ProxyHostRow | null> {
+    return withProxyHostLock(hostId, async () => {
+      const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, hostId) });
+      if (!host?.enabled) return null;
+      await this.renderAndApplyHost(host, { preserveLegacyOnUnsupported: true });
+      return host;
+    });
+  }
+
+  protected async renderAndApplyHost(
+    host: ProxyHostRow,
+    certOptions: CertPathOptions = {}
+  ): Promise<{ config: string; configOwnership: string; epoch: number }> {
+    const certPaths = await this.resolveCertPaths(host, certOptions);
     const accessList = await this.resolveAccessList(host.accessListId);
     const config = await this.buildNginxConfig(host, certPaths, accessList);
+    const configOwnership = this.configOwnershipForHost(host);
     await this.applyConfigToNode(
       host.id,
       config,
       host.nodeId,
       certPaths.preparedTls,
-      this.configOwnershipForHost(host),
+      configOwnership,
       host.accessListId
     );
+    return { config, configOwnership, epoch: this.hostConfigEpochs.get(host.id) ?? 0 };
   }
 
   async reconcileTemplateHosts(
@@ -305,6 +340,7 @@ export abstract class ProxyServiceCore {
     accessListId?: string | null
   ): Promise<void> {
     const resolvedNodeId = preparedTls?.nodeId ?? (await this.nodeDispatch.resolveNodeId(nodeId));
+    this.bumpHostConfigEpoch(hostId);
     await this.deployAccessListCredentials(resolvedNodeId, accessListId);
     if (preparedTls) {
       await this.certificateDistribution.applyHostBundle({ id: hostId, nodeId }, config, preparedTls, configOwnership);
@@ -353,21 +389,18 @@ export abstract class ProxyServiceCore {
   }
 
   protected async restoreConfigOnNode(host: ProxyHostRow): Promise<void> {
-    const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
-    const accessList = await this.resolveAccessList(host.accessListId);
-    const config = await this.buildNginxConfig(host, certPaths, accessList);
-    await this.applyConfigToNode(
-      host.id,
-      config,
-      host.nodeId,
-      certPaths.preparedTls,
-      this.configOwnershipForHost(host),
-      host.accessListId
-    );
+    await this.renderAndApplyHost(host, { preserveLegacyOnUnsupported: true });
+  }
+
+  protected bumpHostConfigEpoch(hostId: string): number {
+    const next = (this.hostConfigEpochs.get(hostId) ?? 0) + 1;
+    this.hostConfigEpochs.set(hostId, next);
+    return next;
   }
 
   protected async removeConfigFromNode(hostId: string, nodeId: string | null): Promise<void> {
     const resolvedNodeId = await this.nodeDispatch.resolveNodeId(nodeId);
+    this.bumpHostConfigEpoch(hostId);
     const result = await this.nodeDispatch.removeConfig(resolvedNodeId, hostId);
     if (!result.success) {
       throw new Error(result.error || 'Daemon config remove failed');
@@ -479,15 +512,27 @@ export abstract class ProxyServiceCore {
       );
     }
 
+    // A stored Compose target also records its resolved container name, so a
+    // request naming a container without mentioning the Compose fields is a
+    // switch to that named container: the Compose reference must not win.
+    const selectsNamedContainer =
+      typeof input.dockerContainerName === 'string' &&
+      input.dockerComposeProjectId === undefined &&
+      input.dockerComposeServiceName === undefined &&
+      (existing.dockerComposeProjectId != null || existing.dockerComposeServiceName != null);
     const reference: DockerUpstreamReference = {
       upstreamKind: effectiveKind,
       dockerNodeId: input.dockerNodeId === undefined ? existing.dockerNodeId : input.dockerNodeId,
       dockerContainerName:
         input.dockerContainerName === undefined ? existing.dockerContainerName : input.dockerContainerName,
-      dockerComposeProjectId:
-        input.dockerComposeProjectId === undefined ? existing.dockerComposeProjectId : input.dockerComposeProjectId,
-      dockerComposeServiceName:
-        input.dockerComposeServiceName === undefined
+      dockerComposeProjectId: selectsNamedContainer
+        ? null
+        : input.dockerComposeProjectId === undefined
+          ? existing.dockerComposeProjectId
+          : input.dockerComposeProjectId,
+      dockerComposeServiceName: selectsNamedContainer
+        ? null
+        : input.dockerComposeServiceName === undefined
           ? existing.dockerComposeServiceName
           : input.dockerComposeServiceName,
       dockerDeploymentId:
@@ -567,10 +612,7 @@ export abstract class ProxyServiceCore {
   // Helpers — cert path resolution
   // -----------------------------------------------------------------------
 
-  protected async resolveCertPaths(
-    host: ProxyHostRow,
-    options: { prepare?: boolean; legacy?: boolean; preserveLegacyOnUnsupported?: boolean } = {}
-  ): Promise<CertPaths> {
+  protected async resolveCertPaths(host: ProxyHostRow, options: CertPathOptions = {}): Promise<CertPaths> {
     if (!host.sslEnabled) return { sslCertPath: null, sslKeyPath: null, sslChainPath: null };
     if (options.legacy) return this.certificateDistribution.legacyPathsForHost(host);
     if (options.preserveLegacyOnUnsupported && !(await this.certificateDistribution.supportsNode(host.nodeId))) {

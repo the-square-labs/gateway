@@ -2,7 +2,23 @@ import { fireEvent, screen, waitFor } from "@testing-library/react";
 import { vi } from "vitest";
 import { api } from "@/services/api";
 import { renderWithRouter } from "@/test/render";
+import type { SiemDestination } from "@/types";
 import { SiemDestinationDialog } from "./SiemDestinationDialog";
+
+const EXISTING: SiemDestination = {
+  id: "siem-1",
+  name: "Security Operations",
+  url: "https://siem.example.test/gateway/audit",
+  authType: "bearer",
+  customHeaderName: null,
+  secretConfigured: true,
+  enabled: true,
+  pendingDeliveries: 0,
+  lastDeliveryStatus: null,
+  lastDeliveryAt: null,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:00:00.000Z",
+};
 
 describe("SiemDestinationDialog", () => {
   beforeEach(() => {
@@ -52,5 +68,63 @@ describe("SiemDestinationDialog", () => {
     if (!deliveryRow?.parentElement) throw new Error("Delivery control container is missing");
 
     expect(deliveryRow.parentElement).toHaveClass("pt-4");
+  });
+  it("requires the secret again when an edit changes the endpoint URL", async () => {
+    const updateSiemDestination = vi
+      .spyOn(api, "updateSiemDestination")
+      .mockResolvedValue(EXISTING as never);
+
+    renderWithRouter(
+      <SiemDestinationDialog open onOpenChange={vi.fn()} destination={EXISTING} onSaved={vi.fn()} />
+    );
+
+    fireEvent.change(screen.getByLabelText("HTTPS endpoint"), {
+      target: { value: "https://collector.example.test/audit" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(
+      await screen.findByText("Re-enter the secret when changing the destination URL")
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("Bearer token")).toHaveAttribute("aria-invalid", "true");
+    expect(updateSiemDestination).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Bearer token"), { target: { value: "new-token" } });
+    expect(
+      screen.queryByText("Re-enter the secret when changing the destination URL")
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(updateSiemDestination).toHaveBeenCalledWith("siem-1", {
+        name: "Security Operations",
+        url: "https://collector.example.test/audit",
+        authType: "bearer",
+        enabled: true,
+        secret: "new-token",
+      })
+    );
+  });
+
+  it("keeps the stored secret when an edit leaves the endpoint URL unchanged", async () => {
+    const updateSiemDestination = vi
+      .spyOn(api, "updateSiemDestination")
+      .mockResolvedValue(EXISTING as never);
+
+    renderWithRouter(
+      <SiemDestinationDialog open onOpenChange={vi.fn()} destination={EXISTING} onSaved={vi.fn()} />
+    );
+
+    fireEvent.change(screen.getByLabelText("Name"), { target: { value: "SOC" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() =>
+      expect(updateSiemDestination).toHaveBeenCalledWith("siem-1", {
+        name: "SOC",
+        url: "https://siem.example.test/gateway/audit",
+        authType: "bearer",
+        enabled: true,
+      })
+    );
   });
 });

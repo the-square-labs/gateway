@@ -343,6 +343,7 @@ export class DatabaseConnectionService {
     _userId: string,
     _options?: {
       maxRows?: number;
+      queryAccess?: SqlQueryAccess;
     }
   ): Promise<{
     results: {

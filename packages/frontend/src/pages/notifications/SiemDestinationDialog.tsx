@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import type { SiemAuthType, SiemDestination } from "@/types";
 
@@ -49,6 +50,17 @@ export function SiemDestinationDialog({
   const [customHeaderName, setCustomHeaderName] = useState("");
   const [secret, setSecret] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [secretError, setSecretError] = useState<string | null>(null);
+  // The stored credential was issued for the saved endpoint, so the backend never forwards it
+  // to a new URL implicitly.
+  const urlChanged = isEdit && url.trim() !== destination.url;
+  const secretPlaceholder = !isEdit
+    ? "Required"
+    : urlChanged
+      ? "Required when the endpoint changes"
+      : authType !== destination.authType
+        ? "Required when the authentication changes"
+        : "Leave blank to keep current";
 
   useEffect(() => {
     if (!open) return;
@@ -57,8 +69,19 @@ export function SiemDestinationDialog({
     setAuthType(destination?.authType ?? "bearer");
     setCustomHeaderName(destination?.customHeaderName ?? "");
     setSecret("");
+    setSecretError(null);
     setEnabled(destination?.enabled ?? true);
   }, [destination, open]);
+
+  const changeUrl = (value: string) => {
+    setUrl(value);
+    setSecretError(null);
+  };
+
+  const changeSecret = (value: string) => {
+    setSecret(value);
+    if (value) setSecretError(null);
+  };
 
   const validateUrl = (value: string) => {
     try {
@@ -93,11 +116,15 @@ export function SiemDestinationDialog({
       return;
     }
     if (!isEdit && !secret) {
-      toast.error("Authentication secret is required");
+      setSecretError("Authentication secret is required");
       return;
     }
     if (isEdit && authType !== destination.authType && !secret) {
-      toast.error("Provide a new secret when changing authentication type");
+      setSecretError("Provide a new secret when changing authentication type");
+      return;
+    }
+    if (isEdit && trimmedUrl !== destination.url && !secret) {
+      setSecretError("Re-enter the secret when changing the destination URL");
       return;
     }
 
@@ -127,6 +154,10 @@ export function SiemDestinationDialog({
       onOpenChange(false);
       onSaved();
     } catch (error) {
+      if (error instanceof ApiRequestError && error.code === "SIEM_SECRET_REQUIRED") {
+        setSecretError(error.message);
+        return;
+      }
       if (!handleLicenseApiError(error, "SIEM destinations")) {
         toast.error(error instanceof Error ? error.message : "Failed to save SIEM destination");
       }
@@ -164,7 +195,7 @@ export function SiemDestinationDialog({
               id="siem-url"
               type="url"
               value={url}
-              onChange={(event) => setUrl(event.target.value)}
+              onChange={(event) => changeUrl(event.target.value)}
               placeholder="https://siem.example.com/gateway/audit"
               autoCapitalize="none"
               autoCorrect="off"
@@ -214,10 +245,13 @@ export function SiemDestinationDialog({
                         id="siem-secret"
                         type="password"
                         value={secret}
-                        onChange={(event) => setSecret(event.target.value)}
-                        placeholder={isEdit ? "Leave blank to keep current" : "Required"}
+                        onChange={(event) => changeSecret(event.target.value)}
+                        placeholder={secretPlaceholder}
                         autoComplete="new-password"
+                        aria-invalid={secretError ? true : undefined}
+                        aria-describedby={secretError ? "siem-secret-error" : undefined}
                       />
+                      <SecretError message={secretError} />
                       <p className="text-xs text-muted-foreground">
                         Gateway sends this header with every request. Gateway transport headers
                         cannot be overridden.
@@ -233,10 +267,13 @@ export function SiemDestinationDialog({
                       id="siem-secret"
                       type="password"
                       value={secret}
-                      onChange={(event) => setSecret(event.target.value)}
-                      placeholder={isEdit ? "Leave blank to keep current" : "Required"}
+                      onChange={(event) => changeSecret(event.target.value)}
+                      placeholder={secretPlaceholder}
                       autoComplete="new-password"
+                      aria-invalid={secretError ? true : undefined}
+                      aria-describedby={secretError ? "siem-secret-error" : undefined}
                     />
+                    <SecretError message={secretError} />
                     {authType === "hmac_sha256" && (
                       <p className="text-xs text-muted-foreground">
                         Gateway sends <code>X-Gateway-Timestamp</code> and signs it with the raw
@@ -274,5 +311,14 @@ export function SiemDestinationDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function SecretError({ message }: { message: string | null }) {
+  if (!message) return null;
+  return (
+    <p id="siem-secret-error" role="alert" className="text-xs text-destructive">
+      {message}
+    </p>
   );
 }

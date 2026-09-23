@@ -26,7 +26,7 @@ import {
 import { AdditionalRouteService } from './additional-route.service.js';
 import { CreateAdditionalRouteSchema, UpdateAdditionalRouteSchema } from './additional-route.validation.js';
 import { FolderService } from './folder.service.js';
-import { redactPageTargetWithoutProjectAccess } from './page-target-visibility.js';
+import { redactProxyHostForScopes } from './page-target-visibility.js';
 import {
   createProxyHostRoute,
   deleteProxyHostRoute,
@@ -61,12 +61,33 @@ export const proxyRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidat
 
 proxyRoutes.use('*', authMiddleware);
 
-function requestUsesRawProxyConfig(input: { type?: string; rawConfig?: unknown; rawConfigEnabled?: unknown }): boolean {
-  return input.type === 'raw' || input.rawConfig !== undefined || input.rawConfigEnabled !== undefined;
+type RawModeState = { type?: string | null; rawConfigEnabled?: boolean | null };
+
+/**
+ * A raw-mode "toggle" is an actual change of the stored mode. Clients that
+ * submit a complete form echo the unchanged `rawConfigEnabled`/`type`, which
+ * must not require the raw scopes.
+ */
+function requestTogglesRawProxyConfig(
+  input: { type?: string; rawConfigEnabled?: unknown },
+  existing: RawModeState = {}
+): boolean {
+  const becomesRawType = input.type === 'raw' && existing.type !== 'raw';
+  const leavesRawType = existing.type === 'raw' && input.type !== undefined && input.type !== 'raw';
+  const changesFlag =
+    input.rawConfigEnabled !== undefined && input.rawConfigEnabled !== (existing.rawConfigEnabled ?? false);
+  return becomesRawType || leavesRawType || changesFlag;
 }
 
-function requestTogglesRawProxyConfig(input: { type?: string; rawConfigEnabled?: unknown }): boolean {
-  return input.type === 'raw' || input.rawConfigEnabled !== undefined;
+function requestUsesRawProxyConfig(
+  input: { type?: string; rawConfig?: unknown; rawConfigEnabled?: unknown },
+  existing?: RawModeState
+): boolean {
+  return input.rawConfig !== undefined || requestTogglesRawProxyConfig(input, existing);
+}
+
+function normalizedAdvancedConfig(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
 function requestOnlyUpdatesRawProxyConfig(input: Record<string, unknown>): boolean {
@@ -79,12 +100,12 @@ function canReadRawProxyConfig(scopes: string[], id: string) {
 }
 
 function serializeProxyHostForBrowser(host: Record<string, unknown>, scopes: string[], id: string) {
-  const scoped = redactPageTargetWithoutProjectAccess(host, scopes);
+  const scoped = redactProxyHostForScopes(host, scopes);
   return canReadRawProxyConfig(scopes, id) ? scoped : redactRawProxyConfigForBrowser(scoped);
 }
 
 function serializeProxyHostForProgrammatic(host: Record<string, unknown>, scopes: string[]) {
-  return stripRawProxyConfigForProgrammatic(redactPageTargetWithoutProjectAccess(host, scopes));
+  return stripRawProxyConfigForProgrammatic(redactProxyHostForScopes(host, scopes));
 }
 
 proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('proxy:view') }, async (c) => {
@@ -95,7 +116,7 @@ proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('prox
     query,
     hasScope(scopes, 'proxy:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'proxy:view') }
   );
-  const scopedData = result.data.map((host) => redactPageTargetWithoutProjectAccess(host as any, scopes));
+  const scopedData = result.data.map((host) => redactProxyHostForScopes(host as any, scopes));
   if (isProgrammaticAuth(c)) {
     return c.json({ ...result, data: stripRawProxyConfigArrayForProgrammatic(scopedData as any[]) });
   }
@@ -380,6 +401,7 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   if (input.rawConfig !== undefined && !hasScope(scopes, 'proxy:raw:write')) {
     throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope');
   }
+  await proxyService.assertReferenceAccess(scopes, input);
   const host = await proxyService.createProxyHost(input, user.id, {
     bypassAdvancedValidation,
     bypassRawValidation,
@@ -394,14 +416,31 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   const user = c.get('user')!;
   const id = c.req.param('id')!;
   const input = UpdateProxyHostSchema.parse(await c.req.json());
-  if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input)) {
+  const scopes = c.get('effectiveScopes') || [];
+  const existing = await proxyService.getProxyHost(id);
+  if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input, existing)) {
     return c.json(
       { code: 'BROWSER_SESSION_REQUIRED', message: 'Raw nginx config requires browser session authentication' },
       403
     );
   }
-  const scopes = c.get('effectiveScopes') || [];
-  const existing = await proxyService.getProxyHost(id);
+  // Moving a route between folders goes through the same checks as the move
+  // endpoint. An unchanged folderId (full-object PUT) is ignored.
+  if (input.folderId !== undefined) {
+    if ((input.folderId ?? null) === ((existing as { folderId?: string | null }).folderId ?? null)) {
+      delete input.folderId;
+    } else {
+      if (!hasScope(scopes, 'proxy:folders:manage')) {
+        throw new AppError(403, 'FORBIDDEN', 'Moving a route requires proxy:folders:manage scope', {
+          requiredScope: 'proxy:folders:manage',
+        });
+      }
+      if (!hasScope(scopes, `proxy:edit:${id}`) || !hasScopeForCreation(scopes, 'proxy:edit', input.folderId)) {
+        throw new AppError(403, 'FORBIDDEN', 'Missing route edit access for the move destination');
+      }
+      await container.resolve(FolderService).assertFolderExists(input.folderId ?? undefined);
+    }
+  }
   if (input.upstreamKind === 'pages' || input.pageProjectId != null || input.pageTagId != null) {
     await container.resolve(LicensePolicyService).requireFeature('pages');
     await container.resolve(PageProfileService).requireEnabled();
@@ -424,12 +463,22 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
   }
-  if (input.advancedConfig && !hasScope(scopes, `proxy:advanced:${id}`)) {
-    throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
+  // Setting or clearing the advanced config both need the scope; echoing the
+  // stored value (or the redacted null a scope-less viewer received) does not.
+  if (
+    input.advancedConfig !== undefined &&
+    !hasScope(scopes, `proxy:advanced:${id}`) &&
+    normalizedAdvancedConfig(input.advancedConfig) !== normalizedAdvancedConfig(existing.advancedConfig)
+  ) {
+    if (normalizedAdvancedConfig(input.advancedConfig) === null) {
+      delete input.advancedConfig;
+    } else {
+      throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
+    }
   }
   const bypassAdvancedValidation = hasScope(scopes, `proxy:advanced:bypass:${id}`);
   const bypassRawValidation = hasScope(scopes, `proxy:raw:bypass:${id}`);
-  if (requestTogglesRawProxyConfig(input)) {
+  if (requestTogglesRawProxyConfig(input, existing)) {
     if (!hasScope(scopes, `proxy:raw:toggle:${id}`) && !hasScope(scopes, 'proxy:raw:toggle')) {
       throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:toggle scope');
     }
@@ -442,6 +491,7 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   if (input.nodeId && input.nodeId !== existing.nodeId && !hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
   }
+  await proxyService.assertReferenceAccess(scopes, input, existing);
   const host = await proxyService.updateProxyHost(id, input, user.id, {
     bypassAdvancedValidation,
     bypassRawValidation,

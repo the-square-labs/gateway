@@ -6,10 +6,12 @@ import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
-import type {
-  AlertRuleListQuery,
-  CreateAlertRuleInput,
-  UpdateAlertRuleInput,
+import {
+  type AlertRuleListQuery,
+  type CreateAlertRuleInput,
+  isOnceADayAlertRule,
+  ONCE_A_DAY_ALERT_WINDOWS,
+  type UpdateAlertRuleInput,
 } from './notification-alert-rule.schemas.js';
 
 const logger = createChildLogger('AlertRuleService');
@@ -79,6 +81,8 @@ export class NotificationAlertRuleService {
   }
 
   async create(input: CreateAlertRuleInput, userId: string) {
+    // API, AI and MCP all create through here; normalize windows a once-a-day rule can never satisfy.
+    if (isOnceADayAlertRule(input)) input = { ...input, ...ONCE_A_DAY_ALERT_WINDOWS };
     const [rule] = await this.db
       .insert(notificationAlertRules)
       .values({
@@ -136,6 +140,11 @@ export class NotificationAlertRuleService {
     if (input.messageTemplate !== undefined) updates.messageTemplate = input.messageTemplate;
     if (input.webhookIds !== undefined) updates.webhookIds = input.webhookIds;
     if (input.cooldownSeconds !== undefined) updates.cooldownSeconds = input.cooldownSeconds;
+    if (isOnceADayAlertRule({ ...existing, metric: input.metric ?? existing.metric })) {
+      for (const [key, value] of Object.entries(ONCE_A_DAY_ALERT_WINDOWS)) {
+        if (updates[key] !== undefined || existing[key as keyof typeof existing] !== value) updates[key] = value;
+      }
+    }
 
     const [updated] = await this.db
       .update(notificationAlertRules)

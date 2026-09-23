@@ -48,6 +48,8 @@ const logger = createChildLogger('AuthService');
 const PKCE_STATE_PREFIX = 'oidc:pkce:';
 const PRECREATED_SUBJECT_PREFIX = 'manual:';
 const SYSTEM_SUBJECT_PREFIX = 'system:';
+/** Subject namespaces Gateway writes itself; an identity provider must never be able to claim them. */
+const RESERVED_SUBJECT_PREFIXES = [PRECREATED_SUBJECT_PREFIX, SYSTEM_SUBJECT_PREFIX] as const;
 const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;
 export const AI_APPROVAL_MODES = ['always-ask', 'normal', 'bypass-non-destructive', 'bypass-everything'] as const;
@@ -66,6 +68,8 @@ export interface DeletedUser {
 
 export interface NormalizedOidcClaims {
   oidcSubject: string;
+  /** Normalized issuer that asserted the subject; null only for legacy callers without an issuer. */
+  oidcIssuer: string | null;
   email: string | null;
   emailVerified: boolean;
   name: string | null;
@@ -77,12 +81,22 @@ export interface OidcSessionMetadata {
   userAgent?: string;
 }
 
-export function normalizeOidcClaims(claims: Record<string, unknown> | undefined | null): NormalizedOidcClaims {
+/** Issuer identifiers are compared without trailing slashes so `https://idp/` and `https://idp` match. */
+export function normalizeOidcIssuer(value: string | null | undefined): string | null {
+  const trimmed = value?.trim().replace(/\/+$/, '');
+  return trimmed ? trimmed : null;
+}
+
+export function normalizeOidcClaims(
+  claims: Record<string, unknown> | undefined | null,
+  fallbackIssuer?: string | null
+): NormalizedOidcClaims {
   const subject = typeof claims?.sub === 'string' ? claims.sub : '';
   if (!subject) {
     throw new Error('No subject claim in ID token');
   }
-  if (subject.startsWith(SYSTEM_SUBJECT_PREFIX)) {
+  const lowerSubject = subject.trim().toLowerCase();
+  if (RESERVED_SUBJECT_PREFIXES.some((prefix) => lowerSubject.startsWith(prefix))) {
     throw new Error('OIDC subject uses a reserved Gateway namespace');
   }
 
@@ -90,6 +104,7 @@ export function normalizeOidcClaims(claims: Record<string, unknown> | undefined 
 
   return {
     oidcSubject: subject,
+    oidcIssuer: normalizeOidcIssuer(typeof claims?.iss === 'string' ? claims.iss : fallbackIssuer),
     email: email || null,
     emailVerified: claims?.email_verified === true,
     name: typeof claims?.name === 'string' && claims.name.trim() ? claims.name.trim() : null,
@@ -241,6 +256,7 @@ export class AuthService {
     // accept a callback for a method that has been disabled in the meantime.
     await this.assertAuthMethodEnabled('oidc');
     const config = await this.getOIDCConfig();
+    const runtime = (await this.oidcSettingsService?.getRuntimeConfig()) ?? null;
 
     const oidcState = await this.cacheService.get<OIDCState>(`${PKCE_STATE_PREFIX}${state}`);
 
@@ -260,7 +276,10 @@ export class AuthService {
         expectedState: state,
       });
 
-      const normalizedClaims = normalizeOidcClaims(tokens.claims() as Record<string, unknown> | undefined | null);
+      const normalizedClaims = normalizeOidcClaims(
+        tokens.claims() as Record<string, unknown> | undefined | null,
+        runtime?.issuer ?? null
+      );
       const user = await this.findOrCreateUser(normalizedClaims);
 
       const { sessionId } = await this.sessionService.createSession(user, tokens.access_token, tokens.refresh_token, {
@@ -290,6 +309,15 @@ export class AuthService {
     });
 
     if (existingUser) {
+      // Subjects are only unique per issuer. Once an account has been bound to
+      // an issuer, the same `sub` from any other issuer is a different person.
+      if (existingUser.oidcIssuer && existingUser.oidcIssuer !== data.oidcIssuer) {
+        throw new AppError(
+          403,
+          'OIDC_ISSUER_MISMATCH',
+          'This account is linked to a different identity provider. Contact an administrator.'
+        );
+      }
       if (existingUser.deletedAt) {
         throw new AppError(
           403,
@@ -297,6 +325,9 @@ export class AuthService {
           'This account has been deleted and must be restored by a system administrator'
         );
       }
+      // Accounts created before issuers were recorded are bound on their
+      // next login under the currently configured issuer.
+      const bindIssuer = !existingUser.oidcIssuer && data.oidcIssuer !== null;
       const authSettings = await this.authSettingsService.getConfig();
       const canSyncEmail =
         normalizedEmail !== null &&
@@ -306,6 +337,7 @@ export class AuthService {
       const nextAvatarUrl = isCustomAvatarUrl(existingUser.avatarUrl) ? existingUser.avatarUrl : data.avatarUrl;
 
       if (
+        bindIssuer ||
         existingUser.email !== nextEmail ||
         existingUser.name !== nextName ||
         existingUser.avatarUrl !== nextAvatarUrl
@@ -313,13 +345,19 @@ export class AuthService {
         const [updatedUser] = await this.db
           .update(users)
           .set({
+            ...(bindIssuer ? { oidcIssuer: data.oidcIssuer } : {}),
             email: nextEmail,
             name: nextName,
             avatarUrl: nextAvatarUrl,
             updatedAt: new Date(),
           })
-          .where(eq(users.id, existingUser.id))
+          .where(
+            bindIssuer ? and(eq(users.id, existingUser.id), isNull(users.oidcIssuer)) : eq(users.id, existingUser.id)
+          )
           .returning();
+        if (!updatedUser) {
+          throw new AppError(409, 'OIDC_ACCOUNT_CHANGED', 'The account changed during sign-in. Try again.');
+        }
 
         await this.auditService.log({
           userId: updatedUser.id,
@@ -333,6 +371,7 @@ export class AuthService {
               normalizedEmail !== null && existingUser.email !== normalizedEmail && nextEmail === existingUser.email,
             emailClaimMissing: normalizedEmail === null,
             emailVerified: data.emailVerified,
+            ...(bindIssuer ? { oidcIssuerBound: data.oidcIssuer } : {}),
             nameChanged: existingUser.name !== nextName,
             avatarChanged: existingUser.avatarUrl !== nextAvatarUrl,
           },
@@ -359,6 +398,7 @@ export class AuthService {
         .update(users)
         .set({
           oidcSubject: data.oidcSubject,
+          oidcIssuer: data.oidcIssuer,
           email: normalizedEmail,
           name: normalizeDisplayName(data.name, precreatedUser.name?.trim() || normalizedEmail),
           avatarUrl: data.avatarUrl,
@@ -381,6 +421,7 @@ export class AuthService {
           email: claimedUser.email,
           previousOidcSubject: previousSubject,
           oidcSubject: data.oidcSubject,
+          oidcIssuer: data.oidcIssuer,
           emailVerified: data.emailVerified,
         },
       });
@@ -403,6 +444,7 @@ export class AuthService {
         .insert(users)
         .values({
           oidcSubject: data.oidcSubject,
+          oidcIssuer: data.oidcIssuer,
           email: normalizedEmail,
           name: normalizeDisplayName(data.name, normalizedEmail),
           avatarUrl: data.avatarUrl,
@@ -427,6 +469,7 @@ export class AuthService {
         email: createdUser.email,
         group: group.name,
         oidcSubject: data.oidcSubject,
+        oidcIssuer: data.oidcIssuer,
         emailVerified: data.emailVerified,
         bootstrap: false,
       },
@@ -552,6 +595,7 @@ export class AuthService {
       .set({
         authMethod,
         oidcSubject: authMethod === 'oidc' ? `${PRECREATED_SUBJECT_PREFIX}${target.email}` : null,
+        oidcIssuer: null,
         updatedAt: new Date(),
       })
       .where(eq(users.id, userId))
@@ -666,21 +710,28 @@ export class AuthService {
   }
 
   async logout(sessionId: string): Promise<string | null> {
+    const session = await this.sessionService.getSession(sessionId).catch(() => null);
     await this.sessionService.destroySession(sessionId);
 
-    const config = await this.getOIDCConfig();
-    const env = getEnv();
-    const publicUrl = this.generalSettingsService ? await this.generalSettingsService.requirePublicUrl() : env.APP_URL;
-
+    // Only OIDC sessions have an identity-provider session to end. Local
+    // installs have no OIDC configuration at all, and discovery failures must
+    // never turn a completed local logout into an error.
+    if (session?.authMethod && session.authMethod !== 'oidc') return null;
     try {
+      if (!(await this.oidcSettingsService?.getRuntimeConfig())) return null;
+      const config = await this.getOIDCConfig();
+      const env = getEnv();
+      const publicUrl = this.generalSettingsService
+        ? await this.generalSettingsService.requirePublicUrl()
+        : env.APP_URL;
       const metadata = config.serverMetadata();
       if (metadata.end_session_endpoint) {
         const logoutUrl = new URL(metadata.end_session_endpoint);
         logoutUrl.searchParams.set('post_logout_redirect_uri', publicUrl);
         return logoutUrl.href;
       }
-    } catch {
-      // No end_session_endpoint available
+    } catch (error) {
+      logger.debug('No identity-provider logout URL for this session', { error });
     }
 
     return null;

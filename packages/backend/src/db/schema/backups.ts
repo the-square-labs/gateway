@@ -47,6 +47,10 @@ export const backupPolicies = pgTable(
     schedule: text('schedule'),
     timezone: text('timezone').notNull().default('UTC'),
     lastScheduledAt: timestamp('last_scheduled_at', { withTimezone: true }),
+    // Last schedule or retention problem (skipped slot, revoked owner,
+    // retention failure). Cleared by the next successful scheduled dispatch.
+    lastError: text('last_error'),
+    lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
     retentionCount: integer('retention_count').notNull().default(7),
     limits: jsonb('limits')
       .$type<{ workspaceBytes: number; timeoutSeconds: number; cpuCores: number; memoryMb: number }>()
@@ -67,9 +71,12 @@ export const backupRuns = pgTable(
   {
     id: uuid('id').primaryKey().defaultRandom(),
     policyId: uuid('policy_id').references(() => backupPolicies.id, { onDelete: 'set null' }),
-    databaseConnectionId: uuid('database_connection_id')
-      .notNull()
-      .references(() => databaseConnections.id, { onDelete: 'restrict' }),
+    // Backup history (and its artifacts) outlives a deleted connection; the
+    // denormalized name keeps the history readable afterwards.
+    databaseConnectionId: uuid('database_connection_id').references(() => databaseConnections.id, {
+      onDelete: 'set null',
+    }),
+    databaseConnectionName: text('database_connection_name'),
     destinationId: uuid('destination_id')
       .notNull()
       .references(() => objectStorageConnections.id, { onDelete: 'restrict' }),
@@ -97,6 +104,10 @@ export const backupRuns = pgTable(
     artifactsDeletedAt: timestamp('artifacts_deleted_at', { withTimezone: true }),
     createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
     claimedAt: timestamp('claimed_at', { withTimezone: true }),
+    // Absolute deadline fixed when the run claims its executor. The daemon
+    // receives it (when supported) and the control plane fails runs that are
+    // still active well past it, even when the executor is unreachable.
+    deadlineAt: timestamp('deadline_at', { withTimezone: true }),
     startedAt: timestamp('started_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

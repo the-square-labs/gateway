@@ -304,3 +304,56 @@ func TestOverlappingLogOpensCancelEarlierAndPreserveNewestOwner(t *testing.T) {
 		})
 	}
 }
+
+func TestLogFollowStopCommandCancelsOnlyThatContainerStream(t *testing.T) {
+	recorder := &logCommandRecorder{}
+	p := &DockerPlugin{writer: stream.NewWriter(recorder), logger: slog.Default(), logStreamCancel: make(map[string]context.CancelFunc)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	otherCtx, otherCancel := context.WithCancel(context.Background())
+	defer otherCancel()
+	p.registerLogStream(ctx, cancel, "container")
+	p.registerLogStream(otherCtx, otherCancel, "other")
+
+	result := &pb.CommandResult{Success: true}
+	p.handleLogsCommand(&pb.DockerLogsCommand{ContainerId: "container", TailLines: -1}, result)
+	if !result.Success || result.Detail != `{"streaming":false}` {
+		t.Fatalf("stop result = %+v", result)
+	}
+	if ctx.Err() != context.Canceled {
+		t.Fatal("stop did not cancel the container's follow stream")
+	}
+	if otherCtx.Err() != nil {
+		t.Fatal("stop canceled another container's follow stream")
+	}
+	p.streamLogs(ctx, cancel, "container", io.NopCloser(bytes.NewReader(nil)))
+	if messages := recorder.snapshot(); len(messages) != 0 {
+		t.Fatalf("stopped stream sent %d messages; a stop must not look like the container ending", len(messages))
+	}
+	if _, exists := logStreamOwners.Load(logStreamOwnerKey{p, "container"}); exists {
+		t.Fatal("stopped stream retained its ownership token")
+	}
+
+	idle := &pb.CommandResult{Success: true}
+	p.handleLogsCommand(&pb.DockerLogsCommand{ContainerId: "container", TailLines: -1}, idle)
+	if !idle.Success {
+		t.Fatalf("stop without a running stream failed: %+v", idle)
+	}
+	p.stopLogStream("other")
+	p.releaseLogStream(otherCtx, otherCancel, "other")
+}
+
+func TestLogFollowStopRequiresNegativeTailWithoutFollow(t *testing.T) {
+	for _, cmd := range []*pb.DockerLogsCommand{
+		{ContainerId: "container", TailLines: 0},
+		{ContainerId: "container", TailLines: 100},
+		{ContainerId: "container", TailLines: -1, Follow: true},
+	} {
+		if isLogFollowStop(cmd) {
+			t.Fatalf("regular logs command treated as stop: %+v", cmd)
+		}
+	}
+	if !isLogFollowStop(&pb.DockerLogsCommand{ContainerId: "container", TailLines: -1}) {
+		t.Fatal("negative non-follow tail was not treated as stop")
+	}
+}

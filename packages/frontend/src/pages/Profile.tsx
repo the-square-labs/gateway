@@ -1,4 +1,4 @@
-import { startRegistration } from "@simplewebauthn/browser";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import {
   ArrowRight,
   Check,
@@ -70,6 +70,7 @@ import {
 import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
 import { cn, getInitials } from "@/lib/utils";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
@@ -744,9 +745,14 @@ function LocalAccountSecurityPanel() {
   const [totpResetting, setTotpResetting] = useState(false);
   const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
   const [recoveryCodesOpen, setRecoveryCodesOpen] = useState(false);
+  const [stepUpOpen, setStepUpOpen] = useState(false);
+  const [stepUpCode, setStepUpCode] = useState("");
+  const [stepUpUseRecoveryCode, setStepUpUseRecoveryCode] = useState(false);
+  const [stepUpBusy, setStepUpBusy] = useState(false);
   const totpCloseTimer = useRef<number | null>(null);
   const recoveryCodesCloseTimer = useRef<number | null>(null);
   const pendingRecoveryCodes = useRef<string[] | null>(null);
+  const pendingStepUpAction = useRef<(() => Promise<void>) | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -821,6 +827,58 @@ function LocalAccountSecurityPanel() {
     finishTotpSetupClose();
   };
 
+  // Changing second factors requires a fresh proof of an existing one. The
+  // server answers MFA_STEP_UP_REQUIRED; ask for it, then retry the action.
+  const requestStepUp = (retry: () => Promise<void>) => {
+    pendingStepUpAction.current = retry;
+    setStepUpCode("");
+    setStepUpUseRecoveryCode(false);
+    setStepUpOpen(true);
+  };
+
+  const cancelStepUp = () => {
+    pendingStepUpAction.current = null;
+    setStepUpOpen(false);
+  };
+
+  const completeStepUp = async () => {
+    const retry = pendingStepUpAction.current;
+    pendingStepUpAction.current = null;
+    setStepUpOpen(false);
+    setStepUpCode("");
+    if (retry) await retry();
+  };
+
+  const verifyStepUpCode = async () => {
+    setStepUpBusy(true);
+    try {
+      await api.verifyCurrentUserStepUp(
+        stepUpUseRecoveryCode ? { recoveryCode: stepUpCode.trim() } : { totpCode: stepUpCode }
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Invalid authentication code");
+      setStepUpBusy(false);
+      return;
+    }
+    setStepUpBusy(false);
+    await completeStepUp();
+  };
+
+  const verifyStepUpPasskey = async () => {
+    setStepUpBusy(true);
+    try {
+      const options = await api.beginCurrentUserStepUpPasskey();
+      const response = await startAuthentication({ optionsJSON: options as never });
+      await api.finishCurrentUserStepUpPasskey(options.challenge, response);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Passkey verification failed");
+      setStepUpBusy(false);
+      return;
+    }
+    setStepUpBusy(false);
+    await completeStepUp();
+  };
+
   const registerPasskey = async () => {
     setAddingPasskey(true);
     try {
@@ -830,6 +888,10 @@ function LocalAccountSecurityPanel() {
       await load();
       toast.success("Passkey added");
     } catch (error) {
+      if (isStepUpRequired(error)) {
+        requestStepUp(registerPasskey);
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Failed to add passkey");
     } finally {
       setAddingPasskey(false);
@@ -848,8 +910,12 @@ function LocalAccountSecurityPanel() {
     try {
       setTotpSetup(await api.beginCurrentUserTotpSetup());
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to start TOTP setup");
       closeTotpSetup();
+      if (isStepUpRequired(error)) {
+        requestStepUp(openTotpSetup);
+        return;
+      }
+      toast.error(error instanceof Error ? error.message : "Failed to start TOTP setup");
     }
   };
 
@@ -861,6 +927,11 @@ function LocalAccountSecurityPanel() {
       closeTotpSetup();
       await load();
     } catch (error) {
+      if (isStepUpRequired(error)) {
+        closeTotpSetup();
+        requestStepUp(openTotpSetup);
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Invalid authentication code");
     } finally {
       setTotpSaving(false);
@@ -875,6 +946,11 @@ function LocalAccountSecurityPanel() {
       await load();
       await openTotpSetup();
     } catch (error) {
+      if (isStepUpRequired(error)) {
+        setTotpResetOpen(false);
+        requestStepUp(resetAndReconfigureTotp);
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Failed to reset TOTP");
     } finally {
       setTotpResetting(false);
@@ -887,6 +963,10 @@ function LocalAccountSecurityPanel() {
       await load();
       toast.success("Passkey removed");
     } catch (error) {
+      if (isStepUpRequired(error)) {
+        requestStepUp(() => removePasskey(id));
+        return;
+      }
       toast.error(error instanceof Error ? error.message : "Failed to remove passkey");
     }
   };
@@ -1074,6 +1154,81 @@ function LocalAccountSecurityPanel() {
       </Dialog>
 
       <Dialog
+        open={stepUpOpen}
+        onOpenChange={(open) => {
+          if (open) return;
+          cancelStepUp();
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Confirm it&apos;s you</DialogTitle>
+          </DialogHeader>
+          <DialogDescription>
+            Changing passkeys or your authenticator app requires a current second factor.
+          </DialogDescription>
+          {status?.totpConfigured && (
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void verifyStepUpCode();
+              }}
+            >
+              <div className="flex gap-2">
+                <Input
+                  value={stepUpCode}
+                  aria-label={stepUpUseRecoveryCode ? "Recovery code" : "Authentication code"}
+                  inputMode={stepUpUseRecoveryCode ? "text" : "numeric"}
+                  autoComplete="one-time-code"
+                  placeholder={stepUpUseRecoveryCode ? "Recovery code" : "6-digit code"}
+                  onChange={(event) =>
+                    setStepUpCode(
+                      stepUpUseRecoveryCode
+                        ? event.target.value.slice(0, 64)
+                        : event.target.value.replace(/\D/g, "").slice(0, 6)
+                    )
+                  }
+                />
+                <Button
+                  type="submit"
+                  className="shrink-0"
+                  disabled={
+                    stepUpBusy ||
+                    (stepUpUseRecoveryCode ? stepUpCode.trim().length < 6 : stepUpCode.length !== 6)
+                  }
+                >
+                  {stepUpBusy ? <Loader2 className="animate-spin" /> : <Check />}
+                  Verify
+                </Button>
+              </div>
+              <Button
+                type="button"
+                variant="link"
+                className="h-auto self-start p-0 text-xs"
+                onClick={() => {
+                  setStepUpUseRecoveryCode((current) => !current);
+                  setStepUpCode("");
+                }}
+              >
+                {stepUpUseRecoveryCode ? "Use authenticator app code" : "Use a recovery code"}
+              </Button>
+            </form>
+          )}
+          {(status?.passkeyCount ?? 0) > 0 && (
+            <Button
+              variant="outline"
+              onClick={() => void verifyStepUpPasskey()}
+              disabled={stepUpBusy}
+            >
+              <KeyRound />
+              Use a passkey
+            </Button>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
         open={recoveryCodesOpen}
         onOpenChange={(open) => {
           if (open) return;
@@ -1125,6 +1280,10 @@ function LocalAccountSecurityPanel() {
       </Dialog>
     </PanelShell>
   );
+}
+
+function isStepUpRequired(error: unknown): boolean {
+  return error instanceof ApiRequestError && error.code === "MFA_STEP_UP_REQUIRED";
 }
 
 function derivePasskeyName(response: unknown): string {

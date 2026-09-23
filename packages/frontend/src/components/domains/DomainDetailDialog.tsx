@@ -142,8 +142,8 @@ export function DomainDetailDialog({
     try {
       await api.updateDomain(domain.id, { description: newDesc });
       onUpdated();
-    } catch {
-      // silent
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save domain description");
     }
   };
 

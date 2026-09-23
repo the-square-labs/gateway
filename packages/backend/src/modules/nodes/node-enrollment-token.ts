@@ -8,9 +8,21 @@ const SELECTOR_RE = /^[0-9a-f]{16}$/;
 const SECRET_RE = /^[0-9a-f]{48}$/;
 const LEGACY_TOKEN_RE = /^gw_node_[0-9a-f]{48}$/;
 
+/** Enrollment tokens are single use and expire after this long if unused. */
+export const NODE_ENROLLMENT_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
 export interface NodeEnrollmentToken {
   token: string;
   selector: string;
+}
+
+export function nodeEnrollmentTokenExpiresAt(now: Date = new Date()): Date {
+  return new Date(now.getTime() + NODE_ENROLLMENT_TOKEN_TTL_MS);
+}
+
+/** A NULL expiry is a token issued before expiries existed; it never expires. */
+export function isNodeEnrollmentTokenExpired(expiresAt: Date | null | undefined, now: Date = new Date()): boolean {
+  return !!expiresAt && expiresAt.getTime() <= now.getTime();
 }
 
 export type ParsedNodeEnrollmentToken = { kind: 'v2'; selector: string } | { kind: 'legacy' } | { kind: 'invalid' };

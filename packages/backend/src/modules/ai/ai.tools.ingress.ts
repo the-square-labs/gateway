@@ -432,6 +432,8 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     category: 'SSL Certificates',
     requiredScope: 'ssl:cert:issue',
+    // Linking copies the PKI private key into the TLS store, so the service also requires pki:cert:export.
+    requiredScopes: ['ssl:cert:issue', 'pki:cert:export'],
     invalidateStores: ['ssl'],
   },
   {

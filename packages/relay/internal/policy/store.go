@@ -224,6 +224,68 @@ func (s *Store) BootstrapPolicyTrust(keyID string, raw []byte, fingerprint strin
 	return false, nil
 }
 
+// ResetLocalPolicyTrust replaces pinned policy trust with a single key. It exists
+// for the local combined relay only, whose relay.db can be restored from a
+// backup that predates every key Gateway can still sign with. The caller is the
+// co-located Gateway app over its authenticated admin channel, the same channel
+// that bootstraps trust in the first place. A remote relay learns keys only
+// through signed rotation and never accepts this.
+//
+// A persisted signed snapshot is dropped unless the new key signed it, so a
+// restart before Gateway's next snapshot starts empty instead of refusing to
+// load. The in-memory snapshot keeps serving until that next snapshot arrives.
+func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint string) ([]string, error) {
+	if s.mode != relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
+		return nil, fmt.Errorf("policy trust reset is only available to the local relay")
+	}
+	if keyID == "" || len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("policy signing key is invalid")
+	}
+	publicKey := append(ed25519.PublicKey(nil), raw...)
+	if fingerprint == "" || PublicKeyFingerprint(publicKey) != fingerprint {
+		return nil, fmt.Errorf("policy signing key fingerprint does not match public key")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	replaced := make([]string, 0, len(s.policyTrust))
+	for id := range s.policyTrust {
+		replaced = append(replaced, id)
+	}
+	sort.Strings(replaced)
+	next := map[string]trustedPolicyKey{keyID: {PublicKey: publicKey, Fingerprint: fingerprint}}
+	if err := s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bucketState)
+		if signer, signed := persistedSnapshotSigner(bucket); signed && signer != keyID {
+			if err := bucket.Delete(keySnapshot); err != nil {
+				return err
+			}
+			if err := bucket.Delete(keyDigest); err != nil {
+				return err
+			}
+		}
+		return persistTrust(bucket, next)
+	}); err != nil {
+		return nil, err
+	}
+	s.policyTrust = next
+	return replaced, nil
+}
+
+func persistedSnapshotSigner(bucket *bolt.Bucket) (string, bool) {
+	value := bucket.Get(keySnapshot)
+	if len(value) == 0 {
+		return "", false
+	}
+	request := &relayv1.ApplySnapshotRequest{}
+	if err := proto.Unmarshal(value, request); err != nil {
+		return "", true
+	}
+	if request.SignedEnvelope == nil {
+		return "", false
+	}
+	return request.SignedEnvelope.SigningKeyId, true
+}
+
 func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -359,7 +421,11 @@ func (s *Store) normalizeLocked(request *relayv1.ApplySnapshotRequest, allowExpi
 	}
 	envelope := request.SignedEnvelope
 	trusted, ok := s.policyTrust[envelope.SigningKeyId]
-	if !ok || !trusted.validAt(s.now()) || len(envelope.Signature) != ed25519.SignatureSize || !ed25519.Verify(trusted.PublicKey, envelope.Payload, envelope.Signature) {
+	// A persisted snapshot was verified when it was applied, and its trust was
+	// written in the same transaction. Reloading it checks the signature again
+	// but not the signer's validity window: a key that has since aged out, or a
+	// clock that moved, must not stop the relay from starting.
+	if !ok || (!allowExpired && !trusted.validAt(s.now())) || len(envelope.Signature) != ed25519.SignatureSize || !ed25519.Verify(trusted.PublicKey, envelope.Payload, envelope.Signature) {
 		return nil, digest, nil, nil, fmt.Errorf("policy envelope signature is invalid")
 	}
 	payload := &relayv1.PolicyEnvelopePayload{}
@@ -514,7 +580,10 @@ func buildSnapshot(payload *relayv1.PolicyEnvelopePayload, mode relayv1.RelayMod
 }
 
 func (key trustedPolicyKey) validAt(at time.Time) bool {
-	if !key.ValidFrom.IsZero() && at.Before(key.ValidFrom) {
+	// Gateway stamps ValidFrom with its own clock when it promotes a key. Allow
+	// the same skew as IssuedAt so a relay running slightly behind does not
+	// refuse the first snapshots the new key signs.
+	if !key.ValidFrom.IsZero() && at.Add(IssuedAtClockSkew).Before(key.ValidFrom) {
 		return false
 	}
 	return key.VerifyUntil.IsZero() || at.Before(key.VerifyUntil)

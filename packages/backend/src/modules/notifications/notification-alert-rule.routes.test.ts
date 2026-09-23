@@ -6,7 +6,14 @@ import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
   scopes: [] as string[],
-  service: { create: vi.fn(), update: vi.fn(), getById: vi.fn(), updateHostingRule: vi.fn() },
+  service: {
+    create: vi.fn(),
+    update: vi.fn(),
+    getById: vi.fn(),
+    updateHostingRule: vi.fn(),
+    reconcileRuleUpdate: vi.fn(),
+    invalidateRuleCache: vi.fn(),
+  },
 }));
 vi.mock('@/container.js', () => ({ container: { resolve: () => mocks.service } }));
 vi.mock('@/modules/auth/auth.middleware.js', () => ({
@@ -53,4 +60,32 @@ it.each(['POST', 'PUT'])('checks effective hosting finance access on %s rather t
   expect(mocks.service.update).not.toHaveBeenCalled();
   mocks.scopes = ['notifications:manage', 'integrations:hosting:view:account', 'hosting:billing:view:account'];
   expect((await request()).status).toBe(method === 'POST' ? 201 : 200);
+});
+
+it('resolves firing states orphaned by disabling or re-scoping a non-hosting rule', async () => {
+  const previous = {
+    ...body,
+    id: 'rule-1',
+    category: 'proxy',
+    type: 'event',
+    eventPattern: 'health.offline',
+    enabled: true,
+    resourceIds: ['a', 'b'],
+  };
+  const next = { ...previous, enabled: false };
+  mocks.service.getById.mockResolvedValue(previous);
+  mocks.service.update.mockResolvedValue(next);
+  const app = new Hono<AppEnv>();
+  app.onError(errorHandler);
+  app.route('/', alertRuleRoutes);
+
+  const response = await app.request('/11111111-1111-4111-8111-111111111111', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled: false }),
+  });
+
+  expect(response.status).toBe(200);
+  expect(mocks.service.updateHostingRule).not.toHaveBeenCalled();
+  expect(mocks.service.reconcileRuleUpdate).toHaveBeenCalledWith(previous, next);
 });

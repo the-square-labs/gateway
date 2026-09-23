@@ -66,6 +66,7 @@ import {
   nodeMonitoringStreamRoute,
   nodeNginxLogsRoute,
   readNodeFileRoute,
+  regenerateNodeEnrollmentTokenRoute,
   reorderNodeFoldersRoute,
   reorderNodesRoute,
   testNodeConfigRoute,
@@ -396,7 +397,10 @@ nodesRoutes.openapi({ ...moveNodeFolderRoute, middleware: requireScope('nodes:fo
   const service = container.resolve(NodeFolderService);
   const user = c.get('user')!;
   const input = MoveResourceFolderSchema.parse(await c.req.json());
-  const data = await service.moveFolder(c.req.param('id')!, input, user.id);
+  const data = await service.moveFolder(c.req.param('id')!, input, user.id, {
+    scopes: c.get('effectiveScopes') ?? [],
+    editScope: 'nodes:rename',
+  });
   return c.json({ data });
 });
 
@@ -588,6 +592,16 @@ nodesRoutes.openapi(createNodeRoute, async (c) => {
   const result = await service.create(input, user.id);
   return c.json({ data: result }, 201);
 });
+
+nodesRoutes.openapi(
+  { ...regenerateNodeEnrollmentTokenRoute, middleware: requireScopeForResource('nodes:create', 'id') },
+  async (c) => {
+    const service = container.resolve(NodesService);
+    const user = c.get('user')!;
+    const result = await service.regenerateEnrollmentToken(c.req.param('id')!, user.id);
+    return c.json({ data: result }, 200);
+  }
+);
 
 nodesRoutes.openapi({ ...updateNodeRoute, middleware: sessionOnly }, async (c) => {
   const service = container.resolve(NodesService);

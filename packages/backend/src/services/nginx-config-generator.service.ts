@@ -214,7 +214,7 @@ export class NginxConfigGenerator {
       lines.push('');
       lines.push('    # ACME challenge');
       lines.push('    location /.well-known/acme-challenge/ {');
-      lines.push('        alias /var/www/acme-challenge/;');
+      lines.push('        alias /var/www/acme-challenge/.well-known/acme-challenge/;');
       lines.push('        auth_basic off;');
       lines.push('    }');
       lines.push('');
@@ -255,7 +255,7 @@ export class NginxConfigGenerator {
     if (!host.sslForced) {
       lines.push('    # ACME challenge');
       lines.push('    location /.well-known/acme-challenge/ {');
-      lines.push('        alias /var/www/acme-challenge/;');
+      lines.push('        alias /var/www/acme-challenge/.well-known/acme-challenge/;');
       lines.push('        auth_basic off;');
       lines.push('    }');
       lines.push('');
@@ -373,7 +373,7 @@ export class NginxConfigGenerator {
     lines.push('');
     lines.push('    # ACME challenge');
     lines.push('    location /.well-known/acme-challenge/ {');
-    lines.push('        alias /var/www/acme-challenge/;');
+    lines.push('        alias /var/www/acme-challenge/.well-known/acme-challenge/;');
     lines.push('        auth_basic off;');
     lines.push('    }');
     lines.push('');

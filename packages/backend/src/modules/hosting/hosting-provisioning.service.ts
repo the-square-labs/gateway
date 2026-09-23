@@ -15,7 +15,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthService } from '@/modules/auth/auth.service.js';
 import type { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
-import { createNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
+import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
 import { CreateNodeSchema } from '@/modules/nodes/nodes.schemas.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
@@ -448,7 +448,11 @@ export class HostingProvisioningService {
         const token = createNodeEnrollmentToken();
         await tx
           .update(nodes)
-          .set({ enrollmentTokenHash: await bcrypt.hash(token.token, 10), enrollmentTokenSelector: token.selector })
+          .set({
+            enrollmentTokenHash: await bcrypt.hash(token.token, 10),
+            enrollmentTokenSelector: token.selector,
+            enrollmentTokenExpiresAt: nodeEnrollmentTokenExpiresAt(),
+          })
           .where(eq(nodes.id, pending.id));
         const script = buildHostingBootstrap({
           waitForCloudInit: connector.provider === 'proxmox',

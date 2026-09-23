@@ -26,6 +26,7 @@ import {
   supportsAdditionalRoutesTemplate,
 } from './additional-route-template.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
+import { withoutReservedTemplateVariables } from './proxy-template-variables.js';
 
 const logger = createChildLogger('NginxTemplateService');
 
@@ -33,6 +34,19 @@ const NGINX_LOGS_PREFIX = '/var/log/nginx';
 const DEFAULT_RATE_LIMIT_RPS = 1000;
 const DEFAULT_RATE_LIMIT_BURST = 3000;
 const DEFAULT_CONNECTIONS_PER_IP = 1000;
+
+// nginx-daemon writes HTTP-01 tokens to
+// <acme_challenge_dir>/.well-known/acme-challenge/<token>, so the location
+// alias must include that subdirectory (matching the setup-node.sh catch-all).
+const ACME_CHALLENGE_ALIAS = '/var/www/acme-challenge/.well-known/acme-challenge/';
+// Custom templates cloned before the fix alias the webroot base, which makes
+// every challenge 404. Rewrite that exact legacy directive at render time.
+const LEGACY_ACME_CHALLENGE_ALIAS =
+  /(location\s+\/\.well-known\/acme-challenge\/\s*\{\s*alias\s+)\/var\/www\/acme-challenge\/;/g;
+
+export function normalizeAcmeChallengeAlias(rendered: string): string {
+  return rendered.replace(LEGACY_ACME_CHALLENGE_ALIAS, `$1${ACME_CHALLENGE_ALIAS};`);
+}
 
 const DEFAULT_PROXY_TEMPLATE_VARIABLES = [
   {
@@ -333,7 +347,7 @@ server {
     server_name {{serverNames}};
 
     location /.well-known/acme-challenge/ {
-        alias /var/www/acme-challenge/;
+        alias /var/www/acme-challenge/.well-known/acme-challenge/;
         auth_basic off;
     }
 
@@ -370,7 +384,7 @@ server {
 
 {{#unless sslForced}}
     location /.well-known/acme-challenge/ {
-        alias /var/www/acme-challenge/;
+        alias /var/www/acme-challenge/.well-known/acme-challenge/;
         auth_basic off;
     }
 
@@ -528,7 +542,7 @@ const BUILTIN_REDIRECT_TEMPLATE = `server {
     error_log {{logPath}}.error.log warn;
 
     location /.well-known/acme-challenge/ {
-        alias /var/www/acme-challenge/;
+        alias /var/www/acme-challenge/.well-known/acme-challenge/;
         auth_basic off;
     }
 
@@ -589,7 +603,7 @@ const BUILTIN_DEAD_TEMPLATE = `server {
     error_log {{logPath}}.error.log warn;
 
     location /.well-known/acme-challenge/ {
-        alias /var/www/acme-challenge/;
+        alias /var/www/acme-challenge/.well-known/acme-challenge/;
         auth_basic off;
     }
 
@@ -1008,7 +1022,9 @@ export class NginxTemplateService {
     } else {
       content = await this.getBuiltinTemplateContent(host.type);
     }
-    const rendered = this.applyUpstreamIpFamily(this.renderTemplate(content, host), host).replaceAll(
+    const rendered = normalizeAcmeChallengeAlias(
+      this.applyUpstreamIpFamily(this.renderTemplate(content, host), host)
+    ).replaceAll(
       escapeNginxReturnText(GATEWAY_NOT_FOUND_HTML),
       escapeNginxReturnText(gatewayNotFoundHtml(hideExternalBranding))
     );
@@ -1308,7 +1324,9 @@ ${rendered}`;
 
     const opts = (host.rateLimitOptions ?? {}) as Record<string, unknown>;
     const cacheOpts = (host.cacheOptions ?? {}) as Record<string, unknown>;
-    const templateVariables = this.sanitizeTemplateVariables(host.templateVariables ?? {});
+    const templateVariables = this.sanitizeTemplateVariables(
+      withoutReservedTemplateVariables(host.templateVariables ?? {})
+    );
     const cacheEnabled =
       typeof templateVariables.cacheEnabled === 'boolean' ? templateVariables.cacheEnabled : host.cacheEnabled;
     const cacheMaxAge =
@@ -1345,6 +1363,10 @@ ${rendered}`;
     );
 
     return {
+      // Custom variables stay available to user templates, but every managed
+      // built-in below is written after them so a stored or submitted variable
+      // can never replace the upstream, access list, TLS or log paths.
+      ...templateVariables,
       id: host.id,
       serverNames,
       upstream,
@@ -1373,9 +1395,6 @@ ${rendered}`;
       accessList: host.accessList,
       accessListHasIpRules: (host.accessList?.ipRules?.length ?? 0) > 0,
       logPath: `${NGINX_LOGS_PREFIX}/proxy-${host.id}`,
-      // Custom variables remain available to user templates; managed built-ins above
-      // are written last so their derived values cannot become internally inconsistent.
-      ...templateVariables,
       pagesRouteIncludePath: host.pagesRouteIncludePath,
       pagesSpaFallback: host.pagesSpaFallback === true,
       pagesFallbackUrl: safePagesFallbackUrl(host.pagesFallbackUrl),

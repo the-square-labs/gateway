@@ -78,6 +78,10 @@ export const sslCertificates = pgTable(
     autoRenewDisabledAt: timestamp('auto_renew_disabled_at', { withTimezone: true }),
     lastRenewedAt: timestamp('last_renewed_at', { withTimezone: true }),
     renewalError: text('renewal_error'),
+    // A failed renewal never demotes a certificate that is still valid. These
+    // record the retry state instead; both reset after a successful renewal.
+    renewalFailureCount: integer('renewal_failure_count').notNull().default(0),
+    lastRenewalAttemptAt: timestamp('last_renewal_attempt_at', { withTimezone: true }),
 
     // Status
     status: sslCertStatusEnum('status').notNull().default('pending'),

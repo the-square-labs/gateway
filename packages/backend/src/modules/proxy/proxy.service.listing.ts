@@ -8,8 +8,9 @@ import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
-import { logger, type ProxyHostView } from './proxy.service.core.js';
+import { logger, type ProxyHostRow, type ProxyHostView } from './proxy.service.core.js';
 import { ProxyServiceSecureLinks } from './proxy.service.secure-links.js';
+import { proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
 
 export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
   async listProxyHosts(
@@ -98,6 +99,10 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
   // -----------------------------------------------------------------------
 
   async toggleProxyHost(id: string, enabled: boolean, userId: string) {
+    return withProxyHostLock(id, () => this.toggleProxyHostLocked(id, enabled, userId));
+  }
+
+  private async toggleProxyHostLocked(id: string, enabled: boolean, userId: string) {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.id, id),
     });
@@ -112,6 +117,15 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
     }
     if (existing.enabled === enabled) return (await attachDockerUpstreamDisplay(this.db, [existing]))[0]!;
 
+    // Enabling makes the host serve on its node again: fence reconnect cleanup.
+    if (enabled && existing.nodeId) {
+      return withProxyLocks([proxyNodeLockKey(existing.nodeId)], () => this.applyToggle(existing, enabled, userId));
+    }
+    return this.applyToggle(existing, enabled, userId);
+  }
+
+  private async applyToggle(existing: ProxyHostRow, enabled: boolean, userId: string) {
+    const id = existing.id;
     const previousEnabled = existing.enabled;
     const exitsMaintenance = !enabled && existing.maintenanceEnabled;
 
@@ -194,6 +208,10 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
   }
 
   async toggleMaintenance(id: string, enabled: boolean, userId: string) {
+    return withProxyHostLock(id, () => this.toggleMaintenanceLocked(id, enabled, userId));
+  }
+
+  private async toggleMaintenanceLocked(id: string, enabled: boolean, userId: string) {
     const existing = await this.db.query.proxyHosts.findFirst({
       where: eq(proxyHosts.id, id),
     });

@@ -11,7 +11,6 @@ import {
 } from '@/modules/databases/databases.schemas.js';
 import { ManagedDatabaseBindingService } from '@/modules/databases/managed-database-bindings.service.js';
 import { ManagedDatabaseService } from '@/modules/databases/managed-databases.service.js';
-import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import {
   DockerBuildCreateSchema,
   DockerBuildSecretNameSchema,
@@ -66,6 +65,7 @@ import {
 } from '@/modules/proxy/additional-route.validation.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
+import { assertWorkloadBindingTargetAccess } from './ai.binding-target-access.js';
 
 export const RESOURCE_SETUP_TOOL_NAMES = new Set([
   'upload_pages_artifact',
@@ -513,13 +513,13 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
   if (operation === 'create_binding') {
     ensureResourceScope(user, 'databases:edit', databaseId);
     const input = CreateManagedDatabaseBindingSchema.parse(args);
-    ensureBindingTargetScopes(user, input);
+    await assertWorkloadBindingTargetAccess(user.scopes, input);
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
     ensureResourceScope(user, 'databases:delete', databaseId);
     const bindingId = requiredString(args.bindingId);
-    ensureBindingTargetScopes(user, await bindings.getTarget(databaseId, bindingId));
+    await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
     return bindings.delete(databaseId, bindingId, user.id, DeleteManagedDatabaseBindingSchema.parse(args));
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported managed database operation: ${operation}`);
@@ -574,35 +574,6 @@ async function manageLoggingBackend(user: User, args: Record<string, unknown>) {
   }
   if (operation === 'disable') return runtime.update({ mode: 'disabled' });
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported logging backend operation: ${operation}`);
-}
-
-function ensureBindingTargetScopes(
-  user: User,
-  target: {
-    targetType: 'container' | 'deployment' | 'compose_service';
-    targetNodeId: string;
-    targetResourceId: string;
-  }
-) {
-  const scopes =
-    target.targetType === 'compose_service'
-      ? ['docker:compose:manage']
-      : target.targetType === 'deployment'
-        ? ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']
-        : ['docker:containers:environment', 'docker:containers:secrets'];
-  const targetResourceId =
-    target.targetType === 'compose_service'
-      ? target.targetResourceId.split(':', 1)[0] || target.targetResourceId
-      : target.targetResourceId;
-  for (const scope of scopes) {
-    if (!hasDockerResourceScope(user.scopes, scope, target.targetNodeId, targetResourceId)) {
-      throw new AppError(
-        403,
-        'FORBIDDEN',
-        `Missing required scope: ${scope}:${target.targetNodeId}/${targetResourceId}`
-      );
-    }
-  }
 }
 
 function ensureScope(user: User, scope: string) {

@@ -110,13 +110,16 @@ beforeEach(() => {
   mocks.stopManagedDatabaseLogStream.mockResolvedValue(undefined);
   mocks.getNode.mockReturnValue({ id: TARGET.nodeId });
   mocks.registerLogStreamHandler.mockImplementation(
-    (_key: string, handler: (lines: string[], ended: boolean) => void) => {
+    (key: string, handler: (lines: string[], ended: boolean) => void) => {
       registeredHandler = handler;
+      // The shared follow channel calls this when its last viewer leaves.
+      return () => mocks.removeLogStreamHandler(key);
     }
   );
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -214,7 +217,10 @@ describe('managed database log stream websocket handlers', () => {
     handlers.onClose(new Event('close'), ws as any);
     expect(mocks.removeLogStreamHandler).toHaveBeenCalledWith(`${TARGET.nodeId}:${TARGET.containerId}`);
     expect(mocks.removeLogStreamHandler).toHaveBeenCalledTimes(1);
-    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId);
+    // The stop is queued behind any pending follow command for the container, so it lands asynchronously.
+    await vi.waitFor(() =>
+      expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId)
+    );
     expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
   });
 
@@ -235,31 +241,35 @@ describe('managed database log stream websocket handlers', () => {
       expect.any(Function)
     );
     expect(mocks.removeLogStreamHandler).toHaveBeenCalledWith(`${TARGET.nodeId}:${TARGET.containerId}`);
-    expect(mocks.stopManagedDatabaseLogStream).not.toHaveBeenCalled();
+    // The failed viewer was the last one on the shared follow, so a stop is queued after the failed start.
+    await vi.waitFor(() => expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1));
 
     handlers.onClose(new Event('close'), ws as any);
+    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
   });
 
   it('revokes an active stream when the database scope disappears', async () => {
+    vi.useFakeTimers();
     const { handlers, ws } = await openStream();
-    mocks.resolveWebSocketCredential.mockResolvedValueOnce(null);
+    mocks.resolveWebSocketCredential.mockResolvedValue(null);
+
+    // Access is re-checked every 30s rather than per chunk.
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(ws.send).toHaveBeenCalledWith(
+      JSON.stringify({ type: 'auth_error', message: 'Access revoked or token expired' })
+    );
+    expect(ws.close).toHaveBeenCalledWith(1008, 'Authentication failed');
+    expect(mocks.removeLogStreamHandler).toHaveBeenCalledWith(`${TARGET.nodeId}:${TARGET.containerId}`);
+    expect(mocks.removeLogStreamHandler).toHaveBeenCalledTimes(1);
+    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId);
+    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
 
     registeredHandler?.(['2026-08-29T10:00:02.000000001Z revoked line'], false);
-
-    await waitForMessage(ws, {
-      type: 'auth_error',
-      message: 'Access revoked or token expired',
-    });
-    expect(ws.close).toHaveBeenCalledWith(1008, 'Authentication failed');
+    await vi.advanceTimersByTimeAsync(0);
     expect(ws.send).not.toHaveBeenCalledWith(
       JSON.stringify({ type: 'new', lines: ['2026-08-29T10:00:02.000000001Z revoked line'] })
     );
-    expect(mocks.removeLogStreamHandler).toHaveBeenCalledWith(`${TARGET.nodeId}:${TARGET.containerId}`);
-    expect(mocks.removeLogStreamHandler).toHaveBeenCalledTimes(1);
-    await vi.waitFor(() =>
-      expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId)
-    );
-    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
 
     handlers.onClose(new Event('close'), ws as any);
   });
@@ -276,8 +286,10 @@ describe('managed database log stream websocket handlers', () => {
 
     expect(mocks.removeLogStreamHandler).toHaveBeenCalledWith(`${TARGET.nodeId}:${TARGET.containerId}`);
     expect(mocks.removeLogStreamHandler).toHaveBeenCalledTimes(1);
-    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId);
-    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
     expect(clearIntervalSpy).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() =>
+      expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledWith(TARGET.nodeId, TARGET.managedDatabaseId)
+    );
+    expect(mocks.stopManagedDatabaseLogStream).toHaveBeenCalledTimes(1);
   });
 });

@@ -8,12 +8,14 @@ import {
   getDockerMigrationRoute,
   listDockerMigrationsRoute,
   preflightDockerMigrationRoute,
+  resolveDockerMigrationRoute,
   retryDockerMigrationCleanupRoute,
 } from './docker-migration.docs.js';
 import {
   DockerMigrationCreateInputSchema,
   DockerMigrationListQuerySchema,
   DockerMigrationPreflightInputSchema,
+  DockerMigrationResolveInputSchema,
 } from './docker-migration.schemas.js';
 import { DockerMigrationService } from './docker-migration.service.js';
 
@@ -62,4 +64,12 @@ export function registerDockerMigrationRoutes(router: OpenAPIHono<AppEnv>) {
       return c.json({ data });
     }
   );
+
+  router.openapi({ ...resolveDockerMigrationRoute, middleware: requireScopeBase('docker:tasks:manage') }, async (c) => {
+    const body = DockerMigrationResolveInputSchema.parse(await c.req.json());
+    const data = await container
+      .resolve(DockerMigrationService)
+      .resolve(c.req.param('id')!, body, c.get('user')!.id, c.get('effectiveScopes') ?? []);
+    return c.json({ data });
+  });
 }

@@ -35,8 +35,13 @@ const (
 )
 
 const (
-	backupRunnerManagedLabel = "wiolett.gateway.managed"
-	backupRunnerRunLabel     = "wiolett.gateway.backup-run-id"
+	backupRunnerManagedLabel  = "wiolett.gateway.managed"
+	backupRunnerRunLabel      = "wiolett.gateway.backup-run-id"
+	backupRunnerDeadlineLabel = "wiolett.gateway.backup-deadline"
+	// A runner found after a daemon restart is stopped only once it is
+	// clearly past its deadline, so small clock differences never stop a
+	// runner that its original context would still have allowed.
+	backupRunnerDeadlineGrace = 30 * time.Second
 )
 
 type backupPayload struct {
@@ -54,6 +59,9 @@ type backupPayload struct {
 	RedisStaging            *backupEndpoint `json:"redisStaging,omitempty"`
 	RedisStageImage         string          `json:"redisStageImage,omitempty"`
 	RedisStageAdvertiseHost string          `json:"redisStageAdvertiseHost,omitempty"`
+	// DeadlineAt is sent only to nodes advertising database_backups_deadline_v1.
+	// It is daemon-only and never reaches the runner's config.json.
+	DeadlineAt *time.Time `json:"deadlineAt,omitempty"`
 }
 
 type backupEndpoint struct {
@@ -106,6 +114,7 @@ type backupRunStatus struct {
 	ContainerID    string          `json:"containerId,omitempty"`
 	CleanupPending bool            `json:"cleanupPending,omitempty"`
 	CleanupError   string          `json:"cleanupError,omitempty"`
+	DeadlineAt     *time.Time      `json:"deadlineAt,omitempty"`
 }
 
 type backupRuntime struct {
@@ -126,6 +135,11 @@ type backupWorkspace struct {
 }
 
 var backupRuntimes sync.Map // map[*DockerPlugin]*backupRuntime; avoids parent-owned DockerPlugin edits.
+
+// backupRuntimeInitMu serializes first initialization. reconcileWorkspaces
+// unmounts, detaches and deletes workspaces, so concurrent first calls must
+// not each run it. A mutex rather than sync.Once lets a failed init retry.
+var backupRuntimeInitMu sync.Mutex
 
 // Installed by the parent relay integration. It keeps this chunk compilable
 // until relay_tunnel.go lands in this isolated worktree.
@@ -158,14 +172,19 @@ func backupRuntimeFor(plugin *DockerPlugin) (*backupRuntime, error) {
 	if existing, ok := backupRuntimes.Load(plugin); ok {
 		return existing.(*backupRuntime), nil
 	}
+	backupRuntimeInitMu.Lock()
+	defer backupRuntimeInitMu.Unlock()
+	if existing, ok := backupRuntimes.Load(plugin); ok {
+		return existing.(*backupRuntime), nil
+	}
 	root := filepath.Join(plugin.cfg.StateDir, backupStateDirectory)
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, fmt.Errorf("create backup state directory: %w", err)
 	}
 	runtime := &backupRuntime{plugin: plugin, root: root, runs: map[string]*backupRunStatus{}, cancel: map[string]context.CancelFunc{}}
 	runtime.reconcileWorkspaces()
-	actual, _ := backupRuntimes.LoadOrStore(plugin, runtime)
-	return actual.(*backupRuntime), nil
+	backupRuntimes.Store(plugin, runtime)
+	return runtime, nil
 }
 
 // A daemon restart can interrupt defer-based teardown. Only terminal or
@@ -469,7 +488,11 @@ func (r *backupRuntime) start(runID string, payload backupPayload, fingerprint s
 		}
 	}
 	if existing := r.runs[runID]; existing != nil {
-		if existing.Fingerprint != fingerprint {
+		// A preflight recovered from the runner's result file after a daemon
+		// restart has no request fingerprint left to compare, so its start is
+		// accepted rather than stranding the run.
+		recoveredPreflight := existing.Phase == "preflight_complete" && existing.Fingerprint == ""
+		if existing.Fingerprint != fingerprint && !recoveredPreflight {
 			r.mu.Unlock()
 			return backupRunStatus{}, errors.New("backup run id was replayed with different immutable request")
 		}
@@ -481,9 +504,23 @@ func (r *backupRuntime) start(runID string, payload backupPayload, fingerprint s
 		delete(r.runs, runID)
 	}
 	started := time.Now().UTC()
-	status := &backupRunStatus{RunID: runID, Status: "queued", Phase: "queued", StartedAt: &started, Fingerprint: fingerprint}
+	if payload.DeadlineAt != nil && !started.Before(*payload.DeadlineAt) {
+		deadlineAt := payload.DeadlineAt.UTC()
+		expired := &backupRunStatus{RunID: runID, Status: "failed", Phase: "timeout", Error: "Backup run exceeded its deadline before it started", CompletedAt: &started, Fingerprint: fingerprint, DeadlineAt: &deadlineAt}
+		r.runs[runID] = expired
+		r.mu.Unlock()
+		if err := r.persist(*expired); err != nil {
+			r.mu.Lock()
+			delete(r.runs, runID)
+			r.mu.Unlock()
+			return backupRunStatus{}, err
+		}
+		return *expired, nil
+	}
+	deadline := effectiveBackupDeadline(started, payload.Limits.TimeoutSeconds, payload.DeadlineAt)
+	status := &backupRunStatus{RunID: runID, Status: "queued", Phase: "queued", StartedAt: &started, Fingerprint: fingerprint, DeadlineAt: &deadline}
 	r.runs[runID] = status
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(payload.Limits.TimeoutSeconds)*time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	r.cancel[runID] = cancel
 	r.mu.Unlock()
 	if err := r.persist(*status); err != nil {
@@ -491,19 +528,18 @@ func (r *backupRuntime) start(runID string, payload backupPayload, fingerprint s
 		delete(r.runs, runID)
 		delete(r.cancel, runID)
 		r.mu.Unlock()
+		cancel()
 		return backupRunStatus{}, err
 	}
 	go func() {
+		defer cancel()
 		result, err := r.runTool(ctx, runID, payload, fingerprint, payload.Direction)
 		if err != nil {
 			cleanupPending, cleanupError := result.CleanupPending, result.CleanupError
-			if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) {
-				result = backupRunStatus{RunID: runID, Status: "cancelled", Phase: "cancelled", Fingerprint: fingerprint}
-			} else {
-				result = backupRunStatus{RunID: runID, Status: "failed", Phase: "failed", Error: sanitizeBackupError(err.Error()), Fingerprint: fingerprint}
-			}
+			result = backupRunFailure(ctx, err, runID, fingerprint)
 			result.CleanupPending, result.CleanupError = cleanupPending, cleanupError
 		}
+		result.DeadlineAt = &deadline
 		now := time.Now().UTC()
 		result.CompletedAt = &now
 		r.mu.Lock()
@@ -558,7 +594,7 @@ func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backu
 		}
 	}()
 	configPath := filepath.Join(configDir, "config.json")
-	data, err := json.Marshal(payload)
+	data, err := backupRunnerConfig(payload)
 	if err != nil {
 		return backupRunStatus{}, err
 	}
@@ -572,8 +608,13 @@ func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backu
 		return backupRunStatus{}, fmt.Errorf("ensure backup runner image: %w", err)
 	}
 	pids := int64(256)
+	labels := map[string]string{backupRunnerManagedLabel: "backup-runner", backupRunnerRunLabel: runID}
+	if deadline, ok := ctx.Deadline(); ok {
+		// Survives a daemon restart, which loses ctx and its timer.
+		labels[backupRunnerDeadlineLabel] = deadline.UTC().Format(time.RFC3339)
+	}
 	created, err := r.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config:     &container.Config{Image: payload.ToolImage, Cmd: []string{operation}, Labels: map[string]string{backupRunnerManagedLabel: "backup-runner", backupRunnerRunLabel: runID}},
+		Config:     &container.Config{Image: payload.ToolImage, Cmd: []string{operation}, Labels: labels},
 		HostConfig: &container.HostConfig{NetworkMode: "host", ReadonlyRootfs: true, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Resources: container.Resources{Memory: payload.Limits.MemoryMB * 1024 * 1024, NanoCPUs: payload.Limits.CPUCores * 1_000_000_000, PidsLimit: &pids}, Mounts: []mount.Mount{{Type: mount.TypeBind, Source: configDir, Target: "/run/gateway-backup", ReadOnly: true}, {Type: mount.TypeBind, Source: resultDir, Target: "/work"}}},
 	})
 	if err != nil {
@@ -595,7 +636,7 @@ func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backu
 	case result := <-wait.Result:
 		if result.StatusCode != 0 {
 			if resultData, readErr := os.ReadFile(filepath.Join(resultDir, "result.json")); readErr == nil {
-				if terminal, parseErr := parseBackupRunnerResult(resultData, runID, fingerprint); parseErr == nil {
+				if terminal, parseErr := parseBackupRunnerResult(resultData, runID, fingerprint, operation); parseErr == nil {
 					return terminal, nil
 				}
 			}
@@ -609,7 +650,94 @@ func (r *backupRuntime) runTool(ctx context.Context, runID string, payload backu
 	if err != nil {
 		return backupRunStatus{}, errors.New("backup runner did not write result")
 	}
-	return parseBackupRunnerResult(resultData, runID, fingerprint)
+	return parseBackupRunnerResult(resultData, runID, fingerprint, operation)
+}
+
+// backupRunFailure is the terminal status of a started run whose runner did
+// not return a result. Cancellation wins over the deadline because a cancel
+// is an explicit request.
+func backupRunFailure(ctx context.Context, err error, runID, fingerprint string) backupRunStatus {
+	switch {
+	case errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled):
+		return backupRunStatus{RunID: runID, Status: "cancelled", Phase: "cancelled", Fingerprint: fingerprint}
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded):
+		return backupRunStatus{RunID: runID, Status: "failed", Phase: "timeout", Error: "Backup run exceeded its time limit", Fingerprint: fingerprint}
+	default:
+		return backupRunStatus{RunID: runID, Status: "failed", Phase: "failed", Error: sanitizeBackupError(err.Error()), Fingerprint: fingerprint}
+	}
+}
+
+// backupRunnerConfig is the runner's config.json. The runner image is
+// released separately and rejects unknown fields, so daemon-only fields are
+// removed before the payload reaches it.
+func backupRunnerConfig(payload backupPayload) ([]byte, error) {
+	payload.DeadlineAt = nil
+	return json.Marshal(payload)
+}
+
+// effectiveBackupDeadline is the run's own time limit, cut short by the
+// control plane's deadline when that comes first.
+func effectiveBackupDeadline(now time.Time, timeoutSeconds int, deadlineAt *time.Time) time.Time {
+	deadline := now.Add(time.Duration(timeoutSeconds) * time.Second)
+	if deadlineAt != nil && deadlineAt.Before(deadline) {
+		deadline = *deadlineAt
+	}
+	return deadline.UTC()
+}
+
+func parseBackupRunnerDeadline(label string) *time.Time {
+	if label == "" {
+		return nil
+	}
+	deadline, err := time.Parse(time.RFC3339, label)
+	if err != nil {
+		return nil
+	}
+	deadline = deadline.UTC()
+	return &deadline
+}
+
+// backupRunOverdue reports whether a runner found after a daemon restart has
+// outlived its deadline: the persisted one, else the one labelled on its
+// container. A runner started by a daemon that predates deadlines has
+// neither, but no run may last longer than backupMaxTimeout after its
+// container was created, so that bound still ends it. A zero created time is
+// unknown and adds no bound.
+func backupRunOverdue(deadline *time.Time, label string, created, now time.Time) bool {
+	effective := deadline
+	if effective == nil {
+		effective = parseBackupRunnerDeadline(label)
+	}
+	if effective == nil && !created.IsZero() {
+		bound := created.Add(backupMaxTimeout)
+		effective = &bound
+	}
+	return effective != nil && now.After(effective.Add(backupRunnerDeadlineGrace))
+}
+
+// stopOverdueRunner ends a runner that no daemon context can end any more.
+// A stop failure other than a missing container is returned so the control
+// plane retries instead of seeing a terminal status for a live runner.
+func (r *backupRuntime) stopOverdueRunner(status backupRunStatus) (backupRunStatus, error) {
+	stopTimeout := 10
+	stopContext, stopCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopCancel()
+	if _, err := r.plugin.client.cli.ContainerStop(stopContext, status.ContainerID, mobyclient.ContainerStopOptions{Timeout: &stopTimeout}); err != nil && !isNotFoundErr(err) {
+		return backupRunStatus{}, fmt.Errorf("stop overdue backup runner: %w", err)
+	}
+	now := time.Now().UTC()
+	stopped := backupRunStatus{
+		RunID:       status.RunID,
+		Status:      "failed",
+		Phase:       "timeout",
+		StartedAt:   status.StartedAt,
+		CompletedAt: &now,
+		Error:       "Backup runner exceeded its time limit and was stopped",
+		Fingerprint: status.Fingerprint,
+		ContainerID: status.ContainerID,
+		DeadlineAt:  status.DeadlineAt,
+	}
+	return r.reconcileTerminalCleanup(stopped, true)
 }
 
 func (r *backupRuntime) recordRunnerContainer(runID, operation, containerID string) error {
@@ -867,23 +995,30 @@ func (r *backupRuntime) recoverUnknownRun(runID string) (backupRunStatus, error)
 	}
 	for _, candidate := range containers.Items {
 		if candidate.State == "running" {
-			status := backupRunStatus{RunID: runID, Status: "running", Phase: "recovered", ContainerID: candidate.ID}
+			status := backupRunStatus{RunID: runID, Status: "running", Phase: "recovered", ContainerID: candidate.ID, DeadlineAt: parseBackupRunnerDeadline(candidate.Labels[backupRunnerDeadlineLabel])}
+			created := time.Time{}
+			if candidate.Created > 0 {
+				created = time.Unix(candidate.Created, 0)
+			}
+			if backupRunOverdue(status.DeadlineAt, "", created, time.Now()) {
+				return r.stopOverdueRunner(status)
+			}
 			if err := r.persist(status); err != nil {
 				return backupRunStatus{}, err
 			}
 			return status, nil
 		}
 		status := backupRunStatus{RunID: runID, ContainerID: candidate.ID}
-		if terminal, resultErr := r.readPersistedRunnerResult(status); resultErr == nil {
-			return r.reconcileTerminalCleanup(terminal, true)
+		if recovered, resultErr := r.readPersistedRunnerResult(status); resultErr == nil {
+			return r.reconcileTerminalCleanup(recovered, true)
 		}
 		status.Status, status.Phase, status.Error = "failed", "runner_lost", "Backup runner exited without a verified result"
 		now := time.Now().UTC()
 		status.CompletedAt = &now
 		return r.reconcileTerminalCleanup(status, true)
 	}
-	if terminal, resultErr := r.readPersistedRunnerResult(backupRunStatus{RunID: runID}); resultErr == nil {
-		return r.reconcileTerminalCleanup(terminal, true)
+	if recovered, resultErr := r.readPersistedRunnerResult(backupRunStatus{RunID: runID}); resultErr == nil {
+		return r.reconcileTerminalCleanup(recovered, true)
 	}
 	return backupRunStatus{}, errors.New("BACKUP_RUN_UNKNOWN")
 }
@@ -905,13 +1040,20 @@ func (r *backupRuntime) reconcilePersistedRun(status backupRunStatus) (backupRun
 			return backupRunStatus{}, errors.New("BACKUP_RUN_UNKNOWN")
 		}
 		if inspect.Container.State != nil && inspect.Container.State.Running {
+			created, _ := time.Parse(time.RFC3339Nano, inspect.Container.Created)
+			if backupRunOverdue(status.DeadlineAt, labels[backupRunnerDeadlineLabel], created, time.Now()) {
+				if status.DeadlineAt == nil {
+					status.DeadlineAt = parseBackupRunnerDeadline(labels[backupRunnerDeadlineLabel])
+				}
+				return r.stopOverdueRunner(status)
+			}
 			return status, nil
 		}
 	} else if !isNotFoundErr(err) {
 		return backupRunStatus{}, fmt.Errorf("inspect persisted backup runner: %w", err)
 	}
-	if terminal, resultErr := r.readPersistedRunnerResult(status); resultErr == nil {
-		return r.reconcileTerminalCleanup(terminal, true)
+	if recovered, resultErr := r.readPersistedRunnerResult(status); resultErr == nil {
+		return r.reconcileTerminalCleanup(recovered, true)
 	}
 	status.Status, status.Phase, status.Error = "failed", "runner_lost", "Backup runner exited without a verified result"
 	now := time.Now().UTC()
@@ -919,12 +1061,37 @@ func (r *backupRuntime) reconcilePersistedRun(status backupRunStatus) (backupRun
 	return r.reconcileTerminalCleanup(status, true)
 }
 
+// readPersistedRunnerResult recovers a runner's result after a daemon restart.
+// A recovered preflight is not terminal: it returns to preflight_complete so
+// the run can still be started. The caller still reclaims the workspace.
 func (r *backupRuntime) readPersistedRunnerResult(status backupRunStatus) (backupRunStatus, error) {
 	data, err := os.ReadFile(filepath.Join(r.root, status.RunID, "work", "result.json"))
 	if err != nil {
 		return backupRunStatus{}, err
 	}
-	return parseBackupRunnerResult(data, status.RunID, status.Fingerprint)
+	recovered, err := parseBackupRunnerResult(data, status.RunID, status.Fingerprint, backupRunnerOperation(status.Phase))
+	if err != nil {
+		return backupRunStatus{}, err
+	}
+	return normalizeRecoveredRunnerResult(recovered), nil
+}
+
+// backupRunnerOperation is the operation recordRunnerContainer stored in the
+// phase of a running status, or "" when the phase does not name one.
+func backupRunnerOperation(phase string) string {
+	switch phase {
+	case "preflight", "backup", "restore":
+		return phase
+	default:
+		return ""
+	}
+}
+
+func normalizeRecoveredRunnerResult(status backupRunStatus) backupRunStatus {
+	if status.Status == "completed" && status.Phase == "preflight" {
+		status.Status, status.Phase, status.CompletedAt = "queued", "preflight_complete", nil
+	}
+	return status
 }
 
 func (r *backupRuntime) reconcileTerminalCleanup(status backupRunStatus, force bool) (backupRunStatus, error) {
@@ -1071,7 +1238,9 @@ func (e *backupEndpoint) replaceWithRelay(address string) error {
 	return nil
 }
 
-func parseBackupRunnerResult(data []byte, runID, fingerprint string) (backupRunStatus, error) {
+// parseBackupRunnerResult verifies result.json against the operation that ran;
+// operation is "" when a recovery cannot tell which one did.
+func parseBackupRunnerResult(data []byte, runID, fingerprint, operation string) (backupRunStatus, error) {
 	if len(data) > backupResultMaxBytes {
 		return backupRunStatus{}, errors.New("backup runner output exceeded limit")
 	}
@@ -1081,12 +1250,27 @@ func parseBackupRunnerResult(data []byte, runID, fingerprint string) (backupRunS
 	if err := decoder.Decode(&status); err != nil {
 		return backupRunStatus{}, errors.New("backup runner returned invalid result")
 	}
-	if status.RunID != runID || (status.Status != "completed" && status.Status != "failed" && status.Status != "cancelled") {
+	if status.RunID != runID || !isTerminalBackupStatus(status.Status) || !backupRunnerPhaseMatches(operation, status) {
 		return backupRunStatus{}, errors.New("backup runner result is invalid")
 	}
 	status.Fingerprint = fingerprint
 	status.Error = sanitizeBackupError(status.Error)
 	return status, nil
+}
+
+// A preflight also ends with status "completed", so only the phase tells a
+// finished backup or restore apart from a preflight that merely passed.
+func backupRunnerPhaseMatches(operation string, status backupRunStatus) bool {
+	switch operation {
+	case "preflight":
+		return status.Status != "completed" || status.Phase == "preflight"
+	case "backup", "restore":
+		return status.Status != "completed" || status.Phase == "completed"
+	case "":
+		return status.Status != "completed" || status.Phase == "completed" || status.Phase == "preflight"
+	default:
+		return false
+	}
 }
 func sanitizeBackupError(value string) string {
 	value = strings.ReplaceAll(value, "\n", " ")

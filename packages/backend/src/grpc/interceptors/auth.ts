@@ -12,6 +12,8 @@ const RELAY_METADATA = {
 } as const;
 let trustedRelayFingerprints = new Set<string>();
 let relayTrustGeneration = 0;
+// Fingerprint staged by a live rotation that the relay has not confirmed yet.
+let stagedRelayFingerprint: string | null = null;
 
 function getPeerCertificateSocket(call: unknown): {
   authorized?: boolean;
@@ -58,32 +60,27 @@ export interface DaemonCertificateIdentity {
 
 export function configureRelayForwardedIdentityTrust(fingerprint: string | null): void {
   relayTrustGeneration += 1;
+  stagedRelayFingerprint = null;
   trustedRelayFingerprints = fingerprint ? new Set([fingerprint]) : new Set();
 }
 
 /**
- * Trust both the current and next relay leaf during a bounded live-rotation
- * window. The returned commit drops the old fingerprint only after the relay
- * explicitly confirms that the new identity files were loaded.
+ * Trust both the current and next relay leaf during a live rotation. The new
+ * leaf is already written to the relay's identity files, so the relay will
+ * present it on its next reload or restart even when this rotation was never
+ * acknowledged; dropping it again would lock every relayed daemon out until
+ * the backend restarts. The old fingerprint is therefore dropped only once the
+ * rotation is confirmed: by the returned commit (the relay acknowledged the
+ * reload) or by the relay presenting the new leaf on a call.
  */
 export function stageRelayForwardedIdentityTrust(nextFingerprint: string): () => void {
   const generation = ++relayTrustGeneration;
-  const previousFingerprints = new Set(trustedRelayFingerprints);
   trustedRelayFingerprints = new Set([...trustedRelayFingerprints, nextFingerprint]);
+  stagedRelayFingerprint = nextFingerprint;
   let committed = false;
-  const rollbackTimer = setTimeout(
-    () => {
-      if (committed || generation !== relayTrustGeneration) return;
-      relayTrustGeneration += 1;
-      trustedRelayFingerprints = previousFingerprints;
-    },
-    5 * 60 * 1000
-  );
-  rollbackTimer.unref?.();
   const commit = () => {
     if (committed || generation !== relayTrustGeneration) return;
     committed = true;
-    clearTimeout(rollbackTimer);
     configureRelayForwardedIdentityTrust(nextFingerprint);
   };
   return commit;
@@ -98,7 +95,12 @@ export function isTrustedRelayServiceCall(
   const peer = socket.getPeerCertificate(false) as { raw?: unknown };
   if (!Buffer.isBuffer(peer?.raw)) return false;
   const fingerprint = `sha256:${createHash('sha256').update(peer.raw).digest('hex')}`;
-  return trustedRelayFingerprints.has(fingerprint);
+  if (!trustedRelayFingerprints.has(fingerprint)) return false;
+  // The relay presenting the staged leaf proves it loaded the rotated identity.
+  if (stagedRelayFingerprint && fingerprint === stagedRelayFingerprint) {
+    configureRelayForwardedIdentityTrust(fingerprint);
+  }
+  return true;
 }
 
 export function normalizeCertificateSerial(serial: string): string {

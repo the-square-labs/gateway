@@ -3,18 +3,31 @@ import { persist } from "zustand/middleware";
 
 export const APP_STATUS_STORAGE_KEY = "gateway-app-status";
 
+export interface GatewayUpdateError {
+  message: string;
+  targetVersion: string | null;
+  /** The update restarted Gateway, which came back on the previous version. */
+  rolledBack?: boolean;
+}
+
 interface AppStatusState {
   maintenanceActive: boolean;
   gatewayUpdatingActive: boolean;
   gatewayUpdatingTargetVersion: string | null;
+  /** When this browser entered the update screen (epoch ms); bounds how long it waits. */
+  gatewayUpdatingStartedAt: number | null;
   gatewayRestartingActive: boolean;
   gatewayRestartTargetUrl: string | null;
-  gatewayUpdateError: { message: string; targetVersion: string | null } | null;
+  gatewayUpdateError: GatewayUpdateError | null;
   rateLimitedUntil: number | null;
   setMaintenanceActive: (active: boolean) => void;
   setGatewayUpdatingActive: (active: boolean, targetVersion?: string | null) => void;
   setGatewayRestartingActive: (active: boolean, targetUrl?: string | null) => void;
-  setGatewayUpdateError: (message: string, targetVersion?: string | null) => void;
+  setGatewayUpdateError: (
+    message: string,
+    targetVersion?: string | null,
+    options?: { rolledBack?: boolean }
+  ) => void;
   clearGatewayUpdating: () => void;
   clearGatewayRestarting: () => void;
   clearGatewayUpdateError: () => void;
@@ -28,6 +41,7 @@ export const useAppStatusStore = create<AppStatusState>()(
       maintenanceActive: false,
       gatewayUpdatingActive: false,
       gatewayUpdatingTargetVersion: null,
+      gatewayUpdatingStartedAt: null,
       gatewayRestartingActive: false,
       gatewayRestartTargetUrl: null,
       gatewayUpdateError: null,
@@ -42,14 +56,23 @@ export const useAppStatusStore = create<AppStatusState>()(
         }),
 
       setGatewayUpdatingActive: (gatewayUpdatingActive, gatewayUpdatingTargetVersion = null) =>
-        set({
+        set((state) => ({
           gatewayUpdatingActive,
           gatewayUpdatingTargetVersion,
+          // Re-announcing the same update keeps its start; a new one starts the clock.
+          gatewayUpdatingStartedAt: gatewayUpdatingActive
+            ? state.gatewayUpdatingActive &&
+              state.gatewayUpdatingStartedAt != null &&
+              (state.gatewayUpdatingTargetVersion === gatewayUpdatingTargetVersion ||
+                gatewayUpdatingTargetVersion == null)
+              ? state.gatewayUpdatingStartedAt
+              : Date.now()
+            : null,
           gatewayRestartingActive: false,
           gatewayRestartTargetUrl: null,
           gatewayUpdateError: null,
           ...(gatewayUpdatingActive ? { maintenanceActive: false } : {}),
-        }),
+        })),
 
       setGatewayRestartingActive: (gatewayRestartingActive, gatewayRestartTargetUrl = null) =>
         set((state) => {
@@ -62,17 +85,26 @@ export const useAppStatusStore = create<AppStatusState>()(
           };
         }),
 
-      setGatewayUpdateError: (message, targetVersion = null) =>
+      setGatewayUpdateError: (message, targetVersion = null, options = {}) =>
         set({
           gatewayUpdatingActive: false,
           gatewayUpdatingTargetVersion: null,
+          gatewayUpdatingStartedAt: null,
           gatewayRestartingActive: false,
           gatewayRestartTargetUrl: null,
-          gatewayUpdateError: { message, targetVersion },
+          gatewayUpdateError: {
+            message,
+            targetVersion,
+            ...(options.rolledBack ? { rolledBack: true } : {}),
+          },
         }),
 
       clearGatewayUpdating: () =>
-        set({ gatewayUpdatingActive: false, gatewayUpdatingTargetVersion: null }),
+        set({
+          gatewayUpdatingActive: false,
+          gatewayUpdatingTargetVersion: null,
+          gatewayUpdatingStartedAt: null,
+        }),
 
       clearGatewayRestarting: () =>
         set({ gatewayRestartingActive: false, gatewayRestartTargetUrl: null }),
@@ -91,6 +123,7 @@ export const useAppStatusStore = create<AppStatusState>()(
       partialize: (state) => ({
         gatewayUpdatingActive: state.gatewayUpdatingActive,
         gatewayUpdatingTargetVersion: state.gatewayUpdatingTargetVersion,
+        gatewayUpdatingStartedAt: state.gatewayUpdatingStartedAt,
         gatewayRestartingActive: state.gatewayRestartingActive,
         gatewayRestartTargetUrl: state.gatewayRestartTargetUrl,
       }),
@@ -118,6 +151,9 @@ export function syncGatewayOperationStatus(snapshot: GatewayOperationStatusSnaps
 
   useAppStatusStore.setState({
     ...snapshot,
+    gatewayUpdatingStartedAt: snapshot.gatewayUpdatingActive
+      ? (current.gatewayUpdatingStartedAt ?? Date.now())
+      : null,
     ...(snapshot.gatewayUpdatingActive || snapshot.gatewayRestartingActive
       ? { maintenanceActive: false }
       : {}),

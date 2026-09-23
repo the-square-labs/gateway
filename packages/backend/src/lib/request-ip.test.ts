@@ -78,6 +78,28 @@ describe('resolveClientIp', () => {
     expect(trusted.ipAddress).toBe('198.51.100.10');
   });
 
+  it('takes the rightmost untrusted X-Forwarded-For hop instead of the spoofable leftmost entry', () => {
+    const singleProxy = resolveClientIp(headers({ 'x-forwarded-for': '1.2.3.4, 198.51.100.10' }), '172.18.0.5', {
+      clientIpSource: 'reverse_proxy',
+      trustedProxyCidrs: [],
+      trustCloudflareHeaders: false,
+    });
+    const chained = resolveClientIp(headers({ 'x-forwarded-for': '1.2.3.4, 198.51.100.10, 10.0.0.7' }), '10.0.0.5', {
+      clientIpSource: 'reverse_proxy',
+      trustedProxyCidrs: ['10.0.0.0/8'],
+      trustCloudflareHeaders: false,
+    });
+    const autoMode = resolveClientIp(headers({ 'x-forwarded-for': '1.2.3.4, 198.51.100.10' }), '10.0.0.5', {
+      clientIpSource: 'auto',
+      trustedProxyCidrs: ['10.0.0.0/8'],
+      trustCloudflareHeaders: false,
+    });
+
+    expect(singleProxy.ipAddress).toBe('198.51.100.10');
+    expect(chained.ipAddress).toBe('198.51.100.10');
+    expect(autoMode.ipAddress).toBe('198.51.100.10');
+  });
+
   it('does not let private peers bypass configured proxy CIDRs', () => {
     const result = resolveClientIp(headers({ 'x-real-ip': '198.51.100.10' }), '172.18.0.5', {
       clientIpSource: 'reverse_proxy',

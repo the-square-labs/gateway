@@ -1675,6 +1675,11 @@ func (x *NetworkInterface) GetIpAddresses() []string {
 type GatewayCommand struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	CommandId string                 `protobuf:"bytes,1,opt,name=command_id,json=commandId,proto3" json:"command_id,omitempty"`
+	// Optional absolute dispatch deadline in Unix milliseconds. Zero means no
+	// deadline (older gateways). A daemon rejects a command that has already
+	// expired when it is received instead of executing work the gateway no
+	// longer waits for; older daemons ignore the field.
+	ExpiresAtUnixMs int64 `protobuf:"varint,72,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
 	// Types that are valid to be assigned to Payload:
 	//
 	//	*GatewayCommand_ApplyConfig
@@ -1784,6 +1789,13 @@ func (x *GatewayCommand) GetCommandId() string {
 		return x.CommandId
 	}
 	return ""
+}
+
+func (x *GatewayCommand) GetExpiresAtUnixMs() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixMs
+	}
+	return 0
 }
 
 func (x *GatewayCommand) GetPayload() isGatewayCommand_Payload {
@@ -10600,10 +10612,11 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"tx_packets\x18\x05 \x01(\x03R\ttxPackets\x12\x1b\n" +
 	"\trx_errors\x18\x06 \x01(\x03R\brxErrors\x12\x1b\n" +
 	"\ttx_errors\x18\a \x01(\x03R\btxErrors\x12!\n" +
-	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xc9,\n" +
+	"\fip_addresses\x18\b \x03(\tR\vipAddresses\"\xf6,\n" +
 	"\x0eGatewayCommand\x12\x1d\n" +
 	"\n" +
-	"command_id\x18\x01 \x01(\tR\tcommandId\x12C\n" +
+	"command_id\x18\x01 \x01(\tR\tcommandId\x12+\n" +
+	"\x12expires_at_unix_ms\x18H \x01(\x03R\x0fexpiresAtUnixMs\x12C\n" +
 	"\fapply_config\x18\x02 \x01(\v2\x1e.gateway.v1.ApplyConfigCommandH\x00R\vapplyConfig\x12F\n" +
 	"\rremove_config\x18\x03 \x01(\v2\x1f.gateway.v1.RemoveConfigCommandH\x00R\fremoveConfig\x12@\n" +
 	"\vdeploy_cert\x18\x04 \x01(\v2\x1d.gateway.v1.DeployCertCommandH\x00R\n" +

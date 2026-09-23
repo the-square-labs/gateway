@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
@@ -325,5 +325,111 @@ describe("CreateProxyHostDialog", () => {
     expect(screen.queryByRole("button", { name: /create/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
     expect(createProxyHost).not.toHaveBeenCalled();
+  });
+
+  describe("editing an existing route", () => {
+    const existingHost = {
+      id: "host-1",
+      type: "proxy",
+      nodeId: "node-1",
+      domainNames: ["app.example.com"],
+      upstreamKind: "manual",
+      forwardScheme: "http",
+      forwardHost: "10.0.0.2",
+      forwardPort: 8080,
+      websocketSupport: true,
+      sslEnabled: true,
+      sslForced: true,
+      http2Support: true,
+      sslCertificateId: "certificate-1",
+      internalCertificateId: null,
+      nginxTemplateId: null,
+      templateVariables: { cacheEnabled: true },
+      rawConfigEnabled: false,
+      redirectUrl: null,
+      redirectStatusCode: 301,
+    } as never;
+
+    beforeEach(() => {
+      api.invalidateCache("nodes:list:default");
+      vi.spyOn(api, "listNodes").mockResolvedValue({
+        data: [
+          {
+            id: "node-1",
+            hostname: "edge-one",
+            displayName: "Edge One",
+            type: "nginx",
+            status: "online",
+            serviceCreationLocked: false,
+            capabilities: {},
+          },
+        ],
+      } as never);
+      vi.spyOn(api, "listSSLCertificates").mockResolvedValue({ data: [] } as never);
+      vi.spyOn(api, "listNginxTemplates").mockResolvedValue([]);
+      vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+      vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+    });
+
+    it("pre-fills the form again when reopened after the close animation reset it", async () => {
+      const dialog = render(
+        <CreateProxyHostDialog open onOpenChange={vi.fn()} existingHost={existingHost} />
+      );
+      expect(screen.getByPlaceholderText("example.com")).toHaveValue("app.example.com");
+
+      const content = screen.getByRole("dialog");
+      content.setAttribute("data-state", "closed");
+      fireEvent.animationEnd(content);
+      dialog.rerender(
+        <CreateProxyHostDialog open={false} onOpenChange={vi.fn()} existingHost={existingHost} />
+      );
+      dialog.rerender(
+        <CreateProxyHostDialog open onOpenChange={vi.fn()} existingHost={existingHost} />
+      );
+
+      await waitFor(() =>
+        expect(screen.getByPlaceholderText("example.com")).toHaveValue("app.example.com")
+      );
+    });
+
+    it("sends only the entrypoint fields and no raw toggle without the raw scope", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["proxy:view", "proxy:edit:host-1"] } as never,
+      });
+      const updateProxyHost = vi
+        .spyOn(api, "updateProxyHost")
+        .mockResolvedValue(existingHost as never);
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} existingHost={existingHost} />);
+
+      expect(screen.queryByText("Raw Config Mode")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => expect(updateProxyHost).toHaveBeenCalledOnce());
+      expect(updateProxyHost.mock.calls[0]?.[1]).toEqual({
+        type: "proxy",
+        nodeId: "node-1",
+        domainNames: ["app.example.com"],
+      });
+    });
+
+    it("shows the raw switch with the raw toggle scope and sends it only when changed", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["proxy:edit:host-1", "proxy:raw:toggle:host-1"] } as never,
+      });
+      const updateProxyHost = vi
+        .spyOn(api, "updateProxyHost")
+        .mockResolvedValue(existingHost as never);
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} existingHost={existingHost} />);
+
+      expect(screen.getByText("Raw Config Mode")).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: /save/i }));
+
+      await waitFor(() => expect(updateProxyHost).toHaveBeenCalledOnce());
+      expect(updateProxyHost.mock.calls[0]?.[1]).not.toHaveProperty("rawConfigEnabled");
+    });
   });
 });

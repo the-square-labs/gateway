@@ -32,6 +32,7 @@ import {
 } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { useAuthStore } from "@/stores/auth";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { AuthProvisioningSettings } from "@/types";
 import { GracefulShutdownSettingsPanel } from "./GracefulShutdownSettingsPanel";
@@ -154,6 +155,11 @@ export function AuthProvisioningSection({
     mfaHasChanges,
     smtpHasChanges,
   } = useAuthProvisioningSettings(canEdit);
+  const hasScope = useAuthStore((state) => state.hasScope);
+  // SMTP, the OIDC provider, the public URL and verified-email enforcement decide who can prove
+  // an identity to Gateway, so the backend only lets admin:system change them.
+  const canEditIdentityTrust = canEdit && hasScope("admin:system");
+  const identityTrustLocked = canEdit && !canEditIdentityTrust;
 
   if (!initialLoadComplete) return <Skeleton />;
   if (!settings) return null;
@@ -209,14 +215,22 @@ export function AuthProvisioningSection({
           <div className="divide-y divide-border">
             <SettingsControlRow
               title="Public URL"
-              description="Browser-facing URL for redirects and links."
+              description={
+                identityTrustLocked ? (
+                  <>
+                    Browser-facing URL for redirects and links. <IdentityTrustHint />
+                  </>
+                ) : (
+                  "Browser-facing URL for redirects and links."
+                )
+              }
               help="This is the address users and external clients use to reach Gateway. A wrong value can break sign-in redirects, callback URLs, and links generated in emails."
             >
               <Input
                 type="url"
                 value={publicUrl}
                 placeholder="https://gateway.example.com"
-                disabled={!canEdit || isSavingGeneral}
+                disabled={!canEditIdentityTrust || isSavingGeneral}
                 onChange={(event) => setPublicUrl(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") saveAccessSettings();
@@ -498,15 +512,19 @@ export function AuthProvisioningSection({
         hidden={section !== "all" && section !== "advanced"}
         title="OIDC provider"
         description={
-          settings.oidc?.configured
-            ? "Client secret is stored encrypted"
-            : "Configure the identity provider used for OIDC sign-in"
+          identityTrustLocked ? (
+            <IdentityTrustHint />
+          ) : settings.oidc?.configured ? (
+            "Client secret is stored encrypted"
+          ) : (
+            "Configure the identity provider used for OIDC sign-in"
+          )
         }
         actions={
           <Button
             aria-label="Save OIDC provider"
             onClick={saveOidc}
-            disabled={!canEdit || isSavingOidc || !oidcHasChanges}
+            disabled={!canEditIdentityTrust || isSavingOidc || !oidcHasChanges}
           >
             <Save className="h-4 w-4" />
             Save
@@ -524,7 +542,7 @@ export function AuthProvisioningSection({
               type="url"
               value={oidcDraft.issuer}
               placeholder="https://id.example.com/application/o/gateway/"
-              disabled={!canEdit || isSavingOidc}
+              disabled={!canEditIdentityTrust || isSavingOidc}
               onChange={(event) =>
                 setOidcDraft((current) => ({ ...current, issuer: event.target.value }))
               }
@@ -538,7 +556,7 @@ export function AuthProvisioningSection({
             <Input
               value={oidcDraft.clientId}
               placeholder="gateway"
-              disabled={!canEdit || isSavingOidc}
+              disabled={!canEditIdentityTrust || isSavingOidc}
               onChange={(event) =>
                 setOidcDraft((current) => ({ ...current, clientId: event.target.value }))
               }
@@ -559,7 +577,7 @@ export function AuthProvisioningSection({
               placeholder={
                 settings.oidc?.configured ? "Leave blank to keep current secret" : "Client secret"
               }
-              disabled={!canEdit || isSavingOidc}
+              disabled={!canEditIdentityTrust || isSavingOidc}
               onChange={(event) =>
                 setOidcDraft((current) => ({ ...current, clientSecret: event.target.value }))
               }
@@ -574,7 +592,7 @@ export function AuthProvisioningSection({
               type="url"
               value={oidcDraft.redirectUri}
               placeholder="https://gateway.example.com/auth/callback"
-              disabled={!canEdit || isSavingOidc}
+              disabled={!canEditIdentityTrust || isSavingOidc}
               onChange={(event) =>
                 setOidcDraft((current) => ({ ...current, redirectUri: event.target.value }))
               }
@@ -587,7 +605,7 @@ export function AuthProvisioningSection({
           >
             <Input
               value={oidcDraft.scopes}
-              disabled={!canEdit || isSavingOidc}
+              disabled={!canEditIdentityTrust || isSavingOidc}
               onChange={(event) =>
                 setOidcDraft((current) => ({ ...current, scopes: event.target.value }))
               }
@@ -782,11 +800,20 @@ export function AuthProvisioningSection({
               <p className="text-xs text-muted-foreground mt-0.5">
                 Require email_verified=true for future auto-created users and pre-created user
                 claims
+                {identityTrustLocked && settings.oidcRequireVerifiedEmail && (
+                  <>
+                    . <IdentityTrustHint action="turn this off" />
+                  </>
+                )}
               </p>
             </div>
             <Switch
               checked={settings.oidcRequireVerifiedEmail}
-              disabled={!canEdit || isSavingVerifiedEmail}
+              disabled={
+                !canEdit ||
+                isSavingVerifiedEmail ||
+                (settings.oidcRequireVerifiedEmail && !canEditIdentityTrust)
+              }
               onChange={handleToggleRequireVerifiedEmail}
             />
           </div>
@@ -918,23 +945,31 @@ export function AuthProvisioningSection({
         hidden={section !== "all" && section !== "advanced"}
         title="Authentication email (SMTP)"
         description={
-          settings.smtp?.verifiedAt
-            ? `Verified ${new Date(settings.smtp.verifiedAt).toLocaleString()}`
-            : "Configure and send a test before enabling email-based sign-in"
+          identityTrustLocked ? (
+            <IdentityTrustHint />
+          ) : settings.smtp?.verifiedAt ? (
+            `Verified ${new Date(settings.smtp.verifiedAt).toLocaleString()}`
+          ) : (
+            "Configure and send a test before enabling email-based sign-in"
+          )
         }
         actions={
           <div className="flex gap-2">
             <Button
               variant="outline"
               onClick={() => setSmtpTestOpen(true)}
-              disabled={!canEdit || isSavingLocalAuth}
+              disabled={
+                !canEdit ||
+                isSavingLocalAuth ||
+                (!canEditIdentityTrust && (!settings.smtp?.configured || smtpHasChanges))
+              }
             >
               Send test
             </Button>
             <Button
               aria-label="Save SMTP settings"
               onClick={() => saveSmtp()}
-              disabled={!canEdit || isSavingLocalAuth || !smtpHasChanges}
+              disabled={!canEditIdentityTrust || isSavingLocalAuth || !smtpHasChanges}
             >
               {isSavingLocalAuth ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
@@ -951,7 +986,7 @@ export function AuthProvisioningSection({
           <SettingsControlRow title="Email provider" description={selectedSmtpPreset.description}>
             <Select
               value={smtpPreset}
-              disabled={!canEdit || isSavingLocalAuth}
+              disabled={!canEditIdentityTrust || isSavingLocalAuth}
               onValueChange={(value) => handleSmtpPresetChange(value as SmtpPresetId)}
             >
               <SelectTrigger aria-label="SMTP provider" className="w-full">
@@ -976,7 +1011,7 @@ export function AuthProvisioningSection({
                   aria-label="SMTP host"
                   value={smtpDraft.host}
                   placeholder="smtp.example.com"
-                  disabled={!canEdit || isSavingLocalAuth}
+                  disabled={!canEditIdentityTrust || isSavingLocalAuth}
                   onChange={(event) =>
                     setSmtpDraft((current) => ({ ...current, host: event.target.value }))
                   }
@@ -990,7 +1025,7 @@ export function AuthProvisioningSection({
                   min={1}
                   max={65535}
                   placeholder="587"
-                  disabled={!canEdit || isSavingLocalAuth}
+                  disabled={!canEditIdentityTrust || isSavingLocalAuth}
                   onChange={(event) =>
                     setSmtpDraft((current) => ({ ...current, port: event.target.value }))
                   }
@@ -1003,7 +1038,7 @@ export function AuthProvisioningSection({
               >
                 <Select
                   value={smtpDraft.tlsMode}
-                  disabled={!canEdit || isSavingLocalAuth}
+                  disabled={!canEditIdentityTrust || isSavingLocalAuth}
                   onValueChange={(tlsMode: "starttls" | "tls") =>
                     setSmtpDraft((current) => ({ ...current, tlsMode }))
                   }
@@ -1025,7 +1060,7 @@ export function AuthProvisioningSection({
                 aria-label="SMTP username"
                 value={smtpDraft.username}
                 placeholder="SMTP username"
-                disabled={!canEdit || isSavingLocalAuth}
+                disabled={!canEditIdentityTrust || isSavingLocalAuth}
                 onChange={(event) =>
                   setSmtpDraft((current) => ({ ...current, username: event.target.value }))
                 }
@@ -1047,7 +1082,7 @@ export function AuthProvisioningSection({
                     : "Configured — enter new to replace"
                   : "SMTP password or API key"
               }
-              disabled={!canEdit || isSavingLocalAuth}
+              disabled={!canEditIdentityTrust || isSavingLocalAuth}
               onChange={(event) =>
                 setSmtpDraft((current) => ({ ...current, password: event.target.value }))
               }
@@ -1061,7 +1096,7 @@ export function AuthProvisioningSection({
               aria-label="Sender name"
               value={smtpDraft.senderName}
               placeholder="Gateway"
-              disabled={!canEdit || isSavingLocalAuth}
+              disabled={!canEditIdentityTrust || isSavingLocalAuth}
               onChange={(event) =>
                 setSmtpDraft((current) => ({ ...current, senderName: event.target.value }))
               }
@@ -1076,7 +1111,7 @@ export function AuthProvisioningSection({
               value={smtpDraft.senderEmail}
               type="email"
               placeholder="security@example.com"
-              disabled={!canEdit || isSavingLocalAuth}
+              disabled={!canEditIdentityTrust || isSavingLocalAuth}
               onChange={(event) =>
                 setSmtpDraft((current) => ({ ...current, senderEmail: event.target.value }))
               }
@@ -1432,5 +1467,11 @@ export function AuthProvisioningSection({
         </div>
       </PanelShell>
     </div>
+  );
+}
+
+function IdentityTrustHint({ action = "change this" }: { action?: string }) {
+  return (
+    <span className="text-muted-foreground">Requires the admin:system permission to {action}.</span>
   );
 }

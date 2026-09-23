@@ -9,6 +9,7 @@ import {
   subscribeGatewayReload,
 } from "@/lib/gateway-update-reload";
 import { formatDateTime } from "@/lib/utils";
+import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useUpdateStore } from "@/stores/update";
@@ -17,6 +18,14 @@ import type { GatewayUpdateOperation } from "@/types";
 export { isGatewayUpdateTargetVersion, normalizeGatewayUpdateVersion };
 
 const VERSION_RELOAD_CHECK_INTERVAL_MS = 30_000;
+/**
+ * The update screen never outlasts the longest wait for running operations
+ * (one hour) plus the update itself, even if the server still reports it.
+ */
+export const GATEWAY_UPDATE_MAX_WAIT_MS = 90 * 60_000;
+/** Covers the moments before the server has registered an accepted update. */
+export const GATEWAY_UPDATE_UNKNOWN_GRACE_MS = 60_000;
+const GATEWAY_UPDATE_STATUS_CHECK_INTERVAL_MS = 15_000;
 const MAINTENANCE_RECOVERY_CHECK_INTERVAL_MS = 5_000;
 const MAINTENANCE_AUTO_RELOAD_GUARD_KEY = "gateway-maintenance-auto-reload";
 
@@ -245,9 +254,12 @@ function GatewayOperationScreen() {
   const restartTargetUrl = useAppStatusStore((s) => s.gatewayRestartTargetUrl);
   const clearGatewayUpdating = useAppStatusStore((s) => s.clearGatewayUpdating);
   const clearGatewayRestarting = useAppStatusStore((s) => s.clearGatewayRestarting);
+  const setGatewayUpdateError = useAppStatusStore((s) => s.setGatewayUpdateError);
   useEffect(() => {
     let cancelled = false;
     let timer: number | null = null;
+    const mountedAt = Date.now();
+    let lastStatusCheckAt = 0;
     // A regular restart can recover before this effect mounts. Treat the
     // persisted restart flag itself as evidence so the first healthy probe
     // clears a stale blocker. Versioned updates still wait for their target.
@@ -263,6 +275,43 @@ function GatewayOperationScreen() {
       if (updatingActive) clearGatewayUpdating();
       else clearGatewayRestarting();
       reloadGatewayClient(reload.id);
+    };
+
+    // Gateway runs, but not the target version: the update was rolled back,
+    // failed, or never happened. Leave the screen instead of waiting forever.
+    const leaveUnfinishedUpdate = (runningVersion: string | null) => {
+      if (navigating || !targetVersion) return;
+      navigating = true;
+      useUpdateStore.getState().clearUpdating();
+      setGatewayUpdateError(
+        `${
+          runningVersion
+            ? `Gateway ${runningVersion} is running instead of ${targetVersion}.`
+            : `Gateway is running a version other than ${targetVersion}.`
+        } The update did not complete; check the update container logs on the Gateway host.`,
+        targetVersion,
+        { rolledBack: true }
+      );
+    };
+
+    const checkUpdateOutcome = async (runningVersion: string | null) => {
+      const now = Date.now();
+      const waited = now - (useAppStatusStore.getState().gatewayUpdatingStartedAt ?? mountedAt);
+      if (waited >= GATEWAY_UPDATE_MAX_WAIT_MS) {
+        leaveUnfinishedUpdate(runningVersion);
+        return;
+      }
+      if (now - lastStatusCheckAt < GATEWAY_UPDATE_STATUS_CHECK_INTERVAL_MS) return;
+      lastStatusCheckAt = now;
+      const status = await useUpdateStore.getState().fetchStatus();
+      if (!status || cancelled || navigating) return;
+      // A waiting or running update keeps the screen; a failed one already
+      // replaced it with its error (see the update store).
+      if (status.gatewayOperation) return;
+      // The server knows no update: the process that accepted it is gone.
+      if (restartObserved || waited >= GATEWAY_UPDATE_UNKNOWN_GRACE_MS) {
+        leaveUnfinishedUpdate(runningVersion);
+      }
     };
 
     const navigateToRestartTarget = () => {
@@ -322,6 +371,7 @@ function GatewayOperationScreen() {
             completeSameOriginRestart(health.version ?? null, "gateway-update-target-ready");
             return;
           }
+          if (updatingActive) await checkUpdateOutcome(health.version ?? null);
           return;
         }
 
@@ -362,6 +412,7 @@ function GatewayOperationScreen() {
     clearGatewayRestarting,
     clearGatewayUpdating,
     restartTargetUrl,
+    setGatewayUpdateError,
     targetVersion,
     updatingActive,
   ]);
@@ -390,17 +441,76 @@ function GatewayOperationScreen() {
 function RelayOperationScreen() {
   const status = useUpdateStore((state) => state.status);
   const optimisticTargetVersion = useUpdateStore((state) => state.updatingTargetVersion);
+  const abandonRelayUpdate = useUpdateStore((state) => state.abandonRelayUpdate);
+  const canUpdate = useAuthStore((state) => state.hasScope("admin:update"));
+  const [confirming, setConfirming] = useState(false);
+  const [abandoning, setAbandoning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const targetVersion =
     status?.relay.operation?.targetVersion ??
     optimisticTargetVersion ??
     status?.relay.latestVersion ??
     "the latest version";
 
+  const handleAbandon = async () => {
+    setAbandoning(true);
+    setError(null);
+    try {
+      await abandonRelayUpdate();
+    } catch (abandonError) {
+      setError(
+        abandonError instanceof Error ? abandonError.message : "The update could not be abandoned"
+      );
+      setAbandoning(false);
+    }
+  };
+
   return (
     <UpdateOperationScreen
       title="Updating Relay"
       description={`Relay is updating to ${targetVersion}. Active Secure Links may be briefly interrupted.`}
-    />
+    >
+      {canUpdate && (
+        <div className="mt-5 space-y-2">
+          {confirming ? (
+            <>
+              <p className="text-xs leading-[1.5] text-[#a1a1aa]">
+                Abandon this update? Relays it drained return to service. Relays that already
+                updated keep the new version.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  className="flex-1"
+                  onClick={() => setConfirming(false)}
+                  disabled={abandoning}
+                >
+                  Keep waiting
+                </Button>
+                <Button
+                  variant="destructive"
+                  className="flex-1"
+                  onClick={handleAbandon}
+                  disabled={abandoning}
+                >
+                  {abandoning && <Loader2 className="animate-spin" />}
+                  Abandon update
+                </Button>
+              </div>
+            </>
+          ) : (
+            <Button variant="secondary" className="w-full" onClick={() => setConfirming(true)}>
+              Abandon update
+            </Button>
+          )}
+          {error && (
+            <p role="alert" className="text-xs text-destructive">
+              {error}
+            </p>
+          )}
+        </div>
+      )}
+    </UpdateOperationScreen>
   );
 }
 
@@ -473,8 +583,19 @@ function GatewayReloadCoordinator() {
 function GatewayUpdateErrorScreen() {
   const error = useAppStatusStore((s) => s.gatewayUpdateError);
   const clearGatewayUpdateError = useAppStatusStore((s) => s.clearGatewayUpdateError);
+  const canUpdate = useAuthStore((state) => state.hasScope("admin:update"));
 
   if (!error) return null;
+
+  const handleReturn = () => {
+    // Other admin sessions no longer need to be told about this attempt.
+    if (error.rolledBack && canUpdate) {
+      void Promise.resolve()
+        .then(() => api.acknowledgeUpdateFailure())
+        .catch(() => undefined);
+    }
+    clearGatewayUpdateError();
+  };
 
   return (
     <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-background px-4">
@@ -485,9 +606,13 @@ function GatewayUpdateErrorScreen() {
           </div>
           <h2 className="text-lg font-semibold text-foreground">Update Failed</h2>
           <p className="text-sm text-muted-foreground">
-            {error.targetVersion
-              ? `Gateway could not start the update to ${error.targetVersion}.`
-              : "Gateway could not start the update."}
+            {error.rolledBack
+              ? `Gateway could not complete the update${
+                  error.targetVersion ? ` to ${error.targetVersion}` : ""
+                }. The previous version is running.`
+              : error.targetVersion
+                ? `Gateway could not start the update to ${error.targetVersion}.`
+                : "Gateway could not start the update."}
           </p>
           <p className="border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
             {error.message}
@@ -495,11 +620,13 @@ function GatewayUpdateErrorScreen() {
         </div>
 
         <div className="space-y-3">
-          <Button onClick={clearGatewayUpdateError} className="w-full">
+          <Button onClick={handleReturn} className="w-full">
             Return to Gateway
           </Button>
           <p className="text-xs text-muted-foreground">
-            No restart was started. You can retry the update after resolving the error.
+            {error.rolledBack
+              ? "Review the update logs on the Gateway host before you retry the update."
+              : "No restart was started. You can retry the update after resolving the error."}
           </p>
         </div>
       </div>

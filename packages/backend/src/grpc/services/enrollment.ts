@@ -5,9 +5,10 @@ import { and, eq, isNull } from 'drizzle-orm';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
-import { parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
+import { isNodeEnrollmentTokenExpired, parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
+import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcEnrollment');
@@ -32,7 +33,8 @@ async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: str
       return null;
     }
 
-    return (await bcrypt.compare(token, candidate.enrollmentTokenHash)) ? candidate : null;
+    if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
+    return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
   }
 
   if (parsedToken.kind !== 'legacy') {
@@ -55,7 +57,14 @@ async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: str
     // Compare every legacy candidate to avoid turning old tokens into a position oracle.
   }
 
+  if (matchedNode && isNodeEnrollmentTokenExpired(matchedNode.enrollmentTokenExpiresAt)) return 'expired';
   return matchedNode;
+}
+
+class EnrollmentTokenConsumedError extends Error {
+  constructor() {
+    super('Enrollment token was already used');
+  }
 }
 
 export function createEnrollmentHandlers(deps: GrpcServerDeps) {
@@ -68,6 +77,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         const token = req.token.trim();
         const matchedNode = await findPendingNodeByEnrollmentToken(deps, token);
 
+        if (matchedNode === 'expired') {
+          callback({ code: 16, message: 'Enrollment token has expired; generate a new token for this node' });
+          return;
+        }
         if (!matchedNode) {
           callback({ code: 16, message: 'Invalid enrollment token' });
           return;
@@ -158,7 +171,9 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         // swap. If this update fails, the prior current certificate remains
         // usable and the newly issued unbound leaf is never auto-cleaned.
         const certResult = await deps.systemCA.issueNodeCert(nodeId, req.hostname, async (tx, certificate) => {
-          await tx
+          // Bind only while this exact token is still pending: a concurrent
+          // enrollment with the same token must not also receive a bundle.
+          const bound = await tx
             .update(nodes)
             .set({
               status: 'online',
@@ -172,13 +187,28 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               lastSeenAt: new Date(),
               enrollmentTokenSelector: null,
               enrollmentTokenHash: null,
+              enrollmentTokenExpiresAt: null,
               certificateSerial: certificate.serialNumber,
               certificateFingerprint: certificateFingerprint(certificate.certificatePem),
               certificateExpiresAt: certificate.notAfter,
+              pendingCertificateSerial: null,
+              pendingCertificateFingerprint: null,
+              pendingCertificateExpiresAt: null,
               hostIdentityId,
               updatedAt: new Date(),
             })
-            .where(eq(nodes.id, nodeId));
+            .where(
+              and(
+                eq(nodes.id, nodeId),
+                eq(nodes.status, 'pending'),
+                eq(nodes.enrollmentTokenHash, matchedNode.enrollmentTokenHash!),
+                matchedNode.enrollmentTokenSelector
+                  ? eq(nodes.enrollmentTokenSelector, matchedNode.enrollmentTokenSelector)
+                  : isNull(nodes.enrollmentTokenSelector)
+              )
+            )
+            .returning({ id: nodes.id });
+          if (bound.length === 0) throw new EnrollmentTokenConsumedError();
           if (relayBundle) {
             const relayValues = {
               faultDomainId: hostIdentityId,
@@ -228,6 +258,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             });
           });
       } catch (err) {
+        if (err instanceof EnrollmentTokenConsumedError) {
+          callback({ code: 16, message: 'Invalid enrollment token' });
+          return;
+        }
         if ((err as { constraint?: string }).constraint === 'relay_instances_pool_fault_domain_unique') {
           callback({ code: 6, message: 'This physical host already has a relay instance in the system pool' });
           return;
@@ -279,22 +313,13 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           return;
         }
 
-        const storedSerial = normalizeCertificateSerial(node.certificateSerial);
-        if (storedSerial !== certIdentity.serialNumber) {
-          logger.warn('Certificate renewal rejected: certificate serial does not match enrolled node', {
+        // The staged (pending) certificate is accepted too: a daemon that
+        // saved it but has not re-registered yet can still retry.
+        if (!matchEnrolledNodeCertificate(node, certIdentity)) {
+          logger.warn('Certificate renewal rejected: certificate does not match enrolled node', {
             nodeId: req.nodeId,
             presentedSerial: certIdentity.serialNumber,
-            storedSerial,
-          });
-          callback({ code: 7, message: 'Client certificate is not the current enrolled certificate for this node' });
-          return;
-        }
-        if (
-          certIdentity.certificateFingerprint &&
-          node.certificateFingerprint !== certIdentity.certificateFingerprint
-        ) {
-          logger.warn('Certificate renewal rejected: certificate fingerprint does not match enrolled node', {
-            nodeId: req.nodeId,
+            storedSerial: normalizeCertificateSerial(node.certificateSerial),
           });
           callback({ code: 7, message: 'Client certificate is not the current enrolled certificate for this node' });
           return;
@@ -322,37 +347,40 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           return;
         }
 
-        // Atomically change the stored serial with the current-leaf swap.
-        const certResult = await deps.systemCA.issueNodeCert(req.nodeId, node.hostname, async (tx, certificate) => {
-          await tx
-            .update(nodes)
-            .set({
-              certificateSerial: certificate.serialNumber,
-              certificateFingerprint: certificateFingerprint(certificate.certificatePem),
-              certificateExpiresAt: certificate.notAfter,
-              updatedAt: new Date(),
-            })
-            .where(eq(nodes.id, req.nodeId));
-        });
+        // Stage the renewed certificate as pending. The current certificate
+        // stays valid (and unrevoked) until the daemon registers with the new
+        // one, so a lost response or a failed write on the node cannot lock it
+        // out. A retry while a staged certificate exists returns that same one.
+        const currentSerial = node.certificateSerial;
+        const certResult = await deps.systemCA.issueNodeCert(
+          req.nodeId,
+          node.hostname,
+          async (tx, certificate) => {
+            const staged = await tx
+              .update(nodes)
+              .set({
+                pendingCertificateSerial: certificate.serialNumber,
+                pendingCertificateFingerprint: certificateFingerprint(certificate.certificatePem),
+                pendingCertificateExpiresAt: certificate.notAfter,
+                updatedAt: new Date(),
+              })
+              .where(and(eq(nodes.id, req.nodeId), eq(nodes.certificateSerial, currentSerial)))
+              .returning({ id: nodes.id });
+            if (staged.length === 0) throw new Error('Node certificate changed during renewal; retry');
+          },
+          { stage: 'pending' }
+        );
 
-        logger.info('Node cert renewed', { nodeId: req.nodeId, serial: certResult.serial });
+        logger.info('Node cert renewal staged', { nodeId: req.nodeId, serial: certResult.serial });
         callback(null, {
           clientCertificate: Buffer.from(certResult.certPem),
           clientKey: Buffer.from(certResult.keyPem),
           certExpiresAt: String(Math.floor(certResult.expiresAt.getTime() / 1000)),
         });
-        await deps.relayPolicy
-          ?.refreshNodeIdentity(req.nodeId, certificateFingerprint(certResult.certPem))
-          .catch((error) => {
-            logger.warn('Relay policy identity refresh deferred after certificate renewal', {
-              nodeId: req.nodeId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
 
         // The active CommandStream was authenticated with the old certificate.
-        // Remove and close it after returning the renewed cert so the daemon reconnects
-        // with credentials matching the newly stored serial.
+        // Remove and close it after returning the renewed cert so the daemon
+        // reconnects with it; that registration promotes the staged serial.
         deps.registry.deregister(req.nodeId, connectedNode.commandStream).catch((deregisterErr) => {
           logger.warn('Failed to deregister command stream after cert renewal', {
             nodeId: req.nodeId,

@@ -36,6 +36,17 @@ describe("Availability replacement progress", () => {
     expect(screen.getByRole("status")).toHaveTextContent("Waiting for all services");
     expect(screen.getByRole("status")).not.toHaveTextContent("through Availability");
   });
+  it("explains a reconciling Compose operation after a node disconnect", () => {
+    const operation = {
+      action: "apply",
+      status: "reconciling",
+      progress: "Applying services",
+    } as DockerComposeOperation;
+    render(<AvailabilityProgress fallbackOperation={operation} />);
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Reconciling: the node connection dropped, waiting for it to report its Compose state"
+    );
+  });
   it("blocks runtime access for a waiting rollout even when the old policy status says healthy", () => {
     expect(isAvailabilityReplacing(policy("waiting"))).toBe(true);
     expect(isAvailabilityReplacing(policy("completed"))).toBe(false);

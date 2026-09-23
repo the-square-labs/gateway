@@ -2,16 +2,18 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { errorHandler } from '@/middleware/error-handler.js';
+import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { DemoAuthService } from '@/modules/demo/demo-auth.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
-import { authRoutes } from './auth.routes.js';
+import { authRoutes, hashOidcState, OIDC_STATE_COOKIE_NAME } from './auth.routes.js';
 import { AuthService } from './auth.service.js';
+import { MfaService } from './mfa.service.js';
 import { OidcSettingsService } from './oidc-settings.service.js';
+import { PasskeyService } from './passkey.service.js';
 
 process.env.DATABASE_URL ||= 'http://localhost/db';
 process.env.REDIS_URL ||= 'redis://localhost:6379';
@@ -298,6 +300,7 @@ describe('OIDC callback route', () => {
       headers: {
         'User-Agent': 'Mozilla/5.0 Gateway browser',
         'X-Forwarded-For': '203.0.113.10',
+        Cookie: `${OIDC_STATE_COOKIE_NAME}=${hashOidcState('state')}`,
       },
     });
 
@@ -335,11 +338,286 @@ describe('OIDC callback route', () => {
     const app = new Hono<AppEnv>();
     app.route('/auth', authRoutes);
 
-    const response = await app.request('/auth/callback?code=code&state=state');
+    const response = await app.request('/auth/callback?code=code&state=state', {
+      headers: { Cookie: `${OIDC_STATE_COOKIE_NAME}=${hashOidcState('state')}` },
+    });
 
     expect(response.status).toBe(302);
     expect(response.headers.get('location')).toBe(
       `https://gateway.example.com/callback?return_to=${encodeURIComponent(returnTo)}`
     );
+  });
+});
+
+describe('OIDC login CSRF binding', () => {
+  function registerOidcRouteDependencies(handleCallback = vi.fn()) {
+    const { auditLog } = registerDependencies();
+    container.registerInstance(AuthService, {
+      handleCallback,
+      getAuthorizationUrl: vi
+        .fn()
+        .mockResolvedValue('https://idp.example.com/authorize?client_id=gateway&state=state-from-login'),
+    } as unknown as AuthService);
+    container.registerInstance(OidcSettingsService, {
+      getRuntimeConfig: vi.fn().mockResolvedValue({ redirectUri: 'https://gateway.example.com/auth/callback' }),
+    } as unknown as OidcSettingsService);
+    container.registerInstance(GeneralSettingsService, {
+      requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
+    } as unknown as GeneralSettingsService);
+    container.registerInstance(NetworkSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({
+        clientIpSource: 'direct',
+        trustedProxyCidrs: [],
+        trustCloudflareHeaders: false,
+      }),
+    } as unknown as NetworkSettingsService);
+    const app = new Hono<AppEnv>();
+    app.route('/auth', authRoutes);
+    return { app, auditLog, handleCallback };
+  }
+
+  it('binds the pending authorization state to the browser with a short-lived httpOnly cookie', async () => {
+    const { app } = registerOidcRouteDependencies();
+
+    const response = await app.request('/auth/login');
+
+    expect(response.status).toBe(302);
+    const cookie = response.headers.get('set-cookie') ?? '';
+    expect(cookie).toContain(`${OIDC_STATE_COOKIE_NAME}=${hashOidcState('state-from-login')}`);
+    expect(cookie).toContain('HttpOnly');
+    expect(cookie).toContain('SameSite=Lax');
+    expect(cookie).toContain('Secure');
+    expect(cookie).toContain('Max-Age=300');
+    expect(cookie).not.toContain('state-from-login;');
+  });
+
+  it('refuses a callback whose state was not started in this browser', async () => {
+    const { app, handleCallback, auditLog } = registerOidcRouteDependencies();
+
+    const missing = await app.request('/auth/callback?code=code&state=attacker-state');
+    const mismatched = await app.request('/auth/callback?code=code&state=attacker-state', {
+      headers: { Cookie: `${OIDC_STATE_COOKIE_NAME}=${hashOidcState('victim-state')}` },
+    });
+
+    expect(missing.status).toBe(400);
+    expect(mismatched.status).toBe(400);
+    expect(handleCallback).not.toHaveBeenCalled();
+    expect(auditLog).toHaveBeenCalledWith(expect.objectContaining({ action: 'auth.login_failed' }));
+    expect(mismatched.headers.get('set-cookie')).toContain(`${OIDC_STATE_COOKIE_NAME}=;`);
+  });
+
+  it('clears the binding cookie after a successful callback', async () => {
+    const { app } = registerOidcRouteDependencies(
+      vi.fn().mockResolvedValue({ sessionId: 'new-session-id', user: USER })
+    );
+
+    const response = await app.request('/auth/callback?code=code&state=state', {
+      headers: { Cookie: `${OIDC_STATE_COOKIE_NAME}=${hashOidcState('state')}` },
+    });
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get('set-cookie')).toContain(`${OIDC_STATE_COOKIE_NAME}=;`);
+  });
+});
+
+describe('logout', () => {
+  it('clears the session cookie when no identity-provider logout URL exists', async () => {
+    registerDependencies();
+    const logout = vi.fn().mockResolvedValue(null);
+    container.registerInstance(AuthService, { logout } as unknown as AuthService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/logout', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=current-session-id', 'X-CSRF-Token': 'csrf-token' },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ message: 'Logged out successfully' });
+    expect(logout).toHaveBeenCalledWith('current-session-id');
+    expect(response.headers.get('set-cookie')).toContain('session_id=;');
+  });
+});
+
+describe('second-factor step-up', () => {
+  it('refuses to reset TOTP without a fresh second-factor proof', async () => {
+    registerDependencies();
+    const resetTotp = vi.fn();
+    container.registerInstance(MfaService, {
+      assertSecondFactorChangeAllowed: vi
+        .fn()
+        .mockRejectedValue(new AppError(403, 'MFA_STEP_UP_REQUIRED', 'Step-up required')),
+      resetTotp,
+    } as unknown as MfaService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+    const localUser = { ...USER, authMethod: 'password' as const };
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: { findFirst: vi.fn().mockResolvedValue(localUser) },
+        permissionGroups: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ id: USER.groupId, parentId: null, name: USER.groupName, scopes: USER.scopes }]),
+        },
+      },
+    } as unknown as DrizzleClient);
+
+    const response = await app.request('/auth/me/mfa/totp/reset', {
+      method: 'POST',
+      headers: { Cookie: 'session_id=current-session-id', 'X-CSRF-Token': 'csrf-token' },
+    });
+
+    expect(response.status).toBe(403);
+    expect(resetTotp).not.toHaveBeenCalled();
+  });
+
+  it('grants a step-up after a passkey assertion for the current user', async () => {
+    registerDependencies();
+    const localUser = { ...USER, authMethod: 'password' as const };
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: { findFirst: vi.fn().mockResolvedValue(localUser) },
+        permissionGroups: {
+          findMany: vi
+            .fn()
+            .mockResolvedValue([{ id: USER.groupId, parentId: null, name: USER.groupName, scopes: USER.scopes }]),
+        },
+      },
+    } as unknown as DrizzleClient);
+    const verifyAuthentication = vi.fn().mockResolvedValue(localUser);
+    const grantStepUp = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(PasskeyService, { verifyAuthentication } as unknown as PasskeyService);
+    container.registerInstance(MfaService, { grantStepUp } as unknown as MfaService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+
+    const response = await app.request('/auth/me/mfa/step-up/passkey/verify', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=current-session-id',
+        'X-CSRF-Token': 'csrf-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ challenge: 'challenge-value-1234', response: { id: 'credential' } }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(verifyAuthentication).toHaveBeenCalledWith('challenge-value-1234', { id: 'credential' }, USER.id, false);
+    expect(grantStepUp).toHaveBeenCalledWith(USER.id, 'current-session-id');
+  });
+});
+
+describe('impersonated sessions', () => {
+  const subjectRow = {
+    id: 'subject-1',
+    oidcSubject: null,
+    authMethod: 'password',
+    email: 'subject@example.com',
+    name: 'Subject',
+    avatarUrl: null,
+    groupId: 'viewer-group',
+    additionalScopes: [],
+    additionalGroupIds: [],
+    isBlocked: false,
+    deletedAt: null,
+  };
+  const actorRow = { ...subjectRow, id: 'actor-1', email: 'admin@example.com', groupId: 'admin-group' };
+
+  function registerImpersonation() {
+    let userLookups = 0;
+    const revokeOtherUserSessions = vi.fn().mockResolvedValue(1);
+    const revokeUserSessionByPublicId = vi.fn().mockResolvedValue(true);
+    const impersonationSession: SessionData = {
+      userId: subjectRow.id,
+      user: { ...USER, id: subjectRow.id },
+      purpose: 'impersonation',
+      impersonation: { actorUserId: actorRow.id, originalSessionId: 'original-session' },
+      csrfToken: 'csrf-token',
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 60_000,
+    };
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(impersonationSession),
+      getOriginalSessionForImpersonation: vi.fn().mockResolvedValue({
+        sessionId: 'original-session',
+        session: { ...SESSION, userId: actorRow.id, mfaSatisfiedAt: Date.now() },
+      }),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      touchSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+      revokeOtherUserSessions,
+      revokeUserSessionByPublicId,
+    } as unknown as SessionService);
+    container.registerInstance(AuditService, { log: vi.fn() } as unknown as AuditService);
+    container.registerInstance(TOKENS.DrizzleClient, {
+      query: {
+        users: {
+          // Each authentication resolves the subject, then the impersonating actor.
+          findFirst: vi.fn(async () => (userLookups++ % 2 === 0 ? subjectRow : actorRow)),
+        },
+        permissionGroups: {
+          findMany: vi.fn().mockResolvedValue([
+            { id: 'viewer-group', parentId: null, name: 'viewer', scopes: ['nodes:details'], requireGateway2fa: false },
+            {
+              id: 'admin-group',
+              parentId: null,
+              name: 'admin',
+              scopes: ['admin:users:impersonate', 'nodes:details'],
+              requireGateway2fa: false,
+            },
+          ]),
+        },
+      },
+    } as unknown as DrizzleClient);
+    const mfa = {
+      resetTotp: vi.fn(),
+      beginTotpSetup: vi.fn(),
+      confirmTotpSetup: vi.fn(),
+      assertSecondFactorChangeAllowed: vi.fn().mockResolvedValue(undefined),
+      verifyStepUpCode: vi.fn(),
+    };
+    const passkeys = { beginRegistration: vi.fn(), finishRegistration: vi.fn(), removePasskey: vi.fn() };
+    container.registerInstance(MfaService, mfa as unknown as MfaService);
+    container.registerInstance(PasskeyService, passkeys as unknown as PasskeyService);
+    const app = new Hono<AppEnv>();
+    app.onError(errorHandler);
+    app.route('/auth', authRoutes);
+    return { app, mfa, passkeys, revokeOtherUserSessions, revokeUserSessionByPublicId };
+  }
+
+  it.each([
+    ['/auth/me/passkeys/options', 'POST'],
+    ['/auth/me/passkeys', 'POST'],
+    ['/auth/me/passkeys/passkey-1', 'DELETE'],
+    ['/auth/me/mfa/totp/setup', 'POST'],
+    ['/auth/me/mfa/totp/confirm', 'POST'],
+    ['/auth/me/mfa/totp/reset', 'POST'],
+    ['/auth/me/mfa/step-up', 'POST'],
+    ['/auth/me/sessions/revoke-others', 'POST'],
+    ['/auth/me/sessions/session-public-id', 'DELETE'],
+  ])('refuses %s %s while impersonating', async (path, method) => {
+    const { app, mfa, passkeys, revokeOtherUserSessions, revokeUserSessionByPublicId } = registerImpersonation();
+
+    const response = await app.request(path, {
+      method,
+      headers: {
+        Cookie: 'session_id=impersonation-session',
+        'X-CSRF-Token': 'csrf-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ code: '123456', totpCode: '123456', response: {} }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ code: 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN' });
+    for (const fn of [...Object.values(mfa), ...Object.values(passkeys)]) expect(fn).not.toHaveBeenCalled();
+    expect(revokeOtherUserSessions).not.toHaveBeenCalled();
+    expect(revokeUserSessionByPublicId).not.toHaveBeenCalled();
   });
 });

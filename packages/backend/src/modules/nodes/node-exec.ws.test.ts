@@ -1,12 +1,17 @@
 import 'reflect-metadata';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { createDockerExecWSHandlers } from '@/modules/docker/docker-exec.ws.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
-import { createNodeExecWSHandlers, EXEC_OUTPUT_MAX_BYTES, EXEC_OUTPUT_MAX_CHUNKS } from './node-exec.ws.js';
+import {
+  createNodeExecWSHandlers,
+  daemonIsolatesNodeConsoleSessions,
+  EXEC_OUTPUT_MAX_BYTES,
+  EXEC_OUTPUT_MAX_CHUNKS,
+} from './node-exec.ws.js';
 
 const auth = vi.hoisted(() => ({
   resolveWebSocketCredential: vi.fn(),
@@ -193,4 +198,91 @@ describe.each(['node', 'docker'] as const)('%s console lifetime', (kind) => {
       expect(s.registry.removeExecHandler).not.toHaveBeenCalled();
       expect(vi.getTimerCount()).toBe(0);
     });
+});
+
+describe('daemonIsolatesNodeConsoleSessions', () => {
+  it.each<[string | null, boolean]>([
+    ['v2.4.4', false],
+    ['v2.4.5-rc.1', false],
+    ['v2.4.5', true],
+    ['v2.10.0', true],
+    ['dev', true],
+    [null, false],
+    ['unknown', false],
+  ])('daemon %s isolates node console sessions: %s', (version, expected) => {
+    expect(daemonIsolatesNodeConsoleSessions(version)).toBe(expected);
+  });
+});
+
+describe('node console session isolation', () => {
+  const created = (execId: string, isNew: boolean) => ({
+    success: true,
+    detail: JSON.stringify({ exec_id: execId, is_new: isNew, buffer: ['c2VjcmV0'] }),
+  });
+
+  function setup(daemonVersion: string | null) {
+    const registry = new NodeRegistryService({} as never);
+    vi.spyOn(registry, 'getNode').mockReturnValue({ nodeId: 'n' } as never);
+    const dispatch = { sendNodeExecCommand: vi.fn(), sendExecInput: vi.fn() };
+    const db = {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ daemonVersion }] }) }) }),
+    };
+    container.registerInstance(NodeRegistryService, registry);
+    container.registerInstance(NodeDispatchService, dispatch as never);
+    container.registerInstance(TOKENS.DrizzleClient, db as never);
+    const handlers = createNodeExecWSHandlers('n', '/bin/sh', credential);
+    const open = async (userId: string) => {
+      auth.resolveWebSocketCredential.mockResolvedValue({ user: { id: userId, isBlocked: false }, scopes: [] });
+      const ws = { send: vi.fn(), close: vi.fn() };
+      handlers.onOpen({} as never, ws as never);
+      await settle();
+      return ws;
+    };
+    const messages = (ws: { send: ReturnType<typeof vi.fn> }) =>
+      ws.send.mock.calls.map(([value]) => JSON.parse(String(value)));
+    return { registry, dispatch, handlers, open, messages };
+  }
+
+  it.each(['v2.4.4', null])('daemon %s: never attaches a user to a console another user opened', async (version) => {
+    const test = setup(version);
+    const execId = `node-shared-${version}`;
+    test.dispatch.sendNodeExecCommand
+      .mockResolvedValueOnce(created(execId, true))
+      .mockResolvedValueOnce(created(execId, false));
+    const owner = await test.open('user-a');
+    expect(test.messages(owner)).toContainEqual(expect.objectContaining({ type: 'connected', execId, isNew: true }));
+
+    const other = await test.open('user-b');
+    expect(test.dispatch.sendNodeExecCommand).toHaveBeenLastCalledWith(
+      'n',
+      'create',
+      expect.objectContaining({ sessionKey: 'user-b' })
+    );
+    expect(other.close).toHaveBeenCalledWith(1008, 'Console session belongs to another user');
+    // Neither the replay buffer nor live output reaches the other user.
+    expect(test.messages(other).map((message) => message.type)).toEqual(['auth_error']);
+    expect(test.registry.getExecHandlerCount(execId)).toBe(1);
+  });
+
+  it('lets the creator reattach to its own console on a daemon without isolation', async () => {
+    const test = setup('v2.4.4');
+    test.dispatch.sendNodeExecCommand
+      .mockResolvedValueOnce(created('node-own', true))
+      .mockResolvedValueOnce(created('node-own', false));
+    const first = await test.open('user-a');
+    test.handlers.onClose({}, first as never);
+    const again = await test.open('user-a');
+    expect(again.close).not.toHaveBeenCalled();
+    expect(test.messages(again)).toContainEqual(
+      expect.objectContaining({ type: 'connected', execId: 'node-own', isNew: false })
+    );
+  });
+
+  it('trusts session reuse on daemons that isolate sessions per user', async () => {
+    const test = setup('v2.4.5');
+    test.dispatch.sendNodeExecCommand.mockResolvedValueOnce(created('node-b', false));
+    const ws = await test.open('user-b');
+    expect(ws.close).not.toHaveBeenCalled();
+    expect(test.messages(ws)).toContainEqual(expect.objectContaining({ type: 'connected', execId: 'node-b' }));
+  });
 });

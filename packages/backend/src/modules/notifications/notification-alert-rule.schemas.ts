@@ -18,6 +18,25 @@ const alertCategorySchema = z.enum([
   'database_redis',
 ]);
 
+/**
+ * Certificate expiry is checked once a day (and on certificate changes). A fire or resolve window
+ * shorter than the check interval can never be covered by samples, so such rules act on every check.
+ */
+export function isOnceADayAlertRule(rule: {
+  type?: string | null;
+  category?: string | null;
+  metric?: string | null;
+}): boolean {
+  return rule.type === 'threshold' && rule.category === 'certificate' && rule.metric === 'days_until_expiry';
+}
+
+export const ONCE_A_DAY_ALERT_WINDOWS = {
+  durationSeconds: 0,
+  fireThresholdPercent: 100,
+  resolveAfterSeconds: 0,
+  resolveThresholdPercent: 100,
+} as const;
+
 export const AlertRuleListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(50),

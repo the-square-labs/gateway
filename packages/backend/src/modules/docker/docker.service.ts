@@ -105,6 +105,7 @@ import {
   abortVolumeFileUpload as abortDockerVolumeFileUpload,
   adoptVolume as adoptDockerVolume,
   appendVolumeFileUploadChunk as appendDockerVolumeFileUploadChunk,
+  assertUserVolumeVisible as assertDockerUserVolumeVisible,
   completeVolumeFileUpload as completeDockerVolumeFileUpload,
   connectContainerToNetwork as connectDockerContainerToNetwork,
   createNetwork as createDockerNetwork,
@@ -1623,6 +1624,12 @@ export class DockerManagementService {
     return listDockerVolumes(this.volumeNetworkOperationContext(), nodeId);
   }
 
+  /** Reject per-volume user operations on volumes hidden from the user volume list. */
+  async assertUserVolumeVisible(nodeId: string, name: string) {
+    await this.validateDockerNode(nodeId);
+    await assertDockerUserVolumeVisible(this.volumeNetworkOperationContext(), nodeId, name);
+  }
+
   async inspectVolume(nodeId: string, name: string) {
     await this.validateDockerNode(nodeId);
     return inspectDockerVolume(this.volumeNetworkOperationContext(), nodeId, name);
@@ -1896,6 +1903,9 @@ export class DockerManagementService {
   async removeVolume(nodeId: string, name: string, force: boolean, userId: string | null) {
     await this.migrationGuard?.assertVolumeAllowed(nodeId, name);
     await this.validateDockerNode(nodeId);
+    // Also reached outside the volume routes (AI tools, housekeeping): never
+    // remove a volume that the user volume list hides.
+    await assertDockerUserVolumeVisible(this.volumeNetworkOperationContext(), nodeId, name);
     await removeDockerVolume(this.volumeNetworkOperationContext(), nodeId, name, force, userId);
   }
 

@@ -1,6 +1,7 @@
 import { api } from "@/services/api";
-import { useAppStatusStore } from "@/stores/app-status";
+import { APP_STATUS_STORAGE_KEY, useAppStatusStore } from "@/stores/app-status";
 import { useUpdateStore } from "@/stores/update";
+import type { UpdateStatus } from "@/types";
 
 vi.mock("@/services/api", () => ({
   api: {
@@ -10,6 +11,8 @@ vi.mock("@/services/api", () => ({
     triggerUpdate: vi.fn(),
     triggerRelayUpdate: vi.fn(),
     proceedWithUpdate: vi.fn(),
+    acknowledgeUpdateFailure: vi.fn(),
+    abandonRelayUpdate: vi.fn(),
   },
 }));
 
@@ -20,6 +23,8 @@ describe("useUpdateStore", () => {
     vi.mocked(api.getVersionInfo).mockReset();
     vi.mocked(api.checkForUpdates).mockReset();
     vi.mocked(api.setCache).mockReset();
+    vi.mocked(api.acknowledgeUpdateFailure).mockReset().mockResolvedValue({ acknowledged: false });
+    vi.mocked(api.abandonRelayUpdate).mockReset();
     useUpdateStore.setState({
       status: null,
       isChecking: false,
@@ -201,6 +206,101 @@ describe("useUpdateStore", () => {
       gatewayUpdatingActive: true,
       gatewayUpdatingTargetVersion: "v2.5.0",
     });
+  });
+
+  describe("after a rolled-back update", () => {
+    const rolledBack: UpdateStatus = {
+      currentVersion: "v2.4.0",
+      latestVersion: "v2.5.0",
+      updateAvailable: true,
+      releaseNotes: null,
+      releaseUrl: null,
+      lastCheckedAt: null,
+      relay: {
+        currentVersion: "v2.4.0",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: null,
+      },
+      gatewayOperation: {
+        status: "failed",
+        targetVersion: "v2.5.0",
+        startedAt: "2026-09-23T12:00:00.000Z",
+        waitDeadline: null,
+        operations: [],
+        error: "Gateway v2.5.0 did not start, so the update was rolled back.",
+      },
+    };
+
+    it("replaces the update screen with the server's error and clears the persisted state", async () => {
+      useAppStatusStore.getState().setGatewayUpdatingActive(true, "v2.5.0");
+      useUpdateStore.setState({ isUpdating: true, updatingComponent: "gateway" });
+      vi.mocked(api.getVersionInfo).mockResolvedValueOnce(rolledBack);
+
+      await expect(useUpdateStore.getState().fetchStatus()).resolves.toEqual(rolledBack);
+
+      expect(useAppStatusStore.getState()).toMatchObject({
+        gatewayUpdatingActive: false,
+        gatewayUpdatingTargetVersion: null,
+        gatewayUpdatingStartedAt: null,
+        gatewayUpdateError: {
+          message: "Gateway v2.5.0 did not start, so the update was rolled back.",
+          targetVersion: "v2.5.0",
+          rolledBack: true,
+        },
+      });
+      expect(useUpdateStore.getState().isUpdating).toBe(false);
+      const persisted = JSON.parse(window.localStorage.getItem(APP_STATUS_STORAGE_KEY) ?? "{}");
+      expect(persisted.state).toMatchObject({
+        gatewayUpdatingActive: false,
+        gatewayUpdatingTargetVersion: null,
+      });
+    });
+
+    it("never locks a session that was not waiting for the update", async () => {
+      vi.mocked(api.getVersionInfo).mockResolvedValueOnce(rolledBack);
+
+      await useUpdateStore.getState().fetchStatus();
+
+      expect(useAppStatusStore.getState()).toMatchObject({
+        gatewayUpdatingActive: false,
+        gatewayUpdateError: null,
+      });
+    });
+
+    it("clears the old report before a new attempt shows the update screen", async () => {
+      const order: string[] = [];
+      vi.mocked(api.acknowledgeUpdateFailure).mockImplementationOnce(async () => {
+        order.push(`acknowledge:${useAppStatusStore.getState().gatewayUpdatingActive}`);
+        return { acknowledged: true };
+      });
+      vi.mocked(api.triggerUpdate).mockImplementationOnce(async () => {
+        order.push("trigger");
+        return { status: "updating", targetVersion: "v2.5.0" };
+      });
+
+      await useUpdateStore.getState().triggerUpdate("v2.5.0");
+
+      expect(order).toEqual(["acknowledge:false", "trigger"]);
+      expect(useAppStatusStore.getState().gatewayUpdatingActive).toBe(true);
+    });
+  });
+
+  it("abandons a stuck Relay update and leaves the Relay update screen", async () => {
+    useUpdateStore.setState({
+      isUpdating: true,
+      updatingComponent: "relay",
+      updatingTargetVersion: "v2.6.13",
+    });
+    vi.mocked(api.abandonRelayUpdate).mockResolvedValueOnce({ targetVersion: "v2.6.13" });
+    vi.mocked(api.getVersionInfo).mockRejectedValueOnce(new Error("offline"));
+
+    await useUpdateStore.getState().abandonRelayUpdate();
+
+    expect(api.abandonRelayUpdate).toHaveBeenCalledOnce();
+    expect(useUpdateStore.getState()).toMatchObject({ isUpdating: false, updatingComponent: null });
   });
 
   it("asks the server to update now and refreshes the update status", async () => {

@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
@@ -14,6 +14,7 @@ import {
   ReorderDockerResourcesSchema,
 } from '@/modules/docker/docker-folder.schemas.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
+import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
@@ -54,6 +55,10 @@ type GenericFolderConfig = {
   service: FolderedResourceService;
   viewScope: string;
   manageScope: string;
+  /** Per-resource scope a whole-folder move must hold for every moved resource and the destination. */
+  moveEditScope?: string;
+  /** Scope the HTTP move-resources route requires on every moved resource and on the destination. */
+  resourceMoveScope: string;
 };
 
 const DOCKER_VIEW_SCOPE_BY_RESOURCE_TYPE = {
@@ -63,6 +68,38 @@ const DOCKER_VIEW_SCOPE_BY_RESOURCE_TYPE = {
   volume: 'docker:volumes:view',
   compose: 'docker:compose:view',
 } as const;
+
+/** Per-resource scope the HTTP Docker folder routes require to move or reorder a resource. */
+const DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE = {
+  container: 'docker:containers:edit',
+  image: 'docker:images:delete',
+  volume: 'docker:volumes:delete',
+  network: 'docker:networks:edit',
+  compose: 'docker:compose:manage',
+} as const;
+
+async function ensureDockerResourceMoveScopes(
+  user: User,
+  resourceType: keyof typeof DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE,
+  items: ReadonlyArray<{ nodeId: string; resourceKey: string }>
+) {
+  const moveScope = DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE[resourceType];
+  for (const item of items) {
+    let resourceId: string | null = item.resourceKey;
+    if (resourceType === 'container') {
+      resourceId = await container
+        .resolve(DockerAccessResourceService)
+        .resolveResourceByName(item.nodeId, item.resourceKey);
+    } else if (resourceType === 'network') {
+      resourceId = await container
+        .resolve(DockerNetworkAccessResourceService)
+        .resolveNetwork(item.nodeId, item.resourceKey);
+    }
+    if (!resourceId || !hasDockerResourceScope(user.scopes, moveScope, item.nodeId, resourceId)) {
+      throw new Error(`Missing required scope: ${moveScope}`);
+    }
+  }
+}
 
 function composeFolderVisibility(scopes: string[], viewScope: string) {
   const targets =
@@ -122,6 +159,23 @@ function ensureScopeForResource(user: User, scope: string, resourceId: string) {
   }
 }
 
+/**
+ * Moving resources into a folder mirrors the HTTP move routes: the caller must
+ * be allowed to edit every moved resource and to place resources in the
+ * destination, because folder-scoped grants on the destination then extend to them.
+ */
+function ensureResourceMoveAccess(
+  user: User,
+  editScope: string,
+  resourceIds: readonly string[],
+  folderId: string | null | undefined
+) {
+  for (const resourceId of resourceIds) ensureScopeForResource(user, editScope, resourceId);
+  if (!hasScopeForCreation(user.scopes, editScope, folderId ?? null)) {
+    throw new Error(`PERMISSION_DENIED: Missing ${editScope} for the move destination`);
+  }
+}
+
 function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>): GenericFolderConfig {
   switch (resourceType) {
     case 'nodes':
@@ -129,48 +183,60 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         service: container.resolve(NodeFolderService),
         viewScope: 'nodes:details',
         manageScope: 'nodes:folders:manage',
+        moveEditScope: 'nodes:rename',
+        resourceMoveScope: 'nodes:rename',
       };
     case 'databases':
       return {
         service: container.resolve(DatabaseFolderService),
         viewScope: 'databases:view',
         manageScope: 'databases:folders:manage',
+        moveEditScope: 'databases:edit',
+        resourceMoveScope: 'databases:edit',
       };
     case 'domains':
       return {
         service: container.resolve(DomainFolderService),
         viewScope: 'domains:view',
         manageScope: 'domains:folders:manage',
+        resourceMoveScope: 'domains:edit',
       };
     case 'ssl_certificates':
       return {
         service: container.resolve(SSLCertificateFolderService),
         viewScope: 'ssl:cert:view',
         manageScope: 'ssl:cert:folders:manage',
+        resourceMoveScope: 'ssl:cert:issue',
       };
     case 'logging_environments':
       return {
         service: container.resolve(LoggingEnvironmentFolderService),
         viewScope: 'logs:environments:view',
         manageScope: 'logs:environments:folders:manage',
+        moveEditScope: 'logs:environments:edit',
+        resourceMoveScope: 'logs:environments:edit',
       };
     case 'logging_schemas':
       return {
         service: container.resolve(LoggingSchemaFolderService),
         viewScope: 'logs:schemas:view',
         manageScope: 'logs:schemas:folders:manage',
+        moveEditScope: 'logs:schemas:edit',
+        resourceMoveScope: 'logs:schemas:edit',
       };
     case 'admin_users':
       return {
         service: container.resolve(AdminUserFolderService),
         viewScope: 'admin:users',
         manageScope: 'admin:users:folders:manage',
+        resourceMoveScope: 'admin:users',
       };
     case 'permission_groups':
       return {
         service: container.resolve(PermissionGroupFolderService),
         viewScope: 'admin:groups',
         manageScope: 'admin:groups:folders:manage',
+        resourceMoveScope: 'admin:groups',
       };
   }
 }
@@ -224,19 +290,24 @@ async function executeGenericFolderTool(
     case 'update':
       return config.service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
     case 'move_folder':
-      return config.service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id);
+      return config.service.moveFolder(
+        folderIdArg(args),
+        MoveResourceFolderSchema.parse(args),
+        user.id,
+        config.moveEditScope ? { scopes: user.scopes, editScope: config.moveEditScope } : undefined
+      );
     case 'delete':
       await config.service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };
     case 'reorder_folders':
       await config.service.reorderFolders(ReorderResourceFoldersSchema.parse(args));
       return { success: true };
-    case 'move_resources':
-      await config.service.moveResourcesToFolder(
-        MoveResourcesToFolderSchema.parse({ ids: args.resourceIds, folderId: args.folderId }),
-        user.id
-      );
+    case 'move_resources': {
+      const input = MoveResourcesToFolderSchema.parse({ ids: args.resourceIds, folderId: args.folderId });
+      ensureResourceMoveAccess(user, config.resourceMoveScope, input.ids, input.folderId);
+      await config.service.moveResourcesToFolder(input, user.id);
       return { success: true };
+    }
     case 'reorder_resources':
       await config.service.reorderResources(ReorderResourcesSchema.parse(args));
       return { success: true };
@@ -270,7 +341,10 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
     case 'update':
       return service.updateFolder(folderIdArg(args), UpdateResourceFolderSchema.parse(args), user.id);
     case 'move_folder':
-      return service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id);
+      return service.moveFolder(folderIdArg(args), MoveResourceFolderSchema.parse(args), user.id, {
+        scopes: user.scopes,
+        editScope: 'proxy:edit',
+      });
     case 'delete':
       await service.deleteFolder(folderIdArg(args), user.id);
       return { success: true };
@@ -279,7 +353,7 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
       return { success: true };
     case 'move_resources': {
       const parsed = MoveHostsToFolderSchema.parse({ hostIds: args.resourceIds, folderId: args.folderId });
-      for (const hostId of parsed.hostIds) ensureScopeForResource(user, 'proxy:edit', hostId);
+      ensureResourceMoveAccess(user, 'proxy:edit', parsed.hostIds, parsed.folderId);
       await service.moveHostsToFolder(parsed, user.id);
       return { success: true };
     }
@@ -314,15 +388,25 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
   }
 
   ensureScope(user, 'docker:containers:folders:manage');
-  if (resourceType === 'container') {
-    const items = Array.isArray(args.items) ? args.items : [];
-    const resources = container.resolve(DockerAccessResourceService);
+  const items = (Array.isArray(args.items) ? args.items : []).filter(
+    (item): item is { nodeId: string; resourceKey: string } =>
+      !!item &&
+      typeof item === 'object' &&
+      typeof (item as { nodeId?: unknown }).nodeId === 'string' &&
+      typeof (item as { resourceKey?: unknown }).resourceKey === 'string'
+  );
+  await ensureDockerResourceMoveScopes(user, resourceType, items);
+  if (operation === 'move_resources') {
+    // Same destination rule as the HTTP move route (docker-folder.routes.ts).
+    const moveScope = DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE[resourceType];
+    const folderId = typeof args.folderId === 'string' && args.folderId ? args.folderId : null;
     for (const item of items) {
-      if (!item || typeof item !== 'object' || !('nodeId' in item) || typeof item.nodeId !== 'string') continue;
-      if (!('resourceKey' in item) || typeof item.resourceKey !== 'string') continue;
-      const resourceId = await resources.resolveResourceByName(item.nodeId, item.resourceKey);
-      if (!resourceId || !hasDockerResourceScope(user.scopes, 'docker:containers:edit', item.nodeId, resourceId)) {
-        throw new Error('Missing required scope: docker:containers:edit');
+      if (
+        !hasScope(user.scopes, moveScope) &&
+        !hasScope(user.scopes, `${moveScope}:${item.nodeId}`) &&
+        !(folderId && hasScope(user.scopes, `${moveScope}:folder/${folderId}`))
+      ) {
+        throw new Error(`PERMISSION_DENIED: Missing required destination scope ${moveScope}`);
       }
     }
   }

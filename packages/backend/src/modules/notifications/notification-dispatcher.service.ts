@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { Env } from '@/config/env.js';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { notificationDeliveryLog, notificationWebhooks } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -15,7 +15,7 @@ import {
   type OutboundWebhookFetchResponse,
 } from '@/modules/settings/outbound-webhook-request.js';
 import { buildTemplateContext, type NotificationEvent, renderTemplate } from './notification-templates.js';
-import type { NotificationWebhookService } from './notification-webhook.service.js';
+import { type NotificationWebhookService, redactWebhookUrl } from './notification-webhook.service.js';
 
 const logger = createChildLogger('NotificationDispatcher');
 
@@ -23,6 +23,21 @@ const logger = createChildLogger('NotificationDispatcher');
 const RETRY_DELAYS = [30, 120, 480, 1800, 7200]; // 30s, 2m, 8m, 30m, 2h
 const MAX_RESPONSE_BODY = 2048;
 const HTTP_TIMEOUT_MS = 10_000;
+const MAX_DELIVERY_ATTEMPTS = 5;
+/** A claimed delivery is invisible to other senders for this long; a crashed sender's claim expires. */
+const DELIVERY_CLAIM_LEASE_MS = 60_000;
+/** Deliveries the retry job still has to send: queued by the outbox, or waiting for a retry. */
+export const OPEN_DELIVERY_STATUSES = ['pending', 'retrying'] as const;
+
+type DispatchWebhook = {
+  id: string;
+  url: string;
+  method: string;
+  bodyTemplate: string | null;
+  headers: Record<string, string>;
+  signingSecret: string | null;
+  signingHeader: string | null;
+};
 
 export { fetchWithPinnedAddress } from '@/modules/settings/outbound-webhook-request.js';
 
@@ -52,22 +67,11 @@ export class NotificationDispatcherService {
    * @param isTest - if true, returns result directly instead of scheduling retries
    */
   async dispatch(
-    webhook: {
-      id: string;
-      url: string;
-      method: string;
-      bodyTemplate: string | null;
-      headers: Record<string, string>;
-      signingSecret: string | null;
-      signingHeader: string | null;
-    },
+    webhook: DispatchWebhook,
     event: NotificationEvent,
     isTest = false
   ): Promise<{ success: boolean; statusCode?: number; error?: string; rendered?: string }> {
-    const context = buildTemplateContext(event, this.getGatewayUrl());
-
-    // Render template
-    const body = webhook.bodyTemplate ? renderTemplate(webhook.bodyTemplate, context) : JSON.stringify(context);
+    const body = this.renderBody(webhook, event);
 
     // Build headers
     const headers: Record<string, string> = { ...webhook.headers };
@@ -139,7 +143,7 @@ export class NotificationDispatcherService {
       responseBody: responseBody ?? null,
       responseTimeMs,
       attempt: 1,
-      maxAttempts: isTest ? 1 : 5,
+      maxAttempts: isTest ? 1 : MAX_DELIVERY_ATTEMPTS,
       nextRetryAt,
       status,
       error: error ?? null,
@@ -149,7 +153,7 @@ export class NotificationDispatcherService {
     if (!success) {
       logger.warn('Webhook delivery failed', {
         webhookId: webhook.id,
-        url: webhook.url,
+        url: redactWebhookUrl(webhook.url),
         event: event.type,
         status: responseStatus,
         error,
@@ -159,15 +163,66 @@ export class NotificationDispatcherService {
     return { success, statusCode: responseStatus, error, rendered: isTest ? body : undefined };
   }
 
-  /** Retry a failed delivery */
-  async retryDelivery(deliveryId: string): Promise<void> {
-    const [delivery] = await this.db
-      .select()
-      .from(notificationDeliveryLog)
-      .where(eq(notificationDeliveryLog.id, deliveryId))
-      .limit(1);
+  private renderBody(webhook: Pick<DispatchWebhook, 'bodyTemplate'>, event: NotificationEvent): string {
+    const context = buildTemplateContext(event, this.getGatewayUrl());
+    return webhook.bodyTemplate ? renderTemplate(webhook.bodyTemplate, context) : JSON.stringify(context);
+  }
 
-    if (!delivery || delivery.status !== 'retrying') return;
+  /**
+   * Transactional outbox: record the rendered deliveries in the caller's transaction (alongside the
+   * alert state change) so a restart or DB error after commit cannot lose the notification. The rows
+   * are sent by deliverQueued() right after commit, or by the retry job if that never happens.
+   */
+  async enqueue(tx: DrizzleExecutor, webhooks: DispatchWebhook[], event: NotificationEvent): Promise<string[]> {
+    if (webhooks.length === 0) return [];
+    const now = new Date();
+    const rows = await tx
+      .insert(notificationDeliveryLog)
+      .values(
+        webhooks.map((webhook) => ({
+          webhookId: webhook.id,
+          eventType: event.type,
+          severity: event.severity,
+          requestUrl: webhook.url,
+          requestMethod: webhook.method || 'POST',
+          requestBody: this.renderBody(webhook, event),
+          attempt: 0,
+          maxAttempts: MAX_DELIVERY_ATTEMPTS,
+          nextRetryAt: now,
+          status: 'pending',
+        }))
+      )
+      .returning({ id: notificationDeliveryLog.id });
+    return rows.map((row) => row.id);
+  }
+
+  /** Send committed outbox rows now instead of waiting for the retry job's next tick. */
+  async deliverQueued(deliveryIds: string[]): Promise<void> {
+    await Promise.allSettled(deliveryIds.map((id) => this.retryDelivery(id)));
+  }
+
+  /** Send a queued delivery, or retry a failed one, against the webhook as it is configured now. */
+  async retryDelivery(deliveryId: string): Promise<void> {
+    // Claim with a lease so the post-commit send and the retry job never deliver the same row twice.
+    const claimedAt = new Date();
+    const leaseUntil = new Date(claimedAt.getTime() + DELIVERY_CLAIM_LEASE_MS);
+    const [delivery] = await this.db
+      .update(notificationDeliveryLog)
+      .set({ nextRetryAt: leaseUntil })
+      .where(
+        and(
+          eq(notificationDeliveryLog.id, deliveryId),
+          inArray(notificationDeliveryLog.status, [...OPEN_DELIVERY_STATUSES]),
+          or(isNull(notificationDeliveryLog.nextRetryAt), lte(notificationDeliveryLog.nextRetryAt, claimedAt))
+        )
+      )
+      .returning();
+
+    if (!delivery) return;
+    const ownsClaim = and(
+      eq(notificationDeliveryLog.id, deliveryId),
+      eq(notificationDeliveryLog.nextRetryAt, leaseUntil)
+    );
 
     // Re-fetch webhook to rebuild headers + HMAC signature
     const [webhook] = await this.db
@@ -176,12 +231,20 @@ export class NotificationDispatcherService {
       .where(eq(notificationWebhooks.id, delivery.webhookId))
       .limit(1);
 
-    if (!webhook) {
-      // Webhook deleted — mark delivery as failed
+    // Credentials belong to the webhook as configured now. Never send them to a URL the webhook no
+    // longer points at, and stop delivering once the webhook is switched off.
+    const abandonReason = !webhook
+      ? 'Webhook no longer exists'
+      : !webhook.enabled
+        ? 'Webhook is disabled'
+        : webhook.url !== delivery.requestUrl
+          ? 'Webhook URL changed after this delivery was queued'
+          : null;
+    if (!webhook || abandonReason) {
       await this.db
         .update(notificationDeliveryLog)
-        .set({ status: 'failed', error: 'Webhook no longer exists', completedAt: new Date() })
-        .where(eq(notificationDeliveryLog.id, deliveryId));
+        .set({ status: 'failed', error: abandonReason, nextRetryAt: null, completedAt: new Date() })
+        .where(ownsClaim);
       return;
     }
 
@@ -218,7 +281,7 @@ export class NotificationDispatcherService {
         fetchOptions.body = delivery.requestBody;
       }
 
-      const response = await this.fetchAllowedWebhookTarget(delivery.requestUrl, fetchOptions);
+      const response = await this.fetchAllowedWebhookTarget(webhook.url, fetchOptions);
 
       responseStatus = response.status;
       const rawBody = await response.text().catch(() => '');
@@ -261,12 +324,21 @@ export class NotificationDispatcherService {
         nextRetryAt,
         completedAt: success || isLastAttempt ? new Date() : null,
       })
-      .where(eq(notificationDeliveryLog.id, deliveryId));
+      .where(ownsClaim);
 
     if (success) {
-      logger.info('Webhook retry succeeded', { deliveryId, attempt: nextAttempt });
+      if (nextAttempt > 1) logger.info('Webhook retry succeeded', { deliveryId, attempt: nextAttempt });
     } else if (isLastAttempt) {
       logger.warn('Webhook delivery permanently failed', { deliveryId, attempt: nextAttempt, error });
+    } else {
+      logger.warn('Webhook delivery failed', {
+        deliveryId,
+        webhookId: webhook.id,
+        url: redactWebhookUrl(webhook.url),
+        attempt: nextAttempt,
+        status: responseStatus,
+        error,
+      });
     }
   }
 

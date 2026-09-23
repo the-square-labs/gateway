@@ -310,9 +310,13 @@ export function Domains() {
           cancelLabel: "Keep DNS",
           variant: "destructive",
         });
-        await api.deleteDomain(d.id, { deleteDns: ok });
-        toast.success("Domain deleted");
-        loadDomains();
+        try {
+          await api.deleteDomain(d.id, { deleteDns: ok });
+          toast.success("Domain deleted");
+          loadDomains();
+        } catch (retryErr) {
+          toast.error(retryErr instanceof Error ? retryErr.message : "Failed to delete domain");
+        }
         return;
       }
       const msg = err instanceof Error ? err.message : "Failed to delete domain";

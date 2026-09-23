@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
     create: vi.fn(),
     present: vi.fn(),
     createAdditionalSecureLink: vi.fn(),
+    assertReferenceAccess: vi.fn(),
   },
   licensePolicy: {
     requireFeature: vi.fn(),
@@ -114,6 +115,7 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.proxyService.validateAdvancedConfig.mockResolvedValue({ valid: true });
     mocks.proxyService.create.mockResolvedValue({ id: 'route-1' });
     mocks.proxyService.present.mockResolvedValue({ id: 'route-1' });
+    mocks.proxyService.assertReferenceAccess.mockResolvedValue(undefined);
   });
 
   it('strips raw config fields from programmatic list and detail responses', async () => {
@@ -813,5 +815,114 @@ describe('proxy routes programmatic raw config handling', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
+  });
+
+  function sessionPut(body: unknown) {
+    return createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  it('does not require raw toggle scope when an edit echoes the unchanged raw mode', async () => {
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      id: 'host-1',
+      type: 'proxy',
+      nodeId: 'node-1',
+      rawConfigEnabled: false,
+      advancedConfig: null,
+    });
+
+    const unchanged = await sessionPut({ domainNames: ['app.example.com'], rawConfigEnabled: false, type: 'proxy' });
+    expect(unchanged.status).toBe(200);
+
+    const toggled = await sessionPut({ rawConfigEnabled: true });
+    expect(toggled.status).toBe(403);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledTimes(1);
+  });
+
+  it('applies the move endpoint checks to a folderId change and ignores an unchanged folderId', async () => {
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
+    mocks.proxyService.getProxyHost.mockResolvedValue({ id: 'host-1', type: 'proxy', folderId: null });
+
+    const moved = await sessionPut({ folderId: '22222222-2222-4222-8222-222222222222' });
+    expect(moved.status).toBe(403);
+    expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
+
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      id: 'host-1',
+      type: 'proxy',
+      folderId: '22222222-2222-4222-8222-222222222222',
+    });
+    const unchanged = await sessionPut({ folderId: '22222222-2222-4222-8222-222222222222', forwardPort: 8080 });
+    expect(unchanged.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost.mock.calls[0]?.[1]).not.toHaveProperty('folderId');
+
+    mocks.scopes = ['proxy:view', 'proxy:edit', 'proxy:folders:manage'];
+    const allowed = await sessionPut({ folderId: '33333333-3333-4333-8333-333333333333' });
+    expect(allowed.status).toBe(200);
+    expect(mocks.folderService.assertFolderExists).toHaveBeenCalledWith('33333333-3333-4333-8333-333333333333');
+  });
+
+  it('redacts advanced config from view responses without proxy:advanced scope', async () => {
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({ id: 'host-1', advancedConfig: 'add_header X-Secret 1;' });
+
+    mocks.scopes = ['proxy:view:host-1'];
+    const hidden = await createApp().request('/host-1', { headers: { Authorization: 'Bearer gw_token' } });
+    expect(((await hidden.json()) as any).data.advancedConfig).toBeNull();
+
+    mocks.scopes = ['proxy:view:host-1', 'proxy:advanced:host-1'];
+    const visible = await createApp().request('/host-1', { headers: { Authorization: 'Bearer gw_token' } });
+    expect(((await visible.json()) as any).data.advancedConfig).toBe('add_header X-Secret 1;');
+
+    mocks.scopes = ['proxy:view'];
+    mocks.proxyService.listProxyHosts.mockResolvedValue({
+      data: [{ id: 'host-1', advancedConfig: 'add_header X-Secret 1;' }],
+      total: 1,
+    });
+    const list = await createApp().request('/', { headers: { Authorization: 'Bearer gw_token' } });
+    expect(((await list.json()) as any).data[0].advancedConfig).toBeNull();
+  });
+
+  it('does not let a scope-less edit clear or replace the stored advanced config', async () => {
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      id: 'host-1',
+      type: 'proxy',
+      advancedConfig: 'add_header X-Secret 1;',
+    });
+
+    const echoedRedacted = await sessionPut({ advancedConfig: null, forwardPort: 8080 });
+    expect(echoedRedacted.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost.mock.calls[0]?.[1]).not.toHaveProperty('advancedConfig');
+
+    const replaced = await sessionPut({ advancedConfig: 'add_header X-Other 1;' });
+    expect(replaced.status).toBe(403);
+  });
+
+  it('checks access to referenced resources with the stored values', async () => {
+    mocks.authType = 'session';
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
+    const existing = { id: 'host-1', type: 'proxy', sslCertificateId: null, accessListId: null };
+    mocks.proxyService.getProxyHost.mockResolvedValue(existing);
+    mocks.proxyService.assertReferenceAccess.mockRejectedValueOnce(
+      new AppError(403, 'FORBIDDEN', 'Viewing the selected access list is required')
+    );
+
+    const response = await sessionPut({ accessListId: '44444444-4444-4444-8444-444444444444' });
+
+    expect(response.status).toBe(403);
+    expect(mocks.proxyService.assertReferenceAccess).toHaveBeenCalledWith(
+      mocks.scopes,
+      expect.objectContaining({ accessListId: '44444444-4444-4444-8444-444444444444' }),
+      existing
+    );
+    expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
   });
 });

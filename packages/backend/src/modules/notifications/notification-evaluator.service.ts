@@ -1,6 +1,14 @@
-import { and, desc, eq } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
-import { notificationAlertRules, notificationAlertStates, proxyHosts, sslCertificates } from '@/db/schema/index.js';
+import { and, desc, eq, inArray, lt, sql } from 'drizzle-orm';
+import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
+import {
+  databaseConnections,
+  loggingEnvironments,
+  nodes,
+  notificationAlertRules,
+  notificationAlertStates,
+  proxyHosts,
+  sslCertificates,
+} from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { HostingAccountObservation } from '@/modules/hosting/hosting-observations.service.js';
 import type { CacheService, RedisClient } from '@/services/cache.service.js';
@@ -31,8 +39,19 @@ import type { NotificationWebhookService } from './notification-webhook.service.
 const logger = createChildLogger('NotificationEvaluator');
 
 const METRIC_BUFFER_TTL = 1800;
-const WINDOW_TRIM_PADDING_MS = 60_000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const LOGGING_RATIO_SAMPLING_MS = 5 * 60 * 1000;
+const STATE_MAINTENANCE_INTERVAL_MS = 5 * 60 * 1000;
+const STATE_MAINTENANCE_DEBOUNCE_MS = 2_000;
+const RESOLVED_STATE_RETENTION_MS = 30 * DAY_MS;
+const RESOLVED_STATE_PRUNE_INTERVAL_MS = 60 * 60 * 1000;
+const HOSTING_CATEGORIES = new Set(['hosting_account', 'hosting_vm']);
+/** Rule fields that decide which resources/metric a firing state belongs to. */
+const RULE_SOURCE_KEYS = ['type', 'category', 'metric', 'metricTarget', 'eventPattern'] as const;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+type AlertStateRow = typeof notificationAlertStates.$inferSelect;
+type ResourceKind = 'node' | 'proxy' | 'certificate' | 'database' | 'logging';
 
 type TemplateDetails = Partial<
   Pick<
@@ -65,6 +84,11 @@ export class NotificationEvaluatorService {
   };
   private unsubscribers: Array<() => void> = [];
   private readonly activeHandlers = new Set<Promise<void>>();
+  private readonly activeDeliveries = new Set<Promise<void>>();
+  private maintenanceInterval: ReturnType<typeof setInterval> | null = null;
+  private maintenanceDebounce: ReturnType<typeof setTimeout> | null = null;
+  private maintenanceRun: Promise<void> | null = null;
+  private lastResolvedStatePrune = 0;
   private readonly hostingEventChains = new Map<string, Promise<void>>();
   private hostingRuleBarrier: Promise<void> = Promise.resolve();
 
@@ -135,13 +159,26 @@ export class NotificationEvaluatorService {
       this.unsubscribers.push(unsub);
     }
 
+    // Rule edits from any surface (UI, API, AI, MCP) publish this; clean up states they orphaned.
+    this.unsubscribers.push(
+      this.eventBus.subscribe('notification.alert-rule.changed', () => this.scheduleStateMaintenance())
+    );
+    this.maintenanceInterval = setInterval(() => void this.runStateMaintenance(), STATE_MAINTENANCE_INTERVAL_MS);
+    this.maintenanceInterval.unref?.();
+
     logger.info('Notification evaluator started', { channels: Object.keys(EVENT_BUS_MAPPINGS).length });
   }
 
   async stop(): Promise<void> {
     for (const unsub of this.unsubscribers) unsub();
     this.unsubscribers = [];
-    await Promise.allSettled([...this.activeHandlers]);
+    if (this.maintenanceInterval) clearInterval(this.maintenanceInterval);
+    if (this.maintenanceDebounce) clearTimeout(this.maintenanceDebounce);
+    this.maintenanceInterval = null;
+    this.maintenanceDebounce = null;
+    await Promise.allSettled([...this.activeHandlers, ...(this.maintenanceRun ? [this.maintenanceRun] : [])]);
+    // Queued deliveries are durable; waiting only lets in-flight sends record their outcome.
+    await Promise.allSettled([...this.activeDeliveries]);
   }
 
   // ── Health Report Evaluation ────────────────────────────────────────
@@ -332,6 +369,243 @@ export class NotificationEvaluatorService {
     }
   }
 
+  /**
+   * Resolve firing states a rule edit orphaned. A state that is never evaluated again (rule disabled,
+   * different metric/event, resource dropped from scope) would otherwise stay firing forever and, through
+   * the unique firing index, suppress every later incident for that resource.
+   */
+  async reconcileRuleUpdate(previous: any, next: any): Promise<void> {
+    if (HOSTING_CATEGORIES.has(previous.category)) {
+      await this.reconcileHostingRuleUpdate(previous, next);
+      return;
+    }
+    const sourceChanged = RULE_SOURCE_KEYS.some(
+      (key) => JSON.stringify(previous[key] ?? null) !== JSON.stringify(next[key] ?? null)
+    );
+    const scopeChanged = JSON.stringify(previous.resourceIds ?? []) !== JSON.stringify(next.resourceIds ?? []);
+    if (next.enabled && !sourceChanged && !scopeChanged) return;
+    this.invalidateRuleCache();
+
+    const states = await this.db
+      .select()
+      .from(notificationAlertStates)
+      .where(and(eq(notificationAlertStates.ruleId, previous.id), eq(notificationAlertStates.status, 'firing')));
+    for (const state of states) {
+      const reason = !next.enabled
+        ? 'rule_disabled'
+        : sourceChanged
+          ? 'rule_updated'
+          : !this.stateInRuleScope(next, state)
+            ? 'out_of_scope'
+            : null;
+      if (reason) await this.resolveOrphanedState(state, next, reason);
+    }
+  }
+
+  /**
+   * Periodic and rule-change sweep over every firing state: resolves states whose rule is disabled,
+   * whose resource left the rule scope, whose rule now watches a different metric/event, or whose
+   * resource was deleted. Covers edits made outside the REST route (AI and MCP tools).
+   */
+  async reconcileStaleAlertStates(): Promise<number> {
+    const rows = await this.db
+      .select({ state: notificationAlertStates, rule: notificationAlertRules })
+      .from(notificationAlertStates)
+      .innerJoin(notificationAlertRules, eq(notificationAlertRules.id, notificationAlertStates.ruleId))
+      .where(eq(notificationAlertStates.status, 'firing'));
+    if (rows.length === 0) return 0;
+
+    const missing = await this.findStatesWithDeletedResources(rows);
+    let resolved = 0;
+    for (const { state, rule } of rows) {
+      const reason = !rule.enabled
+        ? 'rule_disabled'
+        : !this.stateInRuleScope(rule, state)
+          ? 'out_of_scope'
+          : this.stateWatchesOtherSource(rule, state)
+            ? 'rule_updated'
+            : missing.has(state.id)
+              ? 'resource_deleted'
+              : null;
+      if (!reason) continue;
+      await this.resolveOrphanedState(state, rule, reason);
+      resolved++;
+    }
+    return resolved;
+  }
+
+  /**
+   * Resolved rows accumulate forever otherwise (every event alert inserts one). Keep them for 30 days,
+   * or longer when an event rule's cooldown still reads its newest row.
+   */
+  async pruneResolvedAlertStates(): Promise<void> {
+    const cutoff = new Date(Date.now() - RESOLVED_STATE_RETENTION_MS);
+    await this.db
+      .delete(notificationAlertStates)
+      .where(
+        and(
+          eq(notificationAlertStates.status, 'resolved'),
+          lt(notificationAlertStates.resolvedAt, cutoff),
+          sql`${notificationAlertStates.resolvedAt} < now() - make_interval(secs => coalesce((select ${notificationAlertRules.cooldownSeconds} from ${notificationAlertRules} where ${notificationAlertRules.id} = ${notificationAlertStates.ruleId}), 0))`
+        )
+      );
+  }
+
+  private scheduleStateMaintenance(): void {
+    if (this.maintenanceDebounce) return;
+    this.maintenanceDebounce = setTimeout(() => {
+      this.maintenanceDebounce = null;
+      void this.runStateMaintenance();
+    }, STATE_MAINTENANCE_DEBOUNCE_MS);
+    this.maintenanceDebounce.unref?.();
+  }
+
+  private runStateMaintenance(): Promise<void> {
+    if (this.maintenanceRun) return this.maintenanceRun;
+    this.maintenanceRun = (async () => {
+      try {
+        const resolved = await this.reconcileStaleAlertStates();
+        if (resolved > 0) logger.info('Resolved orphaned alert states', { count: resolved });
+        if (Date.now() - this.lastResolvedStatePrune >= RESOLVED_STATE_PRUNE_INTERVAL_MS) {
+          this.lastResolvedStatePrune = Date.now();
+          await this.pruneResolvedAlertStates();
+        }
+      } catch (error) {
+        logger.warn('Alert state maintenance failed', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } finally {
+        this.maintenanceRun = null;
+      }
+    })();
+    return this.maintenanceRun;
+  }
+
+  /** Match a state key against the rule scope; keys may be composite (node:mount, node:container, account:currency). */
+  private stateInRuleScope(rule: any, state: Pick<AlertStateRow, 'resourceId'>): boolean {
+    const scope = (rule.resourceIds ?? []) as string[];
+    if (scope.length === 0) return true;
+    const key = state.resourceId;
+    const separator = key.indexOf(':');
+    const candidates = separator > 0 ? [key, key.slice(0, separator), key.slice(separator + 1)] : [key];
+    return candidates.some((candidate) => scope.includes(candidate));
+  }
+
+  /** The state was raised for a metric/event the rule no longer watches. */
+  private stateWatchesOtherSource(rule: any, state: Pick<AlertStateRow, 'context'>): boolean {
+    const context = (state.context ?? {}) as { metric?: { name?: unknown }; event?: { name?: unknown } };
+    if (rule.type === 'threshold') {
+      const metric = context.metric?.name;
+      return typeof metric === 'string' && !!rule.metric && metric !== rule.metric;
+    }
+    const eventName = context.event?.name;
+    return typeof eventName === 'string' && !!rule.eventPattern && eventName !== rule.eventPattern;
+  }
+
+  /**
+   * The table a firing state's resource lives in, only for sources whose key is known to be that
+   * table's id. Anything else is left alone: a wrong "deleted" verdict would resolve and re-fire forever.
+   */
+  private resourceReference(rule: any, state: AlertStateRow): { kind: ResourceKind; id: string } | null {
+    const nodeId = state.resourceId.split(':')[0] ?? state.resourceId;
+    const eventPattern = String(rule.eventPattern ?? '');
+    const threshold = rule.type === 'threshold';
+    switch (rule.category) {
+      case 'node':
+        // Metric states are keyed node or node:device; lifecycle states come from the node registry.
+        return threshold || eventPattern === 'offline' || eventPattern === 'online'
+          ? { kind: 'node', id: nodeId }
+          : null;
+      case 'container':
+        // Metric states are keyed node:container; lifecycle states only carry the container name.
+        return threshold && state.resourceId.includes(':') ? { kind: 'node', id: nodeId } : null;
+      case 'proxy':
+        return state.resourceType === 'proxy' &&
+          (eventPattern.startsWith('health.') || eventPattern === 'maintenance.active')
+          ? { kind: 'proxy', id: state.resourceId }
+          : null;
+      case 'certificate':
+        return threshold && state.resourceType === 'certificate' ? { kind: 'certificate', id: state.resourceId } : null;
+      case 'database_postgres':
+      case 'database_clickhouse':
+      case 'database_redis':
+        // Snapshot metrics and monitoring health are keyed by the database connection id.
+        return (threshold && state.resourceType === rule.category) ||
+          (state.resourceType === 'database' && eventPattern.startsWith('health.'))
+          ? { kind: 'database', id: state.resourceId }
+          : null;
+      case 'logging':
+        return threshold ? { kind: 'logging', id: state.resourceId } : null;
+      default:
+        return null;
+    }
+  }
+
+  private async findStatesWithDeletedResources(rows: Array<{ state: AlertStateRow; rule: any }>): Promise<Set<string>> {
+    const byKind = new Map<ResourceKind, Map<string, string[]>>();
+    for (const { state, rule } of rows) {
+      const ref = this.resourceReference(rule, state);
+      if (!ref || !UUID_PATTERN.test(ref.id)) continue;
+      const ids = byKind.get(ref.kind) ?? new Map<string, string[]>();
+      ids.set(ref.id, [...(ids.get(ref.id) ?? []), state.id]);
+      byKind.set(ref.kind, ids);
+    }
+
+    const missing = new Set<string>();
+    for (const [kind, ids] of byKind) {
+      const wanted = [...ids.keys()];
+      const found = new Set((await this.findExistingResourceIds(kind, wanted)).map((row) => row.id));
+      for (const id of wanted) {
+        if (!found.has(id)) for (const stateId of ids.get(id) ?? []) missing.add(stateId);
+      }
+    }
+    return missing;
+  }
+
+  private findExistingResourceIds(kind: ResourceKind, ids: string[]): Promise<Array<{ id: string }>> {
+    switch (kind) {
+      case 'node':
+        return this.db.select({ id: nodes.id }).from(nodes).where(inArray(nodes.id, ids));
+      case 'proxy':
+        return this.db.select({ id: proxyHosts.id }).from(proxyHosts).where(inArray(proxyHosts.id, ids));
+      case 'certificate':
+        return this.db.select({ id: sslCertificates.id }).from(sslCertificates).where(inArray(sslCertificates.id, ids));
+      case 'database':
+        return this.db
+          .select({ id: databaseConnections.id })
+          .from(databaseConnections)
+          .where(inArray(databaseConnections.id, ids));
+      case 'logging':
+        return this.db
+          .select({ id: loggingEnvironments.id })
+          .from(loggingEnvironments)
+          .where(inArray(loggingEnvironments.id, ids));
+    }
+  }
+
+  private async resolveOrphanedState(state: AlertStateRow, rule: any, reason: string): Promise<void> {
+    const context = (state.context ?? {}) as TemplateDetails & { metric?: Record<string, unknown> };
+    const firedAt = state.firedAt;
+    await this.resolveAlert(
+      state.id,
+      rule,
+      state.resourceType,
+      state.resourceId,
+      state.resourceId,
+      {
+        ...context,
+        ...(context.metric ? { metric: { ...context.metric, value: null } as TemplateDetails['metric'] } : {}),
+        fired: {
+          at: firedAt?.toISOString() ?? null,
+          duration: firedAt ? Math.round((Date.now() - firedAt.getTime()) / 1000) : 0,
+        },
+        resolution: { reason },
+      },
+      // A rule the operator switched off must not keep talking to its webhooks.
+      { notify: reason !== 'rule_disabled' }
+    );
+  }
+
   async evaluateLoggingRatios(now = new Date()): Promise<void> {
     if (!this.loggingEnvironmentService || !this.loggingClickHouseService) return;
     const rules = (await this.getThresholdRules()).filter(
@@ -365,7 +639,8 @@ export class NotificationEvaluatorService {
             rule.id,
             environment.id,
             breached,
-            Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000
+            Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000,
+            LOGGING_RATIO_SAMPLING_MS
           );
           if (breached) {
             await this.handleThresholdBreach(rule, environment.id, value, environment.id, environment.name);
@@ -411,13 +686,6 @@ export class NotificationEvaluatorService {
         const daysUntilExpiry = Math.ceil((notAfter.getTime() - now.getTime()) / DAY_MS);
         const breached = evaluateThreshold(daysUntilExpiry, rule.operator, rule.thresholdValue);
 
-        await this.recordProbeOutcome(
-          rule.id,
-          cert.id,
-          breached,
-          Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000
-        );
-
         if (breached) {
           await this.handleCertificateThresholdBreach(rule, cert, daysUntilExpiry);
         } else {
@@ -439,22 +707,8 @@ export class NotificationEvaluatorService {
     },
     daysUntilExpiry: number
   ): Promise<void> {
-    const durationMs = (rule.durationSeconds ?? 0) * 1000;
-
-    if (durationMs > 0 && this.redis) {
-      const evaluation = await this.evaluateRatioWindow(
-        rule.id,
-        cert.id,
-        durationMs,
-        rule.fireThresholdPercent ?? 100,
-        'breach'
-      );
-      if (!evaluation?.hasCoverage || !evaluation.thresholdMet) return;
-    } else if (durationMs > 0 && !this.redis) {
-      logger.debug('Certificate expiry fire window skipped: no Redis', { ruleId: rule.id });
-      return;
-    }
-
+    // Expiry is evaluated once a day (and on certificate changes). Fire/resolve windows shorter than a
+    // day can never be covered by samples, so stored windows are ignored and the rule acts on each check.
     const existingState = await this.getActiveAlertState(rule.id, 'certificate', cert.id);
     if (existingState) return;
 
@@ -486,22 +740,6 @@ export class NotificationEvaluatorService {
   ): Promise<void> {
     const existingState = await this.getActiveAlertState(rule.id, 'certificate', cert.id);
     if (!existingState) return;
-
-    const resolveMs = (rule.resolveAfterSeconds ?? 60) * 1000;
-
-    if (resolveMs > 0 && this.redis) {
-      const evaluation = await this.evaluateRatioWindow(
-        rule.id,
-        cert.id,
-        resolveMs,
-        rule.resolveThresholdPercent ?? 100,
-        'clear'
-      );
-      if (!evaluation?.hasCoverage || !evaluation.thresholdMet) return;
-    } else if (resolveMs > 0 && !this.redis) {
-      logger.debug('Certificate expiry resolve window skipped: no Redis', { ruleId: rule.id });
-      return;
-    }
 
     const firedAt = existingState.firedAt;
     const firedDurationSec = firedAt ? Math.round((Date.now() - firedAt.getTime()) / 1000) : 0;
@@ -718,22 +956,37 @@ export class NotificationEvaluatorService {
     return `notif:threshold:outcomes:${ruleId}:${compositeResourceId}`;
   }
 
+  /**
+   * Record one sample for a rule/resource. The zset is trimmed to the evaluation window but always
+   * keeps the newest sample taken before it: that sample is the state at the start of the window.
+   * Without it, any source sampled less often than the window (logging ratios every 5 minutes,
+   * uptime checks every 2+ minutes) can never cover the window, so the rule never fires or resolves.
+   */
   private async recordProbeOutcome(
     ruleId: string,
     compositeResourceId: string,
     breached: boolean,
-    windowMs: number
+    windowMs: number,
+    samplingPeriodMs = 0
   ): Promise<void> {
     if (!this.redis) return;
 
     const now = Date.now();
     const redisKey = this.getProbeOutcomeKey(ruleId, compositeResourceId);
     await this.redis.zadd(redisKey, now, `${now}:${breached ? 1 : 0}`);
-    await this.redis.expire(redisKey, METRIC_BUFFER_TTL);
 
-    const trimWindowMs = Math.max(windowMs, 0);
-    const cutoff = now - trimWindowMs - WINDOW_TRIM_PADDING_MS;
-    await this.redis.zremrangebyscore(redisKey, '-inf', cutoff);
+    const windowStart = now - Math.max(windowMs, 0);
+    const anchor = this.parseProbeOutcomeSamples(
+      await this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1)
+    )[0];
+    if (anchor) await this.redis.zremrangebyscore(redisKey, '-inf', `(${anchor.timestamp}`);
+
+    // The anchor must survive until the next sample arrives.
+    const ttlSeconds = Math.max(
+      METRIC_BUFFER_TTL,
+      Math.ceil((Math.max(windowMs, 0) + 2 * Math.max(samplingPeriodMs, 0)) / 1000)
+    );
+    await this.redis.expire(redisKey, ttlSeconds);
   }
 
   private parseProbeOutcomeSamples(samples: string[]): WindowProbeSample[] {
@@ -757,10 +1010,12 @@ export class NotificationEvaluatorService {
     const now = Date.now();
     const redisKey = this.getProbeOutcomeKey(ruleId, compositeResourceId);
     const windowStart = now - windowMs;
-    const samples = await this.redis.zrangebyscore(redisKey, windowStart - WINDOW_TRIM_PADDING_MS, '+inf');
-    const parsedSamples = this.parseProbeOutcomeSamples(samples).sort((a, b) => a.timestamp - b.timestamp);
-    const preWindowAnchor = parsedSamples.filter((sample) => sample.timestamp < windowStart).at(-1);
-    const windowSamples = parsedSamples.filter((sample) => sample.timestamp >= windowStart);
+    const [inWindow, beforeWindow] = await Promise.all([
+      this.redis.zrangebyscore(redisKey, windowStart, '+inf'),
+      this.redis.zrevrangebyscore(redisKey, `(${windowStart}`, '-inf', 'LIMIT', 0, 1),
+    ]);
+    const windowSamples = this.parseProbeOutcomeSamples(inWindow).sort((a, b) => a.timestamp - b.timestamp);
+    const preWindowAnchor = this.parseProbeOutcomeSamples(beforeWindow)[0];
 
     return evaluateWindowRatio(
       preWindowAnchor ? [preWindowAnchor, ...windowSamples] : windowSamples,
@@ -834,7 +1089,9 @@ export class NotificationEvaluatorService {
     currentState: string,
     resource: { type: string; id: string; name?: string },
     context: Record<string, unknown> = {},
-    observedPatterns?: string[]
+    observedPatterns?: string[],
+    /** How often this source is observed, when periodic; keeps the window anchor alive between samples. */
+    samplingPeriodMs?: number
   ): Promise<void> {
     const eventRules = await this.getEventRules();
     const observedPatternSet = observedPatterns ? new Set(observedPatterns) : null;
@@ -850,7 +1107,8 @@ export class NotificationEvaluatorService {
         rule.id,
         resource.id,
         active,
-        Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000
+        Math.max(rule.durationSeconds ?? 0, rule.resolveAfterSeconds ?? 0) * 1000,
+        samplingPeriodMs
       );
 
       const existingState = await this.getActiveAlertState(rule.id, resource.type, resource.id);
@@ -964,6 +1222,44 @@ export class NotificationEvaluatorService {
 
   // ── Alert State Management ──────────────────────────────────────────
 
+  /**
+   * Transactional outbox: the alert state change and its webhook deliveries commit together, so a
+   * restart or a failed send after commit leaves queued deliveries for the retry job instead of a
+   * silently lost notification. Returns false when the state change did not apply (lost a race).
+   */
+  private async commitWithDeliveries(
+    rule: any,
+    event: NotificationEvent | null,
+    applyStateChange: (tx: DrizzleTransaction) => Promise<boolean>
+  ): Promise<boolean> {
+    const webhookIds = (rule.webhookIds ?? []) as string[];
+    const webhooks =
+      event && webhookIds.length > 0
+        ? (await this.webhookService.getRawByIds(webhookIds)).filter((webhook) => webhook.enabled)
+        : [];
+    let deliveryIds: string[] = [];
+    const applied = await this.db.transaction(async (tx) => {
+      if (!(await applyStateChange(tx))) return false;
+      if (event && webhooks.length > 0) deliveryIds = await this.dispatcherService.enqueue(tx, webhooks, event);
+      return true;
+    });
+    if (applied && deliveryIds.length > 0) this.sendQueuedDeliveries(rule.id, deliveryIds);
+    return applied;
+  }
+
+  private sendQueuedDeliveries(ruleId: string, deliveryIds: string[]): void {
+    const work: Promise<void> = this.dispatcherService
+      .deliverQueued(deliveryIds)
+      .catch((err) => {
+        logger.warn('Immediate alert delivery failed; the retry job will send it', {
+          ruleId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      })
+      .finally(() => this.activeDeliveries.delete(work));
+    this.activeDeliveries.add(work);
+  }
+
   private async fireAlert(
     rule: any,
     resourceType: string,
@@ -971,20 +1267,6 @@ export class NotificationEvaluatorService {
     resourceName: string,
     details: TemplateDetails
   ): Promise<void> {
-    try {
-      await this.db.insert(notificationAlertStates).values({
-        ruleId: rule.id,
-        resourceType,
-        resourceId: resourceKey,
-        status: 'firing',
-        severity: rule.severity,
-        context: details,
-      });
-    } catch (err: any) {
-      if (err.code === '23505') return; // already firing
-      throw err;
-    }
-
     // Render the alert's message template
     const now = new Date().toISOString();
     const resource = this.buildTemplateResource(resourceType, resourceKey, resourceName, details.resourceId);
@@ -1011,17 +1293,23 @@ export class NotificationEvaluatorService {
       timestamp: now,
     };
 
-    // Dispatch to the alert's attached webhooks
-    const webhookIds = (rule.webhookIds ?? []) as string[];
-    if (webhookIds.length > 0) {
-      const webhooks = await this.webhookService.getRawByIds(webhookIds);
-      for (const webhook of webhooks) {
-        if (!webhook.enabled) continue;
-        this.dispatcherService.dispatch(webhook, event).catch((err) => {
-          logger.error('Alert dispatch failed', { webhookId: webhook.id, ruleId: rule.id, error: err.message });
-        });
-      }
-    }
+    const fired = await this.commitWithDeliveries(rule, event, async (tx) => {
+      // The partial unique index on firing states makes a concurrent duplicate a no-op.
+      const inserted = await tx
+        .insert(notificationAlertStates)
+        .values({
+          ruleId: rule.id,
+          resourceType,
+          resourceId: resourceKey,
+          status: 'firing',
+          severity: rule.severity,
+          context: details,
+        })
+        .onConflictDoNothing()
+        .returning({ id: notificationAlertStates.id });
+      return inserted.length > 0;
+    });
+    if (!fired) return; // already firing
 
     this.eventBus?.publish('alert.fired', {
       ruleId: rule.id,
@@ -1040,13 +1328,9 @@ export class NotificationEvaluatorService {
     resourceType: string,
     resourceKey: string,
     resourceName: string | undefined,
-    details: TemplateDetails
+    details: TemplateDetails,
+    options: { notify?: boolean } = {}
   ): Promise<void> {
-    await this.db
-      .update(notificationAlertStates)
-      .set({ status: 'resolved', resolvedAt: new Date() })
-      .where(eq(notificationAlertStates.id, stateId));
-
     const now = new Date().toISOString();
     const resolvedResource = this.buildTemplateResource(
       resourceType,
@@ -1082,16 +1366,16 @@ export class NotificationEvaluatorService {
       timestamp: now,
     };
 
-    const webhookIds = (rule.webhookIds ?? []) as string[];
-    if (webhookIds.length > 0) {
-      const webhooks = await this.webhookService.getRawByIds(webhookIds);
-      for (const webhook of webhooks) {
-        if (!webhook.enabled) continue;
-        this.dispatcherService.dispatch(webhook, event).catch((err) => {
-          logger.error('Resolve dispatch failed', { webhookId: webhook.id, ruleId: rule.id, error: err.message });
-        });
-      }
-    }
+    // Health reports and sweeps race on the same state: only the caller that flips it notifies.
+    const resolved = await this.commitWithDeliveries(rule, options.notify === false ? null : event, async (tx) => {
+      const rows = await tx
+        .update(notificationAlertStates)
+        .set({ status: 'resolved', resolvedAt: new Date() })
+        .where(and(eq(notificationAlertStates.id, stateId), eq(notificationAlertStates.status, 'firing')))
+        .returning({ id: notificationAlertStates.id });
+      return rows.length > 0;
+    });
+    if (!resolved) return;
 
     this.eventBus?.publish('alert.resolved', {
       ruleId: rule.id,
@@ -1117,17 +1401,6 @@ export class NotificationEvaluatorService {
       const acquired = await this.redis.set(lockKey, '1', 'EX', 10, 'NX');
       if (!acquired) return; // another handler is already processing this event
     }
-
-    // Record notification time for cooldown
-    await this.db.insert(notificationAlertStates).values({
-      ruleId: rule.id,
-      resourceType,
-      resourceId: resourceKey,
-      status: 'resolved',
-      severity: rule.severity,
-      context: details,
-      resolvedAt: new Date(),
-    });
 
     const now = new Date().toISOString();
     const resource = this.buildTemplateResource(
@@ -1155,16 +1428,19 @@ export class NotificationEvaluatorService {
       timestamp: now,
     };
 
-    const webhookIds = (rule.webhookIds ?? []) as string[];
-    if (webhookIds.length > 0) {
-      const webhooks = await this.webhookService.getRawByIds(webhookIds);
-      for (const webhook of webhooks) {
-        if (!webhook.enabled) continue;
-        this.dispatcherService.dispatch(webhook, event).catch((err) => {
-          logger.error('Event alert dispatch failed', { webhookId: webhook.id, ruleId: rule.id, error: err.message });
-        });
-      }
-    }
+    // Record notification time for cooldown, in the same transaction as its deliveries.
+    await this.commitWithDeliveries(rule, event, async (tx) => {
+      await tx.insert(notificationAlertStates).values({
+        ruleId: rule.id,
+        resourceType,
+        resourceId: resourceKey,
+        status: 'resolved',
+        severity: rule.severity,
+        context: details,
+        resolvedAt: new Date(),
+      });
+      return true;
+    });
 
     this.eventBus?.publish('alert.fired', {
       ruleId: rule.id,

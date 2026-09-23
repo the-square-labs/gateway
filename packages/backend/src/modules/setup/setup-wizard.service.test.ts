@@ -10,6 +10,7 @@ function createHarness() {
   const general = {
     getConfig: vi.fn().mockResolvedValue({ publicUrl: null }),
     updateConfig: vi.fn().mockResolvedValue({ publicUrl: 'https://gateway.example.com' }),
+    restoreFields: vi.fn().mockResolvedValue({ publicUrl: null }),
     requirePublicUrl: vi.fn().mockResolvedValue('https://gateway.example.com'),
   };
   const authSettings = {
@@ -185,9 +186,25 @@ describe('SetupWizardService', () => {
     expect(harness.logging.restore).toHaveBeenCalledWith({ mode: 'disabled' });
     expect(harness.oidc.restoreConfig).toHaveBeenCalledWith(null);
     expect(harness.mail.restoreConfig).toHaveBeenCalledWith(null);
-    expect(harness.general.updateConfig).toHaveBeenLastCalledWith({ publicUrl: null });
+    // Only the fields setup wrote, and only where nothing else changed them since.
+    expect(harness.general.updateConfig).toHaveBeenCalledOnce();
+    expect(harness.general.restoreFields).toHaveBeenCalledWith(
+      { publicUrl: null },
+      ['publicUrl', 'gatewayGrpcPublicTarget', 'gatewayGrpcLocalIp'],
+      { ifUnchangedFrom: { publicUrl: 'https://gateway.example.com' } }
+    );
     expect(harness.auth.createUser).not.toHaveBeenCalled();
     expect(harness.policy.markSetupComplete).not.toHaveBeenCalled();
+  });
+
+  it('does not touch general settings when setup never wrote them', async () => {
+    const harness = createHarness();
+    harness.general.updateConfig.mockRejectedValueOnce(new Error('database unavailable'));
+
+    await expect(harness.service.apply(APPLY_INPUT, harness.logging as any)).rejects.toThrow('database unavailable');
+
+    expect(harness.general.restoreFields).not.toHaveBeenCalled();
+    expect(harness.general.updateConfig).toHaveBeenCalledOnce();
   });
 
   it('rejects invalid network settings before applying any configuration', async () => {

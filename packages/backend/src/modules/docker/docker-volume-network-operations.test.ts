@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   adoptVolume,
+  assertUserVolumeVisible,
   createNetwork,
   createVolume,
   exportVolume,
@@ -211,5 +212,54 @@ describe('network creation placement', () => {
       'user-1'
     );
     expect(order).toEqual(['placement', 'audit', 'event']);
+  });
+});
+
+describe('assertUserVolumeVisible', () => {
+  function visibilityContext(managedRows: Array<{ volumeName: string }>) {
+    const limit = vi.fn().mockResolvedValue(managedRows);
+    const where = vi.fn(() => Object.assign(Promise.resolve(managedRows), { limit }));
+    return {
+      db: { select: vi.fn(() => ({ from: vi.fn(() => ({ where })) })) },
+      nodeDispatch: {
+        sendDockerVolumeCommand: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify([
+            { Name: 'gateway-internal-data', UsedBy: ['gateway-db-connector'] },
+            { Name: 'app-data', UsedBy: ['app'] },
+          ]),
+        }),
+        sendDockerContainerCommand: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify([
+            { name: 'app', labels: {} },
+            { name: 'gateway-db-connector', labels: { 'wiolett.gateway.managed-database.connector': 'true' } },
+          ]),
+        }),
+      },
+      auditService: {},
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail ?? 'null'),
+    };
+  }
+
+  it('rejects volumes used only by Gateway-internal containers', async () => {
+    await expect(
+      assertUserVolumeVisible(visibilityContext([]) as never, 'node-1', 'gateway-internal-data')
+    ).rejects.toMatchObject({ statusCode: 404, code: 'VOLUME_NOT_FOUND' });
+  });
+
+  it('rejects unknown volume names', async () => {
+    await expect(assertUserVolumeVisible(visibilityContext([]) as never, 'node-1', 'other')).rejects.toMatchObject({
+      code: 'VOLUME_NOT_FOUND',
+    });
+  });
+
+  it('allows volumes used by user containers and managed volumes', async () => {
+    await expect(
+      assertUserVolumeVisible(visibilityContext([]) as never, 'node-1', 'app-data')
+    ).resolves.toBeUndefined();
+    const managed = visibilityContext([{ volumeName: 'managed' }]);
+    await expect(assertUserVolumeVisible(managed as never, 'node-1', 'managed')).resolves.toBeUndefined();
+    expect(managed.nodeDispatch.sendDockerVolumeCommand).not.toHaveBeenCalled();
   });
 });

@@ -397,3 +397,267 @@ func policyKey(keyID string, publicKey ed25519.PublicKey) *relayv1.PolicySigning
 		KeyId: keyID, PublicKey: publicKey, PublicKeyFingerprint: PublicKeyFingerprint(publicKey), Status: "active",
 	}
 }
+
+func policyKeyWindow(keyID string, publicKey ed25519.PublicKey, status string, validFrom, verifyUntil time.Time) *relayv1.PolicySigningKey {
+	key := policyKey(keyID, publicKey)
+	key.Status = status
+	if !validFrom.IsZero() {
+		key.ValidFromUnix = validFrom.Unix()
+	}
+	if !verifyUntil.IsZero() {
+		key.VerifyUntilUnix = verifyUntil.Unix()
+	}
+	return key
+}
+
+func remoteStore(t *testing.T, dir string, now *time.Time) *Store {
+	t.Helper()
+	store, err := OpenWithOptions(dir, Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_REMOTE_DATA_ONLY, PoolID: "system", InstanceID: "relay-1",
+		Now: func() time.Time { return *now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return store
+}
+
+func TestPromotedKeyValidFromAllowsIssuedAtClockSkew(t *testing.T) {
+	oldPublic, oldPrivate, _ := ed25519.GenerateKey(nil)
+	newPublic, newPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	gatewayNow := time.Unix(1_800_000_000, 0)
+	relayNow := gatewayNow.Add(-2 * time.Minute) // relay clock runs behind Gateway
+	dir := t.TempDir()
+	store := remoteStore(t, dir, &relayNow)
+	if _, err := store.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	pending := signedSnapshotWithPolicyKeys(t, oldPrivate, "old", grantPublic, 1, relayNow, []*relayv1.PolicySigningKey{
+		policyKey("old", oldPublic), policyKey("new", newPublic),
+	})
+	if _, _, err := store.Apply(pending); err != nil {
+		t.Fatal(err)
+	}
+	// Gateway promotes "new" at gatewayNow; the relay is still two minutes earlier.
+	promoted := []*relayv1.PolicySigningKey{
+		policyKeyWindow("old", oldPublic, "verification_only", time.Time{}, gatewayNow.Add(30*time.Minute)),
+		policyKeyWindow("new", newPublic, "active", gatewayNow, time.Time{}),
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, newPrivate, "new", grantPublic, 2, gatewayNow, promoted)); err != nil {
+		t.Fatalf("first snapshot from the promoted key was refused: %v", err)
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, newPrivate, "new", grantPublic, 3, gatewayNow, promoted)); err != nil {
+		t.Fatalf("promoted key was refused for a relay two minutes behind: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := remoteStore(t, dir, &relayNow)
+	if reopened.Current().Revision != 3 {
+		t.Fatalf("persisted snapshot was not restored: revision=%d", reopened.Current().Revision)
+	}
+
+	// Skew beyond the leeway is still refused.
+	farBehind := gatewayNow.Add(-IssuedAtClockSkew - time.Minute)
+	relayNow = farBehind
+	if _, _, err := reopened.Apply(signedSnapshotWithPolicyKeys(t, newPrivate, "new", grantPublic, 4, farBehind, promoted)); err == nil {
+		t.Fatal("key was accepted long before its validity window")
+	}
+	reopened.Close()
+}
+
+func TestPersistedSnapshotLoadsAfterSignerWindowCloses(t *testing.T) {
+	oldPublic, oldPrivate, _ := ed25519.GenerateKey(nil)
+	newPublic, _, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	dir := t.TempDir()
+	store := remoteStore(t, dir, &now)
+	if _, err := store.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	// A retained old key introduces the active key; its own window is short.
+	request := signedSnapshotWithPolicyKeys(t, oldPrivate, "old", grantPublic, 1, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("old", oldPublic, "verification_only", time.Time{}, now.Add(30*time.Minute)),
+		policyKeyWindow("new", newPublic, "active", now, time.Time{}),
+	})
+	if _, _, err := store.Apply(request); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	now = now.Add(2 * time.Hour)
+	reopened := remoteStore(t, dir, &now)
+	defer reopened.Close()
+	if reopened.Current().Revision != 1 {
+		t.Fatalf("persisted snapshot was not restored: revision=%d", reopened.Current().Revision)
+	}
+	if reopened.Ready(now) {
+		t.Fatal("expired persisted snapshot reported ready")
+	}
+	if _, _, err := reopened.Apply(signedSnapshotWithPolicyKeys(t, oldPrivate, "old", grantPublic, 2, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("old", oldPublic, "verification_only", time.Time{}, now.Add(30*time.Minute)),
+		policyKeyWindow("new", newPublic, "active", now, time.Time{}),
+	})); err == nil {
+		t.Fatal("a signer past its window was accepted for a new snapshot")
+	}
+}
+
+// A relay that missed the whole pending window still pins only the old key.
+// Gateway keeps that key's private half and signs this relay's snapshot with
+// it; the payload carries the active key, so the relay learns it through
+// signed rotation and accepts the active signer from then on.
+func TestLaggingRelayLearnsActiveKeyFromRetainedOldSigner(t *testing.T) {
+	oldPublic, oldPrivate, _ := ed25519.GenerateKey(nil)
+	newPublic, newPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	store := remoteStore(t, t.TempDir(), &now)
+	defer store.Close()
+	if _, err := store.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Apply(signedSnapshot(t, oldPrivate, "old", oldPublic, grantPublic, 1, now)); err != nil {
+		t.Fatal(err)
+	}
+	// The relay was offline for the rotation, which completed a day ago.
+	promotedAt := now.Add(-24 * time.Hour)
+	now = now.Add(time.Hour)
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, newPrivate, "new", grantPublic, 2, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("new", newPublic, "active", promotedAt, time.Time{}),
+	})); err == nil {
+		t.Fatal("a key the relay never pinned was accepted")
+	}
+	catchUp := signedSnapshotWithPolicyKeys(t, oldPrivate, "old", grantPublic, 3, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("old", oldPublic, "verification_only", time.Time{}, now.Add(30*time.Minute)),
+		policyKeyWindow("new", newPublic, "active", promotedAt, time.Time{}),
+	})
+	if _, _, err := store.Apply(catchUp); err != nil {
+		t.Fatalf("retained old signer could not introduce the active key: %v", err)
+	}
+	if ids := store.PolicyKeyIDs(); len(ids) != 2 || ids[0] != "new" || ids[1] != "old" {
+		t.Fatalf("relay does not report the active key after catching up: %v", ids)
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, newPrivate, "new", grantPublic, 4, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("new", newPublic, "active", promotedAt, time.Time{}),
+	})); err != nil {
+		t.Fatalf("active signer was refused after signed rotation: %v", err)
+	}
+}
+
+// Supervisors re-bootstrap their enrollment key on every health loop. Gateway
+// keeps that key in each relay's trust as an expired verification-only entry:
+// re-pinning an existing key checks only its material, never its window, and
+// the expired entry cannot sign anything.
+func TestExpiredEnrollmentKeyStillBootstrapsButCannotSign(t *testing.T) {
+	enrollPublic, enrollPrivate, _ := ed25519.GenerateKey(nil)
+	activePublic, activePrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	store := remoteStore(t, t.TempDir(), &now)
+	defer store.Close()
+	if _, err := store.BootstrapPolicyTrust("enroll", enrollPublic, PublicKeyFingerprint(enrollPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, enrollPrivate, "enroll", grantPublic, 1, now, []*relayv1.PolicySigningKey{
+		policyKey("enroll", enrollPublic), policyKey("active", activePublic),
+	})); err != nil {
+		t.Fatal(err)
+	}
+	retiredAt := now.Add(-time.Hour)
+	withEnrollment := []*relayv1.PolicySigningKey{
+		policyKeyWindow("enroll", enrollPublic, "verification_only", time.Time{}, retiredAt),
+		policyKeyWindow("active", activePublic, "active", now.Add(-2*time.Hour), time.Time{}),
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, activePrivate, "active", grantPublic, 2, now, withEnrollment)); err != nil {
+		t.Fatal(err)
+	}
+	if unchanged, err := store.BootstrapPolicyTrust("enroll", enrollPublic, PublicKeyFingerprint(enrollPublic)); err != nil || !unchanged {
+		t.Fatalf("expired enrollment key could not be re-bootstrapped: unchanged=%v err=%v", unchanged, err)
+	}
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, enrollPrivate, "enroll", grantPublic, 3, now, withEnrollment)); err == nil {
+		t.Fatal("expired enrollment key signed a snapshot")
+	}
+
+	// Without the entry, the same supervisor call is refused: this is the loop
+	// that dropped relays out of the pool about 30 days after their first rotation.
+	if _, _, err := store.Apply(signedSnapshotWithPolicyKeys(t, activePrivate, "active", grantPublic, 4, now, []*relayv1.PolicySigningKey{
+		policyKeyWindow("active", activePublic, "active", now.Add(-2*time.Hour), time.Time{}),
+	})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.BootstrapPolicyTrust("enroll", enrollPublic, PublicKeyFingerprint(enrollPublic)); err == nil {
+		t.Fatal("expected a retired enrollment key outside trust to be refused")
+	}
+}
+
+func TestResetLocalPolicyTrustIsLocalOnly(t *testing.T) {
+	oldPublic, oldPrivate, _ := ed25519.GenerateKey(nil)
+	newPublic, newPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+
+	remote := remoteStore(t, t.TempDir(), &now)
+	if _, err := remote.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.ResetLocalPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic)); err == nil {
+		t.Fatal("remote relay accepted an unsigned trust reset")
+	}
+	if ids := remote.PolicyKeyIDs(); len(ids) != 1 || ids[0] != "old" {
+		t.Fatalf("refused reset changed remote trust: %v", ids)
+	}
+	remote.Close()
+
+	dir := t.TempDir()
+	options := Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED, PoolID: "system", InstanceID: "relay-1",
+		Now: func() time.Time { return now },
+	}
+	local, err := OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := local.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := local.Apply(signedSnapshot(t, oldPrivate, "old", oldPublic, grantPublic, 5, now)); err != nil {
+		t.Fatal(err)
+	}
+	// relay.db restored from a backup: Gateway's active key is one it never saw.
+	if _, err := local.BootstrapPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic)); err == nil {
+		t.Fatal("expected unsigned bootstrap of a second key to be refused")
+	}
+	if _, err := local.ResetLocalPolicyTrust("new", newPublic, PublicKeyFingerprint(oldPublic)); err == nil {
+		t.Fatal("reset accepted a mismatched fingerprint")
+	}
+	replaced, err := local.ResetLocalPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(replaced) != 1 || replaced[0] != "old" {
+		t.Fatalf("unexpected replaced keys: %v", replaced)
+	}
+	if local.Current().Revision != 5 {
+		t.Fatal("reset dropped the snapshot that is still serving")
+	}
+	if unchanged, err := local.BootstrapPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic)); err != nil || !unchanged {
+		t.Fatalf("re-bootstrap after reset failed: unchanged=%v err=%v", unchanged, err)
+	}
+	// A restart before Gateway's next snapshot must not fail on the old signer.
+	local.Close()
+	local, err = OpenWithOptions(dir, options)
+	if err != nil {
+		t.Fatalf("relay could not start after a trust reset: %v", err)
+	}
+	defer local.Close()
+	if local.Current().Revision != 0 {
+		t.Fatalf("snapshot signed by a replaced key survived the reset: revision=%d", local.Current().Revision)
+	}
+	if _, _, err := local.Apply(signedSnapshot(t, newPrivate, "new", newPublic, grantPublic, 6, now)); err != nil {
+		t.Fatalf("snapshot from the re-pinned key was refused: %v", err)
+	}
+	if _, _, err := local.Apply(signedSnapshot(t, oldPrivate, "old", oldPublic, grantPublic, 7, now)); err == nil {
+		t.Fatal("replaced key still signs policy")
+	}
+}

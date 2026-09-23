@@ -1432,7 +1432,14 @@ export async function initializeContainer(): Promise<void> {
   };
   acmeService.onChallengeCreate = async (token: string, content: string, domain: string) => {
     const ingress = await resolveHttp01Ingress(db, domain);
-    await nodeDispatch.deployAcmeChallenge(ingress.nodeId, token, content);
+    const deployed = await nodeDispatch.deployAcmeChallenge(ingress.nodeId, token, content);
+    if (!deployed.success) {
+      throw new AppError(
+        502,
+        'ACME_CHALLENGE_DEPLOY_FAILED',
+        `Could not publish the HTTP-01 challenge for ${domain} on its Nginx node: ${deployed.error || 'the daemon rejected the challenge'}`
+      );
+    }
     http01ChallengeNodes.set(token, ingress.nodeId);
   };
   acmeService.onChallengeRemove = async (token: string, domain: string) => {
@@ -1454,6 +1461,7 @@ export async function initializeContainer(): Promise<void> {
     nginxCertificateDistribution
   );
   accessListService.setEventBus(eventBus);
+  accessListService.setHostRuntime(proxyService);
   container.registerInstance(AccessListService, accessListService);
 
   const sslService = new SSLService(db, acmeService, cryptoService, auditService, nginxCertificateDistribution);
@@ -1966,6 +1974,9 @@ export async function initializeContainer(): Promise<void> {
       },
     });
   }
+  // Report a rolled-back Gateway update and fail Relay Pool runs this restart interrupted.
+  updateService.setAuditLog(auditService);
+  await updateService.recoverInterruptedUpdates();
 
   // Housekeeping service
   const housekeepingService = new HousekeepingService(db, dockerService, nodeDispatch, env);

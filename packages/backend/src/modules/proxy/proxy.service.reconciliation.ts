@@ -1,12 +1,19 @@
 import { and, eq, inArray, ne, or, sql } from 'drizzle-orm';
-import { proxyAdditionalRoutes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
+import { domains, nodes, proxyAdditionalRoutes, proxyAdditionalSecureLinks, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { runImmediateProxyHealthCheck } from './proxy-health-check.js';
+import { proxyHostLockKey, proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
 import { isDockerUpstream, logger, type ProxyHostRow } from './proxy.service.core.js';
 import { ProxyServiceListing } from './proxy.service.listing.js';
+
+interface AppliedNodeHostConfig {
+  config: string;
+  configOwnership: string;
+  epoch: number;
+}
 
 export class ProxyServiceReconciliation extends ProxyServiceListing {
   async reconcileDockerContainerRecreate(_nodeId: string): Promise<void> {
@@ -28,17 +35,7 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       where: and(eq(proxyHosts.enabled, true), or(eq(proxyHosts.type, '404'), eq(proxyHosts.maintenanceEnabled, true))),
     });
     for (const host of hosts) {
-      const certPaths = await this.resolveCertPaths(host, { preserveLegacyOnUnsupported: true });
-      const accessList = await this.resolveAccessList(host.accessListId);
-      const config = await this.buildNginxConfig(host, certPaths, accessList);
-      await this.applyConfigToNode(
-        host.id,
-        config,
-        host.nodeId,
-        certPaths.preparedTls,
-        this.configOwnershipForHost(host),
-        host.accessListId
-      );
+      await this.reapplyHostConfig(host.id);
     }
   }
 
@@ -202,71 +199,87 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
         ne(proxyHosts.secureLinkStatus, 'cleanup_pending')
       ),
     });
-    for (const host of hosts) {
+    for (const listedHost of hosts) {
       try {
-        if (host.type === 'raw' || host.rawConfigEnabled) {
-          if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
-          continue;
-        }
-        const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
-        if (availabilityManaged) continue;
-        const updated = await this.resolveStoredDockerUpstream(host, force);
-        const secureLinkChanged =
-          updated.forwardHost !== host.forwardHost ||
-          updated.forwardPort !== host.forwardPort ||
-          updated.secureLinkGeneration !== host.secureLinkGeneration ||
-          updated.secureLinkStatus !== host.secureLinkStatus ||
-          updated.secureLinkListenerPort !== host.secureLinkListenerPort ||
-          updated.secureLinkTargetNetwork !== host.secureLinkTargetNetwork ||
-          updated.secureLinkTargetContainer !== host.secureLinkTargetContainer;
-        const cutoverPending =
-          updated.secureLinkGeneration > 0 &&
-          (updated.secureLinkStatus === 'provisioning' ||
-            updated.secureLinkStatus === 'updating' ||
-            updated.secureLinkStatus === 'cutover_ready');
-        if (!secureLinkChanged && !cutoverPending) continue;
-        let cutoverHost = updated;
-        if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
-          if (host.secureLinkGeneration === 0 && host.enabled) {
-            await this.removeConfigFromNode(host.id, host.nodeId);
+        const reconciled = await withProxyHostLock(listedHost.id, async () => {
+          // Re-read under the host lock: an edit that finished after the batch
+          // query must never be overwritten with the stale listed row.
+          const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, listedHost.id) });
+          if (
+            !host ||
+            host.type !== 'proxy' ||
+            !isDockerUpstream(host.upstreamKind) ||
+            host.secureLinkStatus === 'cleanup_pending'
+          ) {
+            return true;
           }
-          cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
-        }
-        if (cutoverHost.enabled) {
-          try {
-            const certPaths = await this.resolveCertPaths(cutoverHost, { preserveLegacyOnUnsupported: true });
-            const accessList = await this.resolveAccessList(cutoverHost.accessListId);
-            const config = await this.buildNginxConfig(cutoverHost, certPaths, accessList);
-            await this.applyConfigToNode(
-              cutoverHost.id,
-              config,
-              cutoverHost.nodeId,
-              certPaths.preparedTls,
-              this.configOwnershipForHost(cutoverHost),
-              cutoverHost.accessListId
-            );
-            if (cutoverHost.secureLinkGeneration > 0) {
-              await this.secureLinks?.activate(cutoverHost.id);
-              this.queueSecureLinkRuntimeSample(cutoverHost);
+          if (host.rawConfigEnabled) {
+            if (host.secureLinkGeneration > 0) await this.secureLinks?.cleanup(host);
+            return true;
+          }
+          const availabilityManaged = (await this.availabilityIngressReconciler?.(host.id)) ?? false;
+          if (availabilityManaged) return true;
+          const updated = await this.resolveStoredDockerUpstream(host, force);
+          const secureLinkChanged =
+            updated.forwardHost !== host.forwardHost ||
+            updated.forwardPort !== host.forwardPort ||
+            updated.secureLinkGeneration !== host.secureLinkGeneration ||
+            updated.secureLinkStatus !== host.secureLinkStatus ||
+            updated.secureLinkListenerPort !== host.secureLinkListenerPort ||
+            updated.secureLinkTargetNetwork !== host.secureLinkTargetNetwork ||
+            updated.secureLinkTargetContainer !== host.secureLinkTargetContainer;
+          const cutoverPending =
+            updated.secureLinkGeneration > 0 &&
+            (updated.secureLinkStatus === 'provisioning' ||
+              updated.secureLinkStatus === 'updating' ||
+              updated.secureLinkStatus === 'cutover_ready');
+          if (!secureLinkChanged && !cutoverPending) return true;
+          let cutoverHost = updated;
+          if (updated.secureLinkGeneration > 0 && updated.secureLinkStatus !== 'active') {
+            if (host.secureLinkGeneration === 0 && host.enabled) {
+              await this.removeConfigFromNode(host.id, host.nodeId);
             }
-          } catch (error) {
-            // Keep the newly resolved endpoint. A disconnected Nginx node will
-            // receive it through the existing resync path after reconnecting.
-            logger.warn('Resolved Docker upstream but could not apply Nginx config yet', {
-              hostId: updated.id,
-              error,
-            });
-            retryNeeded = true;
+            cutoverHost = (await this.secureLinks?.commitCutover(updated.id)) ?? updated;
           }
-        } else if (cutoverPending) {
-          await this.secureLinks?.activate(cutoverHost.id);
-          this.queueSecureLinkRuntimeSample(cutoverHost);
-        }
-        this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
+          if (cutoverHost.enabled) {
+            try {
+              const certPaths = await this.resolveCertPaths(cutoverHost, { preserveLegacyOnUnsupported: true });
+              const accessList = await this.resolveAccessList(cutoverHost.accessListId);
+              const config = await this.buildNginxConfig(cutoverHost, certPaths, accessList);
+              await this.applyConfigToNode(
+                cutoverHost.id,
+                config,
+                cutoverHost.nodeId,
+                certPaths.preparedTls,
+                this.configOwnershipForHost(cutoverHost),
+                cutoverHost.accessListId
+              );
+              if (cutoverHost.secureLinkGeneration > 0) {
+                await this.secureLinks?.activate(cutoverHost.id);
+                this.queueSecureLinkRuntimeSample(cutoverHost);
+              }
+            } catch (error) {
+              // Keep the newly resolved endpoint. A disconnected Nginx node will
+              // receive it through the existing resync path after reconnecting.
+              logger.warn('Resolved Docker upstream but could not apply Nginx config yet', {
+                hostId: updated.id,
+                error,
+              });
+              this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
+              return false;
+            }
+          } else if (cutoverPending) {
+            await this.secureLinks?.activate(cutoverHost.id);
+            this.queueSecureLinkRuntimeSample(cutoverHost);
+          }
+          this.emitHost(updated.id, 'updated', updated.domainNames?.[0]);
+          return true;
+        });
+        if (!reconciled) retryNeeded = true;
       } catch (error) {
         // External disappearance/offline state intentionally keeps the last
         // resolved endpoint and the existing Nginx configuration intact.
-        logger.debug('Keeping last resolved Docker proxy upstream', { hostId: host.id, error });
+        logger.debug('Keeping last resolved Docker proxy upstream', { hostId: listedHost.id, error });
         retryNeeded = true;
       }
     }
@@ -284,47 +297,40 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       where: and(eq(proxyHosts.nodeId, nodeId), eq(proxyHosts.enabled, true)),
     });
 
-    if (hosts.length === 0) {
-      logger.info('No enabled hosts to resync for node', { nodeId });
-      return;
-    }
-
     logger.info('Resyncing all hosts on node', { nodeId, hostCount: hosts.length });
-    const supportsDistribution = await this.certificateDistribution.supportsNode(nodeId);
+    const supportsDistribution = hosts.length > 0 ? await this.certificateDistribution.supportsNode(nodeId) : false;
+    const applied = new Map<string, AppliedNodeHostConfig>();
+    let failures = 0;
 
     for (const storedHost of hosts) {
       try {
-        let host = storedHost;
-        try {
-          host = await this.resolveStoredDockerUpstream(storedHost);
-        } catch (error) {
-          // A node reconnect can race the background Docker reconciler. Never
-          // render the stale pre-cutover row captured above: it could restore a
-          // published-IP upstream after the Secure Link was already committed.
-          const current = await this.db.query.proxyHosts.findFirst({
-            where: eq(proxyHosts.id, storedHost.id),
-          });
-          if (!current?.enabled || current.nodeId !== nodeId) continue;
-          host = current;
-          logger.debug('Using current proxy state after Docker resync resolution failed', {
-            hostId: storedHost.id,
-            error,
-          });
-        }
-        // Existing hosts on an old daemon retain their legacy config and
-        // certificate paths. A new bundle is never initiated for that fleet.
-        const certPaths = await this.resolveCertPaths(host, supportsDistribution ? {} : { legacy: true });
-        const accessList = await this.resolveAccessList(host.accessListId);
-        const config = await this.buildNginxConfig(host, certPaths, accessList);
-        await this.applyConfigToNode(
-          host.id,
-          config,
-          host.nodeId ?? nodeId,
-          certPaths.preparedTls,
-          this.configOwnershipForHost(host),
-          host.accessListId
-        );
+        const result = await withProxyHostLock(storedHost.id, async () => {
+          // Re-read under the host lock so an edit that committed after the
+          // batch query is never overwritten with the stale listed row.
+          const current = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, storedHost.id) });
+          if (!current?.enabled || current.nodeId !== nodeId) return null;
+          let host = current;
+          try {
+            host = await this.resolveStoredDockerUpstream(current);
+          } catch (error) {
+            // A node reconnect can race the background Docker reconciler. Never
+            // render the stale pre-cutover row: it could restore a published-IP
+            // upstream after the Secure Link was already committed.
+            const latest = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, storedHost.id) });
+            if (!latest?.enabled || latest.nodeId !== nodeId) return null;
+            host = latest;
+            logger.debug('Using current proxy state after Docker resync resolution failed', {
+              hostId: storedHost.id,
+              error,
+            });
+          }
+          // Existing hosts on an old daemon retain their legacy config and
+          // certificate paths. A new bundle is never initiated for that fleet.
+          return this.renderAndApplyHost(host, supportsDistribution ? {} : { legacy: true });
+        });
+        if (result) applied.set(storedHost.id, result);
       } catch (err) {
+        failures += 1;
         logger.error('Failed to resync host config', {
           hostId: storedHost.id,
           nodeId,
@@ -333,10 +339,96 @@ export class ProxyServiceReconciliation extends ProxyServiceListing {
       }
     }
 
-    logger.info('Node resync complete', { nodeId, hostCount: hosts.length });
+    logger.info('Node resync complete', { nodeId, hostCount: hosts.length, failures });
+    try {
+      await this.removeStaleConfigsOnNode(nodeId, applied, failures);
+    } catch (error) {
+      logger.warn('Stale proxy config cleanup failed after node resync', {
+        nodeId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  /**
+   * Remove proxy-host configs that no longer belong to an enabled host on this
+   * node (for example a host deleted or moved while the node was unreachable).
+   *
+   * The daemon has no listing command, but every nginx-daemon version supports
+   * FullSync, which rewrites the given host configs and deletes any other
+   * `proxy-host-*.conf`. It is sent only with the exact configs that this
+   * resync just applied, so it never changes a live host and never touches
+   * Pages, maintenance or other non-proxy-host files. Cleanup is skipped
+   * whenever that cannot be guaranteed: a host failed to resync, another write
+   * raced the resync, or an ingress migration still keeps this node serving
+   * its former routes until DNS moves.
+   */
+  protected async removeStaleConfigsOnNode(
+    nodeId: string,
+    applied: Map<string, AppliedNodeHostConfig>,
+    failures: number
+  ): Promise<void> {
+    if (failures > 0) {
+      logger.warn('Skipping stale proxy config cleanup: not every host resynced', { nodeId, failures });
+      return;
+    }
+    if (!this.nodeDispatch.isNodeConnected(nodeId)) return;
+    const [node] = await this.db
+      .select({ type: nodes.type, configVersionHash: nodes.configVersionHash })
+      .from(nodes)
+      .where(eq(nodes.id, nodeId))
+      .limit(1);
+    if (node?.type !== 'nginx') return;
+    const [migration] = await this.db
+      .select({ id: domains.id })
+      .from(domains)
+      .where(eq(domains.ingressMigrationSourceNodeId, nodeId))
+      .limit(1);
+    if (migration) {
+      logger.info('Skipping stale proxy config cleanup during ingress migration', { nodeId });
+      return;
+    }
+
+    await withProxyLocks([...[...applied.keys()].map(proxyHostLockKey), proxyNodeLockKey(nodeId)], async () => {
+      const current = await this.db.query.proxyHosts.findMany({
+        where: and(eq(proxyHosts.nodeId, nodeId), eq(proxyHosts.enabled, true)),
+        columns: { id: true },
+      });
+      const unchanged =
+        current.length === applied.size &&
+        current.every((host) => {
+          const entry = applied.get(host.id);
+          return entry !== undefined && (this.hostConfigEpochs.get(host.id) ?? 0) === entry.epoch;
+        });
+      if (!unchanged) {
+        logger.info('Skipping stale proxy config cleanup: hosts changed during resync', { nodeId });
+        return;
+      }
+      const result = await this.nodeDispatch.fullSync(
+        nodeId,
+        [...applied].map(([hostId, entry]) => ({
+          hostId,
+          configContent: entry.config,
+          configOwnership: entry.configOwnership,
+        })),
+        [],
+        '',
+        [],
+        node.configVersionHash ?? ''
+      );
+      if (!result.success) {
+        logger.warn('Stale proxy config cleanup was rejected by the node', { nodeId, error: result.error });
+        return;
+      }
+      logger.info('Removed stale proxy configs after node resync', { nodeId, hostCount: applied.size });
+    });
   }
 
   async resyncTlsHost(id: string, userId: string) {
+    return withProxyHostLock(id, () => this.resyncTlsHostLocked(id, userId));
+  }
+
+  private async resyncTlsHostLocked(id: string, userId: string) {
     const host = await this.db.query.proxyHosts.findFirst({ where: eq(proxyHosts.id, id) });
     if (!host) throw new AppError(404, 'PROXY_HOST_NOT_FOUND', 'Proxy host not found');
     if (!host.sslEnabled || !this.certificateDistribution.referenceForHost(host)) {

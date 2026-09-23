@@ -187,6 +187,8 @@ export interface NodeDetail extends Node {
 export interface CreateNodeResponse {
   node: Node;
   enrollmentToken: string;
+  /** ISO timestamp after which an unused enrollment token is rejected. */
+  enrollmentTokenExpiresAt?: string;
   gatewayCertSha256: string;
   gatewayEnrollmentTargets?: {
     public?: {

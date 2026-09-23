@@ -188,3 +188,50 @@ describe('ACMERenewalJob', () => {
     expect(alertService.createAlert).not.toHaveBeenCalled();
   });
 });
+
+describe('ACMERenewalJob recovery', () => {
+  it('selects still-valid rows stuck in error and expired rows, not only active ones', async () => {
+    const { PgDialect } = await import('drizzle-orm/pg-core');
+    const db = createDb([]);
+    const job = new ACMERenewalJob(db as never, { renewCert: vi.fn() } as never, { createAlert: vi.fn() } as never);
+
+    await job.run();
+
+    const where = db.query.sslCertificates.findMany.mock.calls[0]![0].where;
+    const query = new PgDialect().sqlToQuery(where);
+    expect(query.sql).toMatch(/"status" in \(\$\d+, \$\d+, \$\d+\)/);
+    expect(query.params).toEqual(expect.arrayContaining(['active', 'error', 'expired']));
+  });
+
+  it('alerts when a renewed certificate did not reach every proxy host', async () => {
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      type: 'acme',
+      status: 'active',
+      autoRenew: true,
+      acmeChallengeType: 'http-01',
+      domainNames: ['example.com'],
+      notAfter: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+    };
+    const sslService = {
+      renewCert: vi.fn().mockResolvedValue({
+        id: 'cert-1',
+        status: 'active',
+        renewalError: 'Distribution incomplete: 1 proxy host(s) did not receive the current certificate (offline)',
+      }),
+    };
+    const alertService = { createAlert: vi.fn() };
+    const job = new ACMERenewalJob(createDb([cert]) as never, sslService as never, alertService as never);
+
+    await job.run();
+
+    expect(alertService.createAlert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'expiry_warning',
+        resourceId: 'cert-1',
+        message: expect.stringContaining('was renewed, but not every proxy host received it'),
+      })
+    );
+  });
+});

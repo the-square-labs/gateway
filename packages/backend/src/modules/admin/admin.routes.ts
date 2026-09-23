@@ -31,6 +31,7 @@ import {
   UpdateUserNameSchema,
 } from '@/modules/admin/admin.schemas.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
+import { findIdentityTrustChanges } from '@/modules/admin/identity-trust-settings.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import {
   authMiddleware,
@@ -60,7 +61,11 @@ import {
   ReorderResourcesSchema,
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
-import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import {
+  type GeneralSettings,
+  GeneralSettingsService,
+  type GeneralSettingsUpdate,
+} from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
@@ -438,6 +443,23 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     }
   }
 
+  if (!hasScope(actorScopes, 'admin:system')) {
+    const privilegedChanges = await findIdentityTrustChanges(input, {
+      smtp: () => authMailService.getPublicConfig(),
+      generalSettings: () => generalSettingsService.getConfig(),
+      authSettings: () => authSettingsService.getConfig(),
+    });
+    if (privilegedChanges.length > 0) {
+      return c.json(
+        {
+          code: 'ADMIN_SYSTEM_REQUIRED',
+          message: `Changing ${privilegedChanges.join(', ')} requires the admin:system permission`,
+        },
+        403
+      );
+    }
+  }
+
   try {
     const previousWebTransport = await webTransportSettingsService.getConfig();
     if (input.smtp) {
@@ -507,7 +529,13 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
       } catch (error) {
         if (previousGeneralSettings) {
           try {
-            await generalSettingsService.updateConfig(previousGeneralSettings);
+            // Undo only what this request changed, and only where nothing else
+            // changed it since, so concurrent edits are not reverted with it.
+            await generalSettingsService.restoreFields(
+              previousGeneralSettings,
+              generalSettingsRollbackFields(previousGeneralSettings, generalSettings, input.generalSettings),
+              { ifUnchangedFrom: generalSettings }
+            );
             if (shouldRefreshGrpcIdentity) {
               await refreshActiveGrpcServerIdentity();
             }
@@ -591,6 +619,38 @@ adminRoutes.openapi({ ...updateAuthSettingsRoute, middleware: requireScope('sett
     throw err;
   }
 });
+
+/** Previous values for exactly the general settings fields that differ after an update. */
+export function generalSettingsRollbackPatch(
+  previous: GeneralSettings,
+  applied: GeneralSettings
+): GeneralSettingsUpdate {
+  const differs = (a: unknown, b: unknown) => JSON.stringify(a) !== JSON.stringify(b);
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(applied) as Array<keyof GeneralSettings>) {
+    if (key === 'features' || key === 'relay') {
+      const before = previous[key] as unknown as Record<string, unknown>;
+      const after = applied[key] as unknown as Record<string, unknown>;
+      const changed = Object.keys(after).filter((field) => differs(before[field], after[field]));
+      if (changed.length > 0) patch[key] = Object.fromEntries(changed.map((field) => [field, before[field]]));
+    } else if (differs(previous[key], applied[key])) {
+      patch[key] = previous[key];
+    }
+  }
+  return patch as GeneralSettingsUpdate;
+}
+
+/** The general settings a request asked to change and that the write actually changed. */
+export function generalSettingsRollbackFields(
+  previous: GeneralSettings,
+  applied: GeneralSettings,
+  requested: object | undefined
+): Array<keyof GeneralSettings> {
+  if (!requested) return [];
+  return (Object.keys(generalSettingsRollbackPatch(previous, applied)) as Array<keyof GeneralSettings>).filter(
+    (field) => field in requested
+  );
+}
 
 function toAuthSettingsAuditDetails(input: UpdateAuthProvisioningSettingsInput) {
   const { smtp: smtpInput, oidc: oidcInput, logging: loggingInput, ...rest } = input;

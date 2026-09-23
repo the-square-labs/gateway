@@ -13,6 +13,7 @@ import type { LoggingSettingsInput } from '@/modules/logging/logging-settings.se
 import type { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import type { FinalizeSetupService } from '@/modules/onboarding/finalize-setup.service.js';
 import {
+  type GeneralSettings,
   type GeneralSettingsService,
   normalizeHostPortTarget,
   normalizeIpPortTarget,
@@ -53,6 +54,8 @@ const SETUP_WIZARD_PHASE_KEY = 'setup:wizard_phase';
 const SETUP_AI_WORKSPACE_OUTCOME_KEY = 'setup:ai_workspace_outcome';
 const FIRST_ADMIN_CLAIM_TTL_MS = 10 * 60 * 1000;
 const logger = createChildLogger('SetupWizard');
+/** General settings the setup wizard writes, and so the only ones its rollback restores. */
+const SETUP_GENERAL_SETTINGS_FIELDS = ['publicUrl', 'gatewayGrpcPublicTarget', 'gatewayGrpcLocalIp'] as const;
 
 export class SetupWizardService {
   constructor(
@@ -71,12 +74,17 @@ export class SetupWizardService {
     private readonly refreshWebIdentity?: () => Promise<void>
   ) {}
 
-  async configureGeneral(publicUrl: string, network: SetupNetworkInput) {
+  async configureGeneral(
+    publicUrl: string,
+    network: SetupNetworkInput,
+    onApplied?: (general: GeneralSettings) => void
+  ) {
     const general = await this.generalSettings.updateConfig({
       publicUrl,
       gatewayGrpcPublicTarget: network.grpcPublicTarget,
       gatewayGrpcLocalIp: network.grpcLocalIp || null,
     });
+    onApplied?.(general);
     await Promise.all([this.refreshGrpcIdentity?.(), this.refreshWebIdentity?.()]);
     return general;
   }
@@ -117,9 +125,12 @@ export class SetupWizardService {
       loggingRuntime.snapshot(),
     ]);
     let createdAdministratorId: string | null = null;
+    const applied: { general: GeneralSettings | null } = { general: null };
 
     try {
-      await this.configureGeneral(input.publicUrl, input.network);
+      await this.configureGeneral(input.publicUrl, input.network, (general) => {
+        applied.general = general;
+      });
       await this.configureAuth(input.auth);
       await loggingRuntime.update(input.logging);
       if (!administratorCreated) {
@@ -144,10 +155,17 @@ export class SetupWizardService {
       await rollback(() => this.authSettings.updateConfig(authSnapshot));
       await rollback(() => this.oidcSettings.restoreConfig(oidcSnapshot));
       await rollback(() => this.authMail.restoreConfig(smtpSnapshot));
-      await rollback(async () => {
-        await this.generalSettings.updateConfig(generalSnapshot);
-        await Promise.all([this.refreshGrpcIdentity?.(), this.refreshWebIdentity?.()]);
-      });
+      const generalToRollback = applied.general;
+      if (generalToRollback) {
+        await rollback(async () => {
+          // Undo only the fields setup wrote, and only where nothing changed them since, so a
+          // concurrent settings save is not overwritten by the whole pre-setup snapshot.
+          await this.generalSettings.restoreFields(generalSnapshot, SETUP_GENERAL_SETTINGS_FIELDS, {
+            ifUnchangedFrom: generalToRollback,
+          });
+          await Promise.all([this.refreshGrpcIdentity?.(), this.refreshWebIdentity?.()]);
+        });
+      }
       if (rollbackFailures.length > 0) {
         logger.error('Setup apply rollback was incomplete', {
           failures: rollbackFailures.map((rollbackError) =>

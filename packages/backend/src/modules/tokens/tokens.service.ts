@@ -10,6 +10,7 @@ import { boundScopes, hasScope as permissionHasScope } from '@/lib/permissions.j
 import { canonicalizeScopes, isApiTokenScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import { apiTokenChangedChannel } from '@/modules/auth/user-resource-events.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -17,6 +18,21 @@ import type { User } from '@/types.js';
 import type { CreateTokenInput, UpdateTokenInput } from './tokens.schemas.js';
 
 const logger = createChildLogger('TokensService');
+
+/**
+ * Defense in depth for paths that do not go through the token routes (for
+ * example AI tools): an impersonated request must never mint or widen a
+ * long-lived credential for the impersonated user.
+ */
+function assertNotImpersonatedRequest(): void {
+  if (getAuditRequestContext()?.impersonation) {
+    throw new AppError(
+      403,
+      'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+      'API tokens cannot be managed while impersonating'
+    );
+  }
+}
 
 function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
@@ -36,6 +52,7 @@ export class TokensService {
   }
 
   async createToken(userId: string, input: CreateTokenInput) {
+    assertNotImpersonatedRequest();
     const raw = `gw_${randomBytes(32).toString('hex')}`;
     const tokenHash = hashToken(raw);
     const tokenPrefix = raw.slice(0, 10);
@@ -97,6 +114,7 @@ export class TokensService {
   }
 
   async updateToken(userId: string, tokenId: string, input: UpdateTokenInput): Promise<void> {
+    assertNotImpersonatedRequest();
     const token = await this.db.query.apiTokens.findFirst({
       where: and(eq(apiTokens.id, tokenId), eq(apiTokens.userId, userId)),
     });

@@ -248,6 +248,8 @@ export interface StatsReport {
 
 export interface GatewayCommand {
   commandId: string;
+  /** Optional absolute dispatch deadline (Unix ms, int64 as string). Omitted or zero means no deadline. */
+  expiresAtUnixMs?: string;
   applyConfig?: ApplyConfigCommand;
   removeConfig?: RemoveConfigCommand;
   deployCert?: DeployCertCommand;

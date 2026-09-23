@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
+import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
 import { DockerBuildService } from '@/modules/docker/docker-build.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { AIService } from './ai.service.js';
+
+vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
+  assertComposeChildMutationAllowed: vi.fn().mockResolvedValue(undefined),
+}));
 
 const BASE_USER = {
   id: 'user-1',
@@ -339,10 +344,7 @@ describe('AIService Docker tool routing', () => {
 
   it('requests a background image recreate and returns its task identity', async () => {
     const dockerService = {
-      inspectContainer: vi
-        .fn()
-        .mockResolvedValueOnce({ scopeResourceId: 'scope-1' })
-        .mockResolvedValueOnce({ Config: { Image: 'nginx:old' } }),
+      inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1', Config: { Image: 'nginx:old' } }),
       recreateWithConfig: vi.fn().mockResolvedValue({
         accepted: true,
         status: 'pending',
@@ -353,7 +355,14 @@ describe('AIService Docker tool routing', () => {
     const service = createService(dockerService);
     const user = {
       ...BASE_USER,
-      scopes: ['docker:containers:manage:node-1', 'docker:containers:edit:node-1/scope-1'],
+      scopes: [
+        'docker:containers:manage:node-1',
+        'docker:containers:edit:node-1/scope-1',
+        'docker:containers:config:node-1/scope-1',
+        'docker:containers:environment:node-1/scope-1',
+        'docker:containers:secrets:node-1/scope-1',
+        'docker:images:pull:node-1',
+      ],
     };
 
     await expect(
@@ -375,6 +384,64 @@ describe('AIService Docker tool routing', () => {
       'user-1',
       { actorScopes: user.scopes, backgroundImagePull: true }
     );
+    expect(assertComposeChildMutationAllowed).toHaveBeenCalledWith('node-1', 'container-1');
+  });
+
+  it('requires the recreate route scopes and image pull access before changing a container image', async () => {
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1', Config: { Image: 'nginx:old' } }),
+      recreateWithConfig: vi.fn(),
+    };
+    const service = createService(dockerService);
+    const containerScopes = [
+      'docker:containers:manage:node-1',
+      'docker:containers:edit:node-1/scope-1',
+      'docker:containers:config:node-1/scope-1',
+      'docker:containers:environment:node-1/scope-1',
+      'docker:containers:secrets:node-1/scope-1',
+    ];
+    const update = (scopes: string[]) =>
+      service.executeTool({ ...BASE_USER, scopes }, 'update_docker_container_image', {
+        nodeId: 'node-1',
+        containerId: 'container-1',
+        imageTag: 'new',
+      });
+
+    for (const missing of containerScopes.slice(1)) {
+      await expect(
+        update([...containerScopes.filter((scope) => scope !== missing), 'docker:images:pull:node-1'])
+      ).resolves.toMatchObject({ error: expect.stringContaining(missing.split(':node-1')[0]) });
+    }
+    await expect(update(containerScopes)).resolves.toMatchObject({
+      error: 'Missing docker:images:pull for the destination node or folder',
+    });
+    expect(dockerService.recreateWithConfig).not.toHaveBeenCalled();
+  });
+
+  it('strips the live environment from container inspect without environment access', async () => {
+    const inspect = {
+      Id: 'container-1',
+      scopeResourceId: 'scope-1',
+      Config: { Image: 'nginx:1', Env: ['DATABASE_PASSWORD=secret'], Labels: {} },
+    };
+    const service = createService({ inspectContainer: vi.fn().mockResolvedValue(inspect) });
+
+    const withoutEnv = await service.executeTool(
+      { ...BASE_USER, scopes: ['docker:containers:view:node-1/scope-1'] },
+      'get_docker_container',
+      { nodeId: 'node-1', containerId: 'container-1' }
+    );
+    expect((withoutEnv.result as any).Config).toEqual({ Image: 'nginx:1', Labels: {} });
+
+    const withEnv = await service.executeTool(
+      {
+        ...BASE_USER,
+        scopes: ['docker:containers:view:node-1/scope-1', 'docker:containers:environment:node-1/scope-1'],
+      },
+      'get_docker_container',
+      { nodeId: 'node-1', containerId: 'container-1' }
+    );
+    expect((withEnv.result as any).Config.Env).toEqual(['DATABASE_PASSWORD=secret']);
   });
 
   it('requires source view, environment, and secret scopes before duplication', async () => {
@@ -694,5 +761,27 @@ describe('AIService Docker tool routing', () => {
       invalidateStores: ['containers'],
     });
     expect(deploymentService.start).toHaveBeenCalledWith('node-1', 'deployment-1', 'user-1');
+  });
+
+  it('redacts env and the webhook token from deployment action results like the deployment routes', async () => {
+    const detail = {
+      id: 'deployment-1',
+      desiredConfig: { image: 'app:1', env: { SECRET: 'value' } },
+      slots: [{ slot: 'blue', desiredConfig: { image: 'app:1', env: { SECRET: 'value' } } }],
+      webhook: { id: 'webhook-1', token: 'raw-token' },
+    };
+    const deploymentService = { restart: vi.fn().mockResolvedValue(detail) };
+    vi.spyOn(container, 'resolve').mockReturnValue(deploymentService as never);
+    const service = createService({});
+
+    const result = await service.executeTool(
+      { ...BASE_USER, scopes: ['docker:containers:manage:node-1'] },
+      'restart_docker_deployment',
+      { nodeId: 'node-1', deploymentId: 'deployment-1' }
+    );
+    const data = (result.result as any).data;
+    expect(data.desiredConfig).toEqual({ image: 'app:1' });
+    expect(data.slots[0].desiredConfig).toEqual({ image: 'app:1' });
+    expect(data.webhook.token).not.toBe('raw-token');
   });
 });

@@ -10,7 +10,8 @@ import type {
 } from '@/grpc/generated/migration-types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
+import { extractDaemonCertificateIdentity } from '../interceptors/auth.js';
+import { matchEnrolledNodeCertificate } from '../node-certificate.js';
 import type { GrpcServerDeps } from '../server.js';
 
 const logger = createChildLogger('GrpcMigrationTransfer');
@@ -504,6 +505,8 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
           .select({
             certificateSerial: nodes.certificateSerial,
             certificateFingerprint: nodes.certificateFingerprint,
+            pendingCertificateSerial: nodes.pendingCertificateSerial,
+            pendingCertificateFingerprint: nodes.pendingCertificateFingerprint,
             status: nodes.status,
             type: nodes.type,
           })
@@ -515,9 +518,7 @@ export function createMigrationTransferHandlers(deps: GrpcServerDeps) {
           node.status === 'pending' ||
           node.type !== 'docker' ||
           !node.certificateSerial ||
-          normalizeCertificateSerial(node.certificateSerial) !== identity.serialNumber ||
-          (identity.certificateFingerprint !== undefined &&
-            node.certificateFingerprint !== identity.certificateFingerprint)
+          !matchEnrolledNodeCertificate(node, identity)
         ) {
           throw new Error('daemon certificate does not match the enrolled Docker node');
         }

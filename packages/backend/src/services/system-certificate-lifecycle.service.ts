@@ -1,4 +1,4 @@
-import { and, count, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, isNotNull, isNull, lte } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { auditLog, certificateAuthorities, certificates, managedDatabaseInstances, nodes } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
@@ -26,7 +26,15 @@ export type SystemCertificateCurrentBinding = (
   certificate: { id: string; serialNumber: string; notAfter: Date; certificatePem: string; privateKeyPem: string }
 ) => Promise<SystemCertificateBindingHandle> | Promise<void>;
 
-const RETIRABLE_STATES = ['current', 'superseded'] as const;
+export type SystemCertificatePromotionBinding = (
+  tx: DrizzleTransaction,
+  certificate: { id: string; serialNumber: string; notAfter: Date; certificatePem: string } | null
+) => Promise<void>;
+
+const RETIRABLE_STATES = ['current', 'superseded', 'pending'] as const;
+// A staged leaf is handed out again on a retried request only while it still
+// has most of its validity left; otherwise a fresh one is staged.
+const PENDING_REUSE_MIN_REMAINING_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
  * Owns the lifecycle of leaves issued by Gateway system CAs. The cleanup
@@ -144,6 +152,237 @@ export class SystemCertificateLifecycleService {
     }
     if (retiredCaId) await this.refreshCRL(retiredCaId);
     return issued;
+  }
+
+  /**
+   * Stage a replacement leaf without retiring the owner's current one. The
+   * owner keeps working with its current leaf until it proves possession of
+   * the staged leaf, and promotePending() then swaps them. While a staged leaf
+   * is still valid it is returned again (with its key) instead of issuing
+   * another, so a lost response can be retried idempotently.
+   */
+  async issuePending(
+    input: IssueCertificateInput,
+    issuedById: string,
+    owner: SystemCertificateOwner,
+    bindPending?: SystemCertificateCurrentBinding
+  ) {
+    await this.assertSystemCA(input.caId);
+
+    const reusable = await this.findReusablePending(owner, input.caId);
+    if (reusable) {
+      if (bindPending) {
+        await this.db.transaction(async (tx) => {
+          await bindPending(tx, { ...reusable.certificate, privateKeyPem: reusable.privateKeyPem });
+        });
+      }
+      return reusable;
+    }
+
+    const issued = await this.certService.issueCertificate(input, issuedById, {
+      allowSystem: true,
+      systemLifecycle: { ownerType: owner.type, ownerId: owner.id, state: 'unknown' },
+    });
+    const now = new Date();
+    const retiredCaIds = new Set<string>();
+    const binding = { handle: undefined as SystemCertificateBindingHandle | undefined };
+
+    try {
+      await this.db.transaction(async (tx) => {
+        // Only one staged leaf per owner: an older, unusable staged leaf is
+        // replaced. The current leaf is deliberately left untouched.
+        const stale = await tx
+          .select({ id: certificates.id, caId: certificates.caId })
+          .from(certificates)
+          .where(
+            and(
+              eq(certificates.systemOwnerType, owner.type),
+              eq(certificates.systemOwnerId, owner.id),
+              eq(certificates.systemLifecycleState, 'pending')
+            )
+          );
+        if (stale.length) {
+          await tx
+            .update(certificates)
+            .set({
+              status: 'revoked',
+              revokedAt: now,
+              revocationReason: 'superseded',
+              systemLifecycleState: 'superseded',
+              systemRetiredAt: now,
+              updatedAt: now,
+            })
+            .where(
+              inArray(
+                certificates.id,
+                stale.map((row) => row.id)
+              )
+            );
+          const caIds = [...new Set(stale.map((row) => row.caId))];
+          await tx
+            .update(certificateAuthorities)
+            .set({ crlRefreshPendingAt: now, updatedAt: now })
+            .where(inArray(certificateAuthorities.id, caIds));
+          for (const caId of caIds) retiredCaIds.add(caId);
+        }
+
+        if (bindPending) {
+          binding.handle =
+            (await bindPending(tx, {
+              ...issued.certificate,
+              privateKeyPem: issued.privateKeyPem,
+            })) ?? undefined;
+        }
+
+        await tx
+          .update(certificates)
+          .set({
+            systemOwnerType: owner.type,
+            systemOwnerId: owner.id,
+            systemLifecycleState: 'pending',
+            systemRetiredAt: null,
+            privateKeyDestroyedAt: null,
+            updatedAt: now,
+          })
+          .where(eq(certificates.id, issued.certificate.id));
+      });
+    } catch (error) {
+      try {
+        await binding.handle?.onRollback?.();
+      } catch (rollbackError) {
+        logger.error('Failed to restore material after pending lifecycle rollback', {
+          certId: issued.certificate.id,
+          owner,
+          error: rollbackError,
+        });
+      }
+      logger.error('Failed to stage issued system certificate; existing certificate remains current', {
+        certId: issued.certificate.id,
+        owner,
+        error,
+      });
+      throw error;
+    }
+
+    try {
+      await binding.handle?.onCommitted?.();
+    } catch (error) {
+      logger.error('Failed to finalize staged system certificate material', {
+        certId: issued.certificate.id,
+        owner,
+        error,
+      });
+    }
+    for (const caId of retiredCaIds) await this.refreshCRL(caId);
+    return issued;
+  }
+
+  /**
+   * Promote the owner's staged leaf with this serial to `current`, retiring
+   * (revoking) the previous current leaf. The binding runs in the same
+   * transaction and may throw to abort the swap. Returns false when no staged
+   * leaf with that serial exists; the binding still runs with `null` so the
+   * owner record can be reconciled.
+   */
+  async promotePending(
+    owner: SystemCertificateOwner,
+    serialNumber: string,
+    bindPromoted?: SystemCertificatePromotionBinding
+  ): Promise<boolean> {
+    const now = new Date();
+    let retiredCaId: string | null = null;
+    const promoted = await this.db.transaction(async (tx) => {
+      const [pending] = await tx
+        .select({
+          id: certificates.id,
+          caId: certificates.caId,
+          serialNumber: certificates.serialNumber,
+          notAfter: certificates.notAfter,
+          certificatePem: certificates.certificatePem,
+        })
+        .from(certificates)
+        .where(
+          and(
+            eq(certificates.systemOwnerType, owner.type),
+            eq(certificates.systemOwnerId, owner.id),
+            eq(certificates.systemLifecycleState, 'pending'),
+            eq(certificates.serialNumber, serialNumber)
+          )
+        )
+        .limit(1);
+
+      if (pending) {
+        const [current] = await tx
+          .select({ id: certificates.id, caId: certificates.caId })
+          .from(certificates)
+          .where(
+            and(
+              eq(certificates.systemOwnerType, owner.type),
+              eq(certificates.systemOwnerId, owner.id),
+              eq(certificates.systemLifecycleState, 'current')
+            )
+          )
+          .limit(1);
+        if (current) {
+          await tx
+            .update(certificates)
+            .set({
+              status: 'revoked',
+              revokedAt: now,
+              revocationReason: 'superseded',
+              systemLifecycleState: 'superseded',
+              systemRetiredAt: now,
+              updatedAt: now,
+            })
+            .where(eq(certificates.id, current.id));
+          await tx
+            .update(certificateAuthorities)
+            .set({ crlRefreshPendingAt: now, updatedAt: now })
+            .where(eq(certificateAuthorities.id, current.caId));
+          retiredCaId = current.caId;
+        }
+        await tx
+          .update(certificates)
+          .set({ systemLifecycleState: 'current', systemRetiredAt: null, updatedAt: now })
+          .where(eq(certificates.id, pending.id));
+      }
+
+      await bindPromoted?.(
+        tx,
+        pending
+          ? {
+              id: pending.id,
+              serialNumber: pending.serialNumber,
+              notAfter: pending.notAfter,
+              certificatePem: pending.certificatePem,
+            }
+          : null
+      );
+      return !!pending;
+    });
+    if (retiredCaId) await this.refreshCRL(retiredCaId);
+    return promoted;
+  }
+
+  private async findReusablePending(owner: SystemCertificateOwner, caId: string) {
+    const [pending] = await this.db
+      .select()
+      .from(certificates)
+      .where(
+        and(
+          eq(certificates.systemOwnerType, owner.type),
+          eq(certificates.systemOwnerId, owner.id),
+          eq(certificates.systemLifecycleState, 'pending'),
+          eq(certificates.status, 'active'),
+          eq(certificates.caId, caId)
+        )
+      )
+      .orderBy(desc(certificates.createdAt))
+      .limit(1);
+    if (!pending || pending.notAfter.getTime() - Date.now() < PENDING_REUSE_MIN_REMAINING_MS) return null;
+    const privateKeyPem = await this.certService.getCertificatePrivateKey(pending.id);
+    if (!privateKeyPem) return null;
+    return { certificate: pending, privateKeyPem };
   }
 
   /** Retire all explicitly owned leaves after a node/database was successfully deleted. */
@@ -340,7 +579,7 @@ export class SystemCertificateLifecycleService {
     const byCA = new Map(caRows.map((ca) => [ca.id, ca]));
     const leaves = leafRows.map((leaf) => {
       const classification =
-        leaf.lifecycleState === 'current'
+        leaf.lifecycleState === 'current' || leaf.lifecycleState === 'pending'
           ? 'current'
           : leaf.lifecycleState === 'superseded' || leaf.lifecycleState === 'retired'
             ? 'retired'

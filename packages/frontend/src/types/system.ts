@@ -11,14 +11,19 @@ export interface UpdateStatus {
   gatewayOperation?: GatewayUpdateOperation | null;
 }
 
-/** An accepted Gateway update, waiting for running orchestration operations first. */
+/**
+ * An accepted Gateway update, waiting for running orchestration operations first,
+ * or (`failed`) one that was rolled back or never replaced the running version.
+ */
 export interface GatewayUpdateOperation {
-  status: "waiting_for_operations" | "updating";
+  status: "waiting_for_operations" | "updating" | "failed";
   targetVersion: string;
   startedAt: string;
   /** When the update proceeds even if operations still run. */
   waitDeadline: string | null;
   operations: { kind: string; label: string; count: number }[];
+  /** Why the update did not complete; set only when `failed`. */
+  error?: string | null;
 }
 
 export interface RelayUpdateStatus {

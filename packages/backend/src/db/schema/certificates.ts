@@ -33,6 +33,9 @@ export const systemCertificateLifecycleStateEnum = pgEnum('system_certificate_li
   'superseded',
   'retired',
   'unknown',
+  // Issued to its owner but not yet proven in use; promoted to `current`
+  // (retiring the previous current leaf) once the owner presents it.
+  'pending',
 ]);
 
 export const certificates = pgTable(

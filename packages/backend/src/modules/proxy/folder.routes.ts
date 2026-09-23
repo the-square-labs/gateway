@@ -28,7 +28,7 @@ import {
   UpdateFolderSchema,
 } from './folder.schemas.js';
 import { FolderService } from './folder.service.js';
-import { redactGroupedPageTargets } from './page-target-visibility.js';
+import { redactFolderTreeProxyHostsForScopes, redactGroupedPageTargets } from './page-target-visibility.js';
 import {
   redactFolderTreeRawProxyConfigForBrowserResponse,
   redactGroupedRawProxyConfigForBrowserResponse,
@@ -74,13 +74,18 @@ folderRoutes.openapi(listProxyFoldersRoute, async (c) => {
         }
   );
   if (isProgrammaticAuth(c)) {
-    return c.json({ data: stripFolderTreeRawProxyConfigForProgrammaticResponse(tree) });
+    return c.json({
+      data: redactFolderTreeProxyHostsForScopes(stripFolderTreeRawProxyConfigForProgrammaticResponse(tree), scopes),
+    });
   }
   return c.json({
-    data: redactFolderTreeRawProxyConfigForBrowserResponse(tree, (host) => {
-      const hostId = typeof host.id === 'string' ? host.id : undefined;
-      return scopes.includes('proxy:raw:read') || (hostId ? scopes.includes(`proxy:raw:read:${hostId}`) : false);
-    }),
+    data: redactFolderTreeProxyHostsForScopes(
+      redactFolderTreeRawProxyConfigForBrowserResponse(tree, (host) => {
+        const hostId = typeof host.id === 'string' ? host.id : undefined;
+        return scopes.includes('proxy:raw:read') || (hostId ? scopes.includes(`proxy:raw:read:${hostId}`) : false);
+      }),
+      scopes
+    ),
   });
 });
 
@@ -191,7 +196,10 @@ folderRoutes.openapi({ ...moveProxyFolderRoute, middleware: requireScope('proxy:
   const id = c.req.param('id')!;
   const body = await c.req.json();
   const input = MoveFolderSchema.parse(body);
-  const folder = await folderService.moveFolder(id, input, user.id);
+  const folder = await folderService.moveFolder(id, input, user.id, {
+    scopes: c.get('effectiveScopes') ?? [],
+    editScope: 'proxy:edit',
+  });
   return c.json({ data: folder });
 });
 

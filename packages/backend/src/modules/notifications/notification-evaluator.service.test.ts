@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { notificationAlertStates, sslCertificates } from '@/db/schema/index.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { notificationAlertStates, proxyHosts, sslCertificates } from '@/db/schema/index.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NotificationEvaluatorService } from './notification-evaluator.service.js';
 
@@ -202,7 +202,8 @@ describe('NotificationEvaluatorService hosting evaluation', () => {
         messageTemplate: '{{resource.name}}: {{metric.value}} {{details.currency}}',
       },
     ] as any);
-    const dispatch = vi.fn(async (_webhook: unknown, _event: unknown) => {});
+    const enqueue = vi.fn(async (_tx: unknown, _webhooks: unknown, _event: unknown) => ['delivery']);
+    const deliverQueued = vi.fn(async () => undefined);
     const bus = new EventBusService();
     const fired = vi.fn();
     const resolved = vi.fn();
@@ -212,17 +213,36 @@ describe('NotificationEvaluatorService hosting evaluation', () => {
     const internal = evaluator as any;
     delete internal.fireAlert;
     delete internal.resolveAlert;
+    internal.db.transaction = async (work: (tx: unknown) => Promise<unknown>) => work(internal.db);
     internal.db.insert = () => ({
-      values: async (data: any) => {
-        states.push({ ...data, id: 'state', firedAt: new Date() });
-      },
+      values: (data: any) => ({
+        onConflictDoNothing: () => ({
+          returning: async () => {
+            states.push({ ...data, id: 'state', firedAt: new Date() });
+            return [{ id: 'state' }];
+          },
+        }),
+      }),
     });
-    internal.db.update = () => ({ set: (patch: any) => ({ where: async () => Object.assign(states[0], patch) }) });
+    internal.db.update = () => ({
+      set: (patch: any) => ({
+        where: () => ({
+          returning: async () => {
+            if (states[0].status !== 'firing') return [];
+            Object.assign(states[0], patch);
+            return [{ id: states[0].id }];
+          },
+        }),
+      }),
+    });
     internal.webhookService = { getRawByIds: async () => [{ id: 'hook', enabled: true }] };
-    internal.dispatcherService = { dispatch };
+    internal.dispatcherService = { enqueue, deliverQueued };
     await evaluator.evaluateHostingAccount(observation('0'));
     await evaluator.evaluateHostingAccount(observation('20'));
-    expect(dispatch).toHaveBeenCalledTimes(2);
+    await evaluator.stop();
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(deliverQueued).toHaveBeenCalledTimes(2);
+    const dispatch = { mock: { calls: enqueue.mock.calls.map((call) => [call[1], call[2]]) } };
     expect(dispatch.mock.calls[0]?.[1]).toMatchObject({
       type: 'alert.fired',
       message: 'Test account: 0 USD',
@@ -813,26 +833,396 @@ describe('NotificationEvaluatorService database threshold evaluation', () => {
   });
 });
 
+/** In-memory subset of the ioredis sorted-set API the evaluator uses. */
+function createFakeRedis() {
+  const sets = new Map<string, Map<string, number>>();
+  const ttl = new Map<string, number>();
+  const bound = (value: string | number, fallback: number) => {
+    const raw = String(value);
+    if (raw === '-inf') return { value: Number.NEGATIVE_INFINITY, exclusive: false };
+    if (raw === '+inf') return { value: Number.POSITIVE_INFINITY, exclusive: false };
+    const exclusive = raw.startsWith('(');
+    const parsed = Number(exclusive ? raw.slice(1) : raw);
+    return { value: Number.isFinite(parsed) ? parsed : fallback, exclusive };
+  };
+  const inRange = (score: number, min: string | number, max: string | number) => {
+    const lo = bound(min, Number.NEGATIVE_INFINITY);
+    const hi = bound(max, Number.POSITIVE_INFINITY);
+    return (
+      (lo.exclusive ? score > lo.value : score >= lo.value) && (hi.exclusive ? score < hi.value : score <= hi.value)
+    );
+  };
+  const sorted = (key: string) => [...(sets.get(key) ?? new Map()).entries()].sort((a, b) => a[1] - b[1]);
+  return {
+    sets,
+    ttl,
+    async zadd(key: string, score: number, member: string) {
+      const set = sets.get(key) ?? new Map<string, number>();
+      set.set(member, score);
+      sets.set(key, set);
+      return 1;
+    },
+    async expire(key: string, seconds: number) {
+      ttl.set(key, seconds);
+      return 1;
+    },
+    async zremrangebyscore(key: string, min: string | number, max: string | number) {
+      const set = sets.get(key);
+      if (!set) return 0;
+      let removed = 0;
+      for (const [member, score] of [...set.entries()]) {
+        if (inRange(score, min, max)) {
+          set.delete(member);
+          removed++;
+        }
+      }
+      return removed;
+    },
+    async zrangebyscore(key: string, min: string | number, max: string | number) {
+      return sorted(key)
+        .filter(([, score]) => inRange(score, min, max))
+        .map(([member]) => member);
+    },
+    async zrevrangebyscore(key: string, max: string | number, min: string | number, ...args: unknown[]) {
+      const matches = sorted(key)
+        .filter(([, score]) => inRange(score, min, max))
+        .reverse()
+        .map(([member]) => member);
+      if (args[0] === 'LIMIT') return matches.slice(Number(args[1]), Number(args[1]) + Number(args[2]));
+      return matches;
+    },
+    async set() {
+      return 'OK';
+    },
+  };
+}
+
+function withRedis(evaluator: NotificationEvaluatorService) {
+  const redis = createFakeRedis();
+  const internal = evaluator as any;
+  internal.redis = redis;
+  delete internal.recordProbeOutcome;
+  return redis;
+}
+
 describe('NotificationEvaluatorService ratio window evaluation', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('uses a pre-window sample as coverage anchor for jittered polling intervals', async () => {
     const { evaluator } = createEvaluator([]);
+    const redis = withRedis(evaluator);
     const now = 1_000_000;
-    const zrangebyscore = async () => [`${now - 60_002}:1`, `${now - 30_000}:1`, `${now}:1`];
-    (evaluator as any).redis = { zrangebyscore };
-
-    const originalNow = Date.now;
-    Date.now = () => now;
-    try {
-      const result = await (evaluator as any).evaluateRatioWindow('rule-1', 'node-1', 60_000, 100, 'breach');
-
-      expect(result).toMatchObject({
-        hasCoverage: true,
-        sampleCount: 3,
-        matchingSamples: 3,
-        thresholdMet: true,
-      });
-    } finally {
-      Date.now = originalNow;
+    for (const timestamp of [now - 90_000, now - 60_002, now - 30_000, now]) {
+      await redis.zadd('notif:threshold:outcomes:rule-1:node-1', timestamp, `${timestamp}:1`);
     }
+
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+    const result = await (evaluator as any).evaluateRatioWindow('rule-1', 'node-1', 60_000, 100, 'breach');
+
+    expect(result).toMatchObject({
+      hasCoverage: true,
+      sampleCount: 3,
+      matchingSamples: 3,
+      thresholdMet: true,
+    });
+  });
+
+  it('keeps the newest pre-window sample when trimming, and a TTL that outlives the sampling period', async () => {
+    const { evaluator } = createEvaluator([]);
+    const redis = withRedis(evaluator);
+    vi.useFakeTimers();
+    const start = 10_000_000;
+    for (const offset of [0, 300_000, 600_000]) {
+      vi.setSystemTime(start + offset);
+      await (evaluator as any).recordProbeOutcome('rule-1', 'env-1', true, 60_000, 3_600_000);
+    }
+
+    const key = 'notif:threshold:outcomes:rule-1:env-1';
+    expect([...redis.sets.get(key)!.keys()]).toEqual([`${start + 300_000}:1`, `${start + 600_000}:1`]);
+    expect(redis.ttl.get(key)).toBeGreaterThanOrEqual(2 * 3_600 + 60);
+  });
+
+  it('fires and resolves two separate logging incidents sampled every 300s', async () => {
+    const rule = {
+      ...BASE_RULE,
+      id: 'logging-ratio',
+      name: 'Error ratio',
+      category: 'logging',
+      metric: 'error_fatal_ratio_percent',
+      operator: '>',
+      thresholdValue: 10,
+      durationSeconds: 120,
+      resolveAfterSeconds: 60,
+    };
+    const { evaluator, states } = createEvaluator([], [rule]);
+    withRedis(evaluator);
+    let errorCount = 0;
+    evaluator.setLoggingServices(
+      { list: async () => [{ id: 'env-1', name: 'Production', enabled: true }] },
+      {
+        getFacets: async () => ({
+          severities: [
+            { severity: 'info', count: 100 - errorCount },
+            { severity: 'error', count: errorCount },
+          ],
+        }),
+      }
+    );
+
+    vi.useFakeTimers();
+    const start = Date.UTC(2026, 3, 1);
+    const timeline = [0, 50, 50, 0, 0, 50, 50, 0, 0];
+    const snapshots: string[] = [];
+    for (const [index, errors] of timeline.entries()) {
+      // Real schedulers drift a little; the anchor must not depend on exact multiples.
+      vi.setSystemTime(start + index * 300_000 + (index % 2) * 7);
+      errorCount = errors;
+      await evaluator.evaluateLoggingRatios(new Date());
+      snapshots.push(states.map((state) => state.status).join(','));
+    }
+
+    expect(snapshots).toEqual([
+      '',
+      '',
+      'firing',
+      'firing',
+      'resolved',
+      'resolved',
+      'resolved,firing',
+      'resolved,firing',
+      'resolved,resolved',
+    ]);
+  });
+
+  it('fires and resolves two separate uptime incidents sampled every 120s', async () => {
+    const rule = {
+      ...BASE_EVENT_RULE,
+      id: 'uptime',
+      name: 'Proxy offline',
+      category: 'proxy',
+      eventPattern: 'health.offline',
+      durationSeconds: 60,
+      resolveAfterSeconds: 60,
+    };
+    const { evaluator, states } = createEvaluator([], [], [rule]);
+    withRedis(evaluator);
+
+    vi.useFakeTimers();
+    const start = Date.UTC(2026, 3, 1);
+    const timeline = ['online', 'offline', 'offline', 'online', 'online', 'offline', 'offline', 'online', 'online'];
+    const snapshots: string[] = [];
+    for (const [index, health] of timeline.entries()) {
+      vi.setSystemTime(start + index * 120_000 + (index % 3) * 11);
+      await evaluator.observeStatefulEvent(
+        'proxy',
+        `health.${health}`,
+        { type: 'proxy', id: 'host-1', name: 'example.com' },
+        { health_status: health },
+        undefined,
+        120_000
+      );
+      snapshots.push(states.map((state) => state.status).join(','));
+    }
+
+    expect(snapshots).toEqual([
+      '',
+      '',
+      'firing',
+      'firing',
+      'resolved',
+      'resolved',
+      'resolved,firing',
+      'resolved,firing',
+      'resolved,resolved',
+    ]);
+  });
+});
+
+describe('NotificationEvaluatorService alert state lifecycle', () => {
+  function outboxEvaluator(states: any[], rows: { rules?: any[]; existing?: Record<string, string[]> } = {}) {
+    const enqueue = vi.fn(async (..._args: unknown[]) => ['delivery-1']);
+    const deliverQueued = vi.fn(async () => undefined);
+    const bus = new EventBusService();
+    const resolvedEvents = vi.fn();
+    bus.subscribe('alert.resolved', resolvedEvents);
+    const db: any = {
+      transaction: async (work: (tx: unknown) => Promise<unknown>) => work(db),
+      update: () => ({
+        set: (patch: any) => ({
+          where: () => ({
+            returning: async () => {
+              // Emulates `WHERE id = ? AND status = 'firing'`: only the first resolver wins.
+              const state = states.find((candidate) => candidate.status === 'firing' && candidate.id === db.target);
+              if (!state) return [];
+              Object.assign(state, patch);
+              return [{ id: state.id }];
+            },
+          }),
+        }),
+      }),
+      select: (projection?: any) => ({
+        from: (table: unknown) => ({
+          where: async () => {
+            if (projection?.id) {
+              const kind = table === proxyHosts ? 'proxy' : 'other';
+              return (rows.existing?.[kind] ?? []).map((id) => ({ id }));
+            }
+            return states.filter((state) => state.status === 'firing');
+          },
+          innerJoin: () => ({
+            where: async () =>
+              states
+                .filter((state) => state.status === 'firing')
+                .map((state) => ({ state, rule: rows.rules?.find((rule) => rule.id === state.ruleId) })),
+          }),
+        }),
+      }),
+    };
+    const evaluator = new NotificationEvaluatorService(
+      db,
+      { getEnabledThresholdRules: async () => [], getEnabledEventRules: async () => [] } as any,
+      { getRawByIds: async () => [{ id: 'hook', enabled: true }] } as any,
+      { enqueue, deliverQueued } as any,
+      null,
+      { getNode: () => null } as any
+    );
+    evaluator.setEventBus(bus);
+    const resolve = (stateId: string, rule: any, options?: { notify?: boolean }) => {
+      db.target = stateId;
+      return (evaluator as any).resolveAlert(stateId, rule, 'proxy', 'host-1', 'example.com', {}, options);
+    };
+    return { evaluator, enqueue, deliverQueued, resolvedEvents, resolve, db };
+  }
+
+  const proxyRule = {
+    ...BASE_EVENT_RULE,
+    id: 'proxy-offline',
+    category: 'proxy',
+    eventPattern: 'health.offline',
+    webhookIds: ['hook'],
+  };
+
+  it('sends a single Resolved notification when concurrent evaluations resolve the same state', async () => {
+    const states = [
+      { id: 'state-1', ruleId: proxyRule.id, resourceType: 'proxy', resourceId: 'host-1', status: 'firing' },
+    ];
+    const { enqueue, resolvedEvents, resolve } = outboxEvaluator(states);
+
+    await Promise.all([resolve('state-1', proxyRule), resolve('state-1', proxyRule)]);
+
+    expect(states[0].status).toBe('resolved');
+    expect(enqueue).toHaveBeenCalledOnce();
+    expect(resolvedEvents).toHaveBeenCalledOnce();
+  });
+
+  it('queues deliveries inside the state transaction and hands them to the dispatcher after commit', async () => {
+    const states = [
+      { id: 'state-1', ruleId: proxyRule.id, resourceType: 'proxy', resourceId: 'host-1', status: 'firing' },
+    ];
+    const { evaluator, enqueue, deliverQueued, resolve, db } = outboxEvaluator(states);
+
+    await resolve('state-1', proxyRule);
+    await evaluator.stop();
+
+    expect(enqueue.mock.calls[0]?.[0]).toBe(db);
+    expect(enqueue.mock.calls[0]?.[2]).toMatchObject({ type: 'alert.resolved' });
+    expect(deliverQueued).toHaveBeenCalledWith(['delivery-1']);
+  });
+
+  it('resolves firing states when a rule is disabled, without notifying its webhooks', async () => {
+    const states = [
+      {
+        id: 'state-1',
+        ruleId: proxyRule.id,
+        resourceType: 'proxy',
+        resourceId: 'host-1',
+        status: 'firing',
+        context: {},
+      },
+    ];
+    const { evaluator, enqueue, db } = outboxEvaluator(states);
+    db.target = 'state-1';
+
+    await evaluator.reconcileRuleUpdate(proxyRule, { ...proxyRule, enabled: false });
+
+    expect(states[0].status).toBe('resolved');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('resolves only the states a narrowed scope dropped', async () => {
+    const states = [
+      { id: 'kept', ruleId: proxyRule.id, resourceType: 'proxy', resourceId: 'host-1', status: 'firing', context: {} },
+      {
+        id: 'dropped',
+        ruleId: proxyRule.id,
+        resourceType: 'proxy',
+        resourceId: 'host-2',
+        status: 'firing',
+        context: {},
+      },
+    ];
+    const { evaluator, enqueue, db } = outboxEvaluator(states);
+    db.target = 'dropped';
+
+    await evaluator.reconcileRuleUpdate(
+      { ...proxyRule, resourceIds: ['host-1', 'host-2'] },
+      { ...proxyRule, resourceIds: ['host-1'] }
+    );
+
+    expect(states.map((state) => state.status)).toEqual(['firing', 'resolved']);
+    expect(enqueue.mock.calls[0]?.[2]).toMatchObject({ context: { resolution: { reason: 'out_of_scope' } } });
+  });
+
+  it('sweeps states of disabled rules, re-targeted rules and deleted resources', async () => {
+    const liveHost = '11111111-1111-4111-8111-111111111111';
+    const deletedHost = '22222222-2222-4222-8222-222222222222';
+    const disabledRule = { ...proxyRule, id: 'disabled', enabled: false };
+    const retargetedRule = { ...proxyRule, id: 'retargeted', eventPattern: 'health.degraded' };
+    const states = [
+      { id: 'a', ruleId: 'disabled', resourceType: 'proxy', resourceId: liveHost, status: 'firing', context: {} },
+      {
+        id: 'b',
+        ruleId: 'retargeted',
+        resourceType: 'proxy',
+        resourceId: liveHost,
+        status: 'firing',
+        context: { event: { name: 'health.offline' } },
+      },
+      {
+        id: 'c',
+        ruleId: proxyRule.id,
+        resourceType: 'proxy',
+        resourceId: deletedHost,
+        status: 'firing',
+        context: { event: { name: 'health.offline' } },
+      },
+      {
+        id: 'd',
+        ruleId: proxyRule.id,
+        resourceType: 'proxy',
+        resourceId: liveHost,
+        status: 'firing',
+        context: { event: { name: 'health.offline' } },
+      },
+    ];
+    const { evaluator, db } = outboxEvaluator(states, {
+      rules: [disabledRule, retargetedRule, proxyRule],
+      existing: { proxy: [liveHost] },
+    });
+    const resolveAlert = (evaluator as any).resolveAlert.bind(evaluator);
+    const reasons: Record<string, string> = {};
+    (evaluator as any).resolveAlert = (stateId: string, ...rest: any[]) => {
+      db.target = stateId;
+      reasons[stateId] = rest[4].resolution.reason;
+      return resolveAlert(stateId, ...rest);
+    };
+
+    await expect(evaluator.reconcileStaleAlertStates()).resolves.toBe(3);
+
+    expect(reasons).toEqual({ a: 'rule_disabled', b: 'rule_updated', c: 'resource_deleted' });
+    expect(states.map((state) => state.status)).toEqual(['resolved', 'resolved', 'resolved', 'firing']);
   });
 });

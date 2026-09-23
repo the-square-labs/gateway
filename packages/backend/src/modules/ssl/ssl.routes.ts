@@ -241,7 +241,7 @@ sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
     );
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
-  const cert = await sslService.linkInternalCert(input, user.id);
+  const cert = await sslService.linkInternalCert(input, user.id, c.get('effectiveScopes') ?? []);
   await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
   return c.json({ data: cert }, 201);
 });
@@ -253,7 +253,7 @@ sslRoutes.openapi(
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
     const id = c.req.param('id')!;
-    const cert = await sslService.renewCert(id, user.id);
+    const cert = await sslService.renewCert(id, user.id, user.email);
     return c.json({ data: cert });
   }
 );
@@ -278,7 +278,7 @@ sslRoutes.openapi(
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
     const id = c.req.param('id')!;
-    const cert = await sslService.completeDNS01Verification(id, user.id);
+    const cert = await sslService.completeDNS01Verification(id, user.id, { contactEmail: user.email });
     return c.json({ data: cert });
   }
 );
