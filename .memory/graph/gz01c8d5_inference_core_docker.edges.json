@@ -1,0 +1,15 @@
+{
+  "file_name": "gz01c8d5_inference_core_docker",
+  "edges": [
+    {
+      "from_id": "gz01c8d5",
+      "to_id": "ifp3c48s",
+      "relation": "same_workflow",
+      "weight": 0.9,
+      "reason": "Both define the managed inference-core integration workflow, including Gateway control-plane ownership and internal runtime connectivity.",
+      "source": "auto",
+      "created_at": 1790155294108,
+      "updated_at": 1790155294108
+    }
+  ]
+}

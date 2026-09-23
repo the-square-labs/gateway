@@ -1,0 +1,15 @@
+{
+  "file_name": "s3jakmn4_sandbox_testing",
+  "edges": [
+    {
+      "from_id": "s3jakmn4",
+      "to_id": "rnxjftcd",
+      "relation": "same_workflow",
+      "weight": 0.78,
+      "reason": "Both document the inference-core backend testing workflow, including deterministic tests, live-provider boundaries, and verification constraints.",
+      "source": "auto",
+      "created_at": 1790153372964,
+      "updated_at": 1790153372964
+    }
+  ]
+}

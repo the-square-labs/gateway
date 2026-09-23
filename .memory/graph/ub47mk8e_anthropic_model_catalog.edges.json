@@ -1,0 +1,15 @@
+{
+  "file_name": "ub47mk8e_anthropic_model_catalog",
+  "edges": [
+    {
+      "from_id": "ub47mk8e",
+      "to_id": "hc1xhdcx",
+      "relation": "same_workflow",
+      "weight": 0.82,
+      "reason": "Claude Code setup relies on Gateway model discovery and the catalog's model metadata and aliases.",
+      "source": "auto",
+      "created_at": 1790152711691,
+      "updated_at": 1790152711691
+    }
+  ]
+}
