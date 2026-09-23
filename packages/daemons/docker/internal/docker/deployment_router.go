@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"regexp"
 	"strings"
 	"time"
 
@@ -245,6 +246,86 @@ func deploymentRouterHasCurrentShape(current container.InspectResponse) bool {
 
 func deploymentContainerLabelsOwned(labels map[string]string, deploymentID string) bool {
 	return deploymentID != "" && labels[deploymentManagedLabel] == "true" && labels[deploymentIDLabel] == deploymentID
+}
+
+var (
+	// deploymentRouterUpstream matches the slot a rendered router config sends
+	// traffic to. Routers of older daemons used a static proxy_pass instead.
+	deploymentRouterUpstream       = regexp.MustCompile(`set \$deployment_upstream (blue|green):[0-9]+;`)
+	legacyDeploymentRouterUpstream = regexp.MustCompile(`proxy_pass http://(blue|green):[0-9]+`)
+)
+
+// deploymentRouterConfigSlot returns the one slot a router config serves, or ""
+// when it names no slot or its routes disagree.
+func deploymentRouterConfigSlot(config string) string {
+	matches := deploymentRouterUpstream.FindAllStringSubmatch(config, -1)
+	if len(matches) == 0 {
+		matches = legacyDeploymentRouterUpstream.FindAllStringSubmatch(config, -1)
+	}
+	slot := ""
+	for _, match := range matches {
+		if slot != "" && slot != match[1] {
+			return ""
+		}
+		slot = match[1]
+	}
+	return slot
+}
+
+// deploymentRouterInspect reports which slot a deployment router serves.
+type deploymentRouterInspect struct {
+	Name    string `json:"name,omitempty"`
+	Found   bool   `json:"found"`
+	Running bool   `json:"running"`
+	// ServedSlot is the slot the router sends traffic to, or restarts serving.
+	ServedSlot string `json:"servedSlot,omitempty"`
+	// ConfigSource is "file" for the config on disk, "command" for the config
+	// a router that never started writes on its first start.
+	ConfigSource string `json:"configSource,omitempty"`
+	Error        string `json:"error,omitempty"`
+}
+
+// inspectDeploymentRouter reads the slot from the router's config on disk,
+// which is authoritative: a write replaces it only once nginx accepted it and a
+// restarted router keeps it. A router that never started still holds the
+// image's default config; its start command carries the config it will write.
+// The creation command is never trusted otherwise, it goes stale on a switch.
+func (c *Client) inspectDeploymentRouter(ctx context.Context, router ContainerInfo) deploymentRouterInspect {
+	state := deploymentRouterInspect{Name: router.Name, Found: true, Running: router.State == "running"}
+	content, err := c.readContainerFile(ctx, router.ID, deploymentRouterConfigPath, deploymentRouterOutputLimit)
+	if err != nil && !isNotFoundErr(err) {
+		state.Error = fmt.Sprintf("read router config: %v", err)
+		return state
+	}
+	if err == nil {
+		if slot := deploymentRouterConfigSlot(string(content)); slot != "" {
+			state.ServedSlot, state.ConfigSource = slot, "file"
+			return state
+		}
+	}
+	inspect, err := c.cli.ContainerInspect(ctx, router.ID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		state.Error = fmt.Sprintf("inspect router: %v", err)
+		return state
+	}
+	if inspect.Container.Config != nil {
+		if slot := deploymentRouterConfigSlot(strings.Join(inspect.Container.Config.Cmd, " ")); slot != "" {
+			state.ServedSlot, state.ConfigSource = slot, "command"
+			return state
+		}
+	}
+	state.Error = "router config does not name a deployment slot"
+	return state
+}
+
+// readContainerFile reads one regular file from a running or stopped container.
+func (c *Client) readContainerFile(ctx context.Context, containerID, path string, maxBytes int64) ([]byte, error) {
+	archive, err := c.cli.CopyFromContainer(ctx, containerID, mobyclient.CopyFromContainerOptions{SourcePath: path})
+	if err != nil {
+		return nil, err
+	}
+	defer archive.Content.Close()
+	return readSingleRegularFileFromTar(archive.Content, maxBytes)
 }
 
 func (c *Client) writeRouterConfig(ctx context.Context, routerName string, config string) error {

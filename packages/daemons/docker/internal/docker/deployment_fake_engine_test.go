@@ -1,7 +1,10 @@
 package docker
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -50,6 +53,8 @@ type fakeContainer struct {
 	Running       bool
 	RestartPolicy container.RestartPolicyMode
 	PortBindings  network.PortMap
+	// Files holds file contents by absolute path, served by the archive API.
+	Files map[string]string
 }
 
 type fakeExec struct {
@@ -193,6 +198,8 @@ func (e *fakeDockerEngine) serve(w http.ResponseWriter, r *http.Request) {
 		e.stopContainer(w, parts[1])
 	case r.Method == http.MethodDelete && len(parts) == 2 && parts[0] == "containers":
 		e.removeContainer(w, parts[1])
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "containers" && parts[2] == "archive":
+		e.archiveFile(w, parts[1], r.URL.Query().Get("path"))
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "exec":
 		e.createExec(w, r, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "exec" && parts[2] == "start":
@@ -337,6 +344,40 @@ func (e *fakeDockerEngine) removeContainer(w http.ResponseWriter, ref string) {
 	}
 	delete(e.containers, ctr.ID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// archiveFile serves one file of a running or stopped container as a tar
+// archive, the way the Engine's archive endpoint does.
+func (e *fakeDockerEngine) archiveFile(w http.ResponseWriter, ref, path string) {
+	e.mu.Lock()
+	ctr := e.lookupLocked(ref)
+	var content string
+	var exists bool
+	if ctr != nil {
+		content, exists = ctr.Files[path]
+	}
+	e.mu.Unlock()
+	if ctr == nil {
+		writeNoSuchContainer(w, ref)
+		return
+	}
+	if !exists {
+		writeFakeJSON(w, http.StatusNotFound, map[string]string{"message": "Could not find the file " + path + " in container " + ctr.ID})
+		return
+	}
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	name := path[strings.LastIndex(path, "/")+1:]
+	if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content)), Typeflag: tar.TypeReg}); err != nil {
+		e.t.Errorf("write archive header: %v", err)
+	}
+	_, _ = tw.Write([]byte(content))
+	_ = tw.Close()
+	stat, _ := json.Marshal(container.PathStat{Name: name, Size: int64(len(content)), Mode: 0o644})
+	w.Header().Set("X-Docker-Container-Path-Stat", base64.StdEncoding.EncodeToString(stat))
+	w.Header().Set("Content-Type", "application/x-tar")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(archive.Bytes())
 }
 
 func (e *fakeDockerEngine) createExec(w http.ResponseWriter, r *http.Request, ref string) {

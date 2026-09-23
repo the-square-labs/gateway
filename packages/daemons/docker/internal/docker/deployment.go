@@ -164,6 +164,14 @@ func (p *DockerPlugin) cancelDeploymentOperationAndWait(deploymentID string, tim
 	return true
 }
 
+// deploymentOperationInProgress reports whether a mutating operation runs on,
+// or waits for, the deployment. A kill holds the lock without registering.
+func (p *DockerPlugin) deploymentOperationInProgress(deploymentID string) bool {
+	p.deploymentOpMu.Lock()
+	defer p.deploymentOpMu.Unlock()
+	return len(p.deploymentOps[deploymentID]) > 0 || p.deploymentLocks[deploymentID] != nil
+}
+
 // lockDeployment waits until no other mutating operation runs on the
 // deployment. The backend retries commands it timed out on, so without this a
 // retry could run next to the original, e.g. recreate the slot the router is
@@ -279,7 +287,14 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	case "kill":
 		err = p.client.KillDeployment(ctx, payload)
 	case "inspect":
-		detail, err = p.client.InspectDeployment(ctx, cmd.DeploymentId, payload.Deployment)
+		var inspected map[string]any
+		inspected, err = p.client.InspectDeployment(ctx, cmd.DeploymentId, payload.Deployment)
+		if err == nil {
+			// A backend that restarted mid-operation must not reconcile its
+			// records against a router the still-running operation may change.
+			inspected["operationInProgress"] = p.deploymentOperationInProgress(cmd.DeploymentId)
+			detail = inspected
+		}
 	case "stop_slot":
 		err = p.client.StopDeploymentSlot(ctx, payload)
 	case "remove":
@@ -715,7 +730,29 @@ func (c *Client) InspectDeployment(ctx context.Context, deploymentID string, exp
 		}
 	}
 	result["containers"] = matched
+	router := deploymentRouterInspect{Name: expected.RouterName}
+	if container := findDeploymentRouter(matched, deploymentID, expected.RouterName); container != nil {
+		router = c.inspectDeploymentRouter(ctx, *container)
+	}
+	result["router"] = router
 	return result, nil
+}
+
+// findDeploymentRouter prefers the router this deployment owns by label and
+// falls back to the router name the backend expects.
+func findDeploymentRouter(containers []ContainerInfo, deploymentID, routerName string) *ContainerInfo {
+	for i := range containers {
+		labels := containers[i].Labels
+		if deploymentID != "" && labels[deploymentIDLabel] == deploymentID && labels[deploymentRoleLabel] == "router" {
+			return &containers[i]
+		}
+	}
+	for i := range containers {
+		if routerName != "" && containers[i].Name == routerName {
+			return &containers[i]
+		}
+	}
+	return nil
 }
 
 func deploymentRemovalContainerMatches(container ContainerInfo, dep deploymentSnapshot, role, slot string, force bool) bool {
