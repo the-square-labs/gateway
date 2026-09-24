@@ -1,5 +1,5 @@
 import { createHash, X509Certificate } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
@@ -97,6 +97,60 @@ function atomicWrite(path: string, content: string | Buffer, mode: number): void
   renameSync(temporary, path);
 }
 
+const COMMIT_JOURNAL = '.commit';
+const STAGED_SUFFIX = '.next';
+
+interface StagedFile {
+  staged: string;
+  path: string;
+}
+
+/**
+ * Writes the relay identity as one set. Every file is staged next to its final name first, so a crash
+ * while staging leaves the installed set intact; the journal lets the next start finish the renames.
+ */
+class IdentityFileSet {
+  private readonly files: StagedFile[] = [];
+
+  constructor(private readonly directory: string) {}
+
+  write(path: string, content: string | Buffer, mode: number): void {
+    const staged = `${path}${STAGED_SUFFIX}`;
+    atomicWrite(staged, content, mode);
+    this.files.push({ staged, path });
+  }
+
+  commit(): void {
+    const journal = resolve(this.directory, COMMIT_JOURNAL);
+    atomicWrite(journal, JSON.stringify(this.files), 0o600);
+    for (const file of this.files) renameSync(file.staged, file.path);
+    safelyUnlink(journal);
+  }
+}
+
+/** Finishes a set interrupted after its journal was written and drops files staged for a set that never committed. */
+export function recoverIdentityFileSet(directory: string): void {
+  const journal = resolve(directory, COMMIT_JOURNAL);
+  const recorded = readIfExists(journal);
+  if (recorded) {
+    let files: StagedFile[] = [];
+    try {
+      files = JSON.parse(recorded.toString('utf8')) as StagedFile[];
+    } catch {
+      logger.warn('Ignoring an unreadable relay identity commit journal');
+    }
+    for (const file of Array.isArray(files) ? files : []) {
+      if (typeof file?.path !== 'string' || dirname(file.path) !== directory) continue;
+      if (file.staged !== `${file.path}${STAGED_SUFFIX}`) continue;
+      if (existsSync(file.staged)) renameSync(file.staged, file.path);
+    }
+    safelyUnlink(journal);
+  }
+  for (const name of readdirSync(directory)) {
+    if (name.endsWith(STAGED_SUFFIX) || name.includes('.pending-')) safelyUnlink(resolve(directory, name));
+  }
+}
+
 export class RelayIdentityProvisionerService {
   private identity: AppRelayIdentity | null = null;
 
@@ -112,9 +166,11 @@ export class RelayIdentityProvisionerService {
   async ensure(): Promise<AppRelayIdentity> {
     if (this.identity) return this.identity;
     const marker = resolve(this.identityDir, '.updating');
-    mkdirSync(this.identityDir, { recursive: true });
+    const directory = resolve(this.identityDir);
+    mkdirSync(directory, { recursive: true });
     writeFileSync(marker, `${process.pid}\n`, { mode: 0o600 });
     try {
+      recoverIdentityFileSet(directory);
       const [systemCa, externalIdentity, appServer, appClient, relayClient] = await Promise.all([
         this.systemCA.getSystemCACertPem(),
         this.grpcIdentity.resolve(),
@@ -140,35 +196,37 @@ export class RelayIdentityProvisionerService {
       };
       // A running relay trusts the client pair it loaded, and it reloads only when a client it
       // trusts asks. Keep the pair a renewal replaces, so Gateway can still ask.
+      const files = new IdentityFileSet(directory);
       const installedClient = readIfExists(paths.appClientCertificate);
       const installedKey = readIfExists(paths.appClientPrivateKey);
       const renewedFingerprint = fingerprint(appClient.certificatePem);
+      let previousFingerprint = validFingerprint(readIfExists(paths.previousAppClientCertificate));
       if (
         installedKey &&
         validFingerprint(installedClient) &&
         validFingerprint(installedClient) !== renewedFingerprint
       ) {
-        atomicWrite(paths.previousAppClientCertificate, installedClient!, 0o644);
-        atomicWrite(paths.previousAppClientPrivateKey, installedKey, 0o600);
+        files.write(paths.previousAppClientCertificate, installedClient!, 0o644);
+        files.write(paths.previousAppClientPrivateKey, installedKey, 0o600);
+        previousFingerprint = validFingerprint(installedClient);
       }
-      const previousFingerprint = validFingerprint(readIfExists(paths.previousAppClientCertificate));
       if (!previousFingerprint) {
         safelyUnlink(paths.previousAppClientCertificate);
         safelyUnlink(paths.previousAppClientPrivateKey);
       }
-      atomicWrite(paths.systemCa, systemCa, 0o644);
-      atomicWrite(paths.externalCertificate, readFileSync(externalIdentity.certPath), 0o644);
-      atomicWrite(paths.externalPrivateKey, readFileSync(externalIdentity.keyPath), 0o600);
-      atomicWrite(paths.appServerCertificate, appServer.certificatePem, 0o644);
-      atomicWrite(paths.appServerPrivateKey, appServer.privateKeyPem, 0o600);
-      atomicWrite(paths.appClientCertificate, appClient.certificatePem, 0o644);
-      atomicWrite(paths.appClientPrivateKey, appClient.privateKeyPem, 0o600);
-      atomicWrite(paths.relayClientCertificate, relayClient.certificatePem, 0o644);
-      atomicWrite(paths.relayClientPrivateKey, relayClient.privateKeyPem, 0o600);
+      files.write(paths.systemCa, systemCa, 0o644);
+      files.write(paths.externalCertificate, readFileSync(externalIdentity.certPath), 0o644);
+      files.write(paths.externalPrivateKey, readFileSync(externalIdentity.keyPath), 0o600);
+      files.write(paths.appServerCertificate, appServer.certificatePem, 0o644);
+      files.write(paths.appServerPrivateKey, appServer.privateKeyPem, 0o600);
+      files.write(paths.appClientCertificate, appClient.certificatePem, 0o644);
+      files.write(paths.appClientPrivateKey, appClient.privateKeyPem, 0o600);
+      files.write(paths.relayClientCertificate, relayClient.certificatePem, 0o644);
+      files.write(paths.relayClientPrivateKey, relayClient.privateKeyPem, 0o600);
 
       const appClientFingerprint = fingerprint(appClient.certificatePem);
       const relayClientFingerprint = fingerprint(relayClient.certificatePem);
-      atomicWrite(
+      files.write(
         paths.trustManifest,
         `${JSON.stringify(
           {
@@ -181,6 +239,7 @@ export class RelayIdentityProvisionerService {
         )}\n`,
         0o644
       );
+      files.commit();
       const externalCertificate = readFileSync(paths.externalCertificate, 'utf8');
       const materialDigest = createHash('sha256')
         .update(

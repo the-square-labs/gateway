@@ -1,9 +1,9 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import forge from 'node-forge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { RelayIdentityProvisionerService } from './relay-identity-provisioner.service.js';
+import { RelayIdentityProvisionerService, recoverIdentityFileSet } from './relay-identity-provisioner.service.js';
 
 const DAY = 24 * 60 * 60 * 1000;
 let serial = 10;
@@ -154,6 +154,48 @@ describe('RelayIdentityProvisionerService', () => {
     const issued = lifecycle.issueCurrent.mock.calls.length;
     await expect(service.ensure()).resolves.toBe(current);
     expect(lifecycle.issueCurrent).toHaveBeenCalledTimes(issued);
+  });
+
+  it('keeps the installed identity intact when provisioning stops before the set is committed', async () => {
+    const identityDir = join(directory, 'identity');
+    await provisioner().ensure();
+    const installedClient = readFileSync(join(identityDir, 'app-relay-client.crt'), 'utf8');
+    // A crash while staging leaves only *.next files; the installed set is still complete.
+    writeFileSync(join(identityDir, 'app-relay-client.crt.next'), 'half-written');
+
+    recoverIdentityFileSet(identityDir);
+
+    expect(existsSync(join(identityDir, 'app-relay-client.crt.next'))).toBe(false);
+    expect(readFileSync(join(identityDir, 'app-relay-client.crt'), 'utf8')).toBe(installedClient);
+  });
+
+  it('finishes a committed set whose renames were interrupted', async () => {
+    const identityDir = join(directory, 'identity');
+    await provisioner().ensure();
+    const certificate = join(identityDir, 'relay-app-client.crt');
+    const key = join(identityDir, 'relay-app-client.key');
+    writeFileSync(`${certificate}.next`, 'new-certificate');
+    writeFileSync(`${key}.next`, 'new-key');
+    writeFileSync(
+      join(identityDir, '.commit'),
+      JSON.stringify([
+        { staged: `${certificate}.next`, path: certificate },
+        { staged: `${key}.next`, path: key },
+      ])
+    );
+
+    recoverIdentityFileSet(identityDir);
+
+    expect(readFileSync(certificate, 'utf8')).toBe('new-certificate');
+    expect(readFileSync(key, 'utf8')).toBe('new-key');
+    expect(existsSync(join(identityDir, '.commit'))).toBe(false);
+  });
+
+  it('leaves no staging files or journal behind after provisioning', async () => {
+    const identityDir = join(directory, 'identity');
+    await provisioner().ensure();
+
+    expect(readdirSync(identityDir).filter((name) => name.endsWith('.next') || name === '.commit')).toEqual([]);
   });
 
   it('names the certificates the relay loads for expiry checks', () => {
