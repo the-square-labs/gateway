@@ -487,6 +487,31 @@ describe("AIMessage tool call groups", () => {
     expect(screen.getByText("Docker")).not.toHaveClass("ai-streaming-chunk");
   });
 
+  it("keeps the streaming chunk mounted across re-renders until a new chunk arrives", () => {
+    const message: AIMessageType = {
+      id: "assistant-stable-chunk",
+      role: "assistant",
+      content: "Deploying the stack",
+      isStreaming: true,
+      streamingChunk: " stack",
+    };
+    const { rerender } = render(<AIMessage message={message} resourceReferences={[]} />);
+    const chunk = screen.getByText("stack", { exact: false });
+
+    // Parent re-renders pass fresh props; the chunk must not remount and replay its fade-in.
+    rerender(<AIMessage message={{ ...message }} resourceReferences={[]} />);
+    rerender(<AIMessage message={{ ...message }} resourceReferences={[]} />);
+    expect(screen.getByText("stack", { exact: false })).toBe(chunk);
+
+    rerender(
+      <AIMessage
+        message={{ ...message, content: "Deploying the stack now", streamingChunk: " now" }}
+        resourceReferences={[]}
+      />
+    );
+    expect(screen.getByText("now", { exact: false })).toHaveClass("ai-streaming-chunk");
+  });
+
   it("renders a large provider delta immediately through the streaming animation", () => {
     const streamingMessage: AIMessageType = {
       id: "assistant-large-delta",

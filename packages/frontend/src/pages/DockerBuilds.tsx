@@ -270,7 +270,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       {
         key: "source",
         header: "Source / resource",
-        width: "minmax(14rem,1fr)",
+        width: "minmax(14rem,1.6fr)",
         render: (build) => (
           <span className="flex min-w-0 items-center gap-2">
             <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted">
@@ -294,7 +294,8 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       {
         key: "commit",
         header: "Commit / ref",
-        width: "minmax(8.5rem,0.5fr)",
+        // A short SHA and a branch name: a fixed width instead of a share of the free space.
+        width: "9rem",
         render: (build) => (
           <span className="block min-w-0">
             <Badge variant="outline" className="font-mono">
@@ -310,7 +311,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         key: "status",
         header: "Status",
         align: "right",
-        width: "9rem",
+        width: "minmax(9rem,0.6fr)",
         render: (build) => (
           <Badge variant={STATUS_VARIANT[build.status]}>{build.status.replaceAll("_", " ")}</Badge>
         ),
@@ -319,7 +320,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         key: "result",
         header: "Result",
         align: "right",
-        width: "12rem",
+        width: "minmax(12rem,0.8fr)",
         render: (build) => {
           if (!build.artifact) {
             return (
@@ -356,7 +357,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         key: "time",
         header: "Duration / created",
         align: "right",
-        width: "11rem",
+        width: "minmax(11rem,0.6fr)",
         render: (build) => (
           <span className="block">
             <span className="block">{formatDockerBuildDuration(build, now)}</span>

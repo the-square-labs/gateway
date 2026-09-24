@@ -24,6 +24,7 @@ interface AIMessageListProps {
   isStreaming?: boolean;
 }
 
+const NO_RESOURCE_REFERENCES: AIResourceReference[] = [];
 export function AIMessageList({
   messages,
   assistantMaxWidthClass,
@@ -34,7 +35,7 @@ export function AIMessageList({
   onRetryUserMessage,
   retryDisabled,
   editUserMessageDisabled,
-  resourceReferences = [],
+  resourceReferences = NO_RESOURCE_REFERENCES,
   isStreaming = false,
 }: AIMessageListProps) {
   const visibleMessages = collapseConsecutiveModelChanges(messages);

@@ -194,7 +194,7 @@ export function AIMessage({
   onRetry,
   retryDisabled = false,
   editUserMessageDisabled = false,
-  resourceReferences = [],
+  resourceReferences = NO_RESOURCE_REFERENCES,
   suppressActivityIndicator = false,
 }: AIMessageProps) {
   const prefersReducedMotion = useReducedMotion();
@@ -244,24 +244,9 @@ export function AIMessage({
     () => ({
       ...markdownComponents,
       a: resourceMarkdownLinkComponent(availableResourceReferences),
-      span: ({ children, className, ...props }: React.HTMLAttributes<HTMLSpanElement>) =>
-        className?.includes("ai-streaming-chunk") ? (
-          <motion.span
-            key={`${message.id}:${visibleContent.length}`}
-            className={className}
-            initial={prefersReducedMotion ? false : { opacity: 0, y: 2 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
-          >
-            {children}
-          </motion.span>
-        ) : (
-          <span className={className} {...props}>
-            {children}
-          </span>
-        ),
+      span: StreamingMarkdownSpan,
     }),
-    [availableResourceReferences, message.id, prefersReducedMotion, visibleContent.length]
+    [availableResourceReferences]
   );
 
   if (message.conversationStatus) return null;
@@ -890,6 +875,40 @@ interface StreamingHastNode {
   children?: StreamingHastNode[];
 }
 
+const NO_RESOURCE_REFERENCES: AIResourceReference[] = [];
+
+/**
+ * Module-level so the Markdown renderer keeps the same component type across re-renders: a new type
+ * would remount the chunk and replay its fade-in on every render. The fade replays only when a new
+ * chunk starts, keyed by its start offset.
+ */
+function StreamingMarkdownSpan({
+  children,
+  className,
+  "data-chunk-start": chunkStart,
+  ...props
+}: React.HTMLAttributes<HTMLSpanElement> & { "data-chunk-start"?: number | string }) {
+  const prefersReducedMotion = useReducedMotion();
+  if (!className?.includes("ai-streaming-chunk")) {
+    return (
+      <span className={className} {...props}>
+        {children}
+      </span>
+    );
+  }
+  return (
+    <motion.span
+      key={String(chunkStart)}
+      className={className}
+      initial={prefersReducedMotion ? false : { opacity: 0, y: 2 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: prefersReducedMotion ? 0 : 0.12, ease: "easeOut" }}
+    >
+      {children}
+    </motion.span>
+  );
+}
+
 function createStreamingChunkRehypePlugin(chunkStartOffset: number) {
   return () => (tree: StreamingHastNode) => {
     wrapStreamingTextNodes(tree, chunkStartOffset);
@@ -921,7 +940,7 @@ function wrapStreamingTextNodes(parent: StreamingHastNode, chunkStartOffset: num
     nextChildren.push({
       type: "element",
       tagName: "span",
-      properties: { className: ["ai-streaming-chunk"] },
+      properties: { className: ["ai-streaming-chunk"], dataChunkStart: chunkStartOffset },
       children: [{ ...child, value: child.value.slice(splitAt) }],
     });
   }
