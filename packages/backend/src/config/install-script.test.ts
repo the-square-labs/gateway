@@ -322,7 +322,8 @@ describe('install.sh managed browser bootstrap', () => {
     expect(source).toContain('[[ "$RELEASE_COMPONENT" == "relay" ]]');
     expect(source).not.toContain('[[ "$RELEASE_COMPONENT" == "database-connector" ]]');
     expect(source).not.toContain('[[ "$RELEASE_COMPONENT" == "secure-link-connector" ]]');
-    expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+$/);
+    // Same format the relay update trust check accepts (update-artifact-trust.ts).
+    expect(readFileSync(relayMinGatewayVersion, 'utf8').trim()).toMatch(/^v\d+\.\d+\.\d+(?:-rc\.\d+)?$/);
   });
 
   it('does not advertise Docker, CNI, or loopback interface addresses as host-local targets', () => {
