@@ -1,6 +1,15 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
+import {
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  hasScopeForResource,
+} from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { UpdateAuthProvisioningSettingsSchema } from '@/modules/admin/admin.schemas.js';
+import { updateGatewaySettings } from '@/modules/admin/gateway-settings.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
   CreateManagedDatabaseBindingSchema,
@@ -20,13 +29,14 @@ import {
 } from '@/modules/docker/docker-build.schemas.js';
 import {
   DockerMigrationCreateInputSchema,
+  DockerMigrationListQuerySchema,
   DockerMigrationPreflightInputSchema,
+  DockerMigrationResolveInputSchema,
 } from '@/modules/docker/docker-migration.schemas.js';
 import { DockerMigrationService } from '@/modules/docker/docker-migration.service.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
-import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
 import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import {
   CreatePageDeploymentSchema,
@@ -43,7 +53,7 @@ import {
   UpdatePageProjectSchema,
 } from '@/modules/pages/page-project.schemas.js';
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
-import { visiblePageProjectIds } from '@/modules/pages/page-project-access.js';
+import { canAccessPageProject, visiblePageProjectIds } from '@/modules/pages/page-project-access.js';
 import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
 import { UpdatePageProfileSchema } from '@/modules/pages/profile/page-profile.schemas.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
@@ -63,9 +73,16 @@ import {
   CreateAdditionalRouteSchema,
   UpdateAdditionalRouteSchema,
 } from '@/modules/proxy/additional-route.validation.js';
+import { redactAdditionalRouteForScopes } from '@/modules/proxy/page-target-visibility.js';
+import { CreateAdditionalSecureLinkSchema } from '@/modules/proxy/proxy.schemas.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
 import { assertWorkloadBindingTargetAccess } from './ai.binding-target-access.js';
+import {
+  ensureManagedDatabaseScopes,
+  MANAGED_DATABASE_ACCESS_OPERATIONS,
+  manageManagedDatabaseAccess,
+} from './ai.database-tools.js';
 
 export const RESOURCE_SETUP_TOOL_NAMES = new Set([
   'upload_pages_artifact',
@@ -165,6 +182,9 @@ async function managePages(user: User, args: Record<string, unknown>) {
   const readOperations = new Set([
     'project_list',
     'project_get',
+    'project_get_by_slug',
+    'project_placement_options',
+    'source_repositories',
     'deployment_list',
     'deployment_get',
     'tag_list',
@@ -188,6 +208,24 @@ async function managePages(user: User, args: Record<string, unknown>) {
     await container.resolve(PageProjectFolderService).assertFolderExists(input.folderId);
     return projects.create(input, user.id);
   }
+  if (operation === 'project_placement_options') {
+    // GET /projects/placement-options: nodes a Project can be created on or moved to.
+    ensureAnyScopeBase(user, ['pages:create', 'pages:edit']);
+    const canUseAnyPlacement =
+      hasScope(user.scopes, 'pages:create') ||
+      hasScope(user.scopes, 'pages:edit') ||
+      getFolderScopedIds(user.scopes, ['pages:create']).length > 0;
+    return canUseAnyPlacement
+      ? projects.placementOptions()
+      : projects.placementOptions({ allowedNodeIds: getResourceScopedIds(user.scopes, 'pages:create') });
+  }
+  if (operation === 'project_get_by_slug') {
+    const project = await projects.getBySlug(requiredString(args.slug));
+    if (!canAccessPageProject(user.scopes, 'pages:view', project.id)) {
+      throw new AppError(403, 'PAGE_PROJECT_FORBIDDEN', 'Missing pages:view for this Project');
+    }
+    return project;
+  }
 
   const projectId = requiredString(args.projectId);
   if (operation === 'project_get') {
@@ -200,7 +238,13 @@ async function managePages(user: User, args: Record<string, unknown>) {
   }
   if (operation === 'project_migrate') {
     ensureResourceScope(user, 'pages:edit', projectId);
-    return projects.migrate(projectId, MigratePageProjectSchema.parse(args), user.id);
+    const input = MigratePageProjectSchema.parse(args);
+    // Like POST /projects/:id/migrate: moving a Project onto a node needs pages:create for that node.
+    const project = await projects.get(projectId);
+    if (!hasScopeForCreation(user.scopes, 'pages:create', project.folderId, input.targetNodeId)) {
+      throw new AppError(403, 'PAGE_PROJECT_FORBIDDEN', 'Missing pages:create permission for the target node');
+    }
+    return projects.migrate(projectId, input, user.id);
   }
   if (operation === 'project_delete') {
     ensureResourceScope(user, 'pages:delete', projectId);
@@ -234,6 +278,7 @@ async function managePages(user: User, args: Record<string, unknown>) {
   }
   if (operation === 'source_upsert') {
     ensureResourceScope(user, 'pages:edit', projectId);
+    ensureResourceScope(user, 'pages:deploy', projectId);
     return sources().upsert(
       DockerSourceBindingUpsertSchema.parse({
         target: sourceTarget,
@@ -364,36 +409,38 @@ async function manageAdditionalRoute(user: User, args: Record<string, unknown>) 
   const operation = requiredString(args.operation);
   const routeId = requiredString(args.routeId);
   const service = container.resolve(AdditionalRouteService);
+  // Same view the Additional Route endpoints return: advanced config and Pages fields follow the caller scopes.
+  const visible = (row: unknown) => redactAdditionalRouteForScopes(row as Record<string, unknown>, user.scopes);
   if (operation === 'list') {
     ensureResourceScope(user, 'proxy:view', routeId);
-    return { data: await service.list(routeId) };
+    return { data: (await service.list(routeId)).map(visible) };
   }
   const additionalRouteId = operation === 'create' ? undefined : requiredString(args.additionalRouteId);
   if (operation === 'get') {
     ensureResourceScope(user, 'proxy:view', routeId);
-    return service.present(await service.get(routeId, requiredValue(additionalRouteId)));
+    return visible(await service.present(await service.get(routeId, requiredValue(additionalRouteId))));
   }
   ensureResourceScope(user, 'proxy:edit', routeId);
   if (operation === 'create') {
     const input = CreateAdditionalRouteSchema.parse(args);
-    if (input.advancedConfig !== undefined && input.advancedConfig !== null) {
-      ensureResourceScope(user, 'proxy:advanced', routeId);
-    }
+    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', routeId);
     await requirePagesForAdditionalTarget(input);
-    return service.present(await service.create(routeId, input, user.id, user.scopes));
+    return visible(await service.present(await service.create(routeId, input, user.id, user.scopes)));
   }
   if (operation === 'update') {
     const input = UpdateAdditionalRouteSchema.parse(args);
-    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', routeId);
     await requirePagesForAdditionalTarget(input);
-    return service.present(
-      await service.update(routeId, requiredValue(additionalRouteId), input, user.id, user.scopes)
+    if (input.advancedConfig !== undefined) ensureResourceScope(user, 'proxy:advanced', routeId);
+    return visible(
+      await service.present(
+        await service.update(routeId, requiredValue(additionalRouteId), input, user.id, user.scopes)
+      )
     );
   }
   if (operation === 'retry') {
     const existing = await service.get(routeId, requiredValue(additionalRouteId));
     if (existing.targetKind === 'pages') await container.resolve(LicensePolicyService).requireFeature('pages');
-    return service.present(await service.retry(routeId, existing.id, user.id, user.scopes));
+    return visible(await service.present(await service.retry(routeId, existing.id, user.id, user.scopes)));
   }
   if (operation === 'delete') {
     await service.remove(routeId, requiredValue(additionalRouteId), user.id);
@@ -414,19 +461,18 @@ async function manageAdditionalSecureLink(user: User, args: Record<string, unkno
   if (operation === 'create') {
     return service.createAdditionalSecureLink(
       routeId,
-      {
-        name: requiredString(args.name),
-        upstreamKind: requiredEnum(args.upstreamKind, ['docker_container', 'docker_deployment', 'managed_storage']),
-        managedStorageId: optionalString(args.managedStorageId),
-        forwardScheme:
-          args.upstreamKind === 'managed_storage' ? 'http' : requiredEnum(args.forwardScheme, ['http', 'https']),
-        dockerNodeId: optionalString(args.dockerNodeId),
-        dockerContainerName: optionalString(args.dockerContainerName),
-        dockerComposeProjectId: optionalString(args.dockerComposeProjectId),
-        dockerComposeServiceName: optionalString(args.dockerComposeServiceName),
-        dockerDeploymentId: optionalString(args.dockerDeploymentId),
-        dockerContainerPort: args.upstreamKind === 'managed_storage' ? 9000 : requiredNumber(args.dockerContainerPort),
-      },
+      CreateAdditionalSecureLinkSchema.parse({
+        name: args.name,
+        upstreamKind: args.upstreamKind,
+        managedStorageId: args.managedStorageId,
+        forwardScheme: args.forwardScheme,
+        dockerNodeId: args.dockerNodeId,
+        dockerContainerName: args.dockerContainerName,
+        dockerComposeProjectId: args.dockerComposeProjectId,
+        dockerComposeServiceName: args.dockerComposeServiceName,
+        dockerDeploymentId: args.dockerDeploymentId,
+        dockerContainerPort: args.dockerContainerPort,
+      }),
       user.id,
       user.scopes
     );
@@ -453,16 +499,23 @@ async function requirePagesForAdditionalTarget(input: {
 
 async function manageManagedDatabase(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
+  // LICENSE ENFORCEMENT: same gate as every /api/databases route.
+  await container.resolve(LicensePolicyService).requireFeature('external-database-connections');
+  if (MANAGED_DATABASE_ACCESS_OPERATIONS.has(operation)) return manageManagedDatabaseAccess(user, operation, args);
   const service = container.resolve(ManagedDatabaseService);
   const bindings = container.resolve(ManagedDatabaseBindingService);
 
   if (operation === 'catalog') {
-    ensureScope(user, 'databases:view');
+    ensureAnyScopeBase(user, ['databases:view']);
     return service.listCatalog();
   }
   if (operation === 'list') {
-    ensureScope(user, 'databases:view');
-    return service.list(ManagedDatabaseListQuerySchema.parse({ nodeId: args.nodeId, type: args.type }));
+    // Same visibility as GET /databases/managed: scoped grants name the canonical connection.
+    ensureAnyScopeBase(user, ['databases:view']);
+    const rows = await service.list(ManagedDatabaseListQuerySchema.parse({ nodeId: args.nodeId, type: args.type }));
+    if (hasScope(user.scopes, 'databases:view')) return rows;
+    const allowedIds = new Set(getResourceScopedIds(user.scopes, 'databases:view'));
+    return rows.filter((row) => allowedIds.has(row.databaseConnectionId ?? ''));
   }
   if (operation === 'create') {
     const input = CreateManagedDatabaseSchema.parse(args);
@@ -475,49 +528,49 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
 
   const databaseId = requiredString(args.databaseId);
   if (operation === 'get') {
-    ensureResourceScope(user, 'databases:view', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:view');
     return service.get(databaseId);
   }
   if (operation === 'update') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.update(databaseId, UpdateManagedDatabaseSchema.parse(args), user.id);
   }
   if (operation === 'retry') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.retryProvisioning(databaseId, user.id);
   }
   if (operation === 'restart') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.restart(databaseId, user.id);
   }
   if (operation === 'pause') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.pause(databaseId, user.id);
   }
   if (operation === 'unpause') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.unpause(databaseId, user.id);
   }
   if (operation === 'rotate_certificate') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     return service.rotateCertificate(databaseId, user.id);
   }
   if (operation === 'delete') {
-    ensureResourceScope(user, 'databases:delete', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:delete');
     return service.delete(databaseId, user.id);
   }
   if (operation === 'list_bindings') {
-    ensureResourceScope(user, 'databases:view', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:view');
     return bindings.list(databaseId);
   }
   if (operation === 'create_binding') {
-    ensureResourceScope(user, 'databases:edit', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     const input = CreateManagedDatabaseBindingSchema.parse(args);
     await assertWorkloadBindingTargetAccess(user.scopes, input);
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
-    ensureResourceScope(user, 'databases:delete', databaseId);
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:delete');
     const bindingId = requiredString(args.bindingId);
     await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
     return bindings.delete(databaseId, bindingId, user.id, DeleteManagedDatabaseBindingSchema.parse(args));
@@ -525,29 +578,51 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported managed database operation: ${operation}`);
 }
 
+/**
+ * Mirrors the Docker migration routes: preflight and start are authorized by the
+ * service against source, target and dependencies (docker:containers:migrate);
+ * list and get need docker:tasks, cancel, retry_cleanup and resolve need
+ * docker:tasks:manage, and the service narrows every one to the migration nodes.
+ */
 async function manageDockerMigration(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
   const service = container.resolve(DockerMigrationService);
   if (operation === 'preflight') {
-    ensureScope(user, 'docker:containers:migrate');
+    ensureAnyScopeBase(user, ['docker:containers:migrate']);
     return service.preflightMigration(DockerMigrationPreflightInputSchema.parse(args), user.scopes);
   }
   if (operation === 'start') {
-    ensureScope(user, 'docker:containers:migrate');
+    ensureAnyScopeBase(user, ['docker:containers:migrate']);
     return service.create(DockerMigrationCreateInputSchema.parse(args), user.id, user.scopes);
+  }
+  if (operation === 'list') {
+    ensureAnyScopeBase(user, ['docker:tasks']);
+    return service.list(
+      user.scopes,
+      DockerMigrationListQuerySchema.parse({ status: args.status, nodeId: args.nodeId, limit: args.limit })
+    );
   }
   const migrationId = requiredString(args.migrationId);
   if (operation === 'get') {
-    ensureScope(user, 'docker:tasks');
+    ensureAnyScopeBase(user, ['docker:tasks']);
     return service.get(migrationId, user.scopes);
   }
   if (operation === 'cancel') {
-    ensureScope(user, 'docker:tasks:manage');
+    ensureAnyScopeBase(user, ['docker:tasks:manage']);
     return service.cancel(migrationId, user.id, user.scopes);
   }
   if (operation === 'retry_cleanup') {
-    ensureScope(user, 'docker:tasks:manage');
+    ensureAnyScopeBase(user, ['docker:tasks:manage']);
     return service.retryCleanup(migrationId, user.id, user.scopes);
+  }
+  if (operation === 'resolve') {
+    ensureAnyScopeBase(user, ['docker:tasks:manage']);
+    return service.resolve(
+      migrationId,
+      DockerMigrationResolveInputSchema.parse({ authoritativeSide: args.authoritativeSide }),
+      user.id,
+      user.scopes
+    );
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported Docker migration operation: ${operation}`);
 }
@@ -559,21 +634,28 @@ async function manageLoggingBackend(user: User, args: Record<string, unknown>) {
     return container.resolve(LoggingSettingsService).getPublicConfig();
   }
   ensureScope(user, 'settings:gateway:edit');
-  const runtime = container.resolve(LoggingRuntimeService);
-  if (operation === 'enable_local') return runtime.update({ mode: 'local' });
-  if (operation === 'configure_external') {
-    return runtime.update({
-      mode: 'external',
-      url: requiredString(args.url),
-      username: requiredString(args.username),
-      password: requiredString(args.password),
-      database: optionalString(args.database),
-      table: optionalString(args.table),
-      requestTimeoutMs: optionalNumber(args.requestTimeoutMs),
-    });
+  const logging =
+    operation === 'enable_local'
+      ? { mode: 'local' }
+      : operation === 'disable'
+        ? { mode: 'disabled' }
+        : operation === 'configure_external'
+          ? {
+              mode: 'external',
+              url: requiredString(args.url),
+              username: requiredString(args.username),
+              password: requiredString(args.password),
+              database: optionalString(args.database),
+              table: optionalString(args.table),
+              requestTimeoutMs: optionalNumber(args.requestTimeoutMs),
+            }
+          : null;
+  if (!logging) {
+    throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported logging backend operation: ${operation}`);
   }
-  if (operation === 'disable') return runtime.update({ mode: 'disabled' });
-  throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported logging backend operation: ${operation}`);
+  // Same path as PUT /admin/auth-settings { logging }: schema, audit record, and settings change event.
+  const input = UpdateAuthProvisioningSettingsSchema.parse({ logging });
+  return (await updateGatewaySettings({ user, scopes: user.scopes }, input)).logging;
 }
 
 function ensureScope(user: User, scope: string) {

@@ -286,6 +286,7 @@ export interface GatewayCommand {
   syncRelayPolicy?: SyncRelayPolicyCommand;
   setRelayDrain?: SetRelayDrainCommand;
   updateRelayWorker?: UpdateRelayWorkerCommand;
+  renewRelayIdentity?: RenewRelayIdentityCommand;
   syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
   dockerBuild?: DockerBuildCommand;
   dockerBuildCancel?: DockerBuildCancelCommand;
@@ -380,6 +381,13 @@ export interface UpdateRelayWorkerCommand {
   targetVersion: string;
   checksum: string;
   signedManifest: string;
+}
+
+export interface RenewRelayIdentityCommand {
+  serverCertificate: Buffer;
+  serverKey: Buffer;
+  serverIdentity: string;
+  retainServerFingerprint: string;
 }
 
 export interface SyncDockerRegistryBindingsCommand {

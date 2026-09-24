@@ -106,31 +106,47 @@ describe('MCP tool scope filtering', () => {
     );
   });
 
-  it('never exposes GitLab tools through Gateway MCP', () => {
+  it('exposes GitLab tools through delegated GitLab scopes but never the AI sandbox clone', () => {
     const names = toolNames([
       'integrations:gitlab:view',
+      'integrations:gitlab:manage',
       'integrations:gitlab:projects:view',
       'integrations:gitlab:repo:read',
       'integrations:gitlab:repo:write',
-      'integrations:gitlab:system',
+      'integrations:gitlab:ci:view',
+      'integrations:gitlab:variables:edit',
+      'integrations:gitlab:sandbox:clone',
+      'ai:sandbox:use',
     ]);
-    expect(names.some((name) => name.startsWith('gitlab_'))).toBe(false);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'gitlab_list_connectors',
+        'gitlab_list_projects',
+        'gitlab_read_file',
+        'gitlab_commit_files',
+        'gitlab_list_pipelines',
+        'gitlab_set_project_variable',
+        'create_gitlab_connector',
+      ])
+    );
+    expect(names).not.toContain('gitlab_clone_repository_to_sandbox');
   });
 
-  it('never exposes embedded-assistant connector tools through Gateway MCP', () => {
+  it('exposes GitHub, generic Git, Cloudflare, and external SSH connector tools but not setup dialogs', () => {
     const names = toolNames([
       'feat:ai:use',
+      'ai:workspace:use',
       'integrations:github:view',
       'integrations:github:manage',
       'integrations:git:view',
       'integrations:git:manage',
+      'integrations:cloudflare:manage',
       'integrations:ssh:view',
       'integrations:ssh:use',
       'integrations:ssh:manage',
     ]);
-    expect(names).not.toEqual(
+    expect(names).toEqual(
       expect.arrayContaining([
-        'open_connector_setup',
         'github_list_connectors',
         'github_list_repositories',
         'github_list_repository_tree',
@@ -148,16 +164,56 @@ describe('MCP tool scope filtering', () => {
         'git_read_repository_file',
         'git_upsert_repository_file',
         'create_git_connector',
+        'create_cloudflare_connector',
         'ssh_list_connectors',
         'ssh_execute_command',
         'create_ssh_connector',
       ])
     );
+    expect(names).not.toContain('open_connector_setup');
+    expect(names).not.toContain('open_node_enrollment');
   });
 
-  it('never exposes node config or filesystem tools through MCP', () => {
-    expect(toolNames(['nodes:config:view', 'nodes:config:edit'])).not.toContain('manage_node_config');
-    expect(toolNames(['nodes:files:read', 'nodes:files:write'])).not.toContain('manage_node_file');
+  it('exposes node config and filesystem tools through their node scopes', () => {
+    expect(toolNames(['nodes:config:view:node-1'])).toContain('manage_node_config');
+    expect(toolNames(['nodes:files:read:node-1'])).toContain('manage_node_file');
+    expect(toolNames(['nodes:details'])).not.toContain('manage_node_config');
+    expect(toolNames(['nodes:details'])).not.toContain('manage_node_file');
+  });
+
+  it('exposes inference administration and personal inference key tools', () => {
+    const names = toolNames([
+      'inference:providers:view',
+      'inference:providers:manage',
+      'inference:models:manage',
+      'inference:limits:manage',
+      'feat:ai:use',
+    ]);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'manage_inference_provider',
+        'manage_inference_model',
+        'manage_inference_limits',
+        'manage_inference_token',
+      ])
+    );
+    expect(toolNames(['inference:providers:view'])).not.toContain('manage_inference_token');
+  });
+
+  it('exposes administration and gateway settings tools through their delegated scopes', () => {
+    const names = toolNames(['admin:users', 'admin:groups', 'settings:gateway:view', 'settings:gateway:edit']);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'list_users',
+        'create_user',
+        'update_user_role',
+        'list_groups',
+        'create_group',
+        'get_gateway_settings',
+        'update_gateway_settings',
+        'manage_logging_backend',
+      ])
+    );
   });
 
   it('exposes console tools only when their opt-in console scopes are delegated', () => {
@@ -172,25 +228,28 @@ describe('MCP tool scope filtering', () => {
     ).toBe(true);
   });
 
-  it('never exposes browser-session-only current-user tools through MCP', () => {
-    expect(toolNames(['feat:ai:use'])).not.toEqual(
-      expect.arrayContaining([
-        'get_current_context',
-        'end_conversation',
-        'search_chats',
-        'search_compacted_history',
-        'find_in_chat',
-        'read_chat_slice',
-        'list_chat_projects',
-        'manage_ai_conversation',
-        'manage_oauth_authorization',
-        'manage_api_token',
-        'manage_inference_provider',
-        'manage_inference_model',
-        'manage_inference_limits',
-        'manage_inference_token',
-      ])
-    );
+  it('never exposes AI chat internals, Gateway token minting, or UI-only tools through MCP', () => {
+    const names = toolNames(['feat:ai:use', 'ai:workspace:use']);
+    for (const name of [
+      'get_current_context',
+      'end_conversation',
+      'search_chats',
+      'search_compacted_history',
+      'find_in_chat',
+      'read_chat_slice',
+      'list_chat_projects',
+      'manage_ai_conversation',
+      'manage_oauth_authorization',
+      'manage_api_token',
+      'open_node_enrollment',
+      'open_connector_setup',
+      'set_resource_pin',
+      'ask_question',
+      'send_comment',
+      'wait',
+    ]) {
+      expect(names, name).not.toContain(name);
+    }
   });
 
   it('keeps assistant-only coordination tools hidden while exposing supported resource lifecycles', () => {
@@ -204,9 +263,8 @@ describe('MCP tool scope filtering', () => {
       'settings:gateway:view',
       'settings:gateway:edit',
     ];
-    expect(toolNames(resourceSetupScopes)).toContain('manage_managed_database');
-    expect(toolNames(resourceSetupScopes)).not.toEqual(
-      expect.arrayContaining(['manage_docker_migration', 'manage_logging_backend'])
+    expect(toolNames(resourceSetupScopes)).toEqual(
+      expect.arrayContaining(['manage_managed_database', 'manage_docker_migration', 'manage_logging_backend'])
     );
     expect(toolNames(['pages:view'])).toContain('manage_pages');
     const managedStorage = toolByName(['storage:iam:storage-1'], 'manage_managed_storage');

@@ -75,7 +75,41 @@ describe('AIService status page tool routing', () => {
       result: { enabled: false },
       invalidateStores: [],
     });
-    expect(statusPageService.updateSettings).toHaveBeenCalledWith({ enabled: false }, 'user-1');
+    // Like the route, the caller scopes reach the service (custom upstream edits need proxy:raw:write).
+    expect(statusPageService.updateSettings).toHaveBeenCalledWith({ enabled: false }, 'user-1', ['status-page:manage']);
+  });
+
+  it('reorders status page services with status-page:manage and the route schema', async () => {
+    const serviceIds = ['550e8400-e29b-41d4-a716-446655440000', '550e8400-e29b-41d4-a716-446655440001'];
+    const statusPageService = {
+      reorderServices: vi.fn().mockResolvedValue([{ id: serviceIds[1] }, { id: serviceIds[0] }]),
+    };
+    vi.spyOn(container, 'resolve').mockReturnValue(statusPageService as never);
+    const service = createService();
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['status-page:view'] }, 'manage_status_page', {
+        resource: 'services',
+        operation: 'reorder',
+        payload: { serviceIds },
+      })
+    ).resolves.toMatchObject({ error: 'PERMISSION_DENIED: Missing required scope status-page:manage' });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['status-page:manage'] }, 'manage_status_page', {
+        resource: 'services',
+        operation: 'reorder',
+        payload: { serviceIds: [serviceIds[0], serviceIds[0]] },
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Service ids must be unique') });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['status-page:manage'] }, 'manage_status_page', {
+        resource: 'services',
+        operation: 'reorder',
+        payload: { serviceIds: [...serviceIds].reverse() },
+      })
+    ).resolves.toMatchObject({ result: [{ id: serviceIds[1] }, { id: serviceIds[0] }] });
+    expect(statusPageService.reorderServices).toHaveBeenCalledTimes(1);
+    expect(statusPageService.reorderServices).toHaveBeenCalledWith([...serviceIds].reverse(), 'user-1');
   });
 
   it('creates status page services after schema parsing', async () => {

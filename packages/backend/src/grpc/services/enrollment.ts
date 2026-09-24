@@ -1,7 +1,7 @@
 import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import type { ServerUnaryCall, sendUnaryData } from '@grpc/grpc-js';
 import bcrypt from 'bcryptjs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
@@ -61,6 +61,32 @@ async function findPendingNodeByEnrollmentToken(deps: GrpcServerDeps, token: str
   return matchedNode;
 }
 
+/**
+ * A re-enrollment token of an enrolled remote relay (RelayPoolService.issueRelayReenrollment).
+ * The token is the authorization, exactly as for a first enrollment: single use, expiring, and
+ * handed to the host by an administrator. It lets a relay whose pinned policy trust holds only
+ * keys Gateway destroyed start over from the active key without leaving the pool.
+ */
+async function findRelayNodeByReenrollmentToken(deps: GrpcServerDeps, token: string) {
+  const parsedToken = parseNodeEnrollmentToken(token);
+  if (parsedToken.kind !== 'v2') return null;
+  const [candidate] = await deps.db
+    .select()
+    .from(nodes)
+    .where(
+      and(
+        eq(nodes.type, 'relay'),
+        ne(nodes.status, 'pending'),
+        isNotNull(nodes.certificateSerial),
+        eq(nodes.enrollmentTokenSelector, parsedToken.selector)
+      )
+    )
+    .limit(1);
+  if (!candidate?.enrollmentTokenHash) return null;
+  if (!(await bcrypt.compare(token, candidate.enrollmentTokenHash))) return null;
+  return isNodeEnrollmentTokenExpired(candidate.enrollmentTokenExpiresAt) ? 'expired' : candidate;
+}
+
 class EnrollmentTokenConsumedError extends Error {
   constructor() {
     super('Enrollment token was already used');
@@ -75,7 +101,10 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
         logger.info('Enrollment request', { hostname: req.hostname });
 
         const token = req.token.trim();
-        const matchedNode = await findPendingNodeByEnrollmentToken(deps, token);
+        const matchedNode =
+          (await findPendingNodeByEnrollmentToken(deps, token)) ??
+          (await findRelayNodeByReenrollmentToken(deps, token));
+        const relayReenrollment = matchedNode !== null && matchedNode !== 'expired' && matchedNode.status !== 'pending';
 
         if (matchedNode === 'expired') {
           callback({ code: 16, message: 'Enrollment token has expired; generate a new token for this node' });
@@ -200,7 +229,9 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
             .where(
               and(
                 eq(nodes.id, nodeId),
-                eq(nodes.status, 'pending'),
+                relayReenrollment
+                  ? and(eq(nodes.type, 'relay'), ne(nodes.status, 'pending'))
+                  : eq(nodes.status, 'pending'),
                 eq(nodes.enrollmentTokenHash, matchedNode.enrollmentTokenHash!),
                 matchedNode.enrollmentTokenSelector
                   ? eq(nodes.enrollmentTokenSelector, matchedNode.enrollmentTokenSelector)
@@ -218,6 +249,11 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               certificateExpiresAt: relayBundle.serverExpiresAt,
               policySigningKeyId: relayBundle.policyKeyId,
               policyPublicKeyFingerprint: relayBundle.policyFingerprint,
+              // The supervisor starts its worker over from the enrollment key: forget the trust
+              // and the policy sequence the relay reported before.
+              appliedPolicyRevision: 0,
+              policyExpiresAt: null,
+              health: sql`coalesce(${relayInstances.health}, '{}'::jsonb) - 'policySigningKeyIds' - 'lastError'`,
               updatedAt: new Date(),
             };
             await tx.update(relayInstances).set(relayValues).where(eq(relayInstances.id, relayBundle.instanceId));
@@ -229,7 +265,12 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
           action: 'node.enroll',
           resourceType: 'node',
           resourceId: nodeId,
-          details: { hostname: req.hostname, type: matchedNode.type, certSerial: certResult.serial },
+          details: {
+            hostname: req.hostname,
+            type: matchedNode.type,
+            certSerial: certResult.serial,
+            ...(relayReenrollment ? { reenrollment: true } : {}),
+          },
         });
 
         logger.info('Node enrolled with PKI cert', { nodeId, hostname: req.hostname, serial: certResult.serial });

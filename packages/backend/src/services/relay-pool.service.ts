@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
-import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import bcrypt from 'bcryptjs';
+import { and, desc, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   managedDatabaseInstances,
+  nodes,
   proxyAdditionalSecureLinks,
   proxyHosts,
   relayAssignmentSourceProbes,
@@ -17,9 +19,11 @@ import {
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
+import { createNodeEnrollmentToken, nodeEnrollmentTokenExpiresAt } from '@/modules/nodes/node-enrollment-token.js';
 import type { GeneralSettingsService, RelayAssignmentSpread } from '@/modules/settings/general-settings.service.js';
 import type { EventBusService } from './event-bus.service.js';
-import type { RelayPolicyService } from './relay-policy.service.js';
+import type { RelayCertificateRenewalService, RelayCertificateStatus } from './relay-certificate-renewal.service.js';
+import type { RelayPolicyService, RelayPolicyTrustStatus } from './relay-policy.service.js';
 import { bumpRelayPolicyRevision } from './relay-policy-reconciler.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
@@ -27,6 +31,25 @@ const AUTO_REBALANCE_SETTLE_MS = 30_000;
 const AUTO_REBALANCE_RETRY_MS = 5 * 60_000;
 const STAGING_RECOVERY_MS = 2 * 60_000;
 const MANUAL_DRAIN_TIMEOUT_MS = 10 * 60_000;
+/** Supervisors report every 5 s; a remote relay silent this long is offline. */
+const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
+const UPDATE_DRAIN_RELEASE_INTERVAL_MS = 30_000;
+/** Update runs that may still hold a relay drained, and the step states in which they do. */
+const UNFINISHED_UPDATE_RUN_STATES = [
+  'preflight',
+  'draining',
+  'updating',
+  'verifying',
+  'paused',
+  'rolling_back',
+] as const;
+const IN_FLIGHT_UPDATE_STEP_STATES = ['draining', 'updating', 'verifying', 'rolling_back'] as const;
+/**
+ * Update run states that leave automatic placement running. A paused run waits for an operator
+ * for as long as it takes; freezing placement for the whole pool meanwhile would leave workloads
+ * on a relay that fails in the meantime.
+ */
+const PLACEMENT_RUNS_DURING_RUN_STATES: readonly string[] = ['complete', 'failed', 'paused'];
 
 function poolBlockers(instances: RelayInstanceRow[]): string[] {
   return instances.flatMap((instance) =>
@@ -84,6 +107,12 @@ export class RelayPoolService {
   private readonly drainActions = new Set<string>();
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
+  private readonly startedAt = Date.now();
+  private nextUpdateDrainReleaseAt = 0;
+  private certificateRenewal?: Pick<
+    RelayCertificateRenewalService,
+    'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
+  >;
   constructor(
     private readonly db: DrizzleClient,
     private readonly policy: RelayPolicyService,
@@ -118,8 +147,32 @@ export class RelayPoolService {
     return flight;
   }
 
+  setCertificateRenewal(
+    renewal: Pick<
+      RelayCertificateRenewalService,
+      'renewDueIfScheduled' | 'describeCertificates' | 'renewInstanceCertificate'
+    >
+  ): void {
+    this.certificateRenewal = renewal;
+  }
+
+  /** Renews one remote relay's certificate now. */
+  async renewInstanceCertificate(instanceId: string, userId: string) {
+    if (!this.certificateRenewal)
+      throw new AppError(409, 'RELAY_CERTIFICATE_RENEWAL_UNAVAILABLE', 'Relay certificate renewal is not configured');
+    return this.certificateRenewal.renewInstanceCertificate(instanceId, userId);
+  }
+
   private async reconcileOnce(): Promise<void> {
+    // Renewals wait on relay supervisors; they run beside the reconciler, never inside it.
+    void this.certificateRenewal
+      ?.renewDueIfScheduled()
+      .catch((error) => logger.warn('Relay certificate renewal check failed', { error: String(error) }));
+    await this.fenceSilentRemoteInstances();
     await this.reconcileManualDrains();
+    await this.releaseOrphanedUpdateDrains().catch((error) =>
+      logger.warn('Relay update drain release deferred', { error: String(error) })
+    );
     await this.retireDrainedGenerations();
     if (this.rebalanceFlight) return;
     const snapshot = await this.getSnapshot();
@@ -204,6 +257,155 @@ export class RelayPoolService {
         }
       });
     }
+  }
+
+  /**
+   * A remote relay that stopped reporting is offline, whatever its last report said. The control
+   * stream's close hook marks it offline only in the process that held the stream, so a relay
+   * that died while Gateway restarted would stay ready forever: placement kept choosing it, its
+   * drained generations never retired and it could not be removed. Reconnecting relays get the
+   * same grace after a Gateway start before they are judged.
+   */
+  async fenceSilentRemoteInstances(now = new Date()): Promise<number> {
+    if (now.getTime() - this.startedAt < REMOTE_HEARTBEAT_TIMEOUT_MS) return 0;
+    const cutoff = new Date(now.getTime() - REMOTE_HEARTBEAT_TIMEOUT_MS);
+    const fenced = await this.db
+      .update(relayInstances)
+      .set({ state: 'offline', updatedAt: now })
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          eq(relayInstances.kind, 'remote'),
+          inArray(relayInstances.state, ['synchronizing', 'ready', 'draining']),
+          sql`coalesce(${relayInstances.lastSeenAt}, ${relayInstances.updatedAt}) < ${cutoff}`
+        )
+      )
+      .returning({ id: relayInstances.id });
+    if (fenced.length) {
+      logger.warn('Marked remote relays that stopped reporting offline', { instanceIds: fenced.map(({ id }) => id) });
+      this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'instances_offline' });
+    }
+    return fenced.length;
+  }
+
+  /**
+   * Resumes remote relays an update run drained and no longer owns. The run's own release is an
+   * in-process retry that ends after a while or with the process; a relay left draining by a
+   * failed or abandoned run would then stay out of service. Only update runs drain without an
+   * operator's drain mark, and a relay held by an unfinished run, paused ones included, stays.
+   */
+  async releaseOrphanedUpdateDrains(now = Date.now()): Promise<number> {
+    if (now < this.nextUpdateDrainReleaseAt) return 0;
+    this.nextUpdateDrainReleaseAt = now + UPDATE_DRAIN_RELEASE_INTERVAL_MS;
+    const drained = await this.db
+      .select({ id: relayInstances.id })
+      .from(relayInstances)
+      .where(
+        and(
+          eq(relayInstances.poolId, 'system'),
+          eq(relayInstances.kind, 'remote'),
+          eq(relayInstances.state, 'draining'),
+          isNull(relayInstances.manualDrainStartedAt),
+          isNotNull(relayInstances.nodeId)
+        )
+      );
+    let released = 0;
+    for (const { id } of drained) {
+      if (this.drainActions.has(id)) continue;
+      if (await this.isHeldByUnfinishedUpdate(id)) continue;
+      try {
+        await this.drainInstance(id, null, false, { manual: false });
+        released += 1;
+        logger.info('Resumed a relay left drained by a finished Relay Pool update', { instanceId: id });
+      } catch (error) {
+        logger.warn('Could not resume a relay left drained by a Relay Pool update yet', {
+          instanceId: id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return released;
+  }
+
+  /** An update run that has not finished, paused ones included, holds this relay drained. */
+  private async isHeldByUnfinishedUpdate(instanceId: string): Promise<boolean> {
+    const [held] = await this.db
+      .select({ id: relayPoolUpdateSteps.id })
+      .from(relayPoolUpdateSteps)
+      .innerJoin(relayPoolUpdateRuns, eq(relayPoolUpdateSteps.runId, relayPoolUpdateRuns.id))
+      .where(
+        and(
+          eq(relayPoolUpdateSteps.relayInstanceId, instanceId),
+          inArray(relayPoolUpdateSteps.state, [...IN_FLIGHT_UPDATE_STEP_STATES]),
+          inArray(relayPoolUpdateRuns.state, [...UNFINISHED_UPDATE_RUN_STATES])
+        )
+      )
+      .limit(1);
+    return Boolean(held);
+  }
+
+  /**
+   * Issues a single-use token that re-enrolls an enrolled remote relay. Running the relay
+   * installer with it on the host makes the supervisor enroll again: the relay keeps its instance
+   * and assignments, receives new certificates, moves its pinned policy trust aside and pins the
+   * active signing key. That is the supported recovery for a relay whose trust holds only keys
+   * Gateway no longer has, and for expired relay certificates. Authorization comes from the
+   * token, which an administrator hands to the host out of band; the current identity keeps
+   * working until the token is used, and an unused token expires.
+   */
+  async issueRelayReenrollment(instanceId: string, userId: string) {
+    const [instance] = await this.db.select().from(relayInstances).where(eq(relayInstances.id, instanceId)).limit(1);
+    if (!instance) throw new AppError(404, 'RELAY_INSTANCE_NOT_FOUND', 'Relay instance not found');
+    if (instance.kind !== 'remote' || !instance.nodeId) {
+      throw new AppError(
+        409,
+        'RELAY_REENROLLMENT_UNSUPPORTED',
+        'Only an enrolled remote relay can be re-enrolled; Gateway recovers the local relay automatically'
+      );
+    }
+    const token = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(token.token, 10);
+    const expiresAt = nodeEnrollmentTokenExpiresAt();
+    const [node] = await this.db
+      .update(nodes)
+      .set({
+        enrollmentTokenSelector: token.selector,
+        enrollmentTokenHash: tokenHash,
+        enrollmentTokenExpiresAt: expiresAt,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(nodes.id, instance.nodeId),
+          eq(nodes.type, 'relay'),
+          ne(nodes.status, 'pending'),
+          isNotNull(nodes.certificateSerial)
+        )
+      )
+      .returning({ id: nodes.id });
+    if (!node) {
+      throw new AppError(
+        409,
+        'RELAY_NOT_ENROLLED',
+        'This relay has not completed its first enrollment; use its regular enrollment token'
+      );
+    }
+    await this.audit.log({
+      userId,
+      action: 'relay.instance.reenrollment_token.issue',
+      resourceType: 'relay_instance',
+      resourceId: instance.id,
+      details: { nodeId: instance.nodeId, expiresAt: expiresAt.toISOString() },
+    });
+    return {
+      instanceId: instance.id,
+      nodeId: instance.nodeId,
+      displayName: instance.displayName,
+      enrollmentToken: token.token,
+      enrollmentTokenExpiresAt: expiresAt.toISOString(),
+      advertiseAddress: instance.advertisedAddresses[0] ?? null,
+      servicePort: instance.servicePort,
+    };
   }
 
   private async withDrainAction<T>(instanceId: string, action: () => Promise<T>): Promise<T> {
@@ -370,17 +572,21 @@ export class RelayPoolService {
     const readyFaultDomains = new Set(
       instances.filter(({ state }) => state === 'ready').map(({ faultDomainId }) => faultDomainId)
     );
+    const localOnly = await this.poolIncapableEndpoints(
+      endpoints.filter(({ ownerKind }) => ownerKind !== 'internal_registry').map(({ id }) => id)
+    );
     const rebalancePlan =
       readyFaultDomains.size === 0
         ? []
         : endpoints.flatMap((endpoint) => {
             if (endpoint.ownerKind === 'internal_registry') return [];
             const spread = effectiveSpreads.get(endpoint.id) ?? generalSettings.relay.assignmentSpread;
-            const selectedIds = chooseCandidates(
-              endpoint.id,
-              instances,
-              effectiveCount(spread, readyFaultDomains.size)
+            const selectedIds = (
+              localOnly.has(endpoint.id)
+                ? instances.filter(({ kind, state }) => kind === 'local' && state === 'ready')
+                : chooseCandidates(endpoint.id, instances, effectiveCount(spread, readyFaultDomains.size))
             ).map(({ id }) => id);
+            if (!selectedIds.length) return [];
             const active = activeByEndpoint.get(endpoint.id);
             if (active && sameAssignmentSet(assignmentsByGeneration.get(active.id) ?? [], selectedIds)) return [];
             const participants = new Set(selectedIds);
@@ -423,7 +629,17 @@ export class RelayPoolService {
           })
         )
       : 0;
-    const automaticRebalancePaused = Boolean(updateRun && !['complete', 'failed'].includes(updateRun.state));
+    const automaticRebalancePaused = Boolean(updateRun && !PLACEMENT_RUNS_DURING_RUN_STATES.includes(updateRun.state));
+    // Trust status is advisory: a failure to assess it must not take the pool status down.
+    const policyTrust = await Promise.resolve()
+      .then(() => this.policy.describePolicyTrust(instances))
+      .catch(() => new Map<string, RelayPolicyTrustStatus>());
+    let certificates = new Map<string, RelayCertificateStatus>();
+    try {
+      certificates = this.certificateRenewal?.describeCertificates(instances) ?? certificates;
+    } catch {
+      // Advisory, like the trust status.
+    }
     const activeTunnels = instances.reduce((sum, instance) => sum + (instance.health?.activeTunnels ?? 0), 0);
     const registeredEndpoints = instances.reduce(
       (sum, instance) => sum + (instance.health?.registeredEndpoints ?? 0),
@@ -478,6 +694,8 @@ export class RelayPoolService {
             0
           ),
           updateStep: updateStepByInstance.get(instance.id) ?? null,
+          policyTrust: policyTrust.get(instance.id) ?? null,
+          certificate: certificates.get(instance.id) ?? null,
         };
       }),
       staging: [...stagingByEndpoint.values()],
@@ -626,7 +844,7 @@ export class RelayPoolService {
 
   async stageRebalance(
     userId?: string,
-    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean } = {}
+    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean; evacuation?: boolean } = {}
   ) {
     if (this.rebalanceFlight)
       throw new AppError(409, 'RELAY_REBALANCE_IN_PROGRESS', 'Relay rebalance is already running');
@@ -640,7 +858,7 @@ export class RelayPoolService {
 
   private async stageRebalanceOnce(
     userId: string | undefined,
-    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean }
+    options: { endpointIds?: string[]; allowNoop?: boolean; automatic?: boolean; evacuation?: boolean }
   ) {
     // Synchronize local live capabilities before selecting candidates. This also
     // recovers the persisted legacy capability row after a compatible relay upgrade.
@@ -654,16 +872,20 @@ export class RelayPoolService {
       .where(and(eq(relayEndpoints.status, 'active'), endpointFilter));
     const globalSpread = (await this.settings.getConfig()).relay.assignmentSpread;
     const effectiveSpreads = await this.resolveEffectiveSpreads(endpoints, globalSpread);
+    const localOnly = await this.poolIncapableEndpoints(endpoints.map(({ id }) => id));
     const staged = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-pool-rebalance'))`);
-      if (options.automatic) {
+      // An update run pauses automatic placement, but never the evacuation of a relay it drains:
+      // otherwise that relay's workloads have no relay accepting new connections for the whole
+      // drain, update and verification window.
+      if (options.automatic && !options.evacuation) {
         const [update] = await tx
           .select()
           .from(relayPoolUpdateRuns)
           .where(eq(relayPoolUpdateRuns.poolId, 'system'))
           .orderBy(desc(relayPoolUpdateRuns.startedAt))
           .limit(1);
-        if (update && !['complete', 'failed'].includes(update.state)) return [];
+        if (update && !PLACEMENT_RUNS_DURING_RUN_STATES.includes(update.state)) return [];
       }
       const candidates = await tx.select().from(relayInstances).where(eq(relayInstances.poolId, 'system'));
       const readyInstances = candidates.filter(
@@ -722,7 +944,11 @@ export class RelayPoolService {
           ({ assignmentGenerationId }) => assignmentGenerationId === active?.id
         );
         const spread = effectiveSpreads.get(endpoint.id) ?? globalSpread;
-        const selected = chooseCandidates(endpoint.id, readyInstances, effectiveCount(spread, readyFaultDomains));
+        // A path with a daemon that lacks Relay Pool support runs on legacy grants, which only
+        // the local relay serves: keep such workloads there until every participant is updated.
+        const selected = localOnly.has(endpoint.id)
+          ? readyInstances.filter(({ kind }) => kind === 'local')
+          : chooseCandidates(endpoint.id, readyInstances, effectiveCount(spread, readyFaultDomains));
         const selectedIds = selected.map(({ id }) => id);
         if (!selectedIds.length || sameAssignmentSet(activeAssignments, selectedIds)) continue;
         const participantIds = new Set([
@@ -1012,6 +1238,15 @@ export class RelayPoolService {
     if (!instance.nodeId) throw new AppError(409, 'RELAY_INSTANCE_UNENROLLED', 'Relay instance is not enrolled');
     // Completing an update cannot cancel a separate operator-owned drain.
     if (!manual && !enabled && instance.manualDrainStartedAt) enabled = true;
+    // An operator resume cannot take a relay away from an update run that drained it: the run
+    // would later restart the worker under the tunnels the resume admitted.
+    if (manual && !enabled && !instance.manualDrainStartedAt && (await this.isHeldByUnfinishedUpdate(instance.id))) {
+      throw new AppError(
+        409,
+        'RELAY_HELD_BY_UPDATE',
+        'A Relay Pool update drained this relay; retry or abandon that update instead of resuming the relay'
+      );
+    }
     // Persist user intent before remote I/O so a crash or failed delivery cannot
     // lose the deadline. Update-owned drains retain their separate rollout policy.
     const persist = () =>
@@ -1041,7 +1276,28 @@ export class RelayPoolService {
       details: {},
     });
     this.events.publish('system.relay.health.changed', { poolId: instance.poolId, instanceId: instance.id });
-    if (enabled) await this.evacuateInstance(instance.id);
+    if (enabled) {
+      try {
+        await this.evacuateInstance(instance.id);
+      } catch (error) {
+        // An update's drain stands on its own; moving workloads is retried by later placement.
+        if (manual) throw error;
+        logger.warn('Relay drained for an update; moving its workloads failed', {
+          instanceId: instance.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  /** Endpoints whose path includes a daemon without Relay Pool support; advisory on failure. */
+  private async poolIncapableEndpoints(endpointIds: string[]): Promise<Set<string>> {
+    if (!endpointIds.length) return new Set();
+    try {
+      return await this.policy.poolIncapableEndpointIds(endpointIds);
+    } catch {
+      return new Set();
+    }
   }
 
   async forceDisconnectInstance(instanceId: string, userId: string) {
@@ -1099,6 +1355,7 @@ export class RelayPoolService {
     await this.stageRebalance(undefined, {
       allowNoop: true,
       automatic: true,
+      evacuation: true,
       endpointIds: affected.map(({ endpointId }) => endpointId),
     });
   }

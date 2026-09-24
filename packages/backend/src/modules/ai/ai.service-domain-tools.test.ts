@@ -80,7 +80,7 @@ describe('AIService domain tool routing', () => {
       invalidateStores: ['domains'],
     });
     expect(domainsService.createDomain).toHaveBeenCalledWith(
-      { domain: 'example.com', description: undefined, ttl: 60, proxied: false, overwriteDns: true },
+      { domain: 'example.com', dnsProvider: 'cloudflare', ttl: 60, proxied: false, overwriteDns: true },
       'user-1'
     );
 
@@ -154,27 +154,9 @@ describe('AIService domain tool routing', () => {
           proxied: false,
         }
       )
-    ).resolves.toMatchObject({ error: expect.stringContaining('integrations:cloudflare:dns:edit') });
-
-    await expect(
-      service.executeTool(
-        {
-          ...BASE_USER,
-          scopes: [
-            'domains:view',
-            'domains:view:domain-1',
-            'domains:edit:domain-1',
-            'integrations:cloudflare:dns:edit',
-          ],
-        },
-        'manage_domain',
-        {
-          operation: 'update',
-          domainId: 'domain-1',
-          proxied: false,
-        }
-      )
     ).resolves.toMatchObject({ result: { id: 'domain-1' }, invalidateStores: ['domains'] });
+    // Like PUT /domains/{id}, toggling the Cloudflare proxy needs domains:edit only.
+    expect(domainsService.updateDomain).toHaveBeenLastCalledWith('domain-1', { proxied: false }, 'user-1');
 
     await expect(
       service.executeTool(
@@ -190,5 +172,79 @@ describe('AIService domain tool routing', () => {
       invalidateStores: ['domains'],
     });
     expect(domainsService.checkDns).toHaveBeenCalledWith('domain-1');
+  });
+
+  it('previews domains, lists ingress nodes, and resolves Cloudflare migrations with route scopes', async () => {
+    const NODE_ID = '11111111-1111-4111-8111-111111111111';
+    const domainsService = {
+      getNginxNodeOptions: vi.fn().mockResolvedValue({ nodes: [{ id: NODE_ID }] }),
+      previewDomain: vi.fn().mockResolvedValue({ dnsProvider: 'external', domain: 'example.com' }),
+      resolveCloudflareMigration: vi.fn().mockResolvedValue({ id: 'domain-1', status: 'resolved' }),
+    };
+    const service = createService(domainsService);
+
+    // GET /domains/nginx-nodes and POST /domains/preview require domains:create.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:view'] }, 'manage_domain', {
+        operation: 'list_nginx_nodes',
+      })
+    ).resolves.toEqual({ error: 'Missing required scope: domains:create', invalidateStores: [] });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:create'] }, 'manage_domain', {
+        operation: 'preview',
+        domain: 'Example.com',
+        dnsProvider: 'external',
+        nginxNodeId: NODE_ID,
+      })
+    ).resolves.toMatchObject({ result: { dnsProvider: 'external' } });
+    expect(domainsService.previewDomain).toHaveBeenCalledWith({
+      domain: 'example.com',
+      dnsProvider: 'external',
+      nginxNodeId: NODE_ID,
+    });
+
+    // update_dns needs a node; the service also checks proxy access with the caller scopes.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:edit:domain-1'] }, 'manage_domain', {
+        operation: 'resolve_cloudflare_migration',
+        domainId: 'domain-1',
+        action: 'update_dns',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('nginxNodeId') });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:edit:domain-1'] }, 'manage_domain', {
+        operation: 'resolve_cloudflare_migration',
+        domainId: 'domain-1',
+        action: 'update_dns',
+        nginxNodeId: NODE_ID,
+      })
+    ).resolves.toMatchObject({ result: { status: 'resolved' } });
+    expect(domainsService.resolveCloudflareMigration).toHaveBeenCalledWith(
+      'domain-1',
+      { action: 'update_dns', nginxNodeId: NODE_ID },
+      'user-1',
+      ['domains:edit:domain-1']
+    );
+  });
+
+  it('creates external-DNS domains with the route schema', async () => {
+    const domainsService = { createDomain: vi.fn().mockResolvedValue({ id: 'domain-3' }) };
+    const service = createService(domainsService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:create'] }, 'create_domain', {
+        domain: 'not a domain',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Invalid domain name format') });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['domains:create'] }, 'create_domain', {
+        domain: 'Ext.Example.com',
+        dnsProvider: 'external',
+      })
+    ).resolves.toMatchObject({ result: { id: 'domain-3' } });
+    expect(domainsService.createDomain).toHaveBeenCalledWith(
+      { domain: 'ext.example.com', dnsProvider: 'external' },
+      'user-1'
+    );
   });
 });

@@ -164,7 +164,8 @@ describe('resource setup AI tools', () => {
     container.registerInstance(PageProjectService, {} as PageProjectService);
     container.registerInstance(DockerSourceService, { upsert } as unknown as DockerSourceService);
     const projectId = '11111111-1111-4111-8111-111111111111';
-    const user = { ...USER, scopes: [`pages:edit:${projectId}`] };
+    // PUT /projects/:id/source requires both pages:edit and pages:deploy.
+    const user = { ...USER, scopes: [`pages:edit:${projectId}`, `pages:deploy:${projectId}`] };
 
     await expect(
       executeResourceSetupTool(user, 'manage_pages', {
@@ -230,16 +231,26 @@ describe('resource setup AI tools', () => {
       retryAdditionalSecureLink,
     } as unknown as ProxyService);
     const user = { ...USER, scopes: ['proxy:edit:route-1', 'storage:view:connection-1'] };
+    const storageId = '12345678-1234-4234-8234-123456789012';
+    // The body is validated with the Additional Secure Link route schema.
+    await expect(
+      executeResourceSetupTool(user, 'manage_additional_secure_link', {
+        operation: 'create',
+        routeId: 'route-1',
+        name: 'assets',
+        upstreamKind: 'managed_storage',
+      })
+    ).rejects.toThrow('Select managed storage');
     await executeResourceSetupTool(user, 'manage_additional_secure_link', {
       operation: 'create',
       routeId: 'route-1',
       name: 'assets',
       upstreamKind: 'managed_storage',
-      managedStorageId: 'storage-1',
+      managedStorageId: storageId,
     });
     expect(createAdditionalSecureLink).toHaveBeenCalledWith(
       'route-1',
-      expect.objectContaining({ upstreamKind: 'managed_storage', managedStorageId: 'storage-1' }),
+      expect.objectContaining({ upstreamKind: 'managed_storage', managedStorageId: storageId, forwardScheme: 'http' }),
       user.id,
       user.scopes
     );
@@ -258,9 +269,13 @@ describe('resource setup AI tools', () => {
       pause: vi.fn().mockResolvedValue({ id: 'database-1', status: 'paused' }),
       unpause: vi.fn().mockResolvedValue({ id: 'database-1', status: 'ready' }),
       rotateCertificate: vi.fn().mockResolvedValue({ id: 'database-1', certificateVersion: 2 }),
+      getCanonicalScopeResourceId: vi.fn().mockResolvedValue('database-1'),
     };
     container.registerInstance(ManagedDatabaseService, service as unknown as ManagedDatabaseService);
     container.registerInstance(ManagedDatabaseBindingService, {} as ManagedDatabaseBindingService);
+    container.registerInstance(LicensePolicyService, {
+      requireFeature: vi.fn().mockResolvedValue(undefined),
+    } as unknown as LicensePolicyService);
 
     await executeResourceSetupTool(USER, 'manage_managed_database', {
       operation: 'update',

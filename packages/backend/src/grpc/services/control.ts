@@ -901,6 +901,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               const appliedPolicyRevision = Number(runtime.appliedPolicyRevision || 0);
               const runtimeStateChanged =
                 instance.state !== nextState || Number(instance.appliedPolicyRevision || 0) !== appliedPolicyRevision;
+              // A report that raced the stream's replacement must not overwrite the state the
+              // close hook (or the heartbeat fence) recorded.
+              if (!isCurrentCommandStream()) return;
               await deps.db
                 .update(relayInstances)
                 .set({
@@ -935,6 +938,9 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                       assignmentGeneration: Number(count.assignmentGeneration),
                       activeTunnels: Number(count.activeTunnels),
                     })),
+                    // The supervisor's own diagnosis (readiness reason, trust bootstrap
+                    // failure) is what an operator needs when the relay is not ready.
+                    ...(runtime.error ? { lastError: runtime.error.slice(0, 1000) } : {}),
                   },
                   updatedAt: new Date(),
                 })

@@ -4,7 +4,6 @@ import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
-import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { assertComposeVolumeMutationAllowed } from './compose/compose-child.guard.js';
@@ -46,9 +45,14 @@ import {
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
 import { assertDockerResourceScope, filterDockerResourcesForScope } from './docker-access.middleware.js';
-import { resolveDockerVolumeByName } from './docker-route-resolvers.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
-import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
+import {
+  assertSnapshotVolumeVisible,
+  getDockerVolumeMetricsSnapshot,
+  inspectDockerVolumeSnapshot,
+} from './docker-volume-snapshot-reads.js';
+
+export { normalizeVolumeDetailItem } from './docker-volume-snapshot-reads.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_VOLUME_USED_BY_PREVIEW_MAX = 100;
@@ -77,24 +81,6 @@ function requireDockerVolumeScope(
   };
 }
 
-async function assertSnapshotVolumeVisible(nodeId: string, name: string) {
-  const snapshots = container.resolve(DockerSnapshotService);
-  await snapshots.assertDockerNode(nodeId);
-  const [volumes, containers] = await Promise.all([
-    snapshots.getList<any[]>(nodeId, 'volumes'),
-    snapshots.getList<any[]>(nodeId, 'containers'),
-  ]);
-  const candidates = (Array.isArray(volumes.data) ? volumes.data : []).filter(
-    (volume) => String(volume?.Name ?? volume?.name ?? '') === name
-  );
-  const decorated = await container
-    .resolve(DockerManagementService)
-    .decoratePublicVolumeSnapshot(nodeId, candidates, Array.isArray(containers.data) ? containers.data : []);
-  if (!decorated.some((volume) => String(volume?.Name ?? volume?.name ?? '') === name)) {
-    throw new AppError(404, 'VOLUME_NOT_FOUND', 'Volume not found');
-  }
-}
-
 export function compactVolumeListItem(volume: Record<string, any>) {
   const usedBy = volume.usedBy ?? volume.UsedBy;
   return {
@@ -117,29 +103,6 @@ export function compactVolumeListItem(volume: Record<string, any>) {
     folderId: volume.folderId ?? null,
     folderIsSystem: volume.folderIsSystem ?? false,
     folderSortOrder: volume.folderSortOrder ?? 0,
-  };
-}
-
-export function normalizeVolumeDetailItem(volume: Record<string, any>) {
-  const usedBy = volume.usedBy ?? volume.UsedBy;
-  const normalizedUsedBy = Array.isArray(usedBy) ? usedBy : [];
-  return {
-    name: volume.name ?? volume.Name,
-    driver: volume.driver ?? volume.Driver,
-    mountpoint: volume.mountpoint ?? volume.Mountpoint,
-    labels: volume.labels ?? volume.Labels ?? {},
-    options: volume.options ?? volume.Options ?? {},
-    scope: volume.scope ?? volume.Scope,
-    managementState: volume.managementState,
-    storageKind: volume.storageKind,
-    capacityBytes: volume.capacityBytes,
-    adoptable: Boolean(volume.adoptable),
-    adoptionReason: volume.adoptionReason,
-    availability: volume.availability,
-    createdAt: volume.createdAt ?? volume.CreatedAt,
-    usedBy: normalizedUsedBy,
-    usedByCount: normalizedUsedBy.length,
-    usedByTruncated: false,
   };
 }
 
@@ -231,27 +194,8 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
     // The handler applies the public volume visibility to the cached detail.
     { ...inspectVolumeRoute, middleware: requireDockerVolumeScope('docker:volumes:view', 'handler') },
     async (c) => {
-      const snapshots = container.resolve(DockerSnapshotService);
-      const nodeId = c.req.param('nodeId')!;
-      const name = c.req.param('name')!;
-      const detail = await snapshots.getDetail(nodeId, 'volume-detail', name);
-      const data = await resolveDockerVolumeByName({ inspectVolume: async () => detail?.data }, nodeId, name);
-      const containerSnapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-      const [decorated] = await container
-        .resolve(DockerManagementService)
-        .decoratePublicVolumeSnapshot(
-          nodeId,
-          [data],
-          Array.isArray(containerSnapshot.data) ? containerSnapshot.data : []
-        );
-      if (!decorated) throw new HTTPException(404, { message: 'Volume not found' });
-      return c.json({
-        data: {
-          ...normalizeVolumeDetailItem(decorated),
-          nodeId,
-          availability: detail ? snapshots.availability(nodeId, detail) : 'unavailable',
-        },
-      });
+      const data = await inspectDockerVolumeSnapshot(c.req.param('nodeId')!, c.req.param('name')!);
+      return c.json({ data });
     }
   );
 
@@ -474,25 +418,8 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...getVolumeMetricsRoute, middleware: requireDockerVolumeScope('docker:volumes:view', 'snapshot') },
     async (c) => {
-      const nodeId = c.req.param('nodeId')!;
-      const name = c.req.param('name')!;
-      const snapshots = container.resolve(DockerSnapshotService);
-      await snapshots.assertDockerNode(nodeId);
-      const volumes = await snapshots.getList<Array<Record<string, unknown>>>(nodeId, 'volumes');
-      const exists = volumes.data.some((volume) => String(volume.name ?? volume.Name ?? '') === name);
-      if (!exists) throw new AppError(404, 'VOLUME_NOT_FOUND', 'Volume not found');
-      const metrics = await snapshots.getDetail(nodeId, 'volume-metrics', name);
-      if (!metrics?.data) {
-        container
-          .resolve(DockerSnapshotReconciler)
-          .enqueue({ nodeId, kind: 'volume-metrics', key: name }, { urgent: true });
-        throw new AppError(
-          503,
-          'DOCKER_VOLUME_METRICS_PENDING',
-          'Volume metrics are being collected in the background'
-        );
-      }
-      return c.json({ data: metrics.data });
+      const data = await getDockerVolumeMetricsSnapshot(c.req.param('nodeId')!, c.req.param('name')!);
+      return c.json({ data });
     }
   );
 

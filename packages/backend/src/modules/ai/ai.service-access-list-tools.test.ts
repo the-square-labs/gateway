@@ -126,4 +126,43 @@ describe('AIService access-list tool routing', () => {
       'user-1'
     );
   });
+
+  it('creates access lists with the route schema, including description and ordered rules', async () => {
+    const accessListService = { create: vi.fn().mockResolvedValue({ id: 'acl-3' }) };
+    const service = createService(accessListService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['acl:create'] }, 'create_access_list', {
+        name: 'Bad',
+        allowIps: ['not-an-ip'],
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('valid IP address') });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['acl:create'] }, 'create_access_list', {
+        name: 'Auth only',
+        basicAuthEnabled: true,
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Add at least one user') });
+    expect(accessListService.create).not.toHaveBeenCalled();
+
+    await service.executeTool({ ...BASE_USER, scopes: ['acl:create'] }, 'create_access_list', {
+      name: 'Office',
+      description: 'HQ only',
+      ipRules: [{ type: 'deny', value: '10.0.0.5' }],
+      allowIps: ['10.0.0.0/8'],
+    });
+    expect(accessListService.create).toHaveBeenCalledWith(
+      {
+        name: 'Office',
+        description: 'HQ only',
+        ipRules: [
+          { type: 'deny', value: '10.0.0.5' },
+          { type: 'allow', value: '10.0.0.0/8' },
+        ],
+        basicAuthEnabled: false,
+        basicAuthUsers: [],
+      },
+      'user-1'
+    );
+  });
 });

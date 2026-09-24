@@ -310,65 +310,31 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 
 ## API Token Delegation
 
-API and OAuth tokens can be granted all scopes except the protected user/session-only scopes listed below. They cannot be granted:
+API tokens and OAuth grants (for both the Gateway API and Gateway MCP resources) can carry every scope a user can hold, so programmatic clients and MCP agents can do everything a user can do with Gateway resources: node enrollment and configuration, raw nginx config, users and permission groups, Gateway settings, integrations, hosting resources, inference administration, relay control, and updates. Only browser- or identity-bound capabilities are excluded. They cannot be granted:
 
 | Scope | Reason |
 |-------|--------|
-| `ai:workspace:use` | User/session-only AI Workspace access. |
-| `feat:ai:use` | User/session-only Gateway Inference access, usage visibility, and personal token management. |
-| `feat:ai:configure` | User/session-only AI configuration. |
-| `ai:skills:manage` | User/session-only shared AI skill management. |
-| `ai:sandbox:use` | User/session-only sandbox runner access. |
-| `ai:sandbox:tier:medium` | User/session-only sandbox runner tier access. |
-| `ai:sandbox:tier:high` | User/session-only sandbox runner tier access. |
-| `ai:sandbox:manage` | User/session-only sandbox runner management. |
+| `ai:workspace:use` | User-only AI Workspace chat access. |
+| `feat:ai:configure` | User-only AI Workspace configuration. |
+| `ai:skills:manage` | User-only shared AI skill management. |
+| `ai:sandbox:use` | User-only AI sandbox runner access. |
+| `ai:sandbox:tier:medium` | User-only AI sandbox runner tier access. |
+| `ai:sandbox:tier:high` | User-only AI sandbox runner tier access. |
+| `ai:sandbox:manage` | User-only AI sandbox runner management. |
 | `mcp:use` | User-account capability gate for remote MCP. |
 | `inference:setup` | OAuth-only companion CLI authorization resource; not assignable to users or groups. |
-| `admin:system` | Protected system-administrator shielding. |
-| `admin:users` | User administration is session-only. |
-| `admin:users:impersonate` | Browser-only protected user impersonation. |
-| `admin:groups` | Permission group administration is session-only. |
-| `settings:gateway:view` | Gateway auth/control-plane settings are session-only. |
-| `settings:gateway:edit` | Gateway auth/control-plane settings are session-only. |
-| `integrations:gitlab:manage` | GitLab connector administration is session-only. |
-| `integrations:gitlab:system` | System GitLab credential access is session-only. |
-| `integrations:github:manage` | GitHub connector administration is session-only. |
-| `integrations:github:system` | GitHub connector system credentials are session-only. |
-| `integrations:git:manage` | Generic Git connector administration is session-only. |
-| `integrations:git:system` | Generic Git connector system credentials are session-only. |
-| `integrations:ssh:manage` | External SSH connector administration is session-only. |
-| `integrations:cloudflare:manage` | Cloudflare connector administration is session-only. |
-| `integrations:hosting:manage` | Hosting connector administration is session-only. |
-| `hosting:resources:create` | Paid VM creation and node installation require a browser session. |
-| `hosting:resources:power` | VM power actions require a browser session. |
-| `hosting:resources:resize` | VM resize requires a browser session and explicit configuration or quote. |
-| `hosting:snapshots:create` | VM snapshot creation requires a browser session. |
-| `hosting:snapshots:delete` | VM snapshot deletion requires a browser session. |
-| `hosting:snapshots:restore` | Destructive VM snapshot restore requires a browser session. |
-| `hosting:snapshots:folders:manage` | Snapshot folder management requires a browser session. |
-| `hosting:resources:delete` | VM destruction or rental cancellation requires a browser session. |
-| `hosting:resources:recover` | Hosted daemon recovery requires a browser session. |
-| `hosting:billing:view` | Account finances require a browser session. |
-| `hosting:billing:topup` | HOSTKEY deposit invoices require a browser session. |
-| `proxy:raw:read` | Raw nginx config is session-only. |
-| `proxy:raw:write` | Raw nginx config is session-only. |
-| `proxy:raw:toggle` | Raw nginx mode is session-only. |
-| `proxy:raw:bypass` | Dangerous raw nginx directive bypass is session-only. |
-| `proxy:advanced:bypass` | Unrestricted advanced nginx snippets are session-only. |
-| `proxy:maintenance:bypass` | Maintenance access code issuance is session-only. |
-| `nodes:config:view` | Global node nginx config is session-only. |
-| `nodes:config:edit` | Global node nginx config is session-only. |
-| `inference:providers:view` | Inference provider credentials and account state are session-only. |
-| `inference:providers:manage` | Inference provider administration is session-only. |
-| `inference:models:manage` | Inference model publication is session-only. |
-| `inference:limits:manage` | Inference budget administration is session-only. |
-| `inference:usage:view` | System-wide inference accounting is session-only. |
+| `admin:users:impersonate` | Impersonation replaces the caller's browser session with another user's session. |
+| `integrations:gitlab:sandbox:clone` | Clones repositories into the AI sandbox working copy and also requires `ai:sandbox:use`. |
 
 `mcp:use` is not a token scope. It gates whether the owning user account may use the MCP endpoint at all. MCP tokens use ordinary delegated Gateway scopes such as `nodes:details`, `proxy:view`, or `docker:containers:view` to determine which MCP tools and resources are available.
 
-Gateway MCP delegates only the discovery and resync scopes of `integrations:gitlab:*`, `integrations:github:*`, `integrations:git:*`, and `integrations:ssh:*`: the `:view` scopes, `integrations:gitlab:projects:view`, `integrations:gitlab:repo:read`, and `integrations:gitlab:sync`, `integrations:github:sync`, `integrations:git:sync`. Source-control repository, CI, variable, webhook, registry, and external SSH operations belong to dedicated provider MCP servers rather than Gateway's control-plane MCP. Managed DNS access uses the ordinary `domains:*` scopes; `integrations:cloudflare:*` is limited to connector visibility, resync, and administration.
+Gateway MCP delegates the same scopes as API tokens, including GitLab, GitHub, generic Git, Cloudflare, hosting, and external SSH connector administration and operations. Managed DNS access uses the ordinary `domains:*` scopes.
 
-`integrations:<provider>:sync` lets API and OAuth tokens resync a GitLab, GitHub, generic Git, or Cloudflare connector without holding the session-only `integrations:<provider>:manage` scope. Sync routes accept either scope. External SSH has no sync scope: its connection re-test authenticates with the stored credential and stays under `integrations:ssh:manage`.
+Some operations stay browser-only regardless of scopes because they are bound to the caller's identity or browser: sign-in, password, MFA, passkeys, the caller's own sessions and preferences, starting impersonation, OAuth consent, creating or editing API tokens and OAuth authorizations (a token must not mint Gateway credentials), per-user Git credentials, AI Workspace chat, UI bootstrap, and the post-setup onboarding checklist. Gateway settings, user/group administration, node config, raw nginx config, hosting, inference administration and personal `gwi_` inference keys (with `feat:ai:use` on the token), relay control, and updates accept API and OAuth tokens.
+
+Account-level baseline scopes that gate a whole route family (for example `feat:ai:use` in front of inference administration) are evaluated against the token owner's live permissions for bearer callers; the token still needs the route's own delegated scope. Personal inference key management requires `feat:ai:use` on the token itself.
+
+`integrations:<provider>:sync` lets API and OAuth tokens resync a GitLab, GitHub, generic Git, or Cloudflare connector without holding `integrations:<provider>:manage`. Sync routes accept either scope. External SSH has no sync scope: its connection re-test authenticates with the stored credential and stays under `integrations:ssh:manage`.
 
 ## OAuth Manual Approval Scopes
 
@@ -388,10 +354,13 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `ssl:cert:delete` | Can remove deployed SSL certificates. |
 | `ssl:cert:revoke` | Can revoke SSL certificates. |
 | `ssl:cert:export` | Reserved for SSL certificate export capability. |
+| `proxy:raw:write` | Can write raw nginx server config for routes. |
 | `proxy:raw:bypass` | Can bypass dangerous directive validation for raw nginx config. |
+| `proxy:advanced:bypass` | Can apply unrestricted advanced nginx snippets. |
 | `pages:delete` | Can delete Page Projects after their dependencies and retained Deployments are removed. |
 | `pages:tokens:manage` | Can create and revoke Project deploy credentials. |
 | `pages:settings:edit` | Can configure or migrate the public wildcard Pages profile. |
+| `nodes:config:edit` | Can replace and test a node's global nginx config. |
 | `nodes:console` | Can open an interactive shell on nodes. |
 | `nodes:files:read` | Can read files from managed node filesystems. |
 | `nodes:files:write` | Can create, modify, move, or delete files on managed nodes. |
@@ -416,8 +385,22 @@ OAuth consent leaves high-risk scopes unchecked by default. The user must explic
 | `integrations:gitlab:webhooks:manage` | Can create, update, or delete GitLab webhooks. |
 | `integrations:gitlab:registry:manage` | Can mutate GitLab container registry state. |
 | `integrations:gitlab:sandbox:clone` | Can clone connected GitLab repositories into AI sandboxes. |
+| `integrations:gitlab:system` | Can use the system GitLab credential. |
+| `integrations:github:system` | Can use GitHub connector system credentials. |
+| `integrations:git:system` | Can use generic Git connector system credentials. |
+| `integrations:ssh:use` | Can run commands on hosts behind external SSH connectors. |
+| `integrations:hosting:manage` | Can create, reconfigure, and read secrets of hosting provider connectors. |
+| `hosting:resources:create` | Can order paid VMs and install nodes on them. |
+| `hosting:resources:delete` | Can destroy VMs or cancel rentals. |
+| `hosting:snapshots:restore` | Can roll a VM back to a snapshot. |
+| `hosting:billing:topup` | Can request provider deposit invoices. |
 | `logs:tokens:create` | Can mint logging ingest tokens. |
+| `feat:ai:use` | Can use Gateway Inference and mint or revoke the user's `gwi_` inference keys. |
 | `admin:audit` | Can read audit history. |
 | `audit:siem:manage` | Can configure authenticated SIEM endpoints and replay failed audit exports. |
 | `admin:details:certificates` | Can view internal system PKI and SSL certificates. |
 | `admin:update` | Can check for and apply Gateway/daemon updates. |
+| `admin:system` | Protected system administration: deleted-user restore, MFA reset, relay control. |
+| `admin:users` | Can create, reconfigure, block, and delete users and revoke their sessions. |
+| `admin:groups` | Can create and change permission groups and their scopes. |
+| `settings:gateway:edit` | Can change authentication and control-plane settings. |

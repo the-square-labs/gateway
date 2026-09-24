@@ -1,16 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
+import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
 import { LicenseService } from '@/modules/license/license.service.js';
+import { LicenseModuleService } from '@/modules/license/license-module.service.js';
+import { LoggingSettingsService } from '@/modules/logging/logging-settings.service.js';
 import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
+import { EnvironmentSettingsService } from '@/modules/settings/environment-settings.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
+import { EventBusService } from '@/services/event-bus.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { UpdateService } from '@/services/update.service.js';
+import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -31,7 +38,10 @@ const BASE_USER = {
   isBlocked: false,
 };
 
-function createService(groupService: Record<string, unknown> = {}) {
+function createService(
+  groupService: Record<string, unknown> = {},
+  auditService: Record<string, unknown> = { log: vi.fn() }
+) {
   return new AIService(
     {} as never,
     {} as never,
@@ -43,7 +53,7 @@ function createService(groupService: Record<string, unknown> = {}) {
     {} as never,
     {} as never,
     {} as never,
-    { log: vi.fn() } as never,
+    auditService as never,
     {} as never,
     {} as never,
     groupService as never,
@@ -65,6 +75,8 @@ describe('AIService maintenance tools', () => {
       clearKey: vi.fn().mockResolvedValue({ status: 'community' }),
     };
     container.registerInstance(LicenseService, licenseService as unknown as LicenseService);
+    const licenseModuleService = { ensureAvailable: vi.fn().mockResolvedValue({ restarting: true }) };
+    container.registerInstance(LicenseModuleService, licenseModuleService as unknown as LicenseModuleService);
     const service = createService();
 
     await expect(service.executeTool(BASE_USER, 'get_license_status', {})).resolves.toEqual({
@@ -74,9 +86,14 @@ describe('AIService maintenance tools', () => {
     await expect(
       service.executeTool(BASE_USER, 'manage_license', { operation: 'activate', licenseKey: 'WLT-GW-TEST' })
     ).resolves.toEqual({
-      result: { status: 'valid' },
+      result: { status: 'valid', moduleRestarting: true },
       invalidateStores: ['settings'],
     });
+    await expect(service.executeTool(BASE_USER, 'manage_license', { operation: 'activate_module' })).resolves.toEqual({
+      result: { restarting: true },
+      invalidateStores: ['settings'],
+    });
+    expect(licenseModuleService.ensureAvailable).toHaveBeenCalledTimes(2);
     await expect(service.executeTool(BASE_USER, 'manage_license', { operation: 'check' })).resolves.toEqual({
       result: { status: 'valid' },
       invalidateStores: ['settings'],
@@ -131,6 +148,18 @@ describe('AIService maintenance tools', () => {
     expect(housekeepingService.updateConfig).toHaveBeenCalledWith({ enabled: false, cronExpression: '0 1 * * *' });
     expect(updateSchedule).toHaveBeenCalledWith('housekeeping', '0 1 * * *');
     expect(housekeepingService.runAll).toHaveBeenCalledWith('manual', BASE_USER.id);
+
+    await expect(
+      service.executeTool(BASE_USER, 'manage_housekeeping', {
+        operation: 'update_config',
+        config: { cronExpression: 'every night' },
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Invalid cron expression') });
+    housekeepingService.runAll.mockRejectedValueOnce(new Error('Housekeeping is already running'));
+    await expect(service.executeTool(BASE_USER, 'manage_housekeeping', { operation: 'run' })).resolves.toMatchObject({
+      error: 'Housekeeping is already running',
+    });
+    expect(housekeepingService.updateConfig).toHaveBeenCalledTimes(1);
   });
 
   it('rejects housekeeping mutations without operation-specific scopes', async () => {
@@ -205,7 +234,40 @@ describe('AIService maintenance tools', () => {
       OutboundWebhookPolicyService,
       outboundWebhookPolicyService as unknown as OutboundWebhookPolicyService
     );
-    const service = createService(groupService);
+    const smtpConfig = {
+      configured: true,
+      host: 'smtp.example.com',
+      port: 587,
+      tlsMode: 'starttls',
+      username: 'mailer',
+      passwordLast4: 'abcd',
+      senderName: 'Gateway',
+      senderEmail: 'gateway@example.com',
+      verifiedAt: null,
+    };
+    const authMailService = { getPublicConfig: vi.fn().mockResolvedValue(smtpConfig), saveConfig: vi.fn() };
+    container.registerInstance(AuthMailService, authMailService as unknown as AuthMailService);
+    container.registerInstance(OidcSettingsService, {
+      getPublicConfig: vi.fn().mockResolvedValue({ configured: false }),
+    } as unknown as OidcSettingsService);
+    container.registerInstance(LoggingSettingsService, {
+      getPublicConfig: vi.fn().mockResolvedValue({ mode: 'disabled' }),
+    } as unknown as LoggingSettingsService);
+    container.registerInstance(WebTransportSettingsService, {
+      getConfig: vi.fn().mockResolvedValue({ tlsEnabled: false }),
+    } as unknown as WebTransportSettingsService);
+    const environmentSettingsService = {
+      getSnapshot: vi.fn().mockReturnValue({ requestLimits: {} }),
+      update: vi.fn().mockResolvedValue({ requestLimits: { applied: true } }),
+    };
+    container.registerInstance(
+      EnvironmentSettingsService,
+      environmentSettingsService as unknown as EnvironmentSettingsService
+    );
+    const eventBus = { publish: vi.fn() };
+    container.registerInstance(EventBusService, eventBus as unknown as EventBusService);
+    const auditService = { log: vi.fn() };
+    const service = createService(groupService, auditService);
     const user = { ...BASE_USER, scopes: [...BASE_USER.scopes, 'settings:gateway:edit', 'license:view'] };
 
     await expect(service.executeTool(user, 'get_gateway_settings', {})).resolves.toMatchObject({
@@ -213,9 +275,14 @@ describe('AIService maintenance tools', () => {
         oidcAutoCreateUsers: true,
         mcpServerEnabled: false,
         mcpExtendedCompatibility: false,
+        smtp: { host: 'smtp.example.com', passwordLast4: 'abcd' },
+        oidc: { configured: false },
+        logging: { mode: 'disabled' },
+        webTransport: { tlsEnabled: false, restartRequired: false },
         generalSettings: {
           features: { inferenceEnabled: true },
         },
+        environmentSettings: { data: { requestLimits: {} } },
         availableGroups: [{ id: '00000000-0000-4000-8000-000000000001', name: 'viewer', isBuiltin: true }],
       },
       invalidateStores: [],
@@ -254,6 +321,38 @@ describe('AIService maintenance tools', () => {
     expect(generalSettingsService.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false } });
     expect(networkSettingsService.updateConfig).toHaveBeenCalledWith({ clientIpSource: 'direct' });
     expect(outboundWebhookPolicyService.updateConfig).toHaveBeenCalledWith({ allowPrivateNetworks: false });
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'auth.settings_update', resourceType: 'settings', resourceId: 'auth' })
+    );
+    expect(eventBus.publish).toHaveBeenCalledWith('system.config.changed', {
+      action: 'gateway_settings_updated',
+      userId: 'user-1',
+    });
+
+    // Identity-trust settings need admin:system, exactly like PUT /admin/auth-settings.
+    await expect(
+      service.executeTool(user, 'update_gateway_settings', {
+        smtp: {
+          host: 'attacker.example.com',
+          port: 587,
+          tlsMode: 'starttls',
+          username: 'mailer',
+          senderName: 'Gateway',
+          senderEmail: 'gateway@example.com',
+        },
+      })
+    ).resolves.toMatchObject({ error: 'Changing SMTP requires the admin:system permission' });
+    expect(authMailService.saveConfig).not.toHaveBeenCalled();
+
+    // Sign-in methods keep the route prerequisite checks.
+    await expect(
+      service.executeTool(user, 'update_gateway_settings', { methods: { password: true } })
+    ).resolves.toMatchObject({ error: 'Configure and verify SMTP before enabling password or email-code sign-in' });
+
+    await expect(
+      service.executeTool(user, 'update_gateway_settings', { environmentSettings: { requestLimits: {} } })
+    ).resolves.toMatchObject({ result: { environmentSettings: { data: { requestLimits: { applied: true } } } } });
+    expect(environmentSettingsService.update).toHaveBeenCalledTimes(1);
   });
 
   it('routes gateway and daemon update operations through update services', async () => {
@@ -264,8 +363,12 @@ describe('AIService maintenance tools', () => {
         updateAvailable: true,
       }),
       checkForUpdates: vi.fn().mockResolvedValue({ currentVersion: '1.0.0', latestVersion: '1.1.0' }),
+      isAnyUpdateRunning: vi.fn().mockResolvedValue(false),
       getReleaseNotes: vi.fn().mockResolvedValue('release notes'),
+      getReleaseNotesSince: vi.fn().mockResolvedValue([{ version: '1.1.0', notes: 'release notes' }]),
     };
+    const eventBus = { publish: vi.fn() };
+    container.registerInstance(EventBusService, eventBus as unknown as EventBusService);
     const daemonUpdateService = {
       getCachedStatus: vi.fn().mockResolvedValue([{ daemonType: 'docker', nodes: [] }]),
       checkForUpdates: vi.fn().mockResolvedValue([{ daemonType: 'docker', checked: true }]),
@@ -314,6 +417,18 @@ describe('AIService maintenance tools', () => {
       result: { currentVersion: '1.0.0', latestVersion: '1.1.0' },
       invalidateStores: ['settings', 'nodes'],
     });
+    expect(eventBus.publish).toHaveBeenCalledWith('system.update.changed', {
+      updating: false,
+      component: 'gateway',
+      statusChanged: true,
+    });
+    await expect(
+      service.executeTool(user, 'manage_system_updates', { operation: 'list_gateway_release_notes' })
+    ).resolves.toEqual({
+      result: [{ version: '1.1.0', notes: 'release notes' }],
+      invalidateStores: ['settings', 'nodes'],
+    });
+    expect(updateService.getReleaseNotesSince).toHaveBeenCalledWith('1.0.0', '1.1.0');
     await expect(
       service.executeTool(user, 'manage_system_updates', { operation: 'get_gateway_release_notes', version: 'v1.1.0' })
     ).resolves.toEqual({

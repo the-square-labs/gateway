@@ -62,26 +62,36 @@ describe("scope constants", () => {
     expect(tokenValues).not.toContain("docker:containers:files");
 
     expect(apiTokenValues).not.toContain("ai:workspace:use");
-    expect(apiTokenValues).not.toContain("feat:ai:use");
     expect(apiTokenValues).not.toContain("inference:use");
-    expect(apiTokenValues).not.toContain("inference:providers:manage");
-    expect(apiTokenValues).not.toContain("admin:system");
-    expect(apiTokenValues).not.toContain("admin:users");
+    expect(apiTokenValues).not.toContain("mcp:use");
     expect(apiTokenValues).not.toContain("admin:users:impersonate");
-    expect(apiTokenValues).not.toContain("proxy:raw:write");
-    expect(apiTokenValues).not.toContain("nodes:config:edit");
-    expect(apiTokenValues).toContain("nodes:files:read");
-    expect(apiTokenValues).toContain("nodes:files:write");
-    expect(apiTokenValues).toContain("docker:containers:view");
-    expect(apiTokenValues).toContain("docker:compose:view");
-    expect(apiTokenValues).toContain("databases:query:read");
-    expect(apiTokenValues).not.toContain("integrations:gitlab:manage");
-    expect(apiTokenValues).not.toContain("integrations:github:manage");
-    expect(apiTokenValues).not.toContain("integrations:github:system");
-    expect(apiTokenValues).not.toContain("integrations:git:manage");
-    expect(apiTokenValues).not.toContain("integrations:git:system");
-    expect(apiTokenValues).not.toContain("integrations:ssh:manage");
-    expect(apiTokenValues).not.toContain("integrations:cloudflare:manage");
+    expect(apiTokenValues).not.toContain("integrations:gitlab:sandbox:clone");
+    for (const scope of [
+      "feat:ai:use",
+      "inference:providers:manage",
+      "admin:system",
+      "admin:users",
+      "admin:groups",
+      "settings:gateway:edit",
+      "proxy:raw:write",
+      "nodes:config:edit",
+      "nodes:files:read",
+      "nodes:files:write",
+      "docker:containers:view",
+      "docker:compose:view",
+      "databases:query:read",
+      "hosting:resources:create",
+      "integrations:hosting:manage",
+      "integrations:gitlab:manage",
+      "integrations:github:manage",
+      "integrations:github:system",
+      "integrations:git:manage",
+      "integrations:git:system",
+      "integrations:ssh:manage",
+      "integrations:cloudflare:manage",
+    ]) {
+      expect(apiTokenValues).toContain(scope);
+    }
 
     expect(groupValues).toContain("ai:workspace:use");
     expect(groupValues).toContain("feat:ai:use");
@@ -97,50 +107,37 @@ describe("scope constants", () => {
     expect(scopeMatches(["admin:users:impersonate"], "admin:users:impersonate")).toBe(true);
   });
 
-  it("allows connector discovery scopes while keeping mutating integrations out of Gateway MCP scopes", () => {
+  it("lists the same scopes for Gateway MCP as for API tokens, including connector operations", () => {
     const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
 
+    expect(mcpValues).toEqual(scopeValues(API_TOKEN_SCOPES));
     expect(mcpValues).toContain("nodes:details");
-    expect(mcpValues).toContain("integrations:cloudflare:view");
     expect(mcpValues).toEqual(
       expect.arrayContaining([
-        "integrations:gitlab:view",
-        "integrations:gitlab:projects:view",
-        "integrations:gitlab:repo:read",
-        "integrations:github:view",
-        "integrations:git:view",
-        "integrations:ssh:view",
+        "integrations:gitlab:repo:write",
+        "integrations:github:manage",
+        "integrations:git:manage",
+        "integrations:ssh:use",
+        "integrations:ssh:manage",
       ])
     );
-    expect(mcpValues).not.toContain("integrations:gitlab:repo:write");
-    expect(mcpValues).not.toContain("integrations:github:manage");
-    expect(mcpValues).not.toContain("integrations:git:manage");
-    expect(mcpValues).not.toContain("integrations:ssh:use");
+    expect(mcpValues).not.toContain("integrations:gitlab:sandbox:clone");
   });
 
-  it("delegates connector sync scopes to API and MCP tokens while manage stays session-only", () => {
-    const syncScopes = [
+  it("delegates connector sync and administration scopes to API and MCP tokens", () => {
+    const connectorScopes = [
       "integrations:gitlab:sync",
       "integrations:github:sync",
       "integrations:git:sync",
       "integrations:cloudflare:sync",
-    ];
-    const apiValues = scopeValues(API_TOKEN_SCOPES);
-    const mcpValues = scopeValues(MCP_TOKEN_SCOPES);
-
-    expect(apiValues).toEqual(expect.arrayContaining(syncScopes));
-    expect(mcpValues).toEqual(expect.arrayContaining(syncScopes));
-    for (const scope of [
       "integrations:gitlab:manage",
       "integrations:github:manage",
       "integrations:git:manage",
       "integrations:cloudflare:manage",
       "integrations:ssh:manage",
-    ]) {
-      expect(mcpValues).not.toContain(scope);
-    }
-    expect(mcpValues.filter((scope) => scope.startsWith("integrations:ssh:"))).toEqual([
-      "integrations:ssh:view",
-    ]);
+    ];
+
+    expect(scopeValues(API_TOKEN_SCOPES)).toEqual(expect.arrayContaining(connectorScopes));
+    expect(scopeValues(MCP_TOKEN_SCOPES)).toEqual(expect.arrayContaining(connectorScopes));
   });
 });

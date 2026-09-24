@@ -99,4 +99,29 @@ describe('RelayStartupFinalizerService', () => {
       reason: 'ownership_unverified',
     });
   });
+
+  it('delivers the policy to a live relay whose lease ran out instead of recreating it', async () => {
+    const notReady = { ...health(), readiness: false, reason: 'policy snapshot expired' };
+    const client = {
+      reloadIdentity: vi.fn().mockResolvedValue(true),
+      getHealth: vi.fn().mockResolvedValueOnce(notReady).mockResolvedValueOnce(notReady).mockResolvedValue(health()),
+    };
+    const recovery = {
+      ensureStarted: vi.fn().mockResolvedValue('already_running'),
+      recreateExpected: vi.fn().mockResolvedValue('recreate'),
+    };
+    const syncPolicy = vi.fn().mockResolvedValue(12);
+    const finalizer = new RelayStartupFinalizerService(client, recovery as never, {
+      required: true,
+      expectedVersion: '1',
+      readinessWaitMs: 5,
+      readinessPollMs: 1,
+      sleep: async () => {},
+      syncPolicy,
+    });
+    await expect(finalizer.finalize()).resolves.toEqual({ status: 'active', action: null, buildVersion: '1' });
+    expect(syncPolicy).toHaveBeenCalledOnce();
+    expect(recovery.ensureStarted).not.toHaveBeenCalled();
+    expect(recovery.recreateExpected).not.toHaveBeenCalled();
+  });
 });

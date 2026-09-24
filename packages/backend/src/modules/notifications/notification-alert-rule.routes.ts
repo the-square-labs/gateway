@@ -1,6 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
-import { createChildLogger } from '@/lib/logger.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireAnyScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
@@ -14,59 +13,20 @@ import {
   updateNotificationAlertRuleRoute,
 } from './notification.docs.js';
 import {
+  createAlertRuleWithEffects,
+  deleteAlertRuleWithEffects,
+  updateAlertRuleWithEffects,
+} from './notification-alert-rule.mutations.js';
+import {
   AlertRuleListQuerySchema,
   CreateAlertRuleSchema,
   UpdateAlertRuleSchema,
 } from './notification-alert-rule.schemas.js';
 import { NotificationAlertRuleService } from './notification-alert-rule.service.js';
-import { NotificationEvaluatorService } from './notification-evaluator.service.js';
-import { assertHostingAlertAccess } from './notification-hosting-access.js';
-
-const logger = createChildLogger('AlertRuleRoutes');
 
 export const alertRuleRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 alertRuleRoutes.use('*', authMiddleware);
-
-function invalidateCache() {
-  try {
-    container.resolve(NotificationEvaluatorService).invalidateRuleCache();
-  } catch {
-    /* not yet registered */
-  }
-}
-
-/** Disabled, re-scoped or re-targeted rules must not leave firing states behind (they block later alerts). */
-async function reconcileRuleStates(previous: unknown, next: unknown) {
-  try {
-    await container.resolve(NotificationEvaluatorService).reconcileRuleUpdate(previous, next);
-  } catch (error) {
-    // The periodic sweep retries; the rule update itself already succeeded.
-    logger.warn('Failed to reconcile alert states after rule update', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-function triggerCertificateExpiryEvaluation(rule: { category: string; type: string; metric: string | null }) {
-  if (rule.category !== 'certificate' || rule.type !== 'threshold' || rule.metric !== 'days_until_expiry') return;
-  try {
-    const evaluator = container.resolve(NotificationEvaluatorService);
-    void evaluator.evaluateCertificateExpiry().catch(() => {});
-  } catch {
-    /* not yet registered */
-  }
-}
-
-function triggerMaintenanceEvaluation(rule: { category: string; type: string; eventPattern: string | null }) {
-  if (rule.category !== 'proxy' || rule.type !== 'event' || rule.eventPattern !== 'maintenance.active') return;
-  try {
-    const evaluator = container.resolve(NotificationEvaluatorService);
-    void evaluator.reconcileProxyMaintenance().catch(() => {});
-  } catch {
-    /* not yet registered */
-  }
-}
 
 // GET /categories — list alert categories with their metrics, events, and variables
 alertRuleRoutes.openapi(
@@ -134,11 +94,7 @@ alertRuleRoutes.openapi(
     const service = container.resolve(NotificationAlertRuleService);
     const body = CreateAlertRuleSchema.parse(await c.req.json());
     const user = c.get('user')!;
-    assertHostingAlertAccess(c.get('effectiveScopes') ?? user.scopes, body);
-    const rule = await service.create(body, user.id);
-    invalidateCache();
-    triggerCertificateExpiryEvaluation(rule);
-    triggerMaintenanceEvaluation(rule);
+    const rule = await createAlertRuleWithEffects(service, body, c.get('effectiveScopes') ?? user.scopes, user.id);
     return c.json({ data: rule }, 201);
   }
 );
@@ -153,17 +109,13 @@ alertRuleRoutes.openapi(
     const service = container.resolve(NotificationAlertRuleService);
     const body = UpdateAlertRuleSchema.parse(await c.req.json());
     const user = c.get('user')!;
-    const previous = await service.getById(c.req.param('id')!);
-    assertHostingAlertAccess(c.get('effectiveScopes') ?? user.scopes, { ...previous, ...body });
-    const update = () => service.update(c.req.param('id')!, body, user.id);
-    const hostingRule = previous.category === 'hosting_account' || previous.category === 'hosting_vm';
-    const rule = hostingRule
-      ? await container.resolve(NotificationEvaluatorService).updateHostingRule(previous, update)
-      : await update();
-    invalidateCache();
-    if (!hostingRule) await reconcileRuleStates(previous, rule);
-    triggerCertificateExpiryEvaluation(rule);
-    triggerMaintenanceEvaluation(rule);
+    const rule = await updateAlertRuleWithEffects(
+      service,
+      c.req.param('id')!,
+      body,
+      c.get('effectiveScopes') ?? user.scopes,
+      user.id
+    );
     return c.json({ data: rule });
   }
 );
@@ -177,8 +129,7 @@ alertRuleRoutes.openapi(
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);
     const user = c.get('user')!;
-    await service.delete(c.req.param('id')!, user.id);
-    invalidateCache();
+    await deleteAlertRuleWithEffects(service, c.req.param('id')!, user.id);
     return c.body(null, 204);
   }
 );

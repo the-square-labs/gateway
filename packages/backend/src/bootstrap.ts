@@ -242,6 +242,7 @@ import { NginxConfigGenerator } from '@/services/nginx-config-generator.service.
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { ReadModelCoordinator } from '@/services/read-model-coordinator.service.js';
+import { RelayCertificateRenewalService } from '@/services/relay-certificate-renewal.service.js';
 import { RelayDockerRecoveryService } from '@/services/relay-docker-recovery.service.js';
 import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
 import { applyNewerInstalledRelayArtifact, loadInstalledRelayArtifact } from '@/services/relay-installed-artifact.js';
@@ -686,6 +687,8 @@ export async function initializeContainer(): Promise<void> {
       systemCaPath: `${env.GATEWAY_RELAY_IDENTITY_DIR}/system-ca.crt`,
       certificatePath: identity.appClientCertPath,
       privateKeyPath: identity.appClientKeyPath,
+      previousCertificatePath: identity.previousAppClientCertPath,
+      previousPrivateKeyPath: identity.previousAppClientKeyPath,
     });
     container.registerInstance(RelayControlClient, relayControlClient);
     relayPolicyService = new RelayPolicyService(db, cryptoService, generalSettingsService, relayControlClient);
@@ -717,10 +720,24 @@ export async function initializeContainer(): Promise<void> {
   container.registerInstance(NodeDispatchService, nodeDispatch);
   relayPolicyService?.setNodeDispatch(nodeDispatch);
   relayPolicyService?.setEventBus(eventBus);
+  relayPolicyService?.setAuditService(auditService);
   const relayPoolService = relayPolicyService
     ? new RelayPoolService(db, relayPolicyService, eventBus, auditService, generalSettingsService)
     : undefined;
   if (relayPoolService) container.registerInstance(RelayPoolService, relayPoolService);
+  if (relayPoolService && relayPolicyService) {
+    relayPoolService.setCertificateRenewal(
+      new RelayCertificateRenewalService(
+        db,
+        systemCertificateLifecycleService,
+        systemCA,
+        nodeDispatch,
+        relayPolicyService,
+        auditService,
+        eventBus
+      )
+    );
+  }
   relayPoolService?.startReconciliation();
 
   const nginxCertificateDistribution = new NginxCertificateDistributionService(
@@ -1768,6 +1785,7 @@ export async function initializeContainer(): Promise<void> {
     required: env.GATEWAY_RELAY_REQUIRED,
     expectedVersion: env.GATEWAY_RELAY_BUILD_VERSION,
     expectedProtocolMajor: env.GATEWAY_RELAY_PROTOCOL_MAJOR,
+    syncPolicy: relayPolicyService ? () => relayPolicyService!.syncSnapshot() : undefined,
   });
   container.registerInstance(RelayStartupFinalizerService, relayStartupFinalizer);
   const relaySupervisor = new RelaySupervisorService(

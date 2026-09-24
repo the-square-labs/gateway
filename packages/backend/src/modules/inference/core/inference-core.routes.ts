@@ -1,7 +1,7 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { appRoute, jsonBody, okJson, openApiValidationHook } from '@/lib/openapi.js';
-import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireAccountScope, requireScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { inferenceCoreOperationSchema, inferenceCoreStatusSchema } from './inference-core.contract.js';
 import { InferenceCoreRuntimeService } from './inference-core-runtime.service.js';
@@ -20,7 +20,7 @@ const coreStatusRoute = appRoute({
   responses: okJson(inferenceCoreStatusSchema),
 });
 
-const coreVersionInputSchema = z
+export const coreVersionInputSchema = z
   .object({
     version: z
       .string()
@@ -48,7 +48,7 @@ const coreInstallRoute = appRoute({
   responses: acceptedJson(coreOperationAcceptedSchema),
 });
 
-const coreUpdateInputSchema = z
+export const coreUpdateInputSchema = z
   .object({
     version: z
       .string()
@@ -99,8 +99,9 @@ const coreCheckUpdatesRoute = appRoute({
 export const inferenceCoreLifecycleRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 inferenceCoreLifecycleRoutes.use('*', authMiddleware);
-inferenceCoreLifecycleRoutes.use('*', sessionOnly);
-inferenceCoreLifecycleRoutes.use('*', requireScope('feat:ai:use'));
+// feat:ai:use is user-only. Bearer callers inherit it from the token owner; every route below still
+// requires its own delegated inference:providers:* scope.
+inferenceCoreLifecycleRoutes.use('*', requireAccountScope('feat:ai:use'));
 
 inferenceCoreLifecycleRoutes.openapi(
   { ...coreStatusRoute, middleware: requireScope('inference:providers:view') },

@@ -1163,6 +1163,55 @@ describe('UpdateService interrupted updates', () => {
     expect(runtime.drainInstance).not.toHaveBeenCalledWith('remote-1', expect.anything(), false);
   });
 
+  it('does not drain again a relay a retried run finds already updated', async () => {
+    const { service, runtime } = rolloutHarness();
+    const internals = service as unknown as Record<string, (...args: any[]) => any>;
+    const at = vi.spyOn(internals, 'isRemoteRelayAt').mockResolvedValue(true);
+
+    await service.performRelayUpdate('v2.4.3', {} as never, 'admin-1');
+
+    expect(at).toHaveBeenCalledWith(expect.objectContaining({ id: 'remote-1' }), 'v2.4.3');
+    expect(runtime.drainInstance).not.toHaveBeenCalled();
+    expect(runtime.dispatchWorkerUpdate).not.toHaveBeenCalled();
+    expect(internals.updatePoolStep).toHaveBeenCalledWith('step-1', 'ready', true);
+  });
+
+  it('still resumes the drained relay when recording the failure fails', async () => {
+    const { service, runtime, verify } = rolloutHarness();
+    verify.mockRejectedValue(new Error('verify timed out'));
+    const db = (service as unknown as { db: { update: ReturnType<typeof vi.fn> } }).db;
+    const update = db.update.getMockImplementation() as (table: unknown) => unknown;
+    db.update.mockImplementation((table: unknown) => {
+      if (table === relayPoolUpdateSteps) throw new Error('database connection lost');
+      return update(table);
+    });
+
+    await expect(service.performRelayUpdate('v2.4.3', {} as never, 'admin-1')).rejects.toThrow();
+    await vi.waitFor(() => expect(runtime.drainInstance).toHaveBeenLastCalledWith('remote-1', 'admin-1', false));
+  });
+
+  it('tells the UI which Relay Pool rollouts can still be abandoned', async () => {
+    const run = (state: string) => ({
+      state,
+      targetArtifact: { version: 'v2.4.3' },
+      startedAt: new Date('2026-09-24T10:00:00Z'),
+      terminalError: state === 'paused' ? 'Relay drain is waiting for active streams' : 'verify timed out',
+    });
+    for (const [state, abandonable] of [
+      ['paused', true],
+      ['updating', true],
+      ['failed', false],
+    ] as const) {
+      const { db } = scriptedDb([[run(state)]]);
+      const { service } = serviceWith(db);
+      service.setRelayPoolUpdateRuntime({} as never);
+      const operation = await (
+        service as unknown as { getDurableRelayOperation(): Promise<Record<string, unknown>> }
+      ).getDurableRelayOperation();
+      expect(operation).toMatchObject({ abandonable, runState: state });
+    }
+  });
+
   it('refuses to abandon when no Relay Pool update runs', async () => {
     const { db } = scriptedDb([[]]);
     const { service } = serviceWith(db);

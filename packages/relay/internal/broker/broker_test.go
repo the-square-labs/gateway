@@ -628,3 +628,35 @@ func authenticatedContext(commonName string, raw []byte) context.Context {
 	certificate := &x509.Certificate{Subject: pkix.Name{CommonName: commonName}, SerialNumber: big.NewInt(1), Raw: raw}
 	return grpcpeer.NewContext(context.Background(), &grpcpeer.Peer{AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{PeerCertificates: []*x509.Certificate{certificate}, VerifiedChains: [][]*x509.Certificate{{certificate}}}}})
 }
+
+// The opener can give up (timeout, cancel, revocation) right after the target
+// handed over its accept stream. The accept side must end then, not wait for
+// a result nobody will send.
+func TestAcceptTunnelEndsWhenOpenerLeavesBeforeBridging(t *testing.T) {
+	store, err := policy.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	b := New(store)
+	endpoint := &relayv1.EndpointPolicy{EndpointId: "endpoint-1", SubjectId: "node-target"}
+	session := &activeTunnel{stop: make(chan struct{})}
+	pending := &pendingTunnel{endpoint: endpoint, session: session, accepted: make(chan acceptedConnection, 1)}
+	b.pending["token-1"] = pending
+	ctx := authenticatedContext("node-target", []byte("target"))
+	identity, _ := grpcpeer.FromContext(ctx)
+	certificate := identity.AuthInfo.(credentials.TLSInfo).State.PeerCertificates[0]
+	endpoint.CertificateSha256 = fmt.Sprintf("sha256:%x", sha256.Sum256(certificate.Raw))
+	done := make(chan error, 1)
+	go func() { done <- b.AcceptTunnel(&acceptStream{ctx: ctx, first: acceptFrame("token-1")}) }()
+	<-pending.accepted
+	session.close()
+	select {
+	case err := <-done:
+		if code := status.Code(err); code != codes.Aborted {
+			t.Fatalf("accept ended with %v, want Aborted", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("accept stream stayed open after the opener left")
+	}
+}

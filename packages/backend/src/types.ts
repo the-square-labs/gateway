@@ -17,6 +17,8 @@ export interface User {
   groupScopes?: string[];
   additionalScopes?: string[];
   scopes: string[];
+  /** Live account scopes behind a programmatic (MCP) caller whose `scopes` are token-bounded. */
+  accountScopes?: string[];
   isBlocked: boolean;
   isDeleted?: boolean;
   aiApprovalMode?: 'always-ask' | 'normal' | 'bypass-non-destructive' | 'bypass-everything';

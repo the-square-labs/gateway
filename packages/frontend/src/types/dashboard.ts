@@ -137,7 +137,48 @@ export interface DashboardRelayInstance {
     activeTunnels?: number;
     registeredEndpoints?: number;
     pressurePercent?: number;
+    /** The relay's last reported problem, such as why it is not ready. */
+    lastError?: string;
   } | null;
+  /** Why this relay refuses Gateway policy and what repairs it; null when trust is fine. */
+  policyTrust?: RelayPolicyTrustStatus | null;
+  /** Certificate expiry or renewal problems; null when the certificate is fine. */
+  certificate?: RelayCertificateStatus | null;
+}
+
+export interface RelayCertificateStatus {
+  state: "expiring" | "expired" | "renewal_failed";
+  message: string;
+  expiresAt: string | null;
+  observedAt: string;
+}
+
+export interface RelayPolicyTrustStatus {
+  state:
+    | "locked_out"
+    | "recovered"
+    | "recovery_unsupported"
+    | "recovery_failed"
+    | "reenrollment_required";
+  message: string;
+  observedAt: string;
+  trustedKeyIds: string[];
+}
+
+/** A single-use token that re-enrolls an enrolled remote relay through the relay installer. */
+export interface RelayReenrollment {
+  instanceId: string;
+  nodeId: string;
+  displayName: string;
+  enrollmentToken: string;
+  enrollmentTokenExpiresAt: string;
+  advertiseAddress: string | null;
+  servicePort: number;
+  gatewayCertSha256: string;
+  gatewayEnrollmentTargets?: {
+    public?: { label: string; gateway: string | null };
+    local?: { label: string; gateway: string | null };
+  };
 }
 
 export interface DashboardPinnedDockerResourceRequest {

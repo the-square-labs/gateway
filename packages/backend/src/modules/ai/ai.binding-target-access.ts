@@ -62,3 +62,33 @@ export async function assertWorkloadBindingTargetAccess(
     requireDockerScope(scopes, scope, target.targetNodeId, '');
   }
 }
+
+/**
+ * Scope-based copy of `assertManagedDatabaseBindingTargetViewAccess`: reading a
+ * binding's runtime needs view access to the target workload.
+ */
+export async function assertWorkloadBindingTargetViewAccess(
+  scopes: string[],
+  target: WorkloadBindingTarget
+): Promise<void> {
+  if (target.targetType === 'compose_service') {
+    const composeTarget = decodeComposeServiceTarget(target.targetResourceId);
+    requireDockerScope(scopes, 'docker:compose:view', target.targetNodeId, composeTarget.projectId);
+    return;
+  }
+  const scope = 'docker:containers:view';
+  if (hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)) return;
+  if (target.targetType === 'deployment') {
+    requireDockerScope(scopes, scope, target.targetNodeId, target.targetResourceId);
+    return;
+  }
+  const inspected = await container
+    .resolve(DockerManagementService)
+    .inspectContainer(target.targetNodeId, target.targetResourceId);
+  if (isGatewayInternalContainer(inspected)) {
+    throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  }
+  const resourceId = String(inspected?.scopeResourceId ?? '');
+  if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  requireDockerScope(scopes, scope, target.targetNodeId, resourceId);
+}

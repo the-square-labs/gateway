@@ -121,26 +121,76 @@ describe('inference management token routes', () => {
     expect(service.revokeToken).toHaveBeenCalledWith(USER.id, '22222222-2222-4222-8222-222222222222');
   });
 
-  it('rejects ordinary and inference bearer tokens from browser-only management routes', async () => {
-    container.registerInstance(TokensService, {
-      validateToken: vi.fn().mockResolvedValue({
-        user: USER,
-        scopes: USER.scopes,
-        tokenId: 'token-1',
-        tokenPrefix: 'gw_test',
-      }),
-    } as unknown as TokensService);
+  it('manages inference keys for bearer tokens that hold feat:ai:use and rejects inference tokens', async () => {
+    const validateToken = vi.fn().mockResolvedValue({
+      user: USER,
+      scopes: USER.scopes,
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    container.registerInstance(TokensService, { validateToken } as unknown as TokensService);
+    const service = { listTokens: vi.fn().mockResolvedValue([]) };
+    container.registerInstance(InferenceTokenService, service as unknown as InferenceTokenService);
     const app = createApp();
 
     const ordinary = await app.request('/api/inference/tokens', {
       headers: { Authorization: 'Bearer gw_test' },
     });
+    expect(ordinary.status).toBe(200);
+    expect(service.listTokens).toHaveBeenCalledWith(USER.id);
+
+    // The owner's feat:ai:use does not stand in for the token's own grant on key management.
+    validateToken.mockResolvedValueOnce({
+      user: USER,
+      scopes: ['nodes:details'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    const withoutGrant = await app.request('/api/inference/tokens', {
+      headers: { Authorization: 'Bearer gw_test' },
+    });
+    expect(withoutGrant.status).toBe(403);
+
     const inference = await app.request('/api/inference/tokens', {
       headers: { Authorization: 'Bearer gwi_test' },
     });
-
-    expect(ordinary.status).toBe(403);
     expect(inference.status).toBe(401);
+    expect(service.listTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets bearer tokens administer providers through their delegated scope and the owner feat:ai:use', async () => {
+    const owner = { ...USER, scopes: [...USER.scopes, 'inference:providers:view'] };
+    const validateToken = vi.fn().mockResolvedValue({
+      user: owner,
+      scopes: ['inference:providers:view'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    container.registerInstance(TokensService, { validateToken } as unknown as TokensService);
+    const providerService = { listConnections: vi.fn().mockResolvedValue([]) };
+    container.registerInstance(InferenceProviderService, providerService as unknown as InferenceProviderService);
+    const app = createApp();
+    const headers = { Authorization: 'Bearer gw_test' };
+
+    expect((await app.request('/api/inference/providers/connections', { headers })).status).toBe(200);
+    expect(providerService.listConnections).toHaveBeenCalledTimes(1);
+
+    validateToken.mockResolvedValueOnce({
+      user: { ...owner, scopes: ['inference:providers:view'] },
+      scopes: ['inference:providers:view'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    expect((await app.request('/api/inference/providers/connections', { headers })).status).toBe(403);
+
+    validateToken.mockResolvedValueOnce({
+      user: owner,
+      scopes: ['nodes:details'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    expect((await app.request('/api/inference/providers/connections', { headers })).status).toBe(403);
+    expect(providerService.listConnections).toHaveBeenCalledTimes(1);
   });
 
   it('enforces provider scopes and never returns a connected secret', async () => {

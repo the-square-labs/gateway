@@ -371,8 +371,26 @@ export function requireScopeForResource(scopeBase: string, paramName: string): M
 }
 
 /**
+ * Account-level baseline gate (for example `feat:ai:use` in front of inference administration) for
+ * routes that carry their own delegated scope checks. Bearer callers are checked against the owning
+ * account's live permissions, so a token does not have to carry the baseline scope itself: it still
+ * needs each route's own scope and can never reach more than its owner can in the browser.
+ */
+export function requireAccountScope(scope: string): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const scopes = isProgrammaticAuth(c) ? c.get('user')?.scopes : c.get('effectiveScopes');
+    if (!scopes || !TokensService.hasScope(scopes, scope)) {
+      throw new HTTPException(403, { message: `Missing required scope: ${scope}` });
+    }
+    await next();
+  };
+}
+
+/**
  * Middleware that restricts access to session-authenticated users only.
- * API tokens are not allowed.
+ * Reserved for browser/identity-bound routes (login, MFA, passkeys, own sessions, impersonation,
+ * OAuth consent, token management, AI chat, UI bootstrap). Resource and management routes accept
+ * API and OAuth tokens and rely on their scope checks instead.
  */
 export const sessionOnly: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (c.get('authType') !== 'session') {

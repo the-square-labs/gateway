@@ -17,8 +17,13 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_cas',
     description:
-      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId.',
-    parameters: { type: 'object', properties: {} },
+      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId. CAs are listed for their type view scope or a per-CA pki:cert:issue grant.',
+    parameters: {
+      type: 'object',
+      properties: {
+        showSystem: { type: 'boolean', description: 'Include Gateway system CAs; needs admin:details:certificates' },
+      },
+    },
     destructive: false,
     category: 'PKI - Certificate Authorities',
     requiredScope: 'pki:ca:view:root',
@@ -112,15 +117,17 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_ca',
     description:
-      'Manage Certificate Authorities beyond create/delete. Operations: update. CA type-specific view/revoke/create scopes are enforced where needed.',
+      'Manage Certificate Authorities beyond create/delete. Operations: update (CRL distribution URL, CA issuers URL, max issued validity; needs pki:ca:create:root), revoke (revokes the CA and its subordinate CAs; needs pki:ca:revoke:<type>), export_key (PKCS#12 of the CA private key and certificate protected by passphrase, returned base64; needs pki:ca:create:root and is audited).',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['update'] },
+        operation: { type: 'string', enum: ['update', 'revoke', 'export_key'] },
         caId: { type: 'string' },
         crlDistributionUrl: { type: ['string', 'null'] },
         caIssuersUrl: { type: ['string', 'null'] },
         maxValidityDays: { type: 'number' },
+        reason: { type: 'string', description: 'Revocation reason for revoke' },
+        passphrase: { type: 'string', description: 'PKCS#12 passphrase for export_key (at least 8 characters)' },
       },
       required: ['operation', 'caId'],
     },
@@ -128,6 +135,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     category: 'PKI - Certificate Authorities',
     requiredScope: 'pki:ca:create:root',
     invalidateStores: ['ca'],
+    historyRetention: { mode: 'never_full' },
   },
   {
     name: 'list_certificates',
@@ -138,7 +146,14 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         caId: { type: 'string', description: 'Filter by CA UUID' },
         status: { type: 'string', enum: ['active', 'revoked', 'expired'], description: 'Filter by status' },
+        type: { type: 'string', enum: ['tls-server', 'tls-client', 'code-signing', 'email'] },
         search: { type: 'string', description: 'Search by common name' },
+        showSystem: {
+          type: 'boolean',
+          description: 'Include certificates of Gateway system CAs; needs admin:details:certificates',
+        },
+        sortBy: { type: 'string', enum: ['commonName', 'createdAt', 'notAfter', 'type'] },
+        sortOrder: { type: 'string', enum: ['asc', 'desc'] },
         page: { type: 'number', description: 'Page number (default: 1)' },
         limit: { type: 'number', description: 'Items per page (default: 50)' },
       },
@@ -216,9 +231,21 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         certificateId: { type: 'string', description: 'Certificate UUID to revoke' },
-        reason: { type: 'string', description: 'Revocation reason (e.g., "key_compromise", "unspecified")' },
+        reason: {
+          type: 'string',
+          enum: [
+            'unspecified',
+            'keyCompromise',
+            'caCompromise',
+            'affiliationChanged',
+            'superseded',
+            'cessationOfOperation',
+            'certificateHold',
+          ],
+          description: 'RFC 5280 revocation reason (default: unspecified)',
+        },
       },
-      required: ['certificateId', 'reason'],
+      required: ['certificateId'],
     },
     destructive: true,
     category: 'PKI - Certificates',
@@ -228,7 +255,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_certificate',
     description:
-      'Manage PKI certificates beyond generated issuance. Operations: issue_from_csr, export, chain. Operation-specific pki:cert:* scopes are enforced.',
+      'Manage PKI certificates beyond generated issuance. Operations: issue_from_csr, export, chain. Export formats: pem, der, chain (intermediates), fullchain, and the private-key formats private-key, pem-bundle (zip), pkcs12 and jks (passphrase required). Binary formats return contentBase64. Private-key exports are audited and refused for system CAs without admin:system. Operation-specific pki:cert:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
@@ -240,7 +267,10 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
         csrPem: { type: 'string' },
         validityDays: { type: 'number' },
         overrideSans: { type: 'array', items: { type: 'string' } },
-        format: { type: 'string', enum: ['pem', 'der', 'pkcs12', 'jks'] },
+        format: {
+          type: 'string',
+          enum: ['pem', 'der', 'chain', 'fullchain', 'private-key', 'pem-bundle', 'pkcs12', 'jks'],
+        },
         passphrase: { type: 'string' },
       },
       required: ['operation'],
@@ -249,6 +279,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     category: 'PKI - Certificates',
     requiredScope: 'pki:cert:view',
     invalidateStores: ['certificates', 'ca'],
+    historyRetention: { mode: 'never_full' },
   },
   {
     name: 'list_templates',
@@ -261,22 +292,12 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'create_template',
-    description: 'Create a new certificate template with predefined settings.',
+    description:
+      'Create a new certificate template with predefined settings. Fields match the template API: certType (alias type), keyUsage, extKeyUsage (alias extendedKeyUsage), SAN requirements, subject DN defaults, CRL distribution points, AIA, certificate policies, and custom extensions.',
     parameters: {
       type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Template name' },
-        type: {
-          type: 'string',
-          enum: ['tls-server', 'tls-client', 'code-signing', 'email'],
-          description: 'Certificate type',
-        },
-        keyAlgorithm: { type: 'string', enum: ['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384'] },
-        validityDays: { type: 'number', description: 'Default validity in days' },
-        keyUsage: { type: 'array', items: { type: 'string' }, description: 'Key usage flags' },
-        extendedKeyUsage: { type: 'array', items: { type: 'string' }, description: 'Extended key usage OIDs' },
-      },
-      required: ['name', 'type', 'keyAlgorithm', 'validityDays'],
+      properties: templateProperties(),
+      required: ['name', 'keyAlgorithm', 'validityDays'],
     },
     destructive: true,
     category: 'PKI - Templates',
@@ -300,18 +321,13 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'manage_template',
-    description: 'Get or update a PKI certificate template. Operations: get, update.',
+    description: 'Get or update a PKI certificate template. Operations: get, update (same fields as create_template).',
     parameters: {
       type: 'object',
       properties: {
         operation: { type: 'string', enum: ['get', 'update'] },
         templateId: { type: 'string' },
-        name: { type: 'string' },
-        type: { type: 'string', enum: ['tls-server', 'tls-client', 'code-signing', 'email'] },
-        keyAlgorithm: { type: 'string', enum: ['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384'] },
-        validityDays: { type: 'number' },
-        keyUsage: { type: 'array', items: { type: 'string' } },
-        extendedKeyUsage: { type: 'array', items: { type: 'string' } },
+        ...templateProperties(),
       },
       required: ['operation', 'templateId'],
     },
@@ -321,3 +337,55 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: ['templates'],
   },
 ];
+
+function templateProperties(): Record<string, unknown> {
+  const certType = { type: 'string', enum: ['tls-server', 'tls-client', 'code-signing', 'email'] };
+  return {
+    name: { type: 'string', description: 'Template name' },
+    description: { type: 'string' },
+    certType,
+    type: { ...certType, description: 'Alias of certType' },
+    keyAlgorithm: { type: 'string', enum: ['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384'] },
+    validityDays: { type: 'number', description: 'Default validity in days (1-3650)' },
+    keyUsage: {
+      type: 'array',
+      items: {
+        type: 'string',
+        enum: ['digitalSignature', 'keyEncipherment', 'dataEncipherment', 'keyAgreement', 'nonRepudiation'],
+      },
+    },
+    extKeyUsage: { type: 'array', items: { type: 'string' }, description: 'Named usages or custom OIDs' },
+    extendedKeyUsage: { type: 'array', items: { type: 'string' }, description: 'Alias of extKeyUsage' },
+    requireSans: { type: 'boolean' },
+    sanTypes: { type: 'array', items: { type: 'string', enum: ['dns', 'ip', 'email', 'uri'] } },
+    subjectDnFields: {
+      type: 'object',
+      properties: {
+        o: { type: 'string' },
+        ou: { type: 'string' },
+        l: { type: 'string' },
+        st: { type: 'string' },
+        c: { type: 'string' },
+        serialNumber: { type: 'string' },
+      },
+    },
+    crlDistributionPoints: { type: 'array', items: { type: 'string' } },
+    authorityInfoAccess: { type: 'object', properties: { caIssuersUrl: { type: 'string' } } },
+    certificatePolicies: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { oid: { type: 'string' }, qualifier: { type: 'string' } },
+        required: ['oid'],
+      },
+    },
+    customExtensions: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { oid: { type: 'string' }, critical: { type: 'boolean' }, value: { type: 'string' } },
+        required: ['oid', 'value'],
+      },
+    },
+  };
+}

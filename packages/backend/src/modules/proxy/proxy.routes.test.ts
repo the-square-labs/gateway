@@ -91,12 +91,6 @@ function createApp() {
   return app;
 }
 
-function expectNoRawFields(value: unknown) {
-  const serialized = JSON.stringify(value);
-  expect(serialized).not.toContain('rawConfig');
-  expect(serialized).not.toContain('rawConfigEnabled');
-}
-
 describe('proxy routes programmatic raw config handling', () => {
   beforeEach(() => {
     mocks.authType = 'api-token';
@@ -118,24 +112,31 @@ describe('proxy routes programmatic raw config handling', () => {
     mocks.proxyService.assertReferenceAccess.mockResolvedValue(undefined);
   });
 
-  it('strips raw config fields from programmatic list and detail responses', async () => {
+  it('applies the same scope-based raw config visibility to programmatic list and detail responses', async () => {
+    const { rawConfig: _rawConfig, ...listedHost } = rawHost;
+    mocks.proxyService.listProxyHosts.mockResolvedValue({ data: [listedHost], total: 1 });
     const listResponse = await proxyRoutes.request('/', {
       headers: { Authorization: 'Bearer gw_token' },
     });
     const listBody = (await listResponse.json()) as { data: Array<Record<string, unknown>> };
 
-    expect(listBody.data[0]).not.toHaveProperty('rawConfig');
-    expect(listBody.data[0]).not.toHaveProperty('rawConfigEnabled');
-    expectNoRawFields(listBody);
+    expect(listResponse.status).toBe(200);
+    expect(listBody.data[0]).toEqual(listedHost);
 
     const detailResponse = await proxyRoutes.request('/host-1', {
       headers: { Authorization: 'Bearer gw_token' },
     });
     const detailBody = (await detailResponse.json()) as { data: Record<string, unknown> };
 
-    expect(detailBody.data).not.toHaveProperty('rawConfig');
-    expect(detailBody.data).not.toHaveProperty('rawConfigEnabled');
-    expectNoRawFields(detailBody);
+    expect(detailBody.data.rawConfig).toBeNull();
+    expect(detailBody.data.rawConfigEnabled).toBe(true);
+
+    mocks.scopes = [...mocks.scopes, 'proxy:raw:read:host-1'];
+    const rawDetail = await proxyRoutes.request('/host-1', {
+      headers: { Authorization: 'Bearer gw_token' },
+    });
+
+    expect(((await rawDetail.json()) as { data: Record<string, unknown> }).data.rawConfig).toBe('server {}');
   });
 
   it('accepts a managed S3 destination without Docker fields and forwards effective scopes', async () => {
@@ -330,7 +331,7 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(toggleBody.data.rawConfigEnabled).toBe(true);
   });
 
-  it('strips raw config fields from programmatic create update and toggle responses', async () => {
+  it('redacts raw config from programmatic create update and toggle responses without raw read scope', async () => {
     const createResponse = await jsonRequest('POST', '/', {
       nodeId: '11111111-1111-4111-8111-111111111111',
       domainNames: ['app.example.com'],
@@ -340,7 +341,7 @@ describe('proxy routes programmatic raw config handling', () => {
     const createBody = (await createResponse.json()) as { data: Record<string, unknown> };
 
     expect(createResponse.status).toBe(201);
-    expectNoRawFields(createBody);
+    expect(createBody.data.rawConfig).toBeNull();
 
     const updateResponse = await jsonRequest('PUT', '/host-1', {
       forwardHost: 'upstream',
@@ -348,7 +349,7 @@ describe('proxy routes programmatic raw config handling', () => {
     const updateBody = (await updateResponse.json()) as { data: Record<string, unknown> };
 
     expect(updateResponse.status).toBe(200);
-    expectNoRawFields(updateBody);
+    expect(updateBody.data.rawConfig).toBeNull();
 
     const toggleResponse = await jsonRequest('POST', '/host-1/toggle', {
       enabled: false,
@@ -356,7 +357,7 @@ describe('proxy routes programmatic raw config handling', () => {
     const toggleBody = (await toggleResponse.json()) as { data: Record<string, unknown> };
 
     expect(toggleResponse.status).toBe(200);
-    expectNoRawFields(toggleBody);
+    expect(toggleBody.data.rawConfig).toBeNull();
   });
 
   it('toggles maintenance through the resource-scoped edit endpoint', async () => {
@@ -368,44 +369,92 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.toggleMaintenance).toHaveBeenCalledWith('host-1', true, 'user-1');
   });
 
-  it('rejects raw config create and update requests from programmatic auth', async () => {
-    const createResponse = await jsonRequest('POST', '/', {
+  it('gates programmatic raw config create and update requests by raw scopes only', async () => {
+    const rawCreate = {
       type: 'raw',
       nodeId: '11111111-1111-4111-8111-111111111111',
       domainNames: ['raw.example.com'],
       forwardHost: 'upstream',
       forwardPort: 8080,
       rawConfig: 'server {}',
+    };
+    const createResponse = await createApp().request('/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(rawCreate),
     });
 
     expect(createResponse.status).toBe(403);
     expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
 
-    const updateResponse = await jsonRequest('PUT', '/host-1', {
-      rawConfig: 'server {}',
+    const updateResponse = await createApp().request('/host-1', {
+      method: 'PUT',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rawConfig: 'server {}' }),
     });
 
     expect(updateResponse.status).toBe(403);
     expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
+
+    mocks.scopes = [...mocks.scopes, 'proxy:raw:toggle', 'proxy:raw:write', 'proxy:raw:read'];
+    const allowedCreate = await jsonRequest('POST', '/', rawCreate);
+    const allowedCreateBody = (await allowedCreate.json()) as { data: Record<string, unknown> };
+
+    expect(allowedCreate.status).toBe(201);
+    expect(allowedCreateBody.data.rawConfig).toBe('server {}');
+    expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+      expect.objectContaining({ rawConfig: 'server {}' }),
+      'user-1',
+      expect.any(Object)
+    );
+
+    const allowedUpdate = await jsonRequest('PUT', '/host-1', { rawConfig: 'server {}' });
+
+    expect(allowedUpdate.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledWith(
+      'host-1',
+      expect.objectContaining({ rawConfig: 'server {}' }),
+      'user-1',
+      expect.any(Object)
+    );
   });
 
-  it('rejects raw config validation from programmatic auth', async () => {
+  it('validates raw config from programmatic auth with raw write scope', async () => {
+    const denied = await createApp().request('/validate-config', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snippet: 'server {}', mode: 'raw' }),
+    });
+
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.validateAdvancedConfig).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:raw:write:host-1'];
     const response = await jsonRequest('POST', '/validate-config', {
       snippet: 'server {}',
       mode: 'raw',
+      proxyHostId: 'host-1',
     });
 
-    expect(response.status).toBe(403);
-    expect(mocks.proxyService.validateAdvancedConfig).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mocks.proxyService.validateAdvancedConfig).toHaveBeenCalledWith('server {}', true, false, false);
   });
 
-  it('rejects rendered raw config reads from programmatic auth', async () => {
+  it('reads rendered raw config from programmatic auth only with raw read scope', async () => {
+    const denied = await proxyRoutes.request('/host-1/rendered-config', {
+      headers: { Authorization: 'Bearer gw_token' },
+    });
+
+    expect(denied.status).toBe(403);
+    expect(mocks.proxyService.getRenderedConfig).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:raw:read:host-1'];
     const response = await proxyRoutes.request('/host-1/rendered-config', {
       headers: { Authorization: 'Bearer gw_token' },
     });
 
-    expect(response.status).toBe(403);
-    expect(mocks.proxyService.getRenderedConfig).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ data: { rendered: 'server {}' } });
   });
 
   it('requires explicit raw read scope for rendered raw config reads', async () => {

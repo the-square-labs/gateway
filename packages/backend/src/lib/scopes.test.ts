@@ -22,6 +22,7 @@ import {
   PROGRAMMATIC_DENIED_BASE_SCOPES,
   RESOURCE_SCOPABLE,
   SYSTEM_ADMIN_SCOPES,
+  USER_ONLY_SCOPES,
   VIEWER_SCOPES,
 } from './scopes.js';
 
@@ -86,65 +87,41 @@ function migratedProgrammaticStoredScopes(scopes: string[]): string[] {
 }
 
 describe('canonical scope definitions', () => {
-  it('allows connector discovery scopes while keeping mutating integrations out of Gateway MCP delegation', () => {
+  it('delegates the same scopes to Gateway MCP as to API tokens, including connector operations', () => {
+    expect(MCP_TOKEN_SCOPES).toEqual(API_TOKEN_SCOPES);
     expect(MCP_TOKEN_SCOPES).toContain('nodes:details');
-    expect(MCP_TOKEN_SCOPES).toContain('integrations:cloudflare:view');
     expect(MCP_TOKEN_SCOPES).not.toContain('mcp:use');
     expect(MCP_TOKEN_SCOPES).toEqual(
       expect.arrayContaining([
-        'integrations:gitlab:view',
-        'integrations:gitlab:projects:view',
-        'integrations:gitlab:repo:read',
-        'integrations:github:view',
-        'integrations:git:view',
-        'integrations:ssh:view',
+        'integrations:gitlab:repo:write',
+        'integrations:gitlab:variables:edit',
+        'integrations:github:manage',
+        'integrations:git:manage',
+        'integrations:ssh:use',
+        'integrations:ssh:manage',
+        'integrations:cloudflare:manage',
+        'integrations:hosting:manage',
       ])
     );
-    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:gitlab:repo:write');
-    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:github:manage');
-    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:git:manage');
-    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:ssh:use');
-    expect(isMcpTokenScope('integrations:gitlab:repo:read')).toBe(true);
-    expect(isMcpTokenScope('integrations:ssh:use')).toBe(false);
+    expect(MCP_TOKEN_SCOPES).not.toContain('integrations:gitlab:sandbox:clone');
+    expect(isMcpTokenScope('integrations:ssh:use')).toBe(true);
     expect(isMcpTokenScope('nodes:details:node-1')).toBe(true);
+    expect(isMcpTokenScope('mcp:use')).toBe(false);
   });
 
-  it('delegates connector sync, and nothing else mutating, to API and MCP tokens', () => {
-    const syncScopes = [
-      'integrations:gitlab:sync',
-      'integrations:github:sync',
-      'integrations:git:sync',
-      'integrations:cloudflare:sync',
-    ];
-    for (const scope of syncScopes) {
+  it('delegates connector sync and administration to API and MCP tokens', () => {
+    for (const provider of ['gitlab', 'github', 'git', 'cloudflare']) {
+      for (const scope of [`integrations:${provider}:sync`, `integrations:${provider}:manage`]) {
+        expect(isApiTokenScope(scope), scope).toBe(true);
+        expect(isMcpTokenScope(scope), scope).toBe(true);
+        expect(PROGRAMMATIC_DENIED_BASE_SCOPES, scope).not.toContain(scope);
+      }
+    }
+    for (const scope of ['integrations:ssh:manage', 'integrations:ssh:use', 'integrations:gitlab:system']) {
       expect(isApiTokenScope(scope), scope).toBe(true);
       expect(isMcpTokenScope(scope), scope).toBe(true);
-      expect(PROGRAMMATIC_DENIED_BASE_SCOPES, scope).not.toContain(scope);
     }
     expect(ALL_SCOPES).not.toContain('integrations:ssh:sync');
-
-    const mcpIntegrationScopes = MCP_TOKEN_SCOPES.filter((scope) => scope.startsWith('integrations:')).filter(
-      (scope) => !scope.startsWith('integrations:hosting:')
-    );
-    expect(mcpIntegrationScopes.sort()).toEqual(
-      [
-        'integrations:cloudflare:sync',
-        'integrations:cloudflare:view',
-        'integrations:git:sync',
-        'integrations:git:view',
-        'integrations:github:sync',
-        'integrations:github:view',
-        'integrations:gitlab:projects:view',
-        'integrations:gitlab:repo:read',
-        'integrations:gitlab:sync',
-        'integrations:gitlab:view',
-        'integrations:ssh:view',
-      ].sort()
-    );
-    for (const provider of ['gitlab', 'github', 'git', 'ssh', 'cloudflare']) {
-      expect(isApiTokenScope(`integrations:${provider}:manage`)).toBe(false);
-      expect(isMcpTokenScope(`integrations:${provider}:manage`)).toBe(false);
-    }
   });
 
   it('gives built-in groups the sync scope of every connector provider they manage', () => {
@@ -387,40 +364,66 @@ describe('canonical scope definitions', () => {
     expect(hasScopeForResource(['nodes:console'], 'nodes:console', 'node-2')).toBe(true);
   });
 
-  it('removes deprecated housekeeping scope and rejects admin:system for API tokens', () => {
+  it('keeps only browser- and identity-bound scopes out of API tokens', () => {
+    expect(PROGRAMMATIC_DENIED_BASE_SCOPES).toEqual([
+      ...USER_ONLY_SCOPES,
+      'admin:users:impersonate',
+      'integrations:gitlab:sandbox:clone',
+    ]);
     expect(ALL_SCOPES).not.toContain('admin:housekeeping');
-    expect(API_TOKEN_SCOPES).not.toContain('admin:system');
-    expect(API_TOKEN_SCOPES).not.toContain('mcp:use');
     expect(ALL_SCOPES).not.toContain('inference:use');
     expect(ALL_SCOPES).not.toContain('inference:usage:view:self');
     expect(ALL_SCOPES).not.toContain('inference:tokens:manage');
-    expect(API_TOKEN_SCOPES).not.toContain('inference:providers:manage');
-    expect(API_TOKEN_SCOPES).not.toContain('admin:users');
-    expect(API_TOKEN_SCOPES).not.toContain('admin:users:impersonate');
-    expect(API_TOKEN_SCOPES).not.toContain('settings:gateway:edit');
-    expect(API_TOKEN_SCOPES).not.toContain('integrations:gitlab:manage');
-    expect(API_TOKEN_SCOPES).toContain('integrations:gitlab:repo:read');
-    expect(API_TOKEN_SCOPES).toContain('integrations:gitlab:repo:write');
-    expect(API_TOKEN_SCOPES).toContain('integrations:gitlab:variables:delete');
-    expect(API_TOKEN_SCOPES).not.toContain('proxy:raw:write');
-    expect(API_TOKEN_SCOPES).not.toContain('proxy:raw:bypass');
-    expect(API_TOKEN_SCOPES).not.toContain('proxy:advanced:bypass');
-    expect(API_TOKEN_SCOPES).toContain('nodes:files:read');
-    expect(API_TOKEN_SCOPES).toContain('nodes:files:write');
-    expect(isApiTokenScope('admin:system')).toBe(false);
-    expect(isApiTokenScope('mcp:use')).toBe(false);
     expect(isValidBaseScope('inference:use')).toBe(false);
     expect(isValidBaseScope('inference:usage:view:self')).toBe(false);
-    expect(isApiTokenScope('inference:models:manage')).toBe(false);
-    expect(isApiTokenScope('admin:users')).toBe(false);
+
+    for (const scope of USER_ONLY_SCOPES) {
+      expect(API_TOKEN_SCOPES, scope).not.toContain(scope);
+      expect(isApiTokenScope(scope), scope).toBe(false);
+    }
     expect(isApiTokenScope('admin:users:impersonate')).toBe(false);
-    expect(isApiTokenScope('proxy:raw:write:host-1')).toBe(false);
-    expect(isApiTokenScope('proxy:raw:bypass:host-1')).toBe(false);
-    expect(isApiTokenScope('nodes:files:read:node-1')).toBe(true);
-    expect(isApiTokenScope('nodes:files:write:node-1')).toBe(true);
-    expect(isApiTokenScope('integrations:gitlab:manage')).toBe(false);
-    expect(isApiTokenScope('integrations:gitlab:repo:read')).toBe(true);
-    expect(isApiTokenScope('integrations:gitlab:repo:write')).toBe(true);
+    expect(isApiTokenScope('admin:users:impersonate:user-1')).toBe(false);
+    expect(isApiTokenScope('integrations:gitlab:sandbox:clone')).toBe(false);
+
+    for (const scope of [
+      'admin:system',
+      'admin:users',
+      'admin:groups',
+      'settings:gateway:view',
+      'settings:gateway:edit',
+      'integrations:gitlab:manage',
+      'integrations:gitlab:system',
+      'integrations:hosting:manage',
+      'hosting:resources:create',
+      'hosting:resources:delete',
+      'hosting:snapshots:restore',
+      'hosting:billing:view',
+      'hosting:billing:topup',
+      'proxy:raw:read',
+      'proxy:raw:write',
+      'proxy:raw:toggle',
+      'proxy:raw:bypass',
+      'proxy:advanced:bypass',
+      'proxy:maintenance:bypass',
+      'nodes:config:view',
+      'nodes:config:edit',
+      'nodes:files:read',
+      'nodes:files:write',
+      'databases:credentials:reveal',
+      'feat:ai:use',
+      'inference:providers:view',
+      'inference:providers:manage',
+      'inference:models:manage',
+      'inference:limits:manage',
+      'inference:usage:view',
+    ]) {
+      expect(API_TOKEN_SCOPES, scope).toContain(scope);
+      expect(isApiTokenScope(scope), scope).toBe(true);
+    }
+    expect(isApiTokenScope('proxy:raw:write:host-1')).toBe(true);
+    expect(isApiTokenScope('proxy:raw:bypass:host-1')).toBe(true);
+    expect(isApiTokenScope('nodes:config:edit:node-1')).toBe(true);
+    expect(isApiTokenScope('admin:users:team-1')).toBe(true);
   });
 
   it('grants inference administration only to built-in admin tiers by default', () => {
@@ -463,10 +466,13 @@ describe('canonical scope definitions', () => {
       'ssl:cert:delete',
       'ssl:cert:revoke',
       'ssl:cert:export',
+      'proxy:raw:write',
       'proxy:raw:bypass',
+      'proxy:advanced:bypass',
       'pages:delete',
       'pages:tokens:manage',
       'pages:settings:edit',
+      'nodes:config:edit',
       'nodes:console',
       'nodes:files:read',
       'nodes:files:write',
@@ -491,12 +497,30 @@ describe('canonical scope definitions', () => {
       'integrations:gitlab:webhooks:manage',
       'integrations:gitlab:registry:manage',
       'integrations:gitlab:sandbox:clone',
+      'integrations:gitlab:system',
+      'integrations:github:system',
+      'integrations:git:system',
+      'integrations:ssh:use',
+      'integrations:hosting:manage',
+      'hosting:resources:create',
+      'hosting:resources:delete',
+      'hosting:snapshots:restore',
+      'hosting:billing:topup',
       'logs:tokens:create',
+      'feat:ai:use',
       'admin:audit',
       'audit:siem:manage',
       'admin:details:certificates',
       'admin:update',
+      'admin:system',
+      'admin:users',
+      'admin:groups',
+      'settings:gateway:edit',
     ]);
+    for (const scope of MANUAL_APPROVAL_SCOPES) {
+      if (scope === 'integrations:gitlab:sandbox:clone') continue;
+      expect(isApiTokenScope(scope), scope).toBe(true);
+    }
     expect(MANUAL_APPROVAL_SCOPES).not.toContain('docker:containers:environment');
   });
 
@@ -570,7 +594,8 @@ describe('canonical scope definitions', () => {
     expect(
       migratedProgrammaticStoredScopes([
         'mcp:use:any',
-        'admin:system:legacy',
+        'admin:users:impersonate:user-1',
+        'integrations:gitlab:sandbox:clone',
         'proxy:raw:write:host-1',
         'proxy:advanced:bypass:host-1',
         'proxy:advanced:host-1',
@@ -579,6 +604,12 @@ describe('canonical scope definitions', () => {
         'proxy:view:host-1',
         'unknown:scope',
       ])
-    ).toEqual(['proxy:advanced:bypasser', 'proxy:advanced:host-1', 'proxy:view']);
+    ).toEqual([
+      'proxy:advanced:bypass:host-1',
+      'proxy:advanced:bypasser',
+      'proxy:advanced:host-1',
+      'proxy:raw:write:host-1',
+      'proxy:view',
+    ]);
   });
 });

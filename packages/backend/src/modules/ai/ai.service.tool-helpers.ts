@@ -182,8 +182,14 @@ export function normalizeReadChatSliceMode(value: unknown): 'latest' | 'first' |
 export const GITLAB_TOOL_ARG_SECRET_KEY_RE =
   /^(?:token|secret|password|value|privateKey|private_key|webhookSecret|webhook_secret)$/i;
 
+/** Docker tools whose plain `value` argument carries a secret value. */
+const DOCKER_SECRET_VALUE_TOOLS = new Set(['manage_docker_container_config', 'manage_docker_compose']);
+
 export function redactArgsForTool(toolName: string, args: Record<string, unknown>): unknown {
   const redacted = redactToolArgs(args);
+  if (DOCKER_SECRET_VALUE_TOOLS.has(toolName) && isRecord(redacted) && redacted.value !== undefined) {
+    return { ...redacted, value: '[REDACTED]' };
+  }
   if (!toolName.startsWith('gitlab_')) return redacted;
   return redactGitLabToolArgs(redacted);
 }

@@ -4,7 +4,12 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
+import {
+  authMiddleware,
+  rejectImpersonation,
+  requireScope,
+  requireScopeForResource,
+} from '@/modules/auth/auth.middleware.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -72,6 +77,7 @@ export const storageRouteRuntime = {
   authMiddleware,
   requireScope,
   requireScopeForResource,
+  rejectImpersonation,
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
   MoveResourcesToFolderSchema,

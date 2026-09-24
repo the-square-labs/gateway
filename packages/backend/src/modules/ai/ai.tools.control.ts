@@ -15,13 +15,13 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_license',
     description:
-      'Manage the Gateway license. operation must be one of activate, check, or clear. activate requires licenseKey.',
+      'Manage the Gateway license. operation must be one of activate, activate_module, check, or clear. activate requires licenseKey and then installs the licensed module; activate_module retries only the module installation.',
     parameters: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['activate', 'check', 'clear'],
+          enum: ['activate', 'activate_module', 'check', 'clear'],
           description: 'License operation to perform.',
         },
         licenseKey: { type: 'string', description: 'License key for activate.' },
@@ -45,7 +45,11 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
           enum: ['get_config', 'get_stats', 'get_history', 'update_config', 'run'],
           description: 'Housekeeping operation to perform.',
         },
-        config: { type: 'object', description: 'Partial housekeeping config for update_config.' },
+        config: {
+          type: 'object',
+          description:
+            'Partial housekeeping config for update_config, validated like PUT /housekeeping/config (retention periods, cronExpression, enabled categories).',
+        },
       },
       required: ['operation'],
     },
@@ -57,7 +61,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'get_gateway_settings',
     description:
-      'Read Gateway control-plane settings: OIDC provisioning, MCP server enablement and compatibility, and general settings including inferenceEnabled, plus network security and outbound webhook policy.',
+      'Read every Gateway settings section: sign-in methods, password policy and MFA grace, OIDC provisioning and provider, SMTP (secrets masked), logging backend, MCP server, web TLS transport, general settings (public URL, update channel, relay tuning, features), network security, outbound webhook policy, and environment settings with their defaults.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Maintenance',
@@ -67,7 +71,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'update_gateway_settings',
     description:
-      'Update Gateway control-plane settings. Pass only fields to change: OIDC provisioning, MCP server enablement or compatibility, generalSettings, networkSecurity, or outboundWebhookPolicy.',
+      'Update Gateway settings exactly like the Settings UI. Pass only fields to change. SMTP, the OIDC provider, the public URL, and relaxing OIDC verified-email enforcement require admin:system. smtp.testRecipient sends a test email; enabling password or email-code sign-in requires verified SMTP; enabling OIDC sign-in requires a configured provider. environmentSettings patches the environment (limits/timeouts) settings.',
     parameters: {
       type: 'object',
       properties: {
@@ -75,16 +79,104 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
         oidcDefaultGroupId: { type: 'string', description: 'Default permission group UUID for auto-created users.' },
         oidcRequireVerifiedEmail: { type: 'boolean' },
         oauthExtendedCallbackCompatibility: { type: 'boolean' },
+        mfaExistingSessionGracePeriodDays: {
+          type: 'number',
+          description: 'Days (0-7) existing sessions may continue before newly required MFA is enforced.',
+        },
+        methods: {
+          type: 'object',
+          properties: {
+            oidc: { type: 'boolean' },
+            password: { type: 'boolean' },
+            emailOtp: { type: 'boolean' },
+            passkeyLogin: { type: 'boolean' },
+          },
+          additionalProperties: false,
+          description: 'Enabled sign-in methods.',
+        },
+        passwordPolicy: {
+          type: 'object',
+          properties: {
+            minLength: { type: 'number' },
+            maxLength: { type: 'number' },
+            requireUppercase: { type: 'boolean' },
+            requireLowercase: { type: 'boolean' },
+            requireDigit: { type: 'boolean' },
+            requireSymbol: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
+        smtp: {
+          type: 'object',
+          properties: {
+            host: { type: 'string' },
+            port: { type: 'number' },
+            tlsMode: { type: 'string', enum: ['starttls', 'tls'] },
+            username: { type: 'string' },
+            password: { type: 'string', description: 'Omit to keep the saved password.' },
+            senderName: { type: 'string' },
+            senderEmail: { type: 'string' },
+            testRecipient: { type: 'string', description: 'Send a test email to this address after saving.' },
+            testEmailKind: {
+              type: 'string',
+              enum: ['smtp_configuration', 'password_setup', 'password_reset', 'email_otp'],
+            },
+          },
+          required: ['host', 'port', 'tlsMode', 'username', 'senderName', 'senderEmail'],
+          additionalProperties: false,
+          description: 'SMTP server used for sign-in emails. Requires admin:system unless unchanged.',
+        },
+        oidc: {
+          type: 'object',
+          properties: {
+            issuer: { type: 'string' },
+            clientId: { type: 'string' },
+            clientSecret: { type: 'string', description: 'Omit to keep the saved client secret.' },
+            redirectUri: { type: 'string' },
+            scopes: { type: 'string' },
+          },
+          required: ['issuer', 'clientId', 'redirectUri'],
+          additionalProperties: false,
+          description: 'OIDC/SSO identity provider. Requires admin:system.',
+        },
+        logging: {
+          type: 'object',
+          properties: {
+            mode: { type: 'string', enum: ['disabled', 'local', 'external'] },
+            url: { type: 'string' },
+            username: { type: 'string' },
+            password: { type: 'string' },
+            database: { type: 'string' },
+            table: { type: 'string' },
+            requestTimeoutMs: { type: 'number' },
+          },
+          required: ['mode'],
+          additionalProperties: false,
+          description: 'Structured-logging ClickHouse backend.',
+        },
+        webTlsEnabled: {
+          type: 'boolean',
+          description: 'Serve the web UI over TLS; changing it restarts the Gateway web runtime.',
+        },
         mcpServerEnabled: { type: 'boolean' },
         mcpExtendedCompatibility: {
           type: 'boolean',
           description:
             'Return every OAuth-scoped MCP tool in the initial tools/list response. Enabled by default; disable only for harnesses that load every tool schema into context and exhaust it, because they may then be unable to use some Gateway tools.',
         },
-        generalSettings: { type: 'object' },
+        generalSettings: {
+          type: 'object',
+          description:
+            'Partial general settings: publicUrl, updateChannel, hideExternalBranding, autoAssignCreatedResourcePermissions, file limits, gatewayGrpcPublicTarget, gatewayGrpcLocalIp, relayAutoRecovery, relay tuning, shutdown deadlines, relayGrantTtlHours, features.',
+        },
         networkSecurity: { type: 'object' },
         outboundWebhookPolicy: { type: 'object' },
+        environmentSettings: {
+          type: 'object',
+          description: 'Partial environment settings patch, validated like PATCH /settings/environment.',
+        },
       },
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Maintenance',
@@ -94,7 +186,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_system_updates',
     description:
-      'Read or manage Gateway, Relay Pool, and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, perform_gateway_update, proceed_gateway_update (stop waiting for running operations), acknowledge_gateway_update_failure, perform_relay_update, abandon_relay_update (end a stuck or paused Relay Pool update), list_daemon_updates, check_daemon_updates, update_daemon. Mutating operations require explicit approval unless the user bypass mode allows it.',
+      'Read or manage Gateway, Relay Pool, and daemon updates. Operations: get_gateway_status, check_gateway, get_gateway_release_notes, list_gateway_release_notes (every release between the current and the available version), perform_gateway_update, proceed_gateway_update (stop waiting for running operations), acknowledge_gateway_update_failure, perform_relay_update, abandon_relay_update (end a stuck or paused Relay Pool update), list_daemon_updates, check_daemon_updates, update_daemon. Mutating operations require explicit approval unless the user bypass mode allows it.',
     parameters: {
       type: 'object',
       properties: {
@@ -104,6 +196,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
             'get_gateway_status',
             'check_gateway',
             'get_gateway_release_notes',
+            'list_gateway_release_notes',
             'perform_gateway_update',
             'proceed_gateway_update',
             'acknowledge_gateway_update_failure',
@@ -130,15 +223,29 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'get_audit_log',
-    description: 'Query the audit log. Returns paginated entries with action, user, resource, and timestamp.',
+    description:
+      'Query the audit log like the Administration audit view. view entries (default) returns paginated entries; users returns the actors present in the log for filtering; export returns every matching entry (requires the audit export license feature). Filters apply to entries and export.',
     parameters: {
       type: 'object',
       properties: {
+        view: { type: 'string', enum: ['entries', 'users', 'export'], description: 'Default: entries.' },
         action: { type: 'string', description: 'Filter by action name' },
+        actions: { type: 'array', items: { type: 'string' }, description: 'Filter by any of these actions' },
         resourceType: { type: 'string', description: 'Filter by resource type' },
+        resourceTypes: { type: 'array', items: { type: 'string' }, description: 'Filter by any resource type' },
+        userIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Filter by actor user UUIDs; "system" matches system entries',
+        },
+        excludedActions: { type: 'array', items: { type: 'string' } },
+        excludedResourceTypes: { type: 'array', items: { type: 'string' } },
+        from: { type: 'string', description: 'ISO 8601 start time' },
+        to: { type: 'string', description: 'ISO 8601 end time' },
         page: { type: 'number', description: 'Page number (default: 1)' },
         limit: { type: 'number', description: 'Items per page (default: 50)' },
       },
+      additionalProperties: false,
     },
     destructive: false,
     category: 'Administration',
@@ -166,7 +273,16 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
     name: 'get_dashboard_stats',
     description:
       'Get dashboard statistics: counts of CAs, certificates, ingress routes, SSL certs, nodes, and expiring items.',
-    parameters: { type: 'object', properties: {} },
+    parameters: {
+      type: 'object',
+      properties: {
+        showSystem: {
+          type: 'boolean',
+          description: 'Include Gateway system certificates in the counts (requires admin:details:certificates).',
+        },
+      },
+      additionalProperties: false,
+    },
     destructive: false,
     category: 'Administration',
     requiredScope: 'ai:workspace:use',
@@ -196,8 +312,11 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
           description: 'Array of scope strings (e.g., ["cert:read", "cert:issue"])',
         },
         parentId: { type: 'string', description: 'Optional parent group UUID to inherit scopes from' },
+        folderId: { type: ['string', 'null'], description: 'Optional group folder UUID.' },
+        requireGateway2fa: { type: 'boolean', description: 'Require Gateway MFA for members of this group.' },
       },
       required: ['name', 'scopes'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Administration',
@@ -222,8 +341,10 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
           type: ['string', 'null'],
           description: 'New parent group UUID, or null to remove inheritance',
         },
+        requireGateway2fa: { type: 'boolean', description: 'Require Gateway MFA for members of this group.' },
       },
       required: ['groupId'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Administration',
@@ -244,6 +365,161 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
     category: 'Administration',
     requiredScope: 'admin:groups',
     invalidateStores: ['groups'],
+  },
+  // ── User lifecycle ──
+  {
+    name: 'manage_user',
+    description:
+      'Administer another user account like the Administration > Users page. Operations: set_auth_method (password or email_otp emails onboarding and needs verified SMTP), rename (local accounts only), reset_avatar, send_password_link (setup or reset link for password users), list_sessions, revoke_session, revoke_all_sessions, reset_mfa (admin:system; also ends their browser sessions), list_deleted and restore (admin:system; a restored account stays blocked until unblocked with set_user_blocked). Group membership, blocking, deletion, and additional permissions use update_user_role, set_user_blocked, delete_user, and set_user_additional_permissions. Your own password, MFA, passkeys, sessions, and impersonation stay in the browser.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'set_auth_method',
+            'rename',
+            'reset_avatar',
+            'send_password_link',
+            'list_sessions',
+            'revoke_session',
+            'revoke_all_sessions',
+            'reset_mfa',
+            'list_deleted',
+            'restore',
+          ],
+          description: 'User administration operation to perform.',
+        },
+        userId: { type: 'string', description: 'Target user UUID (every operation except list_deleted).' },
+        authMethod: {
+          type: 'string',
+          enum: ['oidc', 'password', 'email_otp'],
+          description: 'New sign-in method for set_auth_method.',
+        },
+        name: { type: 'string', description: 'New display name for rename.' },
+        sessionId: { type: 'string', description: 'Public session ID from list_sessions for revoke_session.' },
+        groupIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Permission groups for restore; omit to restore the previous memberships.',
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Administration',
+    requiredScope: 'admin:users',
+    invalidateStores: ['users'],
+  },
+  // ── Node lifecycle ──
+  {
+    name: 'manage_node',
+    description:
+      'Operate on one daemon node like the node page. Operations: update (displayName, appearanceColor, serviceAddresses or legacy serviceAddress/secondaryServiceAddress, confirmDomainDnsUpdate, builderSettings; each field needs the same node permission as the UI), regenerate_enrollment_token (only for a node that never enrolled; display the new token and gatewayCertSha256), health_history, monitoring_history, daemon_logs (buffered daemon log lines), and nginx_logs (recent access/error lines for the ingress routes on an nginx node).',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'update',
+            'regenerate_enrollment_token',
+            'health_history',
+            'monitoring_history',
+            'daemon_logs',
+            'nginx_logs',
+          ],
+          description: 'Node operation to perform.',
+        },
+        nodeId: { type: 'string', description: 'Node UUID' },
+        displayName: { type: ['string', 'null'], description: 'update: display name, or null to clear.' },
+        appearanceColor: {
+          type: ['string', 'null'],
+          enum: ['blue', 'red', 'green', 'yellow', 'purple', 'pink', 'orange', null],
+          description: 'update: node color, or null to clear.',
+        },
+        serviceAddresses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'update: advertised service addresses (IP addresses or hostnames).',
+        },
+        serviceAddress: { type: ['string', 'null'], description: 'update: legacy primary service address.' },
+        secondaryServiceAddress: {
+          type: ['string', 'null'],
+          description: 'update: legacy secondary service address (nginx nodes).',
+        },
+        confirmDomainDnsUpdate: {
+          type: 'boolean',
+          description: 'update: also move assigned domain DNS targets to the new nginx address (domains:edit).',
+        },
+        builderSettings: {
+          type: 'object',
+          properties: {
+            parallelism: { type: 'number' },
+            timeoutMinutes: { type: 'number' },
+          },
+          required: ['parallelism', 'timeoutMinutes'],
+          additionalProperties: false,
+          description: 'update: Build Worker settings (builder nodes, nodes:config:edit).',
+        },
+        levels: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'daemon_logs: keep only these levels (for example ["warn","error"]).',
+        },
+        statuses: {
+          type: 'array',
+          items: { type: 'string', enum: ['2xx', '3xx', '4xx', '5xx', 'error'] },
+          description: 'nginx_logs: keep only these status classes or error-log lines.',
+        },
+        search: { type: 'string', description: 'daemon_logs/nginx_logs: case-insensitive text filter.' },
+        limit: { type: 'number', description: 'daemon_logs/nginx_logs: maximum lines returned (default and max 300).' },
+      },
+      required: ['operation', 'nodeId'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Nodes',
+    requiredScope: 'nodes:details',
+    invalidateStores: ['nodes'],
+  },
+  // ── Relay Pool ──
+  {
+    name: 'manage_relay_pool',
+    description:
+      'Inspect and operate the Relay Pool like Settings > Relay. Operations: get (pool and local relay health, instances with policyTrust, certificate, health.lastError, assignments; settings:gateway:view), local_policy_trust_status (policy signing trust of the local relay as seen by automatic recovery; settings:gateway:view), retry_recovery (retry local relay recovery), rebalance (stage a rebalance of relay assignments), drain_instance (stop placing new sessions on a relay; confirm: true required), resume_instance (undo a drain), force_disconnect_instance (drop every session on a relay; confirm: true required), renew_certificate (renew the server and admin certificates of a remote relay now instead of waiting for automatic renewal 60 days before expiry), reenroll_instance (single-use re-enrollment token and installer command for an enrolled remote relay whose policy trust is locked out; confirm: true required; display the token, gatewayCertSha256, and command to the user). Mutations require admin:system. Relay updates use manage_system_updates; relay tuning uses update_gateway_settings generalSettings.relay.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'get',
+            'local_policy_trust_status',
+            'retry_recovery',
+            'rebalance',
+            'drain_instance',
+            'resume_instance',
+            'force_disconnect_instance',
+            'renew_certificate',
+            'reenroll_instance',
+          ],
+          description: 'Relay Pool operation to perform.',
+        },
+        instanceId: { type: 'string', description: 'Relay instance UUID for instance operations.' },
+        confirm: {
+          type: 'boolean',
+          description: 'Must be true for drain_instance, force_disconnect_instance, and reenroll_instance.',
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Maintenance',
+    requiredScope: 'settings:gateway:view',
+    invalidateStores: ['settings', 'nodes'],
   },
   {
     name: 'set_resource_pin',

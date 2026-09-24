@@ -92,6 +92,8 @@ export class RelayPolicyNotAcknowledgedError extends Error {
 
 export class RelayGrantIssuerService {
   private acknowledgedRevision = 0;
+  /** A revision grants may be signed for without the local relay's acknowledgement. */
+  private fenceBypassRevision = 0;
   private lastBundleGeneratedAtMs = 0;
 
   constructor(
@@ -102,6 +104,15 @@ export class RelayGrantIssuerService {
 
   acknowledgeRevision(revision: number): void {
     this.acknowledgedRevision = Math.max(this.acknowledgedRevision, revision);
+  }
+
+  /**
+   * Allows grants for this revision while the local relay cannot take it. The fence exists so
+   * a relay never sees grants ahead of its policy; an unreachable local relay sees nothing,
+   * and holding every grant back would stop remote relays too once their grants expire.
+   */
+  allowUnacknowledgedRevision(revision: number): void {
+    this.fenceBypassRevision = Math.max(this.fenceBypassRevision, revision);
   }
 
   async requireState() {
@@ -242,10 +253,14 @@ export class RelayGrantIssuerService {
       )
       .innerJoin(relayInstances, eq(relayEndpointAssignments.relayInstanceId, relayInstances.id))
       .where(inArray(relayEndpointAssignmentGenerations.state, ['active', 'staging', 'draining']));
+    // Within an assignment state, relays that serve come first: callers try candidates in order,
+    // and each unreachable relay costs a connect timeout.
+    const serving = (row: (typeof rows)[number]) => (row.instanceState === 'ready' ? 0 : 1);
     rows.sort((left, right) => {
       const stateOrder = { active: 0, staging: 1, draining: 2, retired: 3, failed: 4 } as const;
       return (
         stateOrder[left.state] - stateOrder[right.state] ||
+        serving(left) - serving(right) ||
         left.generation - right.generation ||
         left.instanceId.localeCompare(right.instanceId)
       );
@@ -266,11 +281,14 @@ export class RelayGrantIssuerService {
     kind: GrantKind,
     subjectId: string,
     certificateSha256: string,
-    endpoint: Pick<typeof relayEndpoints.$inferSelect, 'id' | 'generation' | 'subjectKind' | 'maxConcurrentSessions'>,
+    endpoint: Pick<
+      typeof relayEndpoints.$inferSelect,
+      'id' | 'generation' | 'subjectKind' | 'ownerKind' | 'maxConcurrentSessions'
+    >,
     route:
       | Pick<
           typeof relayRoutes.$inferSelect,
-          'id' | 'generation' | 'sourceKind' | 'maxConcurrentSessions' | 'maxFrameBytes'
+          'id' | 'generation' | 'sourceKind' | 'ownerKind' | 'maxConcurrentSessions' | 'maxFrameBytes'
         >
       | undefined,
     includeStaging: boolean,
@@ -295,16 +313,18 @@ export class RelayGrantIssuerService {
         poolId: assignment.poolId,
         relayInstanceId: assignment.instanceId,
         assignmentGeneration: assignment.generation,
+        // The relay enforces the lower of the policy and grant limits, so a candidate grant
+        // must carry the same effective limit as the policy or it caps the route below it.
         ...(kind === 'endpoint'
           ? {
               endpointId: endpoint.id,
               endpointGeneration: endpoint.generation,
-              maxConcurrentSessions: endpoint.maxConcurrentSessions,
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(endpoint),
             }
           : {
               routeId: route!.id,
               routeGeneration: route!.generation,
-              maxConcurrentSessions: route!.maxConcurrentSessions,
+              maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route!),
               maxFrameBytes: route!.maxFrameBytes,
             }),
       });
@@ -368,6 +388,61 @@ export class RelayGrantIssuerService {
     );
   }
 
+  /**
+   * Endpoints whose path (target daemon and every daemon source) is not fully Relay Pool
+   * capable, in bulk: the same rule endpointPathSupportsPool applies to candidate issuance.
+   * Such endpoints get only legacy grants, which only the local relay serves.
+   */
+  async poolIncapableEndpointIds(endpointIds: string[]): Promise<Set<string>> {
+    const result = new Set<string>();
+    if (!endpointIds.length) return result;
+    const [endpoints, routes] = await Promise.all([
+      this.db
+        .select({ id: relayEndpoints.id, nodeId: relayEndpoints.subjectId, subjectKind: relayEndpoints.subjectKind })
+        .from(relayEndpoints)
+        .where(inArray(relayEndpoints.id, endpointIds)),
+      this.db
+        .select({
+          endpointId: relayRoutes.targetEndpointId,
+          sourceKind: relayRoutes.sourceKind,
+          sourceId: relayRoutes.sourceId,
+        })
+        .from(relayRoutes)
+        .where(inArray(relayRoutes.targetEndpointId, endpointIds)),
+    ]);
+    const participants = new Map<string, string[]>();
+    for (const endpoint of endpoints) {
+      if (endpoint.subjectKind !== 'daemon' && endpoint.subjectKind !== 'local_service') {
+        result.add(endpoint.id);
+        continue;
+      }
+      participants.set(endpoint.id, endpoint.subjectKind === 'daemon' ? [endpoint.nodeId] : []);
+    }
+    for (const route of routes) {
+      if (route.sourceKind === 'daemon') participants.get(route.endpointId)?.push(route.sourceId);
+    }
+    const nodeIds = [...new Set([...participants.values()].flat())];
+    const capable = new Set(
+      nodeIds.length
+        ? (
+            await this.db
+              .select({ id: nodes.id, capabilities: nodes.capabilities })
+              .from(nodes)
+              .where(inArray(nodes.id, nodeIds))
+          )
+            .filter(
+              ({ capabilities }) =>
+                Array.isArray(capabilities?.capabilities) && capabilities.capabilities.includes('relay_pool_v1')
+            )
+            .map(({ id }) => id)
+        : []
+    );
+    for (const [endpointId, nodeIdsOnPath] of participants) {
+      if (nodeIdsOnPath.some((nodeId) => !capable.has(nodeId))) result.add(endpointId);
+    }
+    return result;
+  }
+
   private instanceCapabilities(instance: { kind: 'local' | 'remote'; capabilities: unknown }): string[] {
     if (!instance.capabilities || typeof instance.capabilities !== 'object') return [];
     const features = (instance.capabilities as { features?: unknown }).features;
@@ -399,7 +474,7 @@ export class RelayGrantIssuerService {
       certificateSha256: appCertificateFingerprint,
       routeId: route.id,
       routeGeneration: route.generation,
-      maxConcurrentSessions: route.maxConcurrentSessions,
+      maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
       maxFrameBytes: route.maxFrameBytes,
     });
     const projection = await this.getPoolProjection();
@@ -442,7 +517,7 @@ export class RelayGrantIssuerService {
     ]);
     if (!active?.encryptedPrivateKey || !active.encryptedDek)
       throw new Error('Active relay signing key is unavailable');
-    if (state.revision > this.acknowledgedRevision) {
+    if (state.revision > this.acknowledgedRevision && state.revision > this.fenceBypassRevision) {
       throw new RelayPolicyNotAcknowledgedError(state.revision);
     }
     const now = Math.floor(Date.now() / 1000);

@@ -56,19 +56,57 @@ func main() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
 	lifecycle.Version = Version
-	plugin := supervisor.New(cfg)
-	daemon, err := lifecycle.NewDaemonBase(&cfg.BaseConfig, configPath, plugin, logger)
+	if err := supervisor.RecoverInterruptedReenrollment(&cfg.BaseConfig); err != nil {
+		logger.Error("restore relay supervisor identity from an interrupted re-enrollment", "error", err)
+	}
+	reenrollment, err := supervisor.BeginReenrollment(&cfg.BaseConfig)
 	if err != nil {
+		logger.Error("re-enrollment skipped; continuing with the current identity", "error", err)
+	} else if reenrollment != nil {
+		logger.Warn("configuration carries an enrollment token; re-enrolling this relay with Gateway")
+	}
+	daemon, err := lifecycle.NewDaemonBase(&cfg.BaseConfig, configPath, supervisor.New(cfg), logger)
+	if err != nil {
+		restoreIdentity(reenrollment, logger)
 		logger.Error("initialize relay supervisor", "error", err)
 		os.Exit(1)
 	}
 	lifecycle.NotifyLauncherLocalReadyAwaitingControl(Version)
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
-	if err := daemon.Run(ctx); err != nil {
+	err = daemon.Run(ctx)
+	if err != nil && reenrollment != nil && !cfg.IsEnrolled() && ctx.Err() == nil {
+		// The enrollment did not complete: keep running as the relay was.
+		logger.Error("re-enrollment failed; continuing with the previous identity", "error", err)
+		if !restoreIdentity(reenrollment, logger) {
+			os.Exit(1)
+		}
+		if supervisor.EnrollmentTokenRejected(err) {
+			if clearErr := lifecycle.ClearTokenFromFile(configPath); clearErr != nil {
+				logger.Warn("failed to clear the rejected enrollment token from the configuration", "error", clearErr)
+			}
+		}
+		cfg.Gateway.Token = ""
+		daemon, err = lifecycle.NewDaemonBase(&cfg.BaseConfig, configPath, supervisor.New(cfg), logger)
+		if err == nil {
+			err = daemon.Run(ctx)
+		}
+	}
+	if err != nil {
 		logger.Error("relay supervisor stopped", "error", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
+}
+
+func restoreIdentity(reenrollment *supervisor.Reenrollment, logger *slog.Logger) bool {
+	if reenrollment == nil {
+		return true
+	}
+	if err := reenrollment.Restore(); err != nil {
+		logger.Error("restore the previous relay supervisor identity", "error", err)
+		return false
+	}
+	return true
 }
 
 func logLevel(value string) slog.Level {

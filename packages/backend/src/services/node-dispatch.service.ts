@@ -623,6 +623,21 @@ export class NodeDispatchService {
     return this.registry.sendCommand(nodeId, { setRelayDrain: { enabled, forceDisconnect } }, timeoutMs);
   }
 
+  /** Installs a renewed relay server certificate on a remote relay supervisor's worker. */
+  async renewRelayIdentity(
+    nodeId: string,
+    renewal: {
+      serverCertificate: Buffer;
+      serverKey: Buffer;
+      serverIdentity: string;
+      retainServerFingerprint: string;
+    },
+    timeoutMs = 90_000
+  ): Promise<CommandResult> {
+    await this.assertRelaySupervisorNode(nodeId);
+    return this.registry.sendCommand(nodeId, { renewRelayIdentity: renewal }, timeoutMs);
+  }
+
   async sendRelayWorkerUpdate(
     nodeId: string,
     downloadUrl: string,

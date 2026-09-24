@@ -1,9 +1,36 @@
-import { container } from '@/container.js';
-import { CreateSiemDestinationSchema, UpdateSiemDestinationSchema } from '@/modules/audit/siem.schemas.js';
-import { assertHostingAlertAccess } from '@/modules/notifications/notification-hosting-access.js';
-import { buildSampleEvent } from '@/modules/notifications/notification-templates.js';
+import { hasScope } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
+import {
+  CreateSiemDestinationSchema,
+  SiemDeliveryListQuerySchema,
+  SiemDestinationListQuerySchema,
+  UpdateSiemDestinationSchema,
+} from '@/modules/audit/siem.schemas.js';
+import { ALERT_CATEGORIES } from '@/modules/notifications/notification.constants.js';
+import {
+  createAlertRuleWithEffects,
+  deleteAlertRuleWithEffects,
+  updateAlertRuleWithEffects,
+} from '@/modules/notifications/notification-alert-rule.mutations.js';
+import {
+  AlertRuleListQuerySchema,
+  CreateAlertRuleSchema,
+  UpdateAlertRuleSchema,
+} from '@/modules/notifications/notification-alert-rule.schemas.js';
+import { DeliveryListQuerySchema } from '@/modules/notifications/notification-delivery.schemas.js';
+import {
+  buildSampleEvent,
+  buildTemplateContext,
+  renderTemplate,
+  TEMPLATE_PRESETS,
+} from '@/modules/notifications/notification-templates.js';
+import {
+  CreateWebhookSchema,
+  UpdateWebhookSchema,
+  WebhookListQuerySchema,
+} from '@/modules/notifications/notification-webhook.schemas.js';
 import type { User } from '@/types.js';
-import { agentPageLimit } from './ai.service-helpers.js';
+import { agentPage, agentPageLimit } from './ai.service-helpers.js';
 
 export const SIEM_NOTIFICATION_TOOL_NAMES = new Set([
   'list_siem_destinations',
@@ -30,6 +57,7 @@ export const NOTIFICATION_TOOL_NAMES = new Set([
   'test_webhook',
   'list_webhook_deliveries',
   'get_delivery_stats',
+  'manage_notifications',
   ...SIEM_NOTIFICATION_TOOL_NAMES,
 ]);
 
@@ -41,6 +69,25 @@ export interface NotificationToolContext {
   siemDestinationService?: import('@/modules/audit/siem-destination.service.js').SiemDestinationService;
   siemDeliveryService?: import('@/modules/audit/siem-delivery.service.js').SiemDeliveryService;
   generalSettingsService?: import('@/modules/settings/general-settings.service.js').GeneralSettingsService;
+}
+
+/** Same reveal rules as the webhook and delivery routes. */
+function canRevealWebhookSecrets(user: User): boolean {
+  return hasScope(user.scopes, 'notifications:webhooks:edit') || hasScope(user.scopes, 'notifications:manage');
+}
+
+function canRevealDeliveryPayloads(user: User): boolean {
+  return hasScope(user.scopes, 'notifications:manage');
+}
+
+function requireAnyScope(user: User, scopes: string[]): void {
+  if (!scopes.some((scope) => hasScope(user.scopes, scope))) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: one of ${scopes.join(', ')}`);
+  }
+}
+
+function definedFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }
 
 export async function executeNotificationTool(
@@ -64,41 +111,49 @@ export async function executeNotificationTool(
   switch (toolName) {
     case 'list_alert_rules':
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      return context.notifRuleService.list({ page: 1, limit: 100, category: a.category, enabled: a.enabled });
+      return context.notifRuleService.list(
+        AlertRuleListQuerySchema.parse({
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+          type: a.type,
+          category: a.category,
+          enabled: a.enabled,
+          search: a.search,
+        })
+      );
     case 'get_alert_rule':
       if (!context.notifRuleService) return { error: 'Notification service not available' };
       return context.notifRuleService.getById(a.ruleId);
     case 'create_alert_rule': {
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      const input = {
-        name: a.name,
-        type: a.type,
-        category: a.category,
-        severity: a.severity,
-        metric: a.metric,
-        metricTarget: a.metricTarget,
-        operator: a.operator,
-        thresholdValue: a.thresholdValue,
-        durationSeconds: a.durationSeconds ?? 0,
-        fireThresholdPercent: a.fireThresholdPercent ?? 100,
-        resolveAfterSeconds: a.resolveAfterSeconds ?? 60,
-        resolveThresholdPercent: a.resolveThresholdPercent ?? 100,
-        eventPattern: a.eventPattern,
-        resourceIds: a.resourceIds ?? [],
-        messageTemplate: a.messageTemplate,
-        webhookIds: a.webhookIds ?? [],
-        cooldownSeconds: a.cooldownSeconds ?? 900,
-        enabled: a.enabled ?? true,
-      };
-      // Same source-access rule as the alert rule routes.
-      assertHostingAlertAccess(user.scopes, input);
-      return context.notifRuleService.create(input, user.id);
+      const input = CreateAlertRuleSchema.parse(
+        definedFields({
+          name: a.name,
+          type: a.type,
+          category: a.category,
+          severity: a.severity,
+          metric: a.metric,
+          metricTarget: a.metricTarget,
+          operator: a.operator,
+          thresholdValue: a.thresholdValue,
+          durationSeconds: a.durationSeconds,
+          fireThresholdPercent: a.fireThresholdPercent,
+          resolveAfterSeconds: a.resolveAfterSeconds,
+          resolveThresholdPercent: a.resolveThresholdPercent,
+          eventPattern: a.eventPattern,
+          resourceIds: a.resourceIds,
+          messageTemplate: a.messageTemplate,
+          webhookIds: a.webhookIds,
+          cooldownSeconds: a.cooldownSeconds,
+          enabled: a.enabled,
+        })
+      );
+      return createAlertRuleWithEffects(context.notifRuleService, input, user.scopes, user.id);
     }
     case 'update_alert_rule': {
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      const ruleService = context.notifRuleService;
-      const input = Object.fromEntries(
-        Object.entries({
+      const input = UpdateAlertRuleSchema.parse(
+        definedFields({
           name: a.name,
           enabled: a.enabled,
           severity: a.severity,
@@ -115,67 +170,62 @@ export async function executeNotificationTool(
           messageTemplate: a.messageTemplate,
           webhookIds: a.webhookIds,
           cooldownSeconds: a.cooldownSeconds,
-        }).filter(([, value]) => value !== undefined)
+        })
       );
-      // Mirrors the update route: the merged rule must stay within the caller's
-      // hosting access, hosting rules update behind the evaluator barrier and
-      // other rules reconcile firing states.
-      const previous = await ruleService.getById(a.ruleId);
-      assertHostingAlertAccess(user.scopes, { ...previous, ...input } as Parameters<
-        typeof assertHostingAlertAccess
-      >[1]);
-      const update = () => ruleService.update(a.ruleId, input, user.id);
-      const hostingRule = previous.category === 'hosting_account' || previous.category === 'hosting_vm';
-      const { NotificationEvaluatorService } = await import(
-        '@/modules/notifications/notification-evaluator.service.js'
-      );
-      const evaluator = container.isRegistered(NotificationEvaluatorService)
-        ? container.resolve(NotificationEvaluatorService)
-        : null;
-      const rule = hostingRule && evaluator ? await evaluator.updateHostingRule(previous, update) : await update();
-      if (!hostingRule && evaluator) {
-        await evaluator.reconcileRuleUpdate(previous, rule).catch(() => {
-          // The periodic sweep retries; the rule update itself already succeeded.
-        });
-      }
-      return rule;
+      return updateAlertRuleWithEffects(context.notifRuleService, a.ruleId, input, user.scopes, user.id);
     }
     case 'delete_alert_rule':
       if (!context.notifRuleService) return { error: 'Notification service not available' };
-      return context.notifRuleService.delete(a.ruleId, user.id);
-    case 'list_webhooks':
+      await deleteAlertRuleWithEffects(context.notifRuleService, a.ruleId, user.id);
+      return { success: true };
+    case 'list_webhooks': {
       if (!context.notifWebhookService) return { error: 'Notification service not available' };
-      return context.notifWebhookService.list({ page: 1, limit: 100 });
+      const reveal = canRevealWebhookSecrets(user);
+      return context.notifWebhookService.list(
+        WebhookListQuerySchema.parse({
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+          enabled: a.enabled,
+          search: a.search,
+        }),
+        { revealHeaders: reveal, revealUrl: reveal }
+      );
+    }
     case 'create_webhook':
       if (!context.notifWebhookService) return { error: 'Notification service not available' };
       return context.notifWebhookService.create(
-        {
-          name: a.name,
-          url: a.url,
-          method: a.method ?? 'POST',
-          templatePreset: a.templatePreset,
-          bodyTemplate: a.bodyTemplate,
-          signingSecret: a.signingSecret,
-          signingHeader: a.signingHeader ?? 'X-Signature-256',
-          enabled: true,
-          headers: {},
-        },
+        CreateWebhookSchema.parse(
+          definedFields({
+            name: a.name,
+            url: a.url,
+            method: a.method,
+            enabled: a.enabled,
+            templatePreset: a.templatePreset,
+            bodyTemplate: a.bodyTemplate,
+            signingSecret: a.signingSecret,
+            signingHeader: a.signingHeader,
+            headers: a.headers,
+          })
+        ),
         user.id
       );
     case 'update_webhook':
       if (!context.notifWebhookService) return { error: 'Notification service not available' };
       return context.notifWebhookService.update(
         a.webhookId,
-        {
-          name: a.name,
-          url: a.url,
-          method: a.method,
-          enabled: a.enabled,
-          templatePreset: a.templatePreset,
-          bodyTemplate: a.bodyTemplate,
-          signingSecret: a.signingSecret,
-          signingHeader: a.signingHeader,
-        },
+        UpdateWebhookSchema.parse(
+          definedFields({
+            name: a.name,
+            url: a.url,
+            method: a.method,
+            enabled: a.enabled,
+            templatePreset: a.templatePreset,
+            bodyTemplate: a.bodyTemplate,
+            signingSecret: a.signingSecret,
+            signingHeader: a.signingHeader,
+            headers: a.headers,
+          })
+        ),
         user.id
       );
     case 'delete_webhook':
@@ -190,23 +240,31 @@ export async function executeNotificationTool(
     }
     case 'list_webhook_deliveries':
       if (!context.notifDeliveryService) return { error: 'Notification service not available' };
-      return context.notifDeliveryService.list({
-        page: 1,
-        limit: agentPageLimit(a.limit),
-        webhookId: a.webhookId,
-        status: a.status,
-      });
+      return context.notifDeliveryService.list(
+        DeliveryListQuerySchema.parse({
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+          webhookId: a.webhookId,
+          status: a.status,
+          eventType: a.eventType,
+        }),
+        { revealSensitive: canRevealDeliveryPayloads(user) }
+      );
     case 'get_delivery_stats':
       if (!context.notifDeliveryService) return { error: 'Notification service not available' };
       return context.notifDeliveryService.getStats(a.webhookId);
+    case 'manage_notifications':
+      return manageNotifications(context, user, a);
     case 'list_siem_destinations':
       if (!context.siemDestinationService) return { error: 'SIEM service not available' };
-      return context.siemDestinationService.list({
-        page: 1,
-        limit: agentPageLimit(a.limit),
-        enabled: a.enabled,
-        search: a.search,
-      });
+      return context.siemDestinationService.list(
+        SiemDestinationListQuerySchema.parse({
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+          enabled: a.enabled,
+          search: a.search,
+        })
+      );
     case 'get_siem_destination':
       if (!context.siemDestinationService) return { error: 'SIEM service not available' };
       return context.siemDestinationService.getById(a.destinationId);
@@ -245,19 +303,83 @@ export async function executeNotificationTool(
       return context.siemDestinationService.test(a.destinationId);
     case 'list_siem_deliveries':
       if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
-      return context.siemDeliveryService.list({
-        page: 1,
-        limit: agentPageLimit(a.limit),
-        destinationId: a.destinationId,
-        status: a.status,
-      });
-    case 'get_siem_delivery':
+      return context.siemDeliveryService.list(
+        SiemDeliveryListQuerySchema.parse({
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+          destinationId: a.destinationId,
+          status: a.status,
+        })
+      );
+    case 'get_siem_delivery': {
       if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
-      return context.siemDeliveryService.getById(a.deliveryId);
+      const delivery = await context.siemDeliveryService.getById(a.deliveryId);
+      if (!delivery) throw new AppError(404, 'SIEM_DELIVERY_NOT_FOUND', 'SIEM delivery not found');
+      return delivery;
+    }
     case 'requeue_siem_delivery':
       if (!context.siemDeliveryService) return { error: 'SIEM service not available' };
       return context.siemDeliveryService.requeue(a.deliveryId);
     default:
       throw new Error(`Unsupported notification tool: ${toolName}`);
   }
+}
+
+async function manageNotifications(context: NotificationToolContext, user: User, a: Record<string, any>) {
+  switch (a.operation) {
+    case 'alert_categories':
+      requireAnyScope(user, [
+        'notifications:alerts:view',
+        'notifications:alerts:create',
+        'notifications:alerts:edit',
+        'notifications:alerts:delete',
+        'notifications:view',
+        'notifications:manage',
+      ]);
+      return ALERT_CATEGORIES;
+    case 'webhook_presets':
+      requireAnyScope(user, [
+        'notifications:webhooks:view',
+        'notifications:webhooks:create',
+        'notifications:webhooks:edit',
+        'notifications:webhooks:delete',
+        'notifications:view',
+        'notifications:manage',
+      ]);
+      return TEMPLATE_PRESETS;
+    case 'webhook_get': {
+      requireAnyScope(user, ['notifications:webhooks:view', 'notifications:view', 'notifications:manage']);
+      if (!context.notifWebhookService) return { error: 'Notification service not available' };
+      const reveal = canRevealWebhookSecrets(user);
+      return context.notifWebhookService.getById(requiredId(a.webhookId, 'webhookId'), {
+        revealHeaders: reveal,
+        revealUrl: reveal,
+      });
+    }
+    case 'webhook_preview': {
+      requireAnyScope(user, ['notifications:webhooks:create', 'notifications:webhooks:edit', 'notifications:manage']);
+      if (!context.notifDispatcherService) return { error: 'Notification service not available' };
+      if (typeof a.bodyTemplate !== 'string') {
+        throw new AppError(400, 'BODY_TEMPLATE_REQUIRED', 'bodyTemplate is required');
+      }
+      const templateContext = buildTemplateContext(buildSampleEvent(), context.notifDispatcherService.getGatewayUrl());
+      return { rendered: renderTemplate(a.bodyTemplate, templateContext), context: templateContext };
+    }
+    case 'delivery_get': {
+      requireAnyScope(user, ['notifications:deliveries:view', 'notifications:view', 'notifications:manage']);
+      if (!context.notifDeliveryService) return { error: 'Notification service not available' };
+      const delivery = await context.notifDeliveryService.getById(requiredId(a.deliveryId, 'deliveryId'), {
+        revealSensitive: canRevealDeliveryPayloads(user),
+      });
+      if (!delivery) throw new AppError(404, 'DELIVERY_NOT_FOUND', 'Not found');
+      return delivery;
+    }
+    default:
+      throw new Error(`Unsupported notification operation: ${String(a.operation)}`);
+  }
+}
+
+function requiredId(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !value) throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', `${label} is required`);
+  return value;
 }

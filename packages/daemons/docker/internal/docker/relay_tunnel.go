@@ -536,9 +536,15 @@ func (p *DockerPlugin) OpenBackupRelayRoute(ctx context.Context, ownerKind, rout
 					}
 				}()
 				defer close(closeOnCancel)
-				candidates := relaybridge.PoolCandidates(assignment, false)
+				// A backup can outlive its grants (TTL, generation or key change):
+				// use the newest bundle's assignment for each connection.
+				current := findRelayAssignment(p.relayGrants.get(), "connect", ownerKind, routeID)
+				if current == nil {
+					current = assignment
+				}
+				candidates := relaybridge.PoolCandidates(current, false)
 				if len(candidates) == 0 {
-					candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: assignment.GetGrant()}}
+					candidates = []*pb.RelayDataCandidate{{RelayInstanceId: relaybridge.LegacyTargetID, Grant: current.GetGrant()}}
 				}
 				for _, candidate := range p.orderRelayCandidates(candidates) {
 					router := p.relayRouter(candidate.GetRelayInstanceId())

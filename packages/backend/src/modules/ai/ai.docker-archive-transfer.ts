@@ -1,0 +1,578 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { mkdir, mkdtemp, open, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { Readable, Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { z } from 'zod';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { hasScopeBase } from '@/lib/permissions.js';
+import { sanitizeFilename } from '@/lib/utils.js';
+import { AppError } from '@/middleware/error-handler.js';
+import {
+  ContainerArchiveExportQuerySchema,
+  ContainerArchiveImportQuerySchema,
+  ContainerArchiveResolutionSchema,
+} from '@/modules/docker/docker.schemas.js';
+import type { DockerManagementService } from '@/modules/docker/docker.service.js';
+import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
+import {
+  importDockerContainerArchive,
+  openDockerContainerArchiveExport,
+} from '@/modules/docker/docker-container-archive-operations.js';
+import { assertDockerCreationAccess } from '@/modules/docker/docker-creation-access.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
+import type { User } from '@/types.js';
+import { ensureDockerContainerScopes, requiredToolString } from './ai.docker-tool-access.js';
+
+/**
+ * MCP carries container and volume archives in bounded base64 chunks. Bytes
+ * are spooled privately on the Gateway; only a verified spool reaches the
+ * shared import/export operations the REST routes use.
+ */
+
+export const DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES = 1024 * 1024;
+const SESSION_TTL_MS = 60 * 60 * 1000;
+const ARCHIVE_MAX_BYTES = 32 * 1024 ** 3;
+const RESERVED_UPLOAD_BYTES_MAX = 64 * 1024 ** 3;
+const ACTIVE_SESSIONS_MAX = 16;
+const ACTIVE_SESSIONS_PER_USER_MAX = 4;
+const RESOLUTION_JSON_MAX_BYTES = 32 * 1024;
+const CANONICAL_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const SPOOL_FILE = 'archive';
+
+const UploadBeginSchema = z.object({
+  nodeId: z.string().uuid(),
+  name: ContainerArchiveImportQuerySchema.shape.name,
+  folderId: ContainerArchiveImportQuerySchema.shape.folderId,
+  resolution: ContainerArchiveResolutionSchema.default({}),
+  declaredSizeBytes: z.number().int().min(1).max(ARCHIVE_MAX_BYTES),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+type UploadState = 'open' | 'finalizing' | 'completed' | 'aborted';
+type DownloadState = 'preparing' | 'ready' | 'failed';
+
+interface UploadSession {
+  id: string;
+  userId: string;
+  nodeId: string;
+  name: string;
+  folderId?: string;
+  resolution: z.infer<typeof ContainerArchiveResolutionSchema>;
+  declaredSizeBytes: number;
+  sha256: string;
+  directory: string | null;
+  offset: number;
+  expiresAt: number;
+  state: UploadState;
+  result?: { containerId: string; containerName: string; imageId: string };
+}
+
+type DownloadAccess =
+  | { kind: 'container'; nodeId: string; resourceId: string; scopes: string[] }
+  | { kind: 'volume'; nodeId: string; volumeName: string };
+
+interface DownloadSession {
+  id: string;
+  userId: string;
+  access: DownloadAccess;
+  filename: string;
+  directory: string;
+  state: DownloadState;
+  sizeBytes: number;
+  sha256: string | null;
+  error: { code: string; message: string } | null;
+  expiresAt: number;
+  abort: AbortController;
+}
+
+function transferNotFound(): AppError {
+  // Transfer IDs never grant access; a foreign ID looks like a missing one.
+  return new AppError(404, 'DOCKER_ARCHIVE_TRANSFER_NOT_FOUND', 'Archive transfer session not found');
+}
+
+function decodeChunk(value: unknown): Buffer {
+  if (typeof value !== 'string' || !CANONICAL_BASE64.test(value)) {
+    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', 'Chunk must use canonical base64 encoding');
+  }
+  const bytes = Buffer.from(value, 'base64');
+  if (bytes.byteLength === 0 || bytes.byteLength > DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES) {
+    throw new AppError(400, 'DOCKER_ARCHIVE_CHUNK_INVALID', 'Chunk must contain 1 byte to 1 MiB');
+  }
+  return bytes;
+}
+
+function nonNegativeInteger(value: unknown, name: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', `${name} must be a non-negative integer`);
+  }
+  return value;
+}
+
+/** POST /containers/archive entry checks: create scope, license, destination access and node creation lock. */
+async function assertArchiveImportAccess(user: User, nodeId: string, folderId: string | undefined) {
+  if (!hasScopeBase(user.scopes, 'docker:containers:create')) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing required scope: docker:containers:create');
+  }
+  // LICENSE ENFORCEMENT: Archive operations are Personal entitlements under the project license/TOS.
+  await container.resolve(LicensePolicyService).requireFeature('container-export');
+  const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+  await assertDockerCreationAccess(db, user.scopes, 'docker:containers:create', nodeId, folderId);
+  await assertNodeAllowsServiceCreation(db, nodeId, 'docker');
+}
+
+function assertDownloadAccess(user: User, access: DownloadAccess) {
+  const allowed =
+    access.kind === 'container'
+      ? access.scopes.every((scope) => hasDockerResourceScope(user.scopes, scope, access.nodeId, access.resourceId))
+      : hasDockerResourceScope(user.scopes, 'docker:volumes:export', access.nodeId, access.volumeName);
+  if (!allowed) throw transferNotFound();
+}
+
+export class DockerArchiveTransferStore {
+  private readonly uploads = new Map<string, UploadSession>();
+  private readonly downloads = new Map<string, DownloadSession>();
+  private readonly busy = new Set<string>();
+  private sweepTimer: ReturnType<typeof setInterval> | undefined;
+
+  constructor(private readonly root = join(tmpdir(), 'gateway-docker-archive-mcp')) {}
+
+  async upload(user: User, args: Record<string, unknown>) {
+    const operation = z.enum(['begin', 'chunk', 'status', 'finalize', 'abort']).parse(args.operation);
+    if (operation === 'begin') return this.beginUpload(user, UploadBeginSchema.parse(args));
+    const session = this.uploads.get(requiredToolString(args.uploadId, 'uploadId'));
+    if (!session || session.userId !== user.id) throw transferNotFound();
+    if (!hasScopeBase(user.scopes, 'docker:containers:create')) throw transferNotFound();
+    return this.withSession(session.id, async () => {
+      if (operation === 'status') return this.uploadView(session);
+      if (operation === 'abort') {
+        if (session.state === 'completed') {
+          throw new AppError(409, 'DOCKER_ARCHIVE_IMPORT_COMPLETED', 'The archive was already imported');
+        }
+        session.state = 'aborted';
+        await this.removeUploadSpool(session);
+        this.uploads.delete(session.id);
+        return this.uploadView(session);
+      }
+      if (operation === 'finalize' && session.state === 'completed') return this.uploadView(session);
+      if (session.state !== 'open' || !session.directory) {
+        throw new AppError(409, 'DOCKER_ARCHIVE_UPLOAD_NOT_OPEN', 'Archive upload is not open');
+      }
+      if (session.expiresAt <= Date.now()) {
+        await this.removeUploadSpool(session);
+        this.uploads.delete(session.id);
+        throw new AppError(410, 'DOCKER_ARCHIVE_UPLOAD_EXPIRED', 'Archive upload expired; begin a new upload');
+      }
+      session.expiresAt = Date.now() + SESSION_TTL_MS;
+      if (operation === 'chunk') return this.appendUpload(session, args);
+      return this.finalizeUpload(user, session);
+    });
+  }
+
+  async download(dockerService: DockerManagementService, user: User, args: Record<string, unknown>) {
+    const operation = z.enum(['begin', 'status', 'chunk', 'close']).parse(args.operation);
+    if (operation === 'begin') return this.beginDownload(dockerService, user, args);
+    const session = this.downloads.get(requiredToolString(args.downloadId, 'downloadId'));
+    if (!session || session.userId !== user.id) throw transferNotFound();
+    assertDownloadAccess(user, session.access);
+    return this.withSession(session.id, async () => {
+      if (operation === 'status') return this.downloadView(session);
+      if (operation === 'close') {
+        this.downloads.delete(session.id);
+        session.abort.abort();
+        await rm(session.directory, { recursive: true, force: true });
+        return { ...this.downloadView(session), status: 'closed' };
+      }
+      if (session.state !== 'ready') {
+        throw new AppError(409, 'DOCKER_ARCHIVE_NOT_READY', `Archive is ${session.state}; poll status until ready`);
+      }
+      session.expiresAt = Date.now() + SESSION_TTL_MS;
+      return this.readDownloadChunk(session, args);
+    });
+  }
+
+  dispose() {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.sweepTimer = undefined;
+  }
+
+  private async withSession<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    if (this.busy.has(id)) {
+      throw new AppError(409, 'DOCKER_ARCHIVE_TRANSFER_BUSY', 'Another call for this archive transfer is in progress');
+    }
+    this.busy.add(id);
+    try {
+      return await operation();
+    } finally {
+      this.busy.delete(id);
+    }
+  }
+
+  private reserveSlot(userId: string, uploadBytes = 0) {
+    const active = [
+      ...[...this.uploads.values()].filter((session) => session.directory !== null),
+      ...this.downloads.values(),
+    ];
+    const reservedUploadBytes = [...this.uploads.values()]
+      .filter((session) => session.directory !== null)
+      .reduce((total, session) => total + session.declaredSizeBytes, 0);
+    if (
+      active.length >= ACTIVE_SESSIONS_MAX ||
+      active.filter((session) => session.userId === userId).length >= ACTIVE_SESSIONS_PER_USER_MAX ||
+      reservedUploadBytes + uploadBytes > RESERVED_UPLOAD_BYTES_MAX
+    ) {
+      throw new AppError(
+        429,
+        'DOCKER_ARCHIVE_TRANSFER_CAPACITY',
+        'Too many archive transfers in progress; finish or abort unused transfers'
+      );
+    }
+  }
+
+  private async createSpoolDirectory() {
+    await mkdir(this.root, { recursive: true, mode: 0o700 });
+    this.startSweep();
+    return mkdtemp(join(this.root, 'transfer-'));
+  }
+
+  private async beginUpload(user: User, input: z.infer<typeof UploadBeginSchema>) {
+    if (Buffer.byteLength(JSON.stringify(input.resolution), 'utf8') > RESOLUTION_JSON_MAX_BYTES) {
+      throw new AppError(400, 'GWCA_RESOLUTION_INVALID', 'Archive import resolution is invalid');
+    }
+    await assertArchiveImportAccess(user, input.nodeId, input.folderId);
+    this.reserveSlot(user.id, input.declaredSizeBytes);
+    const session: UploadSession = {
+      id: randomUUID(),
+      userId: user.id,
+      nodeId: input.nodeId,
+      name: input.name,
+      folderId: input.folderId,
+      resolution: input.resolution,
+      declaredSizeBytes: input.declaredSizeBytes,
+      sha256: input.sha256,
+      directory: '',
+      offset: 0,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+      state: 'open',
+    };
+    this.uploads.set(session.id, session);
+    try {
+      session.directory = await this.createSpoolDirectory();
+      const file = await open(join(session.directory, SPOOL_FILE), 'wx', 0o600);
+      await file.close();
+    } catch (error) {
+      await this.removeUploadSpool(session);
+      this.uploads.delete(session.id);
+      throw error;
+    }
+    return this.uploadView(session);
+  }
+
+  private async appendUpload(session: UploadSession, args: Record<string, unknown>) {
+    const offset = nonNegativeInteger(args.offset, 'offset');
+    const bytes = decodeChunk(args.contentBase64);
+    if (offset !== session.offset) {
+      throw new AppError(409, 'DOCKER_ARCHIVE_OFFSET_MISMATCH', 'Upload offset does not match', {
+        expectedOffset: session.offset,
+      });
+    }
+    if (offset + bytes.byteLength > session.declaredSizeBytes) {
+      throw new AppError(400, 'DOCKER_ARCHIVE_SIZE_EXCEEDED', 'Chunk exceeds the declared archive size');
+    }
+    const file = await open(join(session.directory!, SPOOL_FILE), 'r+');
+    try {
+      let written = 0;
+      while (written < bytes.byteLength) {
+        const result = await file.write(bytes, written, bytes.byteLength - written, offset + written);
+        if (result.bytesWritten === 0) throw new Error('Archive spool write made no progress');
+        written += result.bytesWritten;
+      }
+      await file.sync();
+      session.offset += bytes.byteLength;
+    } catch (error) {
+      await file.truncate(offset);
+      throw error;
+    } finally {
+      await file.close();
+    }
+    return this.uploadView(session);
+  }
+
+  private async finalizeUpload(user: User, session: UploadSession) {
+    if (session.offset !== session.declaredSizeBytes) {
+      throw new AppError(409, 'DOCKER_ARCHIVE_UPLOAD_INCOMPLETE', 'Archive upload is incomplete', {
+        expectedOffset: session.offset,
+      });
+    }
+    const path = join(session.directory!, SPOOL_FILE);
+    const hash = createHash('sha256');
+    for await (const bytes of createReadStream(path)) hash.update(bytes);
+    if (hash.digest('hex') !== session.sha256) {
+      throw new AppError(400, 'DOCKER_ARCHIVE_HASH_MISMATCH', 'Archive SHA-256 does not match');
+    }
+    // Access is re-checked with the caller's current grants before anything reaches the node.
+    await assertArchiveImportAccess(user, session.nodeId, session.folderId);
+    session.state = 'finalizing';
+    const body = createReadStream(path);
+    try {
+      session.result = await importDockerContainerArchive({
+        nodeId: session.nodeId,
+        name: session.name,
+        folderId: session.folderId,
+        resolution: session.resolution,
+        body: Readable.toWeb(body) as unknown as ReadableStream<Uint8Array>,
+        actorScopes: user.scopes,
+        userId: user.id,
+      });
+    } catch (error) {
+      // The import rolls back its own partial state; the verified spool stays for a retry until it expires.
+      session.state = 'open';
+      throw error;
+    } finally {
+      body.destroy();
+    }
+    session.state = 'completed';
+    await this.removeUploadSpool(session).catch(() => undefined);
+    return this.uploadView(session);
+  }
+
+  private async beginDownload(dockerService: DockerManagementService, user: User, args: Record<string, unknown>) {
+    const kind = z.enum(['container', 'volume']).parse(args.kind);
+    const nodeId = requiredToolString(args.nodeId, 'nodeId');
+    let access: DownloadAccess;
+    let openArchive: () => Promise<{ filename: string; source: () => Promise<ReadableStream<Uint8Array> | Buffer> }>;
+    if (kind === 'container') {
+      const containerId = requiredToolString(args.containerId, 'containerId');
+      // GET /containers/:id/archive holds docker:containers:export for the container.
+      const inspected = await ensureDockerContainerScopes(
+        dockerService,
+        user,
+        ['docker:containers:export'],
+        nodeId,
+        containerId
+      );
+      // LICENSE ENFORCEMENT: Archive operations are Personal entitlements under the project license/TOS.
+      await container.resolve(LicensePolicyService).requireFeature('container-export');
+      const query = ContainerArchiveExportQuerySchema.parse({
+        imageMode: args.imageMode,
+        includeWritableLayer: args.includeWritableLayer,
+        includeEnvironment: args.includeEnvironment,
+        includeSecrets: args.includeSecrets,
+      });
+      access = {
+        kind: 'container',
+        nodeId,
+        resourceId: String(inspected?.scopeResourceId ?? ''),
+        scopes: [
+          'docker:containers:export',
+          ...(query.imageMode === 'portable' ? ['docker:containers:files:read'] : []),
+          ...(query.includeEnvironment ? ['docker:containers:environment'] : []),
+          ...(query.includeSecrets ? ['docker:containers:secrets'] : []),
+        ],
+      };
+      openArchive = async () => {
+        const archive = await openDockerContainerArchiveExport({
+          nodeId,
+          containerId,
+          query,
+          actorScopes: user.scopes,
+          userId: user.id,
+        });
+        return { filename: archive.filename, source: async () => archive.stream };
+      };
+    } else {
+      const volumeName = requiredToolString(args.volumeName, 'volumeName');
+      // GET /volumes/:name/export holds docker:volumes:export and requires a user-visible volume.
+      if (!hasDockerResourceScope(user.scopes, 'docker:volumes:export', nodeId, volumeName)) {
+        throw new AppError(403, 'FORBIDDEN', `Missing required scope: docker:volumes:export:${nodeId}/${volumeName}`);
+      }
+      await dockerService.assertUserVolumeVisible(nodeId, volumeName);
+      access = { kind: 'volume', nodeId, volumeName };
+      openArchive = async () => ({
+        filename: `${sanitizeFilename(volumeName)}.tar.gz`,
+        source: () => dockerService.exportVolume(nodeId, volumeName),
+      });
+    }
+    this.reserveSlot(user.id);
+    const session: DownloadSession = {
+      id: randomUUID(),
+      userId: user.id,
+      access,
+      filename: '',
+      directory: '',
+      state: 'preparing',
+      sizeBytes: 0,
+      sha256: null,
+      error: null,
+      expiresAt: Date.now() + SESSION_TTL_MS,
+      abort: new AbortController(),
+    };
+    this.downloads.set(session.id, session);
+    let opened: Awaited<ReturnType<typeof openArchive>>;
+    try {
+      session.directory = await this.createSpoolDirectory();
+      opened = await openArchive();
+    } catch (error) {
+      this.downloads.delete(session.id);
+      if (session.directory) await rm(session.directory, { recursive: true, force: true });
+      throw error;
+    }
+    session.filename = opened.filename;
+    void this.spoolDownload(session, opened.source);
+    return this.downloadView(session);
+  }
+
+  private async spoolDownload(
+    session: DownloadSession,
+    source: () => Promise<ReadableStream<Uint8Array> | Buffer>
+  ): Promise<void> {
+    const path = join(session.directory, SPOOL_FILE);
+    const hash = createHash('sha256');
+    let size = 0;
+    try {
+      const data = await source();
+      if (Buffer.isBuffer(data) || data instanceof Uint8Array) {
+        const bytes = Buffer.from(data);
+        if (bytes.byteLength > ARCHIVE_MAX_BYTES) {
+          throw new AppError(413, 'DOCKER_ARCHIVE_TOO_LARGE', 'Archive exceeds the MCP transfer limit');
+        }
+        await writeFile(path, bytes, { mode: 0o600, flag: 'wx' });
+        hash.update(bytes);
+        size = bytes.byteLength;
+      } else {
+        const meter = new Transform({
+          transform(chunk: Buffer, _encoding, callback) {
+            size += chunk.byteLength;
+            if (size > ARCHIVE_MAX_BYTES) {
+              callback(new AppError(413, 'DOCKER_ARCHIVE_TOO_LARGE', 'Archive exceeds the MCP transfer limit'));
+              return;
+            }
+            hash.update(chunk);
+            callback(null, chunk);
+          },
+        });
+        await pipeline(
+          Readable.fromWeb(data as Parameters<typeof Readable.fromWeb>[0]),
+          meter,
+          createWriteStream(path, { mode: 0o600, flags: 'wx' }),
+          { signal: session.abort.signal }
+        );
+      }
+      session.sizeBytes = size;
+      session.sha256 = hash.digest('hex');
+      session.state = 'ready';
+    } catch (error) {
+      session.state = 'failed';
+      session.error =
+        error instanceof AppError
+          ? { code: error.code, message: error.message }
+          : { code: 'DOCKER_ARCHIVE_EXPORT_FAILED', message: 'Archive export failed' };
+      await rm(path, { force: true }).catch(() => undefined);
+    }
+    if (!this.downloads.has(session.id)) await rm(session.directory, { recursive: true, force: true });
+  }
+
+  private async readDownloadChunk(session: DownloadSession, args: Record<string, unknown>) {
+    const offset = nonNegativeInteger(args.offset ?? 0, 'offset');
+    const requested = args.length === undefined ? DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES : args.length;
+    const length = Math.min(nonNegativeInteger(requested, 'length'), DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES);
+    if (offset > session.sizeBytes) {
+      throw new AppError(400, 'DOCKER_ARCHIVE_OFFSET_INVALID', 'Offset is beyond the end of the archive');
+    }
+    const buffer = Buffer.alloc(Math.min(length, session.sizeBytes - offset));
+    const file = await open(join(session.directory, SPOOL_FILE), 'r');
+    let bytesRead = 0;
+    try {
+      while (bytesRead < buffer.byteLength) {
+        const result = await file.read(buffer, bytesRead, buffer.byteLength - bytesRead, offset + bytesRead);
+        if (result.bytesRead === 0) break;
+        bytesRead += result.bytesRead;
+      }
+    } finally {
+      await file.close();
+    }
+    return {
+      downloadId: session.id,
+      offset,
+      bytes: bytesRead,
+      nextOffset: offset + bytesRead,
+      eof: offset + bytesRead >= session.sizeBytes,
+      sizeBytes: session.sizeBytes,
+      sha256: session.sha256,
+      contentBase64: buffer.subarray(0, bytesRead).toString('base64'),
+    };
+  }
+
+  private uploadView(session: UploadSession) {
+    return {
+      uploadId: session.id,
+      nodeId: session.nodeId,
+      name: session.name,
+      offset: session.offset,
+      declaredSizeBytes: session.declaredSizeBytes,
+      status: session.state,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      maxChunkBytes: DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES,
+      ...(session.result ? { container: session.result } : {}),
+    };
+  }
+
+  private downloadView(session: DownloadSession) {
+    return {
+      downloadId: session.id,
+      kind: session.access.kind,
+      nodeId: session.access.nodeId,
+      filename: session.filename,
+      status: session.state,
+      sizeBytes: session.state === 'ready' ? session.sizeBytes : null,
+      sha256: session.sha256,
+      error: session.error,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+      maxChunkBytes: DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES,
+    };
+  }
+
+  private async removeUploadSpool(session: UploadSession) {
+    if (!session.directory) {
+      session.directory = null;
+      return;
+    }
+    const directory = session.directory;
+    session.directory = null;
+    await rm(directory, { recursive: true, force: true });
+  }
+
+  private startSweep() {
+    if (this.sweepTimer) return;
+    this.sweepTimer = setInterval(() => {
+      void this.sweep().catch(() => undefined);
+    }, 60_000);
+    this.sweepTimer.unref?.();
+  }
+
+  async sweep(now = Date.now()) {
+    for (const session of [...this.uploads.values()]) {
+      if (this.busy.has(session.id) || session.expiresAt > now) continue;
+      this.uploads.delete(session.id);
+      await this.removeUploadSpool(session);
+    }
+    for (const session of [...this.downloads.values()]) {
+      if (this.busy.has(session.id) || session.expiresAt > now) continue;
+      this.downloads.delete(session.id);
+      session.abort.abort();
+      await rm(session.directory, { recursive: true, force: true });
+    }
+    if (this.uploads.size === 0 && this.downloads.size === 0) this.dispose();
+  }
+}
+
+let defaultStore: DockerArchiveTransferStore | undefined;
+
+export function dockerArchiveTransferStore(): DockerArchiveTransferStore {
+  defaultStore ??= new DockerArchiveTransferStore();
+  return defaultStore;
+}

@@ -102,23 +102,23 @@ describe('TokensService.validateToken', () => {
     expect(result?.scopes).toEqual(['status-page:manage']);
   });
 
-  it('filters user-only AI scopes from existing tokens', async () => {
+  it('filters user-only AI scopes from existing tokens but keeps delegable inference access', async () => {
     const db = createDb({
       userGroupId: 'admin-group',
-      tokenScopes: ['feat:ai:use', 'feat:ai:configure', 'nodes:details'],
+      tokenScopes: ['feat:ai:use', 'feat:ai:configure', 'ai:workspace:use', 'nodes:details'],
       groups: [
         {
           id: 'admin-group',
           name: 'admin',
           parentId: null,
-          scopes: ['feat:ai:use', 'feat:ai:configure', 'nodes:details'],
+          scopes: ['feat:ai:use', 'feat:ai:configure', 'ai:workspace:use', 'nodes:details'],
         },
       ],
     });
 
     const result = await createService(db).validateToken('gw_test_token');
 
-    expect(result?.scopes).toEqual(['nodes:details']);
+    expect(result?.scopes).toEqual(['feat:ai:use', 'nodes:details']);
   });
 });
 

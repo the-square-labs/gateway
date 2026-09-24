@@ -328,6 +328,9 @@ message GatewayCommand {
     // Availability. Accepted only by a general Docker daemon advertising
     // docker_availability_v1; nodes never form a peer cluster.
     DockerAvailabilityCommand docker_availability = 69;
+    // Relay supervisor only: installs a renewed relay data-plane server
+    // certificate on its worker without dropping tunnels.
+    RenewRelayIdentityCommand renew_relay_identity = 74;
   }
 }
 
@@ -350,6 +353,17 @@ message UpdateRelayWorkerCommand {
   string target_version = 2;
   string checksum = 3;
   string signed_manifest = 4;
+}
+
+// A renewed relay server certificate. Its identity (the TLS server name) is
+// new, so the worker can keep serving the certificate daemons still pin, by
+// its own identity, until their grant bundles name the renewed one.
+message RenewRelayIdentityCommand {
+  bytes server_certificate = 1;
+  bytes server_key = 2;
+  string server_identity = 3;
+  // SHA-256 fingerprint ("sha256:<hex>") of the certificate daemons pin now.
+  string retain_server_fingerprint = 4;
 }
 
 message RelayRuntimeStatus {

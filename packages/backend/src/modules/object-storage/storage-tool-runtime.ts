@@ -17,6 +17,8 @@ import {
   UpdateObjectStorageConnectionSchema,
 } from '@/modules/object-storage/object-storage.schemas.js';
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
+import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
+import { ObjectStorageMonitoringService } from '@/modules/object-storage/object-storage-monitoring.service.js';
 import { ObjectStorageUploadService } from '@/modules/object-storage/object-storage-upload.service.js';
 import {
   CreateManagedStorageAccessKeySchema,
@@ -46,6 +48,8 @@ export const storageToolRuntime = {
   UpdateObjectStorageConnectionSchema,
   ObjectStorageService,
   ObjectStorageUploadService,
+  ObjectStorageFolderService,
+  ObjectStorageMonitoringService,
   CreateManagedStorageAccessKeySchema,
   CreateManagedStorageBindingSchema,
   CreateManagedStorageSchema,

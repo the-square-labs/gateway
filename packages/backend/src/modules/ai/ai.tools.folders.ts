@@ -13,6 +13,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
           enum: [
             'nodes',
             'databases',
+            'storage',
             'domains',
             'ssl_certificates',
             'logging_environments',
@@ -21,13 +22,15 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
             'permission_groups',
             'routes',
             'docker',
+            'pages',
           ],
           description: 'Foldered resource type to inspect.',
         },
         dockerResourceType: {
           type: 'string',
-          enum: ['container', 'image', 'network', 'volume'],
-          description: 'Docker resource subtype when resourceType is docker. Default: container.',
+          enum: ['container', 'image', 'network', 'volume', 'compose'],
+          description:
+            'Docker resource subtype when resourceType is docker (compose = Compose projects). Default: container.',
         },
       },
       required: ['resourceType'],
@@ -40,7 +43,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_resource_folder',
     description:
-      'Create, update, move, delete, reorder, or assign foldered Gateway resources. Use the resource-specific ids and resourceType.',
+      'Create, update, move, delete, reorder, or assign foldered Gateway resources. Use the resource-specific ids and resourceType (pages = Page Projects, storage = storage connections).',
     parameters: {
       type: 'object',
       properties: {
@@ -49,6 +52,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
           enum: [
             'nodes',
             'databases',
+            'storage',
             'domains',
             'ssl_certificates',
             'logging_environments',
@@ -57,6 +61,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
             'permission_groups',
             'routes',
             'docker',
+            'pages',
           ],
         },
         operation: {
@@ -90,8 +95,9 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
         },
         dockerResourceType: {
           type: 'string',
-          enum: ['container', 'image', 'network', 'volume'],
-          description: 'Docker resource subtype when resourceType is docker. Default: container.',
+          enum: ['container', 'image', 'network', 'volume', 'compose'],
+          description:
+            'Docker resource subtype when resourceType is docker (compose = Compose projects). Default: container.',
         },
       },
       required: ['resourceType', 'operation'],

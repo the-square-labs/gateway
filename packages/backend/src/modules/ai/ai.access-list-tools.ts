@@ -1,4 +1,4 @@
-import { UpdateAccessListSchema } from '@/modules/access-lists/access-list.schemas.js';
+import { CreateAccessListSchema, UpdateAccessListSchema } from '@/modules/access-lists/access-list.schemas.js';
 import type { AccessListService } from '@/modules/access-lists/access-list.service.js';
 import type { User } from '@/types.js';
 import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
@@ -35,15 +35,17 @@ export async function executeAccessListTool(
       );
     case 'create_access_list':
       return context.accessListService.create(
-        {
+        CreateAccessListSchema.parse({
           name: a.name,
+          description: a.description,
           ipRules: [
+            ...(Array.isArray(a.ipRules) ? a.ipRules : []),
             ...(a.allowIps || []).map((value: string) => ({ value, type: 'allow' })),
             ...(a.denyIps || []).map((value: string) => ({ value, type: 'deny' })),
           ],
           basicAuthEnabled: a.basicAuthEnabled ?? !!a.basicAuthUsers?.length,
           basicAuthUsers: a.basicAuthUsers || [],
-        },
+        }),
         user.id
       );
     case 'delete_access_list':

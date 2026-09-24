@@ -4,7 +4,7 @@ import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, isProgrammaticAuth, requireScope } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import {
   cloneProxyFolderRoute,
@@ -32,8 +32,6 @@ import { redactFolderTreeProxyHostsForScopes, redactGroupedPageTargets } from '.
 import {
   redactFolderTreeRawProxyConfigForBrowserResponse,
   redactGroupedRawProxyConfigForBrowserResponse,
-  stripFolderTreeRawProxyConfigForProgrammaticResponse,
-  stripGroupedRawProxyConfigForProgrammaticResponse,
 } from './raw-visibility.js';
 
 export const folderRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
@@ -73,11 +71,6 @@ folderRoutes.openapi(listProxyFoldersRoute, async (c) => {
           allowedFolderIds: getFolderScopedIds(scopes, ['proxy:view', 'proxy:edit', 'proxy:create']),
         }
   );
-  if (isProgrammaticAuth(c)) {
-    return c.json({
-      data: redactFolderTreeProxyHostsForScopes(stripFolderTreeRawProxyConfigForProgrammaticResponse(tree), scopes),
-    });
-  }
   return c.json({
     data: redactFolderTreeProxyHostsForScopes(
       redactFolderTreeRawProxyConfigForBrowserResponse(tree, (host) => {
@@ -103,11 +96,6 @@ folderRoutes.openapi(groupedProxyHostsRoute, async (c) => {
       ? { includeAllFolders: canManageFolders }
       : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'), includeAllFolders: canManageFolders }
   );
-  if (isProgrammaticAuth(c)) {
-    return c.json({
-      data: redactGroupedPageTargets(stripGroupedRawProxyConfigForProgrammaticResponse(result), scopes),
-    });
-  }
   return c.json({
     data: redactGroupedPageTargets(
       redactGroupedRawProxyConfigForBrowserResponse(result, (host) => {

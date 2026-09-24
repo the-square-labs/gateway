@@ -12,7 +12,7 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     invalidateStores: [],
     description:
-      'List native backup policies/history, manage policies, run or cancel a backup (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target, and delete_run to remove retired backup history. Runtime addresses and credentials are resolved by Gateway.',
+      'List native backup policies/history, manage policies (config: destinationId, bucket, prefix, optional staging target, executorNodeId, schedule, timezone, retentionCount, limits, enabled), run or cancel a backup or restore run (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target (config: executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId, optional targetDatabaseName and limits), and delete_run to remove retired backup history. Runtime addresses and credentials are resolved by Gateway.',
     parameters: {
       type: 'object',
       properties: {
@@ -33,9 +33,41 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
         databaseId: { type: 'string' },
         policyId: { type: 'string' },
         runId: { type: 'string' },
-        config: { type: 'object', additionalProperties: true },
+        config: {
+          type: 'object',
+          description: 'Policy body for create/update_policy, restore body for restore, { force } for cancel.',
+          properties: {
+            destinationId: { type: 'string' },
+            bucket: { type: 'string' },
+            prefix: { type: 'string' },
+            stagingStorageConnectionId: { type: ['string', 'null'] },
+            stagingBucket: { type: ['string', 'null'] },
+            executorNodeId: { type: 'string' },
+            schedule: { type: ['string', 'null'], description: 'Cron expression; null for manual runs only.' },
+            timezone: { type: 'string' },
+            retentionCount: { type: 'number' },
+            limits: {
+              type: 'object',
+              properties: {
+                workspaceBytes: { type: 'number' },
+                timeoutSeconds: { type: 'number' },
+                cpuCores: { type: 'number' },
+                memoryMb: { type: 'number' },
+              },
+              additionalProperties: false,
+            },
+            enabled: { type: 'boolean' },
+            newManagedDatabaseName: { type: 'string' },
+            targetDatabaseName: { type: 'string', description: 'Database name inside the restore target.' },
+            restoreTargetConnectionId: { type: 'string' },
+            overwrite: { type: 'boolean', enum: [false] },
+            force: { type: 'boolean' },
+          },
+          additionalProperties: false,
+        },
       },
       required: ['action', 'databaseId'],
+      additionalProperties: false,
     },
   },
 ];

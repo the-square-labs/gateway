@@ -225,7 +225,7 @@ export function ApiTokensSection({
     <>
       <PanelShell
         title="API Tokens"
-        description="Granular tokens for programmatic access. AI is available to users only."
+        description="Granular tokens for programmatic access. AI Workspace, the AI sandbox, and impersonation stay user-only."
         icon={<Key className="h-4 w-4" />}
         actions={
           <Button onClick={openTokenCreate}>

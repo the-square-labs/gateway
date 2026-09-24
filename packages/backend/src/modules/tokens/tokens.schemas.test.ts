@@ -5,7 +5,7 @@ describe('CreateTokenSchema', () => {
   it('rejects user-only AI scopes for API tokens', () => {
     const result = CreateTokenSchema.safeParse({
       name: 'CI token',
-      scopes: ['nodes:details', 'feat:ai:use'],
+      scopes: ['nodes:details', 'ai:workspace:use'],
     });
 
     expect(result.success).toBe(false);
@@ -14,10 +14,10 @@ describe('CreateTokenSchema', () => {
     );
   });
 
-  it('rejects admin:system for API tokens', () => {
+  it('rejects impersonation for API tokens', () => {
     const result = CreateTokenSchema.safeParse({
       name: 'CI token',
-      scopes: ['nodes:details', 'admin:system'],
+      scopes: ['nodes:details', 'admin:users:impersonate'],
     });
 
     expect(result.success).toBe(false);
@@ -30,6 +30,24 @@ describe('CreateTokenSchema', () => {
     const result = CreateTokenSchema.safeParse({
       name: 'CI token',
       scopes: ['nodes:details', 'proxy:view'],
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('allows administration, settings, raw config, and hosting scopes for API tokens', () => {
+    const result = CreateTokenSchema.safeParse({
+      name: 'Automation',
+      scopes: [
+        'admin:system',
+        'admin:users',
+        'admin:groups',
+        'settings:gateway:edit',
+        'proxy:raw:write:host-1',
+        'nodes:config:edit',
+        'hosting:resources:create',
+        'inference:providers:manage',
+      ],
     });
 
     expect(result.success).toBe(true);

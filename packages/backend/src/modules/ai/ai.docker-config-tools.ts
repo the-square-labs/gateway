@@ -6,6 +6,10 @@ import {
   DockerHealthCheckUpsertSchema,
   EnvUpdateSchema,
   FileBrowseSchema,
+  FileMoveSchema,
+  FileUploadChunkQuerySchema,
+  FileUploadCompleteSchema,
+  FileUploadInitSchema,
   SecretCreateSchema,
   SecretUpdateSchema,
 } from '@/modules/docker/docker.schemas.js';
@@ -15,13 +19,39 @@ import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deploym
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
 import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
 import type { User } from '@/types.js';
+import {
+  decodeFileContent,
+  decodeUploadChunk,
+  presentFileContent,
+  requiredToolString,
+} from './ai.docker-tool-access.js';
 
 const FileWriteToolSchema = z.object({
   path: FileBrowseSchema.shape.path,
   content: z
-    .string()
-    .refine((content) => Buffer.byteLength(content, 'utf8') <= FILE_UPLOAD_MAX_BYTES, 'File is too large'),
+    .union([z.string(), z.instanceof(Buffer)])
+    .refine(
+      (content) =>
+        (typeof content === 'string' ? Buffer.byteLength(content, 'utf8') : content.byteLength) <=
+        FILE_UPLOAD_MAX_BYTES,
+      'File is too large'
+    ),
 });
+
+const CONTAINER_FILE_OPERATIONS = new Set([
+  'list_files',
+  'read_file',
+  'write_file',
+  'create_file',
+  'create_directory',
+  'delete_file',
+  'move_file',
+  'upload_init',
+  'upload_chunk',
+  'upload_complete',
+  'upload_abort',
+]);
+const CONTAINER_FILE_READ_OPERATIONS = new Set(['list_files', 'read_file']);
 
 export interface DockerConfigToolContext {
   dockerService: DockerManagementService;
@@ -44,7 +74,7 @@ export async function manageDockerContainerConfigTool(
   }
   if (
     targetType === 'deployment' &&
-    ['get_env', 'update_env', 'list_files', 'read_file', 'write_file'].includes(operation)
+    (operation === 'get_env' || operation === 'update_env' || CONTAINER_FILE_OPERATIONS.has(operation))
   ) {
     throw new Error(`Docker config operation ${operation} does not support deployment targets`);
   }
@@ -106,34 +136,12 @@ export async function manageDockerContainerConfigTool(
     await assertComposeChildMutationAllowed(nodeId, containerId);
     return context.dockerService.updateContainerEnv(nodeId, containerId, input.env, input.removeEnv, user.id);
   }
-  if (operation === 'list_files') {
-    ensureToolScopeForResource(
-      user,
-      'docker:containers:files:read',
-      await authorizationResourceId('docker:containers:files:read')
-    );
-    const input = FileBrowseSchema.parse(args);
-    return context.dockerService.listDirectory(nodeId, containerId, input.path);
-  }
-  if (operation === 'read_file') {
-    ensureToolScopeForResource(
-      user,
-      'docker:containers:files:read',
-      await authorizationResourceId('docker:containers:files:read')
-    );
-    const input = FileBrowseSchema.parse(args);
-    const content = await context.dockerService.readFile(nodeId, containerId, input.path);
-    return { path: input.path, content: Buffer.from(content).toString('utf-8') };
-  }
-  if (operation === 'write_file') {
-    ensureToolScopeForResource(
-      user,
-      'docker:containers:files:write',
-      await authorizationResourceId('docker:containers:files:write')
-    );
-    const input = FileWriteToolSchema.parse(args);
-    await context.dockerService.writeFile(nodeId, containerId, input.path, input.content, user.id);
-    return { success: true };
+  if (CONTAINER_FILE_OPERATIONS.has(operation)) {
+    const fileScope = CONTAINER_FILE_READ_OPERATIONS.has(operation)
+      ? 'docker:containers:files:read'
+      : 'docker:containers:files:write';
+    ensureToolScopeForResource(user, fileScope, await authorizationResourceId(fileScope));
+    return manageContainerFiles(context.dockerService, user, operation, nodeId, containerId, args);
   }
   if (operation.endsWith('_secret') || operation === 'list_secrets') {
     ensureToolScopeForResource(
@@ -242,10 +250,79 @@ export async function manageDockerContainerConfigTool(
   throw new Error(`Unsupported Docker container config operation: ${operation}`);
 }
 
+/** Mirrors the container file-browser routes, which hold docker:containers:files:read or :write. */
+async function manageContainerFiles(
+  dockerService: DockerManagementService,
+  user: User,
+  operation: string,
+  nodeId: string,
+  containerId: string,
+  args: Record<string, unknown>
+) {
+  switch (operation) {
+    case 'list_files': {
+      const input = FileBrowseSchema.parse(args);
+      return dockerService.listDirectory(nodeId, containerId, input.path);
+    }
+    case 'read_file': {
+      const input = FileBrowseSchema.parse(args);
+      const content = await dockerService.readFile(nodeId, containerId, input.path);
+      return presentFileContent(input.path, content, args);
+    }
+    case 'write_file': {
+      const input = FileWriteToolSchema.parse({ path: args.path, content: decodeFileContent(args) });
+      await dockerService.writeFile(nodeId, containerId, input.path, input.content, user.id);
+      return { success: true };
+    }
+    case 'create_file': {
+      const hasContent = typeof args.content === 'string' || typeof args.contentBase64 === 'string';
+      const input = FileWriteToolSchema.parse({ path: args.path, content: hasContent ? decodeFileContent(args) : '' });
+      await dockerService.createFile(nodeId, containerId, input.path, hasContent ? input.content : undefined, user.id);
+      return { success: true };
+    }
+    case 'create_directory': {
+      const { path } = FileBrowseSchema.parse({ path: args.path });
+      await dockerService.createDirectory(nodeId, containerId, path, user.id);
+      return { success: true };
+    }
+    case 'delete_file': {
+      const { path } = FileBrowseSchema.parse({ path: args.path });
+      await dockerService.deleteFile(nodeId, containerId, path, user.id);
+      return { success: true };
+    }
+    case 'move_file': {
+      const { fromPath, toPath } = FileMoveSchema.parse({ fromPath: args.fromPath, toPath: args.toPath });
+      await dockerService.moveFile(nodeId, containerId, fromPath, toPath, user.id);
+      return { success: true };
+    }
+    case 'upload_init': {
+      const { path, totalBytes } = FileUploadInitSchema.parse({ path: args.path, totalBytes: args.totalBytes });
+      return dockerService.initFileUpload(nodeId, containerId, path, totalBytes, user.id);
+    }
+    case 'upload_chunk': {
+      const uploadId = requiredToolString(args.uploadId, 'uploadId');
+      const { offset } = FileUploadChunkQuerySchema.parse({ offset: args.offset });
+      return dockerService.appendFileUploadChunk(nodeId, containerId, uploadId, offset, decodeUploadChunk(args));
+    }
+    case 'upload_complete': {
+      const uploadId = requiredToolString(args.uploadId, 'uploadId');
+      const { path, totalBytes } = FileUploadCompleteSchema.parse({ path: args.path, totalBytes: args.totalBytes });
+      await dockerService.completeFileUpload(nodeId, containerId, uploadId, path, totalBytes);
+      return { success: true };
+    }
+    case 'upload_abort': {
+      await dockerService.abortFileUpload(nodeId, containerId, requiredToolString(args.uploadId, 'uploadId'));
+      return { success: true };
+    }
+    default:
+      throw new Error(`Unsupported Docker container file operation: ${operation}`);
+  }
+}
+
 function dockerConfigOperationScope(operation: string): string | undefined {
   if (operation === 'get_env' || operation === 'update_env') return 'docker:containers:environment';
-  if (operation === 'list_files' || operation === 'read_file') return 'docker:containers:files:read';
-  if (operation === 'write_file') return 'docker:containers:files:write';
+  if (CONTAINER_FILE_READ_OPERATIONS.has(operation)) return 'docker:containers:files:read';
+  if (CONTAINER_FILE_OPERATIONS.has(operation)) return 'docker:containers:files:write';
   if (operation.endsWith('_secret') || operation === 'list_secrets') return 'docker:containers:secrets';
   if (operation.includes('webhook')) return 'docker:containers:webhooks';
   if (operation === 'get_health_check') return 'docker:containers:view';

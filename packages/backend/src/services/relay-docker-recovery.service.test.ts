@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { RelayDockerRecoveryService, type RelayRecoverySafetyError } from './relay-docker-recovery.service.js';
+import {
+  RELAY_DOCKER_ACTION_TIMEOUT_MS,
+  RelayDockerRecoveryService,
+  type RelayRecoverySafetyError,
+} from './relay-docker-recovery.service.js';
 
 const IMAGE = `registry.example/gateway@sha256:${'a'.repeat(64)}`;
 const labels = (service: string) => ({
@@ -170,5 +174,35 @@ describe('RelayDockerRecoveryService', () => {
   it('does not mutate manual deployments', async () => {
     const { service: recovery } = service(docker(), { GATEWAY_RELAY_MANAGED: false });
     await expect(recovery.recover()).rejects.toMatchObject({ reason: 'ownership_unverified' });
+  });
+});
+
+describe('RelayDockerRecoveryService Docker timeouts', () => {
+  it('gives up on a Docker API call that never answers', async () => {
+    vi.useFakeTimers();
+    try {
+      const docker = {
+        inspectSelf: vi.fn(() => new Promise(() => undefined)),
+        listContainersByLabel: vi.fn(),
+        inspectContainer: vi.fn(),
+        imageExists: vi.fn(),
+        startContainer: vi.fn(),
+        restartContainer: vi.fn(),
+        runOneShot: vi.fn(),
+      };
+      const recovery = new RelayDockerRecoveryService(
+        docker as never,
+        {
+          GATEWAY_RELAY_MANAGED: true,
+          GATEWAY_RELAY_IMAGE_REF: `gateway/relay@sha256:${'a'.repeat(64)}`,
+          GATEWAY_RELAY_SERVICE_NAME: 'relay',
+        } as never
+      );
+      const outcome = expect(recovery.recover()).rejects.toMatchObject({ reason: 'docker_unavailable' });
+      await vi.advanceTimersByTimeAsync(RELAY_DOCKER_ACTION_TIMEOUT_MS);
+      await outcome;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

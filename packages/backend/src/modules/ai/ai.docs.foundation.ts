@@ -484,8 +484,8 @@ The node status changes from **pending** to **online** in the Nodes list once th
 - get_node: inspect one node.
 - execute_node_console_command: run one argv-style command on a node console. Use { nodeId, command: ["sh","-lc","..."] }. This is destructive, requires nodes:console, is available to MCP only when that OAuth scope is explicitly granted, and catastrophic patterns such as rm -rf / are blocked.
 - create_node, rename_node, delete_node: manage node records.
-- manage_node_config: read/update/test nginx node config. Use { operation: "read"|"update"|"test", nodeId, content? }. read requires nodes:config:view:<nodeId>; update/test require nodes:config:edit:<nodeId>. This tool is browser-session-only and is not available to MCP tokens.
-- manage_node_file: manage node filesystem paths. This tool is browser-session-only and is not available to MCP tokens.
+- manage_node_config: read/update/test nginx node config. Use { operation: "read"|"update"|"test", nodeId, content? }. read requires nodes:config:view:<nodeId>; update/test require nodes:config:edit:<nodeId>. Available to MCP tokens that hold these scopes.
+- manage_node_file: manage node filesystem paths. Requires nodes:files:read, plus nodes:files:write for changes; available to MCP tokens that hold them.
 
 ### Alternative: Manual installation
 If you cannot use the setup script, you can install manually. Storage and database nodes are the stateful exceptions: they use the restricted docker-daemon profiles and require the verified storage preflight.

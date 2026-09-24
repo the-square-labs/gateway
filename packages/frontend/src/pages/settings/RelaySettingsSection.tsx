@@ -16,12 +16,22 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
+import { CopyValueField } from "@/components/common/CopyValueField";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { NumericInput } from "@/components/ui/numeric-input";
 import {
   Select,
@@ -33,6 +43,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
+import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -41,6 +52,7 @@ import type {
   AuthProvisioningSettings,
   DashboardRelayInstance,
   DashboardRelaySnapshot,
+  RelayReenrollment,
 } from "@/types";
 
 const MAX_HISTORY = 60;
@@ -84,6 +96,44 @@ function admissionLabel(state: string | undefined) {
     default:
       return "Unknown";
   }
+}
+
+const RELAY_INSTALLER_URL =
+  "https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh";
+
+/** The relay installer invocation that re-enrolls an existing relay host with a fresh token. */
+function relayReenrollmentCommand(reenrollment: RelayReenrollment, gateway: string): string {
+  const portArgument =
+    reenrollment.servicePort && reenrollment.servicePort !== 9443
+      ? ` \\\n  --service-port ${reenrollment.servicePort}`
+      : "";
+  const addressArgument = reenrollment.advertiseAddress
+    ? ` \\\n  --advertise-address ${reenrollment.advertiseAddress}`
+    : "";
+  return `curl -sSL ${RELAY_INSTALLER_URL} | sudo bash -s -- \\
+  --gateway ${gateway} \\
+  --token ${reenrollment.enrollmentToken} \\
+  --gateway-cert-sha256 ${reenrollment.gatewayCertSha256}${addressArgument}${portArgument}`;
+}
+
+/** Remote relays that need, or may need, a fresh enrollment to recover. */
+function canReenroll(instance: DashboardRelayInstance): boolean {
+  return (
+    instance.kind === "remote" &&
+    Boolean(instance.nodeId) &&
+    (instance.policyTrust?.state === "reenrollment_required" ||
+      instance.certificate?.state === "expired" ||
+      ["synchronizing", "offline", "error"].includes(instance.state))
+  );
+}
+
+/** A remote relay whose certificate Gateway should renew now. */
+function canRenewCertificate(instance: DashboardRelayInstance): boolean {
+  return (
+    instance.kind === "remote" &&
+    Boolean(instance.nodeId) &&
+    (instance.certificate?.state === "expired" || instance.certificate?.state === "renewal_failed")
+  );
 }
 
 function sortRelayInstances(instances: DashboardRelayInstance[]): DashboardRelayInstance[] {
@@ -148,6 +198,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const [poolAction, setPoolAction] = useState(false);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [abandoningUpdate, setAbandoningUpdate] = useState(false);
+  const [reenrollment, setReenrollment] = useState<RelayReenrollment | null>(null);
+  const shownReenrollment = useRetainedDialogValue(reenrollment, reenrollment !== null);
   const canAbandonRelayUpdate = useAuthStore((state) => state.hasScope("admin:update"));
   const abandonRelayUpdate = useUpdateStore((state) => state.abandonRelayUpdate);
 
@@ -348,6 +400,40 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     }
   };
 
+  const renewCertificate = async (instance: DashboardRelayInstance) => {
+    setPoolAction(true);
+    try {
+      recordStatus(await api.renewRelayInstanceCertificate(instance.id));
+      toast.success("Relay certificate renewed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Relay certificate renewal failed");
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
+  const reenroll = async (instance: DashboardRelayInstance) => {
+    if (
+      !(await confirm({
+        title: `Re-enroll ${instance.displayName}?`,
+        description:
+          "Gateway issues a single-use enrollment token for this relay. Running the relay installer with it on the host enrolls the relay again: it keeps its place in the pool, gets new certificates and pins the current policy signing key. Until then the relay keeps its current identity.",
+        confirmLabel: "Create token",
+      }))
+    )
+      return;
+    setPoolAction(true);
+    try {
+      setReenrollment(await api.reenrollRelayInstance(instance.id));
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create a re-enrollment token"
+      );
+    } finally {
+      setPoolAction(false);
+    }
+  };
+
   const removeRelay = async (instance: DashboardRelayInstance) => {
     if (!instance.nodeId) return;
     if (
@@ -457,6 +543,35 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 {row.updateStep.error ? ` · ${row.updateStep.error}` : ""}
               </div>
             )}
+            {row.policyTrust && (
+              <p
+                role={row.policyTrust.state === "recovered" ? undefined : "alert"}
+                className={`max-w-md text-xs ${
+                  row.policyTrust.state === "recovered" || row.policyTrust.state === "locked_out"
+                    ? "text-warning"
+                    : "text-destructive"
+                }`}
+              >
+                {row.policyTrust.message}
+              </p>
+            )}
+            {row.certificate && (
+              <p
+                role={row.certificate.state === "expiring" ? undefined : "alert"}
+                className={`max-w-md text-xs ${
+                  row.certificate.state === "expiring"
+                    ? "text-muted-foreground"
+                    : "text-destructive"
+                }`}
+              >
+                {row.certificate.message}
+              </p>
+            )}
+            {!row.policyTrust && row.state !== "ready" && row.health?.lastError && (
+              <p className="max-w-md break-words text-xs text-muted-foreground">
+                {row.health.lastError}
+              </p>
+            )}
           </div>
         );
       },
@@ -510,6 +625,24 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 onClick={() => void forceDisconnect(row)}
               >
                 Force disconnect
+              </Button>
+            )}
+            {canRenewCertificate(row) && (
+              <Button
+                variant="outline"
+                disabled={!canEdit || poolAction}
+                onClick={() => void renewCertificate(row)}
+              >
+                Renew certificate
+              </Button>
+            )}
+            {canReenroll(row) && (
+              <Button
+                variant={row.policyTrust?.state === "reenrollment_required" ? "default" : "outline"}
+                disabled={!canEdit || poolAction}
+                onClick={() => void reenroll(row)}
+              >
+                Re-enroll
               </Button>
             )}
             <Button
@@ -988,6 +1121,46 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           <Switch checked={autoRecovery} onChange={setAutoRecovery} disabled={!canEdit || saving} />
         </SettingsControlRow>
       </PanelShell>
+
+      <Dialog open={reenrollment !== null} onOpenChange={(open) => !open && setReenrollment(null)}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Re-enroll {shownReenrollment?.displayName}</DialogTitle>
+            <DialogDescription>
+              Run this on the relay host. The installer updates the relay supervisor and enrolls it
+              again with the token below; the relay then trusts Gateway's current policy key.
+            </DialogDescription>
+          </DialogHeader>
+          {shownReenrollment && (
+            <div className="space-y-4">
+              <p className="border border-warning/30 bg-warning/10 px-3 py-2 text-sm font-medium text-warning-foreground">
+                The token is single-use, expires at{" "}
+                {new Date(shownReenrollment.enrollmentTokenExpiresAt).toLocaleString()}, and will
+                not be shown again.
+              </p>
+              {(["public", "local"] as const).map((target) => {
+                const gateway =
+                  shownReenrollment.gatewayEnrollmentTargets?.[target]?.gateway ??
+                  (target === "public" ? `${window.location.hostname}:9443` : null);
+                if (!gateway) return null;
+                const command = relayReenrollmentCommand(shownReenrollment, gateway);
+                return (
+                  <CopyCodeBlock
+                    key={target}
+                    label={shownReenrollment.gatewayEnrollmentTargets?.[target]?.label ?? target}
+                    value={command}
+                    copyValue={command.replace(/\s*\\\n\s*/g, " ")}
+                  />
+                );
+              })}
+              <CopyValueField label="Enrollment token" value={shownReenrollment.enrollmentToken} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button onClick={() => setReenrollment(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NodeEnrollmentDialog
         open={enrollOpen}

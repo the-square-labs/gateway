@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { Duplex } from 'node:stream';
 import type { PeerCertificate } from 'node:tls';
@@ -176,6 +176,24 @@ export interface RelayControlClientOptions {
   systemCaPath: string;
   certificatePath: string;
   privateKeyPath: string;
+  /**
+   * The client certificate the running relay may still trust after Gateway renewed its own at
+   * start-up. The relay reloads its identity only when a client it trusts asks, so the first
+   * admin call uses this one and then moves to the renewed certificate.
+   */
+  previousCertificatePath?: string;
+  previousPrivateKeyPath?: string;
+}
+
+/** The relay refused the caller's client certificate, as opposed to being unreachable. */
+function isClientIdentityRefusal(error: unknown): boolean {
+  const code = (error as { code?: number } | null)?.code;
+  const message = error instanceof Error ? error.message : '';
+  return (
+    code === grpc.status.PERMISSION_DENIED ||
+    code === grpc.status.UNAUTHENTICATED ||
+    /certificate|handshake|ssl|tls/i.test(message)
+  );
 }
 
 export class RelayControlClient {
@@ -186,15 +204,29 @@ export class RelayControlClient {
   private pendingIdentityCommit?: string;
 
   constructor(private readonly options: RelayControlClientOptions) {
-    ({ admin: this.admin, broker: this.broker } = this.createClients());
+    const previous = this.readPreviousIdentity();
+    if (previous) {
+      ({ admin: this.admin, broker: this.broker } = this.createClients(previous));
+      const next = this.createClients();
+      this.pendingIdentityReload = { operationId: randomUUID(), admin: next.admin, broker: next.broker };
+    } else {
+      ({ admin: this.admin, broker: this.broker } = this.createClients());
+    }
   }
 
-  private createClients(): { admin: any; broker: any } {
+  private readPreviousIdentity(): { certificatePath: string; privateKeyPath: string } | null {
+    const { previousCertificatePath, previousPrivateKeyPath } = this.options;
+    if (!previousCertificatePath || !previousPrivateKeyPath) return null;
+    if (!existsSync(previousCertificatePath) || !existsSync(previousPrivateKeyPath)) return null;
+    return { certificatePath: previousCertificatePath, privateKeyPath: previousPrivateKeyPath };
+  }
+
+  private createClients(identity?: { certificatePath: string; privateKeyPath: string }): { admin: any; broker: any } {
     const relayV1 = loadRelayV1Proto();
     const credentials = grpc.credentials.createSsl(
       readFileSync(this.options.systemCaPath),
-      readFileSync(this.options.privateKeyPath),
-      readFileSync(this.options.certificatePath)
+      readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
+      readFileSync(identity?.certificatePath ?? this.options.certificatePath)
     );
     const options = {
       'grpc.keepalive_time_ms': 30_000,
@@ -293,9 +325,26 @@ export class RelayControlClient {
   private async performIdentityReloadConvergence(timeoutMs: number): Promise<boolean> {
     const pending = this.pendingIdentityReload;
     if (!pending) return true;
-    const result = (await this.unary('ReloadIdentity', { operationId: pending.operationId }, timeoutMs)) as {
-      reloaded?: boolean;
-    };
+    let result: { reloaded?: boolean };
+    try {
+      result = (await this.unary('ReloadIdentity', { operationId: pending.operationId }, timeoutMs)) as {
+        reloaded?: boolean;
+      };
+    } catch (error) {
+      // The relay no longer trusts the current client: it already loaded the renewed identity
+      // (it restarted, or another Gateway process reloaded it). Move to the renewed client
+      // once the relay accepts it; there is no rotation left to commit.
+      if (!isClientIdentityRefusal(error)) throw error;
+      await this.unaryWith(pending.admin, 'GetHealth', {}, timeoutMs);
+      const previousAdmin = this.admin;
+      const previousBroker = this.broker;
+      this.admin = pending.admin;
+      this.broker = pending.broker;
+      if (this.pendingIdentityReload === pending) this.pendingIdentityReload = undefined;
+      previousAdmin.close();
+      previousBroker.close();
+      return true;
+    }
     if (result.reloaded !== true) {
       pending.admin.close();
       pending.broker.close();
@@ -414,8 +463,12 @@ export class RelayControlClient {
   }
 
   private unary(method: string, request: unknown, timeoutMs: number): Promise<unknown> {
+    return this.unaryWith(this.admin, method, request, timeoutMs);
+  }
+
+  private unaryWith(admin: any, method: string, request: unknown, timeoutMs: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      this.admin[method](request, { deadline: Date.now() + timeoutMs }, (error: Error | null, response: unknown) =>
+      admin[method](request, { deadline: Date.now() + timeoutMs }, (error: Error | null, response: unknown) =>
         error ? reject(error) : resolve(response)
       );
     });

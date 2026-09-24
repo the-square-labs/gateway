@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { container } from '@/container.js';
+import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
+import { MfaService } from '@/modules/auth/mfa.service.js';
+import { SessionService } from '@/services/session.service.js';
 import { AIService } from './ai.service.js';
+
+const GROUP_ID = '22222222-2222-4222-8222-222222222222';
+const FOLDER_ID = '33333333-3333-4333-8333-333333333333';
 
 const BASE_USER = {
   id: 'user-1',
@@ -16,9 +23,11 @@ const BASE_USER = {
 function createService({
   authService,
   groupService = {},
+  auditService = { log: vi.fn() },
 }: {
   authService: Record<string, unknown>;
   groupService?: Record<string, unknown>;
+  auditService?: Record<string, unknown>;
 }) {
   return new AIService(
     {} as never,
@@ -31,7 +40,7 @@ function createService({
     {} as never,
     {} as never,
     authService as never,
-    { log: vi.fn() } as never,
+    auditService as never,
     {} as never,
     {} as never,
     groupService as never,
@@ -39,6 +48,11 @@ function createService({
     {} as never
   );
 }
+
+afterEach(() => {
+  container.reset();
+  vi.restoreAllMocks();
+});
 
 describe('AIService admin user lifecycle tools', () => {
   it('revalidates the actor scopes immediately before an assistant tool execution', async () => {
@@ -54,32 +68,80 @@ describe('AIService admin user lifecycle tools', () => {
     expect(authService.blockUser).not.toHaveBeenCalled();
   });
 
-  it('creates users only when the target group is inside the actor scope set', async () => {
+  it('creates users like POST /admin/users: schema, group boundary, creator grant, and audit', async () => {
     const authService = {
-      createUser: vi.fn().mockResolvedValue({ id: 'user-2', email: 'ops@example.com' }),
+      createUser: vi.fn().mockResolvedValue({ id: 'user-2', email: 'ops@example.com', groupId: GROUP_ID }),
+      grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
     };
     const groupService = {
-      getGroup: vi.fn().mockResolvedValue({ id: 'group-2', scopes: ['proxy:view'], inheritedScopes: [] }),
+      getGroup: vi.fn().mockResolvedValue({ id: GROUP_ID, scopes: ['proxy:view'], inheritedScopes: [] }),
     };
-    const service = createService({ authService, groupService });
+    const auditService = { log: vi.fn() };
+    const service = createService({ authService, groupService, auditService });
 
     await expect(
       service.executeTool(BASE_USER, 'create_user', {
         email: 'ops@example.com',
         name: 'Ops',
-        groupId: 'group-2',
+        groupId: GROUP_ID,
       })
     ).resolves.toEqual({
-      result: { id: 'user-2', email: 'ops@example.com' },
+      result: { id: 'user-2', email: 'ops@example.com', groupId: GROUP_ID },
       invalidateStores: ['users'],
     });
 
-    expect(groupService.getGroup).toHaveBeenCalledWith('group-2');
+    expect(groupService.getGroup).toHaveBeenCalledWith(GROUP_ID);
     expect(authService.createUser).toHaveBeenCalledWith({
       email: 'ops@example.com',
       name: 'Ops',
-      groupId: 'group-2',
+      groupId: GROUP_ID,
+      groupIds: [GROUP_ID],
+      authMethod: 'oidc',
     });
+    expect(authService.grantCreatedResourcePermissions).toHaveBeenCalledWith('user-1', 'admin:users', 'user-2');
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'user.create', resourceId: 'user-2', userId: 'user-1' })
+    );
+  });
+
+  it('rejects user creation that the route would reject', async () => {
+    const authService = { createUser: vi.fn() };
+    const groupService = {
+      getGroup: vi.fn().mockResolvedValue({ id: GROUP_ID, scopes: ['admin:system'], inheritedScopes: [] }),
+    };
+    const service = createService({ authService, groupService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'create_user', { email: 'ops@example.com', name: ' ', groupId: GROUP_ID })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Name is required') });
+    await expect(
+      service.executeTool(BASE_USER, 'create_user', { email: 'ops@example.com', name: 'Ops', groupId: GROUP_ID })
+    ).resolves.toMatchObject({ error: 'Cannot assign a group with permissions you do not possess' });
+
+    const folderService = { assertFolderExists: vi.fn() };
+    container.registerInstance(AdminUserFolderService, folderService as unknown as AdminUserFolderService);
+    const folderScopedActor = { ...BASE_USER, scopes: [`admin:users:folder/${FOLDER_ID}`] };
+    await expect(
+      service.executeTool(folderScopedActor, 'create_user', {
+        email: 'ops@example.com',
+        name: 'Ops',
+        groupId: GROUP_ID,
+        folderId: '44444444-4444-4444-8444-444444444444',
+      })
+    ).resolves.toMatchObject({ error: 'Select an authorized destination user folder' });
+    expect(folderService.assertFolderExists).not.toHaveBeenCalled();
+    expect(authService.createUser).not.toHaveBeenCalled();
+  });
+
+  it('lists only the users inside the actor admin:users grants', async () => {
+    const authService = {
+      listUsers: vi.fn().mockResolvedValue([{ id: 'user-2' }, { id: 'user-3' }]),
+    };
+    const service = createService({ authService });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['admin:users:user-3'] }, 'list_users', {})
+    ).resolves.toEqual({ result: [{ id: 'user-3' }], invalidateStores: [] });
   });
 
   it('blocks, unblocks, and deletes users through route-equivalent privilege checks', async () => {
@@ -125,7 +187,7 @@ describe('AIService admin user lifecycle tools', () => {
       oidcSubject: 'oidc-user-2',
       scopes: ['proxy:view'],
     };
-    const updatedUser = { ...targetUser, groupId: 'group-2' };
+    const updatedUser = { ...targetUser, groupId: GROUP_ID };
     const authService = {
       getUserById: vi.fn(async (userId: string) => (userId === BASE_USER.id ? BASE_USER : targetUser)),
       assertCanUpdateUserGroup: vi.fn().mockResolvedValue(targetUser),
@@ -134,13 +196,14 @@ describe('AIService admin user lifecycle tools', () => {
     const service = createService({ authService });
 
     await expect(
-      service.executeTool(BASE_USER, 'update_user_role', { userId: 'user-2', groupId: 'group-2' })
+      service.executeTool(BASE_USER, 'update_user_role', { userId: 'user-2', groupId: GROUP_ID })
     ).resolves.toEqual({
       result: updatedUser,
       invalidateStores: ['users'],
     });
 
-    expect(authService.updateUserGroup).toHaveBeenCalledWith('user-2', 'group-2');
+    expect(authService.assertCanUpdateUserGroup).toHaveBeenCalledWith('user-1', BASE_USER.scopes, 'user-2', [GROUP_ID]);
+    expect(authService.updateUserGroup).toHaveBeenCalledWith('user-2', [GROUP_ID]);
   });
 
   it('replaces and resets a user additional permissions through AuthService privilege checks', async () => {
@@ -228,5 +291,170 @@ describe('AIService admin user lifecycle tools', () => {
     await expect(service.executeTool(BASE_USER, 'delete_user', { userId: 'system-user' })).resolves.toMatchObject({
       error: 'Cannot delete the system user',
     });
+  });
+});
+
+describe('AIService manage_user tool', () => {
+  const targetUser = {
+    id: 'user-2',
+    oidcSubject: null,
+    email: 'ops@example.com',
+    name: 'Ops',
+    authMethod: 'password',
+    scopes: ['proxy:view'],
+  };
+  const systemAdmin = { ...BASE_USER, scopes: ['admin:system', 'admin:users', 'proxy:view'] };
+
+  /** getUserById serves both the pre-execution actor refresh and the target lookup. */
+  function authService<Extra extends Record<string, unknown>>(
+    actor: typeof BASE_USER,
+    extra: Extra = {} as Extra,
+    target: Record<string, unknown> = targetUser
+  ) {
+    return {
+      getUserById: vi.fn(async (id: string) => (id === actor.id ? actor : id === target.id ? target : null)),
+      ...extra,
+    };
+  }
+
+  it('renames a local account and records the same audit event as the route', async () => {
+    const auth = authService(BASE_USER, {
+      updateLocalUserName: vi.fn().mockResolvedValue({ ...targetUser, name: 'Operations' }),
+    });
+    const auditService = { log: vi.fn() };
+    const service = createService({ authService: auth, auditService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', { operation: 'rename', userId: 'user-2', name: ' Operations ' })
+    ).resolves.toEqual({ result: { ...targetUser, name: 'Operations' }, invalidateStores: ['users'] });
+    expect(auth.updateLocalUserName).toHaveBeenCalledWith('user-2', 'Operations');
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'user.rename',
+        resourceId: 'user-2',
+        details: { targetUserId: 'user-2', previousName: 'Ops', name: 'Operations' },
+      })
+    );
+  });
+
+  it('enforces the per-user admin:users grant and the privilege boundary', async () => {
+    const scopedActor = { ...BASE_USER, scopes: ['admin:users:user-3'] };
+    const scopedAuth = authService(scopedActor, { updateUserAvatar: vi.fn() });
+    await expect(
+      createService({ authService: scopedAuth }).executeTool(scopedActor, 'manage_user', {
+        operation: 'reset_avatar',
+        userId: 'user-2',
+      })
+    ).resolves.toMatchObject({ error: 'Missing required scope: admin:users:user-2' });
+
+    const auth = authService(BASE_USER, { updateUserAvatar: vi.fn() }, { ...targetUser, scopes: ['admin:system'] });
+    await expect(
+      createService({ authService: auth }).executeTool(BASE_USER, 'manage_user', {
+        operation: 'reset_avatar',
+        userId: 'user-2',
+      })
+    ).resolves.toMatchObject({ error: 'Cannot manage a system administrator' });
+    expect(scopedAuth.updateUserAvatar).not.toHaveBeenCalled();
+    expect(auth.updateUserAvatar).not.toHaveBeenCalled();
+  });
+
+  it('resets MFA only for admin:system and ends the target browser sessions', async () => {
+    const mfaService = { resetMfa: vi.fn().mockResolvedValue(undefined) };
+    const sessionService = { destroyAllUserSessions: vi.fn().mockResolvedValue(undefined) };
+    container.registerInstance(MfaService, mfaService as unknown as MfaService);
+    container.registerInstance(SessionService, sessionService as unknown as SessionService);
+    const auditService = { log: vi.fn() };
+
+    await expect(
+      createService({ authService: authService(BASE_USER), auditService }).executeTool(BASE_USER, 'manage_user', {
+        operation: 'reset_mfa',
+        userId: 'user-2',
+      })
+    ).resolves.toMatchObject({ error: 'Missing required scope: admin:system' });
+    expect(mfaService.resetMfa).not.toHaveBeenCalled();
+
+    await expect(
+      createService({ authService: authService(systemAdmin), auditService }).executeTool(systemAdmin, 'manage_user', {
+        operation: 'reset_mfa',
+        userId: 'user-2',
+      })
+    ).resolves.toEqual({ result: { message: 'MFA reset and browser sessions revoked' }, invalidateStores: ['users'] });
+    expect(mfaService.resetMfa).toHaveBeenCalledWith('user-2');
+    expect(sessionService.destroyAllUserSessions).toHaveBeenCalledWith('user-2');
+    expect(auditService.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'user.mfa_reset' }));
+  });
+
+  it('lists and revokes another user browser sessions', async () => {
+    const sessionService = {
+      listPublicUserSessions: vi.fn().mockResolvedValue([{ id: 'public-1', current: false }]),
+      revokeUserSessionByPublicId: vi.fn().mockResolvedValueOnce(true).mockResolvedValueOnce(false),
+      destroyAllUserSessions: vi.fn().mockResolvedValue(undefined),
+    };
+    container.registerInstance(SessionService, sessionService as unknown as SessionService);
+    const auditService = { log: vi.fn() };
+    const service = createService({ authService: authService(BASE_USER), auditService });
+
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', { operation: 'list_sessions', userId: 'user-2' })
+    ).resolves.toEqual({ result: [{ id: 'public-1', current: false }], invalidateStores: ['users'] });
+    expect(sessionService.listPublicUserSessions).toHaveBeenCalledWith('user-2', '');
+
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', {
+        operation: 'revoke_session',
+        userId: 'user-2',
+        sessionId: 'public-1',
+      })
+    ).resolves.toEqual({ result: { message: 'Session revoked' }, invalidateStores: ['users'] });
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', {
+        operation: 'revoke_session',
+        userId: 'user-2',
+        sessionId: 'public-2',
+      })
+    ).resolves.toMatchObject({ error: 'Session not found' });
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', { operation: 'revoke_all_sessions', userId: 'user-2' })
+    ).resolves.toEqual({ result: { message: 'All sessions revoked' }, invalidateStores: ['users'] });
+    expect(sessionService.revokeUserSessionByPublicId).toHaveBeenCalledWith('user-2', 'public-1');
+    expect(sessionService.destroyAllUserSessions).toHaveBeenCalledWith('user-2');
+    expect(auditService.log.mock.calls.map(([entry]) => entry.action)).toEqual(
+      expect.arrayContaining(['user.session_revoke', 'user.sessions_revoke_all'])
+    );
+  });
+
+  it('keeps deleted-account inspection and restore behind admin:system', async () => {
+    const extra = {
+      listDeletedUsers: vi.fn().mockResolvedValue([{ id: 'user-9' }]),
+      restoreUser: vi.fn().mockResolvedValue({ id: 'user-9', groupId: GROUP_ID }),
+    };
+    await expect(
+      createService({ authService: authService(BASE_USER, extra) }).executeTool(BASE_USER, 'manage_user', {
+        operation: 'list_deleted',
+      })
+    ).resolves.toMatchObject({ error: 'Missing required scope: admin:system' });
+
+    const service = createService({ authService: authService(systemAdmin, extra) });
+    await expect(service.executeTool(systemAdmin, 'manage_user', { operation: 'list_deleted' })).resolves.toEqual({
+      result: [{ id: 'user-9' }],
+      invalidateStores: ['users'],
+    });
+    await expect(
+      service.executeTool(systemAdmin, 'manage_user', { operation: 'restore', userId: 'user-9', groupIds: [GROUP_ID] })
+    ).resolves.toEqual({ result: { id: 'user-9', groupId: GROUP_ID }, invalidateStores: ['users'] });
+    expect(extra.restoreUser).toHaveBeenCalledWith('user-9', [GROUP_ID]);
+  });
+
+  it('rejects unknown operations and missing user ids before any target lookup', async () => {
+    const auth = authService(BASE_USER);
+    const service = createService({ authService: auth });
+
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', { operation: 'impersonate', userId: 'user-2' })
+    ).resolves.toMatchObject({ error: 'Unsupported user operation: impersonate' });
+    await expect(
+      service.executeTool(BASE_USER, 'manage_user', { operation: 'rename', name: 'X' })
+    ).resolves.toMatchObject({ error: 'userId is required' });
+    expect(auth.getUserById).not.toHaveBeenCalledWith('user-2');
   });
 });

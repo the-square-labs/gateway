@@ -9,6 +9,7 @@ import {
   hasScopeBase,
   hasScopeForResource,
   isScopeSubset,
+  privilegeBoundaryScopes,
 } from './permissions.js';
 
 describe('Scope-based permissions', () => {
@@ -210,6 +211,29 @@ describe('Scope-based permissions', () => {
 
     it('does not merge different resource scopes', () => {
       expect(boundScopes(['nodes:details:node-1'], ['nodes:details:node-2'])).toEqual([]);
+    });
+  });
+
+  describe('privilegeBoundaryScopes', () => {
+    const token = ['admin:users', 'proxy:view'];
+    const account = ['admin:users', 'proxy:view', 'proxy:edit', 'ai:workspace:use', 'admin:users:impersonate'];
+
+    it('keeps session scopes unchanged', () => {
+      expect(privilegeBoundaryScopes(token)).toEqual(token);
+    });
+
+    it('adds only the account-only scopes a token can never hold', () => {
+      const scopes = privilegeBoundaryScopes(token, account);
+      expect(scopes).toEqual(expect.arrayContaining([...token, 'ai:workspace:use', 'admin:users:impersonate']));
+      expect(scopes).not.toContain('proxy:edit');
+    });
+
+    it('lets a token manage a user whose extra scopes are account-only and held by the owner', () => {
+      const target = ['proxy:view', 'ai:workspace:use'];
+      expect(canManageUser(token, target)).not.toBe(null);
+      expect(canManageUser(privilegeBoundaryScopes(token, account), target)).toBe(null);
+      expect(canManageUser(privilegeBoundaryScopes(token, ['admin:users', 'proxy:view']), target)).not.toBe(null);
+      expect(canManageUser(privilegeBoundaryScopes(token, account), ['proxy:edit'])).not.toBe(null);
     });
   });
 

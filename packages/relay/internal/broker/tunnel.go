@@ -42,6 +42,12 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 		return status.Error(codes.Internal, "could not create accept token")
 	}
 	b.mu.Lock()
+	// Checked again under the lock: a forced drain disconnects the sessions it
+	// finds under this lock, so a tunnel admitted after it must not slip in.
+	if b.draining.Load() {
+		b.mu.Unlock()
+		return status.Error(codes.Unavailable, "relay is draining")
+	}
 	snapshot := b.store.Current()
 	if err := grant.ValidatePolicy(claims, "connect", snapshot); err != nil {
 		b.mu.Unlock()
@@ -314,6 +320,16 @@ func (b *Broker) AcceptTunnel(stream relayv1.TunnelBroker_AcceptTunnelServer) er
 	select {
 	case result := <-connection.result:
 		return result
+	case <-pending.session.stop:
+		// The opener writes its result before it closes the session. Without a
+		// result it left (timeout, cancel or revocation) before the tunnel was
+		// bridged, and nothing would ever end this stream.
+		select {
+		case result := <-connection.result:
+			return result
+		default:
+			return status.Error(codes.Aborted, "tunnel was closed before it was established")
+		}
 	case <-stream.Context().Done():
 		return stream.Context().Err()
 	}

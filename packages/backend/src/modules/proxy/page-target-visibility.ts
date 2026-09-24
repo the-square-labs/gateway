@@ -23,6 +23,31 @@ export function redactProxyHostForScopes<T extends ProxyHostLike>(host: T, scope
   return redactAdvancedConfigWithoutScope(redactPageTargetWithoutProjectAccess(host, scopes), scopes);
 }
 
+/** Additional Route view: advanced config needs proxy:advanced:<host>, Pages fields need pages:view:<project>. */
+export function redactAdditionalRouteForScopes(route: Record<string, unknown>, scopes: string[]) {
+  const hostId = typeof route.proxyHostId === 'string' ? route.proxyHostId : null;
+  const visibleRoute =
+    hostId && hasScope(scopes, `proxy:advanced:${hostId}`) ? route : { ...route, advancedConfig: null };
+  if (route.targetKind !== 'pages') return visibleRoute;
+  const projectId = typeof route.pageProjectId === 'string' ? route.pageProjectId : null;
+  if (!projectId || !hasScope(scopes, `pages:view:${projectId}`)) {
+    return {
+      ...visibleRoute,
+      pageProjectId: null,
+      pageTagId: null,
+      activeDeploymentId: null,
+      includePath: null,
+      runtimeConfigPath: null,
+      runtimeConfigGeneration: 0,
+      pageProjectName: null,
+      pageProjectSlug: null,
+      pageProjectAppearanceColor: null,
+      pageTagName: null,
+    };
+  }
+  return visibleRoute;
+}
+
 export function redactGroupedPageTargets<T extends { folders: unknown[]; ungroupedHosts: ProxyHostLike[] }>(
   result: T,
   scopes: string[]

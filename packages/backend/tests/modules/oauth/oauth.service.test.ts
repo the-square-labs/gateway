@@ -305,36 +305,32 @@ describe('OAuthService.createConsentRequest', () => {
     expect(cacheSet).toHaveBeenCalledWith(expect.stringContaining('oauth:consent:'), pending, 600);
   });
 
-  it('grants connector discovery but not source-control mutation or SSH execution to Gateway MCP', async () => {
+  it('grants every delegable scope the user holds to Gateway MCP, including connector operations', async () => {
     const { service } = createService();
-    const discoveryScopes = [
+    const connectorScopes = [
       'integrations:gitlab:repo:read',
-      'integrations:github:view',
-      'integrations:git:view',
-      'integrations:ssh:view',
-    ];
-    const deniedScopes = [
       'integrations:gitlab:repo:write',
       'integrations:github:manage',
       'integrations:git:manage',
       'integrations:ssh:use',
     ];
-    const integrationScopes = [...discoveryScopes, ...deniedScopes];
+    const userOnlyScopes = ['admin:users:impersonate', 'integrations:gitlab:sandbox:clone'];
 
     const pending = await service.createConsentRequest(
-      { ...USER, scopes: [...USER.scopes, ...integrationScopes] },
+      { ...USER, scopes: [...USER.scopes, ...connectorScopes, ...userOnlyScopes] },
       {
         response_type: 'code',
         client_id: 'goc_client',
         redirect_uri: 'http://127.0.0.1:8765/callback',
         code_challenge: 'challenge',
         code_challenge_method: 'S256',
-        scope: `mcp:use nodes:details ${integrationScopes.join(' ')}`,
+        scope: `mcp:use nodes:details admin:system ${[...connectorScopes, ...userOnlyScopes].join(' ')}`,
       }
     );
 
-    expect(pending.grantableScopes).toEqual([...discoveryScopes, 'nodes:details'].sort());
-    expect(pending.unavailableScopes).toEqual([...deniedScopes].sort());
+    expect(pending.grantableScopes).toEqual([...connectorScopes, 'nodes:details'].sort());
+    expect(pending.unavailableScopes).toEqual(['admin:system', ...userOnlyScopes].sort());
+    expect(pending.manualApprovalScopes).toEqual(['integrations:gitlab:repo:write', 'integrations:ssh:use']);
   });
 
   it('rejects MCP OAuth requests when the user cannot use MCP', async () => {

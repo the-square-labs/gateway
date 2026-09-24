@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -89,6 +90,8 @@ function reconciliationHarness() {
   };
   vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
   vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
+  vi.spyOn(pool, 'fenceSilentRemoteInstances').mockResolvedValue(0);
+  vi.spyOn(pool, 'releaseOrphanedUpdateDrains').mockResolvedValue(0);
   vi.spyOn(pool, 'getSnapshot').mockImplementation(async () => snapshot);
   const stage = vi.spyOn(pool, 'stageRebalance').mockResolvedValue([]);
   return { pool, snapshot, stage };
@@ -172,7 +175,7 @@ describe('RelayPoolService automatic reconciliation', () => {
     );
     const first = pool.reconcile();
     expect(pool.reconcile()).toBe(first);
-    await Promise.resolve();
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
     expect(pool.retireDrainedGenerations).toHaveBeenCalledOnce();
     release(0);
     await first;
@@ -385,6 +388,7 @@ describe('RelayPoolService activation safety and outcomes', () => {
     expect(stage).toHaveBeenCalledExactlyOnceWith(undefined, {
       automatic: true,
       allowNoop: true,
+      evacuation: true,
       endpointIds: ['affected'],
     });
   });
@@ -407,6 +411,17 @@ describe('RelayPoolService activation safety and outcomes', () => {
     const { pool, policy } = service(db);
     policy.setRemoteInstanceDrain.mockRejectedValue(new Error('disconnected'));
     await expect(pool.drainInstance('remote', 'user', false)).rejects.toThrow('disconnected');
+    expect(writes).toHaveLength(0);
+  });
+
+  it('refuses an operator resume of a relay an unfinished update run drained', async () => {
+    const { db, writes } = queuedDb([
+      [{ ...instance('remote', 'host'), state: 'draining', manualDrainStartedAt: null }],
+      [{ id: 'step' }],
+    ]);
+    const { pool, policy } = service(db);
+    await expect(pool.drainInstance('remote', 'user', false)).rejects.toMatchObject({ code: 'RELAY_HELD_BY_UPDATE' });
+    expect(policy.setRemoteInstanceDrain).not.toHaveBeenCalled();
     expect(writes).toHaveLength(0);
   });
 
@@ -685,10 +700,93 @@ describe('RelayPoolService status', () => {
   it.each([
     'running',
     'failed',
+    'paused',
   ])('pauses automatic placement only for an ongoing update, not %s unconditionally', async (state) => {
     const { db } = snapshotDb([], 'test', true, state);
     const { pool } = service(db);
     expect((await pool.getSnapshot()).automaticRebalancePaused).toBe(state === 'running');
+  });
+
+  it('reports why a relay refuses Gateway policy next to the instance', async () => {
+    const { db } = snapshotDb([]);
+    const { pool, policy } = service(db);
+    const status = { state: 'reenrollment_required', message: 'Re-enroll it', observedAt: 'now', trustedKeyIds: [] };
+    (policy as any).describePolicyTrust = vi.fn().mockResolvedValue(new Map([['relay', status]]));
+    expect((await pool.getSnapshot()).instances[0]).toMatchObject({ policyTrust: status });
+  });
+
+  it('keeps the pool status available when trust cannot be assessed', async () => {
+    const { db } = snapshotDb([]);
+    const { pool, policy } = service(db);
+    (policy as any).describePolicyTrust = vi.fn().mockRejectedValue(new Error('database unavailable'));
+    expect((await pool.getSnapshot()).instances[0]).toMatchObject({ policyTrust: null });
+  });
+});
+
+describe('RelayPoolService remote relay liveness and recovery', () => {
+  it('marks remote relays that stopped reporting offline, after a startup grace', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-24T00:00:00Z'));
+    const { db, writes, conditions } = queuedDb([]);
+    const { pool, events } = service(db);
+    db.updateResult = [];
+    expect(await pool.fenceSilentRemoteInstances()).toBe(0);
+    expect(writes).toEqual([]); // Reconnecting relays get time to report after a Gateway start.
+
+    vi.advanceTimersByTime(90_000);
+    db.updateResult = [{ id: 'silent' }];
+    expect(await pool.fenceSilentRemoteInstances()).toBe(1);
+    expect(writes[0].values).toMatchObject({ state: 'offline' });
+    const where = new PgDialect().sqlToQuery(writes[0].where);
+    expect(where.sql).toContain('coalesce("relay_instances"."last_seen_at", "relay_instances"."updated_at") <');
+    expect(where.params).toEqual(expect.arrayContaining(['system', 'remote', 'synchronizing', 'ready', 'draining']));
+    expect(events.publish).toHaveBeenCalledWith('system.relay.health.changed', expect.anything());
+    void conditions;
+  });
+
+  it('resumes a relay a finished update left drained, but not one an unfinished run holds', async () => {
+    const { db } = queuedDb([
+      [{ id: 'orphaned' }, { id: 'held' }],
+      [], // orphaned: no in-flight step of an unfinished run
+      [{ id: 'step' }], // held: a paused run still owns the drain
+    ]);
+    const { pool } = service(db);
+    const resume = vi.spyOn(pool, 'drainInstance').mockResolvedValue(undefined);
+    expect(await pool.releaseOrphanedUpdateDrains(0)).toBe(1);
+    expect(resume).toHaveBeenCalledExactlyOnceWith('orphaned', null, false, { manual: false });
+    // Throttled between passes.
+    expect(await pool.releaseOrphanedUpdateDrains(1)).toBe(0);
+  });
+
+  it('issues a single-use re-enrollment token only for an enrolled remote relay', async () => {
+    const remote = { ...instance('relay-1', 'host'), nodeId: 'node-1', servicePort: 9443 };
+    const { db, writes } = queuedDb([[remote]]);
+    const { pool, audit } = service(db);
+    db.updateResult = [{ id: 'node-1' }];
+    const issued = await pool.issueRelayReenrollment('relay-1', 'admin');
+    expect(issued).toMatchObject({ instanceId: 'relay-1', nodeId: 'node-1', advertiseAddress: '127.0.0.1' });
+    expect(issued.enrollmentToken).toMatch(/^gw_node_v2_[0-9a-f]{16}_[0-9a-f]{48}$/);
+    const write = writes[0];
+    expect(write.values.enrollmentTokenSelector).toBe(issued.enrollmentToken.split('_')[3]);
+    expect(write.values.enrollmentTokenHash).not.toContain(issued.enrollmentToken);
+    const where = new PgDialect().sqlToQuery(write.where);
+    expect(where.sql).toContain('"nodes"."status" <> $');
+    expect(where.sql).toContain('"nodes"."certificate_serial" is not null');
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'relay.instance.reenrollment_token.issue', resourceId: 'relay-1' })
+    );
+
+    const local = { ...remote, kind: 'local', nodeId: null };
+    const { pool: localPool } = service(queuedDb([[local]]).db);
+    await expect(localPool.issueRelayReenrollment('relay-1', 'admin')).rejects.toMatchObject({
+      code: 'RELAY_REENROLLMENT_UNSUPPORTED',
+    });
+
+    const pending = queuedDb([[remote]]);
+    pending.db.updateResult = [];
+    await expect(service(pending.db).pool.issueRelayReenrollment('relay-1', 'admin')).rejects.toMatchObject({
+      code: 'RELAY_NOT_ENROLLED',
+    });
   });
 });
 
@@ -745,5 +843,79 @@ describe('RelayPoolService assignment selection', () => {
 
     expect(relayPoolInternals.isEnrolledRelayInstance(provisional)).toBe(false);
     expect(relayPoolInternals.isEnrolledRelayInstance(enrolled)).toBe(true);
+  });
+});
+
+describe('RelayPoolService placement during updates and mixed versions', () => {
+  it('evacuates a relay an update drains even while the update pauses automatic placement', async () => {
+    const { db } = queuedDb([[{ endpointId: 'endpoint-1' }]]);
+    const { pool } = service(db);
+    const stage = vi.spyOn(pool, 'stageRebalance').mockResolvedValue([]);
+    await (pool as any).evacuateInstance('remote');
+    expect(stage).toHaveBeenCalledWith(undefined, expect.objectContaining({ automatic: true, evacuation: true }));
+  });
+
+  it('skips the update freeze only for evacuation', async () => {
+    const endpoint = { id: 'endpoint-1', ownerKind: 'managed_database', ownerId: 'db-1', status: 'active' };
+    // Automatic placement stops at the unfinished update run.
+    const frozen = queuedDb([[endpoint], [{ id: 'run', state: 'draining' }]]);
+    await expect(
+      (service(frozen.db).pool as any).stageRebalanceOnce(undefined, { automatic: true, allowNoop: true })
+    ).resolves.toEqual([]);
+    // Evacuation goes on to placement (here: no ready relay to move to).
+    const evacuating = queuedDb([[endpoint], []]);
+    await expect(
+      (service(evacuating.db).pool as any).stageRebalanceOnce(undefined, {
+        automatic: true,
+        allowNoop: true,
+        evacuation: true,
+      })
+    ).rejects.toMatchObject({ code: 'RELAY_CAPACITY_UNAVAILABLE' });
+  });
+
+  it('does not fail an update drain when its workloads cannot move yet', async () => {
+    const { db } = queuedDb([[{ ...instance('remote', 'host'), manualDrainStartedAt: null }]]);
+    const { pool } = service(db);
+    vi.spyOn(pool as any, 'evacuateInstance').mockRejectedValue(new Error('no ready relay'));
+    await expect(pool.drainInstance('remote', null, true, { manual: false })).resolves.toBeUndefined();
+    const manual = queuedDb([[{ ...instance('remote', 'host'), manualDrainStartedAt: null }]]);
+    const { pool: manualPool } = service(manual.db);
+    vi.spyOn(manualPool as any, 'evacuateInstance').mockRejectedValue(new Error('no ready relay'));
+    await expect(manualPool.drainInstance('remote', 'user', true)).rejects.toThrow('no ready relay');
+  });
+
+  it('keeps a workload whose path has a daemon without pool support on the local relay', async () => {
+    const local = {
+      ...instance('local', 'gateway-host'),
+      kind: 'local',
+      capabilities: { features: ['relay_pool_v1'] },
+    };
+    const remote = { ...instance('remote', 'remote-host'), capabilities: { features: ['relay_pool_v1'] } };
+    const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
+    const snapshotFor = async (assignedTo: string) => {
+      const { pool, policy } = service(
+        queuedDb([
+          [local, remote],
+          [{ id: 'endpoint', ownerKind: 'managed_database' }],
+          [active],
+          [{ assignmentGenerationId: 'old', relayInstanceId: assignedTo }],
+          [],
+          [],
+          [],
+        ]).db
+      );
+      (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set(['endpoint']));
+      return pool.getSnapshot();
+    };
+    // Assigned to a remote relay only: legacy grants cannot reach it, so it moves to the local relay.
+    const moved = await snapshotFor('remote');
+    expect(moved.rebalanceEndpointIds).toEqual(['endpoint']);
+    expect(moved.rebalancePlanKey).toBe(
+      createHash('sha256')
+        .update(JSON.stringify([{ endpointId: 'endpoint', instanceIds: ['local'], blockers: [] }]))
+        .digest('hex')
+    );
+    // Already on the local relay: nothing to do, even though spread would add the remote relay.
+    expect((await snapshotFor('local')).rebalanceAvailable).toBe(false);
   });
 });

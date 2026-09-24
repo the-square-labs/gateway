@@ -1,0 +1,197 @@
+import { eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { dockerComposeProjects, dockerDeployments } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
+import { ComposeProjectNameSchema } from '@/modules/docker/compose/compose.schemas.js';
+import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
+import type { User } from '@/types.js';
+import { DockerManagementService } from './docker.service.js';
+import {
+  DockerSourceBindingConfigSchema,
+  type DockerSourceResourceCreateSchema,
+  type DockerSourceTarget,
+} from './docker-build.schemas.js';
+import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
+import { DockerDeploymentService } from './docker-deployment.service.js';
+import { DockerSourceService } from './docker-source.service.js';
+
+/**
+ * Creation of Git-source workloads, shared by the REST routes and the AI/MCP
+ * source tool. Callers check the entry scope and the license entitlement.
+ */
+
+const PENDING_SOURCE_IMAGE = 'gateway.invalid/pending-source-build:latest';
+
+export const ComposeSourceProjectCreateSchema = z
+  .object({
+    folderId: z.string().uuid().nullable().optional(),
+    projectName: ComposeProjectNameSchema,
+    source: DockerSourceBindingConfigSchema,
+  })
+  .superRefine((value, ctx) => {
+    if (!value.source.composeFilePath) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['source', 'composeFilePath'],
+        message: 'Compose file path is required',
+      });
+    }
+  });
+
+export function initialDockerSourceBuildError(error: unknown): { code: string; message: string } {
+  // Never expose provider errors, credential-bearing URLs, SQL or raw build input.
+  const messages: Record<string, string> = {
+    BUILD_WORKER_REQUIRED: 'A Build Worker is required. The resource was saved; retry from Source.',
+    BUILD_CAPACITY_UNAVAILABLE: 'Build capacity is unavailable. The resource was saved; retry from Source.',
+    BUILD_SCHEDULER_UNAVAILABLE: 'The build scheduler is unavailable. The resource was saved; retry from Source.',
+    BUILD_ARTIFACT_POLICY_REJECTED: 'The build was rejected by security policy. Review the policy in Source and retry.',
+    SOURCE_COMMIT_STALE: 'The source branch changed. The resource was saved; retry from Source.',
+    COMPOSE_BUILD_PLAN_MISSING: 'The Compose build plan is unavailable. Review Source configuration and retry.',
+  };
+  if (error instanceof AppError && Object.hasOwn(messages, error.code)) {
+    return { code: error.code, message: messages[error.code]! };
+  }
+  return {
+    code: 'INITIAL_BUILD_ENQUEUE_FAILED',
+    message: 'The resource was saved, but its initial build could not be queued. Review Source and retry.',
+  };
+}
+
+export function assertDockerSourceTargetNode(
+  requestedNodeId: string,
+  actualNodeId: string | undefined,
+  resource: 'compose' | 'deployment'
+): void {
+  if (actualNodeId === requestedNodeId) return;
+  if (resource === 'compose') {
+    throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
+  }
+  throw new AppError(404, 'NOT_FOUND', 'Deployment not found');
+}
+
+/** A deployment or Compose source target must belong to the node named in the request. */
+export async function assertDockerSourceTargetOnNode(
+  requestedNodeId: string,
+  target: { kind: 'deployment'; deploymentId: string } | { kind: 'compose_project'; composeProjectId: string }
+): Promise<void> {
+  const db = container.resolve(TOKENS.DrizzleClient) as DrizzleClient;
+  if (target.kind === 'compose_project') {
+    const [project] = await db
+      .select({ nodeId: dockerComposeProjects.nodeId })
+      .from(dockerComposeProjects)
+      .where(eq(dockerComposeProjects.id, target.composeProjectId))
+      .limit(1);
+    assertDockerSourceTargetNode(requestedNodeId, project?.nodeId, 'compose');
+    return;
+  }
+  const [deployment] = await db
+    .select({ nodeId: dockerDeployments.nodeId })
+    .from(dockerDeployments)
+    .where(eq(dockerDeployments.id, target.deploymentId))
+    .limit(1);
+  assertDockerSourceTargetNode(requestedNodeId, deployment?.nodeId, 'deployment');
+}
+
+/** Create a container or blue/green deployment whose image comes from a Git source build. */
+export async function createDockerSourceResource(
+  nodeId: string,
+  input: z.infer<typeof DockerSourceResourceCreateSchema>,
+  actor: User
+) {
+  const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+  await assertDockerCreationAccess(db, actor.scopes, 'docker:containers:create', nodeId, input.resource.folderId);
+  const sourceService = container.resolve(DockerSourceService);
+  const deploymentService = container.resolve(DockerDeploymentService);
+  let target: DockerSourceTarget;
+  let initialConfig: Record<string, unknown> | null = null;
+  let pendingDeploymentId: string | null = null;
+
+  if (input.resource.kind === 'deployment') {
+    const deployment = await deploymentService.createPending(
+      nodeId,
+      { ...input.resource, image: PENDING_SOURCE_IMAGE },
+      actor.id,
+      actor.scopes
+    );
+    pendingDeploymentId = deployment.id;
+    target = { kind: 'deployment', deploymentId: deployment.id };
+  } else {
+    const containers = await container.resolve(DockerManagementService).listContainers(nodeId);
+    const existing = Array.isArray(containers)
+      ? containers.some((candidate: any) => {
+          const name = String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '');
+          return name === input.resource.name;
+        })
+      : false;
+    if (existing) {
+      throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A container with this name already exists');
+    }
+    target = { kind: 'container', nodeId, containerName: input.resource.name };
+    const { kind: _kind, ...config } = input.resource;
+    initialConfig = config;
+  }
+
+  let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
+  try {
+    source = await sourceService.upsert({ ...input.source, target }, actor, {
+      allowMissingTarget: input.resource.kind === 'container',
+      initialConfig,
+      createOnly: true,
+    });
+    if (input.resource.kind === 'container') {
+      await placeCreatedDockerResource(db, nodeId, 'container', input.resource.name, input.resource.folderId);
+    }
+  } catch (error) {
+    if (pendingDeploymentId) {
+      await deploymentService.discardPending(nodeId, pendingDeploymentId).catch(() => false);
+    }
+    throw error;
+  }
+  try {
+    const queued = await sourceService.createBuild(target, { force: false }, actor);
+    return { source, build: queued.build, target };
+  } catch (error) {
+    return { source, target, build: null, initialBuildError: initialDockerSourceBuildError(error) };
+  }
+}
+
+/** Create a pending Compose Project whose revisions come from a Git source build. */
+export async function createComposeProjectFromSource(
+  nodeId: string,
+  input: z.infer<typeof ComposeSourceProjectCreateSchema>,
+  actor: User
+) {
+  const composeService = container.resolve(DockerComposeService);
+  const sourceService = container.resolve(DockerSourceService);
+  const project = await composeService.createPendingGitProject(
+    nodeId,
+    input.projectName,
+    actor.id,
+    actor.scopes,
+    input.folderId
+  );
+  const target = { kind: 'compose_project' as const, composeProjectId: project.id };
+  let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
+  try {
+    source = await sourceService.upsert({ ...input.source, target }, actor, { createOnly: true });
+  } catch (error) {
+    await composeService.discardPendingGitProject(project.id).catch(() => false);
+    throw error;
+  }
+  try {
+    const queued = await sourceService.createBuild(target, { force: false }, actor);
+    return { project, source, target, ...queued };
+  } catch (error) {
+    return {
+      project,
+      source,
+      target,
+      build: null,
+      builds: [],
+      created: false,
+      initialBuildError: initialDockerSourceBuildError(error),
+    };
+  }
+}

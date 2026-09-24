@@ -17,7 +17,7 @@ vi.mock('@/container.js', () => ({
 }));
 vi.mock('@/modules/auth/auth.middleware.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/modules/auth/auth.middleware.js')>();
-  // Inject an authenticated boundary; keep the actual session-only guard.
+  // Inject an authenticated boundary; keep the actual guards.
   const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     c.set('user', { id: 'actor', scopes: ['integrations:hosting:manage', 'hosting:billing:view'] } as never);
     c.set('effectiveScopes', mocks.scopes);
@@ -47,7 +47,7 @@ describe('hosting HTTP authorization boundary', () => {
     expect(await response.json()).toEqual([]);
     expect(mocks.list).toHaveBeenCalledWith({ id: 'actor', scopes: mocks.scopes });
   });
-  const protectedRoutes = [
+  const managementRoutes = [
     ['POST', '/api/integrations/hosting'],
     ['POST', '/api/integrations/hosting/test'],
     ['POST', '/api/integrations/hosting/discover'],
@@ -73,12 +73,17 @@ describe('hosting HTTP authorization boundary', () => {
     expect(response.status).toBe(410);
     expect(mocks.resolve).not.toHaveBeenCalled();
   });
-  it.each(protectedRoutes)('rejects API and OAuth tokens before service dispatch: %s %s', async (method, path) => {
+  it.each(managementRoutes)('dispatches API and OAuth tokens to the scoped service: %s %s', async (method, path) => {
+    mocks.resolve.mockReturnValue(new Proxy({}, { get: () => vi.fn(async () => ({})) }));
     for (const authType of ['api-token', 'oauth-token']) {
       mocks.authType = authType;
-      const response = await app.request(path, { method });
-      expect(response.status).toBe(403);
-      expect(mocks.resolve).not.toHaveBeenCalled();
+      mocks.resolve.mockClear();
+      const response = await app.request(path, {
+        method,
+        ...(method === 'GET' ? {} : { headers: { 'Content-Type': 'application/json' }, body: '{}' }),
+      });
+      expect(response.status).not.toBe(403);
+      expect(mocks.resolve).toHaveBeenCalled();
     }
   });
   it('rejects malformed identifiers before calling a domain service', async () => {

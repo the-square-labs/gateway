@@ -115,7 +115,7 @@ describe('AIService PKI certificate tool routing', () => {
         certificateId: CERT_ID,
       })
     ).resolves.toEqual({ result: { id: CERT_ID, certificatePem: 'CERT_PEM' }, invalidateStores: [] });
-    expect(certService.getCertificate).toHaveBeenCalledWith(CERT_ID);
+    expect(certService.getCertificate).toHaveBeenCalledWith(CERT_ID, { includeSystem: false });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:cert:issue'] }, 'issue_certificate', {
@@ -129,7 +129,7 @@ describe('AIService PKI certificate tool routing', () => {
     ).resolves.toEqual({
       result: {
         certificate: { id: CERT_ID },
-        message: 'Certificate issued successfully. Private key was generated.',
+        message: expect.stringContaining('Private key was generated'),
       },
       invalidateStores: ['certificates', 'ca'],
     });
@@ -144,6 +144,14 @@ describe('AIService PKI certificate tool routing', () => {
       },
       'user-1'
     );
+
+    // The reason is validated with the revoke route schema.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`pki:cert:revoke:${CERT_ID}`] }, 'revoke_certificate', {
+        certificateId: CERT_ID,
+        reason: 'key_compromise',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('reason') });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`pki:cert:revoke:${CERT_ID}`] }, 'revoke_certificate', {
@@ -225,8 +233,8 @@ describe('AIService PKI certificate tool routing', () => {
       },
       invalidateStores: ['certificates', 'ca'],
     });
-    expect(caService.getCA).toHaveBeenNthCalledWith(1, CA_ID);
-    expect(caService.getCA).toHaveBeenNthCalledWith(2, PARENT_CA_ID);
+    expect(caService.getCA).toHaveBeenNthCalledWith(1, CA_ID, { includeSystem: false });
+    expect(caService.getCA).toHaveBeenNthCalledWith(2, PARENT_CA_ID, { includeSystem: false });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`pki:cert:export:${CERT_ID}`] }, 'manage_certificate', {
@@ -235,10 +243,90 @@ describe('AIService PKI certificate tool routing', () => {
         format: 'der',
       })
     ).resolves.toEqual({
-      result: { format: 'der', contentBase64: Buffer.from('der-bytes').toString('base64') },
+      result: {
+        format: 'der',
+        filename: 'api.example.com.der',
+        contentBase64: Buffer.from('der-bytes').toString('base64'),
+      },
       invalidateStores: ['certificates', 'ca'],
     });
     expect(mocks.exportService.exportDER).toHaveBeenCalledWith('EXPORT_CERT_PEM');
     expect(certService.getCertificatePrivateKey).not.toHaveBeenCalled();
+  });
+
+  it('issues from CSR with a per-CA grant like POST /certificates/from-csr', async () => {
+    const certService = { issueCertificateFromCSR: vi.fn().mockResolvedValue({ id: 'csr-cert' }) };
+    const service = createService({}, certService);
+    const args = { operation: 'issue_from_csr', caId: CA_ID, type: 'tls-server', csrPem: 'CSR', validityDays: 30 };
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`pki:cert:issue:${PARENT_CA_ID}`] }, 'manage_certificate', args)
+    ).resolves.toEqual({ error: `Missing required scope: pki:cert:issue:${CA_ID}`, invalidateStores: [] });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`pki:cert:issue:${CA_ID}`] }, 'manage_certificate', args)
+    ).resolves.toEqual({ result: { id: 'csr-cert' }, invalidateStores: ['certificates', 'ca'] });
+  });
+
+  it('exports private keys only with an audit record and never from system CAs without admin:system', async () => {
+    const audit = { log: vi.fn().mockResolvedValue(true) };
+    const caService = {
+      getCA: vi.fn(async (id: string) =>
+        id === CA_ID
+          ? { id: CA_ID, type: 'intermediate', isSystem: false, parentId: PARENT_CA_ID, certificatePem: 'INT_PEM' }
+          : { id: PARENT_CA_ID, type: 'root', isSystem: false, parentId: null, certificatePem: 'ROOT_PEM' }
+      ),
+    };
+    const certService = {
+      getCertificate: vi.fn().mockResolvedValue({
+        id: CERT_ID,
+        caId: CA_ID,
+        commonName: 'api.example.com',
+        certificatePem: 'CERT_PEM',
+      }),
+      getCertificatePrivateKey: vi.fn().mockResolvedValue('PRIVATE_KEY_PEM'),
+    };
+    const service = createService(caService, certService);
+    (service as any).auditService = audit;
+    const exportAs = (format: string, extra: Record<string, unknown> = {}) =>
+      service.executeTool({ ...BASE_USER, scopes: [`pki:cert:export:${CERT_ID}`] }, 'manage_certificate', {
+        operation: 'export',
+        certificateId: CERT_ID,
+        format,
+        ...extra,
+      });
+
+    await expect(exportAs('private-key')).resolves.toMatchObject({
+      result: { format: 'private-key', filename: 'api.example.com-private-key.pem', content: 'PRIVATE_KEY_PEM' },
+    });
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'cert.export_key', resourceId: CERT_ID, details: { format: 'private-key' } })
+    );
+
+    // PKCS#12 carries the intermediate chain, like the route.
+    await expect(exportAs('pkcs12', { passphrase: 'secret-pass' })).resolves.toMatchObject({
+      result: { format: 'pkcs12' },
+    });
+    expect(mocks.exportService.exportPKCS12).toHaveBeenCalledWith('CERT_PEM', 'PRIVATE_KEY_PEM', 'secret-pass', [
+      'INT_PEM',
+    ]);
+
+    // No audit record, no key.
+    audit.log.mockResolvedValueOnce(false);
+    await expect(exportAs('private-key')).resolves.toEqual({
+      error: 'Private key export requires an audit record',
+      invalidateStores: [],
+    });
+
+    caService.getCA.mockResolvedValueOnce({
+      id: CA_ID,
+      type: 'intermediate',
+      isSystem: true,
+      parentId: null,
+      certificatePem: 'SYS_PEM',
+    });
+    await expect(exportAs('private-key')).resolves.toEqual({
+      error: 'System certificate private keys cannot be exported',
+      invalidateStores: [],
+    });
   });
 });

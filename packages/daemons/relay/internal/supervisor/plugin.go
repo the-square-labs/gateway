@@ -26,6 +26,8 @@ type Plugin struct {
 	mu      sync.RWMutex
 	last    *pb.RelayRuntimeStatus
 	started bool
+	// lastAdminSync throttles the admin client certificate check.
+	lastAdminSync time.Time
 }
 
 func New(cfg *config.Config) *Plugin {
@@ -41,8 +43,23 @@ func (p *Plugin) Init(_ *lifecycle.BaseConfig, logger *slog.Logger) error {
 	return nil
 }
 
+// PersistEnrollmentBundle stores a new enrollment, first or repeated. The
+// worker starts over from the enrollment key: its previous policy trust is
+// moved aside, which is how a re-enrollment repairs a relay that trusts only
+// keys Gateway can no longer sign with.
 func (p *Plugin) PersistEnrollmentBundle(response *pb.EnrollResponse) error {
-	return persistEnrollmentBundle(p.cfg.StateDir, p.cfg.Worker.IdentityDir, response)
+	if _, err := validateEnrollmentBundle(response); err != nil {
+		return err
+	}
+	p.worker.shutdown()
+	if err := resetWorkerPolicyState(p.cfg.Worker.StateDir, time.Now()); err != nil {
+		return err
+	}
+	if err := persistEnrollmentBundle(p.cfg.StateDir, p.cfg.Worker.IdentityDir, response); err != nil {
+		return err
+	}
+	discardStashedIdentity(&p.cfg.BaseConfig)
+	return nil
 }
 
 func (p *Plugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
@@ -107,6 +124,12 @@ func (p *Plugin) HandleCommand(command *pb.GatewayCommand) *pb.CommandResult {
 		if err == nil {
 			result.Detail = fmt.Sprintf("relay worker updated to %s", update.GetTargetVersion())
 		}
+	case *pb.GatewayCommand_RenewRelayIdentity:
+		var fingerprint string
+		fingerprint, err = p.worker.renewIdentity(context.Background(), payload.RenewRelayIdentity, p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey)
+		if err == nil {
+			result.Detail = fmt.Sprintf("server_identity=%s server_fingerprint=%s", payload.RenewRelayIdentity.GetServerIdentity(), fingerprint)
+		}
 	case *pb.GatewayCommand_SetDaemonLogStream:
 		stream.SetDaemonLogStreaming(payload.SetDaemonLogStream.Enabled, payload.SetDaemonLogStream.MinLevel)
 	default:
@@ -169,6 +192,24 @@ func (p *Plugin) reportLoop(ctx context.Context, writer *stream.Writer) {
 	}
 }
 
+// syncAdminClientIfDue moves the worker's admin client onto the supervisor's
+// current certificate after the daemon lifecycle renewed it, before the one
+// the worker trusts expires.
+func (p *Plugin) syncAdminClientIfDue(ctx context.Context) {
+	p.mu.Lock()
+	due := time.Since(p.lastAdminSync) >= adminClientSyncInterval
+	if due {
+		p.lastAdminSync = time.Now()
+	}
+	p.mu.Unlock()
+	if !due {
+		return
+	}
+	if err := p.worker.syncAdminClient(ctx, p.cfg.TLS.ClientCert, p.cfg.TLS.ClientKey); err != nil && p.logger != nil {
+		p.logger.Warn("relay worker admin client renewal deferred", "error", err)
+	}
+}
+
 func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 	state, _ := loadEnrollmentState(p.cfg.StateDir)
 	status := &pb.RelayRuntimeStatus{
@@ -183,6 +224,7 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 		status.Error = err.Error()
 		return status
 	}
+	p.syncAdminClientIfDue(ctx)
 	health, err := p.worker.health(ctx)
 	if err != nil {
 		status.State = "offline"

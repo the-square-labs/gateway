@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import { DockerAccessResourceService } from '@/modules/docker/docker-access-resource.service.js';
@@ -102,7 +102,10 @@ describe('AIService Docker tool routing', () => {
       inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1' }),
     };
     const createBuild = vi.fn().mockResolvedValue({ build: { id: 'build-1' }, created: true });
-    container.registerInstance(DockerSourceService, { createBuild } as never);
+    container.registerInstance(DockerSourceService, {
+      createBuild,
+      getPendingContainer: vi.fn().mockResolvedValue(null),
+    } as never);
     const service = createService(dockerService);
     const user = {
       ...BASE_USER,
@@ -127,7 +130,10 @@ describe('AIService Docker tool routing', () => {
 
   it('does not reach saved-source build execution without manage on the target container', async () => {
     const createBuild = vi.fn();
-    container.registerInstance(DockerSourceService, { createBuild } as never);
+    container.registerInstance(DockerSourceService, {
+      createBuild,
+      getPendingContainer: vi.fn().mockResolvedValue(null),
+    } as never);
     const service = createService({ inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1' }) });
     const result = await service.executeTool(
       { ...BASE_USER, scopes: ['docker:containers:view:node-1', 'docker:containers:manage:node-1/other'] },
@@ -141,6 +147,10 @@ describe('AIService Docker tool routing', () => {
   it('routes Compose source builds through the project-scoped authorization identity', async () => {
     const createBuild = vi.fn().mockResolvedValue({ build: { id: 'build-compose' }, created: true });
     container.registerInstance(DockerSourceService, { createBuild } as never);
+    // The source route verifies that the Compose project belongs to the requested node.
+    container.registerInstance(TOKENS.DrizzleClient, {
+      select: () => ({ from: () => ({ where: () => ({ limit: async () => [{ nodeId: 'node-1' }] }) }) }),
+    } as never);
     const service = createService({});
     const user = {
       ...BASE_USER,

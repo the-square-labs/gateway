@@ -10,6 +10,13 @@ const logger = createChildLogger('RelayGrantKeyService');
 const POLICY_ID = 'current';
 const KEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
 const PUBLIC_KEY_RETENTION_MS = 48 * 60 * 60 * 1000 + 5 * 60 * 1000;
+/**
+ * How long a pending grant key is published before it signs. Remote relays learn it from policy
+ * snapshots, and a relay admits traffic only on a snapshot younger than its 15-minute lease, so
+ * after this long every relay still serving verifies the key. Activating sooner makes remote
+ * relays refuse the renewed endpoint grants, and a refused renewal closes the endpoint's tunnels.
+ */
+export const GRANT_KEY_PUBLICATION_MS = 20 * 60 * 1000;
 
 export class RelayGrantKeyService {
   constructor(
@@ -41,14 +48,14 @@ export class RelayGrantKeyService {
     syncSnapshot: () => Promise<number>,
     refreshGrants: () => Promise<void>
   ): Promise<boolean> {
-    const pendingId = await this.db.transaction(async (tx) => {
+    const pending = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-signing-key-rotation'))`);
       const [existingPending] = await tx
-        .select({ id: relayGrantSigningKeys.id })
+        .select({ id: relayGrantSigningKeys.id, createdAt: relayGrantSigningKeys.createdAt })
         .from(relayGrantSigningKeys)
         .where(eq(relayGrantSigningKeys.status, 'pending'))
         .limit(1);
-      if (existingPending) return existingPending.id;
+      if (existingPending) return existingPending;
 
       const [active] = await tx
         .select({ activatedAt: relayGrantSigningKeys.activatedAt })
@@ -59,15 +66,17 @@ export class RelayGrantKeyService {
 
       const [created] = await this.insertKey(tx, 'pending', null);
       await bumpRelayPolicyRevision(tx);
-      return created.id;
+      return { id: created.id, createdAt: now };
     });
 
-    if (!pendingId) {
+    if (!pending) {
       if (await this.retireExpiredVerificationKeys(now)) await syncSnapshot();
       return false;
     }
 
+    const pendingId = pending.id;
     await syncSnapshot();
+    if (now.getTime() - pending.createdAt.getTime() < GRANT_KEY_PUBLICATION_MS) return false;
     const activated = await this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-signing-key-rotation'))`);
       const [pending] = await tx

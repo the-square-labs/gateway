@@ -1,7 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { getEnvironmentSettingsRoute, updateEnvironmentSettingsRoute } from './environment-settings.docs.js';
 import { EnvironmentSettingsUpdateSchema } from './environment-settings.schemas.js';
@@ -10,7 +10,6 @@ import { DEFAULT_ENVIRONMENT_SETTINGS, EnvironmentSettingsService } from './envi
 export const environmentSettingsRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 environmentSettingsRoutes.use('*', authMiddleware);
-environmentSettingsRoutes.use('*', sessionOnly);
 
 environmentSettingsRoutes.openapi(
   { ...getEnvironmentSettingsRoute, middleware: requireScope('settings:gateway:view') },

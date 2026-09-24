@@ -661,3 +661,110 @@ func TestResetLocalPolicyTrustIsLocalOnly(t *testing.T) {
 		t.Fatal("replaced key still signs policy")
 	}
 }
+
+// A Gateway restored from backup, or reinstalled over an existing relay volume,
+// re-pins its key and then signs snapshots for another instance or from an
+// older revision sequence. The first snapshot after a reset may rebind the
+// relay; later ones are held to the usual rules again.
+func TestResetLocalPolicyTrustRebindsNextSnapshot(t *testing.T) {
+	oldPublic, oldPrivate, _ := ed25519.GenerateKey(nil)
+	newPublic, newPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	local, err := OpenWithOptions(t.TempDir(), Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED, PoolID: "system", InstanceID: "relay-1",
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer local.Close()
+	if _, err := local.BootstrapPolicyTrust("old", oldPublic, PublicKeyFingerprint(oldPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := local.Apply(signedSnapshotForGateway(t, oldPrivate, "old", oldPublic, grantPublic, 50, now, "gateway-1")); err != nil {
+		t.Fatal(err)
+	}
+	replaced, err := local.ResetLocalPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic))
+	if err != nil || len(replaced) != 1 || replaced[0] != "old" {
+		t.Fatalf("reset failed: replaced=%v err=%v", replaced, err)
+	}
+	// A retried reset with the same key is harmless and replaces nothing.
+	if replaced, err := local.ResetLocalPolicyTrust("new", newPublic, PublicKeyFingerprint(newPublic)); err != nil || len(replaced) != 0 {
+		t.Fatalf("repeated reset: replaced=%v err=%v", replaced, err)
+	}
+	if _, err := local.ResetLocalPolicyTrust("new", oldPublic, PublicKeyFingerprint(oldPublic)); err == nil {
+		t.Fatal("reset replaced the material of a pinned key id")
+	}
+	if _, _, err := local.Apply(signedSnapshotForGateway(t, newPrivate, "new", newPublic, grantPublic, 3, now, "gateway-2")); err != nil {
+		t.Fatalf("first snapshot after a reset could not rebind the relay: %v", err)
+	}
+	if current := local.Current(); current.Revision != 3 || current.GatewayInstanceID != "gateway-2" {
+		t.Fatalf("relay did not rebind: revision=%d gateway=%s", current.Revision, current.GatewayInstanceID)
+	}
+	if _, _, err := local.Apply(signedSnapshotForGateway(t, newPrivate, "new", newPublic, grantPublic, 2, now, "gateway-2")); err == nil {
+		t.Fatal("an older revision was accepted after the rebind")
+	}
+	if _, _, err := local.Apply(signedSnapshotForGateway(t, newPrivate, "new", newPublic, grantPublic, 4, now, "gateway-1")); err == nil {
+		t.Fatal("another Gateway instance was accepted after the rebind")
+	}
+}
+
+func signedSnapshotForGateway(t *testing.T, privateKey ed25519.PrivateKey, keyID string, policyPublic, grantPublic ed25519.PublicKey, revision uint64, now time.Time, gatewayInstanceID string) *relayv1.ApplySnapshotRequest {
+	t.Helper()
+	payload := &relayv1.PolicyEnvelopePayload{
+		SchemaVersion: 2, GatewayInstanceId: gatewayInstanceID, PoolId: "system", RelayInstanceId: "relay-1",
+		Revision: revision, IssuedAtUnix: now.Unix(), ExpiresAtUnix: now.Add(PolicyLease).Unix(),
+		GrantPublicKeys:   []*relayv1.PublicKey{{KeyId: "grant-1", PublicKey: grantPublic}},
+		Capabilities:      []string{PoolCapability},
+		PolicySigningKeys: []*relayv1.PolicySigningKey{policyKey(keyID, policyPublic)},
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &relayv1.ApplySnapshotRequest{SignedEnvelope: &relayv1.SignedPolicyEnvelope{
+		SigningKeyId: keyID, Payload: encoded, Signature: ed25519.Sign(privateKey, encoded),
+	}}
+}
+
+// A relay must start even when its persisted snapshot no longer validates:
+// written for another relay instance before a re-enrollment, or with the
+// host clock now behind the snapshot's issue time.
+func TestPersistedSnapshotThatNoLongerValidatesDoesNotBlockStart(t *testing.T) {
+	policyPublic, policyPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	now := time.Unix(1_800_000_000, 0)
+	dir := t.TempDir()
+	store := remoteStore(t, dir, &now)
+	if _, err := store.BootstrapPolicyTrust("policy-1", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Apply(signedSnapshot(t, policyPrivate, "policy-1", policyPublic, grantPublic, 1, now)); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+
+	// The host clock is now ten minutes behind the snapshot it persisted.
+	behind := now.Add(-10 * time.Minute)
+	reopened := remoteStore(t, dir, &behind)
+	if reopened.Current().Revision != 1 {
+		t.Fatalf("persisted snapshot was not restored with a clock behind: revision=%d", reopened.Current().Revision)
+	}
+	reopened.Close()
+
+	other, err := OpenWithOptions(dir, Options{
+		Mode: relayv1.RelayMode_RELAY_MODE_REMOTE_DATA_ONLY, PoolID: "system", InstanceID: "relay-2",
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("relay could not start with a snapshot for another instance: %v", err)
+	}
+	defer other.Close()
+	if other.Current().Revision != 0 || other.Ready(now) {
+		t.Fatal("a snapshot for another relay instance was served")
+	}
+	if ids := other.PolicyKeyIDs(); len(ids) != 1 || ids[0] != "policy-1" {
+		t.Fatalf("pinned trust was not kept: %v", ids)
+	}
+}

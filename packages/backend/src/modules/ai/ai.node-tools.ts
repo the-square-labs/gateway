@@ -1,4 +1,9 @@
-import { hasScopeForResource } from '@/lib/permissions.js';
+import { eq } from 'drizzle-orm';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { proxyHosts } from '@/db/schema/index.js';
+import { hasScope, hasScopeForResource } from '@/lib/permissions.js';
+import { AppError } from '@/middleware/error-handler.js';
 import {
   FileBrowseSchema,
   FileMoveSchema,
@@ -6,9 +11,29 @@ import {
   FileUploadCompleteSchema,
   FileUploadInitSchema,
 } from '@/modules/docker/docker.schemas.js';
-import { UpdateNodeServiceCreationLockSchema } from '@/modules/nodes/nodes.schemas.js';
+import {
+  getDaemonLogHistory,
+  getNginxLogHistory,
+  logRelay,
+  type RelayedLogEntry,
+} from '@/modules/monitoring/log-relay.service.js';
+import { subscribeNginxHostLogs } from '@/modules/monitoring/nginx-log-subscriptions.js';
+import { createNodeForActor, updateNodeForActor } from '@/modules/nodes/node-actions.js';
+import {
+  daemonLogMatcher,
+  NODE_LOG_HISTORY_LIMIT,
+  nginxLogEntryKey,
+  nginxLogMatcher,
+} from '@/modules/nodes/node-log-filters.js';
+import { NodeMonitoringService } from '@/modules/nodes/node-monitoring.service.js';
+import {
+  CreateNodeSchema,
+  UpdateNodeSchema,
+  UpdateNodeServiceCreationLockSchema,
+} from '@/modules/nodes/nodes.schemas.js';
 import type { NodesService } from '@/modules/nodes/nodes.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
 import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
@@ -23,10 +48,14 @@ export const NODE_TOOL_NAMES = new Set([
   'delete_node',
   'manage_node_config',
   'manage_node_file',
+  'manage_node',
 ]);
 
 const NODE_FILE_LIST_MAX = 1000;
 const NODE_FILE_READ_LIMIT_BYTES = 256 * 1024;
+const NGINX_LOG_TAIL_LINES = 200;
+const NGINX_LOG_SNAPSHOT_WAIT_MS = 1500;
+const NODE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface NodeToolContext {
   nodesService: NodesService;
@@ -78,11 +107,20 @@ export async function executeNodeTool(
       return context.nodesService.get(a.nodeId);
     case 'execute_node_console_command':
       return executeNodeConsoleCommand(context, user, a);
-    case 'create_node':
-      return context.nodesService.create(
-        { hostname: a.hostname, type: a.type || 'nginx', displayName: a.displayName },
-        user.id
+    case 'create_node': {
+      // Mirrors POST /nodes: schema, destination folder permission, then the enrollment token.
+      const input = CreateNodeSchema.parse(
+        definedFields({
+          type: a.type,
+          hostname: a.hostname,
+          displayName: a.displayName,
+          folderId: a.folderId,
+          serviceAddresses: a.serviceAddresses,
+          servicePort: a.servicePort,
+        })
       );
+      return createNodeForActor({ id: user.id, scopes: user.scopes }, input, context.nodesService);
+    }
     case 'rename_node':
       return context.nodesService.update(a.nodeId, { displayName: a.displayName }, user.id);
     case 'set_node_service_creation_lock': {
@@ -94,12 +132,14 @@ export async function executeNodeTool(
       return context.nodesService.updateServiceCreationLock(a.nodeId, input, user.id);
     }
     case 'delete_node':
-      await context.nodesService.remove(a.nodeId, user.id);
+      await context.nodesService.remove(a.nodeId, user.id, { cascadeOfflineProxyHosts: a.cascadeProxyHosts === true });
       return { success: true };
     case 'manage_node_config':
       return executeNodeConfigTool(context, user, a);
     case 'manage_node_file':
       return executeNodeFileTool(context.nodesService, user, a);
+    case 'manage_node':
+      return executeManageNodeTool(context, user, a);
     default:
       throw new Error(`Unsupported node tool: ${toolName}`);
   }
@@ -144,12 +184,14 @@ async function executeNodeConfigTool(context: NodeToolContext, user: User, args:
   switch (operation) {
     case 'read': {
       assertNodeConfigScope(user, 'nodes:config:view', nodeId);
+      await assertNginxNode(context.nodesService, nodeId);
       const result = await dispatchService.readGlobalConfig(nodeId);
       if (!result.success) throw new Error(result.error || 'Failed to read node config');
       return { nodeId, content: result.detail ?? '' };
     }
     case 'update': {
       assertNodeConfigScope(user, 'nodes:config:edit', nodeId);
+      await assertNginxNode(context.nodesService, nodeId);
       const content = typeof args.content === 'string' ? args.content : '';
       if (!content) throw new Error('content is required');
       if (Buffer.byteLength(content, 'utf8') > 1024 * 1024) {
@@ -160,6 +202,7 @@ async function executeNodeConfigTool(context: NodeToolContext, user: User, args:
     }
     case 'test': {
       assertNodeConfigScope(user, 'nodes:config:edit', nodeId);
+      await assertNginxNode(context.nodesService, nodeId);
       const result = await dispatchService.testConfig(nodeId);
       return {
         nodeId,
@@ -170,6 +213,146 @@ async function executeNodeConfigTool(context: NodeToolContext, user: User, args:
     }
     default:
       throw new Error(`Unsupported node config operation: ${operation}`);
+  }
+}
+
+/** Mirrors requireNginxNode in nodes.routes.ts: a missing node falls through to the operation's own 404. */
+async function assertNginxNode(nodesService: NodesService, nodeId: string): Promise<void> {
+  let node: { type: string };
+  try {
+    node = await nodesService.get(nodeId);
+  } catch {
+    return;
+  }
+  if (node.type !== 'nginx') {
+    throw new AppError(400, 'NOT_NGINX', 'This operation is only available for nginx nodes');
+  }
+}
+
+async function executeManageNodeTool(context: NodeToolContext, user: User, args: Record<string, unknown>) {
+  const nodeId = String(args.nodeId || '');
+  const operation = String(args.operation || '');
+  if (!nodeId) throw new Error('nodeId is required');
+
+  switch (operation) {
+    case 'update': {
+      // PATCH /nodes/{id}: every field carries its own node permission, checked in updateNodeForActor.
+      const input = UpdateNodeSchema.parse(
+        definedFields({
+          displayName: args.displayName,
+          appearanceColor: args.appearanceColor,
+          serviceAddresses: args.serviceAddresses,
+          serviceAddress: args.serviceAddress,
+          secondaryServiceAddress: args.secondaryServiceAddress,
+          confirmDomainDnsUpdate: args.confirmDomainDnsUpdate,
+          builderSettings: args.builderSettings,
+        })
+      );
+      return updateNodeForActor({ id: user.id, scopes: user.scopes }, nodeId, input, context.nodesService);
+    }
+    case 'regenerate_enrollment_token':
+      assertNodeScope(user, 'nodes:create', nodeId);
+      return context.nodesService.regenerateEnrollmentToken(nodeId, user.id);
+    case 'health_history':
+      assertNodeScope(user, 'nodes:details', nodeId);
+      return { nodeId, healthHistory: await context.nodesService.getHealthHistory(nodeId) };
+    case 'monitoring_history':
+      assertNodeScope(user, 'nodes:details', nodeId);
+      return { nodeId, monitoringHistory: await container.resolve(NodeMonitoringService).getHistory(nodeId) };
+    case 'daemon_logs': {
+      assertNodeScope(user, 'nodes:logs', nodeId);
+      assertNodeIdFormat(nodeId);
+      const matches = daemonLogMatcher({
+        levels: stringArrayArg(args.levels).map((level) => level.toLowerCase()),
+        search: typeof args.search === 'string' ? args.search : '',
+      });
+      const entries = getDaemonLogHistory(nodeId).filter(matches).slice(-logLimitArg(args.limit));
+      return { nodeId, entries, count: entries.length };
+    }
+    case 'nginx_logs':
+      assertNodeScope(user, 'nodes:logs', nodeId);
+      await assertNginxNode(context.nodesService, nodeId);
+      assertNodeIdFormat(nodeId);
+      return readNginxLogSnapshot(nodeId, args);
+    default:
+      throw new Error(`Unsupported node operation: ${operation}`);
+  }
+}
+
+/**
+ * Snapshot of GET /nodes/{id}/nginx-logs: buffered lines for the node's routes, plus the
+ * tail the daemon sends right after a subscription, collected briefly and then released.
+ */
+async function readNginxLogSnapshot(nodeId: string, args: Record<string, unknown>) {
+  const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+  const hosts = await db.select({ id: proxyHosts.id }).from(proxyHosts).where(eq(proxyHosts.nodeId, nodeId));
+  const hostIds = new Set<string>(hosts.map((host) => host.id));
+  const matches = nginxLogMatcher({
+    hostIds,
+    search: typeof args.search === 'string' ? args.search : '',
+    statuses: stringArrayArg(args.statuses),
+  });
+  const entries = new Map<string, RelayedLogEntry>();
+  const collect = (entry: RelayedLogEntry) => {
+    if (entry.nodeId !== nodeId || !matches(entry)) return;
+    entries.set(nginxLogEntryKey(entry), entry);
+  };
+  for (const hostId of hostIds) {
+    for (const entry of getNginxLogHistory(hostId)) collect(entry);
+  }
+
+  let streamError: string | null = hostIds.size === 0 ? 'No proxy hosts are assigned to this nginx node' : null;
+  if (hostIds.size > 0) {
+    const registry = container.resolve(NodeRegistryService);
+    logRelay.on('log', collect);
+    const subscriptions = Array.from(hostIds, (hostId) =>
+      subscribeNginxHostLogs(registry, nodeId, hostId, NGINX_LOG_TAIL_LINES)
+    );
+    try {
+      const failed = subscriptions.filter((subscription) => !subscription.ok);
+      if (failed.length === subscriptions.length) {
+        const first = failed[0];
+        streamError = first && !first.ok ? first.message : 'Nginx log stream is not connected';
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, NGINX_LOG_SNAPSHOT_WAIT_MS));
+      }
+    } finally {
+      logRelay.off('log', collect);
+      for (const subscription of subscriptions) {
+        if (subscription.ok) subscription.cleanup();
+      }
+    }
+  }
+
+  const sorted = [...entries.values()].sort((left, right) => left.timestamp.localeCompare(right.timestamp));
+  const limited = sorted.slice(-logLimitArg(args.limit));
+  return { nodeId, hostCount: hostIds.size, entries: limited, count: limited.length, streamError };
+}
+
+/** Drop omitted arguments so the parsed body matches what the HTTP route receives. */
+function definedFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+}
+
+function logLimitArg(value: unknown): number {
+  const requested = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : 0;
+  return requested > 0 ? Math.min(requested, NODE_LOG_HISTORY_LIMIT) : NODE_LOG_HISTORY_LIMIT;
+}
+
+function stringArrayArg(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim() !== '').map((item) => item.trim())
+    : [];
+}
+
+function assertNodeIdFormat(nodeId: string): void {
+  if (!NODE_ID_PATTERN.test(nodeId)) throw new AppError(400, 'INVALID_ID', 'Invalid node ID');
+}
+
+/** Mirrors requireScopeForResource(<scope>, 'id') on the node routes. */
+function assertNodeScope(user: User, scope: string, nodeId: string): void {
+  if (!hasScope(user.scopes, `${scope}:${nodeId}`)) {
+    throw new Error(`PERMISSION_DENIED: Missing required scope ${scope}:${nodeId}`);
   }
 }
 

@@ -9,6 +9,10 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Search by domain name' },
+        type: { type: 'string', enum: ['proxy', 'redirect', '404', 'raw'] },
+        enabled: { type: 'boolean' },
+        healthStatus: { type: 'string', enum: ['online', 'offline', 'degraded', 'unknown', 'disabled'] },
+        nodeId: { type: 'string', description: 'Nginx node UUID' },
         page: { type: 'number', description: 'Page number (default: 1)' },
         limit: { type: 'number', description: 'Items per page (default: 50)' },
       },
@@ -20,7 +24,8 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'get_route',
-    description: 'Get detailed configuration of a specific ingress route.',
+    description:
+      'Get a compact summary of an ingress route. Use manage_route get_config for every setting (headers, rewrites, cache, rate limit, template, health check).',
     parameters: {
       type: 'object',
       properties: {
@@ -173,6 +178,11 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         },
         dockerNodeId: { type: ['string', 'null'] },
         dockerContainerName: { type: ['string', 'null'] },
+        dockerComposeProjectId: {
+          type: ['string', 'null'],
+          description: 'Compose Project UUID for a service upstream.',
+        },
+        dockerComposeServiceName: { type: ['string', 'null'], description: 'Compose service name within the project.' },
         dockerDeploymentId: { type: ['string', 'null'] },
         dockerContainerPort: { type: ['number', 'null'] },
         pageProjectId: { type: ['string', 'null'] },
@@ -358,12 +368,16 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_proxy_template',
     description:
-      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone. Operation-specific proxy:templates:* scopes are enforced.',
+      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node; needs proxy:raw:write plus template edit, or create when templateId is omitted). Operation-specific proxy:templates:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['list', 'get', 'create', 'update', 'delete', 'clone'] },
+        operation: {
+          type: 'string',
+          enum: ['list', 'get', 'create', 'update', 'delete', 'clone', 'preview', 'test'],
+        },
         templateId: { type: 'string' },
+        routeId: { type: 'string', description: 'Route UUID whose settings preview renders against.' },
         name: { type: 'string' },
         description: { type: 'string' },
         type: { type: 'string', enum: ['proxy', 'redirect', '404'] },
@@ -386,6 +400,12 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Search by name or domain' },
+        type: { type: 'string', enum: ['acme', 'upload', 'internal'] },
+        status: { type: 'string', enum: ['active', 'expired', 'pending', 'error'] },
+        showSystem: {
+          type: 'boolean',
+          description: 'Include Gateway system certificates; needs admin:details:certificates',
+        },
         page: { type: 'number' },
         limit: { type: 'number' },
       },
@@ -494,6 +514,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Search by domain name' },
+        dnsStatus: { type: 'string', enum: ['valid', 'invalid', 'pending', 'unknown'] },
         page: { type: 'number' },
         limit: { type: 'number' },
       },
@@ -506,11 +527,12 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_domain',
     description:
-      'Create a Cloudflare-backed Gateway domain on an eligible Nginx ingress node. If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval.',
+      'Create a Gateway domain on an eligible Nginx ingress node. dnsProvider cloudflare (default) manages A/AAAA records through a synced Cloudflare zone; external only records the domain and expects DNS to be managed elsewhere. If Cloudflare already has different A/AAAA records, the tool returns conflict metadata; retry with overwriteDns only after explicit user approval. Use manage_domain preview first to see the DNS plan.',
     parameters: {
       type: 'object',
       properties: {
         domain: { type: 'string', description: 'Domain name (e.g., "example.com")' },
+        dnsProvider: { type: 'string', enum: ['cloudflare', 'external'], description: 'Default: cloudflare' },
         description: { type: 'string', description: 'Optional description' },
         ttl: { type: 'number', description: 'Optional Cloudflare DNS TTL override' },
         proxied: { type: 'boolean', description: 'Optional Cloudflare proxy override' },
@@ -554,22 +576,45 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_domain',
     description:
-      'Get, update, or re-check DNS for a registered domain. Operations: get, update, check_dns, issue_certificate (ACME certificate for the domain; also needs ssl:cert:issue), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
+      'Inspect and manage domains. Operations without domainId (domains:create): list_nginx_nodes (eligible ingress nodes), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain; also needs ssl:cert:issue), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['get', 'update', 'check_dns', 'issue_certificate', 'preview_ingress_migration', 'migrate_ingress'],
+          enum: [
+            'list_nginx_nodes',
+            'preview',
+            'get',
+            'update',
+            'check_dns',
+            'resolve_cloudflare_migration',
+            'issue_certificate',
+            'preview_ingress_migration',
+            'migrate_ingress',
+          ],
         },
         domainId: { type: 'string' },
+        domain: { type: 'string', description: 'Domain name for preview.' },
+        dnsProvider: { type: 'string', enum: ['cloudflare', 'external'], description: 'DNS provider for preview.' },
+        ttl: { type: 'number', description: 'Cloudflare DNS TTL override for preview.' },
         description: { type: ['string', 'null'] },
+        proxied: { type: 'boolean', description: 'Cloudflare proxy flag for update or preview.' },
+        action: {
+          type: 'string',
+          enum: ['retry', 'keep_external', 'update_dns'],
+          description: 'Resolution for resolve_cloudflare_migration.',
+        },
+        nginxNodeId: {
+          type: 'string',
+          description: 'Nginx node UUID for preview, or for resolve_cloudflare_migration with action update_dns.',
+        },
         targetNodeId: {
           type: 'string',
           description: 'Nginx ingress node UUID for preview_ingress_migration and migrate_ingress.',
         },
       },
-      required: ['operation', 'domainId'],
+      required: ['operation'],
     },
     destructive: true,
     category: 'Domains',
@@ -604,6 +649,15 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         description: { type: 'string', description: 'Optional description' },
         allowIps: { type: 'array', items: { type: 'string' }, description: 'Allowed IP ranges (CIDR)' },
         denyIps: { type: 'array', items: { type: 'string' }, description: 'Denied IP ranges (CIDR)' },
+        ipRules: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { type: { type: 'string', enum: ['allow', 'deny'] }, value: { type: 'string' } },
+            required: ['type', 'value'],
+          },
+          description: 'Ordered allow/deny rules; applied before allowIps and denyIps',
+        },
         basicAuthEnabled: { type: 'boolean', description: 'Enable HTTP basic authentication (default: false)' },
         basicAuthUsers: {
           type: 'array',

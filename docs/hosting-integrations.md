@@ -99,7 +99,7 @@ Creation, deletion and restore are mutually exclusive with other VM mutations. A
 
 Hosting alerts support VM power state, operation outcomes, firewall failures, account synchronization and monetary thresholds. Monetary rules require an explicit currency and separate billing access. Persisted provider observations and Redis read models feed the notification bus; stale or unavailable account data does not become a zero balance.
 
-High-risk hosting mutations, configuration secrets and account finances require an authenticated interactive session; these scopes are excluded from programmatic API/OAuth tokens. See [SCOPES.md](../SCOPES.md) for the canonical scopes.
+Hosting connectors, VM lifecycle, snapshots, firewalls and account finances are available to API tokens and OAuth/MCP grants that hold the matching `integrations:hosting:*` and `hosting:*` scopes, bounded by the token owner's live permissions. OAuth consent leaves paid, destructive and credential-bearing hosting scopes unchecked by default. See [SCOPES.md](../SCOPES.md) for the canonical scopes.
 
 ## Verification boundary
 

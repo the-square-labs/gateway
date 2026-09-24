@@ -115,6 +115,25 @@ function selectSigningKey(records: PolicyKeyRecord[], activeKeyId: string, repor
   return candidates[0]?.keyId ?? activeKeyId;
 }
 
+/**
+ * Whether Gateway can still sign a snapshot that a relay with this trust set accepts: the set
+ * holds the active key, or a formerly active key whose private half Gateway still holds. False
+ * is the lockout no signed rotation can repair (the relay trusts only destroyed keys, for example
+ * after its relay.db was restored from an old backup). Null when the set is unknown.
+ */
+function trustIsSignable(records: PolicyKeyRecord[], reported: string[]): boolean | null {
+  if (reported.length === 0) return null;
+  const active = records.find((record) => record.status === 'active');
+  if (active && reported.includes(active.keyId)) return true;
+  return records.some(
+    (record) =>
+      reported.includes(record.keyId) &&
+      record.status !== 'pending' &&
+      record.activatedAt !== null &&
+      record.hasPrivateKey
+  );
+}
+
 function publishedKey(
   record: PolicyKeyRecord,
   status: RelayPublishedPolicyKey['status'],
@@ -249,7 +268,18 @@ export class RelayPolicySigningKeyService {
     now = new Date(),
     reportedKeyIds?: string[]
   ): Promise<{ signingKeyId: string; keys: RelayPublishedPolicyKey[] }> {
-    const records = await this.db
+    return planInstancePolicyKeys(await this.loadKeyRecords(), instance, now, reportedKeyIds);
+  }
+
+  /** For each reported trust set: can Gateway still sign for it (see trustIsSignable)? */
+  async assessReportedTrust(reportedSets: string[][]): Promise<Array<boolean | null>> {
+    if (reportedSets.every((reported) => reported.length === 0)) return reportedSets.map(() => null);
+    const records = await this.loadKeyRecords();
+    return reportedSets.map((reported) => trustIsSignable(records, reported));
+  }
+
+  private loadKeyRecords(): Promise<PolicyKeyRecord[]> {
+    return this.db
       .select({
         keyId: relayPolicySigningKeys.keyId,
         publicKey: relayPolicySigningKeys.publicKey,
@@ -261,7 +291,6 @@ export class RelayPolicySigningKeyService {
         hasPrivateKey: sql<boolean>`(${relayPolicySigningKeys.encryptedPrivateKey} is not null and ${relayPolicySigningKeys.encryptedDek} is not null)`,
       })
       .from(relayPolicySigningKeys);
-    return planInstancePolicyKeys(records, instance, now, reportedKeyIds);
   }
 
   /** Signs with the active key, or with `keyId` when a lagging relay needs an older signer. */
@@ -434,6 +463,7 @@ export const relayPolicySigningKeyInternals = {
   planInstancePolicyKeys,
   rotationParticipants,
   selectSigningKey,
+  trustIsSignable,
   KEY_OVERLAP_MS,
   REMOTE_ACKNOWLEDGEMENT_DEADLINE_MS,
 };

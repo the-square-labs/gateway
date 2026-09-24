@@ -159,6 +159,28 @@ export const CloudflareConnectorPreviewTestSchema = z.object({
   token: z.string().min(1).max(4096),
 });
 
+export const ExternalSshHostKeySchema = z.object({
+  host: z.string().trim().min(1).max(255),
+  port: z.number().int().min(1).max(65535).optional(),
+  jumpConnectorId: z.string().uuid().nullable().optional(),
+});
+
+export const ExternalSshConnectorCreateSchema = z.object({
+  name: z.string().trim().min(1).max(255),
+  host: z.string().trim().min(1).max(255),
+  port: z.number().int().min(1).max(65535).optional(),
+  username: z.string().trim().min(1).max(255),
+  authMethod: z.enum(['password', 'private_key']),
+  secret: z.string().max(16_384).optional(),
+  hostFingerprint: z.string().trim().min(1).max(255),
+  jumpConnectorId: z.string().uuid().nullable().optional(),
+  enabled: z.boolean().optional(),
+  generatePrivateKey: z.boolean().optional(),
+  reuseCredentialFromConnectorId: z.string().uuid().optional(),
+});
+
+export const ExternalSshConnectorUpdateSchema = z.object({ name: z.string().trim().min(1).max(255) }).strict();
+
 export type GitLabConnectorCreateInput = z.infer<typeof GitLabConnectorCreateSchema>;
 export type GitLabConnectorUpdateInput = z.infer<typeof GitLabConnectorUpdateSchema>;
 export type GitLabConnectorRotateTokenInput = z.infer<typeof GitLabConnectorRotateTokenSchema>;

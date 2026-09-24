@@ -8,9 +8,9 @@ export const TOKEN_SCOPES = [
   ...INFRASTRUCTURE_TOKEN_SCOPES,
 ] as const;
 
+// Mirrors backend PROGRAMMATIC_DENIED_BASE_SCOPES: only browser/identity-bound scopes stay user-only.
 const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:workspace:use",
-  "feat:ai:use",
   "feat:ai:configure",
   "ai:skills:manage",
   "ai:sandbox:use",
@@ -19,76 +19,16 @@ const PROGRAMMATIC_DENIED_SCOPE_VALUES = new Set<string>([
   "ai:sandbox:manage",
   "mcp:use",
   "inference:setup",
-  "inference:providers:view",
-  "inference:providers:manage",
-  "inference:models:manage",
-  "inference:limits:manage",
-  "inference:usage:view",
-  "admin:system",
-  "admin:users",
   "admin:users:impersonate",
-  "admin:groups",
-  "settings:gateway:view",
-  "settings:gateway:edit",
-  "integrations:gitlab:manage",
-  "integrations:gitlab:system",
-  "integrations:github:manage",
-  "integrations:github:system",
-  "integrations:git:manage",
-  "integrations:git:system",
-  "integrations:ssh:manage",
-  "integrations:cloudflare:manage",
-  "integrations:hosting:manage",
-  "hosting:resources:create",
-  "hosting:resources:power",
-  "hosting:resources:resize",
-  "hosting:snapshots:create",
-  "hosting:snapshots:delete",
-  "hosting:snapshots:restore",
-  "hosting:snapshots:folders:manage",
-  "hosting:resources:delete",
-  "hosting:resources:recover",
-  "hosting:billing:view",
-  "hosting:billing:topup",
-  "proxy:raw:read",
-  "proxy:raw:write",
-  "proxy:raw:toggle",
-  "proxy:raw:bypass",
-  "proxy:advanced:bypass",
-  "proxy:maintenance:bypass",
-  "nodes:config:view",
-  "nodes:config:edit",
+  "integrations:gitlab:sandbox:clone",
 ]);
 
 export const API_TOKEN_SCOPES = TOKEN_SCOPES.filter(
   (scope) => !PROGRAMMATIC_DENIED_SCOPE_VALUES.has(scope.value)
 );
 
-const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
-  "integrations:gitlab:",
-  "integrations:github:",
-  "integrations:git:",
-  "integrations:ssh:",
-] as const;
-
-// Discovery reads plus connector resync; mirrors the backend MCP allow-list.
-const MCP_EXTERNAL_INTEGRATION_READ_SCOPE_VALUES = new Set([
-  "integrations:gitlab:view",
-  "integrations:gitlab:projects:view",
-  "integrations:gitlab:repo:read",
-  "integrations:gitlab:sync",
-  "integrations:github:view",
-  "integrations:github:sync",
-  "integrations:git:view",
-  "integrations:git:sync",
-  "integrations:ssh:view",
-]);
-
-export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
-  (scope) =>
-    MCP_EXTERNAL_INTEGRATION_READ_SCOPE_VALUES.has(scope.value) ||
-    !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.value.startsWith(prefix))
-);
+// Gateway MCP delegates exactly the API token scopes.
+export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter((scope) => scope.value !== "mcp:use");
 
 export const GROUP_ASSIGNABLE_SCOPES = TOKEN_SCOPES.filter(
   (scope) => scope.value !== "admin:system"

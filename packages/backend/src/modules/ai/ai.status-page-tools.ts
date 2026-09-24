@@ -5,6 +5,7 @@ import {
   CreateStatusPageIncidentUpdateSchema,
   CreateStatusPageServiceSchema,
   IncidentListQuerySchema,
+  ReorderStatusPageServicesSchema,
   StatusPageSettingsSchema,
   UpdateStatusPageIncidentSchema,
   UpdateStatusPageServiceSchema,
@@ -25,7 +26,8 @@ export async function manageStatusPageTool(user: User, args: Record<string, unkn
     }
     if (operation === 'update') {
       ensureToolScope(user, 'status-page:manage');
-      return service.updateSettings(StatusPageSettingsSchema.parse(payload), user.id);
+      // The route passes the caller scopes: a custom upstream change requires proxy:raw:write.
+      return service.updateSettings(StatusPageSettingsSchema.parse(payload), user.id, user.scopes);
     }
   }
   if (resource === 'proxy_templates' && operation === 'list') {
@@ -44,6 +46,10 @@ export async function manageStatusPageTool(user: User, args: Record<string, unkn
     if (operation === 'update') {
       ensureToolScope(user, 'status-page:manage');
       return service.updateService(String(args.serviceId), UpdateStatusPageServiceSchema.parse(payload), user.id);
+    }
+    if (operation === 'reorder') {
+      ensureToolScope(user, 'status-page:manage');
+      return service.reorderServices(ReorderStatusPageServicesSchema.parse(payload).serviceIds, user.id);
     }
     if (operation === 'delete') {
       ensureToolScope(user, 'status-page:manage');

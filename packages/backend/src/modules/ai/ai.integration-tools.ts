@@ -3,9 +3,24 @@ import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
 import { assertConnectorOperationAccess } from '@/modules/integrations/integration-permissions.js';
-import type {
-  GitConnectorCreateInput,
-  GitHubConnectorCreateInput,
+import {
+  CloudflareConnectorCreateSchema,
+  CloudflareConnectorPreviewTestSchema,
+  CloudflareConnectorRotateTokenSchema,
+  CloudflareConnectorUpdateSchema,
+  ExternalSshConnectorUpdateSchema,
+  ExternalSshHostKeySchema,
+  GitConnectorCreateSchema,
+  GitConnectorPreviewTestSchema,
+  GitConnectorUpdateSchema,
+  GitHubConnectorCreateSchema,
+  GitHubConnectorPreviewTestSchema,
+  GitLabAllowlistPreviewSearchSchema,
+  GitLabAllowlistSearchQuerySchema,
+  GitLabConnectorCreateSchema,
+  GitLabConnectorPreviewTestSchema,
+  GitLabConnectorRotateTokenSchema,
+  GitLabConnectorUpdateSchema,
 } from '@/modules/integrations/integrations.schemas.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import type { User } from '@/types.js';
@@ -74,6 +89,7 @@ export const INTEGRATION_TOOL_NAMES = new Set([
   'create_cloudflare_connector',
   'list_integration_connectors',
   'sync_integration_connector',
+  'manage_integration_connector',
 ]);
 
 export async function executeIntegrationTool(user: User, toolName: string, args: Record<string, unknown>) {
@@ -81,6 +97,7 @@ export async function executeIntegrationTool(user: User, toolName: string, args:
   const a = args as Record<string, unknown>;
   if (toolName === 'list_integration_connectors') return listIntegrationConnectors(service, user, a);
   if (toolName === 'sync_integration_connector') return syncIntegrationConnector(service, user, a);
+  if (toolName === 'manage_integration_connector') return manageIntegrationConnector(service, user, a);
   if (toolName === 'github_list_connectors') return service.listGitConnectors('github', true);
   if (toolName === 'git_list_connectors') return service.listGitConnectors('git', true);
   if (toolName === 'github_list_repositories') {
@@ -187,53 +204,54 @@ export async function executeIntegrationTool(user: User, toolName: string, args:
     });
   }
   if (toolName === 'create_gitlab_connector') {
+    // The assistant keeps its all_visible default when no allowlist is chosen; the route defaults to selected.
     return service.createGitLabConnector(
-      {
-        name: requiredString(a.name),
-        baseUrl: requiredString(a.baseUrl),
-        enabled: true,
-        token: requiredString(a.token),
-        allowlistMode: 'all_visible',
-      },
+      GitLabConnectorCreateSchema.parse({
+        name: a.name,
+        baseUrl: a.baseUrl,
+        enabled: a.enabled,
+        token: a.token,
+        allowlistMode: a.allowlistMode ?? (Array.isArray(a.allowlistEntries) ? 'selected' : 'all_visible'),
+        settings: a.settings,
+        allowlistEntries: a.allowlistEntries,
+      }),
       user.id
     );
   }
   if (toolName === 'create_cloudflare_connector') {
     return service.createCloudflareConnector(
-      { name: requiredString(a.name), enabled: true, token: requiredString(a.token) },
+      CloudflareConnectorCreateSchema.parse({ name: a.name, enabled: a.enabled, token: a.token, settings: a.settings }),
       user.id
     );
   }
   if (toolName === 'create_github_token_connector') {
-    const input: GitHubConnectorCreateInput = {
-      name: requiredString(a.name),
-      baseUrl: requiredString(a.baseUrl),
-      enabled: true,
-      authMode: 'token',
-      token: requiredString(a.token),
-    };
-    return service.createGitConnector('github', input, user.id);
+    return service.createGitConnector(
+      'github',
+      GitHubConnectorCreateSchema.parse({ name: a.name, baseUrl: a.baseUrl, enabled: a.enabled, token: a.token }),
+      user.id
+    );
   }
   if (toolName === 'create_git_connector') {
     const repositoryUrls = Array.isArray(a.repositoryUrls)
       ? a.repositoryUrls.map((value) => String(value).trim()).filter(Boolean)
       : [];
-    const input: GitConnectorCreateInput = {
-      name: requiredString(a.name),
-      baseUrl: requiredString(a.baseUrl),
-      enabled: true,
-      authMode: 'token',
+    const input = GitConnectorCreateSchema.parse({
+      name: a.name,
+      baseUrl: a.baseUrl,
+      enabled: a.enabled,
       username: optionalString(a.username),
-      token: requiredString(a.token),
-      allowlistEntries: repositoryUrls.map((url) => ({
-        entryType: 'project',
-        remoteId: url,
-        fullPath: url,
-        name: url,
-        webUrl: url,
-      })),
-    };
-    if (repositoryUrls.length === 0) throw new Error('repositoryUrls is required');
+      token: a.token,
+      allowlistEntries: [
+        ...(Array.isArray(a.allowlistEntries) ? a.allowlistEntries : []),
+        ...repositoryUrls.map((url) => ({
+          entryType: 'project',
+          remoteId: url,
+          fullPath: url,
+          name: url,
+          webUrl: url,
+        })),
+      ],
+    });
     return service.createGitConnector('git', input, user.id);
   }
   throw new Error(`Unsupported integration tool: ${toolName}`);
@@ -372,6 +390,229 @@ async function syncIntegrationConnector(service: IntegrationsService, user: User
     case 'ssh':
       return { provider, connectorId, result: await container.resolve(ExternalSshService).test(user, connectorId) };
   }
+}
+
+type ConnectorOperation =
+  | 'get'
+  | 'update'
+  | 'delete'
+  | 'test'
+  | 'preview_test'
+  | 'rotate_token'
+  | 'capabilities'
+  | 'list_zones'
+  | 'allowlist_search'
+  | 'allowlist_options'
+  | 'allowlist_refresh'
+  | 'allowlist_preview_search'
+  | 'discover_host_key';
+
+/**
+ * Route access for manage_integration_connector, per provider and operation,
+ * mirroring the connector middleware in integrations.routes.ts. Git, GitHub
+ * and SSH routes name the operation after the HTTP method.
+ */
+const CONNECTOR_MANAGE_ACCESS: Record<ConnectorProvider, Partial<Record<ConnectorOperation, ConnectorRouteAccess>>> = {
+  gitlab: {
+    get: { operation: 'connector.get', requiredScope: ['integrations:gitlab:view', 'integrations:gitlab:manage'] },
+    update: { operation: 'connector.update', requiredScope: 'integrations:gitlab:manage' },
+    delete: { operation: 'connector.delete', requiredScope: 'integrations:gitlab:manage' },
+    test: { operation: 'connector.test', requiredScope: 'integrations:gitlab:manage' },
+    preview_test: { operation: 'connector.preview_test', requiredScope: 'integrations:gitlab:manage' },
+    rotate_token: { operation: 'connector.token.rotate', requiredScope: 'integrations:gitlab:manage' },
+    capabilities: {
+      operation: 'connector.capabilities.get',
+      requiredScope: ['integrations:gitlab:view', 'integrations:gitlab:manage'],
+    },
+    allowlist_search: { operation: 'connector.allowlist.search', requiredScope: 'integrations:gitlab:manage' },
+    allowlist_options: { operation: 'connector.allowlist.options', requiredScope: 'integrations:gitlab:manage' },
+    allowlist_refresh: {
+      operation: 'connector.allowlist.options.refresh',
+      requiredScope: 'integrations:gitlab:manage',
+    },
+    allowlist_preview_search: {
+      operation: 'connector.allowlist.preview_search',
+      requiredScope: 'integrations:gitlab:manage',
+    },
+  },
+  cloudflare: {
+    get: {
+      operation: 'connector.get',
+      requiredScope: ['integrations:cloudflare:view', 'integrations:cloudflare:manage'],
+    },
+    update: { operation: 'connector.update', requiredScope: 'integrations:cloudflare:manage' },
+    delete: { operation: 'connector.delete', requiredScope: 'integrations:cloudflare:manage' },
+    test: { operation: 'connector.test', requiredScope: 'integrations:cloudflare:manage' },
+    preview_test: { operation: 'connector.preview_test', requiredScope: 'integrations:cloudflare:manage' },
+    rotate_token: { operation: 'connector.token.rotate', requiredScope: 'integrations:cloudflare:manage' },
+    list_zones: {
+      operation: 'connector.zones.list',
+      requiredScope: ['integrations:cloudflare:view', 'integrations:cloudflare:manage'],
+    },
+  },
+  github: {
+    update: { operation: 'connector.patch', requiredScope: 'integrations:github:manage' },
+    delete: { operation: 'connector.delete', requiredScope: 'integrations:github:manage' },
+    test: { operation: 'connector.post', requiredScope: 'integrations:github:manage' },
+    preview_test: { operation: 'connector.post', requiredScope: 'integrations:github:manage' },
+  },
+  git: {
+    update: { operation: 'connector.patch', requiredScope: 'integrations:git:manage' },
+    delete: { operation: 'connector.delete', requiredScope: 'integrations:git:manage' },
+    test: { operation: 'connector.post', requiredScope: 'integrations:git:manage' },
+    preview_test: { operation: 'connector.post', requiredScope: 'integrations:git:manage' },
+  },
+  ssh: {
+    update: { operation: 'connector.patch', requiredScope: 'integrations:ssh:manage' },
+    delete: { operation: 'connector.delete', requiredScope: 'integrations:ssh:manage' },
+    test: { operation: 'connector.post', requiredScope: 'integrations:ssh:manage' },
+    discover_host_key: { operation: 'connector.post', requiredScope: 'integrations:ssh:manage' },
+  },
+};
+
+/** Operations that act before a connector exists or across connectors; they take no connectorId. */
+const CONNECTORLESS_OPERATIONS = new Set<ConnectorOperation>([
+  'preview_test',
+  'allowlist_preview_search',
+  'discover_host_key',
+]);
+
+async function manageIntegrationConnector(service: IntegrationsService, user: User, args: Record<string, unknown>) {
+  const provider = connectorProvider(args.provider);
+  const operation = requiredString(args.operation) as ConnectorOperation;
+  const access = CONNECTOR_MANAGE_ACCESS[provider][operation];
+  if (!access) {
+    throw new AppError(
+      400,
+      'UNSUPPORTED_CONNECTOR_OPERATION',
+      `Operation ${operation} is not available for ${provider} connectors`
+    );
+  }
+  const connectorId = CONNECTORLESS_OPERATIONS.has(operation) ? null : requiredString(args.connectorId);
+  assertConnectorRouteAccess(user, provider, connectorId, access);
+  const id = connectorId ?? '';
+  const ssh = () => container.resolve(ExternalSshService);
+
+  switch (`${provider}.${operation}`) {
+    case 'gitlab.get':
+      return service.getGitLabConnector(id);
+    case 'gitlab.update':
+      return service.updateGitLabConnector(id, GitLabConnectorUpdateSchema.parse(pickConnectorFields(args)), user.id);
+    case 'gitlab.delete':
+      await service.deleteGitLabConnector(id, user.id);
+      return { success: true };
+    case 'gitlab.test':
+      return service.testGitLabConnector(id, user.id);
+    case 'gitlab.preview_test':
+      return service.testGitLabConnectorPreview(
+        GitLabConnectorPreviewTestSchema.parse({ baseUrl: args.baseUrl, token: args.token })
+      );
+    case 'gitlab.rotate_token':
+      return service.rotateGitLabConnectorToken(
+        id,
+        GitLabConnectorRotateTokenSchema.parse({ token: args.token }).token,
+        user.id
+      );
+    case 'gitlab.capabilities':
+      return service.getGitLabConnectorCapabilities(id);
+    case 'gitlab.allowlist_search':
+      return service.searchGitLabAllowlist(id, GitLabAllowlistSearchQuerySchema.parse({ q: args.query }).q);
+    case 'gitlab.allowlist_options':
+      return service.listGitLabAllowlistOptions(id);
+    case 'gitlab.allowlist_refresh':
+      return service.refreshGitLabAllowlistOptions(id, user.id);
+    case 'gitlab.allowlist_preview_search':
+      return service.searchGitLabAllowlistPreview(
+        GitLabAllowlistPreviewSearchSchema.parse({ baseUrl: args.baseUrl, token: args.token, q: args.query })
+      );
+    case 'cloudflare.get':
+      return service.getCloudflareConnector(id);
+    case 'cloudflare.update':
+      return service.updateCloudflareConnector(
+        id,
+        CloudflareConnectorUpdateSchema.parse(pickConnectorFields(args)),
+        user.id
+      );
+    case 'cloudflare.delete':
+      await service.deleteCloudflareConnector(id, user.id);
+      return { success: true };
+    case 'cloudflare.test':
+      return service.testCloudflareConnector(id, user.id);
+    case 'cloudflare.preview_test':
+      return service.testCloudflareConnectorPreview(CloudflareConnectorPreviewTestSchema.parse({ token: args.token }));
+    case 'cloudflare.rotate_token':
+      return service.rotateCloudflareConnectorToken(
+        id,
+        CloudflareConnectorRotateTokenSchema.parse({ token: args.token }).token,
+        user.id
+      );
+    case 'cloudflare.list_zones':
+      return service.listCloudflareZones(id);
+    case 'github.update':
+    case 'git.update':
+      return service.updateGitConnector(
+        provider as 'github' | 'git',
+        id,
+        GitConnectorUpdateSchema.parse(pickConnectorFields(args)),
+        user.id
+      );
+    case 'github.delete':
+    case 'git.delete':
+      await service.deleteGitConnector(provider as 'github' | 'git', id, user.id);
+      return { success: true };
+    case 'github.test':
+    case 'git.test':
+      return service.testGitConnector(provider as 'github' | 'git', id, user.id);
+    case 'github.preview_test':
+      return service.previewGitHubConnectorTest(
+        GitHubConnectorPreviewTestSchema.parse({ baseUrl: args.baseUrl, token: args.token })
+      );
+    case 'git.preview_test':
+      return service.previewGitConnectorTest(
+        GitConnectorPreviewTestSchema.parse({
+          baseUrl: args.baseUrl,
+          repositoryUrl: args.repositoryUrl,
+          username: args.username,
+          token: args.token,
+        })
+      );
+    case 'ssh.update':
+      return ssh().updateName(user, id, ExternalSshConnectorUpdateSchema.parse({ name: args.name }).name);
+    case 'ssh.delete':
+      return ssh().delete(user, id);
+    case 'ssh.test':
+      return ssh().test(user, id);
+    case 'ssh.discover_host_key':
+      return ssh().discoverHostKey(
+        user,
+        ExternalSshHostKeySchema.parse({ host: args.host, port: args.port, jumpConnectorId: args.jumpConnectorId })
+      );
+    default:
+      throw new AppError(
+        400,
+        'UNSUPPORTED_CONNECTOR_OPERATION',
+        `Operation ${operation} is not available for ${provider} connectors`
+      );
+  }
+}
+
+/** Connector update fields as the PATCH routes accept them; each provider schema keeps only its own fields. */
+function pickConnectorFields(args: Record<string, unknown>): Record<string, unknown> {
+  const fields: Record<string, unknown> = {};
+  for (const key of [
+    'name',
+    'baseUrl',
+    'enabled',
+    'token',
+    'username',
+    'authMode',
+    'allowlistMode',
+    'allowlistEntries',
+    'settings',
+  ]) {
+    if (args[key] !== undefined) fields[key] = args[key];
+  }
+  return fields;
 }
 
 function requiredString(value: unknown): string {

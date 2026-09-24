@@ -240,27 +240,62 @@ func (e *Rejected) Error() string {
 }
 
 type systemSampler struct {
-	mu        sync.Mutex
-	cachedAt  time.Time
-	cached    ResourcePressure
+	mu         sync.Mutex
+	cachedAt   time.Time
+	cached     ResourcePressure
+	refreshing bool
+	// probeMu guards the CPU baseline; probes can overlap only at start-up.
+	probeMu   sync.Mutex
 	lastCPUAt time.Time
 	lastCPUNs uint64
+	// measure is the expensive probe; it reads /proc and stops the world for
+	// memory statistics. Tests replace it.
+	measure func(now time.Time) ResourcePressure
 }
 
+// Sample returns the latest measurement without measuring on the caller's
+// path. Admission runs under the broker's global lock, and a probe that walks
+// every open file descriptor would serialize tunnel opens, teardown and
+// policy applies behind it. A stale sample starts one background refresh; only
+// the very first sample is taken inline.
 func (s *systemSampler) Sample() ResourcePressure {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	now := time.Now()
-	if !s.cachedAt.IsZero() && now.Sub(s.cachedAt) < pressureSampleInterval {
-		return s.cached
+	if s.cachedAt.IsZero() {
+		s.mu.Unlock()
+		sample := s.probe(now)
+		s.mu.Lock()
+		if s.cachedAt.IsZero() {
+			s.cached, s.cachedAt = sample, now
+		}
+		cached := s.cached
+		s.mu.Unlock()
+		return cached
 	}
-	s.cached = ResourcePressure{
-		CPUPercent: s.cpuPressure(now),
+	if now.Sub(s.cachedAt) >= pressureSampleInterval && !s.refreshing {
+		s.refreshing = true
+		go func() {
+			sample := s.probe(time.Now())
+			s.mu.Lock()
+			s.cached, s.cachedAt, s.refreshing = sample, time.Now(), false
+			s.mu.Unlock()
+		}()
 	}
-	s.cached.MemoryPercent, s.cached.MemoryRSSBytes, s.cached.HeapInUseBytes, s.cached.MemoryLimitBytes = memoryPressure()
-	s.cached.FDPercent, s.cached.OpenFileDescriptors, s.cached.FileDescriptorLimit = fdPressure()
-	s.cachedAt = now
-	return s.cached
+	cached := s.cached
+	s.mu.Unlock()
+	return cached
+}
+
+func (s *systemSampler) probe(now time.Time) ResourcePressure {
+	if s.measure != nil {
+		return s.measure(now)
+	}
+	s.probeMu.Lock()
+	defer s.probeMu.Unlock()
+	sample := ResourcePressure{CPUPercent: s.cpuPressure(now)}
+	sample.MemoryPercent, sample.MemoryRSSBytes, sample.HeapInUseBytes, sample.MemoryLimitBytes = memoryPressure()
+	sample.FDPercent, sample.OpenFileDescriptors, sample.FileDescriptorLimit = fdPressure()
+	return sample
 }
 
 func (s *systemSampler) cpuPressure(now time.Time) uint32 {

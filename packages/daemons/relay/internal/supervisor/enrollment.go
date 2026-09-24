@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 )
@@ -23,28 +24,65 @@ type enrollmentState struct {
 	RelayServerIdentity      string `json:"relayServerIdentity"`
 }
 
-func persistEnrollmentBundle(stateDir, identityDir string, response *pb.EnrollResponse) error {
+type enrollmentBundle struct {
+	policyFingerprint string
+	clientFingerprint string
+}
+
+func validateEnrollmentBundle(response *pb.EnrollResponse) (enrollmentBundle, error) {
 	if response.GetRelayPoolId() == "" || response.GetRelayInstanceId() == "" ||
 		response.GetPolicySigningKeyId() == "" || len(response.GetPolicySigningPublicKey()) != 32 ||
 		response.GetRelayServerIdentity() == "" || len(response.GetRelayServerCertificate()) == 0 ||
 		len(response.GetRelayServerKey()) == 0 {
-		return fmt.Errorf("relay enrollment bundle is incomplete")
+		return enrollmentBundle{}, fmt.Errorf("relay enrollment bundle is incomplete")
 	}
 	digest := sha256.Sum256(response.GetPolicySigningPublicKey())
 	fingerprint := "sha256:" + hex.EncodeToString(digest[:])
 	if fingerprint != response.GetPolicySigningPublicKeyFingerprint() {
-		return fmt.Errorf("policy signing public key fingerprint mismatch")
+		return enrollmentBundle{}, fmt.Errorf("policy signing public key fingerprint mismatch")
 	}
 	clientBlock, _ := pem.Decode(response.GetClientCertificate())
 	if clientBlock == nil {
-		return fmt.Errorf("client certificate is invalid")
+		return enrollmentBundle{}, fmt.Errorf("client certificate is invalid")
 	}
 	clientCert, err := x509.ParseCertificate(clientBlock.Bytes)
 	if err != nil {
-		return fmt.Errorf("parse client certificate: %w", err)
+		return enrollmentBundle{}, fmt.Errorf("parse client certificate: %w", err)
 	}
 	clientDigest := sha256.Sum256(clientCert.Raw)
-	clientFingerprint := "sha256:" + hex.EncodeToString(clientDigest[:])
+	return enrollmentBundle{
+		policyFingerprint: fingerprint,
+		clientFingerprint: "sha256:" + hex.EncodeToString(clientDigest[:]),
+	}, nil
+}
+
+// resetWorkerPolicyState moves the worker's pinned policy trust and identity
+// rotation state aside. An enrollment is what authorizes policy trust: the
+// worker must pin only the key the new bundle carries. Trust left from an
+// earlier enrollment can hold only keys Gateway no longer signs with (the
+// lockout a re-enrollment repairs), and its rotation state would keep the
+// previous supervisor certificate authorized. The worker must not be running;
+// the files are kept beside the originals for inspection.
+func resetWorkerPolicyState(workerStateDir string, now time.Time) error {
+	if workerStateDir == "" {
+		return nil
+	}
+	suffix := fmt.Sprintf(".pre-enrollment-%d", now.Unix())
+	for _, name := range []string{"relay.db", "identity-rotation.json"} {
+		path := filepath.Join(workerStateDir, name)
+		if err := os.Rename(path, path+suffix); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("reset relay worker %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func persistEnrollmentBundle(stateDir, identityDir string, response *pb.EnrollResponse) error {
+	bundle, err := validateEnrollmentBundle(response)
+	if err != nil {
+		return err
+	}
+	fingerprint, clientFingerprint := bundle.policyFingerprint, bundle.clientFingerprint
 
 	staging := identityDir + ".staging"
 	_ = os.RemoveAll(staging)

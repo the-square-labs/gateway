@@ -47,7 +47,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_pages',
     description:
-      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, and runtime configuration. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
+      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, runtime configuration, and Git sources. project_placement_options lists nodes a Project can be created on or migrated to; project_migrate also needs pages:create for the target node, and source_upsert needs pages:edit and pages:deploy. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
     parameters: {
       type: 'object',
       properties: {
@@ -60,6 +60,8 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'profile_disable',
             'project_list',
             'project_get',
+            'project_get_by_slug',
+            'project_placement_options',
             'project_create',
             'project_update',
             'project_migrate',
@@ -90,6 +92,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
           ],
         },
         projectId: { type: 'string', description: 'Page Project UUID.' },
+        slug: { type: 'string', description: 'Page Project slug for project_get_by_slug.' },
         deploymentId: { type: 'string', description: 'Page Deployment UUID.' },
         tagId: { type: 'string', description: 'Page Tag UUID for runtime config overrides.' },
         tokenId: { type: 'string', description: 'Page deploy token UUID.' },
@@ -143,6 +146,39 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'pages:view',
     invalidateStores: [],
     historyRetention: { mode: 'summary_only' },
+  },
+  {
+    name: 'manage_route',
+    description:
+      'Route inspection, maintenance access, and config validation. Operations: get_config (full Route settings; Page targets and advanced config follow the caller scopes, stored raw config needs proxy:raw:read), get_by_slug, health_history, secure_link_status, access_logs (newest nginx access and error log lines, up to tail 200), maintenance_access_code (5-minute code that lets a browser view the Route during maintenance; needs proxy:maintenance:bypass), validate_config (check an advanced snippet or, with mode raw, a raw nginx config; needs proxy:advanced or proxy:raw:write, scoped to routeId when given). Change Routes with update_route, set_route_maintenance, update_route_raw_config, and toggle_route_raw_mode.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'get_config',
+            'get_by_slug',
+            'health_history',
+            'secure_link_status',
+            'access_logs',
+            'maintenance_access_code',
+            'validate_config',
+          ],
+        },
+        tail: { type: 'number', description: 'Number of log lines for access_logs (default 100, max 200)' },
+        routeId: { type: 'string', description: 'Route UUID; optional for validate_config' },
+        slug: { type: 'string', description: 'Route slug for get_by_slug' },
+        snippet: { type: 'string', description: 'Advanced snippet or raw nginx config for validate_config' },
+        mode: { type: 'string', enum: ['advanced', 'raw'], description: 'validate_config mode (default: advanced)' },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Ingress',
+    requiredScope: 'proxy:view',
+    invalidateStores: [],
   },
   {
     name: 'manage_additional_route',
@@ -217,7 +253,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_managed_database',
     description:
-      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. Supports safe lifecycle operations but never reveals or rotates credentials.',
+      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. reveal_credentials and rotate_credentials return the direct-access credentials of a published instance (databases:credentials:reveal; rotation also needs databases:edit); reveal_binding_credentials returns the credentials of one binding and also needs the target workload binding scopes. logs returns recent container log lines; get_binding_runtime reports the link runtime of one binding. Credential operations are refused while impersonating.',
     parameters: {
       type: 'object',
       properties: {
@@ -238,11 +274,19 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'list_bindings',
             'create_binding',
             'delete_binding',
+            'reveal_credentials',
+            'rotate_credentials',
+            'logs',
+            'get_binding_runtime',
+            'reveal_binding_credentials',
           ],
         },
         databaseId: { type: 'string', description: 'Managed database instance ID.' },
         bindingId: { type: 'string', description: 'Managed database binding ID.' },
         name: { type: 'string' },
+        folderId: { type: ['string', 'null'], description: 'Optional destination folder UUID for create.' },
+        tailLines: { type: 'number', description: 'Log lines for logs, 1-5000 (default 500).' },
+        timestamps: { type: 'boolean', description: 'Prefix log lines with timestamps (default true).' },
         type: { type: 'string', enum: ['postgres', 'redis', 'clickhouse'] },
         version: { type: 'string', description: 'Exact version returned by catalog.' },
         nodeId: { type: 'string', description: 'Database node ID for create, or optional list filter.' },
@@ -288,11 +332,14 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_migration',
     description:
-      'Preflight, start, inspect, cancel, or retry cleanup for a Gateway Docker container/deployment migration. Always preflight first and pass its exact fingerprint to start. A migration requires an existing source workload and a distinct target Docker node.',
+      'Preflight, start, list, inspect, cancel, retry cleanup, or resolve a Gateway Docker container/deployment migration. Always preflight first and pass its exact fingerprint to start. A migration requires an existing source workload and a distinct target Docker node. list filters by status and nodeId. A migration in needs_attention is resolved by naming the authoritative side (source keeps the original workload, target keeps the migrated one); resolve, cancel, and retry_cleanup need docker:tasks:manage, list and get need docker:tasks.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['preflight', 'start', 'get', 'cancel', 'retry_cleanup'] },
+        operation: {
+          type: 'string',
+          enum: ['preflight', 'start', 'list', 'get', 'cancel', 'retry_cleanup', 'resolve'],
+        },
         migrationId: { type: 'string' },
         resource: {
           type: 'object',
@@ -307,6 +354,28 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         targetNodeId: { type: 'string' },
         keepSource: { type: 'boolean' },
         preflightFingerprint: { type: 'string' },
+        authoritativeSide: {
+          type: 'string',
+          enum: ['source', 'target'],
+          description: 'resolve only. The side that keeps serving the workload.',
+        },
+        status: {
+          type: 'string',
+          enum: [
+            'pending',
+            'running',
+            'waiting',
+            'cancelling',
+            'cancelled',
+            'completed',
+            'failed',
+            'cleanup_pending',
+            'needs_attention',
+          ],
+          description: 'list only. Status filter.',
+        },
+        nodeId: { type: 'string', description: 'list only. Source or target node filter.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'list only. Default: 50' },
       },
       required: ['operation'],
     },

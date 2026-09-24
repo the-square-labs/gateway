@@ -6,6 +6,7 @@ import type {
   HousekeepingStats,
   LicenseStatusView,
   RelayRebalanceOutcome,
+  RelayReenrollment,
   SystemConfig,
   UpdateStatus,
 } from "@/types";
@@ -62,6 +63,29 @@ export function withSystemApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         this.request<{ data: DashboardRelaySnapshot }>(
           `/system/relay/instances/${instanceId}/force-disconnect`,
           { method: "POST", body: JSON.stringify({ confirm: true }) }
+        )
+      );
+    }
+
+    /** Renew a remote relay's server certificate now. */
+    async renewRelayInstanceCertificate(instanceId: string): Promise<DashboardRelaySnapshot> {
+      return this.unwrapData(
+        this.request<{ data: DashboardRelaySnapshot }>(
+          `/system/relay/instances/${instanceId}/renew-certificate`,
+          { method: "POST" }
+        )
+      );
+    }
+
+    /** Issue a single-use token that re-enrolls an enrolled remote relay. */
+    async reenrollRelayInstance(instanceId: string): Promise<RelayReenrollment> {
+      return this.unwrapData(
+        this.request<{ data: RelayReenrollment }>(
+          `/system/relay/instances/${instanceId}/reenroll`,
+          {
+            method: "POST",
+            body: JSON.stringify({ confirm: true }),
+          }
         )
       );
     }

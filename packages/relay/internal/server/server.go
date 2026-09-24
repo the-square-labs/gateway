@@ -22,6 +22,10 @@ import (
 
 const (
 	maxGatewayMessageBytes = 512 * 1024 * 1024
+	// A remote relay proxies no Gateway RPCs: it carries tunnel frames of at
+	// most 1 MiB and policy snapshots from its supervisor. A smaller limit keeps
+	// a peer from making it buffer huge messages.
+	maxRemoteMessageBytes  = 64 * 1024 * 1024
 	clientKeepaliveMinTime = 20 * time.Second
 )
 
@@ -49,10 +53,14 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 	var app *grpc.ClientConn
 	var proxyHandler *proxy.Handler
 	reloadUpstream := func() error { return nil }
+	maxMessageBytes := maxGatewayMessageBytes
+	if cfg.Mode == config.ModeRemoteDataOnly {
+		maxMessageBytes = maxRemoteMessageBytes
+	}
 	serverOptions := []grpc.ServerOption{
 		grpc.Creds(credentials.NewTLS(identityStore.ServerTLSConfig())),
 		grpc.ForceServerCodec(codec.Codec{}),
-		grpc.MaxRecvMsgSize(maxGatewayMessageBytes), grpc.MaxSendMsgSize(maxGatewayMessageBytes),
+		grpc.MaxRecvMsgSize(maxMessageBytes), grpc.MaxSendMsgSize(maxMessageBytes),
 		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             clientKeepaliveMinTime,

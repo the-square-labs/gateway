@@ -6,6 +6,42 @@ const integrationConnectorProviderSchema = {
   description: 'Connector provider: gitlab, github, git (generic Git), cloudflare, or ssh (external SSH).',
 };
 
+const allowlistEntrySchema = {
+  type: 'object',
+  properties: {
+    entryType: { type: 'string', enum: ['group', 'project'] },
+    remoteId: { type: 'string' },
+    fullPath: { type: 'string' },
+    name: { type: 'string' },
+    webUrl: { type: ['string', 'null'] },
+  },
+  required: ['entryType', 'remoteId', 'fullPath'],
+};
+
+const gitLabSettingsSchema = {
+  type: 'object',
+  properties: {
+    autoSyncEnabled: { type: 'boolean' },
+    autoSyncIntervalSeconds: { type: 'number' },
+    cloneShallow: { type: 'boolean' },
+    cloneDepth: { type: 'number' },
+    cloneLfs: { type: 'boolean' },
+    cloneSubmodules: { type: 'boolean' },
+    cloneMaxSizeMb: { type: 'number' },
+    cloneTimeoutSeconds: { type: 'number' },
+  },
+};
+
+const cloudflareSettingsSchema = {
+  type: 'object',
+  properties: {
+    autoSyncEnabled: { type: 'boolean' },
+    autoSyncIntervalSeconds: { type: 'number' },
+    defaultTtl: { type: 'number' },
+    defaultProxied: { type: 'boolean' },
+  },
+};
+
 const repositoryFields = {
   name: { type: 'string', description: 'Connector name.' },
   baseUrl: { type: 'string', description: 'Provider or Git host base URL.' },
@@ -308,6 +344,7 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
         name: { type: 'string', description: 'Connector name.' },
         baseUrl: { type: 'string', description: 'GitHub base URL.' },
         token: { type: 'string', description: 'GitHub personal access token.' },
+        enabled: { type: 'boolean', description: 'Default true.' },
       },
       required: ['name', 'baseUrl', 'token'],
     },
@@ -329,6 +366,8 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
         ...repositoryFields,
         username: { type: 'string', description: 'Git HTTP username.' },
         token: { type: 'string', description: 'Git access token or HTTP password.' },
+        allowlistEntries: { type: 'array', items: allowlistEntrySchema, description: 'Explicit repository entries.' },
+        enabled: { type: 'boolean', description: 'Default true.' },
       },
       required: ['name', 'baseUrl', 'repositoryUrls', 'username', 'token'],
     },
@@ -350,6 +389,14 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
         name: { type: 'string' },
         baseUrl: { type: 'string' },
         token: { type: 'string' },
+        enabled: { type: 'boolean', description: 'Default true.' },
+        allowlistMode: {
+          type: 'string',
+          enum: ['selected', 'all_visible'],
+          description: 'Default all_visible, or selected when allowlistEntries are given.',
+        },
+        allowlistEntries: { type: 'array', items: allowlistEntrySchema },
+        settings: gitLabSettingsSchema,
       },
       required: ['name', 'baseUrl', 'token'],
     },
@@ -367,7 +414,12 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
       'Create a Cloudflare connector only when the user already supplied its name and API token. If the token is missing, use open_connector_setup instead.',
     parameters: {
       type: 'object',
-      properties: { name: { type: 'string' }, token: { type: 'string' } },
+      properties: {
+        name: { type: 'string' },
+        token: { type: 'string' },
+        enabled: { type: 'boolean', description: 'Default true.' },
+        settings: cloudflareSettingsSchema,
+      },
       required: ['name', 'token'],
     },
     destructive: true,
@@ -419,6 +471,57 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: [],
     effect: 'write',
     approvalClass: 'update',
+    targetIdentity: { resourceType: 'integration-connector', arguments: ['connectorId'] },
+    historyRetention: { mode: 'persistent_context' },
+  },
+  {
+    name: 'manage_integration_connector',
+    description:
+      'Manage one integration connector with the same permission checks as its REST route. Operations by provider: gitlab: get, update, delete, test, preview_test, rotate_token, capabilities, allowlist_search, allowlist_options, allowlist_refresh, allowlist_preview_search. cloudflare: get, update, delete, test, preview_test, rotate_token, list_zones. github and git: update, delete, test, preview_test. ssh: update (name only), delete, test, discover_host_key. preview_test, allowlist_preview_search, and discover_host_key take no connectorId. Update fields: name, baseUrl, enabled, token, username, allowlistMode, allowlistEntries, settings (each provider accepts its own subset). Credentials are never returned. Per-user Git credentials are not managed here.',
+    parameters: {
+      type: 'object',
+      properties: {
+        provider: integrationConnectorProviderSchema,
+        operation: {
+          type: 'string',
+          enum: [
+            'get',
+            'update',
+            'delete',
+            'test',
+            'preview_test',
+            'rotate_token',
+            'capabilities',
+            'list_zones',
+            'allowlist_search',
+            'allowlist_options',
+            'allowlist_refresh',
+            'allowlist_preview_search',
+            'discover_host_key',
+          ],
+        },
+        connectorId: { type: 'string', description: 'Connector UUID from list_integration_connectors.' },
+        name: { type: 'string' },
+        baseUrl: { type: 'string' },
+        enabled: { type: 'boolean' },
+        token: { type: 'string', description: 'New or candidate credential (update, rotate_token, preview_test).' },
+        username: { type: ['string', 'null'], description: 'Git HTTP username.' },
+        repositoryUrl: { type: 'string', description: 'Repository URL for git preview_test.' },
+        allowlistMode: { type: 'string', enum: ['selected', 'all_visible'] },
+        allowlistEntries: { type: 'array', items: allowlistEntrySchema },
+        settings: { type: 'object', description: 'GitLab or Cloudflare connector settings.' },
+        query: { type: 'string', description: 'Search text for allowlist_search and allowlist_preview_search.' },
+        host: { type: 'string', description: 'SSH host for discover_host_key.' },
+        port: { type: 'number', description: 'SSH port for discover_host_key (default 22).' },
+        jumpConnectorId: { type: ['string', 'null'], description: 'Jump SSH connector for discover_host_key.' },
+      },
+      required: ['provider', 'operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Integrations',
+    requiredScope: 'integrations:cloudflare:view',
+    invalidateStores: ['integrations'],
     targetIdentity: { resourceType: 'integration-connector', arguments: ['connectorId'] },
     historyRetention: { mode: 'persistent_context' },
   },

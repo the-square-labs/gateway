@@ -83,10 +83,13 @@ func (h *Handler) Handle(_ any, downstream grpc.ServerStream) error {
 					return
 				}
 				clientResult <- err
+				// The receive loop below blocks on the upstream; end it too.
+				cancel()
 				return
 			}
 			if err := upstream.SendMsg(&frame); err != nil {
 				clientResult <- err
+				cancel()
 				return
 			}
 		}
@@ -107,6 +110,13 @@ func (h *Handler) Handle(_ any, downstream grpc.ServerStream) error {
 			downstream.SetTrailer(upstream.Trailer())
 			if recvErr == io.EOF {
 				return nil
+			}
+			select {
+			case clientErr := <-clientResult:
+				if clientErr != nil && clientErr != io.EOF {
+					return clientErr
+				}
+			default:
 			}
 			return recvErr
 		}

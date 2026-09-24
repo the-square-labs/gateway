@@ -6,6 +6,7 @@ import { DISCOVERY_AI_TOOLS } from './ai.tools.discovery.js';
 import { DOCKER_AI_TOOLS } from './ai.tools.docker.js';
 import { FOLDER_AI_TOOLS } from './ai.tools.folders.js';
 import { GITLAB_AI_TOOLS } from './ai.tools.gitlab.js';
+import { HOSTING_AI_TOOLS } from './ai.tools.hosting.js';
 import { INFERENCE_AI_TOOLS } from './ai.tools.inference.js';
 import { INGRESS_AI_TOOLS } from './ai.tools.ingress.js';
 import { INTEGRATION_AI_TOOLS } from './ai.tools.integrations.js';
@@ -33,6 +34,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   ...BACKUP_AI_TOOLS,
   ...GITLAB_AI_TOOLS,
   ...INTEGRATION_AI_TOOLS,
+  ...HOSTING_AI_TOOLS,
   ...INFERENCE_AI_TOOLS,
   ...OPERATION_AI_TOOLS,
   ...RESOURCE_SETUP_AI_TOOLS,

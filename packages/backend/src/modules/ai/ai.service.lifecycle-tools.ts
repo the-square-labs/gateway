@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
-import { nodes as nodesTable } from '@/db/schema/nodes.js';
+import type { DrizzleClient } from '@/db/client.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { IdParamSchema } from '@/lib/openapi.js';
@@ -8,9 +8,15 @@ import { hasScope, hasScopeBase } from '@/lib/permissions.js';
 import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
+import { AuditExportSchema } from '@/modules/audit/audit.docs.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { dispatchNodeDaemonUpdate } from '@/services/daemon-node-update.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
+import { RelayPolicyService } from '@/services/relay-policy.service.js';
+import { RelayPoolService } from '@/services/relay-pool.service.js';
+import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { User } from '@/types.js';
 import { manageDockerContainerConfigTool } from './ai.docker-config-tools.js';
@@ -37,12 +43,32 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         switch (operation) {
           case 'get_gateway_status':
             return updateService.getCachedStatus();
-          case 'check_gateway':
-            return updateService.checkForUpdates();
+          case 'check_gateway': {
+            const status = await updateService.checkForUpdates();
+            // Like POST /system/check-update: a manual check must not end the screens of a running update.
+            const updateRunning = await updateService.isAnyUpdateRunning();
+            container
+              .resolve(EventBusService)
+              .publish(
+                'system.update.changed',
+                updateRunning ? { statusChanged: true } : { updating: false, component: 'gateway', statusChanged: true }
+              );
+            return status;
+          }
           case 'get_gateway_release_notes': {
             const version = String(a.version ?? '');
             if (!/^v?\d+\.\d+\.\d+$/.test(version)) throw new Error('version must be a semantic version');
             return { version, notes: await updateService.getReleaseNotes(version) };
+          }
+          case 'list_gateway_release_notes': {
+            // GET /system/release-notes: every release between the running and the available version.
+            const status = await updateService.getCachedStatus();
+            if (!status.latestVersion || !status.updateAvailable) return [];
+            try {
+              return await updateService.getReleaseNotesSince(status.currentVersion, status.latestVersion);
+            } catch {
+              return status.releaseNotes ? [{ version: status.latestVersion, notes: status.releaseNotes }] : [];
+            }
           }
           // The update operations mirror the /system update routes step for step.
           case 'perform_gateway_update': {
@@ -153,49 +179,18 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
           case 'update_daemon': {
             const nodeId = String(a.nodeId ?? '');
             if (!nodeId) throw new Error('nodeId is required');
-            const daemonUpdateService = container.resolve(DaemonUpdateService);
-            const db = container.resolve<any>(TOKENS.DrizzleClient);
-            const [node] = await db.select().from(nodesTable).where(eq(nodesTable.id, nodeId)).limit(1);
-            if (!node) throw new Error('Node not found');
-
-            const daemonType = node.type === 'databases' || node.type === 'storage' ? 'docker' : node.type;
-            if (daemonType !== 'nginx' && daemonType !== 'docker' && daemonType !== 'monitoring') {
-              throw new Error('This node does not run an updatable daemon');
-            }
-            const release = await daemonUpdateService.getLatestRelease(daemonType);
-            if (!release) throw new Error('No release found for this daemon type');
-
-            const arch = (((node.capabilities ?? {}) as Record<string, unknown>).architecture as string) ?? 'amd64';
-            const artifact = await daemonUpdateService.prepareTrustedDaemonUpdate(
-              daemonType,
-              release.tagName,
-              release.version,
-              arch
-            );
-            const operationId = await daemonUpdateService.markNodeUpdateInProgress(nodeId, release.version);
-            try {
-              const command = await container
-                .resolve(NodeDispatchService)
-                .sendUpdateDaemonCommand(
-                  nodeId,
-                  artifact.downloadUrl,
-                  release.version,
-                  artifact.checksum,
-                  artifact.signedManifest
-                );
-              daemonUpdateService.trackNodeUpdateCompletion(nodeId, operationId, command.result);
-              await command.accepted;
-            } catch (error) {
-              await daemonUpdateService.clearNodeUpdateInProgress(nodeId, operationId);
-              throw error;
-            }
-
-            return { scheduled: true, targetVersion: release.version };
+            return dispatchNodeDaemonUpdate(nodeId, {
+              db: container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+              daemonUpdateService: container.resolve(DaemonUpdateService),
+              dispatch: container.resolve(NodeDispatchService),
+            });
           }
           default:
             throw new Error('Unsupported system update operation');
         }
       }
+      case 'manage_relay_pool':
+        return this.executeRelayPoolTool(user, a);
       case 'manage_system_alerts': {
         // Same broad admin:alerts scope as the /alerts routes.
         this.ensureToolScope(user, 'admin:alerts');
@@ -209,14 +204,13 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         throw new Error(`Unsupported system alert operation: ${String(a.operation)}`);
       }
       case 'get_audit_log':
-        return this.auditService.getAuditLog({
-          action: a.action,
-          resourceType: a.resourceType,
-          page: agentPage(a.page),
-          limit: agentPageLimit(a.limit),
-        });
+        return this.executeAuditLogTool(a);
       case 'get_dashboard_stats': {
-        const stats = await this.monitoringService.getDashboardStats(dashboardStatsOptionsForScopes(user.scopes));
+        const stats = await this.monitoringService.getDashboardStats({
+          ...dashboardStatsOptionsForScopes(user.scopes),
+          // Same gate as GET /monitoring/dashboard?showSystem=true.
+          showSystem: a.showSystem === true && hasScope(user.scopes, 'admin:details:certificates'),
+        });
         // Filter stats by user's read scopes — don't leak data they can't access
         const filtered: Record<string, unknown> = {};
         if (hasScopeBase(user.scopes, 'proxy:view')) filtered.proxyHosts = stats.proxyHosts;
@@ -310,6 +304,120 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         return UNHANDLED_TOOL;
     }
   }
+
+  /** Mirrors GET /audit, GET /audit/users and the licensed POST /audit/export. */
+  private async executeAuditLogTool(a: Record<string, any>): Promise<unknown> {
+    const view = String(a.view ?? 'entries');
+    if (view === 'users') return this.auditService.getAuditUsers();
+    const filters = {
+      actions: [...stringList(a.actions), ...stringList(a.action)],
+      resourceTypes: [...stringList(a.resourceTypes), ...stringList(a.resourceType)],
+      userIds: stringList(a.userIds),
+      excludedActions: stringList(a.excludedActions),
+      excludedResourceTypes: stringList(a.excludedResourceTypes),
+      from: auditDateArg(a.from),
+      to: auditDateArg(a.to),
+    };
+    if (view === 'export') {
+      // LICENSE ENFORCEMENT: the audit export operation requires the audit-export feature, like the route.
+      await container.resolve(LicensePolicyService).requireFeature('audit-export');
+      const input = AuditExportSchema.parse({
+        actions: filters.actions,
+        resourceTypes: filters.resourceTypes,
+        userIds: filters.userIds,
+        excludedActions: filters.excludedActions,
+        excludedResourceTypes: filters.excludedResourceTypes,
+        from: a.from,
+        to: a.to,
+      });
+      return this.auditService.getAuditExport({ ...input, from: filters.from, to: filters.to });
+    }
+    if (view !== 'entries') throw new Error(`Unsupported audit log view: ${view}`);
+    return this.auditService.getAuditLog({
+      ...filters,
+      page: agentPage(a.page),
+      limit: Math.min(agentPageLimit(a.limit), 100),
+    });
+  }
+
+  /** Mirrors the /system/relay routes: reads need settings:gateway:view, every mutation admin:system. */
+  private async executeRelayPoolTool(user: User, a: Record<string, any>): Promise<unknown> {
+    const operation = String(a.operation ?? '');
+    if (operation === 'get') {
+      this.ensureToolScope(user, 'settings:gateway:view');
+      const local = container.resolve(RelaySupervisorService).getSnapshot(true);
+      const pool = container.isRegistered(RelayPoolService)
+        ? await container.resolve(RelayPoolService).getSnapshot()
+        : null;
+      return pool ? { ...local, ...pool, local } : local;
+    }
+    if (operation === 'local_policy_trust_status') {
+      this.ensureToolScope(user, 'settings:gateway:view');
+      // Registered only when Gateway runs a local relay.
+      const status = container.isRegistered(RelayPolicyService)
+        ? container.resolve(RelayPolicyService).getLocalPolicyTrustStatus()
+        : null;
+      return { localPolicyTrust: status };
+    }
+    this.ensureToolScope(user, 'admin:system');
+    switch (operation) {
+      case 'retry_recovery':
+        return container.resolve(RelaySupervisorService).retryRecovery(user.id);
+      case 'rebalance':
+        return container.resolve(RelayPoolService).stageRebalance(user.id);
+      case 'drain_instance':
+      case 'resume_instance':
+      case 'force_disconnect_instance': {
+        const instanceId = z.string().uuid().parse(a.instanceId);
+        const relayPool = container.resolve(RelayPoolService);
+        if (operation === 'resume_instance') {
+          await relayPool.drainInstance(instanceId, user.id, false);
+        } else {
+          // The drain and force-disconnect routes require an explicit { confirm: true } body.
+          z.object({ confirm: z.literal(true) }).parse({ confirm: a.confirm });
+          if (operation === 'drain_instance') await relayPool.drainInstance(instanceId, user.id, true);
+          else await relayPool.forceDisconnectInstance(instanceId, user.id);
+        }
+        return relayPool.getSnapshot();
+      }
+      case 'renew_certificate': {
+        // POST /system/relay/instances/{id}/renew-certificate: renew the relay's certificates now.
+        const instanceId = z.string().uuid().parse(a.instanceId);
+        const relayPool = container.resolve(RelayPoolService);
+        await relayPool.renewInstanceCertificate(instanceId, user.id);
+        return relayPool.getSnapshot();
+      }
+      case 'reenroll_instance': {
+        // POST /system/relay/instances/{id}/reenroll: confirmed, single-use token plus enrollment targets.
+        const instanceId = z.string().uuid().parse(a.instanceId);
+        z.object({ confirm: z.literal(true) }).parse({ confirm: a.confirm });
+        const issued = await container.resolve(RelayPoolService).issueRelayReenrollment(instanceId, user.id);
+        return {
+          ...issued,
+          gatewayCertSha256: await this.nodesService.getGatewayEnrollmentCertificateFingerprint(),
+          gatewayEnrollmentTargets: await this.nodesService.getGatewayEnrollmentTargets(),
+        };
+      }
+      default:
+        throw new Error(`Unsupported Relay Pool operation: ${operation}`);
+    }
+  }
+}
+
+function stringList(value: unknown): string[] {
+  const values = Array.isArray(value) ? value : value === undefined ? [] : [value];
+  return values
+    .filter((item): item is string => typeof item === 'string')
+    .flatMap((item) => item.split(','))
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+/** Same lenient parsing as the audit routes: an unparseable date is ignored. */
+function auditDateArg(value: unknown): Date | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
 function releaseVersionArg(value: unknown): string {

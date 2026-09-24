@@ -145,7 +145,9 @@ Gateway intentionally separates token families:
 
 REST API tokens are not accepted by the MCP endpoint. MCP accepts only OAuth access tokens issued for the Gateway MCP resource. Logging ingest tokens can write logs only to their logging environment. Inference data-plane routes accept only `gwi_` tokens and reject browser sessions plus `gw_`, `gwo_`, and `gwl_` credentials.
 
-OAuth consent also treats dangerous scopes differently: high-risk scopes are visible but unchecked by default and must be explicitly selected.
+API tokens and OAuth/MCP grants may carry every scope except the user-only AI Workspace, AI sandbox, and `mcp:use` scopes, `admin:users:impersonate`, and `integrations:gitlab:sandbox:clone`. Delegated scopes are always bounded by the owner's live permissions, and a token can never create API tokens or OAuth authorizations. Identity-bound routes (sign-in, MFA, passkeys, own sessions, impersonation start, OAuth consent, token management, AI Workspace chat) require a browser session.
+
+OAuth consent also treats dangerous scopes differently: high-risk scopes, including user/group administration, `admin:system`, Gateway settings edits, raw nginx and node config writes, paid or destructive hosting actions, and system connector credentials, are visible but unchecked by default and must be explicitly selected.
 
 Gateway keeps dynamic OAuth registration enabled for local public-client UX, but defaults registration and authorization to loopback callbacks only. External HTTPS callbacks require the explicit OAuth extended callback compatibility setting, and the consent screen marks those requests with an additional high-risk warning.
 

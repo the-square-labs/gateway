@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { AuthService } from '@/modules/auth/auth.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { AIService } from './ai.service.js';
 
@@ -147,5 +148,54 @@ describe('AIService SSL tool routing', () => {
     });
 
     expect(sslService.setAutoRenew).not.toHaveBeenCalled();
+  });
+
+  it('grants the creator access to new certificates and passes the contact email like the SSL routes', async () => {
+    const userId = '12345678-1234-4234-8234-123456789012';
+    const grantCreatedResourcePermissions = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AuthService, { grantCreatedResourcePermissions } as never);
+    const sslService = {
+      uploadCert: vi.fn().mockResolvedValue({ id: 'cert-2' }),
+      completeDNS01Verification: vi.fn().mockResolvedValue({ id: 'cert-1', status: 'active' }),
+      listCerts: vi.fn().mockResolvedValue({ data: [] }),
+    };
+    const service = createService(sslService);
+    const user = { ...BASE_USER, id: userId };
+
+    await service.executeTool({ ...user, scopes: ['ssl:cert:view', 'ssl:cert:issue'] }, 'manage_ssl_certificate', {
+      operation: 'upload',
+      name: 'Uploaded',
+      certificatePem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
+      privateKeyPem: '-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----',
+    });
+    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(userId, 'ssl:cert', 'cert-2');
+
+    await service.executeTool(
+      { ...user, scopes: ['ssl:cert:view', 'ssl:cert:issue:cert-1'] },
+      'manage_ssl_certificate',
+      {
+        operation: 'verify_dns',
+        sslCertificateId: 'cert-1',
+      }
+    );
+    expect(sslService.completeDNS01Verification).toHaveBeenCalledWith('cert-1', userId, {
+      contactEmail: 'admin@example.com',
+    });
+
+    // System certificates need admin:details:certificates, like GET /ssl-certificates?showSystem=true.
+    await expect(
+      service.executeTool({ ...user, scopes: ['ssl:cert:view'] }, 'list_ssl_certificates', { showSystem: true })
+    ).resolves.toEqual({
+      error: 'PERMISSION_DENIED: Missing required scope admin:details:certificates',
+      invalidateStores: [],
+    });
+    await service.executeTool({ ...user, scopes: ['ssl:cert:view'] }, 'list_ssl_certificates', {
+      type: 'acme',
+      status: 'pending',
+    });
+    expect(sslService.listCerts).toHaveBeenCalledWith(
+      { type: 'acme', status: 'pending', page: 1, limit: 50 },
+      { allowedIds: undefined }
+    );
   });
 });

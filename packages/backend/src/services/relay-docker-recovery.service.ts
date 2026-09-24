@@ -24,6 +24,10 @@ interface RelayOwnership {
   composeWorkingDir: string;
 }
 
+/** A Docker API call that does not answer must not hang Gateway start-up or a recovery cycle. */
+export const RELAY_DOCKER_ACTION_TIMEOUT_MS = 60_000;
+/** Compose may pull and recreate the relay; it gets longer. */
+export const RELAY_COMPOSE_TIMEOUT_MS = 5 * 60_000;
 const SAFE_PROJECT = /^[a-zA-Z0-9_-]+$/;
 const SAFE_ABSOLUTE_PATH = /^\/[a-zA-Z0-9/_.-]+$/;
 
@@ -53,7 +57,7 @@ export class RelayDockerRecoveryService {
     const expectedImage = this.expectedImage();
     let ownership: RelayOwnership;
     try {
-      ownership = await this.inspectOwnership();
+      ownership = await this.runDockerAction(() => this.inspectOwnership());
     } catch (error) {
       if (error instanceof RelayRecoverySafetyError) throw error;
       throw new RelayRecoverySafetyError('docker_unavailable', 'Docker ownership inspection failed', {
@@ -158,33 +162,35 @@ export class RelayDockerRecoveryService {
       throw new RelayRecoverySafetyError('docker_unavailable', 'Pinned Compose helper image is not present locally');
     }
     const composeFile = `${ownership.composeWorkingDir}/docker-compose.yml`;
-    const result = await this.runDockerAction(() =>
-      this.docker.runOneShot({
-        Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
-        Cmd: [
-          'docker',
-          'compose',
-          '--project-name',
-          ownership.composeProject,
-          '--project-directory',
-          ownership.composeWorkingDir,
-          '-f',
-          composeFile,
-          'up',
-          '-d',
-          ...(forceRecreate ? ['--force-recreate'] : []),
-          this.env.GATEWAY_RELAY_SERVICE_NAME,
-        ],
-        HostConfig: {
-          // Compose persists its working directory in container ownership
-          // labels. Mounting the project at a synthetic /project path makes
-          // the recreated relay look foreign to the app on the next probe.
-          Binds: [
-            `${ownership.composeWorkingDir}:${ownership.composeWorkingDir}`,
-            '/var/run/docker.sock:/var/run/docker.sock',
+    const result = await this.runDockerAction(
+      () =>
+        this.docker.runOneShot({
+          Image: DOCKER_COMPOSE_CLI_IMAGE_REF,
+          Cmd: [
+            'docker',
+            'compose',
+            '--project-name',
+            ownership.composeProject,
+            '--project-directory',
+            ownership.composeWorkingDir,
+            '-f',
+            composeFile,
+            'up',
+            '-d',
+            ...(forceRecreate ? ['--force-recreate'] : []),
+            this.env.GATEWAY_RELAY_SERVICE_NAME,
           ],
-        },
-      })
+          HostConfig: {
+            // Compose persists its working directory in container ownership
+            // labels. Mounting the project at a synthetic /project path makes
+            // the recreated relay look foreign to the app on the next probe.
+            Binds: [
+              `${ownership.composeWorkingDir}:${ownership.composeWorkingDir}`,
+              '/var/run/docker.sock:/var/run/docker.sock',
+            ],
+          },
+        }),
+      RELAY_COMPOSE_TIMEOUT_MS
     );
     if (result.exitCode !== 0) {
       throw new RelayRecoverySafetyError('ownership_unverified', 'Compose helper could not start the relay service');
@@ -210,14 +216,23 @@ export class RelayDockerRecoveryService {
     return { composeProject, composeWorkingDir };
   }
 
-  private async runDockerAction<T>(action: () => Promise<T>): Promise<T> {
+  private async runDockerAction<T>(action: () => Promise<T>, timeoutMs = RELAY_DOCKER_ACTION_TIMEOUT_MS): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await action();
+      return await Promise.race([
+        action(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`Docker did not answer within ${timeoutMs} ms`)), timeoutMs);
+          timer.unref?.();
+        }),
+      ]);
     } catch (error) {
       if (error instanceof RelayRecoverySafetyError) throw error;
       throw new RelayRecoverySafetyError('docker_unavailable', 'Docker relay recovery action failed', {
         cause: error instanceof Error ? error : undefined,
       });
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 }

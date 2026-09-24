@@ -57,25 +57,31 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_connection',
     description:
-      'Create, update, test or delete an external storage connection. Config is validated by the storage API.',
+      'Create, update, test or delete an external storage connection, reveal its saved credentials (storage:credentials:reveal; refused while impersonating), or read its health_history and monitoring metrics. Config is validated by the storage API; create accepts config.folderId.',
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['create', 'update', 'test', 'delete'] },
+        action: {
+          type: 'string',
+          enum: ['create', 'update', 'test', 'delete', 'reveal_credentials', 'health_history', 'monitoring'],
+        },
         storageId: id,
         config: object,
       },
       required: ['action'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Storage',
     requiredScope: 'storage:edit',
     invalidateStores: ['storage:list'],
+    // reveal_credentials returns the saved secret; keep it out of saved chat history.
+    historyRetention: { mode: 'summary_only' },
   },
   {
     name: 'manage_storage_objects',
     description:
-      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, or obtain a supported signed download URL. delete_bucket takes config.bucket and needs storage:objects:admin.',
+      'List buckets/objects, inspect metadata, create or delete a bucket, create a prefix, delete objects, read a small object, or obtain a supported signed URL. delete_bucket takes config.bucket and needs storage:objects:admin. presign takes config.bucket/key, optional config.operation get or put (put needs storage:objects:write), contentType and expiresIn. read_object takes config.bucket/key and optional config.maxBytes (default 262144, max 1048576) and returns base64 content; use presign for larger objects.',
     parameters: {
       type: 'object',
       properties: {
@@ -90,12 +96,14 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
             'create_prefix',
             'delete_objects',
             'presign',
+            'read_object',
           ],
         },
         storageId: id,
         config: object,
       },
       required: ['action', 'storageId'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Storage',
@@ -106,7 +114,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
     name: 'manage_managed_storage',
     historyRetention: { mode: 'never_full' },
     description:
-      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; no read action reveals root or key secrets.',
+      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating).',
     parameters: {
       type: 'object',
       properties: {
@@ -127,6 +135,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
             'list_access_keys',
             'create_access_key',
             'remove_access_key',
+            'reveal_credentials',
           ],
         },
         managedStorageId: { type: 'string' },

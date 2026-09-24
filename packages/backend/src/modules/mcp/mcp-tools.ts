@@ -22,7 +22,21 @@ import { setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import type { User } from '@/types.js';
 import type { McpAuthContext } from './mcp-types.js';
 
+/**
+ * MCP exposes every resource and management tool. Only browser- or identity-bound tools stay out:
+ * AI chat internals, the AI sandbox, Gateway token/grant minting, and embedded-assistant UI actions.
+ */
+const MCP_EXCLUDED_CATEGORIES = new Set([
+  'Planning',
+  'Sandbox',
+  'Conversations',
+  'Conversation Retrieval',
+  'Interaction',
+  'Artifact',
+  'Setup',
+]);
 const MCP_EXCLUDED_TOOLS = new Set([
+  // AI chat internals: assistant discovery, skills, tool-output paging, chat retrieval, and coordination.
   'discover_tools',
   'read_skill',
   'activate_skill',
@@ -42,12 +56,7 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'wait',
   'send_comment',
   'manage_ai_conversation',
-  'manage_oauth_authorization',
-  'manage_api_token',
-  'manage_inference_provider',
-  'manage_inference_model',
-  'manage_inference_limits',
-  'manage_inference_token',
+  // AI sandbox runner, its artifacts, and repository clones into the sandbox working copy.
   'execute_script',
   'run_process',
   'fetch',
@@ -59,10 +68,13 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'write_process_stdin',
   'kill_process',
   'list_sandbox_jobs',
-  'manage_node_config',
-  'manage_node_file',
-  'manage_docker_migration',
-  'manage_logging_backend',
+  'gitlab_clone_repository_to_sandbox',
+  // A token must not mint Gateway credentials: API tokens or OAuth grants. Inference keys are resources.
+  'manage_api_token',
+  'manage_oauth_authorization',
+  // Embedded-assistant UI actions: setup dialogs and per-browser pin preferences.
+  'open_node_enrollment',
+  'open_connector_setup',
   'set_resource_pin',
 ]);
 const SENSITIVE_TOOL_ARG_RE =
@@ -122,7 +134,7 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'nodes',
     title: 'Nodes',
-    description: 'Node inventory and lifecycle operations.',
+    description: 'Node inventory, enrollment, lifecycle, global nginx config, console, and filesystem operations.',
     toolNames: toolNamesForCategories(['Nodes']),
   },
   {
@@ -135,19 +147,22 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'certificates',
     title: 'PKI and certificates',
-    description: 'Certificate authorities, PKI certificates, PKI templates, and SSL certificates.',
+    description:
+      'Certificate authorities, PKI certificates, PKI templates, SSL certificates, and system PKI leaf audit.',
     toolNames: toolNamesForCategories([
       'PKI - Certificate Authorities',
       'PKI - Certificates',
       'PKI - Templates',
+      'PKI - System Audit',
       'SSL Certificates',
     ]),
   },
   {
     id: 'docker',
     title: 'Docker',
-    description: 'Docker containers, deployments, images, volumes, networks, registries, tasks, and config operations.',
-    toolNames: toolNamesForCategories(['Docker']),
+    description:
+      'Docker containers, deployments, images, volumes, networks, registries, tasks, config, and cross-node migrations.',
+    toolNames: toolNamesForCategories(['Docker', 'Docker Migration']),
   },
   {
     id: 'databases',
@@ -171,8 +186,8 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'logging',
     title: 'Logging',
-    description: 'Logging environments, tokens, schemas, metadata, search, and facets.',
-    toolNames: toolNamesForCategories(['Logging']),
+    description: 'Logging backend, environments, tokens, schemas, metadata, search, and facets.',
+    toolNames: toolNamesForCategories(['Logging', 'Logging Backend']),
   },
   {
     id: 'status_page',
@@ -184,8 +199,38 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     id: 'integrations',
     title: 'Integrations',
     description:
-      'Integration connector inventory and connector resync for GitLab, GitHub, generic Git, Cloudflare, and external SSH.',
-    toolNames: toolNamesForCategories(['Integrations']),
+      'Integration connector inventory and resync for GitLab, GitHub, generic Git, Cloudflare, and external SSH, plus Cloudflare connector setup.',
+    toolNames: toolNamesForCategories(['Integrations', 'Cloudflare']),
+  },
+  {
+    id: 'gitlab',
+    title: 'GitLab',
+    description: 'GitLab connectors, projects, repository files, CI pipelines, variables, webhooks, and registry.',
+    toolNames: toolNamesForCategories(['GitLab']),
+  },
+  {
+    id: 'github',
+    title: 'GitHub',
+    description: 'GitHub connectors, repositories, branches, workflow runs, repository files, and Actions settings.',
+    toolNames: toolNamesForCategories(['GitHub']),
+  },
+  {
+    id: 'git',
+    title: 'Generic Git',
+    description: 'Generic HTTPS Git connectors, remote refs, repository trees, and repository files.',
+    toolNames: toolNamesForCategories(['Git']),
+  },
+  {
+    id: 'external_ssh',
+    title: 'External SSH',
+    description: 'External SSH connectors and remote command execution.',
+    toolNames: toolNamesForCategories(['External SSH']),
+  },
+  {
+    id: 'hosting',
+    title: 'Hosting',
+    description: 'Hosting provider connectors, VMs, power and resize actions, snapshots, firewalls, and operations.',
+    toolNames: toolNamesForCategories(['Hosting']),
   },
   {
     id: 'notifications',
@@ -196,14 +241,21 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
   {
     id: 'administration',
     title: 'Administration',
-    description: 'Administrative tools that are still subject to MCP/OAuth delegability and token scopes.',
+    description: 'Users, permission groups, audit log, and system alert administration.',
     toolNames: toolNamesForCategories(['Administration']),
   },
   {
     id: 'maintenance',
     title: 'Maintenance',
-    description: 'License and housekeeping control-plane operations when delegated.',
+    description: 'Gateway settings, system updates, license, and housekeeping control-plane operations.',
     toolNames: toolNamesForCategories(['Maintenance']),
+  },
+  {
+    id: 'inference',
+    title: 'Inference',
+    description:
+      'Gateway Inference core, provider connections, published models, limits, usage, and personal inference keys.',
+    toolNames: toolNamesForCategories(['Inference']),
   },
   {
     id: 'ai_assistant',
@@ -241,11 +293,7 @@ const MCP_DISCOVER_TOOLS_DEFINITION = {
 };
 
 function isEligibleMcpTool(tool: AIToolDefinition): boolean {
-  return (
-    !['GitLab', 'GitHub', 'Git', 'External SSH', 'Setup'].includes(tool.category) &&
-    !!tool.requiredScope &&
-    !MCP_EXCLUDED_TOOLS.has(tool.name)
-  );
+  return !!tool.requiredScope && !MCP_EXCLUDED_CATEGORIES.has(tool.category) && !MCP_EXCLUDED_TOOLS.has(tool.name);
 }
 
 function hasDirectScopeBase(scopes: string[], baseScope: string): boolean {
@@ -565,22 +613,20 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
     }
 
     const tool = AI_TOOLS.find((candidate) => candidate.name === toolName);
-    const validation = tool ? validateAIToolArguments(toolName, args) : null;
-    if (
-      !tool ||
-      !isEligibleMcpTool(tool) ||
-      !validation?.ok ||
-      !hasToolScopeForArgs(auth.scopes, tool, validation.arguments)
-    ) {
+    const eligible = !!tool && isEligibleMcpTool(tool);
+    // Tools hidden by the token scopes never validate arguments, so callers get no schema feedback.
+    const visible = !!tool && eligible && hasToolScope(auth.scopes, tool);
+    const validation = visible ? validateAIToolArguments(toolName, args) : null;
+    if (!tool || !visible || !validation?.ok || !hasToolScopeForArgs(auth.scopes, tool, validation.arguments)) {
       await auditDeniedMcpTool(
         tool,
         toolName,
         auth,
         user,
         args,
-        tool && isEligibleMcpTool(tool) ? (validation?.ok ? 'missing_scope' : 'invalid_arguments') : 'unavailable_tool'
+        !eligible ? 'unavailable_tool' : validation && !validation.ok ? 'invalid_arguments' : 'missing_scope'
       );
-      if (tool && isEligibleMcpTool(tool) && validation && !validation.ok) return toolError(validation.error);
+      if (validation && !validation.ok) return toolError(validation.error);
       return toolError(`Tool "${toolName}" is unavailable for this MCP token`);
     }
 

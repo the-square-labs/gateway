@@ -1,6 +1,6 @@
-import { container, TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
-import { hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { z } from 'zod';
+import { container } from '@/container.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   ComposeAdoptInputSchema,
@@ -8,7 +8,6 @@ import {
   ComposeOperationActionSchema,
   ComposeOperationInputSchema,
   ComposeOperationListQuerySchema,
-  ComposeProjectNameSchema,
   ComposeRevisionCreateInputSchema,
   ComposeSecretCreateSchema,
   ComposeSecretUpdateSchema,
@@ -21,12 +20,21 @@ import {
 } from '@/modules/docker/compose/compose-child.guard.js';
 import {
   ContainerCreateSchema,
+  ContainerDuplicateSchema,
   ContainerKillSchema,
   ContainerStopSchema,
+  FileBrowseSchema,
+  FileMoveSchema,
+  FileUploadChunkQuerySchema,
+  FileUploadCompleteSchema,
+  FileUploadInitSchema,
   ImagePullSchema,
+  LogQuerySchema,
   RegistryCreateSchema,
   RegistryUpdateSchema,
   VolumeCreateSchema,
+  VolumeLabelsUpdateSchema,
+  VolumeRenameSchema,
   VolumeResizeSchema,
 } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -41,12 +49,12 @@ import {
   DockerBuildLogQuerySchema,
   DockerBuildSecretNameSchema,
   DockerBuildSecretValueSchema,
+  DockerInternalRegistrySettingsSchema,
   DockerSourceBindingConfigSchema,
   DockerSourceBindingUpsertSchema,
   DockerSourceResourceCreateSchema,
   type DockerSourceTarget,
 } from '@/modules/docker/docker-build.schemas.js';
-import { assertDockerCreationAccess, placeCreatedDockerResource } from '@/modules/docker/docker-creation-access.js';
 import {
   DockerDeploymentCreateSchema,
   DockerDeploymentDeploySchema,
@@ -56,13 +64,36 @@ import {
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { presentDeploymentForCaller } from '@/modules/docker/docker-deployment-redaction.js';
 import { inspectUserContainer } from '@/modules/docker/docker-internal-containers.js';
+import { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
 import { sanitizeContainerInspect } from '@/modules/docker/docker-snapshot.service.js';
+import {
+  assertDockerSourceTargetOnNode,
+  ComposeSourceProjectCreateSchema,
+  createComposeProjectFromSource,
+  createDockerSourceResource,
+} from '@/modules/docker/docker-source-resource-creation.js';
+import {
+  assertSnapshotVolumeVisible,
+  getDockerVolumeMetricsSnapshot,
+  inspectDockerVolumeSnapshot,
+} from '@/modules/docker/docker-volume-snapshot-reads.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
+import { dockerArchiveTransferStore } from './ai.docker-archive-transfer.js';
+import { manageDockerAvailabilityTool } from './ai.docker-availability-tools.js';
+import { assertDockerContainerRecreateAccess, manageDockerContainerTool } from './ai.docker-container-tools.js';
 import { listDockerNetworksForAgent, manageDockerNetworkForAgent } from './ai.docker-network-tools.js';
+import {
+  decodeFileContent,
+  decodeUploadChunk,
+  ensureDockerSourceContainerScope,
+  presentFileContent,
+  requiredToolString,
+} from './ai.docker-tool-access.js';
 import {
   compactAgentList,
   compactDockerContainerForAgent,
@@ -117,6 +148,11 @@ export const DOCKER_TOOL_NAMES = new Set([
   'manage_docker_deployment',
   'kill_docker_container',
   'force_cancel_docker_task',
+  'manage_docker_container',
+  'manage_docker_availability',
+  'manage_docker_runtime',
+  'upload_docker_container_archive',
+  'download_docker_archive',
 ]);
 
 export interface DockerToolContext {
@@ -147,6 +183,7 @@ export async function executeDockerTool(
         restartPolicy: a.restartPolicy ?? 'no',
         runtimeProfile: a.runtimeProfile,
         stopTimeout: a.stopTimeout,
+        gpu: a.gpu,
         labels: a.labels,
         command: a.command,
       });
@@ -338,16 +375,23 @@ export async function executeDockerTool(
       await context.dockerService.renameContainer(a.nodeId, a.containerId, a.name, user.id);
       return { success: true };
     case 'duplicate_docker_container': {
-      await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
-      await ensureDockerContainerScope(context, user, 'docker:containers:environment', a.nodeId, a.containerId);
-      await ensureDockerContainerScope(context, user, 'docker:containers:secrets', a.nodeId, a.containerId);
+      // The duplicate route: docker:containers:create, plus config, environment and secrets on the source.
+      await ensureDockerContainerScopes(
+        context,
+        user,
+        ['docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets'],
+        a.nodeId,
+        a.containerId
+      );
       await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
+      const { name, folderId } = ContainerDuplicateSchema.parse({ name: a.name, folderId: a.folderId });
       const dupData = await context.dockerService.duplicateContainer(
         a.nodeId,
         a.containerId,
-        a.name,
+        name,
         user.id,
-        user.scopes
+        user.scopes,
+        folderId
       );
       return { success: true, message: 'Container duplicated', data: dupData };
     }
@@ -356,25 +400,14 @@ export async function executeDockerTool(
       return context.dockerService.getContainerStats(a.nodeId, a.containerId);
     case 'update_docker_container_image': {
       // Mirrors the recreate route: an image change can expose the container's
-      // environment and secrets, so it needs the same scopes as duplicate.
-      const inspectData = await ensureDockerContainerScopes(
-        context,
+      // environment and secrets, so it needs the same scopes as duplicate plus image pull access.
+      const inspectData = await assertDockerContainerRecreateAccess(
+        context.dockerService,
         user,
-        [
-          'docker:containers:manage',
-          'docker:containers:edit',
-          'docker:containers:config',
-          'docker:containers:environment',
-          'docker:containers:secrets',
-        ],
         a.nodeId,
-        a.containerId
+        a.containerId,
+        { image: String(a.imageTag ?? '') }
       );
-      // The recreate route's `assertDockerCreationAccess(..., 'docker:images:pull', nodeId, undefined)`.
-      if (!hasScopeForCreation(user.scopes, 'docker:images:pull', undefined, a.nodeId)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing docker:images:pull for the destination node or folder');
-      }
-      await assertComposeChildMutationAllowed(a.nodeId, a.containerId);
       const currentImage: string = (inspectData as any)?.Config?.Image ?? '';
       if (!currentImage) return { error: 'Cannot determine current container image' };
       if (currentImage.includes('@') || /^[a-f0-9]{64}$/i.test(currentImage)) {
@@ -402,9 +435,11 @@ export async function executeDockerTool(
         data,
       };
     }
-    case 'get_docker_container_logs':
+    case 'get_docker_container_logs': {
       await ensureDockerContainerScope(context, user, 'docker:containers:view', a.nodeId, a.containerId);
-      return context.dockerService.getContainerLogs(a.nodeId, a.containerId, a.tail || 100, a.timestamps ?? false);
+      const { tail, timestamps } = LogQuerySchema.parse({ tail: a.tail, timestamps: a.timestamps });
+      return context.dockerService.getContainerLogs(a.nodeId, a.containerId, tail, timestamps);
+    }
     case 'list_docker_images': {
       const images = await context.dockerService.listImages(a.nodeId);
       const decorated = Array.isArray(images)
@@ -442,6 +477,28 @@ export async function executeDockerTool(
       let finalImageRef = input.imageRef;
       if (auth && !hasRegistryHost(input.imageRef)) {
         finalImageRef = `${auth.url}/${input.imageRef}`;
+      }
+      if (a.wait === true) {
+        // POST /images/pull-sync: pull now, validate the image exists, and remember its registry.
+        try {
+          await context.dockerService.pullImageImmediate(
+            a.nodeId,
+            finalImageRef,
+            auth?.authJson,
+            input.folderId,
+            user.id,
+            user.scopes
+          );
+        } catch (error) {
+          if (error instanceof AppError) throw error;
+          throw new AppError(
+            400,
+            'PULL_FAILED',
+            error instanceof Error ? error.message : `Failed to pull ${finalImageRef}`
+          );
+        }
+        await registryService.rememberImageRegistry(a.nodeId, finalImageRef, auth?.registryId);
+        return { success: true, message: `Pulled ${finalImageRef}`, data: { imageRef: finalImageRef } };
       }
       const data = await context.dockerService.pullImage(
         a.nodeId,
@@ -500,11 +557,21 @@ export async function executeDockerTool(
     case 'manage_docker_source':
       return manageDockerSource(context, user, args);
     case 'manage_docker_task':
-      return manageDockerTask(context, user, args);
+      return manageDockerTask(user, args);
     case 'manage_docker_deployment':
       return manageDockerDeployment(context, user, args);
     case 'force_cancel_docker_task':
       return forceCancelDockerTask(user, args);
+    case 'manage_docker_container':
+      return manageDockerContainerTool(context.dockerService, user, args);
+    case 'manage_docker_availability':
+      return manageDockerAvailabilityTool(user, args);
+    case 'manage_docker_runtime':
+      return manageDockerRuntime(context, user, args);
+    case 'upload_docker_container_archive':
+      return dockerArchiveTransferStore().upload(user, args);
+    case 'download_docker_archive':
+      return dockerArchiveTransferStore().download(context.dockerService, user, args);
     default:
       throw new Error(`Unsupported Docker tool: ${toolName}`);
   }
@@ -665,6 +732,25 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
     await service.deleteSecret(nodeId, projectId, String(a.secretId || ''), user.id);
     return { success: true };
   }
+  if (operation === 'logs') {
+    // The Compose log viewer: docker:compose:view on the project covers every service container.
+    context.ensureToolScopeForResource(user, 'docker:compose:view', resourceId);
+    const project = await service.get(nodeId, projectId);
+    const { tail, timestamps } = LogQuerySchema.parse({ tail: a.tail, timestamps: a.timestamps });
+    const serviceName = optionalNonEmptyString(a.serviceName);
+    const services = (project.services ?? []).filter((item) => !serviceName || item.name === serviceName);
+    const logs = [];
+    for (const item of services) {
+      for (const containerId of item.containerIds ?? []) {
+        logs.push({
+          service: item.name,
+          containerId,
+          lines: await context.dockerService.getContainerLogs(nodeId, containerId, tail, timestamps),
+        });
+      }
+    }
+    return { projectId, services: logs };
+  }
   throw new Error(`Unsupported Docker Compose operation: ${operation}`);
 }
 
@@ -802,6 +888,38 @@ async function manageDockerRegistry(context: DockerToolContext, user: User, args
         typeof a.password === 'string' ? a.password : undefined,
         typeof a.trustedAuthRealm === 'string' ? a.trustedAuthRealm : undefined
       );
+    // The internal registry routes require broad docker:registries:view or :edit.
+    case 'internal_get':
+      context.ensureToolScope(user, 'docker:registries:view');
+      return container.resolve(DockerInternalRegistryService).getState();
+    case 'internal_repositories': {
+      context.ensureToolScope(user, 'docker:registries:view');
+      const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
+      return container.resolve(DockerBuildService).listInternalRegistryRepositories();
+    }
+    case 'internal_update_settings':
+      context.ensureToolScope(user, 'docker:registries:edit');
+      return container.resolve(DockerInternalRegistryService).updateSettings(
+        DockerInternalRegistrySettingsSchema.parse({
+          externalAccessEnabled: a.externalAccessEnabled,
+          externalHostname: optionalNonEmptyString(a.externalHostname),
+          externalNginxNodeId: optionalNonEmptyString(a.externalNginxNodeId),
+          externalCertificateId: optionalNonEmptyString(a.externalCertificateId),
+        }),
+        user.id
+      );
+    case 'internal_gc': {
+      context.ensureToolScope(user, 'docker:registries:edit');
+      const housekeepingConfig = await container.resolve(HousekeepingService).getConfig();
+      return container.resolve(DockerInternalRegistryService).runGarbageCollection({
+        dryRun: a.dryRun === true,
+        requestedById: user.id,
+        retentionCount: housekeepingConfig.internalRegistry.retentionSuccessfulArtifacts,
+      });
+    }
+    case 'internal_resume_maintenance':
+      context.ensureToolScope(user, 'docker:registries:edit');
+      return container.resolve(DockerInternalRegistryService).resumeMaintenance(z.string().uuid().parse(a.runId));
     default:
       throw new Error(`Unsupported Docker registry operation: ${operation}`);
   }
@@ -833,7 +951,7 @@ async function manageDockerVolume(context: DockerToolContext, user: User, args: 
   const a = args as any;
   const operation = String(a.operation);
   const nodeId = String(a.nodeId);
-  const name = String(a.name);
+  const name = operation === 'managed_options' ? '' : requiredToolString(a.name, 'name');
   if (operation === 'create') {
     // POST /nodes/:nodeId/volumes: createVolume enforces docker:volumes:create for the node or folder.
     const input = VolumeCreateSchema.parse({
@@ -868,7 +986,137 @@ async function manageDockerVolume(context: DockerToolContext, user: User, args: 
     await context.dockerService.removeVolume(nodeId, name, Boolean(a.force), user.id);
     return { success: true };
   }
+  if (operation === 'managed_options') {
+    // GET /nodes/:nodeId/managed-volumes: docker:containers:mounts for the node.
+    context.ensureToolScopeForResource(user, 'docker:containers:mounts', nodeId);
+    return context.dockerService.listManagedVolumeOptions(nodeId);
+  }
+  if (operation === 'inspect') {
+    // GET /nodes/:nodeId/volumes/:name serves the cached detail with the public visibility applied.
+    assertDockerResourceScope(user.scopes, 'docker:volumes:view', nodeId, name);
+    return inspectDockerVolumeSnapshot(nodeId, name);
+  }
+  if (operation === 'metrics') {
+    assertDockerResourceScope(user.scopes, 'docker:volumes:view', nodeId, name);
+    await assertSnapshotVolumeVisible(nodeId, name);
+    return getDockerVolumeMetricsSnapshot(nodeId, name);
+  }
+  if (operation === 'rename' || operation === 'update_labels') {
+    // POST .../rename and PUT .../labels: docker:volumes:create and :delete on a visible, non-Compose volume.
+    assertDockerResourceScope(user.scopes, 'docker:volumes:create', nodeId, name);
+    await context.dockerService.assertUserVolumeVisible(nodeId, name);
+    await assertComposeVolumeMutationAllowed(nodeId, name);
+    assertDockerResourceScope(user.scopes, 'docker:volumes:delete', nodeId, name);
+    if (operation === 'rename') {
+      const { name: newName } = VolumeRenameSchema.parse({ name: a.newName });
+      await context.dockerService.renameVolume(nodeId, name, newName, user.id);
+    } else {
+      const { labels } = VolumeLabelsUpdateSchema.parse({ labels: a.labels });
+      await context.dockerService.updateVolumeLabels(nodeId, name, labels, user.id);
+    }
+    return { success: true };
+  }
+  if (VOLUME_FILE_OPERATIONS.has(operation)) return manageDockerVolumeFiles(context, user, operation, args);
   throw new Error(`Unsupported Docker volume operation: ${operation}`);
+}
+
+const VOLUME_FILE_OPERATIONS = new Set([
+  'list_files',
+  'read_file',
+  'write_file',
+  'create_file',
+  'create_directory',
+  'delete_file',
+  'move_file',
+  'upload_init',
+  'upload_chunk',
+  'upload_complete',
+  'upload_abort',
+]);
+
+/**
+ * Mirrors the volume file-browser routes: docker:volumes:files:read or :write
+ * on a volume the user can see; writes are refused on Compose-owned volumes.
+ */
+async function manageDockerVolumeFiles(
+  context: DockerToolContext,
+  user: User,
+  operation: string,
+  args: Record<string, unknown>
+) {
+  const a = args as any;
+  const nodeId = String(a.nodeId);
+  const name = String(a.name);
+  const service = context.dockerService;
+  const readOnly = operation === 'list_files' || operation === 'read_file';
+  assertDockerResourceScope(
+    user.scopes,
+    readOnly ? 'docker:volumes:files:read' : 'docker:volumes:files:write',
+    nodeId,
+    name
+  );
+  await service.assertUserVolumeVisible(nodeId, name);
+  if (!readOnly) await assertComposeVolumeMutationAllowed(nodeId, name);
+  switch (operation) {
+    case 'list_files':
+      return service.listVolumeFiles(nodeId, name, FileBrowseSchema.parse({ path: a.path }).path);
+    case 'read_file': {
+      const { path } = FileBrowseSchema.parse({ path: a.path });
+      return presentFileContent(path, await service.readVolumeFile(nodeId, name, path), args);
+    }
+    case 'write_file': {
+      const { path } = FileBrowseSchema.parse({ path: a.path });
+      await service.writeVolumeFile(nodeId, name, path, decodeFileContent(args), user.id);
+      return { success: true };
+    }
+    case 'create_file': {
+      const { path } = FileBrowseSchema.parse({ path: a.path });
+      const hasContent = typeof a.content === 'string' || typeof a.contentBase64 === 'string';
+      await service.createVolumeFile(
+        nodeId,
+        name,
+        path,
+        hasContent ? decodeFileContent(args) : Buffer.alloc(0),
+        user.id
+      );
+      return { success: true };
+    }
+    case 'create_directory': {
+      const { path } = FileBrowseSchema.parse({ path: a.path });
+      await service.createVolumeDirectory(nodeId, name, path, user.id);
+      return { success: true };
+    }
+    case 'delete_file': {
+      const { path } = FileBrowseSchema.parse({ path: a.path });
+      await service.deleteVolumeFile(nodeId, name, path, user.id);
+      return { success: true };
+    }
+    case 'move_file': {
+      const { fromPath, toPath } = FileMoveSchema.parse({ fromPath: a.fromPath, toPath: a.toPath });
+      await service.moveVolumeFile(nodeId, name, fromPath, toPath, user.id);
+      return { success: true };
+    }
+    case 'upload_init': {
+      const { path, totalBytes } = FileUploadInitSchema.parse({ path: a.path, totalBytes: a.totalBytes });
+      return service.initVolumeFileUpload(nodeId, name, path, totalBytes, user.id);
+    }
+    case 'upload_chunk': {
+      const uploadId = requiredToolString(a.uploadId, 'uploadId');
+      const { offset } = FileUploadChunkQuerySchema.parse({ offset: a.offset });
+      return service.appendVolumeFileUploadChunk(nodeId, name, uploadId, offset, decodeUploadChunk(args));
+    }
+    case 'upload_complete': {
+      const uploadId = requiredToolString(a.uploadId, 'uploadId');
+      const { path, totalBytes } = FileUploadCompleteSchema.parse({ path: a.path, totalBytes: a.totalBytes });
+      await service.completeVolumeFileUpload(nodeId, name, uploadId, path, totalBytes);
+      return { success: true };
+    }
+    case 'upload_abort':
+      await service.abortVolumeFileUpload(nodeId, name, requiredToolString(a.uploadId, 'uploadId'));
+      return { success: true };
+    default:
+      throw new Error(`Unsupported Docker volume file operation: ${operation}`);
+  }
 }
 
 async function listDockerBuilds(user: User, args: Record<string, unknown>) {
@@ -940,6 +1188,11 @@ async function manageDockerBuild(user: User, args: Record<string, unknown>) {
   throw new Error(`Unsupported Docker build operation: ${operation}`);
 }
 
+/**
+ * Mirrors the Docker source routes. Container targets accept a pending
+ * Git-source container like `allowPendingSource`; deployment and Compose
+ * targets must belong to the requested node.
+ */
 async function manageDockerSource(
   context: DockerToolContext,
   user: User,
@@ -949,18 +1202,17 @@ async function manageDockerSource(
   const operation = String(a.operation);
   const nodeId = String(a.nodeId || '');
   if (operation === 'admission') {
-    if (!hasScopeBase(user.scopes, 'docker:containers:create') && !hasScopeBase(user.scopes, 'docker:compose:create'))
-      throw new Error('Missing Docker creation scope');
+    // GET /nodes/:nodeId/source-resources/admission
+    if (!hasScopeBase(user.scopes, 'docker:containers:create')) {
+      throw new Error('PERMISSION_DENIED: Missing required scope docker:containers:create');
+    }
     const { DockerBuildService } = await import('@/modules/docker/docker-build.service.js');
     return container.resolve(DockerBuildService).admissionStatus();
   }
   if (operation === 'repositories') {
-    if (
-      !hasScopeBase(user.scopes, 'docker:containers:view') &&
-      !hasScopeBase(user.scopes, 'docker:compose:view') &&
-      !hasScopeBase(user.scopes, 'pages:view')
-    ) {
-      throw new Error('PERMISSION_DENIED: Missing Docker, Compose, or Pages view scope');
+    // GET /sources/connectors/:connectorId/repositories
+    if (!hasScopeBase(user.scopes, 'docker:containers:view')) {
+      throw new Error('PERMISSION_DENIED: Missing required scope docker:containers:view');
     }
     return container.resolve(IntegrationsService).listDockerBuildSourceRepositories(user, String(a.connectorId || ''));
   }
@@ -989,41 +1241,24 @@ async function manageDockerSource(
 
   if (operation === 'create') {
     if (!nodeId) throw new Error('nodeId is required');
-    const { DockerSourceService } = await import('@/modules/docker/docker-source.service.js');
-    const sourceService = container.resolve(DockerSourceService);
     if (a.targetType === 'compose') {
-      if (!hasScopeBase(user.scopes, 'docker:compose:create')) throw new Error('Missing docker:compose:create');
-      await container.resolve(LicensePolicyService).requireFeature('compose-applications');
-      const composeService = container.resolve(DockerComposeService);
-      const projectName = ComposeProjectNameSchema.parse(a.projectName);
-      const config = sourceConfig();
-      if (!config.composeFilePath) throw new Error('Compose file path is required');
-      const project = await composeService.createPendingGitProject(
-        nodeId,
-        projectName,
-        user.id,
-        user.scopes,
-        a.folderId
-      );
-      const target = { kind: 'compose_project' as const, composeProjectId: project.id };
-      try {
-        const source = await sourceService.upsert(DockerSourceBindingUpsertSchema.parse({ ...config, target }), user);
-        const queued = await sourceService.createBuild(target, { force: false }, user);
-        return { project, source, ...queued };
-      } catch (error) {
-        await sourceService.remove(target, user.id).catch(() => false);
-        await composeService.discardPendingGitProject(project.id).catch(() => false);
-        throw error;
+      // POST /nodes/:nodeId/compose-projects/from-source
+      if (!hasScopeBase(user.scopes, 'docker:compose:create')) {
+        throw new Error('PERMISSION_DENIED: Missing required scope docker:compose:create');
       }
+      const input = ComposeSourceProjectCreateSchema.parse({
+        folderId: a.folderId,
+        projectName: a.projectName,
+        source: sourceConfig(),
+      });
+      await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+      return createComposeProjectFromSource(nodeId, input, user);
     }
-
-    await assertDockerCreationAccess(
-      container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-      user.scopes,
-      'docker:containers:create',
-      nodeId,
-      a.folderId
-    );
+    // POST /nodes/:nodeId/source-resources
+    if (!hasScopeBase(user.scopes, 'docker:containers:create')) {
+      throw new Error('PERMISSION_DENIED: Missing required scope docker:containers:create');
+    }
+    await container.resolve(LicensePolicyService).requireFeature('git-push-to-deploy');
     const input = DockerSourceResourceCreateSchema.parse({
       source: sourceConfig(),
       resource:
@@ -1047,62 +1282,16 @@ async function manageDockerSource(
               runtimeProfile: a.runtimeProfile ?? 'default',
             },
     });
-    let target: DockerSourceTarget;
-    let initialConfig: Record<string, unknown> | null = null;
-    let pendingDeploymentId: string | null = null;
-    if (input.resource.kind === 'deployment') {
-      const deployment = await container
-        .resolve(DockerDeploymentService)
-        .createPending(
-          nodeId,
-          { ...input.resource, image: 'gateway.invalid/pending-source-build:latest' },
-          user.id,
-          user.scopes
-        );
-      pendingDeploymentId = deployment.id;
-      target = { kind: 'deployment', deploymentId: deployment.id };
-    } else {
-      const containers = await context.dockerService.listContainers(nodeId);
-      const existing = Array.isArray(containers)
-        ? containers.some(
-            (candidate: any) =>
-              String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '') === input.resource.name
-          )
-        : false;
-      if (existing) throw new Error(`Container name already exists: ${input.resource.name}`);
-      target = { kind: 'container', nodeId, containerName: input.resource.name };
-      const { kind: _kind, ...config } = input.resource;
-      initialConfig = config;
-    }
-    try {
-      const source = await sourceService.upsert({ ...input.source, target }, user, {
-        allowMissingTarget: input.resource.kind === 'container',
-        initialConfig,
-      });
-      if (input.resource.kind === 'container')
-        await placeCreatedDockerResource(
-          container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
-          nodeId,
-          'container',
-          input.resource.name,
-          input.resource.folderId
-        );
-      const queued = await sourceService.createBuild(target, { force: false }, user);
-      return { source, ...queued, target };
-    } catch (error) {
-      await sourceService.remove(target, user.id).catch(() => false);
-      if (pendingDeploymentId) {
-        await container
-          .resolve(DockerDeploymentService)
-          .discardPending(nodeId, pendingDeploymentId)
-          .catch(() => false);
-      }
-      throw error;
-    }
+    return createDockerSourceResource(nodeId, input, user);
   }
 
+  const { DockerSourceService } = await import('@/modules/docker/docker-source.service.js');
+  const sourceService = container.resolve(DockerSourceService);
   const targetType =
     a.targetType === 'deployment' ? 'deployment' : a.targetType === 'compose' ? 'compose' : 'container';
+  if (operation === 'pending' && targetType !== 'container') {
+    throw new Error('The pending operation applies to container targets only');
+  }
   let target: DockerSourceTarget;
   if (targetType === 'compose') {
     const composeProjectId = String(a.composeProjectId || '');
@@ -1110,10 +1299,11 @@ async function manageDockerSource(
     const requiredScope =
       operation === 'get' || operation === 'secret_list' ? 'docker:compose:view' : 'docker:compose:manage';
     context.ensureToolScopeForResource(user, requiredScope, `${nodeId}/${composeProjectId}`);
+    target = { kind: 'compose_project', composeProjectId };
+    await assertDockerSourceTargetOnNode(nodeId, target);
     if (operation === 'upsert') {
       await container.resolve(LicensePolicyService).requireFeature('compose-applications');
     }
-    target = { kind: 'compose_project', composeProjectId };
   } else if (targetType === 'deployment') {
     const deploymentId = String(a.deploymentId || '');
     if (!deploymentId) throw new Error('deploymentId is required');
@@ -1125,24 +1315,28 @@ async function manageDockerSource(
           : 'docker:containers:edit';
     ensureDockerDeploymentScope(context, user, requiredScope, nodeId, deploymentId);
     target = { kind: 'deployment', deploymentId };
+    await assertDockerSourceTargetOnNode(nodeId, target);
   } else {
     const containerName = String(a.containerName || '');
     if (!containerName) throw new Error('containerName is required');
     const requiredScope =
-      operation === 'get' || operation === 'secret_list'
+      operation === 'get' || operation === 'secret_list' || operation === 'pending'
         ? 'docker:containers:view'
         : operation === 'build'
           ? 'docker:containers:manage'
           : 'docker:containers:edit';
-    await ensureDockerContainerScope(context, user, requiredScope, nodeId, containerName);
+    await ensureDockerSourceContainerScope(context.dockerService, user, requiredScope, nodeId, containerName);
     target = { kind: 'container', nodeId, containerName };
   }
 
-  const { DockerSourceService } = await import('@/modules/docker/docker-source.service.js');
-  const sourceService = container.resolve(DockerSourceService);
   switch (operation) {
     case 'get':
       return sourceService.get(target);
+    case 'pending': {
+      const pending = await sourceService.getPendingContainer(nodeId, String(a.containerName));
+      if (!pending) throw new AppError(404, 'PENDING_SOURCE_NOT_FOUND', 'Pending source container not found');
+      return pending;
+    }
     case 'upsert':
       return sourceService.upsert(sourceUpsert(target), user);
     case 'remove':
@@ -1171,20 +1365,44 @@ async function manageDockerSource(
   }
 }
 
-async function manageDockerTask(context: DockerToolContext, user: User, args: Record<string, unknown>) {
+/** Mirrors GET /tasks and GET /tasks/{id}: docker:tasks for the task node; scoped callers see their nodes only. */
+async function manageDockerTask(user: User, args: Record<string, unknown>) {
   const a = args as any;
-  context.ensureToolScope(user, 'docker:tasks');
+  if (!hasScopeBase(user.scopes, 'docker:tasks')) {
+    throw new Error('PERMISSION_DENIED: Missing required scope docker:tasks');
+  }
   const { DockerTaskService } = await import('@/modules/docker/docker-task.service.js');
   const taskService = container.resolve(DockerTaskService);
-  if (a.operation === 'get') return taskService.get(String(a.taskId));
+  if (a.operation === 'get') {
+    const task = await taskService.get(String(a.taskId));
+    if (!hasScopeForResource(user.scopes, 'docker:tasks', task.nodeId)) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: docker:tasks:${task.nodeId}`);
+    }
+    return task;
+  }
   if (a.operation === 'list') {
     return taskService.list({
       nodeId: typeof a.nodeId === 'string' ? a.nodeId : undefined,
       status: typeof a.status === 'string' ? a.status : undefined,
       type: typeof a.type === 'string' ? a.type : undefined,
+      allowedNodeIds: user.scopes.includes('docker:tasks')
+        ? undefined
+        : getResourceScopedIds(user.scopes, 'docker:tasks'),
     });
   }
   throw new Error(`Unsupported Docker task operation: ${String(a.operation)}`);
+}
+
+/** Mirrors POST /nodes/{nodeId}/runtime/runsc/preflight and /install, which require broad admin:update. */
+async function manageDockerRuntime(context: DockerToolContext, user: User, args: Record<string, unknown>) {
+  const operation = String(args.operation);
+  if (operation !== 'preflight' && operation !== 'install') {
+    throw new Error(`Unsupported Docker runtime operation: ${operation}`);
+  }
+  if (!hasScope(user.scopes, 'admin:update')) {
+    throw new Error('PERMISSION_DENIED: Missing required scope admin:update');
+  }
+  return context.dockerService.manageRunsc(requiredToolString(args.nodeId, 'nodeId'), operation);
 }
 
 /** Mirrors POST /tasks/{id}/force-cancel: docker:tasks:manage on the task node. */

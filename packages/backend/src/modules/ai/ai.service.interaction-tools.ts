@@ -1,15 +1,25 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
+import { hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { CreateNginxTemplateSchema, UpdateNginxTemplateSchema } from '@/modules/proxy/nginx-template.schemas.js';
+import {
+  CreateNginxTemplateSchema,
+  PreviewNginxTemplateSchema,
+  UpdateNginxTemplateSchema,
+} from '@/modules/proxy/nginx-template.schemas.js';
+import { renderTemplatePreviewForHost, testTemplateContent } from '@/modules/proxy/nginx-template-preview.js';
+import { redactProxyHostForScopes } from '@/modules/proxy/page-target-visibility.js';
 import {
   LinkInternalCertSchema,
   RequestACMECertSchema,
   SetSslAutoRenewSchema,
+  SSLCertListQuerySchema,
   UploadCertSchema,
 } from '@/modules/ssl/ssl.schemas.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
+import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
+import { requireExistingPageRouteAccess } from './ai.proxy-tools.js';
 import { AIServiceExecution } from './ai.service.execution.js';
 import {
   SEND_COMMENT_EMPTY_ERROR,
@@ -155,10 +165,32 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         const { NginxTemplateService } = await import('@/modules/proxy/nginx-template.service.js');
         const templateService = container.resolve(NginxTemplateService);
         if (a.operation === 'list') {
-          this.ensureToolScope(user, 'proxy:templates:view');
+          if (!hasScopeBase(user.scopes, 'proxy:templates:view')) this.ensureToolScope(user, 'proxy:templates:view');
           return templateService.listTemplates({
             allowedIds: allowedResourceIdsForScopes(user.scopes, 'proxy:templates:view'),
           });
+        }
+        if (a.operation === 'preview') {
+          // Mirrors POST /nginx-templates/preview.
+          if (!hasScopeBase(user.scopes, 'proxy:templates:view')) this.ensureToolScope(user, 'proxy:templates:view');
+          const input = PreviewNginxTemplateSchema.parse({ content: a.content, hostId: a.routeId });
+          if (!input.hostId) return { rendered: templateService.previewWithSampleData(input.content) };
+          this.ensureToolScope(user, `proxy:view:${input.hostId}`);
+          const host = await this.proxyService.getProxyHost(input.hostId);
+          const includeAdvancedConfig = hasScope(user.scopes, `proxy:advanced:${input.hostId}`);
+          return {
+            rendered: renderTemplatePreviewForHost(templateService, input.content, host, includeAdvancedConfig),
+          };
+        }
+        if (a.operation === 'test') {
+          // Mirrors POST /nginx-templates/test: raw write plus edit on the template or create.
+          this.ensureToolScope(user, 'proxy:raw:write');
+          const input = PreviewNginxTemplateSchema.parse({ content: a.content, templateId: a.templateId });
+          this.ensureToolScope(
+            user,
+            input.templateId ? `proxy:templates:edit:${input.templateId}` : 'proxy:templates:create'
+          );
+          return testTemplateContent(templateService, container.resolve(NodeDispatchService), input.content);
         }
         if (a.operation === 'get') {
           this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
@@ -188,18 +220,30 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
       }
 
       // ── SSL Certificates ──
-      case 'list_ssl_certificates':
-        return this.sslService.listCerts(
-          { search: a.search, page: agentPage(a.page), limit: agentPageLimit(a.limit) },
-          { allowedIds: allowedResourceIdsForScopes(user.scopes, 'ssl:cert:view') }
-        );
+      case 'list_ssl_certificates': {
+        const query = SSLCertListQuerySchema.parse({
+          search: a.search,
+          type: a.type,
+          status: a.status,
+          showSystem: a.showSystem === true ? 'true' : undefined,
+          page: agentPage(a.page),
+          limit: agentPageLimit(a.limit),
+        });
+        // Same rule as GET /ssl-certificates: system certificates need admin:details:certificates.
+        if (query.showSystem) this.ensureToolScope(user, 'admin:details:certificates');
+        return this.sslService.listCerts(query, {
+          allowedIds: allowedResourceIdsForScopes(user.scopes, 'ssl:cert:view'),
+        });
+      }
       case 'link_internal_cert': {
         const input = LinkInternalCertSchema.parse(args);
         if (!hasScopeForCreation(user.scopes, 'ssl:cert:issue', input.folderId)) {
           throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
-        return this.sslService.linkInternalCert(input, user.id, user.scopes);
+        const cert = await this.sslService.linkInternalCert(input, user.id, user.scopes);
+        await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+        return cert;
       }
       case 'request_acme_cert': {
         const input = RequestACMECertSchema.parse(args);
@@ -207,7 +251,9 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
-        return this.sslService.requestACMECert(input, user.id, user.email);
+        const result = await this.sslService.requestACMECert(input, user.id, user.email);
+        await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id);
+        return result;
       }
       case 'manage_ssl_certificate': {
         if (a.operation === 'get') {
@@ -220,7 +266,9 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
             throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected destination');
           }
           await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
-          return this.sslService.uploadCert(input, user.id);
+          const cert = await this.sslService.uploadCert(input, user.id);
+          await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+          return cert;
         }
         if (a.operation === 'renew') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
@@ -233,7 +281,9 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         if (a.operation === 'verify_dns') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
-          return this.sslService.completeDNS01Verification(a.sslCertificateId, user.id);
+          return this.sslService.completeDNS01Verification(a.sslCertificateId, user.id, {
+            contactEmail: user.email,
+          });
         }
         if (a.operation === 'set_auto_renew') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
@@ -281,19 +331,37 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         if (!(rawHost as any).rawConfigEnabled) {
           throw new Error('Raw mode is not enabled on this route. Enable it first with toggle_route_raw_mode.');
         }
-        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`);
+        // Same checks as a raw-only PUT /proxy-hosts/{id}.
+        requireExistingPageRouteAccess(user, rawHost);
+        const rawInput = { rawConfig: a.rawConfig };
+        await this.proxyService.assertReferenceAccess(user.scopes, rawInput as never, rawHost as never);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.routeId, { rawConfig: a.rawConfig } as any, user.id, {
-            bypassRawValidation,
-          })
+          redactProxyHostForScopes(
+            await this.proxyService.updateProxyHost(a.routeId, rawInput as any, user.id, {
+              bypassAdvancedValidation: hasScope(user.scopes, `proxy:advanced:bypass:${a.routeId}`),
+              bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`),
+              actorScopes: user.scopes,
+            }),
+            user.scopes
+          )
         );
       }
       case 'toggle_route_raw_mode': {
-        const bypassRawValidation = hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`);
+        // PUT {rawConfigEnabled} is not a raw-only update, so the route also requires proxy:edit.
+        this.ensureToolScopeForResource(user, 'proxy:edit', String(a.routeId));
+        const existing = await this.proxyService.getProxyHost(a.routeId);
+        requireExistingPageRouteAccess(user, existing);
+        const toggleInput = { rawConfigEnabled: a.enabled };
+        await this.proxyService.assertReferenceAccess(user.scopes, toggleInput as never, existing as never);
         return compactProxyHostForAgent(
-          await this.proxyService.updateProxyHost(a.routeId, { rawConfigEnabled: a.enabled } as any, user.id, {
-            bypassRawValidation,
-          })
+          redactProxyHostForScopes(
+            await this.proxyService.updateProxyHost(a.routeId, toggleInput as any, user.id, {
+              bypassAdvancedValidation: hasScope(user.scopes, `proxy:advanced:bypass:${a.routeId}`),
+              bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`),
+              actorScopes: user.scopes,
+            }),
+            user.scopes
+          )
         );
       }
       default:

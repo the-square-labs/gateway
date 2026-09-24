@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,6 +24,9 @@ const (
 	PolicyLease       = 15 * time.Minute
 	IssuedAtClockSkew = 5 * time.Minute
 	PoolCapability    = "relay_pool_v1"
+	// TrustResetCapability tells Gateway that this local relay implements
+	// ResetLocalPolicyTrust, so a trust lockout can be repaired without an operator.
+	TrustResetCapability = "policy_trust_reset_v1"
 )
 
 var (
@@ -86,6 +90,11 @@ type Store struct {
 	instanceID  string
 	now         func() time.Time
 	policyTrust map[string]trustedPolicyKey
+	// rebind is set by a local trust reset. The next accepted snapshot may then
+	// replace the serving one even if it names another Gateway instance or an
+	// older revision: both are what a Gateway restored from backup, or one that
+	// was reinstalled over an existing relay volume, sends after re-pinning.
+	rebind bool
 }
 
 func Open(dir string) (*Store, error) {
@@ -233,7 +242,10 @@ func (s *Store) BootstrapPolicyTrust(keyID string, raw []byte, fingerprint strin
 //
 // A persisted signed snapshot is dropped unless the new key signed it, so a
 // restart before Gateway's next snapshot starts empty instead of refusing to
-// load. The in-memory snapshot keeps serving until that next snapshot arrives.
+// load. The in-memory snapshot keeps serving until that next snapshot arrives,
+// and that snapshot may rebind the relay to Gateway's current instance and
+// revision sequence. Repeating the reset with the same key changes nothing
+// else, so a retried call is safe.
 func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint string) ([]string, error) {
 	if s.mode != relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 		return nil, fmt.Errorf("policy trust reset is only available to the local relay")
@@ -249,9 +261,14 @@ func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint stri
 	defer s.mu.Unlock()
 	replaced := make([]string, 0, len(s.policyTrust))
 	for id := range s.policyTrust {
-		replaced = append(replaced, id)
+		if id != keyID {
+			replaced = append(replaced, id)
+		}
 	}
 	sort.Strings(replaced)
+	if existing, ok := s.policyTrust[keyID]; ok && (existing.Fingerprint != fingerprint || !bytes.Equal(existing.PublicKey, publicKey)) {
+		return nil, fmt.Errorf("policy signing key conflicts with pinned key")
+	}
 	next := map[string]trustedPolicyKey{keyID: {PublicKey: publicKey, Fingerprint: fingerprint}}
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketState)
@@ -268,6 +285,7 @@ func (s *Store) ResetLocalPolicyTrust(keyID string, raw []byte, fingerprint stri
 		return nil, err
 	}
 	s.policyTrust = next
+	s.rebind = true
 	return replaced, nil
 }
 
@@ -294,17 +312,21 @@ func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, e
 		return nil, false, err
 	}
 	current := s.current
-	if current.GatewayInstanceID != "" && next.GatewayInstanceID != current.GatewayInstanceID {
-		return nil, false, fmt.Errorf("snapshot gateway instance changed")
+	if next.Revision == current.Revision && bytes.Equal(next.Digest[:], current.Digest[:]) {
+		return current, true, nil
 	}
-	if next.Revision < current.Revision {
-		return nil, false, fmt.Errorf("snapshot revision %d is older than applied revision %d", next.Revision, current.Revision)
-	}
-	if next.Revision == current.Revision {
-		if bytes.Equal(next.Digest[:], current.Digest[:]) {
-			return current, true, nil
+	// After a local trust reset the first snapshot from the re-pinned key is
+	// authoritative; see ResetLocalPolicyTrust.
+	if !s.rebind {
+		if current.GatewayInstanceID != "" && next.GatewayInstanceID != current.GatewayInstanceID {
+			return nil, false, fmt.Errorf("snapshot gateway instance changed")
 		}
-		return nil, false, fmt.Errorf("snapshot revision %d conflicts with applied content", next.Revision)
+		if next.Revision < current.Revision {
+			return nil, false, fmt.Errorf("snapshot revision %d is older than applied revision %d", next.Revision, current.Revision)
+		}
+		if next.Revision == current.Revision {
+			return nil, false, fmt.Errorf("snapshot revision %d conflicts with applied content", next.Revision)
+		}
 	}
 	if err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(bucketState)
@@ -320,6 +342,7 @@ func (s *Store) Apply(request *relayv1.ApplySnapshotRequest) (*Snapshot, bool, e
 	}
 	s.current = next
 	s.policyTrust = nextTrust
+	s.rebind = false
 	return next, false, nil
 }
 
@@ -393,7 +416,13 @@ func (s *Store) load() error {
 	}
 	_, _, snapshot, nextTrust, err := s.normalizeLocked(request, true)
 	if err != nil {
-		return fmt.Errorf("validate persisted snapshot: %w", err)
+		// A persisted snapshot that no longer validates must not keep the relay
+		// from starting, or it restarts forever: for example one written for
+		// another relay instance before a re-enrollment. The relay starts
+		// without a policy, admits nothing and keeps its pinned trust until
+		// Gateway sends a new snapshot.
+		slog.Warn("ignoring persisted relay policy snapshot that no longer validates", "error", err)
+		return nil
 	}
 	s.current = snapshot
 	s.policyTrust = nextTrust
@@ -463,7 +492,9 @@ func (s *Store) normalizeSignedPayload(payload *relayv1.PolicyEnvelopePayload, d
 	if expiresAt.Sub(issuedAt) <= 0 || expiresAt.Sub(issuedAt) > PolicyLease {
 		return nil, nil, fmt.Errorf("policy envelope lease is invalid")
 	}
-	if issuedAt.After(now.Add(IssuedAtClockSkew)) {
+	// A reload checks neither end of the lease: a relay whose clock starts
+	// behind the snapshot it persisted must still start.
+	if !allowExpired && issuedAt.After(now.Add(IssuedAtClockSkew)) {
 		return nil, nil, fmt.Errorf("policy envelope was issued in the future")
 	}
 	if !allowExpired && !now.Before(expiresAt) {

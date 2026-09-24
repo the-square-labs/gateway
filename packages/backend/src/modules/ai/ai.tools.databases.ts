@@ -7,7 +7,7 @@ export const DATABASE_AI_TOOLS: AIToolDefinition[] = [
     parameters: {
       type: 'object',
       properties: {
-        type: { type: 'string', enum: ['postgres', 'redis'], description: 'Optional provider filter' },
+        type: { type: 'string', enum: ['postgres', 'redis', 'clickhouse'], description: 'Optional provider filter' },
         healthStatus: {
           type: 'string',
           enum: ['online', 'offline', 'degraded', 'unknown'],
@@ -144,37 +144,45 @@ export const DATABASE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_database_connection',
     description:
-      'Manage saved database connections. Operations: create, update, delete, test, reveal_credentials, health_history. Operation-specific database scopes are enforced.',
+      'Manage saved database connections. Operations: create, update, delete, test, reveal_credentials, health_history, monitoring. reveal_credentials returns the saved connection secret (databases:credentials:reveal; managed databases use manage_managed_database reveal_credentials instead). delete of a managed connection removes its managed instance. monitoring returns the current health and metric history. Operation-specific database scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['create', 'update', 'delete', 'test', 'reveal_credentials', 'health_history'],
+          enum: ['create', 'update', 'delete', 'test', 'reveal_credentials', 'health_history', 'monitoring'],
         },
-        databaseId: { type: 'string', description: 'Database connection UUID for update/delete/test/reveal/history' },
-        type: { type: 'string', enum: ['postgres', 'redis'] },
+        databaseId: {
+          type: 'string',
+          description: 'Database connection UUID for update/delete/test/reveal/history/monitoring',
+        },
+        type: { type: 'string', enum: ['postgres', 'redis', 'clickhouse'] },
         name: { type: 'string' },
-        description: { type: 'string' },
+        folderId: { type: ['string', 'null'], description: 'Optional destination folder UUID for create' },
+        description: { type: ['string', 'null'] },
         tags: { type: 'array', items: { type: 'string' } },
-        manualSizeLimitMb: { type: 'number' },
+        manualSizeLimitMb: { type: ['number', 'null'] },
+        interactiveQueryBudgetSeconds: { type: 'number', description: 'Postgres/ClickHouse console budget, 30-600' },
         config: {
           type: 'object',
           description:
-            'Connection config. Postgres: connectionString or host/port/database/username/password/sslEnabled. Redis: connectionString or host/port/username/password/db/tlsEnabled.',
+            'Connection config. Postgres: connectionString or host/port/database/username/password/sslEnabled. Redis: connectionString or host/port/username/password/db/tlsEnabled. ClickHouse: connectionString/url or host/port/database/username/password/tlsEnabled.',
         },
       },
       required: ['operation'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Databases',
     requiredScope: 'databases:view',
     invalidateStores: [],
+    // reveal_credentials returns the saved secret; keep it out of saved chat history.
+    historyRetention: { mode: 'summary_only' },
   },
   {
     name: 'manage_postgres_data',
     description:
-      'Explore and edit Postgres data for a saved connection. Operations: list_schemas, list_tables, table_metadata, browse_rows, insert_row, update_row, delete_row, add_column, update_column_type, delete_column.',
+      'Explore and edit SQL data for a saved connection. Postgres operations: list_schemas, list_tables, table_metadata, browse_rows, insert_row, update_row, delete_row, add_column, update_column_type, delete_column. Managed Postgres extensions: list_extensions (query read), enable_extension and disable_extension (query admin) with extension. Provider-neutral SQL explorer for Postgres and ClickHouse: sql_list_namespaces, sql_list_objects (namespace), sql_table_metadata, sql_browse_rows, sql_insert_row (values), sql_update_row (locator, values), sql_delete_row (locator), sql_execute (sql; required query scope follows the statement intent).',
     parameters: {
       type: 'object',
       properties: {
@@ -191,10 +199,22 @@ export const DATABASE_AI_TOOLS: AIToolDefinition[] = [
             'add_column',
             'update_column_type',
             'delete_column',
+            'list_extensions',
+            'enable_extension',
+            'disable_extension',
+            'sql_list_namespaces',
+            'sql_list_objects',
+            'sql_table_metadata',
+            'sql_browse_rows',
+            'sql_insert_row',
+            'sql_update_row',
+            'sql_delete_row',
+            'sql_execute',
           ],
         },
         databaseId: { type: 'string' },
         schema: { type: 'string' },
+        namespace: { type: 'string', description: 'SQL explorer namespace (Postgres schema or ClickHouse database)' },
         table: { type: 'string' },
         page: { type: 'number' },
         limit: { type: 'number' },
@@ -205,10 +225,20 @@ export const DATABASE_AI_TOOLS: AIToolDefinition[] = [
         searchValue: { type: 'string' },
         values: { type: 'object' },
         primaryKey: { type: 'object' },
+        locator: { type: 'object', description: 'Column values identifying the row for sql_update_row/sql_delete_row' },
         column: { type: 'string' },
         dataType: { type: 'string' },
+        extension: {
+          type: 'string',
+          pattern: '^[A-Za-z0-9][A-Za-z0-9_-]*$',
+          maxLength: 64,
+          description: 'Managed Postgres extension name from list_extensions',
+        },
+        sql: { type: 'string', description: 'Single SQL statement for sql_execute' },
+        maxRows: { type: 'number', description: 'Row cap for sql_execute, 1-2000' },
       },
       required: ['operation', 'databaseId'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Databases',

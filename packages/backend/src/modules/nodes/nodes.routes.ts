@@ -16,7 +16,6 @@ import {
   authMiddleware,
   requireScope,
   requireScopeForResource,
-  sessionOnly,
 } from '@/modules/auth/auth.middleware.js';
 import {
   FileBrowseSchema,
@@ -45,7 +44,9 @@ import {
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
+import { createNodeForActor, updateNodeForActor } from './node-actions.js';
 import { NodeFolderService } from './node-folders.service.js';
+import { daemonLogMatcher, nginxLogEntryKey, nginxLogMatcher, splitLogFilterList } from './node-log-filters.js';
 import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
 import {
   abortNodeFileUploadRoute,
@@ -154,21 +155,6 @@ const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
   'docker:networks:delete',
   'docker:networks:edit',
 ] as const;
-
-function nginxLogEntryKey(entry: RelayedLogEntry): string {
-  return [
-    entry.hostId,
-    entry.logType,
-    entry.timestamp,
-    entry.remoteAddr,
-    entry.method,
-    entry.path,
-    entry.status,
-    entry.bodyBytesSent,
-    entry.raw,
-    entry.level,
-  ].join('\u0000');
-}
 
 function hasBroadDockerNodeListAccess(scopes: string[]) {
   return (
@@ -590,14 +576,8 @@ nodesRoutes.openapi(
 nodesRoutes.openapi(createNodeRoute, async (c) => {
   // The response carries an enrollment token that outlives the impersonation session.
   assertNotImpersonating(c, 'Nodes cannot be created while impersonating');
-  const service = container.resolve(NodesService);
-  const user = c.get('user')!;
   const input = CreateNodeSchema.parse(await c.req.json());
-  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'nodes:create', input.folderId)) {
-    throw new AppError(403, 'FORBIDDEN', 'Missing nodes:create permission for the selected destination');
-  }
-  await container.resolve(NodeFolderService).assertFolderExists(input.folderId);
-  const result = await service.create(input, user.id);
+  const result = await createNodeForActor({ id: c.get('user')!.id, scopes: c.get('effectiveScopes') ?? [] }, input);
   return c.json({ data: result }, 201);
 });
 
@@ -612,67 +592,13 @@ nodesRoutes.openapi(
   }
 );
 
-nodesRoutes.openapi({ ...updateNodeRoute, middleware: sessionOnly }, async (c) => {
-  const service = container.resolve(NodesService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
+nodesRoutes.openapi(updateNodeRoute, async (c) => {
   const input = UpdateNodeSchema.parse(await c.req.json());
-  const scopes = c.get('effectiveScopes') || [];
-  const serviceAddressesUpdateRequested =
-    input.serviceAddresses !== undefined ||
-    input.serviceAddress !== undefined ||
-    input.secondaryServiceAddress !== undefined;
-  if (
-    (input.displayName !== undefined || input.appearanceColor !== undefined || serviceAddressesUpdateRequested) &&
-    !hasScope(scopes, `nodes:rename:${id}`)
-  ) {
-    throw new AppError(403, 'FORBIDDEN', 'Editing node identity or service addresses requires node rename access');
-  }
-  if (input.builderSettings !== undefined) {
-    const current = await service.get(id);
-    if (current.type !== 'builder') {
-      throw new AppError(
-        400,
-        'INVALID_BUILDER_SETTINGS_NODE',
-        'Build settings are only supported for Build Worker nodes'
-      );
-    }
-    if (!hasScope(scopes, `nodes:config:edit:${id}`)) {
-      throw new AppError(403, 'FORBIDDEN', 'Editing Build Worker settings requires node config edit access');
-    }
-  }
-  if (serviceAddressesUpdateRequested) {
-    const current = await service.get(id);
-    if (current.type === 'docker' && !hasScope(scopes, `docker:containers:config:${id}`)) {
-      throw new AppError(403, 'FORBIDDEN', 'Editing the Docker service address requires Docker config access');
-    }
-    if (current.type === 'nginx' && !hasScope(scopes, `nodes:config:edit:${id}`)) {
-      throw new AppError(403, 'FORBIDDEN', 'Editing the Nginx service address requires node config edit access');
-    }
-    if (current.type === 'nginx' && input.confirmDomainDnsUpdate && !hasScope(scopes, 'domains:edit')) {
-      throw new AppError(403, 'FORBIDDEN', 'Updating assigned domain DNS targets requires domain edit access');
-    }
-    if (
-      current.type !== 'docker' &&
-      current.type !== 'databases' &&
-      current.type !== 'storage' &&
-      current.type !== 'nginx'
-    ) {
-      throw new AppError(
-        400,
-        'INVALID_SERVICE_ADDRESS_NODE',
-        'Service address is only supported for Docker, database, and Nginx nodes'
-      );
-    }
-    if (input.secondaryServiceAddress !== undefined && current.type !== 'nginx') {
-      throw new AppError(
-        400,
-        'INVALID_SECONDARY_SERVICE_ADDRESS_NODE',
-        'Secondary service address is only supported for Nginx nodes'
-      );
-    }
-  }
-  const node = await service.update(id, input, user.id);
+  const node = await updateNodeForActor(
+    { id: c.get('user')!.id, scopes: c.get('effectiveScopes') || [] },
+    c.req.param('id')!,
+    input
+  );
   return c.json({ data: node });
 });
 
@@ -712,7 +638,7 @@ async function requireNginxNode(c: any): Promise<boolean> {
   }
 }
 
-nodesRoutes.openapi({ ...getNodeConfigRoute, middleware: sessionOnly }, async (c) => {
+nodesRoutes.openapi(getNodeConfigRoute, async (c) => {
   const requiredScope = `nodes:config:view:${c.req.param('id')!}`;
   if (!hasScope(c.get('effectiveScopes') || [], requiredScope)) {
     return c.json({ message: `Missing required scope: ${requiredScope}` }, 403);
@@ -728,7 +654,7 @@ nodesRoutes.openapi({ ...getNodeConfigRoute, middleware: sessionOnly }, async (c
   return c.json({ data: { content: result.detail } });
 });
 
-nodesRoutes.openapi({ ...updateNodeConfigRoute, middleware: sessionOnly }, async (c) => {
+nodesRoutes.openapi(updateNodeConfigRoute, async (c) => {
   const requiredScope = `nodes:config:edit:${c.req.param('id')!}`;
   if (!hasScope(c.get('effectiveScopes') || [], requiredScope)) {
     return c.json({ message: `Missing required scope: ${requiredScope}` }, 403);
@@ -754,7 +680,7 @@ nodesRoutes.openapi({ ...updateNodeConfigRoute, middleware: sessionOnly }, async
 // Test node's nginx config on the target node daemon.
 // Do not run a backend-local nginx -t first, because node configs can contain
 // valid host-specific includes/paths that do not exist inside the Gateway container.
-nodesRoutes.openapi({ ...testNodeConfigRoute, middleware: sessionOnly }, async (c) => {
+nodesRoutes.openapi(testNodeConfigRoute, async (c) => {
   const requiredScope = `nodes:config:edit:${c.req.param('id')!}`;
   if (!hasScope(c.get('effectiveScopes') || [], requiredScope)) {
     return c.json({ message: `Missing required scope: ${requiredScope}` }, 403);
@@ -823,28 +749,15 @@ nodesRoutes.openapi(
 // Query params: ?level=info,warn,error  &search=keyword
 nodesRoutes.openapi({ ...nodeDaemonLogsRoute, middleware: requireScopeForResource('nodes:logs', 'id') }, async (c) => {
   const nodeId = c.req.param('id')!;
-  const levelFilter =
-    c.req
-      .query('level')
-      ?.split(',')
-      .map((l) => l.trim().toLowerCase())
-      .filter(Boolean) ?? [];
-  const searchFilter = c.req.query('search')?.toLowerCase() ?? '';
 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nodeId)) {
     return c.json({ code: 'INVALID_ID', message: 'Invalid node ID' }, 400);
   }
 
-  const matchesFilter = (entry: RelayedDaemonLogEntry): boolean => {
-    if (levelFilter.length > 0 && !levelFilter.includes((entry.level || '').toLowerCase())) return false;
-    if (
-      searchFilter &&
-      !entry.message?.toLowerCase().includes(searchFilter) &&
-      !entry.component?.toLowerCase().includes(searchFilter)
-    )
-      return false;
-    return true;
-  };
+  const matchesFilter = daemonLogMatcher({
+    levels: splitLogFilterList(c.req.query('level'), (level) => level.toLowerCase()),
+    search: c.req.query('search') ?? '',
+  });
 
   return streamSSE(c, async (stream) => {
     // Send buffered history (filtered)
@@ -883,13 +796,6 @@ nodesRoutes.openapi({ ...nodeDaemonLogsRoute, middleware: requireScopeForResourc
 nodesRoutes.openapi({ ...nodeNginxLogsRoute, middleware: requireScopeForResource('nodes:logs', 'id') }, async (c) => {
   if (!(await requireNginxNode(c))) return c.body(null);
   const nodeId = c.req.param('id')!;
-  const searchFilter = c.req.query('search')?.toLowerCase() ?? '';
-  const statusFilter =
-    c.req
-      .query('status')
-      ?.split(',')
-      .map((s) => s.trim())
-      .filter(Boolean) ?? [];
 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(nodeId)) {
     return c.json({ code: 'INVALID_ID', message: 'Invalid node ID' }, 400);
@@ -903,31 +809,11 @@ nodesRoutes.openapi({ ...nodeNginxLogsRoute, middleware: requireScopeForResource
   const hosts = await db.select({ id: proxyHosts.id }).from(proxyHosts).where(eq(proxyHosts.nodeId, nodeId));
   const visibleHostIds = new Set<string>(hosts.map((h: any) => h.id as string));
 
-  const matchesFilter = (entry: RelayedLogEntry): boolean => {
-    if (!visibleHostIds.has(entry.hostId)) return false;
-    if (
-      searchFilter &&
-      !entry.path?.toLowerCase().includes(searchFilter) &&
-      !entry.remoteAddr?.includes(searchFilter) &&
-      !entry.raw?.toLowerCase().includes(searchFilter)
-    )
-      return false;
-    if (statusFilter.length > 0) {
-      const code = entry.status;
-      const isError = entry.logType === 'error';
-      const matches = statusFilter.some((f) => {
-        if (f === 'error') return isError;
-        if (isError) return false;
-        if (f === '2xx') return code >= 200 && code < 300;
-        if (f === '3xx') return code >= 300 && code < 400;
-        if (f === '4xx') return code >= 400 && code < 500;
-        if (f === '5xx') return code >= 500;
-        return false;
-      });
-      if (!matches) return false;
-    }
-    return true;
-  };
+  const matchesFilter = nginxLogMatcher({
+    hostIds: visibleHostIds,
+    search: c.req.query('search') ?? '',
+    statuses: splitLogFilterList(c.req.query('status'), (status) => status),
+  });
 
   return streamSSE(c, async (stream) => {
     await stream.writeSSE({

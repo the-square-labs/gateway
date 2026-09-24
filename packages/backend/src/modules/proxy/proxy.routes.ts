@@ -1,16 +1,13 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
-  isProgrammaticAuth,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
-  sessionOnly,
 } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
@@ -26,7 +23,10 @@ import {
 import { AdditionalRouteService } from './additional-route.service.js';
 import { CreateAdditionalRouteSchema, UpdateAdditionalRouteSchema } from './additional-route.validation.js';
 import { FolderService } from './folder.service.js';
-import { redactProxyHostForScopes } from './page-target-visibility.js';
+import {
+  redactProxyHostForScopes,
+  redactAdditionalRouteForScopes as serializeAdditionalRoute,
+} from './page-target-visibility.js';
 import {
   createProxyHostRoute,
   deleteProxyHostRoute,
@@ -42,6 +42,7 @@ import {
   validateProxyConfigRoute,
 } from './proxy.docs.js';
 import {
+  CreateAdditionalSecureLinkSchema,
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
   ToggleProxyHostSchema,
@@ -51,11 +52,7 @@ import {
 } from './proxy.schemas.js';
 import { ProxyService } from './proxy.service.js';
 import { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
-import {
-  redactRawProxyConfigForBrowser,
-  stripRawProxyConfigArrayForProgrammatic,
-  stripRawProxyConfigForProgrammatic,
-} from './raw-visibility.js';
+import { redactRawProxyConfigForBrowser } from './raw-visibility.js';
 
 export const proxyRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -79,13 +76,6 @@ function requestTogglesRawProxyConfig(
   return becomesRawType || leavesRawType || changesFlag;
 }
 
-function requestUsesRawProxyConfig(
-  input: { type?: string; rawConfig?: unknown; rawConfigEnabled?: unknown },
-  existing?: RawModeState
-): boolean {
-  return input.rawConfig !== undefined || requestTogglesRawProxyConfig(input, existing);
-}
-
 function normalizedAdvancedConfig(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
@@ -104,10 +94,6 @@ function serializeProxyHostForBrowser(host: Record<string, unknown>, scopes: str
   return canReadRawProxyConfig(scopes, id) ? scoped : redactRawProxyConfigForBrowser(scoped);
 }
 
-function serializeProxyHostForProgrammatic(host: Record<string, unknown>, scopes: string[]) {
-  return stripRawProxyConfigForProgrammatic(redactProxyHostForScopes(host, scopes));
-}
-
 proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('proxy:view') }, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const query = ProxyHostListQuerySchema.parse(c.req.query());
@@ -117,9 +103,6 @@ proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('prox
     hasScope(scopes, 'proxy:view') ? undefined : { allowedIds: getResourceScopedIds(scopes, 'proxy:view') }
   );
   const scopedData = result.data.map((host) => redactProxyHostForScopes(host as any, scopes));
-  if (isProgrammaticAuth(c)) {
-    return c.json({ ...result, data: stripRawProxyConfigArrayForProgrammatic(scopedData as any[]) });
-  }
   return c.json({ ...result, data: scopedData });
 });
 
@@ -130,7 +113,6 @@ proxyRoutes.openapi(getProxyHostBySlugRoute, async (c) => {
   if (!hasScope(scopes, `proxy:view:${host.id}`)) {
     throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:view:${host.id}`);
   }
-  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, host.id) });
 });
 
@@ -139,7 +121,6 @@ proxyRoutes.openapi({ ...getProxyHostRoute, middleware: requireScopeForResource(
   const id = c.req.param('id')!;
   const host = await proxyService.getProxyHost(id);
   const scopes = c.get('effectiveScopes') || [];
-  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -160,52 +141,12 @@ proxyRoutes.get('/:id/secure-link', requireScopeForResource('proxy:view', 'id'),
 
 proxyRoutes.post(
   '/:id/maintenance-access-code',
-  sessionOnly,
   requireScopeForResource('proxy:maintenance:bypass', 'id'),
   async (c) => {
     const data = await container.resolve(ProxyMaintenanceAccessService).issue(c.req.param('id')!, c.get('user')!.id);
     return c.json({ data });
   }
 );
-
-const AdditionalSecureLinkSchema = z
-  .object({
-    name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/),
-    upstreamKind: z.enum(['docker_container', 'docker_deployment', 'managed_storage']),
-    managedStorageId: z.string().uuid().nullable().optional(),
-    forwardScheme: z.enum(['http', 'https']).default('http'),
-    dockerNodeId: z.string().uuid().nullable().optional(),
-    dockerContainerName: z.string().min(1).max(255).nullable().optional(),
-    dockerComposeProjectId: z.string().uuid().nullable().optional(),
-    dockerComposeServiceName: z.string().min(1).max(255).nullable().optional(),
-    dockerDeploymentId: z.string().uuid().nullable().optional(),
-    dockerContainerPort: z.number().int().min(1).max(65535).optional(),
-  })
-  .superRefine((data, ctx) => {
-    if (data.upstreamKind === 'managed_storage') {
-      if (!data.managedStorageId)
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['managedStorageId'], message: 'Select managed storage' });
-      return;
-    }
-    if (!data.dockerContainerPort)
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['dockerContainerPort'],
-        message: 'Select the application port',
-      });
-    if (data.upstreamKind === 'docker_deployment' && !data.dockerDeploymentId)
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['dockerDeploymentId'], message: 'Select a deployment' });
-    if (data.upstreamKind !== 'docker_container') return;
-    const hasContainer = Boolean(data.dockerContainerName);
-    const hasCompose = Boolean(data.dockerComposeProjectId && data.dockerComposeServiceName);
-    if (!data.dockerNodeId || hasContainer === hasCompose) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['dockerContainerName'],
-        message: 'Select either a container or a Compose service',
-      });
-    }
-  });
 
 proxyRoutes.get('/:id/additional-secure-links', requireScopeForResource('proxy:view', 'id'), async (c) => {
   const data = await container.resolve(ProxyService).listAdditionalSecureLinks(c.req.param('id')!);
@@ -217,7 +158,7 @@ proxyRoutes.post('/:id/additional-secure-links', requireScopeForResource('proxy:
     .resolve(ProxyService)
     .createAdditionalSecureLink(
       c.req.param('id')!,
-      AdditionalSecureLinkSchema.parse(await c.req.json()),
+      CreateAdditionalSecureLinkSchema.parse(await c.req.json()),
       c.get('user')!.id,
       c.get('effectiveScopes') || []
     );
@@ -250,30 +191,6 @@ proxyRoutes.delete(
     return c.body(null, 204);
   }
 );
-
-function serializeAdditionalRoute(route: Record<string, unknown>, scopes: string[]) {
-  const hostId = typeof route.proxyHostId === 'string' ? route.proxyHostId : null;
-  const visibleRoute =
-    hostId && hasScope(scopes, `proxy:advanced:${hostId}`) ? route : { ...route, advancedConfig: null };
-  if (route.targetKind !== 'pages') return visibleRoute;
-  const projectId = typeof route.pageProjectId === 'string' ? route.pageProjectId : null;
-  if (!projectId || !hasScope(scopes, `pages:view:${projectId}`)) {
-    return {
-      ...visibleRoute,
-      pageProjectId: null,
-      pageTagId: null,
-      activeDeploymentId: null,
-      includePath: null,
-      runtimeConfigPath: null,
-      runtimeConfigGeneration: 0,
-      pageProjectName: null,
-      pageProjectSlug: null,
-      pageProjectAppearanceColor: null,
-      pageTagName: null,
-    };
-  }
-  return visibleRoute;
-}
 
 proxyRoutes.openapi(
   { ...listAdditionalRoutesRoute, middleware: requireScopeForResource('proxy:view', 'id') },
@@ -378,12 +295,6 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
   await container.resolve(FolderService).assertFolderExists(input.folderId);
-  if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input)) {
-    return c.json(
-      { code: 'BROWSER_SESSION_REQUIRED', message: 'Raw nginx config requires browser session authentication' },
-      403
-    );
-  }
   if (input.advancedConfig && !hasScope(scopes, 'proxy:advanced')) {
     throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
   }
@@ -407,7 +318,6 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
     bypassRawValidation,
     actorScopes: scopes,
   });
-  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) }, 201);
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, (host as any).id) }, 201);
 });
 
@@ -418,12 +328,6 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   const input = UpdateProxyHostSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
   const existing = await proxyService.getProxyHost(id);
-  if (isProgrammaticAuth(c) && requestUsesRawProxyConfig(input, existing)) {
-    return c.json(
-      { code: 'BROWSER_SESSION_REQUIRED', message: 'Raw nginx config requires browser session authentication' },
-      403
-    );
-  }
   // Moving a route between folders goes through the same checks as the move
   // endpoint. An unchanged folderId (full-object PUT) is ignored.
   if (input.folderId !== undefined) {
@@ -497,7 +401,6 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
     bypassRawValidation,
     actorScopes: scopes,
   });
-  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -519,7 +422,6 @@ proxyRoutes.openapi({ ...toggleProxyHostRoute, middleware: requireScopeForResour
   const { enabled } = ToggleProxyHostSchema.parse(await c.req.json());
   const host = await proxyService.toggleProxyHost(id, enabled, user.id);
   const scopes = c.get('effectiveScopes') || [];
-  if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
 });
 
@@ -532,7 +434,6 @@ proxyRoutes.openapi(
     const { enabled } = ToggleProxyMaintenanceSchema.parse(await c.req.json());
     const host = await proxyService.toggleMaintenance(id, enabled, user.id);
     const scopes = c.get('effectiveScopes') || [];
-    if (isProgrammaticAuth(c)) return c.json({ data: serializeProxyHostForProgrammatic(host as any, scopes) });
     return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
   }
 );
@@ -544,7 +445,7 @@ proxyRoutes.openapi({ ...resyncProxyHostTlsRoute, middleware: requireScope('admi
   return c.json({ data: result });
 });
 
-proxyRoutes.openapi({ ...renderedProxyConfigRoute, middleware: sessionOnly }, async (c) => {
+proxyRoutes.openapi(renderedProxyConfigRoute, async (c) => {
   const id = c.req.param('id')!;
   const scopes = c.get('effectiveScopes') || [];
   if (!scopes.includes(`proxy:raw:read:${id}`) && !scopes.includes('proxy:raw:read')) {
@@ -559,12 +460,6 @@ proxyRoutes.openapi(validateProxyConfigRoute, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const scopes = c.get('effectiveScopes') || [];
   const { snippet, mode, proxyHostId } = ValidateAdvancedConfigSchema.parse(await c.req.json());
-  if (isProgrammaticAuth(c) && mode === 'raw') {
-    return c.json(
-      { code: 'BROWSER_SESSION_REQUIRED', message: 'Raw nginx config requires browser session authentication' },
-      403
-    );
-  }
 
   const requiredScope =
     mode === 'raw'

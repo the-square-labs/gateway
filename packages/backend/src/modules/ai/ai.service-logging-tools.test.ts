@@ -35,10 +35,18 @@ function createService() {
   );
 }
 
+const licensePolicyService = { requireFeature: vi.fn() };
+const enabledLoggingFeature = { requireEnabled: vi.fn(), requireAvailableForStorage: vi.fn() };
+
 function mockContainerResolve(services: Record<string, unknown>) {
+  const withLoggingGate: Record<string, unknown> = {
+    LicensePolicyService: licensePolicyService,
+    LoggingFeatureService: enabledLoggingFeature,
+    ...services,
+  };
   return vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
     const name = typeof token === 'function' ? token.name : String(token);
-    const service = services[name];
+    const service = withLoggingGate[name];
     if (!service) throw new Error(`Unexpected service resolve: ${name}`);
     return service as never;
   });
@@ -96,7 +104,10 @@ describe('AIService logging tool routing', () => {
     const loggingSchemaService = {
       create: vi.fn().mockResolvedValueOnce({ id: 'schema-1' }).mockResolvedValueOnce({ id: 'schema-2' }),
     };
-    mockContainerResolve({ LoggingSchemaService: loggingSchemaService });
+    mockContainerResolve({
+      LoggingSchemaService: loggingSchemaService,
+      LoggingSchemaFolderService: { assertFolderExists: vi.fn() },
+    });
     const service = createService();
 
     await expect(
@@ -155,6 +166,7 @@ describe('AIService logging tool routing', () => {
 
   it('requires logging storage before running log searches', async () => {
     const loggingFeatureService = {
+      requireEnabled: vi.fn(),
       requireAvailableForStorage: vi.fn(),
     };
     const loggingSearchService = {
@@ -179,5 +191,81 @@ describe('AIService logging tool routing', () => {
     });
     expect(loggingFeatureService.requireAvailableForStorage).toHaveBeenCalled();
     expect(loggingSearchService.search).toHaveBeenCalledWith('env-1', { message: 'error', limit: 10 });
+  });
+
+  it('applies the structured-logging license and enabled gate like the logging routes', async () => {
+    const loggingEnvironmentService = { get: vi.fn().mockResolvedValue({ id: 'env-1' }) };
+    const disabledFeature = {
+      requireEnabled: vi.fn(() => {
+        throw new Error('LOGGING_DISABLED');
+      }),
+    };
+    mockContainerResolve({
+      LoggingEnvironmentService: loggingEnvironmentService,
+      LoggingFeatureService: disabledFeature,
+    });
+    const service = createService();
+
+    const result = await service.executeTool({ ...BASE_USER, scopes: ['logs:environments:view'] }, 'manage_logging', {
+      resource: 'environment',
+      operation: 'get',
+      environmentId: 'env-1',
+    });
+    expect(result).toHaveProperty('error');
+    expect(licensePolicyService.requireFeature).toHaveBeenCalledWith('structured-logging');
+    expect(loggingEnvironmentService.get).not.toHaveBeenCalled();
+  });
+
+  it('authorizes environment creation against the destination folder like the create route', async () => {
+    const folderId = '11111111-1111-4111-8111-111111111111';
+    const otherFolderId = '22222222-2222-4222-8222-222222222222';
+    const loggingEnvironmentService = { create: vi.fn().mockResolvedValue({ id: 'env-1' }) };
+    const folders = { assertFolderExists: vi.fn() };
+    mockContainerResolve({
+      LoggingEnvironmentService: loggingEnvironmentService,
+      LoggingEnvironmentFolderService: folders,
+    });
+    const service = createService();
+    const creator = { ...BASE_USER, scopes: [`logs:environments:create:folder/${folderId}`] };
+    const payload = { name: 'App', schemaMode: 'loose', retentionDays: 7, fieldSchema: [] };
+
+    const denied = await service.executeTool(creator, 'manage_logging', {
+      resource: 'environment',
+      operation: 'create',
+      payload: { ...payload, folderId: otherFolderId },
+    });
+    expect(denied).toHaveProperty('error');
+    expect(loggingEnvironmentService.create).not.toHaveBeenCalled();
+
+    await expect(
+      service.executeTool(creator, 'manage_logging', {
+        resource: 'environment',
+        operation: 'create',
+        payload: { ...payload, folderId },
+      })
+    ).resolves.toMatchObject({ result: { id: 'env-1' } });
+    expect(folders.assertFolderExists).toHaveBeenCalledWith(folderId);
+    expect(loggingEnvironmentService.create).toHaveBeenCalledWith(expect.objectContaining({ folderId }), 'user-1');
+  });
+
+  it('reads logging health with housekeeping:view outside the logging license gate', async () => {
+    const maintenance = { getSnapshot: vi.fn().mockReturnValue({ status: 'healthy' }) };
+    licensePolicyService.requireFeature.mockClear();
+    mockContainerResolve({ LoggingMaintenanceService: maintenance });
+    const service = createService();
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['housekeeping:view'] }, 'manage_logging', {
+        resource: 'health',
+        operation: 'get',
+      })
+    ).resolves.toMatchObject({ result: { status: 'healthy' } });
+    const denied = await service.executeTool({ ...BASE_USER, scopes: ['logs:manage'] }, 'manage_logging', {
+      resource: 'health',
+      operation: 'get',
+    });
+    expect(denied).toHaveProperty('error');
+    expect(maintenance.getSnapshot).toHaveBeenCalledTimes(1);
+    expect(licensePolicyService.requireFeature).not.toHaveBeenCalled();
   });
 });

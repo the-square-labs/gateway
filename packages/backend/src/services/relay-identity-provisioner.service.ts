@@ -28,6 +28,9 @@ export interface AppRelayIdentity {
   appClientKeyPath: string;
   relayClientFingerprint: string;
   appClientFingerprint: string;
+  /** The client pair the running relay may still trust after a renewal; see RelayControlClient. */
+  previousAppClientCertPath?: string;
+  previousAppClientKeyPath?: string;
 }
 
 function fingerprint(certificatePem: string | Buffer): string {
@@ -40,6 +43,26 @@ function safelyUnlink(path: string): void {
     unlinkSync(path);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+function readIfExists(path: string): Buffer | null {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+}
+
+/** The fingerprint of a still-valid certificate, or null. */
+function validFingerprint(certificatePem: Buffer | null, now = Date.now()): string | null {
+  if (!certificatePem) return null;
+  try {
+    const certificate = new X509Certificate(certificatePem);
+    return Date.parse(certificate.validTo) > now ? fingerprint(certificatePem) : null;
+  } catch {
+    return null;
   }
 }
 
@@ -88,7 +111,27 @@ export class RelayIdentityProvisionerService {
         relayClientCertificate: resolve(this.identityDir, 'relay-app-client.crt'),
         relayClientPrivateKey: resolve(this.identityDir, 'relay-app-client.key'),
         trustManifest: resolve(this.identityDir, 'trust-manifest.json'),
+        previousAppClientCertificate: resolve(this.identityDir, 'app-relay-client.previous.crt'),
+        previousAppClientPrivateKey: resolve(this.identityDir, 'app-relay-client.previous.key'),
       };
+      // A running relay trusts the client pair it loaded, and it reloads only when a client it
+      // trusts asks. Keep the pair a renewal replaces, so Gateway can still ask.
+      const installedClient = readIfExists(paths.appClientCertificate);
+      const installedKey = readIfExists(paths.appClientPrivateKey);
+      const renewedFingerprint = fingerprint(appClient.certificatePem);
+      if (
+        installedKey &&
+        validFingerprint(installedClient) &&
+        validFingerprint(installedClient) !== renewedFingerprint
+      ) {
+        atomicWrite(paths.previousAppClientCertificate, installedClient!, 0o644);
+        atomicWrite(paths.previousAppClientPrivateKey, installedKey, 0o600);
+      }
+      const previousFingerprint = validFingerprint(readIfExists(paths.previousAppClientCertificate));
+      if (!previousFingerprint) {
+        safelyUnlink(paths.previousAppClientCertificate);
+        safelyUnlink(paths.previousAppClientPrivateKey);
+      }
       atomicWrite(paths.systemCa, systemCa, 0o644);
       atomicWrite(paths.externalCertificate, readFileSync(externalIdentity.certPath), 0o644);
       atomicWrite(paths.externalPrivateKey, readFileSync(externalIdentity.keyPath), 0o600);
@@ -122,6 +165,12 @@ export class RelayIdentityProvisionerService {
         appClientKeyPath: paths.appClientPrivateKey,
         relayClientFingerprint,
         appClientFingerprint,
+        ...(previousFingerprint && previousFingerprint !== appClientFingerprint
+          ? {
+              previousAppClientCertPath: paths.previousAppClientCertificate,
+              previousAppClientKeyPath: paths.previousAppClientPrivateKey,
+            }
+          : {}),
       };
       return this.identity;
     } finally {

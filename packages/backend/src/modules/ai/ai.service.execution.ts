@@ -15,6 +15,7 @@ import { DOMAIN_TOOL_NAMES, executeDomainTool } from './ai.domain-tools.js';
 import { executeFolderTool, FOLDER_TOOL_NAMES } from './ai.folder-tools.js';
 import { executeGitLabTool, GITLAB_TOOL_NAMES } from './ai.gitlab-tools.js';
 import { executeGroupTool, GROUP_TOOL_NAMES } from './ai.group-tools.js';
+import { executeHostingTool, HOSTING_TOOL_NAMES } from './ai.hosting-tools.js';
 import { executeInferenceTool, INFERENCE_TOOL_NAMES } from './ai.inference-tools.js';
 import { executeIntegrationTool, INTEGRATION_TOOL_NAMES } from './ai.integration-tools.js';
 import { executeNodeTool, NODE_TOOL_NAMES } from './ai.node-tools.js';
@@ -111,7 +112,11 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
         }
         executionUser =
           options.source === 'mcp'
-            ? { ...currentUser, scopes: boundScopes(options.scopes ?? [], currentUser.scopes) }
+            ? {
+                ...currentUser,
+                scopes: boundScopes(options.scopes ?? [], currentUser.scopes),
+                accountScopes: currentUser.scopes,
+              }
             : currentUser;
       } catch (error) {
         logger.warn('Failed to refresh current access before AI tool execution', { userId: user.id, error });
@@ -365,6 +370,9 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     if (INTEGRATION_TOOL_NAMES.has(toolName)) {
       return executeIntegrationTool(user, toolName, args);
     }
+    if (HOSTING_TOOL_NAMES.has(toolName)) {
+      return executeHostingTool(user, toolName, args);
+    }
     if (RESOURCE_SETUP_TOOL_NAMES.has(toolName)) {
       return executeResourceSetupTool(user, toolName, args);
     }
@@ -430,7 +438,12 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       );
     }
     if (GROUP_TOOL_NAMES.has(toolName)) {
-      return executeGroupTool({ groupService: this.groupService }, user, toolName, args);
+      return executeGroupTool(
+        { groupService: this.groupService, auditService: this.auditService },
+        user,
+        toolName,
+        args
+      );
     }
     if (DOMAIN_TOOL_NAMES.has(toolName)) {
       return executeDomainTool(
@@ -476,7 +489,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
       if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
       container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).requireAvailable();
-      return executePkiCaTool({ caService: this.caService }, user, toolName, args);
+      return executePkiCaTool({ caService: this.caService, auditService: this.auditService }, user, toolName, args);
     }
     if (PKI_CERTIFICATE_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
@@ -489,6 +502,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
         {
           caService: this.caService,
           certService: this.certService,
+          auditService: this.auditService,
           ensureToolScope: (executionUser, scope) => this.ensureToolScope(executionUser, scope),
           ensureToolScopeForResource: (executionUser, baseScope, resourceId) =>
             this.ensureToolScopeForResource(executionUser, baseScope, resourceId),

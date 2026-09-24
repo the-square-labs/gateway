@@ -43,10 +43,10 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | proxy:edit | Update routes (resource-scopable) |
 | proxy:delete | Delete routes (resource-scopable) |
 | proxy:folders:manage | Manage route folders and folder placement |
-| proxy:raw:read | View raw nginx config in browser-only raw config workflows (resource-scopable) |
+| proxy:raw:read | View raw nginx config (resource-scopable) |
 | proxy:raw:write | Write raw nginx config (resource-scopable) |
 | proxy:raw:toggle | Enable/disable raw config mode (resource-scopable) |
-| proxy:raw:bypass | Bypass dangerous raw nginx directive restrictions; browser/session-only (resource-scopable) |
+| proxy:raw:bypass | Bypass dangerous raw nginx directive restrictions (resource-scopable) |
 | proxy:advanced | Edit advanced nginx snippets (resource-scopable) |
 | proxy:advanced:bypass | Bypass advanced nginx snippet restrictions (resource-scopable) |
 

@@ -29,6 +29,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
               hostPort: { type: 'number' },
               containerPort: { type: 'number' },
               protocol: { type: 'string', enum: ['tcp', 'udp'], description: 'Default: tcp' },
+              hostIp: { type: 'string', description: 'Host IP address to bind. Default: 0.0.0.0' },
             },
             required: ['hostPort', 'containerPort'],
           },
@@ -64,6 +65,13 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           minimum: 0,
           maximum: 300,
           description: 'Container stop grace period in seconds, 0-300. Default: Gateway fallback 20 seconds.',
+        },
+        gpu: {
+          type: 'object',
+          description: 'GPU devices to attach, by node GPU inventory device ID. Not supported with the secure runtime.',
+          properties: { deviceIds: { type: 'array', items: { type: 'string' } } },
+          required: ['deviceIds'],
+          additionalProperties: false,
         },
         labels: { type: 'object', description: 'Container labels as key-value pairs' },
         command: { type: 'array', items: { type: 'string' }, description: 'Override container command' },
@@ -425,20 +433,22 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'duplicate_docker_container',
-    description: 'Clone a Docker container with a new name. Copies config, ports, volumes, env, and secrets.',
+    description:
+      'Clone a Docker container with a new name. Copies config, ports, volumes, env, and secrets. Requires docker:containers:create for the destination plus config, environment, and secrets access on the source container.',
     parameters: {
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
         containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
         name: { type: 'string', description: 'Name for the new container' },
+        folderId: { type: 'string', description: 'Optional authorized destination container folder UUID.' },
       },
       required: ['nodeId', 'containerId', 'name'],
     },
     destructive: true,
     category: 'Docker',
     requiredScope: 'docker:containers:create',
-    requiredScopes: ['docker:containers:view', 'docker:containers:environment', 'docker:containers:secrets'],
+    requiredScopes: ['docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets'],
     invalidateStores: ['containers'],
   },
   {
@@ -465,7 +475,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         nodeId: { type: 'string', description: 'Docker node ID' },
         containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
-        tail: { type: 'number', description: 'Number of lines from the end (default 100)' },
+        tail: { type: 'integer', minimum: 1, maximum: 1000, description: 'Number of lines from the end (default 100)' },
         timestamps: { type: 'boolean', description: 'Include timestamps (default false)' },
       },
       required: ['nodeId', 'containerId'],
@@ -507,6 +517,12 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           type: 'string',
           description:
             'Optional saved private/custom registry UUID. Omit for public Docker Hub images; never pass an empty string.',
+        },
+        folderId: { type: 'string', description: 'Optional authorized destination image folder UUID.' },
+        wait: {
+          type: 'boolean',
+          description:
+            'Pull synchronously and fail if the image cannot be pulled (default false: queue a background pull task).',
         },
       },
       required: ['nodeId', 'imageRef'],
@@ -587,13 +603,26 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_registry',
     description:
-      'Manage saved private or custom Docker registries. Operations: list, get, create, update, delete, test, test_direct. Do not create a registry for public Docker Hub images; pull those directly without registryId. Mutating operations require the corresponding docker:registries:* scope.',
+      'Manage saved private or custom Docker registries and the Gateway internal build registry. Operations: list, get, create, update, delete, test, test_direct for saved registries; internal_get (state, health, storage, external access), internal_repositories, internal_update_settings (external access hostname, nginx node, certificate), internal_gc (garbage collection, optionally dryRun), and internal_resume_maintenance (resume an interrupted maintenance run) for the internal registry. Do not create a registry for public Docker Hub images; pull those directly without registryId. Mutating operations require the corresponding docker:registries:* scope; internal registry reads need broad docker:registries:view and changes broad docker:registries:edit.',
     parameters: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['list', 'get', 'create', 'update', 'delete', 'test', 'test_direct'],
+          enum: [
+            'list',
+            'get',
+            'create',
+            'update',
+            'delete',
+            'test',
+            'test_direct',
+            'internal_get',
+            'internal_repositories',
+            'internal_update_settings',
+            'internal_gc',
+            'internal_resume_maintenance',
+          ],
         },
         registryId: { type: 'string', description: 'Registry UUID for get/update/delete/test' },
         nodeId: { type: 'string', description: 'Optional node filter for list, or node scoped registry owner' },
@@ -603,6 +632,15 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         password: { type: 'string' },
         trustedAuthRealm: { type: 'string' },
         scope: { type: 'string', enum: ['global', 'node'] },
+        externalAccessEnabled: {
+          type: 'boolean',
+          description: 'internal_update_settings: expose the internal registry through an nginx node.',
+        },
+        externalHostname: { type: 'string', description: 'internal_update_settings: external registry hostname.' },
+        externalNginxNodeId: { type: 'string', description: 'internal_update_settings: nginx node UUID.' },
+        externalCertificateId: { type: 'string', description: 'internal_update_settings: TLS certificate UUID.' },
+        dryRun: { type: 'boolean', description: 'internal_gc: report what would be removed without deleting.' },
+        runId: { type: 'string', description: 'internal_resume_maintenance: maintenance run UUID.' },
       },
       required: ['operation'],
     },
@@ -614,13 +652,56 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create, resize, adopt, or delete Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
+      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists volumes selectable as container mounts (docker:containers:mounts). rename (newName) and update_labels (labels) need docker:volumes:create and :delete. File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['create', 'resize', 'adopt', 'delete'] },
+        operation: {
+          type: 'string',
+          enum: [
+            'create',
+            'resize',
+            'adopt',
+            'delete',
+            'inspect',
+            'metrics',
+            'managed_options',
+            'rename',
+            'update_labels',
+            'list_files',
+            'read_file',
+            'write_file',
+            'create_file',
+            'create_directory',
+            'delete_file',
+            'move_file',
+            'upload_init',
+            'upload_chunk',
+            'upload_complete',
+            'upload_abort',
+          ],
+        },
         nodeId: { type: 'string' },
-        name: { type: 'string', description: 'Volume name. For create, the new volume name.' },
+        name: {
+          type: 'string',
+          description: 'Volume name. For create, the new volume name. managed_options ignores it.',
+        },
+        newName: { type: 'string', description: 'rename only. New volume name.' },
+        labels: { type: 'object', description: 'update_labels only. Complete volume label map.' },
+        path: { type: 'string', description: 'Absolute path inside the volume for file operations. Default: /' },
+        fromPath: { type: 'string', description: 'move_file only. Absolute source path.' },
+        toPath: { type: 'string', description: 'move_file only. Absolute destination path.' },
+        content: { type: 'string', description: 'UTF-8 content for write_file, create_file, or upload_chunk.' },
+        contentBase64: {
+          type: 'string',
+          description: 'Base64 content for binary write_file, create_file, or upload_chunk (chunk at most 1 MiB).',
+        },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'read_file output encoding. Default: utf8' },
+        offsetBytes: { type: 'integer', minimum: 0, description: 'read_file: first byte to return. Default: 0' },
+        limitBytes: { type: 'integer', minimum: 1, description: 'read_file: maximum bytes to return.' },
+        uploadId: { type: 'string', description: 'Upload session ID for upload_chunk, upload_complete, upload_abort.' },
+        offset: { type: 'integer', minimum: 0, description: 'upload_chunk: byte offset of this chunk.' },
+        totalBytes: { type: 'integer', minimum: 0, description: 'upload_init/upload_complete: total file size.' },
         storageKind: {
           type: 'string',
           enum: ['regular', 'disk-image'],
@@ -635,7 +716,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         folderId: { type: 'string', description: 'create only. Authorized destination volume folder UUID.' },
         force: { type: 'boolean', description: 'delete only.' },
       },
-      required: ['operation', 'nodeId', 'name'],
+      required: ['operation', 'nodeId'],
     },
     destructive: true,
     category: 'Docker',
@@ -668,7 +749,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_compose',
     description:
-      'Inspect and manage first-class single-node Docker Compose Projects. Supports discovery, validation, create/adopt/delete, immutable revisions, lifecycle operations, operation history, and project secrets. Managed mutations require the Compose entitlement and exact docker:compose resource scopes.',
+      'Inspect and manage first-class single-node Docker Compose Projects. Supports discovery, validation, create/adopt/delete, immutable revisions, lifecycle operations, operation history, project secrets, and recent service logs (logs, optionally one serviceName). Managed mutations require the Compose entitlement and exact docker:compose resource scopes. While a Git-source build rollout owns a project, revision, secret, and lifecycle changes are refused with 409 BUILD_ROLLOUT_IN_PROGRESS until it finishes.',
     parameters: {
       type: 'object',
       properties: {
@@ -691,6 +772,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
             'secret_create',
             'secret_update',
             'secret_delete',
+            'logs',
           ],
         },
         nodeId: { type: 'string', description: 'Docker node UUID.' },
@@ -713,6 +795,14 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         secretId: { type: 'string' },
         key: { type: 'string' },
         value: { type: 'string' },
+        serviceName: { type: 'string', description: 'logs only. Limit logs to one Compose service.' },
+        tail: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 1000,
+          description: 'logs only. Lines per container (default 100).',
+        },
+        timestamps: { type: 'boolean', description: 'logs only. Include timestamps (default false).' },
       },
       required: ['operation'],
       additionalProperties: false,
@@ -784,7 +874,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_source',
     description:
-      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project. Also lists source repositories and manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts.',
+      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project, or create a new container, deployment, or Compose Project from a Git source (create). pending reads a container that exists only as a queued first source build. Also lists source repositories and manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts; while a build rollout deploys, other changes to its target are refused with 409 BUILD_ROLLOUT_IN_PROGRESS.',
     parameters: {
       type: 'object',
       properties: {
@@ -792,6 +882,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
           type: 'string',
           enum: [
             'get',
+            'pending',
             'create',
             'upsert',
             'remove',
@@ -856,7 +947,8 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'manage_docker_task',
-    description: 'List or get Docker background tasks for image pulls, container updates, and webhook actions.',
+    description:
+      'List or get Docker background tasks for image pulls, container updates, and webhook actions. Callers with node-scoped docker:tasks see tasks of their nodes only. Docker migrations, including needs_attention resolution, use manage_docker_migration.',
     parameters: {
       type: 'object',
       properties: {
@@ -876,7 +968,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_container_config',
     description:
-      'Manage container env, files, secrets, webhooks, and HTTP health checks. Container file list/read requires docker:containers:files:read; write requires docker:containers:files:write. Other operation-specific environment/secrets/webhooks/edit/view scopes are enforced.',
+      'Manage container env, files, secrets, webhooks, and HTTP health checks. Container file list/read requires docker:containers:files:read; write_file, create_file, create_directory, delete_file, move_file, and resumable upload_init/upload_chunk/upload_complete/upload_abort require docker:containers:files:write. Binary content uses contentBase64 (upload chunks at most 1 MiB); read_file returns UTF-8 unless encoding is base64. Other operation-specific environment/secrets/webhooks/edit/view scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
@@ -888,6 +980,14 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
             'list_files',
             'read_file',
             'write_file',
+            'create_file',
+            'create_directory',
+            'delete_file',
+            'move_file',
+            'upload_init',
+            'upload_chunk',
+            'upload_complete',
+            'upload_abort',
             'list_secrets',
             'create_secret',
             'update_secret',
@@ -913,7 +1013,19 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
         env: { type: 'object', description: 'Environment key/value map for update_env' },
         removeEnv: { type: 'array', items: { type: 'string' } },
         path: { type: 'string', description: 'Container file path' },
-        content: { type: 'string', description: 'UTF-8 text file content for write_file' },
+        fromPath: { type: 'string', description: 'move_file only. Absolute source path.' },
+        toPath: { type: 'string', description: 'move_file only. Absolute destination path.' },
+        content: { type: 'string', description: 'UTF-8 text content for write_file, create_file, or upload_chunk' },
+        contentBase64: {
+          type: 'string',
+          description: 'Base64 content for binary write_file, create_file, or upload_chunk (chunk at most 1 MiB).',
+        },
+        encoding: { type: 'string', enum: ['utf8', 'base64'], description: 'read_file output encoding. Default: utf8' },
+        offsetBytes: { type: 'integer', minimum: 0, description: 'read_file: first byte to return. Default: 0' },
+        limitBytes: { type: 'integer', minimum: 1, description: 'read_file: maximum bytes to return.' },
+        uploadId: { type: 'string', description: 'Upload session ID for upload_chunk, upload_complete, upload_abort.' },
+        offset: { type: 'integer', minimum: 0, description: 'upload_chunk: byte offset of this chunk.' },
+        totalBytes: { type: 'integer', minimum: 0, description: 'upload_init/upload_complete: total file size.' },
         enabled: { type: 'boolean', description: 'Webhook or health check enabled state' },
         healthCheck: { type: 'object', description: 'Docker health check configuration' },
       },
@@ -981,5 +1093,280 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     category: 'Docker',
     requiredScope: 'docker:tasks:manage',
     invalidateStores: ['tasks'],
+  },
+  {
+    name: 'manage_docker_container',
+    description:
+      'Change or inspect an existing standalone Docker container beyond start/stop. recreate applies a new configuration by recreating the container: image, ports, mounts (managed volumes by name; existing host bind mounts must be passed back unchanged), entrypoint, command, workingDir, user, hostname, labels, stopTimeout, restartPolicy, maxRetries, memoryLimit, memorySwap, nanoCPUs, cpuShares, pidsLimit, gpu, and runtimeProfile; omitted fields keep their current value, while ports, mounts, labels, and gpu replace the whole list. recreate needs docker:containers:manage plus edit, and changing image, entrypoint, command, user, or runtimeProfile also needs config, environment, and secrets access; a new image needs docker:images:pull on the node. live_update changes restartPolicy, maxRetries, and resource limits without recreation (docker:containers:edit). update pulls a new tag and/or changes env/removeEnv and redeploys (edit; env changes need environment access). processes lists running processes, stats_history returns recent resource samples, and gpu_usage lists GPU devices with their visible containers on the node. image_cleanup_get and image_cleanup_upsert read or set old-image retention (enabled, retentionCount 1-50) for a container or, with targetType deployment, a blue/green deployment (docker:containers:edit). archive_plan_import resolves an archive manifest summary (archiveManifest) against the node before upload_docker_container_archive. Compose-owned containers must be changed through their Compose project and blue/green slot containers through deployment tools; a running build rollout owns its container and changes are refused with 409.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'recreate',
+            'live_update',
+            'update',
+            'processes',
+            'stats_history',
+            'gpu_usage',
+            'image_cleanup_get',
+            'image_cleanup_upsert',
+            'archive_plan_import',
+          ],
+        },
+        nodeId: { type: 'string', description: 'Docker node ID' },
+        containerId: { type: 'string', description: STABLE_CONTAINER_REFERENCE_DESCRIPTION },
+        containerName: {
+          type: 'string',
+          description: 'image_cleanup_*: exact container name (alternative to containerId).',
+        },
+        targetType: {
+          type: 'string',
+          enum: ['container', 'deployment'],
+          description: 'image_cleanup_* only. Default: container.',
+        },
+        deploymentId: { type: 'string', description: 'image_cleanup_* with targetType deployment.' },
+        image: { type: 'string', description: 'recreate: full image reference.' },
+        ports: {
+          type: 'array',
+          description: 'recreate: complete published port list.',
+          items: {
+            type: 'object',
+            properties: {
+              hostPort: { type: 'integer', minimum: 0, maximum: 65535 },
+              containerPort: { type: 'integer', minimum: 1, maximum: 65535 },
+              protocol: { type: 'string', enum: ['tcp', 'udp'] },
+              hostIp: { type: 'string' },
+            },
+            required: ['hostPort', 'containerPort'],
+            additionalProperties: false,
+          },
+        },
+        mounts: {
+          type: 'array',
+          description:
+            'recreate: complete mount list. Use name for a Gateway-managed volume or hostPath for an existing host bind mount; changing mounts requires docker:containers:mounts.',
+          items: {
+            type: 'object',
+            properties: {
+              containerPath: { type: 'string' },
+              name: { type: 'string' },
+              hostPath: { type: 'string' },
+              readOnly: { type: 'boolean' },
+            },
+            required: ['containerPath'],
+            additionalProperties: false,
+          },
+        },
+        entrypoint: { type: 'array', items: { type: 'string' }, description: 'recreate: entrypoint argv.' },
+        command: { type: 'array', items: { type: 'string' }, description: 'recreate: command argv.' },
+        workingDir: { type: 'string', description: 'recreate: working directory.' },
+        user: { type: 'string', description: 'recreate: container user.' },
+        hostname: { type: 'string', description: 'recreate: container hostname.' },
+        labels: { type: 'object', description: 'recreate: complete container label map.' },
+        stopTimeout: { type: 'integer', minimum: 0, maximum: 300, description: 'recreate: stop grace in seconds.' },
+        restartPolicy: { type: 'string', enum: ['no', 'always', 'unless-stopped', 'on-failure'] },
+        maxRetries: { type: 'integer', minimum: 0, description: 'on-failure restart retries.' },
+        memoryLimit: { type: 'integer', minimum: 0, description: 'Memory limit in bytes; 0 removes it.' },
+        memorySwap: { type: 'integer', description: 'Memory plus swap in bytes; -1 is unlimited.' },
+        nanoCPUs: { type: 'integer', minimum: 0, description: 'CPU limit in 1e-9 CPUs (1000000000 = 1 CPU).' },
+        cpuShares: { type: 'integer', minimum: 0, description: 'Relative CPU weight.' },
+        pidsLimit: { type: 'integer', minimum: 0, description: 'Maximum process count.' },
+        gpu: {
+          type: 'object',
+          description: 'recreate: GPU device IDs from the node inventory; an empty list detaches all GPUs.',
+          properties: { deviceIds: { type: 'array', items: { type: 'string' } } },
+          required: ['deviceIds'],
+          additionalProperties: false,
+        },
+        runtimeProfile: { type: 'string', enum: ['default', 'secure'], description: 'recreate: isolation profile.' },
+        tag: { type: 'string', description: 'update: new tag for the current image repository.' },
+        env: { type: 'object', description: 'update: environment variables to set.' },
+        removeEnv: { type: 'array', items: { type: 'string' }, description: 'update: environment keys to remove.' },
+        enabled: { type: 'boolean', description: 'image_cleanup_upsert: enable old-image cleanup.' },
+        retentionCount: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 50,
+          description: 'image_cleanup_upsert: previous images to keep.',
+        },
+        archiveManifest: {
+          type: 'object',
+          description:
+            'archive_plan_import: the archive manifest summary { networks: [{ name, driver?, subnet?, gateway?, createable, createNew?, requiresMapping? }], mounts: [{ type: bind|volume, source, target, readOnly, driver?, labels?, createNew?, requiresMapping? }], ports: [{ containerPort, hostPort, protocol }] }.',
+        },
+      },
+      required: ['operation', 'nodeId'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:view',
+    invalidateStores: ['containers', 'tasks'],
+  },
+  {
+    name: 'manage_docker_availability',
+    description:
+      'Run a Docker container, blue/green deployment, or Compose Project across several Docker nodes (replicated) or with automatic failover. preflight checks eligibility and candidate nodes for a proposed policy; enable applies it; get and get_by_resource read the policy with placements; list_operations pages rollout history; update changes mode, replicas, node selection, rollout policy, or offline grace; retry_operation retries a failed operation; disable returns the workload to one node and requires survivingPlacementId plus the typed confirmation shown by the UI. Mutations need docker:availability:manage; the workload, candidate nodes, and dependencies are authorized like the Availability routes.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: [
+            'preflight',
+            'enable',
+            'get',
+            'get_by_resource',
+            'list_operations',
+            'update',
+            'disable',
+            'retry_operation',
+          ],
+        },
+        resource: {
+          type: 'object',
+          description: 'preflight, enable, get_by_resource: the workload.',
+          properties: {
+            type: { type: 'string', enum: ['container', 'deployment', 'compose'] },
+            nodeId: { type: 'string', description: 'Container node UUID.' },
+            containerName: { type: 'string' },
+            deploymentId: { type: 'string' },
+            composeProjectId: { type: 'string' },
+          },
+          required: ['type'],
+          additionalProperties: false,
+        },
+        policyId: { type: 'string', description: 'Availability policy UUID.' },
+        operationId: { type: 'string', description: 'retry_operation: operation UUID.' },
+        mode: { type: 'string', enum: ['replicated', 'failover'] },
+        desiredReplicaCount: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 32,
+          description: 'replicated: 2-32; failover: exactly 1.',
+        },
+        nodeSelectionMode: { type: 'string', enum: ['all_compatible', 'selected'] },
+        selectedNodeIds: { type: 'array', items: { type: 'string' }, description: 'Required for selected mode.' },
+        rolloutPolicy: {
+          type: 'object',
+          properties: {
+            maxUnavailable: { type: 'integer', minimum: 0, maximum: 32 },
+            maxSurge: { type: 'integer', minimum: 0, maximum: 32 },
+            drainSeconds: { type: 'integer', minimum: 0, maximum: 3600 },
+          },
+          additionalProperties: false,
+        },
+        offlineReplacementGraceSeconds: { type: 'integer', minimum: 0, maximum: 3600 },
+        survivingPlacementId: { type: 'string', description: 'disable: placement UUID that keeps running.' },
+        confirmation: { type: 'string', description: 'disable: typed confirmation text.' },
+        page: { type: 'integer', minimum: 1, description: 'list_operations page. Default: 1' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'list_operations page size. Default: 50' },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:availability:manage',
+    invalidateStores: ['containers'],
+    historyRetention: { mode: 'summary_only' },
+  },
+  {
+    name: 'manage_docker_runtime',
+    description:
+      'Check (preflight) or install (install) the gVisor runsc secure container runtime on a Docker node. Installing restarts the Docker daemon on that node. Requires broad admin:update.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['preflight', 'install'] },
+        nodeId: { type: 'string', description: 'Docker node ID' },
+      },
+      required: ['operation', 'nodeId'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'admin:update',
+    invalidateStores: ['nodes'],
+  },
+  {
+    name: 'upload_docker_container_archive',
+    description:
+      'Import a Gateway container archive (.gwca) as a new container on a Docker node through authenticated MCP, using a resumable begin/chunk/status/finalize/abort workflow. begin takes nodeId, the new container name, optional folderId, the resolution returned by manage_docker_container archive_plan_import, the exact archive size, and its lowercase SHA-256; send ordered chunks of at most 1 MiB decoded base64 at the returned offset, then finalize. Requires docker:containers:create for the node or folder and the container archive entitlement; archive environment, secrets, networks, and volumes need the matching node scopes. Authentication comes from the MCP connection; never pass a token.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['begin', 'chunk', 'status', 'finalize', 'abort'] },
+        nodeId: { type: 'string', description: 'begin: destination Docker node UUID.' },
+        name: { type: 'string', description: 'begin: new container name.' },
+        folderId: { type: 'string', description: 'begin: optional authorized destination container folder UUID.' },
+        resolution: {
+          type: 'object',
+          description:
+            'begin: network, volume, and port mappings { networks?, createNetworks?, volumes?, createVolumes?, ports? } from archive_plan_import.',
+        },
+        declaredSizeBytes: { type: 'integer', minimum: 1, description: 'begin: exact archive size in bytes.' },
+        sha256: { type: 'string', description: 'begin: lowercase SHA-256 of the complete archive.' },
+        uploadId: { type: 'string', description: 'Upload UUID returned by begin.' },
+        offset: { type: 'integer', minimum: 0, description: 'chunk: current byte offset.' },
+        contentBase64: {
+          type: 'string',
+          maxLength: 1_398_104,
+          description: 'chunk: base64-encoded archive bytes, at most 1 MiB decoded.',
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:create',
+    invalidateStores: ['containers'],
+    historyRetention: { mode: 'never_full' },
+    mcpOnly: true,
+  },
+  {
+    name: 'download_docker_archive',
+    description:
+      'Export a container archive (.gwca, kind container) or a volume archive (.tar.gz, kind volume) through authenticated MCP. begin prepares the archive on the Gateway and returns a downloadId; poll status until ready (it reports sizeBytes and sha256); read chunk at increasing offsets (at most 1 MiB per call, base64) until eof; then close. Container export needs docker:containers:export, plus files read for the portable image mode, environment access when includeEnvironment (default true), and secrets access when includeSecrets. Volume export needs docker:volumes:export. Prepared archives expire after an hour of inactivity.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: { type: 'string', enum: ['begin', 'status', 'chunk', 'close'] },
+        kind: { type: 'string', enum: ['container', 'volume'], description: 'begin: what to export.' },
+        nodeId: { type: 'string', description: 'begin: Docker node ID.' },
+        containerId: { type: 'string', description: `begin (container): ${STABLE_CONTAINER_REFERENCE_DESCRIPTION}` },
+        volumeName: { type: 'string', description: 'begin (volume): volume name.' },
+        imageMode: {
+          type: 'string',
+          enum: ['portable', 'registry'],
+          description: 'begin (container): embed the image (portable, default) or reference its registry digest.',
+        },
+        includeWritableLayer: { type: 'boolean', description: 'begin (container): include filesystem changes.' },
+        includeEnvironment: { type: 'boolean', description: 'begin (container): include environment. Default: true' },
+        includeSecrets: {
+          type: 'boolean',
+          description: 'begin (container): include secret values; requires includeEnvironment. Default: false',
+        },
+        downloadId: { type: 'string', description: 'Download UUID returned by begin.' },
+        offset: { type: 'integer', minimum: 0, description: 'chunk: byte offset. Default: 0' },
+        length: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 1_048_576,
+          description: 'chunk: bytes to read. Default: 1 MiB',
+        },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: true,
+    category: 'Docker',
+    requiredScope: 'docker:containers:export',
+    invalidateStores: [],
+    historyRetention: { mode: 'never_full' },
+    mcpOnly: true,
   },
 ];

@@ -539,6 +539,173 @@ describe("RelaySettingsSection", () => {
     }
     expect(remove).toHaveBeenCalledWith("22222222-2222-4222-8222-222222222222");
   });
+
+  it("explains a remote trust lockout and hands out a re-enrollment command", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      ...relayStatus(),
+      instances: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          kind: "remote",
+          nodeId: "22222222-2222-4222-8222-222222222222",
+          faultDomainId: "33333333-3333-4333-8333-333333333333",
+          displayName: "relay-eu-2",
+          advertisedAddresses: ["relay.example.test"],
+          servicePort: 9443,
+          state: "synchronizing",
+          buildVersion: "v2.7.0",
+          protocolMajor: 1,
+          appliedPolicyRevision: 12,
+          policyExpiresAt: "2026-08-20T20:00:00.000Z",
+          lastSeenAt: "2026-08-20T19:59:00.000Z",
+          activeAssignments: 0,
+          health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+          policyTrust: {
+            state: "reenrollment_required",
+            message: "This relay trusts only policy signing keys Gateway can no longer sign with.",
+            observedAt: "2026-09-24T10:00:00.000Z",
+            trustedKeyIds: ["destroyed"],
+          },
+        },
+      ],
+    });
+    const reenroll = vi.spyOn(api, "reenrollRelayInstance").mockResolvedValue({
+      instanceId: "11111111-1111-4111-8111-111111111111",
+      nodeId: "22222222-2222-4222-8222-222222222222",
+      displayName: "relay-eu-2",
+      enrollmentToken: `gw_node_v2_${"a".repeat(16)}_${"b".repeat(48)}`,
+      enrollmentTokenExpiresAt: "2026-10-01T10:00:00.000Z",
+      advertiseAddress: "relay.example.test",
+      servicePort: 9443,
+      gatewayCertSha256: `sha256:${"c".repeat(64)}`,
+      gatewayEnrollmentTargets: {
+        public: { label: "Public node", gateway: "gateway.example.test:9443" },
+      },
+    });
+
+    renderRelaySettings();
+
+    expect(
+      await screen.findByText(/trusts only policy signing keys Gateway can no longer sign with/)
+    ).toHaveAttribute("role", "alert");
+    await user.click(screen.getByRole("button", { name: "Re-enroll" }));
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Re-enroll relay-eu-2?" })
+    );
+    expect(reenroll).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText(/setup-relay-node\.sh/).length).toBeGreaterThan(0);
+    expect(
+      within(dialog).getAllByText(/--advertise-address relay\.example\.test/).length
+    ).toBeGreaterThan(0);
+    expect(
+      within(dialog).getAllByText(/--gateway gateway\.example\.test:9443/).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("does not offer re-enrollment for a healthy relay or the local relay", async () => {
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({
+      ...relayStatus(),
+      instances: [
+        {
+          id: "11111111-1111-4111-8111-111111111111",
+          kind: "remote",
+          nodeId: "22222222-2222-4222-8222-222222222222",
+          faultDomainId: "33333333-3333-4333-8333-333333333333",
+          displayName: "relay-eu-2",
+          advertisedAddresses: ["10.0.0.22"],
+          servicePort: 9443,
+          state: "ready",
+          buildVersion: "v2.7.0",
+          protocolMajor: 1,
+          appliedPolicyRevision: 12,
+          policyExpiresAt: "2099-08-20T20:00:00.000Z",
+          lastSeenAt: "2026-08-20T19:59:00.000Z",
+          activeAssignments: 0,
+          health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+        },
+        {
+          id: "00000000-0000-4000-8000-000000000001",
+          kind: "local",
+          nodeId: null,
+          faultDomainId: "44444444-4444-4444-8444-444444444444",
+          displayName: "Local relay",
+          advertisedAddresses: [],
+          servicePort: 9443,
+          state: "synchronizing",
+          buildVersion: "v2.7.0",
+          protocolMajor: 1,
+          appliedPolicyRevision: 12,
+          policyExpiresAt: null,
+          lastSeenAt: null,
+          activeAssignments: 0,
+          health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+          policyTrust: {
+            state: "recovery_unsupported",
+            message:
+              "The local relay trusts only policy signing keys Gateway can no longer sign with. Update the Relay Pool.",
+            observedAt: "2026-09-24T10:00:00.000Z",
+            trustedKeyIds: ["destroyed"],
+          },
+        },
+      ],
+    });
+
+    renderRelaySettings();
+
+    expect(await screen.findByText(/Update the Relay Pool\./)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Re-enroll" })).not.toBeInTheDocument();
+  });
+
+  it("shows an expired relay certificate and renews it on request", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getAuthProvisioningSettings").mockResolvedValue(relaySettings());
+    const relay = {
+      id: "11111111-1111-4111-8111-111111111111",
+      kind: "remote" as const,
+      nodeId: "22222222-2222-4222-8222-222222222222",
+      faultDomainId: "33333333-3333-4333-8333-333333333333",
+      displayName: "relay-eu-2",
+      advertisedAddresses: ["relay.example.test"],
+      servicePort: 9443,
+      state: "ready" as const,
+      buildVersion: "v2.7.0",
+      protocolMajor: 1,
+      appliedPolicyRevision: 12,
+      policyExpiresAt: "2099-08-20T20:00:00.000Z",
+      lastSeenAt: "2026-08-20T19:59:00.000Z",
+      activeAssignments: 0,
+      health: { activeTunnels: 0, registeredEndpoints: 0, pressurePercent: 0 },
+      certificate: {
+        state: "expired" as const,
+        message:
+          "The relay certificate expired on 2026-09-01. If the supervisor cannot reconnect, re-enroll the relay.",
+        expiresAt: "2026-09-01T00:00:00.000Z",
+        observedAt: "2026-09-24T10:00:00.000Z",
+      },
+    };
+    vi.spyOn(api, "getRelayStatus").mockResolvedValue({ ...relayStatus(), instances: [relay] });
+    const renew = vi
+      .spyOn(api, "renewRelayInstanceCertificate")
+      .mockResolvedValue({ ...relayStatus(), instances: [{ ...relay, certificate: null }] });
+
+    renderRelaySettings();
+
+    expect(await screen.findByText(/The relay certificate expired on 2026-09-01/)).toHaveAttribute(
+      "role",
+      "alert"
+    );
+    // An expired certificate can also be repaired by re-enrolling the relay.
+    expect(screen.getByRole("button", { name: "Re-enroll" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Renew certificate" }));
+    expect(renew).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
+    await waitFor(() =>
+      expect(screen.queryByText(/The relay certificate expired/)).not.toBeInTheDocument()
+    );
+  });
 });
 
 function relaySettings(): AuthProvisioningSettings {

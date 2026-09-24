@@ -6,10 +6,12 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScope } from '@/lib/permissions.js';
 import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
+import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
-import { DaemonUpdateService, daemonTypeForNodeType } from '@/services/daemon-update.service.js';
+import { dispatchNodeDaemonUpdate } from '@/services/daemon-node-update.js';
+import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
@@ -72,7 +74,7 @@ systemRoutes.openapi(systemConfigRoute, async (c) => {
   });
 });
 
-systemRoutes.post('/relay/recovery', sessionOnly, requireScope('admin:system'), async (c) => {
+systemRoutes.post('/relay/recovery', requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const data = await container.resolve(RelaySupervisorService).retryRecovery(user.id);
   return c.json({ data });
@@ -87,13 +89,13 @@ systemRoutes.get('/relay', requireScope('settings:gateway:view'), async (c) => {
   return c.json({ data });
 });
 
-systemRoutes.post('/relay/rebalance', sessionOnly, requireScope('admin:system'), async (c) => {
+systemRoutes.post('/relay/rebalance', requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const data = await container.resolve(RelayPoolService).stageRebalance(user.id);
   return c.json({ data }, data.some(({ state }) => state === 'staging') ? 202 : 200);
 });
 
-systemRoutes.post('/relay/instances/:instanceId/drain', sessionOnly, requireScope('admin:system'), async (c) => {
+systemRoutes.post('/relay/instances/:instanceId/drain', requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
   const body = z.object({ confirm: z.literal(true) }).parse(await c.req.json());
@@ -102,29 +104,48 @@ systemRoutes.post('/relay/instances/:instanceId/drain', sessionOnly, requireScop
   return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
 });
 
-systemRoutes.post('/relay/instances/:instanceId/resume', sessionOnly, requireScope('admin:system'), async (c) => {
+systemRoutes.post('/relay/instances/:instanceId/resume', requireScope('admin:system'), async (c) => {
   const user = c.get('user')!;
   const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
   await container.resolve(RelayPoolService).drainInstance(instanceId, user.id, false);
   return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
 });
 
-systemRoutes.post(
-  '/relay/instances/:instanceId/force-disconnect',
-  sessionOnly,
-  requireScope('admin:system'),
-  async (c) => {
-    const user = c.get('user')!;
-    const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
-    const body = z.object({ confirm: z.literal(true) }).parse(await c.req.json());
-    void body;
-    await container.resolve(RelayPoolService).forceDisconnectInstance(instanceId, user.id);
-    return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
-  }
-);
+systemRoutes.post('/relay/instances/:instanceId/force-disconnect', requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+  const body = z.object({ confirm: z.literal(true) }).parse(await c.req.json());
+  void body;
+  await container.resolve(RelayPoolService).forceDisconnectInstance(instanceId, user.id);
+  return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
+});
+
+// Re-enrollment token for an enrolled remote relay; the relay installer run with it repairs the relay.
+systemRoutes.post('/relay/instances/:instanceId/reenroll', requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+  z.object({ confirm: z.literal(true) }).parse(await c.req.json());
+  const issued = await container.resolve(RelayPoolService).issueRelayReenrollment(instanceId, user.id);
+  const nodesService = container.resolve(NodesService);
+  return c.json({
+    data: {
+      ...issued,
+      gatewayCertSha256: await nodesService.getGatewayEnrollmentCertificateFingerprint(),
+      gatewayEnrollmentTargets: await nodesService.getGatewayEnrollmentTargets(),
+    },
+  });
+});
+
+// Renews a remote relay's server certificate now instead of waiting for the hourly check.
+systemRoutes.post('/relay/instances/:instanceId/renew-certificate', requireScope('admin:system'), async (c) => {
+  const user = c.get('user')!;
+  const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
+  await container.resolve(RelayPoolService).renewInstanceCertificate(instanceId, user.id);
+  return c.json({ data: await container.resolve(RelayPoolService).getSnapshot() });
+});
 
 // POST /check-update — manual check against GitLab (admin only)
-systemRoutes.openapi({ ...checkSystemUpdateRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(checkSystemUpdateRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const updateService = container.resolve(UpdateService);
@@ -141,7 +162,7 @@ systemRoutes.openapi({ ...checkSystemUpdateRoute, middleware: sessionOnly }, asy
 });
 
 // POST /update — trigger self-update (admin only)
-systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(performSystemUpdateRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const body = await c.req.json();
@@ -201,7 +222,7 @@ systemRoutes.openapi({ ...performSystemUpdateRoute, middleware: sessionOnly }, a
 });
 
 // POST /update/proceed — stop waiting for running orchestration operations (admin only)
-systemRoutes.openapi({ ...proceedSystemUpdateRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(proceedSystemUpdateRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const updateService = container.resolve(UpdateService);
@@ -213,14 +234,14 @@ systemRoutes.openapi({ ...proceedSystemUpdateRoute, middleware: sessionOnly }, a
 });
 
 // POST /update/acknowledge — stop reporting a Gateway update that was rolled back (admin only)
-systemRoutes.openapi({ ...acknowledgeSystemUpdateFailureRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(acknowledgeSystemUpdateFailureRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const acknowledged = await container.resolve(UpdateService).acknowledgeGatewayUpdateFailure();
   return c.json({ data: { acknowledged } });
 });
 
-systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(performRelayUpdateRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const { version } = z
@@ -272,7 +293,7 @@ systemRoutes.openapi({ ...performRelayUpdateRoute, middleware: sessionOnly }, as
 });
 
 // POST /relay-update/abandon — fail a stuck or paused Relay Pool update (admin only)
-systemRoutes.openapi({ ...abandonRelayUpdateRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(abandonRelayUpdateRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const data = await container.resolve(UpdateService).abandonRelayUpdate(c.get('user')!.id);
@@ -328,7 +349,7 @@ systemRoutes.openapi({ ...daemonUpdatesRoute, middleware: requireScope('admin:up
 });
 
 // POST /daemon-updates/check — force re-check daemon updates
-systemRoutes.openapi({ ...checkDaemonUpdatesRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(checkDaemonUpdatesRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
   const service = container.resolve(DaemonUpdateService);
@@ -337,44 +358,15 @@ systemRoutes.openapi({ ...checkDaemonUpdatesRoute, middleware: sessionOnly }, as
 });
 
 // POST /daemon-updates/:nodeId — trigger update for a specific node
-systemRoutes.openapi({ ...updateDaemonRoute, middleware: sessionOnly }, async (c) => {
+systemRoutes.openapi(updateDaemonRoute, async (c) => {
   const forbidden = requireUpdateScope(c);
   if (forbidden) return forbidden;
-  const nodeId = c.req.param('nodeId')!;
-  const service = container.resolve(DaemonUpdateService);
   const { NodeDispatchService } = await import('@/services/node-dispatch.service.js');
-  const dispatch = container.resolve(NodeDispatchService);
   const { TOKENS } = await import('@/container.js');
-  const { nodes: nodesTable } = await import('@/db/schema/nodes.js');
-  const { eq } = await import('drizzle-orm');
-  const db = container.resolve<any>(TOKENS.DrizzleClient);
-
-  const [node] = await db.select().from(nodesTable).where(eq(nodesTable.id, nodeId)).limit(1);
-  if (!node) throw new AppError(404, 'NODE_NOT_FOUND', 'Node not found');
-
-  const daemonType = daemonTypeForNodeType(node.type);
-  if (!daemonType) throw new AppError(400, 'UNSUPPORTED_NODE_TYPE', 'This node does not run an updatable daemon');
-  const release = await service.getLatestRelease(daemonType);
-  if (!release) throw new AppError(404, 'RELEASE_NOT_FOUND', 'No release found for this daemon type');
-
-  const arch = (((node.capabilities ?? {}) as Record<string, unknown>).architecture as string) ?? 'amd64';
-  const artifact = await service.prepareTrustedDaemonUpdate(daemonType, release.tagName, release.version, arch);
-
-  const operationId = await service.markNodeUpdateInProgress(nodeId, release.version);
-  try {
-    const command = await dispatch.sendUpdateDaemonCommand(
-      nodeId,
-      artifact.downloadUrl,
-      release.version,
-      artifact.checksum,
-      artifact.signedManifest
-    );
-    service.trackNodeUpdateCompletion(nodeId, operationId, command.result);
-    await command.accepted;
-  } catch (error) {
-    await service.clearNodeUpdateInProgress(nodeId, operationId);
-    throw error;
-  }
-
-  return c.json({ data: { scheduled: true, targetVersion: release.version } });
+  const data = await dispatchNodeDaemonUpdate(c.req.param('nodeId')!, {
+    db: container.resolve(TOKENS.DrizzleClient),
+    daemonUpdateService: container.resolve(DaemonUpdateService),
+    dispatch: container.resolve(NodeDispatchService),
+  });
+  return c.json({ data });
 });

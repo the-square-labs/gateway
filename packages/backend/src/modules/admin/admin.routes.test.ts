@@ -16,6 +16,7 @@ import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
 import { DEFAULT_GENERAL_SETTINGS, GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
+import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
@@ -313,6 +314,26 @@ describe('admin user impersonation', () => {
       'session-1',
       expect.objectContaining({ userAgent: undefined })
     );
+  });
+
+  it('keeps starting impersonation browser-session-only for bearer tokens', async () => {
+    const createImpersonationSession = registerImpersonationDependencies(TARGET_USER);
+    container.registerInstance(TokensService, {
+      validateToken: vi.fn().mockResolvedValue({
+        user: { ...USER, scopes: ['admin:users', 'admin:users:impersonate'] },
+        scopes: ['admin:users', 'admin:users:impersonate'],
+        tokenId: 'token-1',
+        tokenPrefix: 'gw_test',
+      }),
+    } as unknown as TokensService);
+
+    const response = await createApp().request(`/api/admin/users/${TARGET_USER.id}/impersonate`, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_test' },
+    });
+
+    expect(response.status).toBe(403);
+    expect(createImpersonationSession).not.toHaveBeenCalled();
   });
 
   it('rejects blocked targets before creating an impersonation session', async () => {
@@ -1236,6 +1257,36 @@ describe('deleted user administration', () => {
     expect(auditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.restore', details: expect.objectContaining({ remainsBlocked: true }) })
     );
+  });
+
+  it('lets bearer tokens administer users through their delegated admin scopes', async () => {
+    const listDeletedUsers = vi.fn().mockResolvedValue([]);
+    container.registerInstance(AuthService, { listDeletedUsers } as unknown as AuthService);
+    const validateToken = vi.fn().mockResolvedValue({
+      user: { ...USER, scopes: ['admin:system', 'admin:users'] },
+      scopes: ['admin:system'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    container.registerInstance(TokensService, { validateToken } as unknown as TokensService);
+
+    const allowed = await createApp().request('/api/admin/users/deleted', {
+      headers: { Authorization: 'Bearer gw_test' },
+    });
+    expect(allowed.status).toBe(200);
+    expect(listDeletedUsers).toHaveBeenCalledTimes(1);
+
+    validateToken.mockResolvedValueOnce({
+      user: { ...USER, scopes: ['admin:system', 'admin:users'] },
+      scopes: ['admin:users'],
+      tokenId: 'token-1',
+      tokenPrefix: 'gw_test',
+    });
+    const denied = await createApp().request('/api/admin/users/deleted', {
+      headers: { Authorization: 'Bearer gw_test' },
+    });
+    expect(denied.status).toBe(403);
+    expect(listDeletedUsers).toHaveBeenCalledTimes(1);
   });
 });
 

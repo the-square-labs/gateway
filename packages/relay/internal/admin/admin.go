@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
@@ -80,7 +81,7 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 		FileDescriptorLimit:    runtime.Admission.FileDescriptorLimit,
 		Liveness:               true, Readiness: ready, Reason: reason,
 		PoolId: current.PoolID, RelayInstanceId: current.RelayInstanceID, Mode: current.Mode,
-		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: []string{policy.PoolCapability, "signed_policy_envelope_v1"},
+		PolicyExpiresAtUnix: policyExpiresAtUnix, Capabilities: healthCapabilities(current.Mode),
 		Draining:     runtime.Draining,
 		PolicyKeyIds: s.store.PolicyKeyIDs(),
 		AssignmentTunnels: func() []*relayv1.AssignmentTunnelCount {
@@ -93,6 +94,16 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 			return result
 		}(),
 	}, nil
+}
+
+// healthCapabilities lists what Gateway may rely on. Only the local relay
+// advertises the trust reset: a remote relay refuses it.
+func healthCapabilities(mode relayv1.RelayMode) []string {
+	capabilities := []string{policy.PoolCapability, "signed_policy_envelope_v1"}
+	if mode == relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
+		capabilities = append(capabilities, policy.TrustResetCapability)
+	}
+	return capabilities
 }
 
 func (s *Service) GetRouteRuntime(ctx context.Context, request *relayv1.RouteRuntimeRequest) (*relayv1.RouteRuntimeResponse, error) {
@@ -163,8 +174,10 @@ func (s *Service) ResetLocalPolicyTrust(ctx context.Context, request *relayv1.Re
 	}
 	replaced, err := s.store.ResetLocalPolicyTrust(request.KeyId, request.PublicKey, request.PublicKeyFingerprint)
 	if err != nil {
+		slog.Warn("refused policy trust reset", "key_id", request.KeyId, "error", err)
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
+	slog.Warn("Gateway reset pinned policy trust", "key_id", request.KeyId, "fingerprint", request.PublicKeyFingerprint, "replaced_key_ids", replaced)
 	return &relayv1.ResetLocalPolicyTrustResponse{
 		KeyId: request.KeyId, PublicKeyFingerprint: request.PublicKeyFingerprint, ReplacedKeyIds: replaced,
 	}, nil

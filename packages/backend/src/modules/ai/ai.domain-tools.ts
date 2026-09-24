@@ -1,7 +1,15 @@
 import { container } from '@/container.js';
 import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { DomainIngressMigrationSchema, UpdateDomainSchema } from '@/modules/domains/domain.schemas.js';
+import {
+  CreateDomainSchema,
+  DeleteDomainSchema,
+  DomainIngressMigrationSchema,
+  DomainListQuerySchema,
+  PreviewDomainSchema,
+  ResolveCloudflareMigrationSchema,
+  UpdateDomainSchema,
+} from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
@@ -26,80 +34,114 @@ export async function executeDomainTool(
   switch (toolName) {
     case 'list_domains':
       return context.domainsService.listDomains(
-        {
+        DomainListQuerySchema.parse({
           search: a.search,
+          dnsStatus: a.dnsStatus,
           page: agentPage(a.page),
           limit: agentPageLimit(a.limit),
-        },
+        }),
         { allowedIds: allowedResourceIdsForScopes(user.scopes, 'domains:view') }
       );
-    case 'create_domain':
-      if (!hasScopeForCreation(user.scopes, 'domains:create', a.folderId, a.nginxNodeId)) {
+    case 'create_domain': {
+      const input = CreateDomainSchema.parse({
+        domain: a.domain,
+        dnsProvider: a.dnsProvider,
+        description: a.description,
+        folderId: a.folderId,
+        ttl: a.ttl,
+        proxied: a.proxied,
+        overwriteDns: a.overwriteDns,
+        nginxNodeId: a.nginxNodeId,
+      });
+      if (!hasScopeForCreation(user.scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
       }
-      await container.resolve(DomainFolderService).assertFolderExists(a.folderId);
-      return context.domainsService.createDomain(
-        {
-          domain: a.domain,
-          description: a.description,
-          folderId: a.folderId,
-          ttl: typeof a.ttl === 'number' ? a.ttl : undefined,
-          proxied: typeof a.proxied === 'boolean' ? a.proxied : undefined,
-          overwriteDns: a.overwriteDns === true,
-          nginxNodeId: typeof a.nginxNodeId === 'string' ? a.nginxNodeId : undefined,
-        },
-        user.id
-      );
+      await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
+      return context.domainsService.createDomain(input, user.id);
+    }
     case 'delete_domain':
-      await context.domainsService.deleteDomain(a.domainId, user.id, {
-        deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined,
-      });
+      await context.domainsService.deleteDomain(
+        a.domainId,
+        user.id,
+        DeleteDomainSchema.parse({ deleteDns: typeof a.deleteDns === 'boolean' ? a.deleteDns : undefined })
+      );
       return { success: true };
     case 'manage_domain':
-      if (a.operation === 'get') {
-        context.ensureToolScopeForResource(user, 'domains:view', String(a.domainId));
-        return context.domainsService.getDomain(a.domainId);
-      }
-      if (a.operation === 'update') {
-        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
-        if (typeof a.proxied === 'boolean') {
-          context.ensureToolScopeForResource(user, 'integrations:cloudflare:dns:edit', String(a.domainId));
-        }
-        return context.domainsService.updateDomain(a.domainId, UpdateDomainSchema.parse(args), user.id);
-      }
-      if (a.operation === 'check_dns') {
-        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
-        return context.domainsService.checkDns(a.domainId);
-      }
-      if (a.operation === 'preview_ingress_migration' || a.operation === 'migrate_ingress') {
-        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
-        const input = DomainIngressMigrationSchema.parse({ targetNodeId: a.targetNodeId });
-        return a.operation === 'preview_ingress_migration'
-          ? context.domainsService.previewIngressMigration(a.domainId, input)
-          : context.domainsService.migrateIngress(a.domainId, input, user.id, user.scopes);
-      }
-      if (a.operation === 'issue_certificate') {
-        // Mirrors POST /domains/{id}/issue-cert: domain edit plus broad ssl:cert:issue.
-        context.ensureToolScopeForResource(user, 'domains:edit', String(a.domainId));
-        if (!hasScope(user.scopes, 'ssl:cert:issue')) {
-          throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
-        }
-        const domain = await context.domainsService.getDomain(a.domainId);
-        const cloudflare = domain.dnsProvider === 'cloudflare';
-        return container.resolve(SSLService).requestACMECert(
-          {
-            domains: [domain.domain],
-            challengeType: cloudflare ? 'dns-01' : 'http-01',
-            provider: 'letsencrypt',
-            autoRenew: true,
-            ...(cloudflare ? { dnsProvider: 'cloudflare' as const } : {}),
-          },
-          user.id,
-          user.email
-        );
-      }
-      throw new Error(`Unsupported domain operation: ${String(a.operation)}`);
+      return manageDomain(context, user, a);
     default:
       throw new Error(`Unsupported domain tool: ${toolName}`);
   }
+}
+
+async function manageDomain(context: DomainToolContext, user: User, a: Record<string, any>): Promise<unknown> {
+  // Mirrors GET /domains/nginx-nodes and POST /domains/preview (domains:create).
+  if (a.operation === 'list_nginx_nodes' || a.operation === 'preview') {
+    if (!hasScope(user.scopes, 'domains:create')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: domains:create');
+    }
+    if (a.operation === 'list_nginx_nodes') return context.domainsService.getNginxNodeOptions();
+    return context.domainsService.previewDomain(
+      PreviewDomainSchema.parse({
+        domain: a.domain,
+        dnsProvider: a.dnsProvider,
+        ttl: a.ttl,
+        proxied: a.proxied,
+        nginxNodeId: a.nginxNodeId,
+      })
+    );
+  }
+
+  const domainId = typeof a.domainId === 'string' ? a.domainId : '';
+  if (!domainId) throw new AppError(400, 'DOMAIN_ID_REQUIRED', `domainId is required for ${String(a.operation)}`);
+  if (a.operation === 'get') {
+    context.ensureToolScopeForResource(user, 'domains:view', domainId);
+    return context.domainsService.getDomain(domainId);
+  }
+  if (a.operation === 'update') {
+    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    return context.domainsService.updateDomain(
+      domainId,
+      UpdateDomainSchema.parse({ description: a.description, proxied: a.proxied }),
+      user.id
+    );
+  }
+  if (a.operation === 'check_dns') {
+    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    return context.domainsService.checkDns(domainId);
+  }
+  if (a.operation === 'resolve_cloudflare_migration') {
+    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    const input = ResolveCloudflareMigrationSchema.parse(
+      a.action === 'update_dns' ? { action: a.action, nginxNodeId: a.nginxNodeId } : { action: a.action }
+    );
+    return context.domainsService.resolveCloudflareMigration(domainId, input, user.id, user.scopes);
+  }
+  if (a.operation === 'preview_ingress_migration' || a.operation === 'migrate_ingress') {
+    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    const input = DomainIngressMigrationSchema.parse({ targetNodeId: a.targetNodeId });
+    return a.operation === 'preview_ingress_migration'
+      ? context.domainsService.previewIngressMigration(domainId, input)
+      : context.domainsService.migrateIngress(domainId, input, user.id, user.scopes);
+  }
+  if (a.operation === 'issue_certificate') {
+    // Mirrors POST /domains/{id}/issue-cert: domain edit plus broad ssl:cert:issue.
+    context.ensureToolScopeForResource(user, 'domains:edit', domainId);
+    if (!hasScope(user.scopes, 'ssl:cert:issue')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
+    }
+    const domain = await context.domainsService.getDomain(domainId);
+    const cloudflare = domain.dnsProvider === 'cloudflare';
+    return container.resolve(SSLService).requestACMECert(
+      {
+        domains: [domain.domain],
+        challengeType: cloudflare ? 'dns-01' : 'http-01',
+        provider: 'letsencrypt',
+        autoRenew: true,
+        ...(cloudflare ? { dnsProvider: 'cloudflare' as const } : {}),
+      },
+      user.id,
+      user.email
+    );
+  }
+  throw new Error(`Unsupported domain operation: ${String(a.operation)}`);
 }

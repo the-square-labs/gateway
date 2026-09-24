@@ -456,6 +456,7 @@ describe('AI tool scope filtering', () => {
       'test_webhook',
       'list_webhook_deliveries',
       'get_delivery_stats',
+      'manage_notifications',
       'list_siem_destinations',
       'get_siem_destination',
       'create_siem_destination',
@@ -472,6 +473,14 @@ describe('AI tool scope filtering', () => {
       'list_webhooks',
       'list_webhook_deliveries',
       'get_delivery_stats',
+      'manage_notifications',
+    ]);
+    // The granular notification scopes open the same tools as their routes.
+    expect(notificationToolNamesForScopes(['notifications:webhooks:edit'])).toEqual([
+      'list_webhooks',
+      'update_webhook',
+      'test_webhook',
+      'manage_notifications',
     ]);
     expect(notificationToolNamesForScopes(['notifications:manage'])).toEqual([
       'list_alert_rules',
@@ -486,6 +495,7 @@ describe('AI tool scope filtering', () => {
       'test_webhook',
       'list_webhook_deliveries',
       'get_delivery_stats',
+      'manage_notifications',
     ]);
     expect(notificationToolNamesForScopes(['audit:siem:view'])).toEqual([
       'list_siem_destinations',
@@ -644,6 +654,7 @@ describe('AI tool scope filtering', () => {
       'get_gateway_settings',
       'update_gateway_settings',
       'manage_system_updates',
+      'manage_relay_pool',
     ]);
     expect(toolNames(['license:view'])).toContain('get_license_status');
     expect(toolNames(['license:view'])).not.toContain('manage_license');
@@ -749,6 +760,11 @@ describe('AI tool scope filtering', () => {
       'manage_docker_deployment',
       'kill_docker_container',
       'force_cancel_docker_task',
+      'manage_docker_container',
+      'manage_docker_availability',
+      'manage_docker_runtime',
+      'upload_docker_container_archive',
+      'download_docker_archive',
     ]);
     expect(dockerToolNamesForScopes(['docker:containers:view'])).toEqual([
       'list_docker_containers',
@@ -761,6 +777,8 @@ describe('AI tool scope filtering', () => {
       'manage_docker_build',
       'manage_docker_source',
       'manage_docker_container_config',
+      'manage_docker_container',
+      'manage_docker_availability',
     ]);
     expect(dockerToolNamesForScopes(['docker:containers:manage'])).toEqual([
       'list_docker_containers',
@@ -786,16 +804,25 @@ describe('AI tool scope filtering', () => {
       'manage_docker_source',
       'manage_docker_container_config',
       'kill_docker_container',
+      'manage_docker_container',
+      'manage_docker_availability',
     ]);
     expect(dockerToolNamesForScopes(['docker:images:view'])).toEqual(['list_docker_images']);
-    expect(dockerToolNamesForScopes(['docker:volumes:view'])).toEqual(['list_docker_volumes']);
+    expect(dockerToolNamesForScopes(['docker:volumes:view'])).toEqual(['list_docker_volumes', 'manage_docker_volume']);
     expect(dockerToolNamesForScopes(['docker:networks:view'])).toEqual(['list_docker_networks']);
     expect(dockerToolNamesForScopes(['docker:compose:view'])).toEqual([
       'manage_docker_compose',
       'list_docker_builds',
       'manage_docker_build',
       'manage_docker_source',
+      'manage_docker_availability',
     ]);
+    // Binary archive transfer is MCP-only and never offered to the embedded model.
+    expect(toolNames(['docker:containers:create', 'docker:containers:export'])).not.toContain(
+      'upload_docker_container_archive'
+    );
+    expect(toolNames(['docker:containers:export'])).not.toContain('download_docker_archive');
+    expect(dockerToolNamesForScopes(['admin:update'])).toEqual(['manage_docker_runtime']);
     expect(dockerToolNamesForScopes(['docker:containers:console:node-1'])).toContain(
       'execute_docker_container_console_command'
     );

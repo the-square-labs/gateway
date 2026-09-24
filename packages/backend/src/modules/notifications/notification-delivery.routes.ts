@@ -1,5 +1,4 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScope } from '@/lib/permissions.js';
@@ -11,15 +10,8 @@ import {
   listNotificationDeliveriesRoute,
   notificationDeliveryStatsRoute,
 } from './notification.docs.js';
+import { DeliveryListQuerySchema } from './notification-delivery.schemas.js';
 import { NotificationDeliveryService } from './notification-delivery.service.js';
-
-const DeliveryListQuerySchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  webhookId: z.string().uuid().optional(),
-  status: z.enum(['pending', 'success', 'failed', 'retrying']).optional(),
-  eventType: z.string().optional(),
-});
 
 export const deliveryRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 

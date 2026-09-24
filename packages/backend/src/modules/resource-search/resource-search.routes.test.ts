@@ -18,15 +18,9 @@ vi.mock('@/modules/ai/ai.service.js', () => ({
 
 vi.mock('@/modules/auth/auth.middleware.js', () => ({
   authMiddleware: async (c: any, next: () => Promise<void>) => {
-    c.set('user', { id: 'user-1', scopes: ['proxy:view'] });
-    c.set('effectiveScopes', ['proxy:view']);
+    c.set('user', { id: 'user-1', scopes: ['proxy:view', 'nodes:details'] });
+    c.set('effectiveScopes', mocks.authType === 'session' ? ['proxy:view', 'nodes:details'] : ['proxy:view']);
     c.set('authType', mocks.authType);
-    await next();
-  },
-  sessionOnly: async (c: any, next: () => Promise<void>) => {
-    if (c.get('authType') !== 'session') {
-      return c.json({ message: 'This endpoint requires browser session authentication.' }, 403);
-    }
     await next();
   },
 }));
@@ -60,11 +54,14 @@ describe('resource search routes', () => {
     });
   });
 
-  it('rejects API-token callers because the endpoint is UI-only', async () => {
+  it('searches for API-token callers with the token scopes, never the owner scopes', async () => {
     mocks.authType = 'api-token';
     const response = await resourceSearchRoutes.request('/search?q=api');
 
-    expect(response.status).toBe(403);
-    expect(mocks.searchResources).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(mocks.searchResources).toHaveBeenCalledWith(
+      { id: 'user-1', scopes: ['proxy:view'] },
+      expect.objectContaining({ query: 'api' })
+    );
   });
 });

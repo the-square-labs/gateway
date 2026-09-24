@@ -69,7 +69,7 @@ describe('AIService PKI template tool routing', () => {
         keyUsage: ['digitalSignature'],
         extKeyUsage: ['serverAuth'],
         requireSans: true,
-        sanTypes: ['dns'],
+        sanTypes: ['dns', 'ip'],
         crlDistributionPoints: [],
         certificatePolicies: [],
         customExtensions: [],
@@ -77,12 +77,32 @@ describe('AIService PKI template tool routing', () => {
       'user-1'
     );
 
+    // The template routes check broad scopes; a per-template grant is not enough.
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:templates:delete:template-1'] }, 'delete_template', {
         templateId: 'template-1',
       })
+    ).resolves.toEqual({
+      error: 'PERMISSION_DENIED: Missing required scope pki:templates:delete',
+      invalidateStores: [],
+    });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:templates:delete'] }, 'delete_template', {
+        templateId: 'template-1',
+      })
     ).resolves.toEqual({ result: { success: true }, invalidateStores: ['templates'] });
     expect(templatesService.deleteTemplate).toHaveBeenCalledWith('template-1');
+
+    // Template content is validated like POST /templates.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:templates:create'] }, 'create_template', {
+        name: 'Bad',
+        certType: 'tls-server',
+        keyAlgorithm: 'ecdsa-p256',
+        validityDays: 90,
+        customExtensions: [{ oid: 'not-an-oid', value: '0101' }],
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Must be a valid OID') });
   });
 
   it('routes managed template get/update operations with resource scopes', async () => {

@@ -1,18 +1,14 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
-import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
-import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { AuditService } from '@/modules/audit/audit.service.js';
 import {
   authMiddleware,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
-  sessionOnly,
 } from '@/modules/auth/auth.middleware.js';
 import {
   CreateResourceFolderSchema,
@@ -39,13 +35,19 @@ import {
   updateGroupRoute,
 } from './group.docs.js';
 import { CreateGroupSchema, UpdateGroupSchema } from './group.schemas.js';
-import { GroupService } from './group.service.js';
+import {
+  createGroupForActor,
+  deleteGroupForActor,
+  type GroupActor,
+  getGroupForActor,
+  listVisibleGroups,
+  updateGroupForActor,
+} from './group-actions.js';
 import { PermissionGroupFolderService } from './permission-group-folders.service.js';
 
 export const groupRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 groupRoutes.use('*', authMiddleware);
-groupRoutes.use('*', sessionOnly);
 
 function requireAnyGroupScope(...requiredScopes: string[]) {
   return async (c: any, next: () => Promise<void>) => {
@@ -58,12 +60,9 @@ function requireAnyGroupScope(...requiredScopes: string[]) {
 }
 
 // List all groups
-groupRoutes.openapi({ ...listGroupsRoute, middleware: requireScopeBase('admin:groups') }, async (c) => {
-  const groupService = container.resolve(GroupService);
-  const groups = await groupService.listGroups();
-  const scopes = c.get('effectiveScopes') || [];
-  return c.json(groups.filter((group) => hasScope(scopes, `admin:groups:${group.id}`)));
-});
+groupRoutes.openapi({ ...listGroupsRoute, middleware: requireScopeBase('admin:groups') }, async (c) =>
+  c.json(await listVisibleGroups(c.get('effectiveScopes') || []))
+);
 
 groupRoutes.openapi(
   { ...listGroupFoldersRoute, middleware: requireAnyGroupScope('admin:groups', 'admin:groups:folders:manage') },
@@ -165,96 +164,34 @@ groupRoutes.openapi(
   }
 );
 
+function groupActor(c: any): GroupActor {
+  return {
+    id: c.get('user')!.id,
+    scopes: c.get('effectiveScopes') || [],
+    accountScopes: c.get('isTokenAuth') ? c.get('user')!.scopes : undefined,
+    userAgent: c.req.header('user-agent'),
+  };
+}
+
 // Get single group
-groupRoutes.openapi({ ...getGroupRoute, middleware: requireScopeForResource('admin:groups', 'id') }, async (c) => {
-  const groupService = container.resolve(GroupService);
-  const id = c.req.param('id')!;
-  const group = await groupService.getGroup(id);
-  return c.json(group);
-});
+groupRoutes.openapi({ ...getGroupRoute, middleware: requireScopeForResource('admin:groups', 'id') }, async (c) =>
+  c.json(await getGroupForActor(groupActor(c), c.req.param('id')!))
+);
 
 // Create custom group
 groupRoutes.openapi({ ...createGroupRoute, middleware: requireScopeBase('admin:groups') }, async (c) => {
-  const groupService = container.resolve(GroupService);
-  const auditService = container.resolve(AuditService);
-  const user = c.get('user')!;
-  const body = await c.req.json();
-  const parsedInput = CreateGroupSchema.parse(body);
-  const input = { ...parsedInput, scopes: canonicalizeScopes(parsedInput.scopes) };
-
-  const userScopes = c.get('effectiveScopes') || [];
-  if (!hasScopeForCreation(userScopes, 'admin:groups', input.folderId))
-    throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination group folder');
-  if (input.folderId) await container.resolve(PermissionGroupFolderService).assertFolderExists(input.folderId);
-  await groupService.assertCanCreateGroup(input, userScopes);
-
-  const group = await groupService.createGroup(input);
-  await grantCreatedResourcePermissions(user.id, 'admin:groups', group.id);
-
-  await auditService.log({
-    userId: user.id,
-    action: 'group.create',
-    resourceType: 'permission_group',
-    resourceId: group.id,
-    details: { name: group.name, scopes: input.scopes },
-    userAgent: c.req.header('user-agent'),
-  });
-
-  return c.json(group, 201);
+  const input = CreateGroupSchema.parse(await c.req.json());
+  return c.json(await createGroupForActor(groupActor(c), input), 201);
 });
 
 // Update custom group
 groupRoutes.openapi({ ...updateGroupRoute, middleware: requireScopeForResource('admin:groups', 'id') }, async (c) => {
-  const groupService = container.resolve(GroupService);
-  const auditService = container.resolve(AuditService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
-  const body = await c.req.json();
-  const parsedInput = UpdateGroupSchema.parse(body);
-  const input = {
-    ...parsedInput,
-    ...(parsedInput.scopes !== undefined && { scopes: canonicalizeScopes(parsedInput.scopes) }),
-  };
-
-  const userScopes = c.get('effectiveScopes') || [];
-  await groupService.assertCanUpdateGroup(id, input, userScopes);
-
-  const group = await groupService.updateGroup(id, input);
-
-  await auditService.log({
-    userId: user.id,
-    action: 'group.update',
-    resourceType: 'permission_group',
-    resourceId: id,
-    details: { changes: input },
-    userAgent: c.req.header('user-agent'),
-  });
-
-  return c.json(group);
+  const input = UpdateGroupSchema.parse(await c.req.json());
+  return c.json(await updateGroupForActor(groupActor(c), c.req.param('id')!, input));
 });
 
 // Delete custom group
 groupRoutes.openapi({ ...deleteGroupRoute, middleware: requireScopeForResource('admin:groups', 'id') }, async (c) => {
-  const groupService = container.resolve(GroupService);
-  const auditService = container.resolve(AuditService);
-  const user = c.get('user')!;
-  const id = c.req.param('id')!;
-  const userScopes = c.get('effectiveScopes') || [];
-
-  await groupService.assertCanDeleteGroup(id, userScopes);
-
-  // getGroup will throw 404 if not found, and deleteGroup will throw if built-in or has members
-  const group = await groupService.getGroup(id);
-  await groupService.deleteGroup(id);
-
-  await auditService.log({
-    userId: user.id,
-    action: 'group.delete',
-    resourceType: 'permission_group',
-    resourceId: id,
-    details: { name: group.name },
-    userAgent: c.req.header('user-agent'),
-  });
-
+  await deleteGroupForActor(groupActor(c), c.req.param('id')!);
   return c.json({ message: 'Group deleted' });
 });

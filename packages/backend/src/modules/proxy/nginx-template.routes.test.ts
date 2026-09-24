@@ -109,17 +109,26 @@ describe('nginx template routes', () => {
     expect(await response.json()).toEqual({ data: [{ id: 'template-1', name: 'Default' }] });
   });
 
-  it('requires a privileged browser session to create template content', async () => {
-    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
+  it('requires raw write scope, not a browser session, to create template content', async () => {
     const input = { name: 'Custom', type: 'proxy', content: 'server {}' };
 
+    mocks.scopes = ['proxy:templates:create'];
+    const programmaticWithoutRawScope = await createApp().request('/', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    expect(programmaticWithoutRawScope.status).toBe(403);
+    expect(mocks.templateService.createTemplate).not.toHaveBeenCalled();
+
+    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
     const programmatic = await createApp().request('/', {
       method: 'POST',
       headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     });
-    expect(programmatic.status).toBe(403);
-    expect(mocks.templateService.createTemplate).not.toHaveBeenCalled();
+    expect(programmatic.status).toBe(201);
+    expect(mocks.templateService.createTemplate).toHaveBeenCalledTimes(1);
 
     mocks.authType = 'session';
     mocks.scopes = ['proxy:templates:create'];

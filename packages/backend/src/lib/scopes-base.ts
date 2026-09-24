@@ -287,9 +287,12 @@ export const ALL_SCOPES = [
 
 export type Scope = (typeof ALL_SCOPES)[number];
 
+/**
+ * AI Workspace chat, skills, sandbox, the MCP account gate, and the OAuth-only inference setup grant.
+ * `feat:ai:use` is not here: it gates Gateway Inference (a resource, including personal `gwi_` keys).
+ */
 export const USER_ONLY_SCOPES = [
   'ai:workspace:use',
-  'feat:ai:use',
   'feat:ai:configure',
   'ai:skills:manage',
   'ai:sandbox:use',
@@ -299,77 +302,24 @@ export const USER_ONLY_SCOPES = [
   'mcp:use',
   'inference:setup',
 ] as const;
+/**
+ * Scopes that API tokens and OAuth grants (REST and MCP) can never carry. Programmatic access may do
+ * everything a user can do with Gateway resources; only browser- or identity-bound capabilities stay
+ * here. Every other scope is delegable and stays bounded by the owner's live permissions.
+ */
 export const PROGRAMMATIC_DENIED_BASE_SCOPES = [
   ...USER_ONLY_SCOPES,
-  'admin:system',
-  'admin:users',
+  // Impersonation turns the caller's browser session into another user's session.
   'admin:users:impersonate',
-  'admin:groups',
-  'settings:gateway:view',
-  'settings:gateway:edit',
-  'integrations:gitlab:manage',
-  'integrations:gitlab:system',
-  'integrations:github:manage',
-  'integrations:github:system',
-  'integrations:git:manage',
-  'integrations:git:system',
-  'integrations:ssh:manage',
-  'integrations:cloudflare:manage',
-  'integrations:hosting:manage',
-  'hosting:resources:create',
-  'hosting:resources:power',
-  'hosting:resources:resize',
-  'hosting:snapshots:create',
-  'hosting:snapshots:delete',
-  'hosting:snapshots:restore',
-  'hosting:snapshots:folders:manage',
-  'hosting:resources:delete',
-  'hosting:resources:recover',
-  'hosting:billing:view',
-  'hosting:billing:topup',
-  'proxy:raw:read',
-  'proxy:raw:write',
-  'proxy:raw:toggle',
-  'proxy:raw:bypass',
-  'proxy:advanced:bypass',
-  'proxy:maintenance:bypass',
-  'nodes:config:view',
-  'nodes:config:edit',
-  'inference:providers:view',
-  'inference:providers:manage',
-  'inference:models:manage',
-  'inference:limits:manage',
-  'inference:usage:view',
+  // Clones into the AI sandbox working copy and additionally requires the user-only ai:sandbox:use.
+  'integrations:gitlab:sandbox:clone',
 ] as const;
 
 export const PROGRAMMATIC_DENIED_SCOPE_SET = new Set<string>(PROGRAMMATIC_DENIED_BASE_SCOPES);
 
 export const API_TOKEN_SCOPES = ALL_SCOPES.filter((scope) => !PROGRAMMATIC_DENIED_SCOPE_SET.has(scope));
 
-export const MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES = [
-  'integrations:gitlab:',
-  'integrations:github:',
-  'integrations:git:',
-  'integrations:ssh:',
-] as const;
-
-/** Source-control and SSH scopes Gateway MCP may delegate: discovery reads plus connector resync. */
-export const MCP_EXTERNAL_INTEGRATION_READ_SCOPES = new Set<string>([
-  'integrations:gitlab:view',
-  'integrations:gitlab:projects:view',
-  'integrations:gitlab:repo:read',
-  'integrations:gitlab:sync',
-  'integrations:github:view',
-  'integrations:github:sync',
-  'integrations:git:view',
-  'integrations:git:sync',
-  'integrations:ssh:view',
-]);
-
-export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter(
-  (scope) =>
-    MCP_EXTERNAL_INTEGRATION_READ_SCOPES.has(scope) ||
-    !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => scope.startsWith(prefix))
-);
+/** Gateway MCP delegates exactly the API token scopes; `mcp:use` is the user-account gate, never a grant. */
+export const MCP_TOKEN_SCOPES = API_TOKEN_SCOPES.filter((scope) => scope !== 'mcp:use');
 
 /** System-admin group: every scope including admin:system (protected) */

@@ -4,19 +4,20 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_alert_rules',
     description:
-      'List all notification alert rules. Returns id, name, enabled, type (threshold/event), category, severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds. Categories include node, container, build, compose, proxy, pages, gateway, logging, integration, certificate, security, and managed database types.',
+      'List notification alert rules. Returns id, name, enabled, type (threshold/event), category, severity, metric, operator, thresholdValue, eventPattern, resourceIds, webhookIds, cooldownSeconds. Categories include hosting VM/account, node, container, build, compose, proxy, gateway, logging, integration, certificate, security, and managed database types. Use manage_notifications alert_categories for each category metrics, events, and template variables.',
     parameters: {
       type: 'object',
       properties: {
         category: {
           type: 'string',
           enum: [
+            'hosting_vm',
+            'hosting_account',
             'node',
             'container',
             'build',
             'compose',
             'proxy',
-            'pages',
             'gateway',
             'logging',
             'integration',
@@ -28,7 +29,11 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           ],
           description: 'Filter by category',
         },
+        type: { type: 'string', enum: ['threshold', 'event'] },
         enabled: { type: 'boolean', description: 'Filter by enabled/disabled' },
+        search: { type: 'string', description: 'Search by rule name' },
+        page: { type: 'number' },
+        limit: { type: 'number', description: 'Items per page (default 50, max 100)' },
       },
     },
     destructive: false,
@@ -63,12 +68,13 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         category: {
           type: 'string',
           enum: [
+            'hosting_vm',
+            'hosting_account',
             'node',
             'container',
             'build',
             'compose',
             'proxy',
-            'pages',
             'gateway',
             'logging',
             'integration',
@@ -118,7 +124,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         },
         webhookIds: { type: 'array', items: { type: 'string' }, description: 'Webhook IDs to deliver to' },
         cooldownSeconds: { type: 'number', description: 'Cooldown between repeated firings (default 900)' },
-        enabled: { type: 'boolean', description: 'Whether the rule is active (default true)' },
+        enabled: { type: 'boolean', description: 'Whether the rule is active (default false, like the UI)' },
       },
       required: ['name', 'type', 'category', 'severity', 'webhookIds'],
     },
@@ -138,7 +144,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         enabled: { type: 'boolean', description: 'Enable/disable' },
         severity: { type: 'string', enum: ['info', 'warning', 'critical'] },
         metric: { type: 'string' },
-        metricTarget: { type: 'string' },
+        metricTarget: { type: ['string', 'null'] },
         operator: { type: 'string', enum: ['>', '>=', '<', '<='] },
         thresholdValue: { type: 'number' },
         durationSeconds: { type: 'number' },
@@ -175,8 +181,17 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'list_webhooks',
-    description: 'List all notification webhooks. Returns id, name, url, method, enabled, templatePreset, headers.',
-    parameters: { type: 'object', properties: {} },
+    description:
+      'List notification webhooks. Returns id, name, url, method, enabled, templatePreset, headers. URL and headers are revealed only with notifications:webhooks:edit or notifications:manage.',
+    parameters: {
+      type: 'object',
+      properties: {
+        search: { type: 'string' },
+        enabled: { type: 'boolean' },
+        page: { type: 'number' },
+        limit: { type: 'number', description: 'Items per page (default 50, max 100)' },
+      },
+    },
     destructive: false,
     category: 'Notifications',
     requiredScope: 'notifications:view',
@@ -200,6 +215,12 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         bodyTemplate: { type: 'string', description: 'Custom Handlebars body template (overrides preset)' },
         signingSecret: { type: 'string', description: 'HMAC-SHA256 signing secret (optional)' },
         signingHeader: { type: 'string', description: 'HMAC header name (default X-Signature-256)' },
+        headers: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Extra HTTP headers sent with each delivery',
+        },
+        enabled: { type: 'boolean', description: 'Default true' },
       },
       required: ['name', 'url'],
     },
@@ -219,10 +240,15 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
         url: { type: 'string' },
         method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH'] },
         enabled: { type: 'boolean' },
-        templatePreset: { type: 'string' },
+        templatePreset: { type: ['string', 'null'] },
         bodyTemplate: { type: 'string' },
-        signingSecret: { type: 'string' },
+        signingSecret: { type: ['string', 'null'], description: 'New signing secret; null removes it' },
         signingHeader: { type: 'string' },
+        headers: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+          description: 'Full replacement set of extra HTTP headers',
+        },
       },
       required: ['webhookId'],
     },
@@ -275,6 +301,8 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           enum: ['success', 'failed', 'retrying', 'pending'],
           description: 'Filter by delivery status',
         },
+        eventType: { type: 'string', description: 'Filter by event type' },
+        page: { type: 'number' },
         limit: { type: 'number', description: 'Max results (default 50)' },
       },
     },
@@ -298,6 +326,29 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     invalidateStores: [],
   },
   {
+    name: 'manage_notifications',
+    description:
+      'Read notification catalogs and details. Operations: alert_categories (metrics, events, and template variables per alert category), webhook_get (one webhook; URL and headers need notifications:webhooks:edit or notifications:manage), webhook_presets (built-in body templates), webhook_preview (render bodyTemplate with a sample event; needs notifications:webhooks:create or :edit), delivery_get (one delivery attempt; payloads need notifications:manage).',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: ['alert_categories', 'webhook_get', 'webhook_presets', 'webhook_preview', 'delivery_get'],
+        },
+        webhookId: { type: 'string', description: 'Webhook UUID for webhook_get' },
+        deliveryId: { type: 'string', description: 'Delivery UUID for delivery_get' },
+        bodyTemplate: { type: 'string', description: 'Handlebars body template for webhook_preview' },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: false,
+    category: 'Notifications',
+    requiredScope: 'notifications:view',
+    invalidateStores: [],
+  },
+  {
     name: 'list_siem_destinations',
     description:
       'List configured SIEM audit export destinations. Returns safe configuration metadata and delivery state; secrets are never returned.',
@@ -306,6 +357,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
       properties: {
         enabled: { type: 'boolean', description: 'Filter by enabled/disabled state' },
         search: { type: 'string', description: 'Filter by destination name' },
+        page: { type: 'number' },
         limit: { type: 'number', description: 'Max results (default 50)' },
       },
     },

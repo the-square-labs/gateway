@@ -349,6 +349,8 @@ OAuth uses public-client Authorization Code + PKCE and resource-bound access tok
 
 REST API routes accept browser sessions, `gw_` API tokens, and `gwo_` OAuth tokens issued for the Gateway API resource. The MCP endpoint accepts only `gwo_` OAuth tokens issued for the Gateway MCP resource. Inference data-plane routes accept only `gwi_` tokens and never accept REST, OAuth, logging, or browser credentials.
 
+API tokens and MCP agents can perform every resource and management operation their delegated scopes allow, including node enrollment and config, user and group administration, Gateway settings, integrations, hosting, inference administration, and personal inference keys. Only AI Workspace chat and sandbox access, impersonation, OAuth consent, API token and OAuth authorization minting, and the caller's own sign-in, MFA, and session management remain browser-only.
+
 Gateway MCP exposes permission-filtered operator documentation through `read_gateway_documentation` and the `gateway://docs` resource tree. General topics are readable by any valid MCP authorization; subsystem topics require the corresponding delegated OAuth scope. Extended compatibility lists every granted tool by default, while discovery mode can be enabled for clients that correctly refresh `tools/list` after `notifications/tools/list_changed`.
 
 For scope rules and delegation details, see [SCOPES.md](../SCOPES.md).

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 var ErrMaterialUpdating = errors.New("relay identity material is being updated")
@@ -28,9 +29,30 @@ type Snapshot struct {
 	SystemCA    *x509.CertPool
 	SystemCAPEM []byte
 	External    tls.Certificate
-	AppClient   tls.Certificate
-	RelayClient tls.Certificate
-	Trust       TrustManifest
+	// PreviousExternal is the server certificate a renewal replaced. Daemons pin
+	// it until their grant bundles name the renewed one, and they ask for it by
+	// its own identity, so it is served to clients that name it.
+	PreviousExternal *tls.Certificate
+	AppClient        tls.Certificate
+	RelayClient      tls.Certificate
+	Trust            TrustManifest
+}
+
+// ServerCertificate picks the certificate for a TLS client that asked for
+// serverName: the previous one when it names that identity and the current
+// one does not, while it is still valid; otherwise the current one.
+func (s *Snapshot) ServerCertificate(serverName string, now time.Time) tls.Certificate {
+	previous := s.PreviousExternal
+	if previous == nil || serverName == "" || previous.Leaf == nil || !now.Before(previous.Leaf.NotAfter) {
+		return s.External
+	}
+	if s.External.Leaf != nil && s.External.Leaf.VerifyHostname(serverName) == nil {
+		return s.External
+	}
+	if previous.Leaf.VerifyHostname(serverName) != nil {
+		return s.External
+	}
+	return *previous
 }
 
 type Store struct {
@@ -63,6 +85,14 @@ func NewStore(dir, stateDir string) (*Store, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// LoadSnapshot reads the identity material without opening the rotation state.
+// The container health check uses it: it runs beside the live relay and must
+// never write identity-rotation.json, or it could resurrect a committed
+// rotation's previous client fingerprint.
+func LoadSnapshot(dir string) (*Snapshot, error) {
+	return (&Store{dir: dir}).readSnapshot()
 }
 
 func (s *Store) Current() *Snapshot { return s.current.Load() }
@@ -146,10 +176,24 @@ func (s *Store) readSnapshot() (*Snapshot, error) {
 	if len(relayClient.Certificate) == 0 || Fingerprint(relayClient.Certificate[0]) != trust.RelayAppClientFingerprint {
 		return nil, fmt.Errorf("relay app client certificate does not match trust manifest")
 	}
+	// The retained certificate is optional: without it, or when it cannot be
+	// loaded, the relay serves only its current certificate.
+	var previousExternal *tls.Certificate
+	if previous, previousErr := loadPair("external-server.previous.crt", "external-server.previous.key"); previousErr == nil && len(previous.Certificate) > 0 {
+		if leaf, parseErr := x509.ParseCertificate(previous.Certificate[0]); parseErr == nil {
+			previous.Leaf = leaf
+			previousExternal = &previous
+		}
+	}
+	if len(external.Certificate) > 0 && external.Leaf == nil {
+		if leaf, parseErr := x509.ParseCertificate(external.Certificate[0]); parseErr == nil {
+			external.Leaf = leaf
+		}
+	}
 	if _, err := os.Stat(filepath.Join(s.dir, ".updating")); err == nil {
 		return nil, fmt.Errorf("relay identity material changed during reload: %w", ErrMaterialUpdating)
 	}
-	return &Snapshot{SystemCA: pool, SystemCAPEM: caPEM, External: external, AppClient: appClient, RelayClient: relayClient, Trust: trust}, nil
+	return &Snapshot{SystemCA: pool, SystemCAPEM: caPEM, External: external, PreviousExternal: previousExternal, AppClient: appClient, RelayClient: relayClient, Trust: trust}, nil
 }
 
 // AuthorizeAppClient retains the previous Gateway client until an explicit,
@@ -262,12 +306,16 @@ func (s *Store) ServerTLSConfig() *tls.Config {
 		ClientAuth: tls.VerifyClientCertIfGiven,
 		NextProtos: []string{"h2"},
 	}
-	base.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) {
+	base.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
 		current := s.Current()
 		clone := base.Clone()
 		clone.GetConfigForClient = nil
 		clone.ClientCAs = current.SystemCA
-		clone.Certificates = []tls.Certificate{current.External}
+		serverName := ""
+		if hello != nil {
+			serverName = hello.ServerName
+		}
+		clone.Certificates = []tls.Certificate{current.ServerCertificate(serverName, time.Now())}
 		return clone, nil
 	}
 	return base

@@ -5,6 +5,7 @@
 
 import { isFolderScopedScope } from './folder-scopes.js';
 import { extractBaseScope, isValidBaseScope } from './scopes.js';
+import { PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
   if (
@@ -250,6 +251,18 @@ export function boundScopes(delegatedScopes: string[], principalScopes: string[]
   }
 
   return [...bounded];
+}
+
+/**
+ * Scopes used for "cannot touch what you do not hold" checks. A programmatic caller can never hold the
+ * account-only scopes (AI workspace, impersonation, ...), so those come from the live account behind it.
+ */
+export function privilegeBoundaryScopes(actorScopes: string[], accountScopes?: string[]): string[] {
+  if (!accountScopes) return actorScopes;
+  return [
+    ...actorScopes,
+    ...accountScopes.filter((scope) => PROGRAMMATIC_DENIED_SCOPE_SET.has(extractBaseScope(scope))),
+  ];
 }
 
 /**

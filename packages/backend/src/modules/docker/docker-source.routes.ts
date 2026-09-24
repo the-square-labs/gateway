@@ -1,22 +1,16 @@
 import type { OpenAPIHono as OpenAPIHonoType } from '@hono/zod-openapi';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import { eq } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
 import { z } from 'zod';
-import { container, TOKENS } from '@/container.js';
-import type { DrizzleClient } from '@/db/client.js';
-import { dockerComposeProjects, dockerDeployments } from '@/db/schema/index.js';
+import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { demoRestriction, isDemoMode } from '@/modules/demo/demo-mode.js';
-import { ComposeProjectNameSchema } from '@/modules/docker/compose/compose.schemas.js';
-import { DockerComposeService } from '@/modules/docker/compose/compose.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv, User } from '@/types.js';
 import { createDockerSourceResourceRoute, getDockerBuildAdmissionRoute } from './docker.docs.js';
-import { DockerManagementService } from './docker.service.js';
 import { requireDockerContainerScope } from './docker-access.middleware.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import {
@@ -29,47 +23,18 @@ import {
   type DockerSourceTarget,
 } from './docker-build.schemas.js';
 import { DockerBuildService } from './docker-build.service.js';
-import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
-import { DockerDeploymentService } from './docker-deployment.service.js';
 import { DockerSourceService } from './docker-source.service.js';
+import {
+  assertDockerSourceTargetOnNode,
+  ComposeSourceProjectCreateSchema,
+  createComposeProjectFromSource,
+  createDockerSourceResource,
+} from './docker-source-resource-creation.js';
+
+export { assertDockerSourceTargetNode, initialDockerSourceBuildError } from './docker-source-resource-creation.js';
 
 const SourceBindingIdSchema = z.string().uuid();
 const SOURCE_WEBHOOK_BODY_MAX_BYTES = 1_048_576;
-const PENDING_SOURCE_IMAGE = 'gateway.invalid/pending-source-build:latest';
-
-export function initialDockerSourceBuildError(error: unknown): { code: string; message: string } {
-  // Never expose provider errors, credential-bearing URLs, SQL or raw build input.
-  const messages: Record<string, string> = {
-    BUILD_WORKER_REQUIRED: 'A Build Worker is required. The resource was saved; retry from Source.',
-    BUILD_CAPACITY_UNAVAILABLE: 'Build capacity is unavailable. The resource was saved; retry from Source.',
-    BUILD_SCHEDULER_UNAVAILABLE: 'The build scheduler is unavailable. The resource was saved; retry from Source.',
-    BUILD_ARTIFACT_POLICY_REJECTED: 'The build was rejected by security policy. Review the policy in Source and retry.',
-    SOURCE_COMMIT_STALE: 'The source branch changed. The resource was saved; retry from Source.',
-    COMPOSE_BUILD_PLAN_MISSING: 'The Compose build plan is unavailable. Review Source configuration and retry.',
-  };
-  if (error instanceof AppError && Object.hasOwn(messages, error.code)) {
-    return { code: error.code, message: messages[error.code]! };
-  }
-  return {
-    code: 'INITIAL_BUILD_ENQUEUE_FAILED',
-    message: 'The resource was saved, but its initial build could not be queued. Review Source and retry.',
-  };
-}
-const ComposeSourceProjectCreateSchema = z
-  .object({
-    folderId: z.string().uuid().nullable().optional(),
-    projectName: ComposeProjectNameSchema,
-    source: DockerSourceBindingConfigSchema,
-  })
-  .superRefine((value, ctx) => {
-    if (!value.source.composeFilePath) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['source', 'composeFilePath'],
-        message: 'Compose file path is required',
-      });
-    }
-  });
 
 function actorFor(c: {
   get(name: 'user'): User | undefined;
@@ -96,18 +61,6 @@ function composeTarget(c: { req: { param(name: string): string | undefined } }):
   return { kind: 'compose_project', composeProjectId: c.req.param('projectId')! };
 }
 
-export function assertDockerSourceTargetNode(
-  requestedNodeId: string,
-  actualNodeId: string | undefined,
-  resource: 'compose' | 'deployment'
-): void {
-  if (actualNodeId === requestedNodeId) return;
-  if (resource === 'compose') {
-    throw new AppError(404, 'COMPOSE_PROJECT_NOT_FOUND', 'Compose project not found');
-  }
-  throw new AppError(404, 'NOT_FOUND', 'Deployment not found');
-}
-
 function requireComposeSourceScope(scope: string): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const nodeId = c.req.param('nodeId');
@@ -115,12 +68,7 @@ function requireComposeSourceScope(scope: string): MiddlewareHandler<AppEnv> {
     if (!nodeId || !projectId) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
     }
-    const [project] = await (container.resolve(TOKENS.DrizzleClient) as DrizzleClient)
-      .select({ nodeId: dockerComposeProjects.nodeId })
-      .from(dockerComposeProjects)
-      .where(eq(dockerComposeProjects.id, projectId))
-      .limit(1);
-    assertDockerSourceTargetNode(nodeId, project?.nodeId, 'compose');
+    await assertDockerSourceTargetOnNode(nodeId, { kind: 'compose_project', composeProjectId: projectId });
     if (!hasDockerResourceScope(c.get('effectiveScopes') || [], scope, nodeId, projectId)) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
     }
@@ -135,12 +83,7 @@ function requireDeploymentSourceScope(scope: string): MiddlewareHandler<AppEnv> 
     if (!nodeId || !deploymentId) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
     }
-    const [deployment] = await (container.resolve(TOKENS.DrizzleClient) as DrizzleClient)
-      .select({ nodeId: dockerDeployments.nodeId })
-      .from(dockerDeployments)
-      .where(eq(dockerDeployments.id, deploymentId))
-      .limit(1);
-    assertDockerSourceTargetNode(nodeId, deployment?.nodeId, 'deployment');
+    await assertDockerSourceTargetOnNode(nodeId, { kind: 'deployment', deploymentId });
     if (!hasDockerResourceScope(c.get('effectiveScopes') || [], scope, nodeId, deploymentId)) {
       throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${scope}`);
     }
@@ -173,65 +116,8 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
       await container.resolve(LicensePolicyService).requireFeature('git-push-to-deploy');
       const nodeId = z.string().uuid().parse(c.req.param('nodeId'));
       const input = DockerSourceResourceCreateSchema.parse(await c.req.json());
-      const actor = actorFor(c);
-      const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
-      await assertDockerCreationAccess(db, actor.scopes, 'docker:containers:create', nodeId, input.resource.folderId);
-      const sourceService = container.resolve(DockerSourceService);
-      const deploymentService = container.resolve(DockerDeploymentService);
-      let target: DockerSourceTarget;
-      let initialConfig: Record<string, unknown> | null = null;
-      let pendingDeploymentId: string | null = null;
-
-      if (input.resource.kind === 'deployment') {
-        const deployment = await deploymentService.createPending(
-          nodeId,
-          { ...input.resource, image: PENDING_SOURCE_IMAGE },
-          actor.id,
-          actor.scopes
-        );
-        pendingDeploymentId = deployment.id;
-        target = { kind: 'deployment', deploymentId: deployment.id };
-      } else {
-        const containers = await container.resolve(DockerManagementService).listContainers(nodeId);
-        const existing = Array.isArray(containers)
-          ? containers.some((candidate: any) => {
-              const name = String(candidate.name ?? candidate.Name ?? '').replace(/^\//, '');
-              return name === input.resource.name;
-            })
-          : false;
-        if (existing) {
-          throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A container with this name already exists');
-        }
-        target = { kind: 'container', nodeId, containerName: input.resource.name };
-        const { kind: _kind, ...config } = input.resource;
-        initialConfig = config;
-      }
-
-      let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
-      try {
-        source = await sourceService.upsert({ ...input.source, target }, actor, {
-          allowMissingTarget: input.resource.kind === 'container',
-          initialConfig,
-          createOnly: true,
-        });
-        if (input.resource.kind === 'container') {
-          await placeCreatedDockerResource(db, nodeId, 'container', input.resource.name, input.resource.folderId);
-        }
-      } catch (error) {
-        if (pendingDeploymentId) {
-          await deploymentService.discardPending(nodeId, pendingDeploymentId).catch(() => false);
-        }
-        throw error;
-      }
-      try {
-        const queued = await sourceService.createBuild(target, { force: false }, actor);
-        return c.json({ data: { source, build: queued.build, target } }, 201);
-      } catch (error) {
-        return c.json(
-          { data: { source, target, build: null, initialBuildError: initialDockerSourceBuildError(error) } },
-          201
-        );
-      }
+      const data = await createDockerSourceResource(nodeId, input, actorFor(c));
+      return c.json({ data }, 201);
     }
   );
 
@@ -388,42 +274,8 @@ export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
     const input = ComposeSourceProjectCreateSchema.parse(await c.req.json());
     const actor = actorFor(c);
     await container.resolve(LicensePolicyService).requireFeature('compose-applications');
-    const composeService = container.resolve(DockerComposeService);
-    const sourceService = container.resolve(DockerSourceService);
-    const project = await composeService.createPendingGitProject(
-      nodeId,
-      input.projectName,
-      actor.id,
-      actor.scopes,
-      input.folderId
-    );
-    const target = { kind: 'compose_project' as const, composeProjectId: project.id };
-    let source: Awaited<ReturnType<DockerSourceService['upsert']>>;
-    try {
-      source = await sourceService.upsert({ ...input.source, target }, actor, { createOnly: true });
-    } catch (error) {
-      await composeService.discardPendingGitProject(project.id).catch(() => false);
-      throw error;
-    }
-    try {
-      const queued = await sourceService.createBuild(target, { force: false }, actor);
-      return c.json({ data: { project, source, target, ...queued } }, 201);
-    } catch (error) {
-      return c.json(
-        {
-          data: {
-            project,
-            source,
-            target,
-            build: null,
-            builds: [],
-            created: false,
-            initialBuildError: initialDockerSourceBuildError(error),
-          },
-        },
-        201
-      );
-    }
+    const data = await createComposeProjectFromSource(nodeId, input, actor);
+    return c.json({ data }, 201);
   });
 
   router.get(

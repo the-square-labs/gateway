@@ -130,6 +130,10 @@ export interface RelayUpdateOperation {
   targetVersion: string;
   startedAt: string;
   error: string | null;
+  /** The run has not finished (it runs, or it is paused waiting for an operator) and can be abandoned. */
+  abandonable?: boolean;
+  /** The durable Relay Pool run state, when the operation is a pool run. */
+  runState?: string;
 }
 
 export interface RelayUpdateStatus {
@@ -1265,13 +1269,23 @@ chmod 700 "$backup"
           .limit(1);
         if (!instance) throw new Error(`Relay instance ${step.relayInstanceId} is unavailable`);
         if (instance.kind === 'local') {
-          await this.updatePoolStep(step.id, 'updating');
-          await this.performLocalRelayUpdate(targetVersion, artifact, false);
+          // A retried run finds the local relay already on the target image.
+          if (!artifact.imageRef || this.env.GATEWAY_RELAY_IMAGE_REF !== artifact.imageRef) {
+            await this.updatePoolStep(step.id, 'updating');
+            await this.performLocalRelayUpdate(targetVersion, artifact, false);
+          }
           await this.updatePoolStep(step.id, 'ready', true);
           currentStepId = null;
           continue;
         }
         if (!instance.nodeId) throw new Error(`Relay instance ${instance.id} is not enrolled`);
+        // A retried run must not drain again a relay whose worker and supervisor already run the
+        // target: that only takes it out of service for the drain window.
+        if (await this.isRemoteRelayAt(instance, normalizeVersionTag(targetVersion))) {
+          await this.updatePoolStep(step.id, 'ready', true);
+          currentStepId = null;
+          continue;
+        }
         await this.updatePoolStep(step.id, 'draining', false, new Date(Date.now() + 30 * 60 * 1000));
         drainedInstanceId = instance.id;
         await runtime.drainInstance(instance.id, userId, true);
@@ -1310,28 +1324,34 @@ chmod 700 "$backup"
         .where(and(eq(relayPoolUpdateRuns.id, run.id), eq(relayPoolUpdateRuns.state, 'updating')));
     } catch (error) {
       const message = formatError(error);
-      const [current] = await this.db
-        .select({ state: relayPoolUpdateRuns.state })
-        .from(relayPoolUpdateRuns)
-        .where(eq(relayPoolUpdateRuns.id, run.id))
-        .limit(1);
-      if (current?.state !== 'paused' && current?.state !== 'failed') {
-        if (currentStepId) {
+      let currentState: string | undefined;
+      try {
+        const [current] = await this.db
+          .select({ state: relayPoolUpdateRuns.state })
+          .from(relayPoolUpdateRuns)
+          .where(eq(relayPoolUpdateRuns.id, run.id))
+          .limit(1);
+        currentState = current?.state;
+        if (currentState !== 'paused' && currentState !== 'failed') {
+          if (currentStepId) {
+            await this.db
+              .update(relayPoolUpdateSteps)
+              .set({ state: 'failed', error: message, completedAt: new Date(), updatedAt: new Date() })
+              .where(eq(relayPoolUpdateSteps.id, currentStepId));
+          }
           await this.db
-            .update(relayPoolUpdateSteps)
-            .set({ state: 'failed', error: message, completedAt: new Date(), updatedAt: new Date() })
-            .where(eq(relayPoolUpdateSteps.id, currentStepId));
+            .update(relayPoolUpdateRuns)
+            .set({ state: 'failed', terminalError: message, updatedAt: new Date() })
+            .where(eq(relayPoolUpdateRuns.id, run.id));
         }
-        await this.db
-          .update(relayPoolUpdateRuns)
-          .set({ state: 'failed', terminalError: message, updatedAt: new Date() })
-          .where(eq(relayPoolUpdateRuns.id, run.id));
-      }
-      // A failed run (verify timeout, dispatch error, abandon) gives back the drain it took, as
-      // restart recovery does; operator drains stay. A paused run keeps draining toward a resume.
-      // Abandoning released the drains it knew about; an aborted run's drain may have begun meanwhile.
-      if (drainedInstanceId && (signal.aborted || current?.state !== 'paused')) {
-        this.scheduleRelayDrainRelease([drainedInstanceId], userId);
+      } finally {
+        // A failed run (verify timeout, dispatch error, abandon) gives back the drain it took, as
+        // restart recovery does; operator drains stay. A paused run keeps draining toward a resume.
+        // Abandoning released the drains it knew about; an aborted run's drain may have begun
+        // meanwhile. The release runs even when recording the failure did not.
+        if (drainedInstanceId && (signal.aborted || currentState !== 'paused')) {
+          this.scheduleRelayDrainRelease([drainedInstanceId], userId);
+        }
       }
       throw error;
     }
@@ -1579,6 +1599,16 @@ exit 1`,
       .where(eq(relayPoolUpdateSteps.id, stepId));
   }
 
+  private async isRemoteRelayAt(instance: typeof relayInstances.$inferSelect, version: string): Promise<boolean> {
+    if (!instance.nodeId || instance.buildVersion !== version) return false;
+    const [node] = await this.db
+      .select({ status: nodes.status, daemonVersion: nodes.daemonVersion })
+      .from(nodes)
+      .where(eq(nodes.id, instance.nodeId))
+      .limit(1);
+    return node?.status === 'online' && node.daemonVersion === version;
+  }
+
   private relayInstanceArchitecture(instance: typeof relayInstances.$inferSelect): string {
     return instance.capabilities?.architecture || 'amd64';
   }
@@ -1821,6 +1851,8 @@ exit 1`,
       targetVersion: run.targetArtifact.version,
       startedAt: run.startedAt.toISOString(),
       error: run.terminalError,
+      abandonable: (UNFINISHED_RELAY_POOL_RUN_STATES as readonly string[]).includes(run.state),
+      runState: run.state,
     };
   }
 

@@ -26,8 +26,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     checkForUpdates,
     triggerUpdate,
     triggerRelayUpdate,
+    abandonRelayUpdate,
     fetchStatus,
   } = useUpdateStore();
+  const [abandoningRelayUpdate, setAbandoningRelayUpdate] = useState(false);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
   const [releaseNotesSource, setReleaseNotesSource] = useState<"gateway" | "relay">("gateway");
   const [releaseNotesList, setReleaseNotesList] = useState<string[] | null>(null);
@@ -97,12 +99,43 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     triggerRelayUpdate(updateStatus.relay.latestVersion);
   };
 
+  const relayOperation = updateStatus?.relay?.operation ?? null;
+  // A paused rollout keeps a relay drained until an operator retries or abandons it.
+  const relayOperationAbandonable = Boolean(
+    relayOperation &&
+      (relayOperation.abandonable ??
+        (relayOperation.status === "updating" || relayOperation.runState === "paused"))
+  );
+
+  const handleAbandonRelayUpdate = async () => {
+    const ok = await confirm({
+      title: "Abandon Relay Pool update?",
+      description:
+        "Gateway fails this update run and returns the relays it drained to service. Relays that already updated keep the new version.",
+      confirmLabel: "Abandon update",
+      variant: "destructive",
+    });
+    if (!ok) return;
+    setAbandoningRelayUpdate(true);
+    try {
+      await abandonRelayUpdate();
+      toast.success("Relay Pool update abandoned");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to abandon the Relay Pool update"
+      );
+    } finally {
+      setAbandoningRelayUpdate(false);
+    }
+  };
+
   const gatewayUpdateAvailable = Boolean(
     updateStatus?.updateAvailable && updateStatus.latestVersion
   );
   const relayUpdateAvailable = Boolean(
     updateStatus?.relay?.updateAvailable && updateStatus.relay.latestVersion
   );
+  const showRelayPanel = relayUpdateAvailable || relayOperationAbandonable;
   const anyUpdateAvailable = gatewayUpdateAvailable || relayUpdateAvailable;
   const activeReleaseNotes =
     releaseNotesSource === "gateway"
@@ -163,12 +196,20 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
         </PanelShell>
       )}
 
-      {relayUpdateAvailable && (
+      {showRelayPanel && (
         <PanelShell
           icon={<RefreshCw className="h-4 w-4 text-warning" />}
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
-          title={<span className="text-warning">Relay Pool Update Available</span>}
-          description="A signed Relay release is ready for a one-instance-at-a-time rollout"
+          title={
+            <span className="text-warning">
+              {relayUpdateAvailable ? "Relay Pool Update Available" : "Relay Pool Update"}
+            </span>
+          }
+          description={
+            relayUpdateAvailable
+              ? "A signed Relay release is ready for a one-instance-at-a-time rollout"
+              : "A Relay Pool rollout has not finished"
+          }
           className={cn(
             "xl:col-span-2",
             !gatewayUpdateAvailable && navigationHighlighted && "navigation-target-ripple"
@@ -189,7 +230,16 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                   Release notes
                 </Button>
               )}
-              {canUpdate && (
+              {canUpdate && relayOperationAbandonable && (
+                <Button
+                  variant="outline"
+                  onClick={() => void handleAbandonRelayUpdate()}
+                  disabled={abandoningRelayUpdate}
+                >
+                  {abandoningRelayUpdate ? "Abandoning..." : "Abandon update"}
+                </Button>
+              )}
+              {canUpdate && relayUpdateAvailable && (
                 <Button
                   onClick={handleRelayUpdate}
                   className="bg-warning text-black hover:bg-warning/90"
@@ -201,17 +251,21 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           }
         >
           <div className="divide-y divide-border">
-            <DetailRow
-              label="Relay Pool"
-              value={`${updateStatus?.relay.currentVersion} → ${updateStatus?.relay.latestVersion}`}
-            />
-            {updateStatus?.relay.operation && (
+            {relayUpdateAvailable && (
+              <DetailRow
+                label="Relay Pool"
+                value={`${updateStatus?.relay.currentVersion} → ${updateStatus?.relay.latestVersion}`}
+              />
+            )}
+            {relayOperation && (
               <DetailRow
                 label="Rollout"
                 value={
-                  updateStatus.relay.operation.status === "failed"
-                    ? `Paused: ${updateStatus.relay.operation.error ?? "instance update failed"}`
-                    : `Updating to ${updateStatus.relay.operation.targetVersion}`
+                  relayOperation.status === "updating"
+                    ? `Updating to ${relayOperation.targetVersion}`
+                    : `${relayOperation.runState === "paused" ? "Paused" : "Failed"}: ${
+                        relayOperation.error ?? "instance update failed"
+                      }`
                 }
               />
             )}

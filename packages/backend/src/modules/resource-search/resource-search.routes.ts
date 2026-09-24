@@ -2,7 +2,7 @@ import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { appRoute, okJson, openApiValidationHook, UnknownDataResponseSchema } from '@/lib/openapi.js';
 import { AIService } from '@/modules/ai/ai.service.js';
-import { authMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import { authMiddleware } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 
 const ResourceSearchQuerySchema = z.object({
@@ -26,11 +26,13 @@ export const resourceSearchRoutes = new OpenAPIHono<AppEnv>({
 });
 
 resourceSearchRoutes.use('*', authMiddleware);
-resourceSearchRoutes.use('*', sessionOnly);
 
 resourceSearchRoutes.openapi(searchResourcesRoute, async (c) => {
   const query = ResourceSearchQuerySchema.parse(c.req.query());
-  const data = await container.resolve(AIService).searchResources(c.get('user')!, {
+  const user = c.get('user')!;
+  // Bearer tokens search with their delegated scopes, never the owner's full account.
+  const actor = { ...user, scopes: c.get('effectiveScopes') ?? user.scopes };
+  const data = await container.resolve(AIService).searchResources(actor, {
     query: query.q,
     types: query.types
       ?.split(',')

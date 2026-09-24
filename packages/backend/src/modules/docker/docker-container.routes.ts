@@ -2,10 +2,8 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import { HTTPException } from 'hono/http-exception';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import type { CommercialEditionRuntime } from '@/edition/runtime.js';
-import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { AuditService } from '@/modules/audit/audit.service.js';
 import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
@@ -84,21 +82,28 @@ import {
   filterDockerResourcesForScope,
   requireDockerContainerScope,
 } from './docker-access.middleware.js';
-import { hasDockerResourceScope } from './docker-access-resource.service.js';
-import { dockerArchiveCommercialRuntime } from './docker-archive-commercial-runtime.js';
+import {
+  importDockerContainerArchive,
+  openDockerContainerArchiveExport,
+  planDockerContainerArchiveImport,
+} from './docker-container-archive-operations.js';
+import {
+  getDockerContainerProcesses,
+  getDockerContainerStatsHistory,
+  getLatestDockerContainerStats,
+  listDockerGpuUsage,
+} from './docker-container-observability.js';
+import {
+  containerRecreateRequiredScopes,
+  containerUpdateRequiredScopes,
+} from './docker-container-scope-requirements.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
-import { envListToMap } from './docker-env-operations.js';
-import { DockerEnvironmentService } from './docker-environment.service.js';
-import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
-import { assertUserContainerAccessible, inspectUserContainer } from './docker-internal-containers.js';
-import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
-import { DockerRegistryService } from './docker-registry.service.js';
+import { assertUserContainerAccessible } from './docker-internal-containers.js';
 import { resolveDockerContainerByName } from './docker-route-resolvers.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService, sanitizeContainerInspect } from './docker-snapshot.service.js';
 import { DockerSnapshotReconciler } from './docker-snapshot-reconciler.service.js';
-import { assertDockerMountChangeAllowed } from './docker-socket-mount.guard.js';
 
 const DOCKER_RESOURCE_LIST_MAX = 1000;
 const DOCKER_CONTAINER_PORT_PREVIEW_MAX = 64;
@@ -121,35 +126,7 @@ function filterContainerDatabaseLinksForScopes(data: any, scopes: string[]) {
   };
 }
 
-function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
-  return {
-    canViewNetworks: hasScopeForResource([...actorScopes], 'docker:networks:view', nodeId),
-    canCreateNetworks: hasScopeForResource([...actorScopes], 'docker:networks:create', nodeId),
-    canViewVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:view', nodeId),
-    canCreateVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:create', nodeId),
-  };
-}
-
-const RECREATE_EXECUTION_FIELDS = ['image', 'entrypoint', 'command', 'user', 'runtimeProfile'] as const;
-
-/**
- * Scopes a recreate request needs beyond docker:containers:manage. A plain
- * recreate stays on manage; changing what the container executes can expose
- * its environment and secrets, so it needs the same scopes as duplicate.
- */
-export function containerRecreateRequiredScopes(config: Record<string, unknown>): string[] {
-  const present = (key: string) => config[key] !== undefined;
-  if (!Object.keys(config).some(present)) return [];
-  const required = ['docker:containers:edit'];
-  if (RECREATE_EXECUTION_FIELDS.some(present)) {
-    required.push('docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets');
-  }
-  return required;
-}
-
-export function containerUpdateRequiredScopes(config: { env?: unknown; removeEnv?: unknown }): string[] {
-  return config.env !== undefined || config.removeEnv !== undefined ? ['docker:containers:environment'] : [];
-}
+export { containerRecreateRequiredScopes, containerUpdateRequiredScopes };
 
 async function assertAdditionalContainerScopes(
   c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0],
@@ -172,13 +149,6 @@ async function callerHasContainerScope(
     if (error instanceof HTTPException && error.status === 403) return false;
     throw error;
   }
-}
-
-function canPlanArchiveImport(actorScopes: readonly string[], nodeId: string) {
-  return (
-    hasScopeForCreation(actorScopes, 'docker:containers:create', undefined, nodeId) ||
-    actorScopes.some((scope) => scope.startsWith('docker:containers:create:folder/'))
-  );
 }
 
 async function parseFileContentRequest(c: Parameters<Parameters<OpenAPIHono<AppEnv>['openapi']>[1]>[0]) {
@@ -263,15 +233,6 @@ async function resolveContainerName(nodeId: string, containerId: string): Promis
   return name;
 }
 
-async function resolveMonitoringRuntimeContainerId(nodeId: string, containerIdOrName: string): Promise<string> {
-  try {
-    const detail = await container.resolve(DockerSnapshotService).getContainerDetailSnapshot(nodeId, containerIdOrName);
-    return String(detail.data?.Id ?? detail.data?.id ?? containerIdOrName);
-  } catch {
-    return containerIdOrName;
-  }
-}
-
 export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Container routes ────────────────────────────────────────────────
 
@@ -332,33 +293,10 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...listContainerGpuUsageRoute, middleware: requireScopeBase('docker:containers:view') },
     async (c) => {
-      const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const scopes = c.get('effectiveScopes') ?? [];
       assertDockerNodeScope(scopes, 'docker:containers:view', nodeId);
-
-      const users = filterDockerResourcesForScope(
-        await service.listGpuAttachmentUsers(nodeId, scopes),
-        scopes,
-        'docker:containers:view',
-        nodeId
-      );
-      const byDeviceId = new Map<string, Array<{ name: string }>>();
-      for (const user of users) {
-        for (const deviceId of user.deviceIds) {
-          const containers = byDeviceId.get(deviceId) ?? [];
-          containers.push({ name: user.name });
-          byDeviceId.set(deviceId, containers);
-        }
-      }
-
-      const data = [...byDeviceId.entries()]
-        .map(([deviceId, containers]) => {
-          const sorted = containers.sort((a, b) => a.name.localeCompare(b.name));
-          return { deviceId, containerCount: sorted.length, containers: sorted };
-        })
-        .sort((a, b) => a.deviceId.localeCompare(b.deviceId));
-      return c.json({ data });
+      return c.json({ data: await listDockerGpuUsage(nodeId, scopes) });
     }
   );
 
@@ -621,78 +559,12 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       const nodeId = c.req.param('nodeId')!;
       const containerId = c.req.param('containerId')!;
       const query = ContainerArchiveExportQuerySchema.parse(c.req.query());
-      const actorScopes = c.get('effectiveScopes') || [];
-      const docker = container.resolve(DockerManagementService);
-      const inspected = await inspectUserContainer(docker, nodeId, containerId);
-      if (dockerGpuAttachmentFromInspect(inspected).mode !== 'none') {
-        throw new AppError(
-          409,
-          'GPU_ARCHIVE_UNSUPPORTED',
-          'Containers with GPU mappings cannot be exported as portable archives.'
-        );
-      }
-      const scopeResourceId = String(inspected?.scopeResourceId ?? '');
-      if (
-        query.imageMode === 'portable' &&
-        !hasDockerResourceScope(actorScopes, 'docker:containers:files:read', nodeId, scopeResourceId)
-      ) {
-        throw new AppError(403, 'FORBIDDEN', 'Exporting a portable container archive requires files access');
-      }
-      if (
-        query.includeEnvironment &&
-        !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, scopeResourceId)
-      ) {
-        throw new AppError(403, 'FORBIDDEN', 'Exporting a container archive requires environment access');
-      }
-      if (
-        query.includeSecrets &&
-        !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, scopeResourceId)
-      ) {
-        throw new AppError(403, 'FORBIDDEN', 'Exporting archive secrets is not permitted for this container');
-      }
-      let environment: Record<string, string> = {};
-      let secrets: Record<string, string> = {};
-      let secretKeys: string[] = [];
-      if (query.includeEnvironment) {
-        environment = envListToMap(await docker.getContainerEnv(nodeId, containerId));
-        const containerName = String(inspected?.Name ?? '').replace(/^\/+/, '');
-        if (!containerName) throw new AppError(409, 'GWCA_SOURCE_INVALID', 'Could not resolve container name');
-        const secretService = container.resolve(DockerSecretService);
-        if (query.includeSecrets) {
-          secrets = await secretService.getDecryptedMap(nodeId, containerName);
-        } else {
-          secretKeys = [...(await secretService.getSecretKeys(nodeId, containerName))];
-        }
-      }
-      const dispatch = container.resolve(DockerMigrationDispatchAdapter);
-      const archive = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(
-        'openGwcaExport',
-        {
-          dispatch,
-          nodeId,
-          containerId,
-          includeWritableLayer: query.includeWritableLayer,
-          imageMode: query.imageMode,
-          environment,
-          secrets,
-          secretKeys,
-          includeEnvironment: query.includeEnvironment,
-          includeSecrets: query.includeSecrets,
-        },
-        dockerArchiveCommercialRuntime
-      );
-      await container.resolve(AuditService).log({
-        action: 'docker.container.archive.export',
+      const archive = await openDockerContainerArchiveExport({
+        nodeId,
+        containerId,
+        query,
+        actorScopes: c.get('effectiveScopes') || [],
         userId: c.get('user')!.id,
-        resourceType: 'docker-container',
-        resourceId: containerId,
-        details: {
-          nodeId,
-          includeWritableLayer: query.includeWritableLayer,
-          includeEnvironment: query.includeEnvironment,
-          includeSecrets: query.includeSecrets,
-          imageMode: query.imageMode,
-        },
       });
       return new Response(archive.stream, {
         headers: {
@@ -711,19 +583,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       await container.resolve(LicensePolicyService).requireFeature('container-export');
       const nodeId = c.req.param('nodeId')!;
       const body = ContainerArchivePlanSchema.parse(await c.req.json());
-      const actorScopes = c.get('effectiveScopes') || [];
-      if (!canPlanArchiveImport(actorScopes, nodeId)) {
-        throw new AppError(403, 'FORBIDDEN', 'Missing docker:containers:create for the destination node');
-      }
-      await assertNodeAllowsServiceCreation(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, nodeId, 'docker');
-      const data = await container.resolve(DockerMigrationDispatchAdapter).planArchiveImport(nodeId, {
-        manifest: { schemaVersion: 1, ...body },
-        ...archiveImportPlanAccess(actorScopes, nodeId),
-      });
-      const managedNames = new Set(
-        (await container.resolve(DockerManagementService).listManagedVolumeOptions(nodeId)).map((row) => row.name)
-      );
-      data.volumes = data.volumes.filter((volume) => managedNames.has(volume.name));
+      const data = await planDockerContainerArchiveImport(nodeId, body, c.get('effectiveScopes') || []);
       return c.json({ data });
     }
   );
@@ -755,119 +615,16 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
           throw new AppError(400, 'GWCA_RESOLUTION_INVALID', 'Archive import resolution is invalid');
         }
       }
-      const dispatch = container.resolve(DockerMigrationDispatchAdapter);
-      const actorScopes = c.get('effectiveScopes') || [];
-      const registryService = container.resolve(DockerRegistryService);
-      const data = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(
-        'importGwca',
-        {
-          dispatch,
-          nodeId,
-          name: query.name,
-          body,
-          resolution,
-          authorizeContents: async (archiveContainer) => {
-            assertDockerMountChangeAllowed({
-              nodeId,
-              actorScopes,
-              currentDefinitions: [],
-              nextDefinitions: (archiveContainer.mounts ?? []).map((mount) => ({
-                type: mount.type,
-                source: mount.source,
-                target: mount.target,
-                readOnly: mount.readOnly,
-              })),
-            });
-            if (
-              Object.keys(archiveContainer.environment ?? {}).length > 0 &&
-              !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, '')
-            ) {
-              throw new AppError(403, 'FORBIDDEN', 'Importing archive environment is not permitted on the target node');
-            }
-            if (
-              Object.keys(archiveContainer.secrets ?? {}).length > 0 &&
-              !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, '')
-            ) {
-              throw new AppError(403, 'FORBIDDEN', 'Importing archive secrets is not permitted on the target node');
-            }
-            const canCreateNetworks = hasScopeForResource(actorScopes, 'docker:networks:create', nodeId);
-            if (!canCreateNetworks && (archiveContainer.networks ?? []).some((network) => network.createNew)) {
-              throw new AppError(403, 'FORBIDDEN', 'Creating archive networks is not permitted on the target node');
-            }
-            for (const network of archiveContainer.networks ?? []) {
-              if (!canCreateNetworks) network.createable = false;
-            }
-            const canCreateVolumes = hasScopeForResource(actorScopes, 'docker:volumes:create', nodeId);
-            if (!canCreateVolumes && (archiveContainer.mounts ?? []).some((mount) => mount.createNew)) {
-              throw new AppError(403, 'FORBIDDEN', 'Creating archive volumes is not permitted on the target node');
-            }
-            await container.resolve(DockerManagementService).assertManagedVolumeSelections(
-              nodeId,
-              (archiveContainer.mounts ?? [])
-                .filter((mount) => mount.type === 'volume' && !mount.createNew)
-                .map((mount) => mount.source)
-            );
-          },
-          resolveRegistryAuthCandidates: async (imageReference) =>
-            (
-              await registryService.resolveAuthCandidatesForImagePull(nodeId, imageReference, undefined, {
-                actorScopes,
-              })
-            ).map((candidate) => candidate.authJson),
-        },
-        dockerArchiveCommercialRuntime
-      );
-      const docker = container.resolve(DockerManagementService);
-      try {
-        await container.resolve(DockerEnvironmentService).replace(nodeId, data.containerName, data.environment);
-        await container
-          .resolve(DockerSecretService)
-          .replaceImported(nodeId, data.containerName, data.secrets, c.get('user')!.id);
-        await docker.registerImportedContainer(
-          nodeId,
-          data.containerName,
-          data.containerId,
-          query.folderId,
-          c.get('user')!.id
-        );
-        await docker.registerImportedManagedVolumes(nodeId, data.createdVolumes, c.get('user')!.id);
-      } catch (error) {
-        await container
-          .resolve(DockerEnvironmentService)
-          .deleteImported(nodeId, data.containerName)
-          .catch(() => undefined);
-        await container
-          .resolve(DockerSecretService)
-          .deleteImported(nodeId, data.containerName)
-          .catch(() => undefined);
-        await docker.removeContainer(nodeId, data.containerId, true, c.get('user')!.id).catch(() => undefined);
-        await dispatch.cleanupArchiveImport(nodeId, data.archiveId).catch(() => undefined);
-        throw error;
-      }
-      await container.resolve(AuditService).log({
-        action: 'docker.container.archive.import',
+      const data = await importDockerContainerArchive({
+        nodeId,
+        name: query.name,
+        folderId: query.folderId,
+        resolution,
+        body,
+        actorScopes: c.get('effectiveScopes') || [],
         userId: c.get('user')!.id,
-        resourceType: 'docker-container',
-        resourceId: data.containerId,
-        details: {
-          nodeId,
-          requestedName: query.name,
-          name: data.containerName,
-          imageId: data.imageId,
-          resolution,
-          importedSecretKeys: Object.keys(data.secrets),
-        },
       });
-      return c.json(
-        {
-          data: {
-            containerId: data.containerId,
-            containerName: data.containerName,
-            imageId: data.imageId,
-          },
-        },
-        201
-      );
+      return c.json({ data }, 201);
     }
   );
 
@@ -952,12 +709,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...containerStatsRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
-      const { NodeMonitoringService } = await import('@/modules/nodes/node-monitoring.service.js');
-      const monitoring = container.resolve(NodeMonitoringService);
-      const nodeId = c.req.param('nodeId')!;
-      const containerId = c.req.param('containerId')!;
-      const runtimeContainerId = await resolveMonitoringRuntimeContainerId(nodeId, containerId);
-      const data = monitoring.getLatestContainerStats(nodeId, runtimeContainerId);
+      const data = await getLatestDockerContainerStats(c.req.param('nodeId')!, c.req.param('containerId')!);
       return c.json({ data });
     }
   );
@@ -966,12 +718,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...containerStatsHistoryRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
-      const { NodeMonitoringService } = await import('@/modules/nodes/node-monitoring.service.js');
-      const monitoring = container.resolve(NodeMonitoringService);
-      const nodeId = c.req.param('nodeId')!;
-      const containerId = c.req.param('containerId')!;
-      const runtimeContainerId = await resolveMonitoringRuntimeContainerId(nodeId, containerId);
-      const data = await monitoring.getContainerStatsHistory(runtimeContainerId);
+      const data = await getDockerContainerStatsHistory(c.req.param('nodeId')!, c.req.param('containerId')!);
       return c.json({ data });
     }
   );
@@ -980,23 +727,7 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...containerTopRoute, middleware: requireDockerContainerScope('docker:containers:view') },
     async (c) => {
-      const service = container.resolve(DockerManagementService);
-      const nodeId = c.req.param('nodeId')!;
-      const containerId = c.req.param('containerId')!;
-      const data = await service.getContainerTop(nodeId, containerId);
-      if (Array.isArray(data?.Processes) && data.Processes.length > DOCKER_RESOURCE_LIST_MAX) {
-        return c.json({
-          data: {
-            ...data,
-            Processes: data.Processes.slice(0, DOCKER_RESOURCE_LIST_MAX),
-            totalProcesses: data.Processes.length,
-            limit: DOCKER_RESOURCE_LIST_MAX,
-            truncated: true,
-          },
-          truncated: true,
-        });
-      }
-      return c.json({ data });
+      return c.json(await getDockerContainerProcesses(c.req.param('nodeId')!, c.req.param('containerId')!));
     }
   );
 

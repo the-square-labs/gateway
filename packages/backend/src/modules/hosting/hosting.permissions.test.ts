@@ -45,7 +45,7 @@ describe('hosting authorization boundaries', () => {
     expect(canViewHostingFinance(['nodes:details', 'integrations:hosting:manage'], 'account')).toBe(false);
     expect(canViewHostingFinance(['hosting:billing:view:account'], 'account')).toBe(true);
     expect(canViewHostingFinance(['hosting:billing:view:other'], 'account')).toBe(false);
-    expect(API_TOKEN_SCOPES).not.toContain('hosting:billing:topup');
+    // Hosting administration is delegable to API and OAuth/MCP tokens like any other resource scope.
     for (const scope of [
       'integrations:hosting:manage',
       'hosting:resources:create',
@@ -54,8 +54,9 @@ describe('hosting authorization boundaries', () => {
       'hosting:resources:delete',
       'hosting:resources:recover',
       'hosting:billing:view',
+      'hosting:billing:topup',
     ])
-      expect(API_TOKEN_SCOPES).not.toContain(scope);
+      expect(API_TOKEN_SCOPES).toContain(scope);
   });
   it('does not authorize global adoption from a single-node grant', () => {
     const scopes = ['nodes:details:n1', 'nodes:config:edit:n1'];

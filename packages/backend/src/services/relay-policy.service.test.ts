@@ -10,7 +10,11 @@ import {
 } from '@/db/schema/index.js';
 import { decodeRelayV1Message } from '@/grpc/relay-proto.js';
 import { RelayPolicyNotAcknowledgedError } from './relay-grant-issuer.service.js';
-import { managedDatabaseListenerConfigsEqual, RelayPolicyService } from './relay-policy.service.js';
+import {
+  LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
+  managedDatabaseListenerConfigsEqual,
+  RelayPolicyService,
+} from './relay-policy.service.js';
 
 function createService(
   db: unknown,
@@ -969,15 +973,81 @@ describe('RelayPolicyService policy signing trust', () => {
     expect(relay.applyEncodedSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the original refusal when the local relay predates the reset call', async () => {
+  it('reports an actionable status when the local relay predates the reset call', async () => {
     const refusal = signedRotationRefusal();
     const { service, relay } = localPoolFixture({
       bootstrapPolicyTrust: vi.fn().mockRejectedValue(refusal),
       resetLocalPolicyTrust: vi.fn().mockRejectedValue(Object.assign(new Error('unimplemented'), { code: 12 })),
     });
 
-    await expect(service.syncSnapshot()).rejects.toBe(refusal);
+    await expect(service.syncSnapshot()).rejects.toThrow('Update the Relay Pool');
     expect(relay.applyEncodedSnapshot).not.toHaveBeenCalled();
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({
+      state: 'recovery_unsupported',
+      message: LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
+      trustedKeyIds: ['stale'],
+    });
+  });
+
+  it('audits a reset, shows the recovery, and never repeats it within the cooldown', async () => {
+    const { service, relay } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(signedRotationRefusal()),
+    });
+    const audit = { log: vi.fn().mockResolvedValue(true) };
+    service.setAuditService(audit);
+
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'relay.policy_trust.reset',
+        resourceId: 'local',
+        details: expect.objectContaining({ activeKeyId: 'active', replacedKeyIds: ['stale'] }),
+      })
+    );
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({ state: 'recovered', trustedKeyIds: ['active'] });
+
+    // Locked out again right away: something else is wrong, a second reset would only loop.
+    await expect(service.syncSnapshot()).rejects.toThrow('cooldown');
+    expect(relay.resetLocalPolicyTrust).toHaveBeenCalledTimes(1);
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({ state: 'locked_out' });
+  });
+
+  it('re-pins the active key when the relay pins it but refuses its signature window', async () => {
+    const lockout = Object.assign(new Error('9 FAILED_PRECONDITION: policy envelope signature is invalid'), {
+      code: 9,
+    });
+    const { service, relay } = localPoolFixture();
+    relay.applyEncodedSnapshot.mockRejectedValueOnce(lockout);
+
+    await expect(service.syncSnapshot()).resolves.toBe(102);
+    expect(relay.bootstrapPolicyTrust).toHaveBeenCalledTimes(1); // The relay already pins the key.
+    expect(relay.resetLocalPolicyTrust).toHaveBeenCalledWith('active', ACTIVE.publicKey, ACTIVE.fingerprint);
+    expect(relay.applyEncodedSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it('never resets trust for refusals a retry or a new snapshot repairs', async () => {
+    const { service, relay } = localPoolFixture({
+      applyEncodedSnapshot: vi
+        .fn()
+        .mockRejectedValue(
+          Object.assign(new Error('9 FAILED_PRECONDITION: policy envelope was issued in the future'), { code: 9 })
+        ),
+    });
+
+    await expect(service.syncSnapshot()).rejects.toThrow('issued in the future');
+    expect(relay.resetLocalPolicyTrust).not.toHaveBeenCalled();
+    expect(service.getLocalPolicyTrustStatus()).toBeNull();
+  });
+
+  it('continues the pool revision above what the local relay already applied', async () => {
+    const { service, relay } = localPoolFixture();
+    relay.getHealth.mockResolvedValue({
+      ...(await relay.getHealth()),
+      appliedRevision: '5000',
+    });
+    const build = vi.spyOn(service as any, 'buildInstanceSnapshot');
+    await service.syncSnapshot();
+    expect(build).toHaveBeenCalledWith('local', ['active'], 5000);
   });
 
   it('never resets trust for other bootstrap failures', async () => {
@@ -998,5 +1068,244 @@ describe('RelayPolicyService policy signing trust', () => {
 
     await expect(service.finalizePolicySigningKeyRotation()).resolves.toBe(false);
     expect(keys.destroyUnneededPrivateKeys).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RelayPolicyService relay recovery surfaces', () => {
+  it('allocates a revision above the one a relay reported after a Gateway database restore', async () => {
+    const rows = [
+      [{ revision: 900, gatewayInstanceId: 'gateway' }],
+      [{ id: 'remote', poolId: 'system', appliedPolicyRevision: 7000 }],
+      [],
+      [],
+    ];
+    const select = () => {
+      const q: any = Promise.resolve(rows.shift());
+      for (const method of ['from', 'where', 'limit', 'innerJoin', 'for']) q[method] = () => q;
+      return q;
+    };
+    const set = vi.fn(() => ({ where: () => ({ returning: async () => [{ revision: 7001 }] }) }));
+    const db: any = { select, execute: vi.fn(), update: () => ({ set }) };
+    db.transaction = (fn: any) => fn(db);
+    const service = createService(db, { applySnapshot: vi.fn() });
+    (service as any).policyKeys.resolveInstancePolicyKeys = async () => ({ signingKeyId: 'test', keys: [] });
+    (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
+
+    await (service as any).buildInstanceSnapshot('remote', undefined, 6500);
+    const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].desiredPolicyRevision);
+    expect(expression.params).toEqual([7000]);
+  });
+
+  it('flags remote relays only re-enrollment repairs and local relays that cannot reset', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    (service as any).policyKeys.assessReportedTrust = vi.fn(async (sets: string[][]) =>
+      sets.map((reported) => (reported.length === 0 ? null : !reported.includes('destroyed')))
+    );
+    const trust = await service.describePolicyTrust([
+      { id: 'remote-locked', kind: 'remote', health: { policySigningKeyIds: ['destroyed'] } },
+      { id: 'remote-fine', kind: 'remote', health: { policySigningKeyIds: ['active'] } },
+      { id: 'remote-unknown', kind: 'remote', health: null },
+      {
+        id: 'local',
+        kind: 'local',
+        health: { policySigningKeyIds: ['destroyed'] },
+        capabilities: { features: ['relay_pool_v1'] },
+      },
+    ]);
+    expect(trust.get('remote-locked')).toMatchObject({
+      state: 'reenrollment_required',
+      trustedKeyIds: ['destroyed'],
+      message: expect.stringContaining('Re-enroll'),
+    });
+    expect(trust.has('remote-fine')).toBe(false);
+    expect(trust.has('remote-unknown')).toBe(false);
+    expect(trust.get('local')).toMatchObject({ state: 'recovery_unsupported' });
+  });
+
+  it('delivers a changed policy to remote relays once, in order, before grants go out', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const order: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const once = vi
+      .spyOn(service as any, 'syncRemoteInstancePolicyOnce')
+      .mockImplementationOnce(async () => {
+        await blocked;
+        order.push('first');
+        return 1;
+      })
+      .mockImplementationOnce(async () => {
+        order.push('second');
+        return 2;
+      });
+    const first = service.syncRemoteInstancePolicy('node-1');
+    const second = service.syncRemoteInstancePolicy('node-1', 10_000);
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    // The second push waits for the first to be delivered.
+    expect(once).toHaveBeenCalledTimes(1);
+    release();
+    await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+    expect(order).toEqual(['first', 'second']);
+    expect(once).toHaveBeenLastCalledWith('node-1', 10_000);
+
+    const db: any = {
+      select: () => {
+        const q: any = Promise.resolve([{ nodeId: 'node-1' }, { nodeId: 'node-2' }]);
+        q.from = () => q;
+        q.where = () => q;
+        return q;
+      },
+    };
+    const pushing = createService(db, { applySnapshot: vi.fn() });
+    pushing.setNodeDispatch({} as never);
+    const push = vi.spyOn(pushing, 'syncRemoteInstancePolicy').mockResolvedValue(1);
+    (pushing as any).remotePolicyRevisions.set('node-2', 12);
+    await (pushing as any).pushChangedRemotePolicies(12);
+    expect(push).toHaveBeenCalledExactlyOnceWith('node-1', 10_000);
+
+    // A relay that did not answer is left to the lease refresh for a while.
+    push.mockClear();
+    push.mockRejectedValueOnce(new Error('timed out'));
+    await (pushing as any).pushChangedRemotePolicies(13);
+    expect(push).toHaveBeenCalledTimes(2);
+    push.mockClear();
+    await (pushing as any).pushChangedRemotePolicies(14);
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('RelayPolicyService grant issuance around the local relay', () => {
+  it('issues grants without the local relay acknowledgement only while that relay is unreachable', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    const push = vi.spyOn(service as any, 'pushChangedRemotePolicies').mockResolvedValue(undefined);
+    const allow = vi.spyOn(issuer, 'allowUnacknowledgedRevision');
+    vi.spyOn(service, 'syncSnapshot').mockRejectedValue(
+      Object.assign(new Error('14 UNAVAILABLE: connect ECONNREFUSED'), { code: 14 })
+    );
+    issuer.getNodeGrantBundle = vi
+      .fn()
+      .mockRejectedValueOnce(new RelayPolicyNotAcknowledgedError(12))
+      .mockResolvedValueOnce({ revision: '12', grants: [] });
+
+    await expect(service.getNodeGrantBundle('node')).resolves.toMatchObject({ revision: '12' });
+    // Remote relays get the policy before grants that depend on it.
+    expect(push).toHaveBeenCalledWith(12);
+    expect(allow).toHaveBeenCalledWith(12);
+
+    // A relay that refuses the policy is not unreachable: the fence holds.
+    vi.mocked(service.syncSnapshot).mockRejectedValue(
+      Object.assign(new Error('9 FAILED_PRECONDITION: snapshot revision conflicts'), { code: 9 })
+    );
+    issuer.getNodeGrantBundle.mockRejectedValue(new RelayPolicyNotAcknowledgedError(13));
+    await expect(service.getNodeGrantBundle('node')).rejects.toThrow('conflicts');
+    expect(allow).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the fence pass a bypassed revision and nothing newer', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    let revision = 12;
+    issuer.requireState = async () => ({ revision, gatewayInstanceId: 'gateway' });
+    issuer.settings = { getConfig: async () => ({ relayGrantTtlHours: 4 }) };
+    issuer.db = {
+      select: () => {
+        const query: any = Promise.resolve([{ keyId: 'grant', encryptedPrivateKey: 'x', encryptedDek: 'y' }]);
+        for (const method of ['from', 'where', 'limit']) query[method] = () => query;
+        return query;
+      },
+    };
+    const { privateKey } = generateKeyPairSync('ed25519');
+    issuer.cryptoService = { decryptPrivateKey: () => privateKey.export({ type: 'pkcs8', format: 'pem' }) };
+    const claims = { kind: 'endpoint', subjectKind: 'daemon', subjectId: 'node', certificateSha256: 'sha256:x' };
+    await expect(issuer.signGrant(claims)).rejects.toThrow('revision 12');
+    issuer.allowUnacknowledgedRevision(12);
+    await expect(issuer.signGrant(claims)).resolves.toMatchObject({ keyId: 'grant' });
+    revision = 13;
+    await expect(issuer.signGrant(claims)).rejects.toThrow('revision 13');
+  });
+
+  it('opens a Gateway tunnel on an intact route without re-ensuring it', async () => {
+    const rows: Record<string, unknown[]> = {
+      route: [
+        {
+          id: 'route-1',
+          sourceKind: 'gateway',
+          sourceId: 'gateway',
+          sourceCertificateSha256: 'sha256:app',
+          targetEndpointId: 'endpoint-1',
+        },
+      ],
+      endpoint: [
+        {
+          id: 'endpoint-1',
+          ownerKind: 'managed_database',
+          ownerId: 'db-1',
+          subjectId: 'node-1',
+          certificateSha256: 'sha256:node',
+          status: 'active',
+        },
+      ],
+      assignment: [{ id: 'generation-1' }],
+    };
+    const order = ['route', 'endpoint', 'assignment'];
+    const db: any = {
+      select: () => {
+        const query: any = Promise.resolve(rows[order.shift()!]);
+        for (const method of ['from', 'where', 'limit']) query[method] = () => query;
+        return query;
+      },
+    };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    const issuer = (service as any).grantIssuer;
+    issuer.requireState = async () => ({ revision: 1, gatewayInstanceId: 'gateway' });
+    issuer.requireNodeIdentity = async () => ({ certificateFingerprint: 'sha256:node' });
+    const route = (service as any).currentGatewayRoute(
+      'managed_database_gateway',
+      'managed_database',
+      'db-1',
+      'node-1',
+      'sha256:app'
+    );
+    await expect(route).resolves.toBe('route-1');
+
+    // The target node's certificate changed: the route must be re-ensured.
+    order.push('route', 'endpoint', 'assignment');
+    issuer.requireNodeIdentity = async () => ({ certificateFingerprint: 'sha256:renewed' });
+    await expect(
+      (service as any).currentGatewayRoute(
+        'managed_database_gateway',
+        'managed_database',
+        'db-1',
+        'node-1',
+        'sha256:app'
+      )
+    ).resolves.toBeNull();
+  });
+
+  it('continues the revision above a daemon that holds newer grants after a database restore', async () => {
+    const set = vi.fn(() => ({ where: async () => undefined }));
+    const db: any = { update: () => ({ set }) };
+    const service = createService(db, { applySnapshot: vi.fn() });
+    const sync = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
+    const bundles = vi
+      .spyOn(service, 'syncNodeGrantBundle')
+      .mockResolvedValueOnce({ success: false, error: 'relay grant revision 40 is older than 9000' } as never)
+      .mockResolvedValueOnce({ success: true } as never);
+    service.setNodeDispatch({} as never);
+
+    await expect(service.syncNodeGrants('node-1')).resolves.toBeUndefined();
+    const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].revision);
+    expect(expression.sql).toBe('greatest("relay_policy_state"."revision" + 1, $1)');
+    expect(expression.params).toEqual([9001]);
+    expect(sync).toHaveBeenCalledOnce();
+    expect(bundles).toHaveBeenCalledTimes(2);
+
+    // Rate-limited: a second refusal right away is reported, not looped on.
+    bundles.mockResolvedValueOnce({ success: false, error: 'stale relay grant bundle' } as never);
+    await expect(service.syncNodeGrants('node-1')).rejects.toThrow('stale relay grant bundle');
+    expect(set).toHaveBeenCalledTimes(1);
   });
 });

@@ -81,11 +81,10 @@ func healthcheck() error {
 	if err != nil {
 		return err
 	}
-	store, err := identity.NewStore(cfg.IdentityDir, cfg.StateDir)
+	current, err := identity.LoadSnapshot(cfg.IdentityDir)
 	if err != nil {
 		return err
 	}
-	current := store.Current()
 	tlsConfig := &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		Certificates:       []tls.Certificate{current.AppClient},

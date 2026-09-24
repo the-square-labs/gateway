@@ -1,5 +1,12 @@
 import { container } from '@/container.js';
-import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import {
+  getResourceScopedIds,
+  hasScope,
+  hasScopeBase,
+  hasScopeForCreation,
+  hasScopeForResource,
+} from '@/lib/permissions.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import {
   CreateLoggingEnvironmentSchema,
   CreateLoggingSchemaSchema,
@@ -14,6 +21,15 @@ import type { User } from '@/types.js';
 export async function manageLoggingTool(user: User, args: Record<string, unknown>) {
   const { resource, operation } = normalizeLoggingOperationArgs(args);
   const payload = (args.payload && typeof args.payload === 'object' ? args.payload : {}) as Record<string, unknown>;
+  if (resource === 'health' && operation === 'get') {
+    // GET /logging/health is a housekeeping read outside the logging paywall.
+    if (!hasScope(user.scopes, 'housekeeping:view')) {
+      throw new Error('PERMISSION_DENIED: Missing required scope housekeeping:view');
+    }
+    const { LoggingMaintenanceService } = await import('@/modules/logging/logging-maintenance.service.js');
+    return container.resolve(LoggingMaintenanceService).getSnapshot();
+  }
+  await requireLoggingEnabled();
   if (resource === 'environment') {
     const { LoggingEnvironmentService } = await import('@/modules/logging/logging-environment.service.js');
     const service = container.resolve(LoggingEnvironmentService);
@@ -34,8 +50,13 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
       return service.get(id);
     }
     if (operation === 'create') {
-      ensureLoggingScope(user, 'logs:environments:create');
-      return service.create(CreateLoggingEnvironmentSchema.parse(payload), user.id);
+      const input = CreateLoggingEnvironmentSchema.parse(payload);
+      ensureLoggingCreationScope(user, 'logs:environments:create', input.folderId);
+      const { LoggingEnvironmentFolderService } = await import(
+        '@/modules/logging/logging-environment-folders.service.js'
+      );
+      await container.resolve(LoggingEnvironmentFolderService).assertFolderExists(input.folderId);
+      return service.create(input, user.id);
     }
     if (operation === 'update') {
       ensureLoggingScope(user, 'logs:environments:edit', id);
@@ -63,8 +84,11 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
       return service.get(id);
     }
     if (operation === 'create') {
-      ensureLoggingScope(user, 'logs:schemas:create');
-      return service.create(CreateLoggingSchemaSchema.parse(payload), user.id);
+      const input = CreateLoggingSchemaSchema.parse(payload);
+      ensureLoggingCreationScope(user, 'logs:schemas:create', input.folderId);
+      const { LoggingSchemaFolderService } = await import('@/modules/logging/logging-schema-folders.service.js');
+      await container.resolve(LoggingSchemaFolderService).assertFolderExists(input.folderId);
+      return service.create(input, user.id);
     }
     if (operation === 'update') {
       ensureLoggingScope(user, 'logs:schemas:edit', id);
@@ -156,6 +180,7 @@ function normalizeLoggingResource(resource: string): string {
     metadata: 'metadata',
     facet: 'facets',
     facets: 'facets',
+    health: 'health',
   };
   return aliases[normalized] ?? normalized;
 }
@@ -178,6 +203,20 @@ function normalizeLoggingOperation(operation: string): string {
     metadata: 'metadata',
   };
   return aliases[normalized] ?? normalized;
+}
+
+/** Same gate as the logging routes' `requireLoggingEnabledMiddleware`. */
+async function requireLoggingEnabled() {
+  await container.resolve(LicensePolicyService).requireFeature('structured-logging');
+  const { LoggingFeatureService } = await import('@/modules/logging/logging-feature.service.js');
+  container.resolve(LoggingFeatureService).requireEnabled();
+}
+
+/** Same destination check as the environment and schema create routes (no logs:manage override). */
+function ensureLoggingCreationScope(user: User, baseScope: string, folderId: string | null | undefined) {
+  if (!hasScopeForCreation(user.scopes, baseScope, folderId)) {
+    throw new Error(`PERMISSION_DENIED: Missing ${baseScope} permission for the selected destination`);
+  }
 }
 
 function ensureLoggingScope(user: User, baseScope: string, resourceId?: string) {

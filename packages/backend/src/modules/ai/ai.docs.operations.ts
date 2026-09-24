@@ -10,6 +10,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 ## Resource Types
 - nodes
 - databases
+- storage
 - domains
 - ssl_certificates
 - logging_environments
@@ -31,6 +32,7 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 ## Scope Rules
 - nodes: list with nodes:details or nodes:folders:manage; mutate with nodes:folders:manage.
 - databases: list with databases:view or databases:folders:manage; mutate with databases:folders:manage.
+- storage: list with storage:view or storage:folders:manage; mutate with storage:folders:manage; moving connections also checks storage:edit for each connection and the destination.
 - domains: list with domains:view; mutate with domains:folders:manage.
 - ssl_certificates: list with ssl:cert:view; mutate with ssl:cert:folders:manage.
 - logging_environments: list with logs:environments:view, logs:environments:folders:manage, or logs:manage; mutate with logs:environments:folders:manage or logs:manage.
@@ -142,7 +144,7 @@ Scopes: status-page:view for reads/preview, status-page:manage for settings/serv
   api: `# Gateway REST API
 
 Gateway provides REST access for external scripts, CI/CD pipelines, CLI tools, and integrations without a browser session.
-Programmatic REST clients can use either Gateway API tokens (\`gw_\`) or OAuth Authorization Code + PKCE access tokens (\`gwo_\`). AI Workspace access, AI configuration, MCP user access, auth administration, raw nginx config, gateway settings, node raw config, node filesystem access, \`proxy:raw:bypass\`, and \`proxy:advanced:bypass\` cannot be delegated to API/OAuth tokens. MCP clients use OAuth access tokens for the MCP resource with ordinary delegated API scopes; the owning user account must have \`mcp:use\`. Node config and node file-management Workspace tools are intentionally browser-session-only and are not exposed through MCP.
+Programmatic REST clients can use either Gateway API tokens (\`gw_\`) or OAuth Authorization Code + PKCE access tokens (\`gwo_\`). API/OAuth tokens can hold every resource scope, including user and group administration, gateway settings, raw nginx config and bypass flags, node config and files, integrations, hosting and inference administration. Only account-bound scopes cannot be delegated: AI Workspace and sandbox access, AI configuration and skills, \`mcp:use\`, \`inference:setup\` and \`admin:users:impersonate\`. A token never exceeds its owner's current scopes. MCP clients use OAuth access tokens for the MCP resource with ordinary delegated API scopes; the owning user account must have \`mcp:use\`.
 
 ## Current-User OAuth Authorizations
 The assistant can manage existing OAuth authorizations for the current browser user with manage_oauth_authorization:
@@ -207,7 +209,7 @@ The UI calls these resources Routes; stable API paths keep the \`proxy-hosts\` n
 - \`PUT /api/proxy-hosts/:id\` — update route
 - \`DELETE /api/proxy-hosts/:id\` — delete route
 - \`GET /api/nginx-templates\` — list nginx config templates
-Programmatic clients can use validated \`advancedConfig\`, but cannot set or read raw nginx config fields.
+Programmatic clients read and write raw nginx config with the same \`proxy:raw:*\` scopes as browser users.
 
 ### Domains
 - \`GET /api/domains\` — list domains

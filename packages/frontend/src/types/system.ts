@@ -37,6 +37,10 @@ export interface RelayUpdateStatus {
     targetVersion: string;
     startedAt: string;
     error: string | null;
+    /** The run has not finished (running or paused) and can be abandoned. */
+    abandonable?: boolean;
+    /** Durable Relay Pool run state, e.g. "paused". */
+    runState?: string;
   } | null;
 }
 

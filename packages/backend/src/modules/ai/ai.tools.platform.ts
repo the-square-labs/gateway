@@ -64,19 +64,30 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_node',
     description:
-      'Create a new daemon node and generate an enrollment token. IMPORTANT: The response contains enrollmentToken and gatewayCertSha256 — you MUST display both to the user and include --gateway-cert-sha256 in setup commands (curl/wget). The token is one-time-use and cannot be retrieved again.',
+      'Create (enroll) a new daemon node, including Relay Pool relays, and generate an enrollment token. Relay nodes require serviceAddresses (addresses daemons use to reach the relay) and optionally servicePort; other types reject them. IMPORTANT: The response contains enrollmentToken and gatewayCertSha256 — you MUST display both to the user and include --gateway-cert-sha256 in setup commands (curl/wget). The token is one-time-use and cannot be retrieved again; use manage_node regenerate_enrollment_token for a node that has not enrolled yet.',
     parameters: {
       type: 'object',
       properties: {
         hostname: { type: 'string', description: 'Node hostname (e.g., "proxy-01.example.com")' },
         type: {
           type: 'string',
-          enum: ['nginx', 'monitoring', 'docker', 'builder', 'databases', 'relay', 'bastion'],
+          enum: ['nginx', 'monitoring', 'docker', 'builder', 'databases', 'storage', 'relay', 'bastion'],
           description: 'Node type (default: nginx)',
         },
         displayName: { type: 'string', description: 'Optional display name' },
+        folderId: {
+          type: ['string', 'null'],
+          description: 'Optional node folder UUID; creation there needs nodes:create on the folder.',
+        },
+        serviceAddresses: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Relay nodes only: unique advertised IP addresses or hostnames (1-10).',
+        },
+        servicePort: { type: 'number', description: 'Relay nodes only: advertised service port.' },
       },
       required: ['hostname'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Nodes',
@@ -119,13 +130,18 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'delete_node',
     description:
-      'Delete a daemon node. The node must have no assigned ingress routes. Also revokes its mTLS certificate.',
+      'Delete a daemon node. The node must have no assigned ingress routes unless cascadeProxyHosts is true and the node is offline. Also revokes its mTLS certificate.',
     parameters: {
       type: 'object',
       properties: {
         nodeId: { type: 'string', description: 'Node UUID to delete' },
+        cascadeProxyHosts: {
+          type: 'boolean',
+          description: 'Also delete the ingress routes assigned to an offline node (the UI cascade option).',
+        },
       },
       required: ['nodeId'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Nodes',
@@ -220,15 +236,27 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_user',
     description:
-      'Create a user before first login and assign an initial permission group. You can only assign groups within your own effective scopes.',
+      'Create (invite) a user before first login and assign permission groups. authMethod password or email_otp emails the onboarding link or code and requires verified SMTP. You can only assign groups within your own effective scopes.',
     parameters: {
       type: 'object',
       properties: {
         email: { type: 'string', description: 'User email address' },
-        name: { type: 'string', description: 'Optional display name' },
-        groupId: { type: 'string', description: 'Initial permission group UUID' },
+        name: { type: 'string', description: 'Display name' },
+        groupId: { type: 'string', description: 'Initial permission group UUID (or pass groupIds)' },
+        groupIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Permission group UUIDs; the first is the primary group.',
+        },
+        authMethod: {
+          type: 'string',
+          enum: ['oidc', 'password', 'email_otp'],
+          description: 'Sign-in method (default: oidc).',
+        },
+        folderId: { type: ['string', 'null'], description: 'Optional user folder UUID.' },
       },
-      required: ['email', 'groupId'],
+      required: ['email', 'name'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Administration',
@@ -237,14 +265,21 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'update_user_role',
-    description: "Change a user's permission group. Use list_users to see available groups.",
+    description:
+      "Change a user's permission group membership. Pass groupId for a single group or groupIds to replace every membership. Use list_groups to see available groups.",
     parameters: {
       type: 'object',
       properties: {
         userId: { type: 'string', description: 'User UUID' },
         groupId: { type: 'string', description: 'Permission group UUID to assign' },
+        groupIds: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Complete replacement list of permission group UUIDs; the first is the primary group.',
+        },
       },
-      required: ['userId', 'groupId'],
+      required: ['userId'],
+      additionalProperties: false,
     },
     destructive: true,
     category: 'Administration',

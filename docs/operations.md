@@ -146,6 +146,8 @@ Important behavior:
 - Sensitive reveal or export operations require explicit scopes.
 - API tokens are not accepted by the MCP endpoint.
 
+API tokens and OAuth grants can do everything a user can do with Gateway resources, including node enrollment and global nginx config, raw route config, users and permission groups, Gateway and environment settings, integration and hosting connectors, hosting VMs, inference administration, relay drain/rebalance/force-disconnect, and updates. They can also manage the owner's personal `gwi_` inference keys when they hold `feat:ai:use`. They cannot carry the user-only AI Workspace, AI sandbox, and `mcp:use` scopes, `admin:users:impersonate`, or `integrations:gitlab:sandbox:clone`, and they cannot call browser/identity-bound routes: sign-in, password, MFA, passkeys, the caller's own sessions and preferences, starting impersonation, OAuth consent, API token and OAuth authorization management, per-user Git credentials, AI Workspace chat, UI bootstrap, and the post-setup onboarding checklist. See [SCOPES.md](../SCOPES.md#api-token-delegation).
+
 ### OAuth
 
 Gateway supports OAuth 2.0 Authorization Code + PKCE for public clients.
@@ -185,6 +187,8 @@ MCP accepts only OAuth access tokens issued for the Gateway MCP resource. It rej
 - OAuth tokens issued for the Gateway API resource.
 
 The `mcp:use` scope is a user-account capability gate. The owning user must have it for MCP access.
+
+MCP tools cover every resource and management operation the OAuth grant's scopes allow, including node config and files, Docker migrations, the logging backend, Gateway settings, users and groups, inference providers, models, limits, usage and personal inference keys, hosting, and GitLab, GitHub, generic Git, Cloudflare, and external SSH connectors. Only AI Workspace internals (conversations, skills, tool-output paging, web search), AI sandbox tools and sandbox clones, API token and OAuth authorization minting, and embedded-assistant UI actions (setup dialogs, resource pins) are not exposed.
 
 By default, Extended MCP compatibility is enabled and the first `tools/list` response includes every tool allowed by the OAuth grant. Administrators can disable it for clients that support dynamic discovery; in that mode MCP starts with a compact core toolset, clients call `discover_tools`, Gateway sends `notifications/tools/list_changed`, and the client refreshes `tools/list` so the activated tools become callable.
 

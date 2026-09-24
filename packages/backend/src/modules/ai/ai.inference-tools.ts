@@ -1,11 +1,17 @@
 import { container } from '@/container.js';
 import { hasScope } from '@/lib/permissions.js';
+import { AuthService } from '@/modules/auth/auth.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
+import { coreUpdateInputSchema, coreVersionInputSchema } from '@/modules/inference/core/inference-core.routes.js';
+import { InferenceCoreRuntimeService } from '@/modules/inference/core/inference-core-runtime.service.js';
 import {
+  CompleteInferenceOAuthSchema,
   CreateInferenceProviderConnectionSchema,
   CreateInferenceTokenSchema,
+  InferenceActivityQuerySchema,
   InferenceLimitPolicyInputSchema,
   InferenceModelConfigurationSchema,
+  ReorderInferenceModelsSchema,
   StartInferenceOAuthSchema,
   UpdateInferenceProviderConnectionSchema,
   UpdateInferenceProviderRoutingSchema,
@@ -23,19 +29,83 @@ export const INFERENCE_TOOL_NAMES = new Set([
   'manage_inference_model',
   'manage_inference_limits',
   'manage_inference_token',
+  'manage_inference_usage',
 ]);
+
+const CORE_OPERATIONS = new Set(['core_status', 'core_check_updates', 'core_install', 'core_update', 'core_repair']);
 
 export async function executeInferenceTool(
   user: User,
   toolName: string,
   args: Record<string, unknown>
 ): Promise<unknown> {
-  await requireInferenceEnabled();
+  // The core lifecycle routes stay reachable while inference is disabled, so the core can be installed first.
+  const coreOperation = toolName === 'manage_inference_provider' && CORE_OPERATIONS.has(String(args.operation));
+  if (!coreOperation) await requireInferenceEnabled();
+  // Every inference management route requires feat:ai:use on the account (requireAccountScope).
+  await requireAccountAiUse(user);
+  if (coreOperation) return manageCore(user, args);
   if (toolName === 'manage_inference_provider') return manageProvider(user, args);
   if (toolName === 'manage_inference_model') return manageModel(user, args);
   if (toolName === 'manage_inference_limits') return manageLimits(user, args);
   if (toolName === 'manage_inference_token') return manageToken(user, args);
+  if (toolName === 'manage_inference_usage') return manageUsage(user, args);
   throw new Error(`Unsupported inference tool: ${toolName}`);
+}
+
+async function manageCore(user: User, args: Record<string, unknown>) {
+  const operation = requiredString(args.operation, 'operation');
+  const service = container.resolve(InferenceCoreRuntimeService);
+  if (operation === 'core_status') {
+    requireScope(user, 'inference:providers:view');
+    return service.getStatus();
+  }
+  requireScope(user, 'inference:providers:manage');
+  if (operation === 'core_install') {
+    return { operation: await service.install(coreVersionInputSchema.parse({ version: args.coreVersion }).version) };
+  }
+  if (operation === 'core_update') {
+    return { operation: await service.update(coreUpdateInputSchema.parse({ version: args.coreVersion }).version) };
+  }
+  if (operation === 'core_repair') return { operation: await service.repair() };
+  // Same response shape as POST /inference/core/check-updates.
+  const latest = await service.checkForUpdates();
+  return {
+    latest: latest
+      ? {
+          version: latest.version,
+          digest: latest.digest,
+          sizeBytes: latest.sizeBytes,
+          releaseNotesUrl: latest.releaseNotesUrl,
+        }
+      : null,
+  };
+}
+
+async function manageUsage(user: User, args: Record<string, unknown>) {
+  const operation = requiredString(args.operation, 'operation');
+  const service = container.resolve(InferenceUsageService);
+  if (operation === 'self' || operation === 'self_overview') {
+    requireScope(user, 'feat:ai:use');
+    return operation === 'self' ? service.self(user) : service.selfOverview(user);
+  }
+  requireScope(user, 'inference:usage:view');
+  if (operation === 'system') return service.adminOverview();
+  if (operation === 'users') return service.users();
+  if (operation === 'activity_filters') return service.activityFilters();
+  if (operation === 'activity') {
+    return service.activity(
+      InferenceActivityQuerySchema.parse({
+        page: args.page,
+        limit: args.limit,
+        search: args.search,
+        status: args.status,
+        userId: args.userId,
+        model: args.model,
+      })
+    );
+  }
+  throw new Error(`Unsupported inference usage operation: ${operation}`);
 }
 
 async function manageProvider(user: User, args: Record<string, unknown>) {
@@ -78,6 +148,16 @@ async function manageProvider(user: User, args: Record<string, unknown>) {
     const session = await container
       .resolve(InferenceOAuthService)
       .status(user.id, requiredString(args.sessionId, 'sessionId'));
+    if (session.status === 'complete' && session.connectionId) {
+      await service.syncConnection(session.connectionId, true);
+    }
+    return session;
+  }
+  if (operation === 'complete_authorization') {
+    const input = CompleteInferenceOAuthSchema.parse({ callback: args.callback });
+    const session = await container
+      .resolve(InferenceOAuthService)
+      .complete(user.id, requiredString(args.sessionId, 'sessionId'), input.callback);
     if (session.status === 'complete' && session.connectionId) {
       await service.syncConnection(session.connectionId, true);
     }
@@ -128,6 +208,11 @@ async function manageModel(user: User, args: Record<string, unknown>) {
     const modelId = optionalString(args.modelId);
     return container.resolve(InferenceModelConfigurationService).save(user.id, modelId, configuration);
   }
+  if (operation === 'reorder') {
+    const input = ReorderInferenceModelsSchema.parse({ items: args.items });
+    await container.resolve(InferenceModelService).reorder(user.id, input.items);
+    return { success: true };
+  }
   if (operation === 'delete') {
     await container.resolve(InferenceModelService).remove(user.id, requiredString(args.modelId, 'modelId'));
     return { success: true };
@@ -155,6 +240,9 @@ async function manageLimits(user: User, args: Record<string, unknown>) {
     await service.removeUser(user.id, requiredString(args.userId, 'userId'));
     return { success: true };
   }
+  if (operation === 'reset_user') {
+    return service.resetUserLimits(user.id, requiredString(args.userId, 'userId'));
+  }
   throw new Error(`Unsupported inference limits operation: ${operation}`);
 }
 
@@ -163,7 +251,7 @@ async function manageToken(user: User, args: Record<string, unknown>) {
   const service = container.resolve(InferenceTokenService);
   if (operation === 'list') {
     requireScope(user, 'feat:ai:use');
-    return (await service.listTokens(user.id)).filter((token) => token.status === 'active');
+    return service.listTokens(user.id);
   }
   if (operation === 'create') {
     requireScope(user, 'feat:ai:use');
@@ -182,6 +270,21 @@ async function requireInferenceEnabled(): Promise<void> {
     throw new Error(
       'Inference is disabled for this Gateway. An administrator can enable generalSettings.features.inferenceEnabled.'
     );
+  }
+}
+
+/**
+ * Mirrors requireAccountScope('feat:ai:use'): remote MCP callers carry
+ * token-bounded scopes, which never include the user-only feat:ai:use, so the
+ * account's own scopes decide.
+ */
+async function requireAccountAiUse(user: User): Promise<void> {
+  if (hasScope(user.scopes, 'feat:ai:use')) return;
+  const account = container.isRegistered(AuthService)
+    ? await container.resolve(AuthService).getUserById(user.id)
+    : null;
+  if (!account || account.isBlocked || !hasScope(account.scopes, 'feat:ai:use')) {
+    throw new Error('PERMISSION_DENIED: feat:ai:use is required');
   }
 }
 

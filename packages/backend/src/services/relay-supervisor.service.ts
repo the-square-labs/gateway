@@ -1,5 +1,5 @@
 import * as grpc from '@grpc/grpc-js';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { relayInstances } from '@/db/schema/index.js';
 import type { RelayControlClient, RelayHealthResponse } from '@/grpc/relay-control.client.js';
@@ -87,7 +87,12 @@ export interface RelaySupervisorOptions {
   sleep?: (ms: number) => Promise<void>;
 }
 
-type ProbeResult = { healthy: true; response: RelayHealthResponse } | { healthy: false; reason: RelayHealthReason };
+type ProbeResult =
+  | { healthy: true; response: RelayHealthResponse }
+  | { healthy: false; reason: RelayHealthReason; response?: RelayHealthResponse };
+
+/** A relay that cannot be reached serves nothing; one that answers but is not ready admits nothing. */
+const OFFLINE_REASONS: readonly RelayHealthReason[] = ['unreachable', 'listener_unavailable'];
 
 function isRelayHealthReason(value: string): value is RelayHealthReason {
   return (RELAY_HEALTH_REASONS as readonly string[]).includes(value);
@@ -158,14 +163,14 @@ export class RelaySupervisorService {
     if (!this.options.required || !this.relayClient) return;
     this.stopping = false;
     const persisted = await this.cache.get<RelaySupervisorState>(CONTROL_STATE_KEY).catch(() => null);
-    if (persisted?.maxAttempts === MAX_ATTEMPTS) this.state = persisted;
+    if (persisted?.maxAttempts === MAX_ATTEMPTS) {
+      // Maintenance belongs to the process that opened it (a relay update). Restored after a
+      // restart it would switch supervision off for good, since nothing else ends it.
+      this.state = persisted.state === 'maintenance' ? { ...persisted, state: 'migration_pending' } : persisted;
+    }
     const resumeRecovery = this.state.state === 'recovering';
     await this.probeNow();
-    if (resumeRecovery && this.state.state === 'recovering') {
-      this.recoveryCycle = this.runRecoveryCycle(false).finally(() => {
-        this.recoveryCycle = null;
-      });
-    }
+    if (resumeRecovery && this.state.state === 'recovering') this.startRecoveryCycle(false);
     this.timer = setInterval(() => void this.probeNow(), this.probeIntervalMs);
     this.timer.unref();
   }
@@ -291,13 +296,19 @@ export class RelaySupervisorService {
         }
         return;
       }
-      if (this.state.state === 'recovering' || this.state.state === 'critical' || this.recoveryCycle) return;
+      await this.recordUnavailableLocalInstance(result).catch((error) => {
+        logger.warn('Failed to persist local Relay Pool health', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+      if (this.state.state === 'recovering' || this.recoveryCycle) return;
+      // A critical relay stays critical for the same cause. A new cause is recorded, so the retry
+      // decision and automatic recovery act on what is wrong now, not on a stale reason.
+      if (this.state.state === 'critical' && this.state.reason === result.reason) return;
       const autoRecovery = (await this.settings.getConfig()).relayAutoRecovery;
       if (this.isRecoverable(result.reason) && autoRecovery && this.options.managed && this.recovery) {
         await this.transition({ state: 'recovering', reason: result.reason, attempt: 0, attemptHistory: [] });
-        this.recoveryCycle = this.runRecoveryCycle(false).finally(() => {
-          this.recoveryCycle = null;
-        });
+        this.startRecoveryCycle(false);
         return;
       }
       await this.transition({ state: 'critical', reason: result.reason });
@@ -372,9 +383,7 @@ export class RelaySupervisorService {
         resourceId: 'gateway-relay',
         details: { maxAttempts: MAX_ATTEMPTS },
       });
-      this.recoveryCycle = this.runRecoveryCycle(true).finally(() => {
-        this.recoveryCycle = null;
-      });
+      this.startRecoveryCycle(true);
       return this.getSnapshot(true);
     } finally {
       this.probing = false;
@@ -393,6 +402,23 @@ export class RelaySupervisorService {
     this.options.expectedProtocolMajor = protocolMajor;
   }
 
+  /**
+   * Runs a recovery cycle in the background. Its promise is kept only for stop(), so a failure
+   * (a cache or database error) must be handled here: unhandled, it would end the process.
+   */
+  private startRecoveryCycle(manual: boolean): void {
+    this.recoveryCycle = this.runRecoveryCycle(manual)
+      .catch(async (error) => {
+        logger.error('Gateway relay recovery cycle failed internally', {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        await this.transition({ state: 'critical', reason: this.state.reason ?? 'unreachable' }).catch(() => {});
+      })
+      .finally(() => {
+        this.recoveryCycle = null;
+      });
+  }
+
   private async runRecoveryCycle(manual: boolean): Promise<void> {
     if (!this.recovery) {
       await this.transition({ state: 'degraded', reason: 'ownership_unverified' });
@@ -403,7 +429,18 @@ export class RelaySupervisorService {
       if (this.stopping) return;
       const delay = this.recoveryDelaysMs[attempt - 1] ?? 0;
       if (delay > 0) await this.sleep(delay);
-      if (this.stopping) return;
+      if (this.stopping || this.inMaintenance()) return;
+      // The relay may have recovered on its own meanwhile, or an update may have taken it over.
+      // Restarting it then would only drop its tunnels.
+      if (attempt > startAttempt || delay > 0) {
+        const current = await this.checkRelay();
+        if (this.inMaintenance()) return;
+        if (current.healthy) {
+          this.failureCount = 0;
+          await this.transition({ state: 'healthy', reason: null, attempt: 0, attemptHistory: [] });
+          return;
+        }
+      }
       const startedAt = new Date().toISOString();
       await this.allocateAttempt(attempt, startedAt);
       let action: RelayRecoveryAction;
@@ -486,11 +523,12 @@ export class RelaySupervisorService {
     if (!this.relayClient) return { healthy: false, reason: 'unreachable' };
     try {
       const response = await this.relayClient.getHealth(2_000);
-      if (!response.liveness) return { healthy: false, reason: 'listener_unavailable' };
+      if (!response.liveness) return { healthy: false, reason: 'listener_unavailable', response };
       if (!response.readiness) {
         return {
           healthy: false,
           reason: isRelayHealthReason(response.reason) ? response.reason : 'policy_snapshot_required',
+          response,
         };
       }
       if (this.options.expectedVersion && response.buildVersion !== this.options.expectedVersion) {
@@ -516,13 +554,31 @@ export class RelaySupervisorService {
     }
   }
 
-  private async recordLocalInstance(response: RelayHealthResponse): Promise<void> {
+  /**
+   * Records a local relay that stays unavailable, so placement and the pool status stop treating
+   * it as ready. It is written only after the second failed probe, never during maintenance
+   * (probes are off then), and cleared by the next healthy probe. A relay that answers but is
+   * not ready also reports the keys it trusts, which policy key rotation relies on.
+   */
+  private async recordUnavailableLocalInstance(result: Extract<ProbeResult, { healthy: false }>): Promise<void> {
+    if (result.response?.liveness) {
+      await this.recordLocalInstance(result.response, 'synchronizing');
+      return;
+    }
+    if (!OFFLINE_REASONS.includes(result.reason)) return;
+    await this.db
+      .update(relayInstances)
+      .set({ state: 'offline', updatedAt: new Date() })
+      .where(and(eq(relayInstances.poolId, 'system'), eq(relayInstances.kind, 'local')));
+  }
+
+  private async recordLocalInstance(response: RelayHealthResponse, unavailableState?: 'synchronizing'): Promise<void> {
     if (!response.relayInstanceId || response.poolId !== 'system') return;
     const expiresAtUnix = Number(response.policyExpiresAtUnix || 0);
     await this.db
       .update(relayInstances)
       .set({
-        state: response.draining ? 'draining' : 'ready',
+        state: unavailableState ?? (response.draining ? 'draining' : 'ready'),
         buildVersion: response.buildVersion,
         protocolMajor: response.protocolMajor,
         capabilities: {
@@ -550,6 +606,11 @@ export class RelaySupervisorService {
         updatedAt: new Date(),
       })
       .where(eq(relayInstances.id, response.relayInstanceId));
+  }
+
+  /** Read through a method: a relay update can switch maintenance on while a cycle awaits. */
+  private inMaintenance(): boolean {
+    return this.state.state === 'maintenance';
   }
 
   private isRecoverable(reason: RelayHealthReason): boolean {

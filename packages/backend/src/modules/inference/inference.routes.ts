@@ -1,7 +1,12 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { assertNotImpersonating, authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
+import {
+  assertNotImpersonating,
+  authMiddleware,
+  requireAccountScope,
+  requireScope,
+} from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { InferenceUsageService } from './accounting/inference-usage.service.js';
 import {
@@ -59,8 +64,12 @@ import { InferenceProviderService } from './providers/inference-provider.service
 export const inferenceManagementRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 inferenceManagementRoutes.use('*', authMiddleware);
-inferenceManagementRoutes.use('*', sessionOnly);
-inferenceManagementRoutes.use('*', requireScope('feat:ai:use'));
+// Personal gwi_ inference keys need feat:ai:use on the caller itself, so a bearer token must hold it.
+inferenceManagementRoutes.use('/tokens', requireScope('feat:ai:use'));
+inferenceManagementRoutes.use('/tokens/*', requireScope('feat:ai:use'));
+// Administration routes below require their own delegated inference:* scopes; bearer callers may
+// satisfy the feat:ai:use baseline through the token owner's live account.
+inferenceManagementRoutes.use('*', requireAccountScope('feat:ai:use'));
 
 inferenceManagementRoutes.openapi(listInferenceTokensRoute, async (c) => {
   const user = c.get('user')!;

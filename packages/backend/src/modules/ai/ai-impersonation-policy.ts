@@ -24,20 +24,34 @@ const CREDENTIAL_TOOL_CALLS: Readonly<Record<string, (args: ToolArgs) => boolean
   manage_inference_token: (args) => args.operation === 'create',
   // Returns a node enrollment token.
   create_node: () => true,
+  manage_node: (args) => args.operation === 'regenerate_enrollment_token',
+  // Returns a single-use relay re-enrollment token.
+  manage_relay_pool: (args) => args.operation === 'reenroll_instance',
   manage_pages: (args) => args.operation === 'token_create',
   manage_logging: (args) => args.resource === 'token' && args.operation === 'create',
-  manage_managed_storage: (args) => args.action === 'create_access_key',
+  manage_managed_storage: (args) => args.action === 'create_access_key' || args.action === 'reveal_credentials',
+  // The storage reveal route has no impersonation guard; refuse it like every other credential reveal.
+  manage_storage_connection: (args) => args.action === 'reveal_credentials',
   manage_database_connection: (args) => args.operation === 'reveal_credentials',
+  // Rotation returns the new direct-access password.
+  manage_managed_database: (args) =>
+    args.operation === 'reveal_credentials' ||
+    args.operation === 'rotate_credentials' ||
+    args.operation === 'reveal_binding_credentials',
   // Docker webhook rows carry the trigger token; a revealed secret list carries the values.
   manage_docker_container_config: (args) =>
     args.operation === 'get_webhook' ||
     args.operation === 'upsert_webhook' ||
     args.operation === 'regenerate_webhook_token' ||
     (args.operation === 'list_secrets' && Boolean(args.reveal)),
+  // An exported container archive with includeSecrets carries the secret values.
+  download_docker_archive: (args) => args.operation === 'begin' && args.includeSecrets === true,
   gitlab_create_deploy_token: () => true,
   // Issuance generates the certificate's private key.
   issue_certificate: () => true,
   manage_certificate: (args) => args.operation === 'export' && PRIVATE_KEY_EXPORT_FORMATS.has(args.format),
+  // Exports the CA signing key.
+  manage_ca: (args) => args.operation === 'export_key',
 };
 
 export function isImpersonationBlockedToolCall(toolName: string, args: ToolArgs): boolean {

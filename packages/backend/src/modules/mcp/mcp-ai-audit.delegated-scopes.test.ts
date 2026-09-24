@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TOKENS } from '@/container.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import {
   AIService,
   container,
@@ -9,6 +11,17 @@ import {
   LoggingSchemaService,
   USER,
 } from './mcp-ai-audit.test-helpers.js';
+
+/** manage_logging applies the same licensed-and-enabled gate as the logging routes. */
+function registerLoggingAvailable() {
+  container.registerInstance(LicensePolicyService, {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+  } as unknown as LicensePolicyService);
+  container.registerInstance(LoggingFeatureService, {
+    requireEnabled: vi.fn(),
+    requireAvailableForStorage: vi.fn(),
+  } as unknown as LoggingFeatureService);
+}
 
 describe('AIService MCP delegated scope audit behavior', () => {
   beforeEach(() => {
@@ -58,6 +71,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     ]);
     container.registerInstance(LoggingEnvironmentService, { list: envList } as unknown as LoggingEnvironmentService);
     container.registerInstance(LoggingSchemaService, { list: schemaList } as unknown as LoggingSchemaService);
+    registerLoggingAvailable();
     const service = createService({ nodesService: {}, auditService });
 
     const result = await service.executeTool(
@@ -102,6 +116,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     ]);
     container.registerInstance(LoggingEnvironmentService, { list: envList } as unknown as LoggingEnvironmentService);
     container.registerInstance(LoggingSchemaService, { list: schemaList } as unknown as LoggingSchemaService);
+    registerLoggingAvailable();
     const service = createService({ nodesService: {}, auditService });
 
     const environments = await service.executeTool(
@@ -141,20 +156,21 @@ describe('AIService MCP delegated scope audit behavior', () => {
     };
     const service = createService({ nodesService: {}, proxyService, auditService });
 
+    const nodeId = '33333333-3333-4333-8333-333333333333';
     const result = await service.executeTool(
-      { ...USER, scopes: ['proxy:create:node-1'] },
+      { ...USER, scopes: [`proxy:create:${nodeId}`] },
       'create_route',
-      { nodeId: 'node-1', domainNames: ['example.com'] },
-      { source: 'mcp', scopes: ['proxy:create:node-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
+      { nodeId, domainNames: ['example.com'], forwardHost: 'app', forwardPort: 3000 },
+      { source: 'mcp', scopes: [`proxy:create:${nodeId}`], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
     );
 
     expect(result.error).toBeUndefined();
     expect(result.result).toMatchObject({ id: 'proxy-1' });
     expect(proxyService.createProxyHost).toHaveBeenCalledWith(
-      expect.objectContaining({ nodeId: 'node-1', domainNames: ['example.com'] }),
+      expect.objectContaining({ nodeId, domainNames: ['example.com'] }),
       USER.id,
       expect.objectContaining({
-        actorScopes: ['proxy:create:node-1'],
+        actorScopes: [`proxy:create:${nodeId}`],
         bypassAdvancedValidation: false,
       })
     );

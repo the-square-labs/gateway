@@ -34,7 +34,7 @@ export const SSH_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_ssh_connector',
     description:
-      'Create a password-authenticated external SSH connector only when every required field and the confirmed host fingerprint are already known. For generated-key setup or host-key discovery, use open_connector_setup with connector ssh.',
+      'Create an external SSH connector once the host fingerprint is confirmed (get it with manage_integration_connector discover_host_key). authMethod password takes secret; private_key takes generatePrivateKey or reuseCredentialFromConnectorId (private key import is disabled). A generated public key is returned for installation on the host.',
     parameters: {
       type: 'object',
       properties: {
@@ -42,14 +42,21 @@ export const SSH_AI_TOOLS: AIToolDefinition[] = [
         host: { type: 'string' },
         port: { type: 'number' },
         username: { type: 'string' },
-        secret: { type: 'string', description: 'SSH account password.' },
+        authMethod: { type: 'string', enum: ['password', 'private_key'], description: 'Default password.' },
+        secret: { type: 'string', description: 'SSH account password for password auth.' },
+        generatePrivateKey: { type: 'boolean', description: 'Generate a key pair (private_key only).' },
+        reuseCredentialFromConnectorId: {
+          type: 'string',
+          description: 'Reuse the credential of another SSH connector (private_key only).',
+        },
         hostFingerprint: {
           type: 'string',
           description: 'Pinned SHA256 host key fingerprint explicitly confirmed by the user.',
         },
-        jumpConnectorId: { type: 'string' },
+        jumpConnectorId: { type: ['string', 'null'] },
+        enabled: { type: 'boolean', description: 'Default true.' },
       },
-      required: ['name', 'host', 'username', 'secret', 'hostFingerprint'],
+      required: ['name', 'host', 'username', 'hostFingerprint'],
     },
     destructive: true,
     category: 'External SSH',

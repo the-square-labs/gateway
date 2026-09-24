@@ -286,27 +286,94 @@ describe('MCP route authentication', () => {
 });
 
 describe('MCP tools', () => {
-  it('rejects direct GitLab tool calls even when the token has every GitLab scope', async () => {
+  it('discovers and calls GitLab tools through delegated GitLab scopes but never the sandbox clone', async () => {
     registerToken([
       'integrations:gitlab:view',
       'integrations:gitlab:projects:view',
       'integrations:gitlab:repo:read',
       'integrations:gitlab:repo:write',
-      'integrations:gitlab:system',
+      'integrations:gitlab:sandbox:clone',
     ]);
-    const executeTool = vi.fn();
+    const executeTool = vi.fn().mockResolvedValue({ result: { projects: [] }, invalidateStores: [] });
     container.registerInstance(AIService, { executeTool } as unknown as AIService);
     container.registerInstance(AuditService, { log: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService);
 
+    const initial = await mcpRequest('tools/list');
+    expect(initial.body.result.tools.map((tool: { name: string }) => tool.name)).not.toContain('gitlab_list_projects');
+
+    await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category: 'gitlab' } });
     const list = await mcpRequest('tools/list');
-    expect(list.body.result.tools.map((tool: { name: string }) => tool.name)).not.toContain('gitlab_list_projects');
+    const names = list.body.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(expect.arrayContaining(['gitlab_list_projects', 'gitlab_commit_files']));
+    expect(names).not.toContain('gitlab_clone_repository_to_sandbox');
 
     const call = await mcpRequest('tools/call', {
       name: 'gitlab_list_projects',
       arguments: { connectorId: '11111111-1111-4111-8111-111111111111' },
     });
-    expect(JSON.stringify(call.body)).toContain('unavailable');
-    expect(executeTool).not.toHaveBeenCalled();
+    expect(call.body.result.isError).not.toBe(true);
+    expect(executeTool).toHaveBeenCalledWith(
+      USER,
+      'gitlab_list_projects',
+      expect.objectContaining({ connectorId: '11111111-1111-4111-8111-111111111111' }),
+      expect.objectContaining({ source: 'mcp' })
+    );
+
+    const clone = await mcpRequest('tools/call', {
+      name: 'gitlab_clone_repository_to_sandbox',
+      arguments: { connectorId: '11111111-1111-4111-8111-111111111111', project: 'group/app' },
+    });
+    expect(JSON.stringify(clone.body)).toContain('unavailable');
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it('discovers newly delegable management toolsets', async () => {
+    registerToken([
+      'nodes:config:view',
+      'nodes:files:read',
+      'docker:containers:migrate',
+      'settings:gateway:view',
+      'inference:providers:view',
+      'integrations:ssh:use',
+      'integrations:github:view',
+      'integrations:git:view',
+      'integrations:cloudflare:manage',
+      'integrations:hosting:view',
+      'admin:details:certificates',
+    ]);
+
+    for (const category of [
+      'nodes',
+      'docker',
+      'logging',
+      'inference',
+      'external_ssh',
+      'github',
+      'git',
+      'hosting',
+      'integrations',
+      'certificates',
+    ]) {
+      const discovered = await mcpRequest('tools/call', { name: 'discover_tools', arguments: { category } });
+      expect(discovered.body.result.isError, category).not.toBe(true);
+    }
+    const refreshed = await mcpRequest('tools/list');
+    const names = refreshed.body.result.tools.map((tool: { name: string }) => tool.name);
+    expect(names).toEqual(
+      expect.arrayContaining([
+        'manage_node_config',
+        'manage_node_file',
+        'manage_docker_migration',
+        'manage_logging_backend',
+        'manage_inference_provider',
+        'ssh_execute_command',
+        'github_list_repositories',
+        'git_read_repository_file',
+        'create_cloudflare_connector',
+        'manage_hosting',
+        'audit_system_pki_leaves',
+      ])
+    );
   });
 
   it('lists only scoped Gateway tools and excludes AI-only tools', async () => {

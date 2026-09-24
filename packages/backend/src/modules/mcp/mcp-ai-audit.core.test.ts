@@ -359,7 +359,12 @@ describe('AIService MCP audit core behavior', () => {
       service.executeTool(
         USER,
         'create_route',
-        { nodeId: 'node-1', domainNames: ['app.example.com'], forwardHost: 'app', forwardPort: 3000 },
+        {
+          nodeId: '33333333-3333-4333-8333-333333333333',
+          domainNames: ['app.example.com'],
+          forwardHost: 'app',
+          forwardPort: 3000,
+        },
         { source: 'mcp', scopes: ['proxy:create'] }
       ),
       service.executeTool(
@@ -378,7 +383,8 @@ describe('AIService MCP audit core behavior', () => {
         USER,
         'toggle_route_raw_mode',
         { routeId: 'proxy-1', enabled: true },
-        { source: 'mcp', scopes: ['proxy:raw:toggle:proxy-1'] }
+        // Like PUT {rawConfigEnabled}, a raw-mode toggle also needs route edit access.
+        { source: 'mcp', scopes: ['proxy:raw:toggle:proxy-1', 'proxy:edit:proxy-1'] }
       ),
     ]);
 

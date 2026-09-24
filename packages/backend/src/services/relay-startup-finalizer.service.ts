@@ -12,6 +12,8 @@ export interface RelayStartupFinalizerOptions {
   readinessWaitMs?: number;
   readinessPollMs?: number;
   sleep?: (ms: number) => Promise<void>;
+  /** Delivers the current policy snapshot to the local relay. */
+  syncPolicy?: () => Promise<unknown>;
 }
 
 export type RelayStartupFinalizerResult =
@@ -48,9 +50,19 @@ export class RelayStartupFinalizerService {
       // Apply those files before readiness is evaluated; a missing relay is
       // handled by the normal start/recreate path below.
       await this.client.reloadIdentity().catch(() => false);
-      const initial = await this.probe();
+      let initial = await this.probe();
       if (initial && this.isExpected(initial)) {
         return { status: 'active', action: null, buildVersion: initial.buildVersion };
+      }
+      // A relay that answers but is not ready lacks only a current policy: its lease ran out
+      // while Gateway was down, or it refused the last one. Deliver it before judging the
+      // container; recreating a live relay for that would only drop its sessions.
+      if (!initial && this.options.syncPolicy && (await this.probeLive())) {
+        await this.options.syncPolicy().catch(() => undefined);
+        initial = await this.probe();
+        if (initial && this.isExpected(initial)) {
+          return { status: 'active', action: null, buildVersion: initial.buildVersion };
+        }
       }
 
       if (initial && !this.isExpected(initial)) {
@@ -101,6 +113,14 @@ export class RelayStartupFinalizerService {
       await this.sleep(this.readinessPollMs);
     } while (Date.now() < deadline);
     return null;
+  }
+
+  private async probeLive(): Promise<boolean> {
+    try {
+      return (await this.client!.getHealth(2_000)).liveness === true;
+    } catch {
+      return false;
+    }
   }
 
   private async probe(): Promise<RelayHealthResponse | null> {

@@ -23,6 +23,7 @@ vi.mock("@/services/api", () => ({
     setCache: vi.fn(),
     triggerUpdate: vi.fn(),
     triggerRelayUpdate: vi.fn(),
+    abandonRelayUpdate: vi.fn(),
   },
 }));
 
@@ -179,5 +180,69 @@ describe("UpdateSection", () => {
       )
     );
     expect(confirm).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers to abandon a paused rollout even when no newer Relay release is listed", async () => {
+    const status: UpdateStatus = {
+      ...makeStatus("v2.6.12"),
+      latestVersion: null,
+      updateAvailable: false,
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: null,
+        updateAvailable: false,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: {
+          status: "failed",
+          targetVersion: "v2.6.13",
+          startedAt: "2026-09-24T10:00:00.000Z",
+          error: "Relay drain is waiting for active streams",
+          abandonable: true,
+          runState: "paused",
+        },
+      },
+    };
+    vi.mocked(api.getVersionInfo).mockResolvedValue(status);
+    vi.mocked(api.abandonRelayUpdate).mockReset().mockResolvedValue({ targetVersion: "v2.6.13" });
+    useUpdateStore.setState({ status });
+
+    renderUpdateSection();
+    expect(
+      await screen.findByText(/Paused: Relay drain is waiting for active streams/)
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Abandon update" }));
+
+    await waitFor(() => expect(api.abandonRelayUpdate).toHaveBeenCalledOnce());
+    expect(confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Abandon Relay Pool update?", variant: "destructive" })
+    );
+  });
+
+  it("does not offer to abandon a rollout that already failed", async () => {
+    const status: UpdateStatus = {
+      ...makeStatus("v2.6.12"),
+      relay: {
+        currentVersion: "v2.6.12",
+        latestVersion: "v2.6.13",
+        updateAvailable: true,
+        releaseNotes: null,
+        releaseUrl: null,
+        operation: {
+          status: "failed",
+          targetVersion: "v2.6.13",
+          startedAt: "2026-09-24T10:00:00.000Z",
+          error: "verify timed out",
+          abandonable: false,
+          runState: "failed",
+        },
+      },
+    };
+    vi.mocked(api.getVersionInfo).mockResolvedValue(status);
+    useUpdateStore.setState({ status });
+
+    renderUpdateSection();
+    expect(await screen.findByText(/Failed: verify timed out/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Abandon update" })).not.toBeInTheDocument();
   });
 });

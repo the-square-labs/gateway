@@ -292,3 +292,29 @@ describe('Relay status report key ids', () => {
     expect(reportedPolicySigningKeyIds(undefined, ['current'], 'ready')).toEqual(['current']);
   });
 });
+
+describe('Relay policy trust assessment', () => {
+  const { trustIsSignable } = relayPolicySigningKeyInternals;
+  const records = () => [
+    keyRecord('destroyed', { activatedAt: minutes(-60 * 24 * 60), hasPrivateKey: false }),
+    keyRecord('retained', {
+      status: 'verification_only',
+      activatedAt: minutes(-30 * 24 * 60),
+      hasPrivateKey: true,
+    }),
+    keyRecord('current', { status: 'active', activatedAt: minutes(-10), hasPrivateKey: true }),
+    keyRecord('next', { status: 'pending', hasPrivateKey: true }),
+  ];
+
+  it('knows a relay is locked out only when it trusts no key Gateway can sign with', () => {
+    expect(trustIsSignable(records(), ['current'])).toBe(true);
+    // A retained old key can still sign a snapshot that carries the active key.
+    expect(trustIsSignable(records(), ['destroyed', 'retained'])).toBe(true);
+    // The incident: trust only in a key whose private half is gone. A pending key never signs.
+    expect(trustIsSignable(records(), ['destroyed'])).toBe(false);
+    expect(trustIsSignable(records(), ['destroyed', 'next'])).toBe(false);
+    expect(trustIsSignable(records(), ['unknown-after-restore'])).toBe(false);
+    // Nothing reported says nothing.
+    expect(trustIsSignable(records(), [])).toBeNull();
+  });
+});

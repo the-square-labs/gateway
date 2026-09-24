@@ -1,15 +1,46 @@
 import { container } from '@/container.js';
-import { canManageUser, hasScope, isScopeSubset } from '@/lib/permissions.js';
+import { isScopeSubset } from '@/lib/permissions.js';
 import { canonicalizeScopes } from '@/lib/scopes.js';
-import { UpdateAuthProvisioningSettingsSchema } from '@/modules/admin/admin.schemas.js';
-import { findIdentityTrustChanges } from '@/modules/admin/identity-trust-settings.js';
-import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
-import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
+import { AppError } from '@/middleware/error-handler.js';
+import {
+  CreateUserSchema,
+  RestoreUserSchema,
+  UpdateAuthProvisioningSettingsSchema,
+  UpdateUserAdditionalPermissionsSchema,
+  UpdateUserAuthMethodSchema,
+  UpdateUserGroupSchema,
+  UpdateUserNameSchema,
+} from '@/modules/admin/admin.schemas.js';
+import {
+  type AdminUserActionServices,
+  type AdminUserActor,
+  createAdminUser,
+  deleteAdminUser,
+  listAdminUserSessions,
+  listAdminUsers,
+  listDeletedAdminUsers,
+  renameAdminUser,
+  resetAdminUserAvatar,
+  resetAdminUserMfa,
+  restoreAdminUser,
+  revokeAdminUserSession,
+  revokeAllAdminUserSessions,
+  sendAdminUserPasswordLink,
+  setAdminUserBlocked,
+  updateAdminUserAdditionalPermissions,
+  updateAdminUserAuthMethod,
+  updateAdminUserGroups,
+} from '@/modules/admin/admin-user-actions.js';
+import { readGatewaySettings, updateGatewaySettings } from '@/modules/admin/gateway-settings.js';
+import { HousekeepingConfigUpdateSchema } from '@/modules/housekeeping/housekeeping.docs.js';
+import { toLicenseAppError } from '@/modules/license/license.errors.js';
 import { LicenseService } from '@/modules/license/license.service.js';
-import { McpSettingsService } from '@/modules/mcp/mcp-settings.service.js';
-import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
-import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
-import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
+import { LicenseModuleService } from '@/modules/license/license-module.service.js';
+import { EnvironmentSettingsUpdateSchema } from '@/modules/settings/environment-settings.schemas.js';
+import {
+  DEFAULT_ENVIRONMENT_SETTINGS,
+  EnvironmentSettingsService,
+} from '@/modules/settings/environment-settings.service.js';
 import { CreateTokenSchema, UpdateTokenSchema } from '@/modules/tokens/tokens.schemas.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
@@ -17,7 +48,7 @@ import { SchedulerService } from '@/services/scheduler.service.js';
 import type { User } from '@/types.js';
 import { AIServiceInteractionTools } from './ai.service.interaction-tools.js';
 import { isRecord, type ToolRuntimeContext, UNHANDLED_TOOL } from './ai.service.runtime-helpers.js';
-import { aiSettingsUpdatesFromArgs, getEffectiveGroupScopes } from './ai.service.tool-helpers.js';
+import { aiSettingsUpdatesFromArgs } from './ai.service.tool-helpers.js';
 import { AI_TOOLS } from './ai.tools.js';
 import { AIConversationService } from './ai-conversation.service.js';
 
@@ -32,30 +63,28 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
     switch (toolName) {
       // ── Administration ──
       case 'list_users':
-        return this.authService.listUsers();
+        return listAdminUsers(this.adminUserActor(user), this.adminUserServices());
       case 'create_user': {
-        const destGroup = await this.groupService.getGroup(a.groupId);
-        if (!isScopeSubset(getEffectiveGroupScopes(destGroup), user.scopes)) {
-          throw new Error('Cannot assign a group with permissions you do not possess');
-        }
-        return this.authService.createUser({
-          email: a.email,
-          name: a.name,
-          groupId: a.groupId,
-        });
+        const input = CreateUserSchema.parse(
+          definedFields({
+            email: a.email,
+            name: a.name,
+            groupId: a.groupId,
+            groupIds: a.groupIds,
+            authMethod: a.authMethod,
+            folderId: a.folderId,
+          })
+        );
+        return createAdminUser(this.adminUserActor(user), input, this.adminUserServices());
       }
       case 'update_user_role': {
-        if (a.userId === user.id) {
-          throw new Error('Cannot change your own group');
-        }
-        const targetUser = await this.authService.getUserById(a.userId);
-        if (!targetUser) throw new Error('User not found');
-        if (targetUser.isDeleted) throw new Error('Deleted users must be restored before they can be changed');
-        if (targetUser.oidcSubject?.startsWith('system:')) {
-          throw new Error('Cannot modify the system user');
-        }
-        await this.authService.assertCanUpdateUserGroup(user.id, user.scopes, a.userId, a.groupId);
-        return this.authService.updateUserGroup(a.userId, a.groupId);
+        const { groupIds } = UpdateUserGroupSchema.parse(definedFields({ groupId: a.groupId, groupIds: a.groupIds }));
+        return updateAdminUserGroups(
+          this.adminUserActor(user),
+          requiredId(a.userId),
+          groupIds,
+          this.adminUserServices()
+        );
       }
       case 'set_user_additional_permissions': {
         if (
@@ -64,44 +93,28 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
         ) {
           throw new Error('additionalScopes must be an array of permission scope strings');
         }
-        const requestedScopes = a.additionalScopes as string[];
-        const { additionalScopes } = await this.authService.assertCanUpdateUserAdditionalScopes(
-          user.id,
-          user.scopes,
-          a.userId,
-          requestedScopes
+        const { additionalScopes } = UpdateUserAdditionalPermissionsSchema.parse({
+          additionalScopes: a.additionalScopes,
+        });
+        return updateAdminUserAdditionalPermissions(
+          this.adminUserActor(user),
+          requiredId(a.userId),
+          additionalScopes,
+          this.adminUserServices()
         );
-        return this.authService.updateUserAdditionalScopes(a.userId, additionalScopes);
       }
-      case 'set_user_blocked': {
-        if (a.userId === user.id) {
-          throw new Error('Cannot block yourself');
-        }
-        const targetUser = await this.authService.getUserById(a.userId);
-        if (!targetUser) throw new Error('User not found');
-        if (targetUser.isDeleted) throw new Error('Deleted users must be restored before they can be changed');
-        if (targetUser.oidcSubject?.startsWith('system:')) {
-          throw new Error('Cannot modify the system user');
-        }
-        const denyReason = canManageUser(user.scopes, targetUser.scopes);
-        if (denyReason) throw new Error(denyReason);
-        return a.blocked ? this.authService.blockUser(a.userId) : this.authService.unblockUser(a.userId);
-      }
-      case 'delete_user': {
-        if (a.userId === user.id) {
-          throw new Error('Cannot delete your own account');
-        }
-        const targetUser = await this.authService.getUserById(a.userId);
-        if (!targetUser) throw new Error('User not found');
-        if (targetUser.isDeleted) throw new Error('User is already deleted');
-        if (targetUser.oidcSubject?.startsWith('system:')) {
-          throw new Error('Cannot delete the system user');
-        }
-        const denyReason = canManageUser(user.scopes, targetUser.scopes);
-        if (denyReason) throw new Error(denyReason);
-        await this.authService.deleteUser(a.userId, user.id);
+      case 'set_user_blocked':
+        return setAdminUserBlocked(
+          this.adminUserActor(user),
+          requiredId(a.userId),
+          a.blocked === true,
+          this.adminUserServices()
+        );
+      case 'delete_user':
+        await deleteAdminUser(this.adminUserActor(user), requiredId(a.userId), this.adminUserServices());
         return { success: true };
-      }
+      case 'manage_user':
+        return this.executeManageUserTool(user, a);
       case 'get_ai_settings': {
         const [config, gatewayInferenceModels] = await Promise.all([
           this.settingsService.getConfigForAdmin(),
@@ -245,16 +258,28 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
       case 'get_license_status':
         return container.resolve(LicenseService).getStatus();
       case 'manage_license': {
+        // Mirrors /system/license: activation also installs the licensed module.
         const service = container.resolve(LicenseService);
-        switch (a.operation) {
-          case 'activate':
-            return service.activateKey(String(a.licenseKey ?? ''));
-          case 'check':
-            return service.checkNow();
-          case 'clear':
-            return service.clearKey();
-          default:
-            throw new Error('Unsupported license operation');
+        try {
+          switch (a.operation) {
+            case 'activate': {
+              const licenseKey = String(a.licenseKey ?? '').trim();
+              if (!licenseKey) throw new AppError(400, 'INVALID_LICENSE_KEY', 'licenseKey is required');
+              const status = await service.activateKey(licenseKey);
+              const activation = await container.resolve(LicenseModuleService).ensureAvailable();
+              return { ...status, moduleRestarting: activation.restarting };
+            }
+            case 'activate_module':
+              return await container.resolve(LicenseModuleService).ensureAvailable();
+            case 'check':
+              return await service.checkNow();
+            case 'clear':
+              return await service.clearKey();
+            default:
+              throw new Error('Unsupported license operation');
+          }
+        } catch (error) {
+          throw toLicenseAppError(error) ?? error;
         }
       }
       case 'manage_housekeeping': {
@@ -268,106 +293,129 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
             return service.getRunHistory();
           case 'update_config': {
             this.ensureToolScope(user, 'housekeeping:configure');
-            const config = isRecord(a.config) ? a.config : {};
-            const updated = await service.updateConfig(config as Parameters<typeof service.updateConfig>[0]);
-            if (typeof config.cronExpression === 'string') {
-              container.resolve(SchedulerService).updateSchedule('housekeeping', config.cronExpression);
+            const validated = HousekeepingConfigUpdateSchema.parse(isRecord(a.config) ? a.config : {});
+            const updated = await service.updateConfig(validated as Parameters<typeof service.updateConfig>[0]);
+            if (validated.cronExpression) {
+              container.resolve(SchedulerService).updateSchedule('housekeeping', validated.cronExpression);
             }
             return updated;
           }
           case 'run':
             this.ensureToolScope(user, 'housekeeping:run');
-            return service.runAll('manual', user.id);
+            try {
+              return await service.runAll('manual', user.id);
+            } catch (error) {
+              if (error instanceof Error && error.message.includes('already running')) {
+                throw new AppError(409, 'ALREADY_RUNNING', 'Housekeeping is already running');
+              }
+              throw error;
+            }
           default:
             throw new Error('Unsupported housekeeping operation');
         }
       }
       case 'get_gateway_settings': {
-        const authSettingsService = container.resolve(AuthSettingsService);
-        const mcpSettingsService = container.resolve(McpSettingsService);
-        const generalSettingsService = container.resolve(GeneralSettingsService);
-        const networkSettingsService = container.resolve(NetworkSettingsService);
-        const outboundWebhookPolicyService = container.resolve(OutboundWebhookPolicyService);
-        const [settings, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy, groups] =
-          await Promise.all([
-            authSettingsService.getConfig(),
-            mcpSettingsService.getConfig(),
-            generalSettingsService.getConfig(),
-            networkSettingsService.getConfig(),
-            outboundWebhookPolicyService.getConfig(),
-            this.groupService.listGroups(),
-          ]);
-        const availableGroups = groups
-          .filter((group) => isScopeSubset(getEffectiveGroupScopes(group), user.scopes))
-          .map((group) => ({ id: group.id, name: group.name, isBuiltin: group.isBuiltin }));
+        const settings = await readGatewaySettings(
+          { user, scopes: user.scopes },
+          {},
+          { groupService: this.groupService }
+        );
         return {
           ...settings,
-          mcpServerEnabled: mcpSettings.serverEnabled,
-          mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
-          generalSettings,
-          networkSecurity,
-          outboundWebhookPolicy,
-          availableGroups,
+          environmentSettings: {
+            data: container.resolve(EnvironmentSettingsService).getSnapshot(),
+            defaults: DEFAULT_ENVIRONMENT_SETTINGS,
+          },
         };
       }
       case 'update_gateway_settings': {
-        const input = UpdateAuthProvisioningSettingsSchema.parse(args);
-        if (!hasScope(user.scopes, 'admin:system')) {
-          const privilegedChanges = await findIdentityTrustChanges(input, {
-            smtp: () => container.resolve(AuthMailService).getPublicConfig(),
-            generalSettings: () => container.resolve(GeneralSettingsService).getConfig(),
-            authSettings: () => container.resolve(AuthSettingsService).getConfig(),
-          });
-          if (privilegedChanges.length > 0) {
-            throw new Error(`PERMISSION_DENIED: Changing ${privilegedChanges.join(', ')} requires admin:system`);
-          }
+        // Same validation, privilege boundaries, side effects and audit as PUT /admin/auth-settings
+        // and PATCH /settings/environment.
+        const { environmentSettings, ...settingsArgs } = args;
+        const environmentInput =
+          environmentSettings === undefined ? undefined : EnvironmentSettingsUpdateSchema.parse(environmentSettings);
+        const settingsInput = UpdateAuthProvisioningSettingsSchema.parse(settingsArgs);
+        if (!environmentInput && Object.keys(settingsInput).length === 0) {
+          throw new Error('No supported Gateway settings fields were provided');
         }
-        if (input.oidcDefaultGroupId) {
-          const destGroup = await this.groupService.getGroup(input.oidcDefaultGroupId);
-          if (!isScopeSubset(getEffectiveGroupScopes(destGroup), user.scopes)) {
-            throw new Error('Cannot assign a group with permissions you do not possess');
-          }
-        }
-        const authSettingsService = container.resolve(AuthSettingsService);
-        const mcpSettingsService = container.resolve(McpSettingsService);
-        const generalSettingsService = container.resolve(GeneralSettingsService);
-        const networkSettingsService = container.resolve(NetworkSettingsService);
-        const outboundWebhookPolicyService = container.resolve(OutboundWebhookPolicyService);
-        const [settings, mcpSettings, generalSettings, networkSecurity, outboundWebhookPolicy] = await Promise.all([
-          authSettingsService.updateConfig(input),
-          mcpSettingsService.updateConfig({
-            serverEnabled: input.mcpServerEnabled,
-            extendedCompatibility: input.mcpExtendedCompatibility,
-          }),
-          input.generalSettings
-            ? generalSettingsService.updateConfig(input.generalSettings)
-            : generalSettingsService.getConfig(),
-          input.networkSecurity
-            ? networkSettingsService.updateConfig(input.networkSecurity)
-            : networkSettingsService.getConfig(),
-          input.outboundWebhookPolicy
-            ? outboundWebhookPolicyService.updateConfig(input.outboundWebhookPolicy)
-            : outboundWebhookPolicyService.getConfig(),
-        ]);
-        const groups = await this.groupService.listGroups();
-        const availableGroups = groups
-          .filter((group) => isScopeSubset(getEffectiveGroupScopes(group), user.scopes))
-          .map((group) => ({ id: group.id, name: group.name, isBuiltin: group.isBuiltin }));
-        this.eventBus?.publish('system.config.changed', { action: 'gateway_settings_updated' });
-        return {
-          ...settings,
-          mcpServerEnabled: mcpSettings.serverEnabled,
-          mcpExtendedCompatibility: mcpSettings.extendedCompatibility,
-          generalSettings,
-          networkSecurity,
-          outboundWebhookPolicy,
-          availableGroups,
-        };
+        const settings =
+          Object.keys(settingsInput).length > 0
+            ? await updateGatewaySettings(
+                { user, scopes: user.scopes },
+                settingsInput,
+                {},
+                { groupService: this.groupService, auditService: this.auditService }
+              )
+            : await readGatewaySettings({ user, scopes: user.scopes }, {}, { groupService: this.groupService });
+        const environmentService = container.resolve(EnvironmentSettingsService);
+        const environment = environmentInput
+          ? await environmentService.update(environmentInput)
+          : environmentService.getSnapshot();
+        return { ...settings, environmentSettings: { data: environment, defaults: DEFAULT_ENVIRONMENT_SETTINGS } };
       }
       default:
         return UNHANDLED_TOOL;
     }
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private adminUserActor(user: User): AdminUserActor {
+    return { user, scopes: user.scopes, accountScopes: user.accountScopes };
+  }
+
+  private adminUserServices(): AdminUserActionServices {
+    return { authService: this.authService, auditService: this.auditService, groupService: this.groupService };
+  }
+
+  /** Mirrors the /api/admin/users/{id}/* routes through the shared user actions. */
+  private async executeManageUserTool(user: User, a: Record<string, unknown>): Promise<unknown> {
+    const actor = this.adminUserActor(user);
+    const services = this.adminUserServices();
+    const operation = String(a.operation ?? '');
+    if (operation === 'list_deleted') return listDeletedAdminUsers(actor, services);
+    const userId = requiredId(a.userId);
+    switch (operation) {
+      case 'set_auth_method': {
+        const { authMethod } = UpdateUserAuthMethodSchema.parse({ authMethod: a.authMethod });
+        return updateAdminUserAuthMethod(actor, userId, authMethod, services);
+      }
+      case 'rename': {
+        const { name } = UpdateUserNameSchema.parse({ name: a.name });
+        return renameAdminUser(actor, userId, name, services);
+      }
+      case 'reset_avatar':
+        return resetAdminUserAvatar(actor, userId, services);
+      case 'send_password_link':
+        return sendAdminUserPasswordLink(actor, userId, services);
+      case 'list_sessions':
+        // Assistant and MCP calls are not a browser session, so no session is marked current.
+        return listAdminUserSessions(actor, userId, '', services);
+      case 'revoke_session': {
+        const sessionId = requiredId(a.sessionId, 'sessionId');
+        await revokeAdminUserSession(actor, userId, sessionId, services);
+        return { message: 'Session revoked' };
+      }
+      case 'revoke_all_sessions':
+        await revokeAllAdminUserSessions(actor, userId, services);
+        return { message: 'All sessions revoked' };
+      case 'reset_mfa':
+        return resetAdminUserMfa(actor, userId, services);
+      case 'restore': {
+        const groups = RestoreUserSchema.parse(definedFields({ groupIds: a.groupIds }));
+        return restoreAdminUser(actor, userId, groups, services);
+      }
+      default:
+        throw new Error(`Unsupported user operation: ${operation}`);
+    }
+  }
+}
+
+function requiredId(value: unknown, name = 'userId'): string {
+  const id = typeof value === 'string' ? value.trim() : '';
+  if (!id) throw new AppError(400, 'INVALID_AI_TOOL_ARGUMENT', `${name} is required`);
+  return id;
+}
+
+/** Drop omitted arguments so the parsed body matches what the HTTP route receives. */
+function definedFields(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
 }

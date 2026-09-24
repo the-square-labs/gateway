@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
 import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
@@ -290,6 +291,92 @@ describe('Enroll token lookup', () => {
         relayServerKey: Buffer.from('relay-server-key'),
         relayServerIdentity: 'relay-instance-1',
       })
+    );
+  });
+
+  it('re-enrolls an enrolled relay with a fresh token and starts its policy trust over', async () => {
+    const enrollmentToken = createNodeEnrollmentToken();
+    const tokenHash = await bcrypt.hash(enrollmentToken.token, 4);
+    const hostIdentityId = '22222222-2222-4222-8222-222222222222';
+    const instanceId = '33333333-3333-4333-8333-333333333333';
+    const enrolled = {
+      ...makePendingNode(tokenHash, enrollmentToken.selector),
+      type: 'relay',
+      status: 'online',
+      certificateSerial: 'old01',
+    };
+    const instance = { id: instanceId, nodeId, poolId: 'system', advertisedAddresses: ['relay.example.test'] };
+    const nodeLookups: unknown[] = [];
+    const updates: Array<{ value: any; where: unknown }> = [];
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: (condition: unknown) => ({
+            limit: async () => {
+              if (table === relayInstances) return [instance];
+              nodeLookups.push(condition);
+              // The first lookup accepts pending nodes only; the second finds the enrolled relay.
+              return nodeLookups.length === 1 ? [] : [enrolled];
+            },
+          }),
+        }),
+      })),
+      update: vi.fn(() => ({
+        set: (value: unknown) => ({
+          where: vi.fn((where: unknown) => {
+            updates.push({ value, where });
+            return updateResult();
+          }),
+        }),
+      })),
+    } as any;
+    const deps = makeDeps(db);
+    deps.relayPolicy = {
+      getPolicyEnrollmentTrust: vi.fn(async () => ({
+        keyId: 'active-key',
+        publicKey: Buffer.alloc(32, 7),
+        fingerprint: `sha256:${'a'.repeat(64)}`,
+      })),
+      refreshNodeIdentity: vi.fn(async () => undefined),
+    };
+    const callback = vi.fn();
+
+    await createEnrollmentHandlers(deps).Enroll(
+      {
+        request: {
+          token: enrollmentToken.token,
+          hostname: 'relay-host',
+          daemonVersion: '1.2.3',
+          osInfo: 'linux/amd64',
+          nginxVersion: '',
+          daemonType: 'relay',
+          hostIdentityId,
+        },
+      } as any,
+      callback
+    );
+
+    const dialect = new PgDialect();
+    const reenrollmentLookup = dialect.sqlToQuery(nodeLookups[1] as any);
+    expect(reenrollmentLookup.sql).toContain('"nodes"."type" = $');
+    expect(reenrollmentLookup.sql).toContain('"nodes"."certificate_serial" is not null');
+    expect(reenrollmentLookup.params).toEqual(expect.arrayContaining(['relay', 'pending', enrollmentToken.selector]));
+
+    const bind = updates.find(({ value }) => value.certificateSerial === 'new01');
+    expect(bind?.value).toMatchObject({ status: 'online', enrollmentTokenHash: null, enrollmentTokenSelector: null });
+    const bindWhere = dialect.sqlToQuery(bind!.where as any);
+    expect(bindWhere.sql).toContain('"nodes"."status" <> $');
+    expect(bindWhere.sql).toContain('"nodes"."enrollment_token_hash" = $');
+
+    const relay = updates.find(({ value }) => value.policySigningKeyId === 'active-key');
+    expect(relay?.value).toMatchObject({ state: 'synchronizing', appliedPolicyRevision: 0, policyExpiresAt: null });
+    expect(dialect.sqlToQuery(relay!.value.health).sql).toContain("- 'policySigningKeyIds'");
+    expect(callback).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ relayInstanceId: instanceId, policySigningKeyId: 'active-key' })
+    );
+    expect(deps.auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({ details: expect.objectContaining({ reenrollment: true }) })
     );
   });
 

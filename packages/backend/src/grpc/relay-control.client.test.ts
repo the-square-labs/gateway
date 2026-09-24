@@ -146,6 +146,7 @@ vi.mock('@grpc/grpc-js', () => ({
   credentials: {
     createSsl: vi.fn((ca: Buffer, key: Buffer, certificate: Buffer) => ({ ca, key, certificate })),
   },
+  status: { PERMISSION_DENIED: 7, UNAUTHENTICATED: 16 },
 }));
 
 vi.mock('./relay-proto.js', () => ({
@@ -197,6 +198,55 @@ describe('RelayControlClient identity rotation', () => {
     expect(fakeGrpc.admins[1]!.credentials.key.toString()).toBe('new-private-key');
     expect(fakeGrpc.reloadRequests).toHaveLength(1);
     expect(fakeGrpc.commitRequests).toEqual(fakeGrpc.reloadRequests);
+  });
+
+  it('asks the relay to reload with the client it still trusts after Gateway renewed its own', async () => {
+    const previousCertificatePath = join(directory, 'client.previous.crt');
+    const previousPrivateKeyPath = join(directory, 'client.previous.key');
+    writeFileSync(previousCertificatePath, 'previous-certificate');
+    writeFileSync(previousPrivateKeyPath, 'previous-private-key');
+    writeFileSync(certificatePath, 'renewed-certificate');
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+      previousCertificatePath,
+      previousPrivateKeyPath,
+    });
+    const [previous, renewed] = fakeGrpc.admins;
+    expect(previous!.credentials.certificate.toString()).toBe('previous-certificate');
+    expect(renewed!.credentials.certificate.toString()).toBe('renewed-certificate');
+
+    await client.getHealth();
+    // The previous client asked for the reload and the renewed one committed it.
+    expect(fakeGrpc.reloadRequests).toHaveLength(1);
+    expect(fakeGrpc.commitRequests).toEqual(fakeGrpc.reloadRequests);
+    expect(previous!.closed).toBe(true);
+  });
+
+  it('moves to the renewed client when the relay already trusts only that one', async () => {
+    const previousCertificatePath = join(directory, 'client.previous.crt');
+    const previousPrivateKeyPath = join(directory, 'client.previous.key');
+    writeFileSync(previousCertificatePath, 'previous-certificate');
+    writeFileSync(previousPrivateKeyPath, 'previous-private-key');
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+      previousCertificatePath,
+      previousPrivateKeyPath,
+    });
+    const [previous, renewed] = fakeGrpc.admins;
+    previous!.ReloadIdentity = vi.fn((_request, _options, callback) =>
+      callback(Object.assign(new Error('7 PERMISSION_DENIED: Gateway app service certificate required'), { code: 7 }))
+    );
+
+    await expect(client.getHealth()).resolves.toMatchObject({ liveness: true });
+    expect(previous!.closed).toBe(true);
+    expect(renewed!.closed).toBe(false);
+    expect(fakeGrpc.commitRequests).toEqual([]);
   });
 
   it('keeps the current clients when relay identity reload is not acknowledged', async () => {

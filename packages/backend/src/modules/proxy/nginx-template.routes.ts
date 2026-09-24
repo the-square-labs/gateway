@@ -28,19 +28,13 @@ import {
   UpdateNginxTemplateSchema,
 } from './nginx-template.schemas.js';
 import { NginxTemplateService } from './nginx-template.service.js';
+import { renderTemplatePreviewForHost, testTemplateContent } from './nginx-template-preview.js';
 
 export const nginxTemplateRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
 nginxTemplateRoutes.use('*', authMiddleware);
 
-function assertRawTemplateWrite(c: { get(key: 'authType' | 'effectiveScopes'): unknown }) {
-  if (c.get('authType') !== 'session') {
-    throw new AppError(
-      403,
-      'BROWSER_SESSION_REQUIRED',
-      'Nginx template content requires browser session authentication'
-    );
-  }
+function assertRawTemplateWrite(c: { get(key: 'effectiveScopes'): unknown }) {
   const scopes = c.get('effectiveScopes');
   if (!Array.isArray(scopes) || !hasScope(scopes, 'proxy:raw:write')) {
     throw new AppError(403, 'FORBIDDEN', 'Nginx template content requires proxy:raw:write scope');
@@ -149,34 +143,7 @@ nginxTemplateRoutes.openapi(
       const { ProxyService } = await import('./proxy.service.js');
       const proxyService = container.resolve(ProxyService);
       const host = await proxyService.getProxyHost(input.hostId);
-      // Build a minimal ProxyHostConfig for rendering
-      rendered = service.renderTemplate(input.content, {
-        id: host.id,
-        type: host.type,
-        domainNames: host.domainNames,
-        enabled: host.enabled,
-        forwardHost: host.forwardHost,
-        forwardPort: host.forwardPort,
-        forwardScheme: host.forwardScheme ?? 'http',
-        sslEnabled: host.sslEnabled,
-        sslForced: host.sslForced,
-        http2Support: host.http2Support,
-        websocketSupport: host.websocketSupport,
-        redirectUrl: host.redirectUrl,
-        redirectStatusCode: host.redirectStatusCode ?? 301,
-        customHeaders: (host.customHeaders ?? []) as { name: string; value: string }[],
-        cacheEnabled: host.cacheEnabled,
-        cacheOptions: host.cacheOptions as Record<string, unknown> | null,
-        rateLimitEnabled: host.rateLimitEnabled,
-        rateLimitMode: host.rateLimitMode,
-        rateLimitOptions: host.rateLimitOptions as Record<string, unknown> | null,
-        customRewrites: (host.customRewrites ?? []) as { source: string; destination: string; type: string }[],
-        advancedConfig: canPreviewAdvancedConfig ? host.advancedConfig : null,
-        accessList: null, // simplified for preview
-        sslCertPath: host.sslEnabled ? `/etc/nginx/certs/${host.id}.crt` : null,
-        sslKeyPath: host.sslEnabled ? `/etc/nginx/certs/${host.id}.key` : null,
-        sslChainPath: null,
-      });
+      rendered = renderTemplatePreviewForHost(service, input.content, host, canPreviewAdvancedConfig);
     } else {
       rendered = service.previewWithSampleData(input.content);
     }
@@ -211,25 +178,6 @@ nginxTemplateRoutes.openapi(
       );
     }
 
-    const rendered = service.previewWithSampleData(input.content);
-
-    try {
-      const nodeId = await nodeDispatch.getFirstNginxNodeId();
-      if (!nodeId) {
-        return c.json({ data: { rendered, valid: false, errors: ['No nginx node available'] } });
-      }
-      // Send rendered config to daemon for test-only validation (writes temp, tests, removes)
-      const testId = `test-${Date.now()}`;
-      const result = await nodeDispatch.applyConfig(nodeId, testId, rendered, true);
-      return c.json({ data: { rendered, valid: result.success, errors: result.error ? [result.error] : [] } });
-    } catch (err) {
-      return c.json({
-        data: {
-          rendered,
-          valid: false,
-          errors: [err instanceof Error ? err.message : 'Test failed'],
-        },
-      });
-    }
+    return c.json({ data: await testTemplateContent(service, nodeDispatch, input.content) });
   }
 );

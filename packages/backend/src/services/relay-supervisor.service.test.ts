@@ -304,4 +304,71 @@ describe('RelaySupervisorService', () => {
     await probe;
     expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' });
   });
+
+  it('does not restore maintenance left by a process that stopped during a relay update', async () => {
+    const { supervisor, cache, getHealth } = harness();
+    await cache.set('relay:control-state', {
+      state: 'maintenance',
+      reason: null,
+      attempt: 0,
+      maxAttempts: 3,
+      attemptHistory: [],
+      lastHealthyAt: null,
+      lastProbeAt: null,
+      relayBuildVersion: '1',
+      protocolMajor: 1,
+    });
+
+    await supervisor.start();
+
+    // Probing resumed: a persisted maintenance state used to switch supervision off for good.
+    expect(getHealth).toHaveBeenCalled();
+    expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' });
+    await supervisor.stop();
+  });
+
+  it('contains an internal failure of a recovery cycle instead of crashing the process', async () => {
+    const { supervisor, cache } = harness({ getHealth: vi.fn().mockRejectedValue(new Error('connect refused')) });
+    await supervisor.probeNow();
+    cache.set.mockImplementation(async (_key: string, value: any) => {
+      if (value?.state === 'recovering' && value.attempt === 1) throw new Error('redis restarted');
+    });
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical' }));
+  });
+
+  it('stops a recovery cycle when the relay recovered on its own between attempts', async () => {
+    let supervisorRef: RelaySupervisorService | null = null;
+    // Unreachable until the first attempt has failed its readiness wait, healthy afterwards.
+    const getHealth = vi.fn(async () => {
+      const history = (supervisorRef?.getSnapshot(true) as any)?.attemptHistory ?? [];
+      if (history.some((record: any) => record.attempt === 1 && record.result === 'failed')) return healthy();
+      throw new Error('connect refused');
+    });
+    const { supervisor, recover } = harness({ getHealth });
+    supervisorRef = supervisor;
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'healthy' }));
+    // One restart; the second attempt found a healthy relay and left it alone.
+    expect(recover).toHaveBeenCalledTimes(1);
+  });
+
+  it('acts on a new failure cause of a critical relay instead of a stale one', async () => {
+    const notReady = { ...healthy(), readiness: false, reason: 'policy snapshot expired' };
+    const getHealth = vi
+      .fn()
+      .mockResolvedValueOnce(notReady)
+      .mockResolvedValueOnce(notReady)
+      .mockRejectedValue(new Error('connect refused'));
+    const { supervisor, recover } = harness({ getHealth });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical', reason: 'policy_snapshot_required' });
+    expect(recover).not.toHaveBeenCalled();
+
+    // Now the container is gone: that is recoverable, and recovery starts.
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(recover).toHaveBeenCalled());
+  });
 });

@@ -1,9 +1,17 @@
 package identity
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"math/big"
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 )
 
 func TestServerTLSConfigPreservesGRPCALPNForDynamicCertificates(t *testing.T) {
@@ -111,4 +119,53 @@ func repeatHex(value string) string {
 		result += value
 	}
 	return result
+}
+
+func selfSignedServerCertificate(t *testing.T, name string, notAfter time.Time) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: name},
+		DNSNames: []string{name, "relay.example.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: notAfter,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}
+}
+
+// After a renewal the relay serves the renewed certificate by its new identity
+// and the retained one by the identity daemons still pin, until it expires.
+func TestServerCertificateServesRetainedCertificateByItsIdentity(t *testing.T) {
+	now := time.Now()
+	current := selfSignedServerCertificate(t, "relay-instance-r2", now.Add(365*24*time.Hour))
+	previous := selfSignedServerCertificate(t, "relay-instance", now.Add(20*24*time.Hour))
+	snapshot := &Snapshot{External: current, PreviousExternal: &previous}
+
+	if got := snapshot.ServerCertificate("relay-instance-r2", now); got.Leaf != current.Leaf {
+		t.Fatal("renewed identity did not get the renewed certificate")
+	}
+	if got := snapshot.ServerCertificate("relay-instance", now); got.Leaf != previous.Leaf {
+		t.Fatal("the identity daemons still pin did not get the retained certificate")
+	}
+	// Names both certificates carry, and no name at all, get the current one.
+	if got := snapshot.ServerCertificate("relay.example.test", now); got.Leaf != current.Leaf {
+		t.Fatal("a shared name did not get the renewed certificate")
+	}
+	if got := snapshot.ServerCertificate("", now); got.Leaf != current.Leaf {
+		t.Fatal("a client without SNI did not get the renewed certificate")
+	}
+	// An expired retained certificate is never served.
+	if got := snapshot.ServerCertificate("relay-instance", now.Add(21*24*time.Hour)); got.Leaf != current.Leaf {
+		t.Fatal("an expired retained certificate was served")
+	}
 }

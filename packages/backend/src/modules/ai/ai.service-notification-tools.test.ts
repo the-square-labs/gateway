@@ -89,19 +89,35 @@ describe('AIService notification tool routing', () => {
     });
   });
 
-  it('creates alert rules with existing AI defaults', async () => {
+  it('creates alert rules with the route schema and defaults', async () => {
     const notifRuleService = {
-      create: vi.fn().mockResolvedValue({ id: 'rule-1' }),
+      create: vi.fn().mockResolvedValue({ id: 'rule-1', category: 'node', type: 'threshold', metric: 'cpu' }),
     };
     const service = createService({ notifRuleService });
 
+    // Threshold rules need metric, operator, and threshold, like POST /notifications/alert-rules.
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['notifications:manage'] }, 'create_alert_rule', {
         name: 'CPU High',
         type: 'threshold',
         category: 'node',
         severity: 'warning',
-        webhookIds: ['webhook-1'],
+        webhookIds: ['12121212-1212-4121-8121-121212121212'],
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Threshold rules require metric') });
+    expect(notifRuleService.create).not.toHaveBeenCalled();
+
+    // The granular create scope is enough, as on the route.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:create'] }, 'create_alert_rule', {
+        name: 'CPU High',
+        type: 'threshold',
+        category: 'node',
+        severity: 'warning',
+        metric: 'cpu',
+        operator: '>',
+        thresholdValue: 90,
+        webhookIds: ['12121212-1212-4121-8121-121212121212'],
       })
     ).resolves.toMatchObject({
       result: { id: 'rule-1' },
@@ -115,9 +131,9 @@ describe('AIService notification tool routing', () => {
         resolveAfterSeconds: 60,
         resolveThresholdPercent: 100,
         resourceIds: [],
-        webhookIds: ['webhook-1'],
+        webhookIds: ['12121212-1212-4121-8121-121212121212'],
         cooldownSeconds: 900,
-        enabled: true,
+        enabled: false,
       }),
       'user-1'
     );
@@ -184,7 +200,7 @@ describe('AIService notification tool routing', () => {
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['notifications:view'] }, 'list_webhook_deliveries', {
-        webhookId: 'webhook-1',
+        webhookId: '12121212-1212-4121-8121-121212121212',
         status: 'failed',
         limit: 999,
       })
@@ -192,12 +208,11 @@ describe('AIService notification tool routing', () => {
       result: { data: [], total: 0 },
       invalidateStores: [],
     });
-    expect(notifDeliveryService.list).toHaveBeenCalledWith({
-      page: 1,
-      limit: 100,
-      webhookId: 'webhook-1',
-      status: 'failed',
-    });
+    // Payloads stay redacted without notifications:manage, like GET /notifications/deliveries.
+    expect(notifDeliveryService.list).toHaveBeenCalledWith(
+      { page: 1, limit: 100, webhookId: '12121212-1212-4121-8121-121212121212', status: 'failed' },
+      { revealSensitive: false }
+    );
   });
 
   it('creates SIEM destinations with a one-time secret and returns only safe service output', async () => {
@@ -294,5 +309,67 @@ describe('AIService notification tool routing', () => {
 
     expect(generalSettingsService.isFeatureEnabled).toHaveBeenCalledWith('siemEnabled');
     expect(siemDestinationService.list).not.toHaveBeenCalled();
+  });
+
+  it('reads notification catalogs and details through manage_notifications with the route scopes', async () => {
+    const notifWebhookService = { getById: vi.fn().mockResolvedValue({ id: '12121212-1212-4121-8121-121212121212' }) };
+    const notifDeliveryService = { getById: vi.fn().mockResolvedValue(null) };
+    const notifDispatcherService = { getGatewayUrl: vi.fn().mockReturnValue('https://gateway.example.com') };
+    const service = createService({ notifWebhookService, notifDeliveryService, notifDispatcherService });
+
+    const categories = await service.executeTool(
+      { ...BASE_USER, scopes: ['notifications:alerts:view'] },
+      'manage_notifications',
+      { operation: 'alert_categories' }
+    );
+    expect(Array.isArray(categories.result)).toBe(true);
+
+    // URL and headers are revealed only with webhook edit or notifications:manage.
+    await service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:view'] }, 'manage_notifications', {
+      operation: 'webhook_get',
+      webhookId: '12121212-1212-4121-8121-121212121212',
+    });
+    expect(notifWebhookService.getById).toHaveBeenLastCalledWith('12121212-1212-4121-8121-121212121212', {
+      revealHeaders: false,
+      revealUrl: false,
+    });
+    await service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:edit'] }, 'manage_notifications', {
+      operation: 'webhook_get',
+      webhookId: '12121212-1212-4121-8121-121212121212',
+    });
+    expect(notifWebhookService.getById).toHaveBeenLastCalledWith('12121212-1212-4121-8121-121212121212', {
+      revealHeaders: true,
+      revealUrl: true,
+    });
+
+    // Preview needs webhook create/edit; view is not enough.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:view'] }, 'manage_notifications', {
+        operation: 'webhook_preview',
+        bodyTemplate: '{{ title }}',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('notifications:webhooks:create') });
+    const preview = await service.executeTool(
+      { ...BASE_USER, scopes: ['notifications:webhooks:create'] },
+      'manage_notifications',
+      { operation: 'webhook_preview', bodyTemplate: 'ok' }
+    );
+    expect(preview.result).toMatchObject({ rendered: 'ok' });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:deliveries:view'] }, 'manage_notifications', {
+        operation: 'delivery_get',
+        deliveryId: 'missing',
+      })
+    ).resolves.toEqual({ error: 'Not found', invalidateStores: [] });
+    expect(notifDeliveryService.getById).toHaveBeenCalledWith('missing', { revealSensitive: false });
+
+    // Granular scopes never reach unrelated notification tools.
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:view'] }, 'create_webhook', {
+        name: 'x',
+        url: 'https://example.test',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('PERMISSION_DENIED') });
   });
 });

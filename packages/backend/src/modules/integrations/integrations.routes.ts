@@ -1,6 +1,5 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { MiddlewareHandler } from 'hono';
-import { z } from 'zod';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
@@ -42,6 +41,9 @@ import {
   CloudflareConnectorPreviewTestSchema,
   CloudflareConnectorRotateTokenSchema,
   CloudflareConnectorUpdateSchema,
+  ExternalSshConnectorCreateSchema,
+  ExternalSshConnectorUpdateSchema,
+  ExternalSshHostKeySchema,
   GitConnectorCreateSchema,
   GitConnectorPreviewTestSchema,
   GitConnectorUpdateSchema,
@@ -286,13 +288,7 @@ integrationsRoutes.post(
   '/ssh/connectors/host-key',
   requireGitOperation('ssh', 'integrations:ssh:manage'),
   async (c) => {
-    const input = z
-      .object({
-        host: z.string().trim().min(1).max(255),
-        port: z.number().int().min(1).max(65535).optional(),
-        jumpConnectorId: z.string().uuid().nullable().optional(),
-      })
-      .parse(await c.req.json());
+    const input = ExternalSshHostKeySchema.parse(await c.req.json());
     return c.json({
       data: await container.resolve(ExternalSshService).discoverHostKey(c.get('user')!, input, c.req.raw.signal),
     });
@@ -301,21 +297,7 @@ integrationsRoutes.post(
 
 integrationsRoutes.post('/ssh/connectors', requireGitOperation('ssh', 'integrations:ssh:manage'), async (c) => {
   const body = await c.req.json();
-  const input = z
-    .object({
-      name: z.string().trim().min(1).max(255),
-      host: z.string().trim().min(1).max(255),
-      port: z.number().int().min(1).max(65535).optional(),
-      username: z.string().trim().min(1).max(255),
-      authMethod: z.enum(['password', 'private_key']),
-      secret: z.string().max(16_384).optional(),
-      hostFingerprint: z.string().trim().min(1).max(255),
-      jumpConnectorId: z.string().uuid().nullable().optional(),
-      enabled: z.boolean().optional(),
-      generatePrivateKey: z.boolean().optional(),
-      reuseCredentialFromConnectorId: z.string().uuid().optional(),
-    })
-    .parse(body);
+  const input = ExternalSshConnectorCreateSchema.parse(body);
   return c.json({ data: await container.resolve(ExternalSshService).create(c.get('user')!, input) }, 201);
 });
 
@@ -340,10 +322,7 @@ integrationsRoutes.post(
 );
 
 integrationsRoutes.patch('/ssh/connectors/:id', requireGitOperation('ssh', 'integrations:ssh:manage'), async (c) => {
-  const input = z
-    .object({ name: z.string().trim().min(1).max(255) })
-    .strict()
-    .parse(await c.req.json());
+  const input = ExternalSshConnectorUpdateSchema.parse(await c.req.json());
   return c.json({
     data: await container.resolve(ExternalSshService).updateName(c.get('user')!, c.req.param('id'), input.name),
   });

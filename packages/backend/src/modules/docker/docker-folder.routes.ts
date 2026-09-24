@@ -23,6 +23,7 @@ import { DockerAccessResourceService, hasDockerResourceScope } from './docker-ac
 import {
   CreateDockerFolderSchema,
   DockerFolderPlacementsSchema,
+  type DockerFolderResourceType,
   DockerFolderResourceTypeSchema,
   MoveDockerContainersToFolderSchema,
   MoveDockerResourcesToFolderSchema,
@@ -177,48 +178,51 @@ async function networkFolderVisibility(scopes: string[], viewScope: string) {
   return { allowedNodeIds, allowedResourceRefs };
 }
 
+/** Who may list Docker folders of a resource type and which folders they see; shared with the AI/MCP folder tools. */
+export async function dockerFolderTreeOptions(scopes: string[], resourceType: DockerFolderResourceType) {
+  const viewScope = VIEW_SCOPE_BY_RESOURCE_TYPE[resourceType];
+  const createScope =
+    resourceType === 'image'
+      ? 'docker:images:pull'
+      : resourceType === 'compose'
+        ? 'docker:compose:create'
+        : `docker:${resourceType}s:create`;
+  if (
+    !hasScopeBase(scopes, viewScope) &&
+    !hasScopeBase(scopes, createScope) &&
+    !hasScope(scopes, 'docker:containers:folders:manage')
+  ) {
+    throw new AppError(
+      403,
+      'FORBIDDEN',
+      'Docker folders require resource view access or docker:containers:folders:manage'
+    );
+  }
+  const canManageFolders = hasScope(scopes, 'docker:containers:folders:manage');
+  return canManageFolders ||
+    hasScope(scopes, viewScope) ||
+    hasScope(scopes, createScope) ||
+    getResourceScopedIds(scopes, createScope).some((id) => !id.includes('/'))
+    ? { resourceType, includeAllFolders: true }
+    : {
+        resourceType,
+        allowedFolderIds: getFolderScopedIds(scopes, [viewScope, createScope]),
+        ...(resourceType === 'container'
+          ? await containerFolderVisibility(scopes, viewScope)
+          : resourceType === 'compose'
+            ? composeFolderVisibility(scopes, viewScope)
+            : resourceType === 'network'
+              ? await networkFolderVisibility(scopes, viewScope)
+              : composeFolderVisibility(scopes, viewScope)),
+      };
+}
+
 export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(listDockerFoldersRoute, async (c) => {
     const scopes = c.get('effectiveScopes') || [];
     const resourceType = DockerFolderResourceTypeSchema.default('container').parse(c.req.query('resourceType'));
-    const viewScope = VIEW_SCOPE_BY_RESOURCE_TYPE[resourceType];
-    const createScope =
-      resourceType === 'image'
-        ? 'docker:images:pull'
-        : resourceType === 'compose'
-          ? 'docker:compose:create'
-          : `docker:${resourceType}s:create`;
-    if (
-      !hasScopeBase(scopes, viewScope) &&
-      !hasScopeBase(scopes, createScope) &&
-      !hasScope(scopes, 'docker:containers:folders:manage')
-    ) {
-      throw new AppError(
-        403,
-        'FORBIDDEN',
-        'Docker folders require resource view access or docker:containers:folders:manage'
-      );
-    }
-    const service = container.resolve(DockerFolderService);
-    const canManageFolders = hasScope(scopes, 'docker:containers:folders:manage');
-    const data = await service.getFolderTree(
-      canManageFolders ||
-        hasScope(scopes, viewScope) ||
-        hasScope(scopes, createScope) ||
-        getResourceScopedIds(scopes, createScope).some((id) => !id.includes('/'))
-        ? { resourceType, includeAllFolders: true }
-        : {
-            resourceType,
-            allowedFolderIds: getFolderScopedIds(scopes, [viewScope, createScope]),
-            ...(resourceType === 'container'
-              ? await containerFolderVisibility(scopes, viewScope)
-              : resourceType === 'compose'
-                ? composeFolderVisibility(scopes, viewScope)
-                : resourceType === 'network'
-                  ? await networkFolderVisibility(scopes, viewScope)
-                  : composeFolderVisibility(scopes, viewScope)),
-          }
-    );
+    const options = await dockerFolderTreeOptions(scopes, resourceType);
+    const data = await container.resolve(DockerFolderService).getFolderTree(options);
     return c.json({ data });
   });
 

@@ -6,12 +6,7 @@
  * Resource-scopable scopes support suffixes: e.g. docker:containers:view:node-uuid
  */
 
-import {
-  ALL_SCOPES,
-  MCP_EXTERNAL_INTEGRATION_READ_SCOPES,
-  MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES,
-  PROGRAMMATIC_DENIED_SCOPE_SET,
-} from './scopes-base.js';
+import { ALL_SCOPES, PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
 import { RESOURCE_SCOPABLE } from './scopes-resource.js';
 
 export * from './scopes-base.js';
@@ -35,10 +30,13 @@ export const MANUAL_APPROVAL_SCOPES = [
   'ssl:cert:delete',
   'ssl:cert:revoke',
   'ssl:cert:export',
+  'proxy:raw:write',
   'proxy:raw:bypass',
+  'proxy:advanced:bypass',
   'pages:delete',
   'pages:tokens:manage',
   'pages:settings:edit',
+  'nodes:config:edit',
   'nodes:console',
   'nodes:files:read',
   'nodes:files:write',
@@ -63,11 +61,25 @@ export const MANUAL_APPROVAL_SCOPES = [
   'integrations:gitlab:webhooks:manage',
   'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
+  'integrations:gitlab:system',
+  'integrations:github:system',
+  'integrations:git:system',
+  'integrations:ssh:use',
+  'integrations:hosting:manage',
+  'hosting:resources:create',
+  'hosting:resources:delete',
+  'hosting:snapshots:restore',
+  'hosting:billing:topup',
   'logs:tokens:create',
+  'feat:ai:use',
   'admin:audit',
   'audit:siem:manage',
   'admin:details:certificates',
   'admin:update',
+  'admin:system',
+  'admin:users',
+  'admin:groups',
+  'settings:gateway:edit',
 ] as const;
 export const MANUAL_APPROVAL_SCOPE_SET = new Set<string>(MANUAL_APPROVAL_SCOPES);
 
@@ -93,14 +105,9 @@ export function isApiTokenScope(scope: string): boolean {
   return isValidBaseScope(scope) && !PROGRAMMATIC_DENIED_SCOPE_SET.has(extractBaseScope(scope));
 }
 
-/** Gateway MCP may discover configured connectors but cannot delegate connector mutation or execution. */
+/** Gateway MCP grants carry the same delegable scopes as API tokens. */
 export function isMcpTokenScope(scope: string): boolean {
-  if (!isApiTokenScope(scope) || scope === 'mcp:use') return false;
-  const baseScope = extractBaseScope(scope);
-  return (
-    MCP_EXTERNAL_INTEGRATION_READ_SCOPES.has(baseScope) ||
-    !MCP_EXTERNAL_INTEGRATION_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))
-  );
+  return isApiTokenScope(scope) && extractBaseScope(scope) !== 'mcp:use';
 }
 
 /** Check if a scope string is a resource-scoped variant */

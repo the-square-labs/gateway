@@ -79,6 +79,8 @@ export interface RelayInstanceHealth {
   admissionState?: string;
   assignmentTunnels?: Array<{ endpointId: string; assignmentGeneration: number; activeTunnels: number }>;
   policySigningKeyIds?: string[];
+  /** The relay's last reported problem, such as why it is not ready. */
+  lastError?: string;
 }
 
 export interface RelayManagedDatabaseListenerConfig {

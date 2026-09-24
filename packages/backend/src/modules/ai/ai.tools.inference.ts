@@ -49,7 +49,7 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_inference_provider',
     description:
-      'Inspect and manage inference provider templates and connections. Operations: list_templates, list_connections, connect_api_key, start_authorization, authorization_status, cancel_authorization, sync, update, set_routing, disconnect. Never acknowledge subscription connector terms unless the user explicitly approves the warning.',
+      'Inspect and manage inference provider templates, connections, and the managed inference core. Operations: list_templates, list_connections, connect_api_key, start_authorization, authorization_status, complete_authorization (finish a paste-back sign-in with callback), cancel_authorization, sync, update, set_routing, disconnect, core_status, core_check_updates, core_install (optional coreVersion), core_update (coreVersion), core_repair. Core operations work while inference is disabled. Never acknowledge subscription connector terms unless the user explicitly approves the warning.',
     parameters: {
       type: 'object',
       properties: {
@@ -61,16 +61,27 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
             'connect_api_key',
             'start_authorization',
             'authorization_status',
+            'complete_authorization',
             'cancel_authorization',
             'sync',
             'update',
             'set_routing',
             'disconnect',
+            'core_status',
+            'core_check_updates',
+            'core_install',
+            'core_update',
+            'core_repair',
           ],
         },
         providerId: { type: 'string', description: 'Provider template ID from list_templates.' },
         connectionId: { type: 'string', description: 'Provider connection UUID.' },
         sessionId: { type: 'string', description: 'Authorization session UUID.' },
+        callback: {
+          type: 'string',
+          description: 'Redirect URL or code pasted back by the user for complete_authorization.',
+        },
+        coreVersion: { type: 'string', description: 'Inference core release version for core_install or core_update.' },
         name: { type: 'string', description: 'Connection display name.' },
         connectionName: { type: 'string', description: 'Connection name for start_authorization.' },
         authType: { type: 'string', enum: ['api_key', 'local'] },
@@ -92,8 +103,9 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
         },
         routingStrategy: {
           type: 'string',
-          enum: ['balanced', 'sequential'],
-          description: 'balanced distributes new threads; sequential exhausts connections by routing order.',
+          enum: ['even', 'balanced', 'sequential'],
+          description:
+            'even spreads requests evenly; balanced distributes new threads; sequential exhausts connections by routing order.',
         },
       },
       required: ['operation'],
@@ -107,11 +119,20 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_inference_model',
     description:
-      'List, atomically create/replace, inspect source suggestions for, or delete published inference models. Operations: list, suggestions, save, delete. save always replaces the complete model/source/pricing/access configuration in one transaction.',
+      'List, atomically create/replace, reorder, inspect source suggestions for, or delete published inference models. Operations: list, suggestions, save, reorder (items of {id, sortOrder}), delete. save always replaces the complete model/source/pricing/access configuration in one transaction.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['list', 'suggestions', 'save', 'delete'] },
+        operation: { type: 'string', enum: ['list', 'suggestions', 'save', 'reorder', 'delete'] },
+        items: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: { id: { type: 'string' }, sortOrder: { type: 'number' } },
+            required: ['id', 'sortOrder'],
+          },
+          description: 'Model order for reorder.',
+        },
         modelId: { type: 'string', description: 'Model UUID. Omit for save to create a new logical model.' },
         configuration: {
           type: 'object',
@@ -206,15 +227,15 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_inference_limits',
     description:
-      'Inspect or manage default and per-user inference budgets. Operations: list_policies, list_users, set_default, set_user, remove_user. Disabled 5h/7d/30d windows are unlimited; an API value of 0 disables API usage.',
+      'Inspect or manage default and per-user inference budgets. Operations: list_policies, list_users, set_default, set_user, remove_user, reset_user (clear the user current usage windows). Disabled 5h/7d/30d windows are unlimited; an API value of 0 disables API usage.',
     parameters: {
       type: 'object',
       properties: {
         operation: {
           type: 'string',
-          enum: ['list_policies', 'list_users', 'set_default', 'set_user', 'remove_user'],
+          enum: ['list_policies', 'list_users', 'set_default', 'set_user', 'remove_user', 'reset_user'],
         },
-        userId: { type: 'string', description: 'Target user UUID for set_user or remove_user.' },
+        userId: { type: 'string', description: 'Target user UUID for set_user, remove_user, or reset_user.' },
         policy: POLICY_SCHEMA,
       },
       required: ['operation'],
@@ -243,5 +264,32 @@ export const INFERENCE_AI_TOOLS: AIToolDefinition[] = [
     requiredScope: 'feat:ai:use',
     invalidateStores: [],
     historyRetention: { mode: 'never_full' },
+  },
+  {
+    name: 'manage_inference_usage',
+    description:
+      'Read inference usage. Operations: self and self_overview (the current user usage and remaining budget; feat:ai:use), system (Gateway-wide overview), users (per-user usage), activity_filters, activity (request log filtered by search, status, userId, model; paginated). system, users, and activity need inference:usage:view.',
+    parameters: {
+      type: 'object',
+      properties: {
+        operation: {
+          type: 'string',
+          enum: ['self', 'self_overview', 'system', 'users', 'activity_filters', 'activity'],
+        },
+        page: { type: 'number' },
+        limit: { type: 'number', description: 'Items per page (max 100)' },
+        search: { type: 'string' },
+        status: { type: 'string', enum: ['reserved', 'running', 'completed', 'failed', 'cancelled'] },
+        userId: { type: 'string', description: 'User UUID filter for activity' },
+        model: { type: 'string', description: 'Model filter for activity' },
+      },
+      required: ['operation'],
+      additionalProperties: false,
+    },
+    destructive: false,
+    category: 'Inference',
+    requiredScope: 'feat:ai:use',
+    invalidateStores: [],
+    historyRetention: { mode: 'summary_only' },
   },
 ];

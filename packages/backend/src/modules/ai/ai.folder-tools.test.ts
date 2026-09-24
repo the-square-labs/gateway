@@ -1,11 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
+import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
+import { PageProjectFolderService } from '@/modules/pages/page-project-folder.service.js';
+import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { executeFolderTool } from './ai.folder-tools.js';
+import { parseAndValidateAIToolArguments } from './ai.tools.js';
 
 const BASE_USER = {
   id: 'user-1',
@@ -77,7 +83,7 @@ describe('AI folder tools', () => {
     ]);
   });
 
-  it('requires domain view scope for domain folder listings', async () => {
+  it('lists domain folders with the same access rules as GET /domains/folders', async () => {
     const domainFolderService = {
       getFolderTree: vi.fn().mockResolvedValue([{ id: 'folder-1', name: 'Domains', children: [] }]),
     };
@@ -87,17 +93,133 @@ describe('AI folder tools', () => {
     });
 
     await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['nodes:details'] }, 'list_resource_folders', {
+        resourceType: 'domains',
+      })
+    ).rejects.toThrow('PERMISSION_DENIED: Missing one of required scopes: domains:view');
+
+    await expect(
       executeFolderTool({ ...BASE_USER, scopes: ['domains:folders:manage'] }, 'list_resource_folders', {
         resourceType: 'domains',
       })
-    ).rejects.toThrow('PERMISSION_DENIED: Missing required scope domains:view');
+    ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [] }]);
+    expect(domainFolderService.getFolderTree).toHaveBeenLastCalledWith({ includeAllFolders: true });
 
     await expect(
-      executeFolderTool({ ...BASE_USER, scopes: ['domains:view', 'domains:folders:manage'] }, 'list_resource_folders', {
-        resourceType: 'domains',
-      })
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['domains:view:domain-1', 'domains:edit:folder/folder-9'] },
+        'list_resource_folders',
+        { resourceType: 'domains' }
+      )
     ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [] }]);
-    expect(domainFolderService.getFolderTree).toHaveBeenCalledWith({ includeAllFolders: true });
+    expect(domainFolderService.getFolderTree).toHaveBeenLastCalledWith({
+      allowedResourceIds: ['domain-1'],
+      allowedFolderIds: ['folder-9'],
+    });
+  });
+
+  it('lets node creators list every node folder, like the node folder route', async () => {
+    const nodeFolderService = { getFolderTree: vi.fn().mockResolvedValue([]) };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === NodeFolderService) return nodeFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    await executeFolderTool({ ...BASE_USER, scopes: ['nodes:create'] }, 'list_resource_folders', {
+      resourceType: 'nodes',
+    });
+    expect(nodeFolderService.getFolderTree).toHaveBeenCalledWith({ includeAllFolders: true });
+  });
+
+  it('requires the per-user grant on every reordered user, like the user reorder route', async () => {
+    const userFolderService = { reorderResources: vi.fn().mockResolvedValue(undefined) };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === AdminUserFolderService) return userFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const userOne = '11111111-1111-4111-8111-111111111111';
+    const userTwo = '22222222-2222-4222-8222-222222222222';
+    const args = {
+      resourceType: 'admin_users',
+      operation: 'reorder_resources',
+      items: [
+        { id: userOne, sortOrder: 0 },
+        { id: userTwo, sortOrder: 1 },
+      ],
+    };
+
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['admin:users:folders:manage', `admin:users:${userOne}`] },
+        'manage_resource_folder',
+        args
+      )
+    ).rejects.toThrow(`PERMISSION_DENIED: Missing required scope admin:users:${userTwo}`);
+    expect(userFolderService.reorderResources).not.toHaveBeenCalled();
+
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['admin:users:folders:manage', 'admin:users'] },
+        'manage_resource_folder',
+        args
+      )
+    ).resolves.toEqual({ success: true });
+    expect(userFolderService.reorderResources).toHaveBeenCalledTimes(1);
+  });
+
+  it('manages Page Project folders behind the Pages license and enabled profile', async () => {
+    const requireFeature = vi.fn().mockResolvedValue(undefined);
+    const requireEnabled = vi.fn().mockResolvedValue(undefined);
+    const pageFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([]),
+      createFolder: vi.fn().mockResolvedValue({ id: 'folder-1', name: 'Sites' }),
+      moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === LicensePolicyService) return { requireFeature } as never;
+      if (token === PageProfileService) return { requireEnabled } as never;
+      if (token === PageProjectFolderService) return pageFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const projectId = '11111111-1111-4111-8111-111111111111';
+    const folderId = '22222222-2222-4222-8222-222222222222';
+
+    await executeFolderTool({ ...BASE_USER, scopes: [`pages:view:${projectId}`] }, 'list_resource_folders', {
+      resourceType: 'pages',
+    });
+    expect(pageFolderService.getFolderTree).toHaveBeenCalledWith({
+      allowedResourceIds: [projectId],
+      allowedFolderIds: [],
+    });
+    expect(requireEnabled).not.toHaveBeenCalled();
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['pages:folders:manage'] }, 'manage_resource_folder', {
+        resourceType: 'pages',
+        operation: 'create',
+        name: 'Sites',
+      })
+    ).resolves.toEqual({ id: 'folder-1', name: 'Sites' });
+    expect(requireFeature).toHaveBeenCalledWith('pages');
+    expect(requireEnabled).toHaveBeenCalledTimes(1);
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['pages:folders:manage'] }, 'manage_resource_folder', {
+        resourceType: 'pages',
+        operation: 'move_resources',
+        resourceIds: [projectId],
+        folderId,
+      })
+    ).rejects.toThrow(`PERMISSION_DENIED: Missing required scope pages:edit:${projectId}`);
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['pages:folders:manage', 'pages:edit'] }, 'manage_resource_folder', {
+        resourceType: 'pages',
+        operation: 'move_resources',
+        resourceIds: [projectId],
+        folderId,
+      })
+    ).resolves.toEqual({ success: true });
+    expect(pageFolderService.moveResourcesToFolder).toHaveBeenCalledWith({ ids: [projectId], folderId }, 'user-1');
   });
 
   it('uses the shared folder contract for SSL certificates', async () => {
@@ -185,9 +307,83 @@ describe('AI folder tools', () => {
     ).resolves.toEqual([{ id: 'compose-folder-1', name: 'Stacks', children: [] }]);
     expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith({
       resourceType: 'compose',
+      allowedFolderIds: [],
       allowedNodeIds: [],
       allowedResourceRefs: [{ nodeId: 'node-1', resourceKey: 'project-1' }],
     });
+  });
+
+  it('manages Compose project folders with the Docker folder route scopes', async () => {
+    const dockerFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([]),
+      createFolder: vi.fn().mockResolvedValue({ id: 'compose-folder-1', name: 'Stacks' }),
+      moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DockerFolderService) return dockerFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+    const folderId = '11111111-1111-4111-8111-111111111111';
+    const nodeId = '22222222-2222-4222-8222-222222222222';
+    const items = [{ nodeId, resourceKey: 'project-1' }];
+
+    expect(
+      parseAndValidateAIToolArguments(
+        'manage_resource_folder',
+        JSON.stringify({ resourceType: 'docker', dockerResourceType: 'compose', operation: 'create', name: 'Stacks' })
+      )
+    ).toMatchObject({ ok: true });
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:compose:create'] }, 'list_resource_folders', {
+        resourceType: 'docker',
+        dockerResourceType: 'compose',
+      })
+    ).resolves.toEqual([]);
+    expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith({
+      resourceType: 'compose',
+      includeAllFolders: true,
+    });
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:containers:folders:manage'] }, 'manage_resource_folder', {
+        resourceType: 'docker',
+        dockerResourceType: 'compose',
+        operation: 'create',
+        name: 'Stacks',
+      })
+    ).resolves.toEqual({ id: 'compose-folder-1', name: 'Stacks' });
+    expect(dockerFolderService.createFolder).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'Stacks', resourceType: 'compose' }),
+      'user-1'
+    );
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:containers:folders:manage'] }, 'manage_resource_folder', {
+        resourceType: 'docker',
+        dockerResourceType: 'compose',
+        operation: 'move_resources',
+        folderId,
+        items,
+      })
+    ).rejects.toThrow('Missing required scope: docker:compose:manage');
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['docker:containers:folders:manage', `docker:compose:manage:${nodeId}/project-1`] },
+        'manage_resource_folder',
+        { resourceType: 'docker', dockerResourceType: 'compose', operation: 'move_resources', folderId, items }
+      )
+    ).rejects.toThrow('PERMISSION_DENIED: Missing required destination scope docker:compose:manage');
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['docker:containers:folders:manage', `docker:compose:manage:${nodeId}`] },
+        'manage_resource_folder',
+        { resourceType: 'docker', dockerResourceType: 'compose', operation: 'move_resources', folderId, items }
+      )
+    ).resolves.toEqual({ success: true });
+    expect(dockerFolderService.moveResourcesToFolder).toHaveBeenCalledWith(
+      { resourceType: 'compose', items, folderId },
+      'user-1'
+    );
   });
   it('requires the module edit scope on every moved resource and on the destination', async () => {
     const domainOne = '11111111-1111-4111-8111-111111111111';

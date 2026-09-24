@@ -3,6 +3,7 @@ package admission
 import (
 	"runtime"
 	"testing"
+	"time"
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 )
@@ -134,5 +135,52 @@ func TestSnapshotReportsSmoothedProcessPressure(t *testing.T) {
 	snapshot := controller.GetSnapshot()
 	if snapshot.CPUPressurePercent == 0 || snapshot.CPUPressurePercent >= 40 {
 		t.Fatalf("smoothed cpu pressure = %d", snapshot.CPUPressurePercent)
+	}
+}
+
+// Admission runs under the broker's global lock: a stale sample must be
+// refreshed in the background, never measured on the caller's path.
+func TestSystemSamplerNeverMeasuresOnTheCallersPathAfterStartup(t *testing.T) {
+	release := make(chan struct{})
+	probes := make(chan struct{}, 8)
+	sampler := &systemSampler{}
+	calls := 0
+	sampler.measure = func(time.Time) ResourcePressure {
+		calls++
+		probes <- struct{}{}
+		if calls > 1 {
+			<-release
+		}
+		return ResourcePressure{CPUPercent: uint32(calls * 10)}
+	}
+	if got := sampler.Sample(); got.CPUPercent != 10 {
+		t.Fatalf("first sample = %d, want the inline measurement", got.CPUPercent)
+	}
+	<-probes
+	sampler.mu.Lock()
+	sampler.cachedAt = time.Now().Add(-time.Second)
+	sampler.mu.Unlock()
+
+	done := make(chan ResourcePressure, 1)
+	go func() { done <- sampler.Sample() }()
+	select {
+	case got := <-done:
+		if got.CPUPercent != 10 {
+			t.Fatalf("stale sample = %d, want the cached value", got.CPUPercent)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Sample blocked on a slow measurement")
+	}
+	<-probes // the background refresh started
+	if got := sampler.Sample(); got.CPUPercent != 10 {
+		t.Fatalf("sample during refresh = %d", got.CPUPercent)
+	}
+	close(release)
+	deadline := time.Now().Add(time.Second)
+	for sampler.Sample().CPUPercent != 20 {
+		if time.Now().After(deadline) {
+			t.Fatal("background refresh never landed")
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

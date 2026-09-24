@@ -4,11 +4,11 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_logging',
     description:
-      'Manage external logging environments, schemas, ingest tokens, metadata, facets, and search. Use canonical args like { resource: "schema", operation: "create", payload: { name, schemaMode, fieldSchema } } or { resource: "environment", operation: "list", search }. Resource slugs are assigned by the backend. Operation-specific logs:* scopes are enforced.',
+      'Manage external logging environments, schemas, ingest tokens, metadata, facets, and search. Use canonical args like { resource: "schema", operation: "create", payload: { name, schemaMode, fieldSchema } } or { resource: "environment", operation: "list", search }. Resource slugs are assigned by the backend. Operation-specific logs:* scopes are enforced. { resource: "health", operation: "get" } returns the logging storage maintenance snapshot (housekeeping:view).',
     parameters: {
       type: 'object',
       properties: {
-        resource: { type: 'string', enum: ['environment', 'schema', 'token', 'logs', 'metadata', 'facets'] },
+        resource: { type: 'string', enum: ['environment', 'schema', 'token', 'logs', 'metadata', 'facets', 'health'] },
         operation: {
           type: 'string',
           enum: ['list', 'get', 'create', 'update', 'delete', 'search', 'facets', 'metadata'],
@@ -34,7 +34,7 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_status_page',
     description:
-      'Manage the status page settings, service list, incidents, incident updates, proxy template options, and preview. Operation-specific status-page:* scopes are enforced.',
+      'Manage the status page settings, service list and order, incidents, incident updates, proxy template options, and preview. services.reorder takes payload { serviceIds } in the new display order. Operation-specific status-page:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
@@ -44,7 +44,18 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
         },
         operation: {
           type: 'string',
-          enum: ['get', 'list', 'update', 'create', 'delete', 'resolve', 'promote', 'create_update', 'preview'],
+          enum: [
+            'get',
+            'list',
+            'update',
+            'create',
+            'delete',
+            'reorder',
+            'resolve',
+            'promote',
+            'create_update',
+            'preview',
+          ],
         },
         serviceId: { type: 'string' },
         incidentId: { type: 'string' },

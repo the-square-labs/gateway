@@ -245,4 +245,120 @@ describe('integration connector AI/MCP tools', () => {
     expect(result.error).toContain('Missing required connector scope');
     expect(integrations.listGitLabConnectors).not.toHaveBeenCalled();
   });
+
+  it('manages connectors through manage_integration_connector with the route scopes and schemas', async () => {
+    const integrations = {
+      getCloudflareConnector: vi.fn().mockResolvedValue(connectorRow()),
+      updateCloudflareConnector: vi.fn().mockResolvedValue(connectorRow({ name: 'Renamed' })),
+      rotateGitLabConnectorToken: vi.fn().mockResolvedValue(connectorRow()),
+      deleteGitConnector: vi.fn().mockResolvedValue(undefined),
+      previewGitConnectorTest: vi.fn().mockResolvedValue({ ok: true }),
+    };
+    const ssh = { discoverHostKey: vi.fn().mockResolvedValue({ fingerprint: 'SHA256:abc' }) };
+    mockServices(integrations, ssh);
+    const service = createService();
+    const run = (scopes: string[], args: Record<string, unknown>) =>
+      service.executeTool({ ...BASE_USER, scopes }, 'manage_integration_connector', args);
+
+    // Reads accept view or manage; writes need manage on the provider.
+    await expect(
+      run(['integrations:cloudflare:view'], { provider: 'cloudflare', operation: 'get', connectorId: CONNECTOR_ID })
+    ).resolves.toMatchObject({ result: { id: CONNECTOR_ID } });
+    await expect(
+      run(['integrations:cloudflare:view'], {
+        provider: 'cloudflare',
+        operation: 'update',
+        connectorId: CONNECTOR_ID,
+        name: 'Renamed',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Missing required connector scope') });
+    await expect(
+      run(['integrations:cloudflare:manage'], {
+        provider: 'cloudflare',
+        operation: 'update',
+        connectorId: CONNECTOR_ID,
+        name: 'Renamed',
+        settings: { defaultProxied: false },
+      })
+    ).resolves.toMatchObject({ result: { name: 'Renamed' } });
+    expect(integrations.updateCloudflareConnector).toHaveBeenCalledWith(
+      CONNECTOR_ID,
+      { name: 'Renamed', settings: { defaultProxied: false } },
+      'user-1'
+    );
+
+    // Provider-specific operations are refused for other providers.
+    await expect(
+      run(['integrations:github:manage'], { provider: 'github', operation: 'list_zones', connectorId: CONNECTOR_ID })
+    ).resolves.toMatchObject({ error: 'Operation list_zones is not available for github connectors' });
+
+    await expect(
+      run(['integrations:gitlab:manage'], {
+        provider: 'gitlab',
+        operation: 'rotate_token',
+        connectorId: CONNECTOR_ID,
+        token: 'glpat-new',
+      })
+    ).resolves.toMatchObject({ result: { id: CONNECTOR_ID } });
+    expect(integrations.rotateGitLabConnectorToken).toHaveBeenCalledWith(CONNECTOR_ID, 'glpat-new', 'user-1');
+
+    await expect(
+      run(['integrations:git:manage'], { provider: 'git', operation: 'delete', connectorId: CONNECTOR_ID })
+    ).resolves.toMatchObject({ result: { success: true } });
+    expect(integrations.deleteGitConnector).toHaveBeenCalledWith('git', CONNECTOR_ID, 'user-1');
+
+    // Candidate credentials are validated like POST /git/connectors/preview-test.
+    await expect(
+      run(['integrations:git:manage'], {
+        provider: 'git',
+        operation: 'preview_test',
+        baseUrl: 'https://git.example.com',
+        repositoryUrl: 'not-a-url',
+        username: 'bot',
+        token: 'secret',
+      })
+    ).resolves.toMatchObject({ error: expect.stringContaining('Invalid') });
+    expect(integrations.previewGitConnectorTest).not.toHaveBeenCalled();
+
+    await expect(
+      run(['integrations:ssh:manage'], { provider: 'ssh', operation: 'discover_host_key', host: 'example.com' })
+    ).resolves.toMatchObject({ result: { fingerprint: 'SHA256:abc' } });
+    expect(ssh.discoverHostKey).toHaveBeenCalledWith(expect.objectContaining({ id: 'user-1' }), {
+      host: 'example.com',
+    });
+  });
+
+  it('creates connectors with the full route schemas', async () => {
+    const integrations = { createCloudflareConnector: vi.fn().mockResolvedValue(connectorRow()) };
+    const ssh = { create: vi.fn().mockResolvedValue({ id: CONNECTOR_ID }) };
+    mockServices(integrations, ssh);
+    const service = createService();
+
+    await service.executeTool(
+      { ...BASE_USER, scopes: ['integrations:cloudflare:manage'] },
+      'create_cloudflare_connector',
+      {
+        name: 'CF',
+        token: 'cf-token',
+        settings: { defaultTtl: 300 },
+      }
+    );
+    expect(integrations.createCloudflareConnector).toHaveBeenCalledWith(
+      { name: 'CF', enabled: true, token: 'cf-token', settings: { defaultTtl: 300 } },
+      'user-1'
+    );
+
+    await service.executeTool({ ...BASE_USER, scopes: ['integrations:ssh:manage'] }, 'create_ssh_connector', {
+      name: 'Box',
+      host: 'box.example.com',
+      username: 'deploy',
+      authMethod: 'private_key',
+      generatePrivateKey: true,
+      hostFingerprint: 'SHA256:abc',
+    });
+    expect(ssh.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user-1' }),
+      expect.objectContaining({ authMethod: 'private_key', generatePrivateKey: true })
+    );
+  });
 });
