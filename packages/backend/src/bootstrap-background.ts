@@ -59,6 +59,10 @@ import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { CacheService } from '@/services/cache.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import {
+  GATEWAY_IDENTITY_RENEWAL_CHECK_INTERVAL_MS,
+  GatewayIdentityRenewalService,
+} from '@/services/gateway-identity-renewal.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -164,6 +168,9 @@ export async function initializeBackgroundServices(): Promise<void> {
     .initializeBackups(scheduler, backupRuntime, relayPolicyService);
   scheduler.registerInterval('system-certificate-crl-retry', 5 * 60 * 1000, async () => {
     await systemCertificateLifecycleService.retryPendingCRLs();
+  });
+  scheduler.registerInterval('gateway-identity-renewal', GATEWAY_IDENTITY_RENEWAL_CHECK_INTERVAL_MS, async () => {
+    await container.resolve(GatewayIdentityRenewalService).renewDue();
   });
   if (relayPolicyService) {
     scheduler.registerInterval('relay-policy-sync', 30_000, () =>

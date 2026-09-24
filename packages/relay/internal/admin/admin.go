@@ -211,7 +211,13 @@ func (s *Service) ReloadIdentity(ctx context.Context, request *relayv1.ReloadIde
 	if err := s.reloadApp(); err != nil {
 		return nil, status.Error(codes.Unavailable, "relay app client identity reload failed")
 	}
-	return &relayv1.ReloadIdentityResponse{Reloaded: true}, nil
+	external, relayClient, appClient := s.identity.Current().LoadedFingerprints()
+	return &relayv1.ReloadIdentityResponse{
+		Reloaded:                     true,
+		ExternalCertificateSha256:    external,
+		RelayClientCertificateSha256: relayClient,
+		AppClientCertificateSha256:   appClient,
+	}, nil
 }
 
 func (s *Service) CommitIdentityRotation(ctx context.Context, request *relayv1.CommitIdentityRotationRequest) (*relayv1.CommitIdentityRotationResponse, error) {

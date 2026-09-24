@@ -15,6 +15,7 @@ import (
 	"github.com/wiolett-industries/gateway/relay/internal/codec"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	grpcpeer "google.golang.org/grpc/peer"
@@ -185,6 +186,96 @@ func TestTransparentProxyDeadlineAndCancellation(t *testing.T) {
 	cancel()
 	if code := status.Code(handler.Handle(nil, authenticatedDownstream("/gateway.v1.Contract/Wait", []codec.Frame{{1}}, cancelCtx))); code != codes.Canceled {
 		t.Fatalf("cancellation status = %v", code)
+	}
+}
+
+func TestReloadUpstreamKeepsRunningStreamsOnPreviousConnection(t *testing.T) {
+	started := make(chan struct{}, 1)
+	proceed := make(chan struct{})
+	var previousCalls, nextCalls int
+	var callsMu sync.Mutex
+	previous, stopPrevious := startUpstream(t, func(_ any, stream grpc.ServerStream) error {
+		callsMu.Lock()
+		previousCalls++
+		callsMu.Unlock()
+		var frame codec.Frame
+		for stream.RecvMsg(&frame) == nil {
+		}
+		started <- struct{}{}
+		<-proceed
+		reply := codec.Frame{7}
+		return stream.SendMsg(&reply)
+	})
+	defer stopPrevious()
+	next, stopNext := startUpstream(t, func(_ any, stream grpc.ServerStream) error {
+		callsMu.Lock()
+		nextCalls++
+		callsMu.Unlock()
+		var frame codec.Frame
+		for stream.RecvMsg(&frame) == nil {
+		}
+		reply := codec.Frame{8}
+		return stream.SendMsg(&reply)
+	})
+	defer stopNext()
+	handler := New(previous, func() (*grpc.ClientConn, error) { return next, nil })
+
+	running := authenticatedDownstream("/gateway.v1.NodeControl/CommandStream", []codec.Frame{{1}}, context.Background())
+	result := make(chan error, 1)
+	go func() { result <- handler.Handle(nil, running) }()
+	<-started
+	if err := handler.ReloadUpstream(); err != nil {
+		t.Fatal(err)
+	}
+	if state := previous.GetState(); state == connectivity.Shutdown {
+		t.Fatal("reload closed the connection a running stream still uses")
+	}
+
+	fresh := authenticatedDownstream("/gateway.v1.NodeControl/CommandStream", []codec.Frame{{2}}, context.Background())
+	if err := handler.Handle(nil, fresh); err != nil {
+		t.Fatal(err)
+	}
+	if !equalFrames(fresh.output, []codec.Frame{{8}}) {
+		t.Fatalf("new stream output = %v, want it served over the reloaded connection", fresh.output)
+	}
+
+	close(proceed)
+	if err := <-result; err != nil {
+		t.Fatalf("running stream was interrupted by the reload: %v", err)
+	}
+	if !equalFrames(running.output, []codec.Frame{{7}}) {
+		t.Fatalf("running stream output = %v", running.output)
+	}
+	callsMu.Lock()
+	if previousCalls != 1 || nextCalls != 1 {
+		t.Fatalf("calls previous=%d next=%d, want 1 each", previousCalls, nextCalls)
+	}
+	callsMu.Unlock()
+	if state := previous.GetState(); state != connectivity.Shutdown {
+		t.Fatalf("previous connection state after its last stream = %v, want closed", state)
+	}
+	if state := next.GetState(); state == connectivity.Shutdown {
+		t.Fatal("reloaded connection was closed")
+	}
+}
+
+func TestReloadUpstreamClosesIdlePreviousConnectionImmediately(t *testing.T) {
+	previous, stopPrevious := startUpstream(t, func(_ any, stream grpc.ServerStream) error { return nil })
+	defer stopPrevious()
+	next, stopNext := startUpstream(t, func(_ any, stream grpc.ServerStream) error { return nil })
+	defer stopNext()
+	handler := New(previous, func() (*grpc.ClientConn, error) { return next, nil })
+	if err := handler.ReloadUpstream(); err != nil {
+		t.Fatal(err)
+	}
+	if state := previous.GetState(); state != connectivity.Shutdown {
+		t.Fatalf("idle previous connection state = %v, want closed", state)
+	}
+	if err := handler.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if state := next.GetState(); state != connectivity.Shutdown {
+		t.Fatalf("current connection state after Close = %v, want closed", state)
 	}
 }
 

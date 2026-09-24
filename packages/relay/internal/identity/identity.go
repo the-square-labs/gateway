@@ -47,6 +47,20 @@ type Snapshot struct {
 // ServerCertificate picks the certificate for a TLS client that asked for
 // serverName: the previous one when it names that identity and the current
 // one does not, while it is still valid; otherwise the current one.
+// LoadedFingerprints names the external server certificate, the relay's own
+// client certificate toward Gateway, and the Gateway client certificate it
+// trusts, as loaded. Gateway compares them with what it installed before it
+// treats an identity rotation as done.
+func (s *Snapshot) LoadedFingerprints() (external, relayClient, appClient string) {
+	if len(s.External.Certificate) > 0 {
+		external = Fingerprint(s.External.Certificate[0])
+	}
+	if len(s.RelayClient.Certificate) > 0 {
+		relayClient = Fingerprint(s.RelayClient.Certificate[0])
+	}
+	return external, relayClient, s.Trust.AppRelayClientFingerprint
+}
+
 func (s *Snapshot) ServerCertificate(serverName string, now time.Time) tls.Certificate {
 	previous := s.PreviousExternal
 	if previous == nil || serverName == "" || previous.Leaf == nil || !now.Before(previous.Leaf.NotAfter) {

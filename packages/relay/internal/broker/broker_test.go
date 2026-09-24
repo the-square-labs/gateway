@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"sync"
 	"testing"
 	"time"
@@ -362,6 +363,41 @@ func TestPumpRecordsOnlyForwardedDataBytes(t *testing.T) {
 	}
 	if transferred != uint64(len("payload")) {
 		t.Fatalf("recorded bytes = %d", transferred)
+	}
+}
+
+func TestConnectionStreamReusesReadBufferAndCopiesEachFrame(t *testing.T) {
+	local, remote := net.Pipe()
+	defer local.Close()
+	defer remote.Close()
+	stream := &connectionTunnelStream{connection: local, maxFrame: DefaultMaxFrameBytes}
+	payloads := []string{"first frame", "second"}
+	go func() {
+		for _, payload := range payloads {
+			_, _ = remote.Write([]byte(payload))
+		}
+	}()
+	var frames []*relayv1.TunnelFrame
+	var buffers []*byte
+	for range payloads {
+		frame, err := stream.Recv()
+		if err != nil {
+			t.Fatal(err)
+		}
+		frames = append(frames, frame)
+		buffers = append(buffers, &stream.readBuffer[0])
+	}
+	if buffers[0] != buffers[1] {
+		t.Fatal("every read allocated a new full-size frame buffer")
+	}
+	for index, payload := range payloads {
+		data := frames[index].GetData().GetData()
+		if string(data) != payload {
+			t.Fatalf("frame %d = %q, want %q", index, data, payload)
+		}
+		if cap(data) != len(payload) {
+			t.Fatalf("frame %d capacity = %d, want a copy sized to the read (%d)", index, cap(data), len(payload))
+		}
 	}
 }
 

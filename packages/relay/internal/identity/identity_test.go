@@ -169,3 +169,19 @@ func TestServerCertificateServesRetainedCertificateByItsIdentity(t *testing.T) {
 		t.Fatal("an expired retained certificate was served")
 	}
 }
+
+func TestLoadedFingerprintsNameTheLoadedIdentity(t *testing.T) {
+	now := time.Now()
+	external := selfSignedServerCertificate(t, "gateway-grpc", now.Add(time.Hour))
+	relayClient := selfSignedServerCertificate(t, "relay-app-client", now.Add(time.Hour))
+	appClient := "sha256:" + repeatHex("c")
+	snapshot := &Snapshot{External: external, RelayClient: relayClient, Trust: TrustManifest{AppRelayClientFingerprint: appClient}}
+
+	gotExternal, gotRelayClient, gotAppClient := snapshot.LoadedFingerprints()
+	if gotExternal != Fingerprint(external.Certificate[0]) || gotRelayClient != Fingerprint(relayClient.Certificate[0]) || gotAppClient != appClient {
+		t.Fatalf("loaded fingerprints = %q %q %q", gotExternal, gotRelayClient, gotAppClient)
+	}
+	if external, relayClient, _ := (&Snapshot{}).LoadedFingerprints(); external != "" || relayClient != "" {
+		t.Fatal("an empty snapshot reported certificate fingerprints")
+	}
+}

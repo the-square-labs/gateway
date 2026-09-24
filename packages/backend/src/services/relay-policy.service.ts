@@ -535,12 +535,10 @@ export class RelayPolicyService {
       this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
       throw refusal;
     }
-    // Rebinding to another Gateway instance ships with the reset capability; a relay without it
-    // would accept the reset and still refuse every snapshot.
-    if (
-      reason.includes('snapshot gateway instance changed') &&
-      !health.capabilities?.includes(LOCAL_POLICY_TRUST_RESET_CAPABILITY)
-    ) {
+    // Every relay build with the reset call advertises it, and only such a build can rebind to
+    // another Gateway instance. Asking an older build starts no cooldown, so the relay is
+    // recovered on the first sync after it is updated, well inside the update's health wait.
+    if (!health.capabilities?.includes(LOCAL_POLICY_TRUST_RESET_CAPABILITY)) {
       this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
       throw new Error(`${LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE} Relay refusal: ${reason}`);
     }
@@ -563,9 +561,11 @@ export class RelayPolicyService {
       ({ replacedKeyIds } = await this.relay.resetLocalPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint));
       this.lastLocalPolicyTrustResetAt = now;
     } catch (error) {
-      // The cooldown starts only once the relay answered: an unreachable relay was not reset.
-      if (!isRelayUnavailable(error)) this.lastLocalPolicyTrustResetAt = now;
-      if ((error as { code?: number } | null)?.code === GrpcStatus.UNIMPLEMENTED) {
+      const unimplemented = (error as { code?: number } | null)?.code === GrpcStatus.UNIMPLEMENTED;
+      // The cooldown starts only once the relay answered and could reset: an unreachable relay or
+      // one without the call was not reset.
+      if (!isRelayUnavailable(error) && !unimplemented) this.lastLocalPolicyTrustResetAt = now;
+      if (unimplemented) {
         this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
         logger.error('Local relay refuses Gateway policy and cannot reset its trust', { reason });
         throw new Error(`${LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE} Relay refusal: ${reason}`);

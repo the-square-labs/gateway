@@ -2573,10 +2573,16 @@ func (x *ReloadIdentityRequest) GetOperationId() string {
 }
 
 type ReloadIdentityResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Reloaded      bool                   `protobuf:"varint,1,opt,name=reloaded,proto3" json:"reloaded,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Reloaded bool                   `protobuf:"varint,1,opt,name=reloaded,proto3" json:"reloaded,omitempty"`
+	// Fingerprints ("sha256:<hex>") of the identity the relay loaded, so Gateway
+	// confirms a rotation only once the relay serves the files it installed.
+	// Empty from relays built before these fields existed.
+	ExternalCertificateSha256    string `protobuf:"bytes,2,opt,name=external_certificate_sha256,json=externalCertificateSha256,proto3" json:"external_certificate_sha256,omitempty"`
+	RelayClientCertificateSha256 string `protobuf:"bytes,3,opt,name=relay_client_certificate_sha256,json=relayClientCertificateSha256,proto3" json:"relay_client_certificate_sha256,omitempty"`
+	AppClientCertificateSha256   string `protobuf:"bytes,4,opt,name=app_client_certificate_sha256,json=appClientCertificateSha256,proto3" json:"app_client_certificate_sha256,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *ReloadIdentityResponse) Reset() {
@@ -2614,6 +2620,27 @@ func (x *ReloadIdentityResponse) GetReloaded() bool {
 		return x.Reloaded
 	}
 	return false
+}
+
+func (x *ReloadIdentityResponse) GetExternalCertificateSha256() string {
+	if x != nil {
+		return x.ExternalCertificateSha256
+	}
+	return ""
+}
+
+func (x *ReloadIdentityResponse) GetRelayClientCertificateSha256() string {
+	if x != nil {
+		return x.RelayClientCertificateSha256
+	}
+	return ""
+}
+
+func (x *ReloadIdentityResponse) GetAppClientCertificateSha256() string {
+	if x != nil {
+		return x.AppClientCertificateSha256
+	}
+	return ""
 }
 
 type CommitIdentityRotationRequest struct {
@@ -3029,9 +3056,12 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x1flast_activity_unix_milliseconds\x18\v \x01(\x03R\x1clastActivityUnixMilliseconds\x12E\n" +
 	"\x1fmetrics_since_unix_milliseconds\x18\f \x01(\x03R\x1cmetricsSinceUnixMilliseconds\":\n" +
 	"\x15ReloadIdentityRequest\x12!\n" +
-	"\foperation_id\x18\x01 \x01(\tR\voperationId\"4\n" +
+	"\foperation_id\x18\x01 \x01(\tR\voperationId\"\xfe\x01\n" +
 	"\x16ReloadIdentityResponse\x12\x1a\n" +
-	"\breloaded\x18\x01 \x01(\bR\breloaded\"B\n" +
+	"\breloaded\x18\x01 \x01(\bR\breloaded\x12>\n" +
+	"\x1bexternal_certificate_sha256\x18\x02 \x01(\tR\x19externalCertificateSha256\x12E\n" +
+	"\x1frelay_client_certificate_sha256\x18\x03 \x01(\tR\x1crelayClientCertificateSha256\x12A\n" +
+	"\x1dapp_client_certificate_sha256\x18\x04 \x01(\tR\x1aappClientCertificateSha256\"B\n" +
 	"\x1dCommitIdentityRotationRequest\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\">\n" +
 	"\x1eCommitIdentityRotationResponse\x12\x1c\n" +

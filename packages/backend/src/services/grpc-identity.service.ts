@@ -15,6 +15,10 @@ export interface GrpcIdentity {
 
 export class GrpcIdentityService {
   private identity: GrpcIdentity | null = null;
+  /** Fingerprint of the certificate daemons are served now, which enrollment commands pin. */
+  private servedSha256: string | null = null;
+  /** Loads never overlap: two certificate issuances would undo each other's staged files. */
+  private queue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly env: Env,
@@ -22,10 +26,48 @@ export class GrpcIdentityService {
   ) {}
 
   async resolve(): Promise<GrpcIdentity> {
-    if (this.identity) {
-      return this.identity;
-    }
+    if (this.identity) return this.identity;
+    return this.exclusive(async () => {
+      if (!this.identity) this.remember(await this.load());
+      return this.identity!;
+    });
+  }
 
+  /** The fingerprint new enrollment commands carry: the certificate daemons are served now. */
+  async getGatewayCertSha256(): Promise<string> {
+    return this.servedSha256 ?? (await this.resolve()).gatewayCertSha256;
+  }
+
+  /**
+   * Re-reads the identity, renewing the auto-managed certificate once it is within
+   * `renewBeforeMs` of expiry (the default renews only in its last week, see
+   * SystemCAService.ensureGrpcServerCert). A failure keeps the current identity.
+   */
+  async refresh(options: { renewBeforeMs?: number } = {}): Promise<GrpcIdentity> {
+    return this.exclusive(async () => {
+      this.remember(await this.load(options));
+      return this.identity!;
+    });
+  }
+
+  /** Records that daemons are now served the certificate with this fingerprint. */
+  markServed(gatewayCertSha256: string): void {
+    this.servedSha256 = gatewayCertSha256;
+  }
+
+  private remember(identity: GrpcIdentity): void {
+    this.identity = identity;
+    // What is resolved first is what the listener starts with; later changes are marked when served.
+    this.servedSha256 ??= identity.gatewayCertSha256;
+  }
+
+  private exclusive<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.queue.then(task, task);
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async load(options: { renewBeforeMs?: number } = {}): Promise<GrpcIdentity> {
     let certPath = this.env.GRPC_TLS_CERT;
     let keyPath = this.env.GRPC_TLS_KEY;
 
@@ -34,10 +76,14 @@ export class GrpcIdentityService {
     }
 
     if (!certPath && !keyPath) {
-      const autoCert = await this.systemCA.ensureGrpcServerCert(
-        `${this.env.GRPC_TLS_AUTO_DIR}/grpc-server.crt`,
-        `${this.env.GRPC_TLS_AUTO_DIR}/grpc-server.key`
-      );
+      const autoCertPath = `${this.env.GRPC_TLS_AUTO_DIR}/grpc-server.crt`;
+      const autoKeyPath = `${this.env.GRPC_TLS_AUTO_DIR}/grpc-server.key`;
+      const autoCert =
+        options.renewBeforeMs === undefined
+          ? await this.systemCA.ensureGrpcServerCert(autoCertPath, autoKeyPath)
+          : await this.systemCA.ensureGrpcServerCert(autoCertPath, autoKeyPath, {
+              renewBeforeMs: options.renewBeforeMs,
+            });
       certPath = autoCert.certPath;
       keyPath = autoCert.keyPath;
     } else {
@@ -49,20 +95,8 @@ export class GrpcIdentityService {
     const resolvedCertPath = certPath!;
     const resolvedKeyPath = keyPath!;
     const gatewayCertSha256 = GrpcIdentityService.computeCertificateSha256(readFileSync(resolvedCertPath));
-    const identity = { certPath: resolvedCertPath, keyPath: resolvedKeyPath, gatewayCertSha256 };
-    this.identity = identity;
-
     logger.info('Resolved gRPC server identity', { certPath: resolvedCertPath, gatewayCertSha256 });
-    return identity;
-  }
-
-  async getGatewayCertSha256(): Promise<string> {
-    return (await this.resolve()).gatewayCertSha256;
-  }
-
-  async refresh(): Promise<GrpcIdentity> {
-    this.identity = null;
-    return this.resolve();
+    return { certPath: resolvedCertPath, keyPath: resolvedKeyPath, gatewayCertSha256 };
   }
 
   static computeCertificateSha256(certificatePem: string | Buffer): string {

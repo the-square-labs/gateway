@@ -392,16 +392,50 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         const instanceId = z.string().uuid().parse(a.instanceId);
         z.object({ confirm: z.literal(true) }).parse({ confirm: a.confirm });
         const issued = await container.resolve(RelayPoolService).issueRelayReenrollment(instanceId, user.id);
+        const gatewayCertSha256 = await this.nodesService.getGatewayEnrollmentCertificateFingerprint();
+        const gatewayEnrollmentTargets = await this.nodesService.getGatewayEnrollmentTargets();
         return {
           ...issued,
-          gatewayCertSha256: await this.nodesService.getGatewayEnrollmentCertificateFingerprint(),
-          gatewayEnrollmentTargets: await this.nodesService.getGatewayEnrollmentTargets(),
+          gatewayCertSha256,
+          gatewayEnrollmentTargets,
+          installCommands: relayReenrollmentCommands(issued, gatewayCertSha256, gatewayEnrollmentTargets),
         };
       }
       default:
         throw new Error(`Unsupported Relay Pool operation: ${operation}`);
     }
   }
+}
+
+const RELAY_INSTALLER_URL =
+  'https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh';
+
+/** Same installer invocation Settings > Relay shows, one per reachable Gateway enrollment target. */
+function relayReenrollmentCommands(
+  issued: {
+    enrollmentToken: string;
+    advertiseAddress?: string | null;
+    servicePort?: number | null;
+    relayVersion?: string | null;
+  },
+  gatewayCertSha256: string | null | undefined,
+  targets: Record<string, { label: string; gateway: string | null } | undefined>
+): { target: string; label: string; command: string }[] {
+  return Object.entries(targets).flatMap(([target, value]) => {
+    if (!value?.gateway) return [];
+    const args = [
+      `--gateway ${value.gateway}`,
+      `--token ${issued.enrollmentToken}`,
+      `--gateway-cert-sha256 ${gatewayCertSha256 ?? ''}`,
+      ...(issued.advertiseAddress ? [`--advertise-address ${issued.advertiseAddress}`] : []),
+      ...(issued.servicePort && issued.servicePort !== 9443 ? [`--service-port ${issued.servicePort}`] : []),
+      // Pin the pool's release: "latest" can resolve to a supervisor that ignores re-enrollment tokens.
+      ...(issued.relayVersion ? [`--version ${issued.relayVersion}`] : []),
+    ];
+    return [
+      { target, label: value.label, command: `curl -sSL ${RELAY_INSTALLER_URL} | sudo bash -s -- ${args.join(' ')}` },
+    ];
+  });
 }
 
 function stringList(value: unknown): string[] {

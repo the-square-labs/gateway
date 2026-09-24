@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, X509Certificate } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { Duplex } from 'node:stream';
@@ -196,21 +196,66 @@ function isClientIdentityRefusal(error: unknown): boolean {
   );
 }
 
+interface ClientIdentity {
+  privateKey: Buffer;
+  certificate: Buffer;
+}
+
+/** What a relay reports it loaded on ReloadIdentity; relays built before the report send none. */
+export interface RelayLoadedIdentity {
+  externalCertificateSha256: string;
+  relayClientCertificateSha256: string;
+  appClientCertificateSha256: string;
+}
+
+/** The client identity Gateway moved to after the relay confirmed a reload. */
+export interface RelayIdentityActivation {
+  /** The client certificate Gateway presents to relays from now on. */
+  certificate: Buffer;
+  /** Its fingerprint, "sha256:<hex>", or null when it does not parse. */
+  certificateSha256: string | null;
+  /** What the relay loaded, when it said so; null for older relays and for a relay that restarted. */
+  loaded: RelayLoadedIdentity | null;
+}
+
+function certificateSha256(certificatePem: Buffer): string | null {
+  try {
+    return `sha256:${createHash('sha256').update(new X509Certificate(certificatePem).raw).digest('hex')}`;
+  } catch {
+    return null;
+  }
+}
+
+function loadedIdentity(response: {
+  externalCertificateSha256?: string;
+  relayClientCertificateSha256?: string;
+  appClientCertificateSha256?: string;
+}): RelayLoadedIdentity | null {
+  const loaded = {
+    externalCertificateSha256: response.externalCertificateSha256 ?? '',
+    relayClientCertificateSha256: response.relayClientCertificateSha256 ?? '',
+    appClientCertificateSha256: response.appClientCertificateSha256 ?? '',
+  };
+  return Object.values(loaded).some(Boolean) ? loaded : null;
+}
+
 export class RelayControlClient {
   private admin: any;
   private broker: any;
-  private pendingIdentityReload?: { operationId: string; admin: any; broker: any };
+  private pendingIdentityReload?: { operationId: string; admin: any; broker: any; identity: ClientIdentity };
+  /** The client identity the current admin and broker clients present. */
+  private activeIdentity: ClientIdentity;
+  private identityActivationListener?: (activation: RelayIdentityActivation) => void;
   private identityReloadConvergence?: Promise<boolean>;
   private pendingIdentityCommit?: string;
 
   constructor(private readonly options: RelayControlClientOptions) {
     const previous = this.readPreviousIdentity();
     if (previous) {
-      ({ admin: this.admin, broker: this.broker } = this.createClients(previous));
-      const next = this.createClients();
-      this.pendingIdentityReload = { operationId: randomUUID(), admin: next.admin, broker: next.broker };
+      ({ admin: this.admin, broker: this.broker, identity: this.activeIdentity } = this.createClients(previous));
+      this.pendingIdentityReload = { operationId: randomUUID(), ...this.createClients() };
     } else {
-      ({ admin: this.admin, broker: this.broker } = this.createClients());
+      ({ admin: this.admin, broker: this.broker, identity: this.activeIdentity } = this.createClients());
     }
   }
 
@@ -221,12 +266,20 @@ export class RelayControlClient {
     return { certificatePath: previousCertificatePath, privateKeyPath: previousPrivateKeyPath };
   }
 
-  private createClients(identity?: { certificatePath: string; privateKeyPath: string }): { admin: any; broker: any } {
+  private createClients(identity?: { certificatePath: string; privateKeyPath: string }): {
+    admin: any;
+    broker: any;
+    identity: ClientIdentity;
+  } {
     const relayV1 = loadRelayV1Proto();
+    const material = {
+      privateKey: readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
+      certificate: readFileSync(identity?.certificatePath ?? this.options.certificatePath),
+    };
     const credentials = grpc.credentials.createSsl(
       readFileSync(this.options.systemCaPath),
-      readFileSync(identity?.privateKeyPath ?? this.options.privateKeyPath),
-      readFileSync(identity?.certificatePath ?? this.options.certificatePath)
+      material.privateKey,
+      material.certificate
     );
     const options = {
       'grpc.keepalive_time_ms': 30_000,
@@ -238,7 +291,45 @@ export class RelayControlClient {
     return {
       admin: new relayV1.RelayAdmin(this.options.target, credentials, options),
       broker: new relayV1.TunnelBroker(this.options.target, credentials, options),
+      identity: material,
     };
+  }
+
+  /**
+   * Called whenever the relay confirmed a reload and Gateway moved to the client identity on
+   * disk, including a reload a later admin call converged.
+   */
+  setIdentityActivationListener(listener: (activation: RelayIdentityActivation) => void): void {
+    this.identityActivationListener = listener;
+  }
+
+  /** Fingerprint of the client certificate Gateway presents to relays now; grants must name it. */
+  activeClientCertificateSha256(): string | null {
+    return certificateSha256(this.activeIdentity.certificate);
+  }
+
+  private adoptPendingIdentity(
+    pending: NonNullable<RelayControlClient['pendingIdentityReload']>,
+    loaded: RelayLoadedIdentity | null
+  ): void {
+    const previousAdmin = this.admin;
+    const previousBroker = this.broker;
+    this.admin = pending.admin;
+    this.broker = pending.broker;
+    this.activeIdentity = pending.identity;
+    if (this.pendingIdentityReload === pending) this.pendingIdentityReload = undefined;
+    // Closing a channel ends no call already running on it.
+    previousAdmin.close();
+    previousBroker.close();
+    try {
+      this.identityActivationListener?.({
+        certificate: pending.identity.certificate,
+        certificateSha256: certificateSha256(pending.identity.certificate),
+        loaded,
+      });
+    } catch {
+      // A listener failure must not undo a reload the relay already confirmed.
+    }
   }
 
   close(): void {
@@ -302,11 +393,21 @@ export class RelayControlClient {
     return { replacedKeyIds: response.replacedKeyIds ?? [] };
   }
 
+  /**
+   * Asks the relay to load the identity files installed now and moves to the client on disk.
+   * A reload already in flight may have been answered before those files were written, so it is
+   * awaited and a fresh one is always sent.
+   */
   async reloadIdentity(timeoutMs = 2_000): Promise<boolean> {
-    if (!this.pendingIdentityReload) {
-      const next = this.createClients();
-      this.pendingIdentityReload = { operationId: randomUUID(), admin: next.admin, broker: next.broker };
+    while (this.identityReloadConvergence) {
+      await this.identityReloadConvergence.catch(() => undefined);
     }
+    // Target the client identity on disk now. A reload staged earlier and never confirmed
+    // may name a certificate that a later renewal already replaced.
+    const stale = this.pendingIdentityReload;
+    this.pendingIdentityReload = { operationId: randomUUID(), ...this.createClients() };
+    stale?.admin.close();
+    stale?.broker.close();
     return this.convergePendingIdentityReload(timeoutMs);
   }
 
@@ -325,39 +426,31 @@ export class RelayControlClient {
   private async performIdentityReloadConvergence(timeoutMs: number): Promise<boolean> {
     const pending = this.pendingIdentityReload;
     if (!pending) return true;
-    let result: { reloaded?: boolean };
+    let result: { reloaded?: boolean } & Parameters<typeof loadedIdentity>[0];
     try {
-      result = (await this.unary('ReloadIdentity', { operationId: pending.operationId }, timeoutMs)) as {
-        reloaded?: boolean;
-      };
+      result = (await this.unary('ReloadIdentity', { operationId: pending.operationId }, timeoutMs)) as typeof result;
     } catch (error) {
       // The relay no longer trusts the current client: it already loaded the renewed identity
       // (it restarted, or another Gateway process reloaded it). Move to the renewed client
       // once the relay accepts it; there is no rotation left to commit.
       if (!isClientIdentityRefusal(error)) throw error;
       await this.unaryWith(pending.admin, 'GetHealth', {}, timeoutMs);
-      const previousAdmin = this.admin;
-      const previousBroker = this.broker;
-      this.admin = pending.admin;
-      this.broker = pending.broker;
-      if (this.pendingIdentityReload === pending) this.pendingIdentityReload = undefined;
-      previousAdmin.close();
-      previousBroker.close();
+      this.adoptPendingIdentity(pending, null);
       return true;
     }
-    if (result.reloaded !== true) {
+    const loaded = loadedIdentity(result);
+    const pendingSha256 = certificateSha256(pending.identity.certificate);
+    // The relay loaded files written after this client was staged: it trusts another client, so
+    // stay on the current one (the relay keeps trusting it) until a fresh reload targets them.
+    const loadedOtherClient =
+      loaded !== null && pendingSha256 !== null && loaded.appClientCertificateSha256 !== pendingSha256;
+    if (result.reloaded !== true || loadedOtherClient) {
       pending.admin.close();
       pending.broker.close();
       if (this.pendingIdentityReload === pending) this.pendingIdentityReload = undefined;
       return false;
     }
-    const previousAdmin = this.admin;
-    const previousBroker = this.broker;
-    this.admin = pending.admin;
-    this.broker = pending.broker;
-    if (this.pendingIdentityReload === pending) this.pendingIdentityReload = undefined;
-    previousAdmin.close();
-    previousBroker.close();
+    this.adoptPendingIdentity(pending, loaded);
     this.pendingIdentityCommit = pending.operationId;
     // Commit is explicitly operation-bound and uses the candidate identity.
     // A lost response is safe and retried by later admin operations.
@@ -400,10 +493,12 @@ export class RelayControlClient {
   private createCandidateBroker(address: string, candidate: RelayTunnelCandidate): any {
     const relayV1 = loadRelayV1Proto();
     const expectedFingerprint = normalizeCertificateFingerprint(candidate.certificateFingerprint);
+    // Present the identity the local clients present, which Gateway's tunnel grants name: until
+    // the local relay confirmed a renewal it is the previous one, even with renewed files installed.
     const credentials = grpc.credentials.createSsl(
       readFileSync(this.options.systemCaPath),
-      readFileSync(this.options.privateKeyPath),
-      readFileSync(this.options.certificatePath),
+      this.activeIdentity.privateKey,
+      this.activeIdentity.certificate,
       {
         checkServerIdentity: (_hostname: string, certificate: PeerCertificate) => {
           const actual = normalizeCertificateFingerprint(certificate.fingerprint256 ?? '');

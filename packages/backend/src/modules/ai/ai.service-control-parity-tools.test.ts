@@ -70,7 +70,7 @@ describe('manage_relay_pool', () => {
       getSnapshot: vi.fn().mockResolvedValue({ instances: [{ id: INSTANCE_ID, draining: false }] }),
       issueRelayReenrollment: vi.fn().mockResolvedValue({
         enrollmentToken: 'gw_enroll_relay',
-        installCommand: 'curl ... | sh',
+        relayVersion: 'v2.11.0-rc.7',
       }),
       stageRebalance: vi.fn().mockResolvedValue([{ state: 'staging' }]),
       drainInstance: vi.fn().mockResolvedValue(undefined),
@@ -231,7 +231,9 @@ describe('manage_relay_pool', () => {
     const { relayPool } = registerRelayServices();
     const nodesService = {
       getGatewayEnrollmentCertificateFingerprint: vi.fn().mockResolvedValue('sha256:gateway'),
-      getGatewayEnrollmentTargets: vi.fn().mockResolvedValue(['gateway.example.com:7443']),
+      getGatewayEnrollmentTargets: vi
+        .fn()
+        .mockResolvedValue({ public: { label: 'Public node', gateway: 'gateway.example.com:9444' } }),
     };
     const service = createService({ nodesService });
     const args = { operation: 'reenroll_instance', instanceId: INSTANCE_ID, confirm: true };
@@ -248,9 +250,17 @@ describe('manage_relay_pool', () => {
     await expect(service.executeTool(admin, 'manage_relay_pool', args)).resolves.toEqual({
       result: {
         enrollmentToken: 'gw_enroll_relay',
-        installCommand: 'curl ... | sh',
+        relayVersion: 'v2.11.0-rc.7',
         gatewayCertSha256: 'sha256:gateway',
-        gatewayEnrollmentTargets: ['gateway.example.com:7443'],
+        gatewayEnrollmentTargets: { public: { label: 'Public node', gateway: 'gateway.example.com:9444' } },
+        installCommands: [
+          {
+            target: 'public',
+            label: 'Public node',
+            command:
+              'curl -sSL https://raw.githubusercontent.com/the-square-labs/gateway/main/scripts/setup-relay-node.sh | sudo bash -s -- --gateway gateway.example.com:9444 --token gw_enroll_relay --gateway-cert-sha256 sha256:gateway --version v2.11.0-rc.7',
+          },
+        ],
       },
       invalidateStores: ['settings', 'nodes'],
     });

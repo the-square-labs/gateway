@@ -579,6 +579,7 @@ describe("RelaySettingsSection", () => {
       enrollmentTokenExpiresAt: "2026-10-01T10:00:00.000Z",
       advertiseAddress: "relay.example.test",
       servicePort: 9443,
+      relayVersion: "v2.11.0-rc.7",
       gatewayCertSha256: `sha256:${"c".repeat(64)}`,
       gatewayEnrollmentTargets: {
         public: { label: "Public node", gateway: "gateway.example.test:9443" },
@@ -603,6 +604,8 @@ describe("RelaySettingsSection", () => {
     expect(
       within(dialog).getAllByText(/--gateway gateway\.example\.test:9443/).length
     ).toBeGreaterThan(0);
+    // The installer reinstalls the release the pool runs rather than resolving "latest".
+    expect(within(dialog).getAllByText(/--version v2\.11\.0-rc\.7/).length).toBeGreaterThan(0);
   });
 
   it("does not offer re-enrollment for a healthy relay or the local relay", async () => {

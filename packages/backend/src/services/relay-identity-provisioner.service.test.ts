@@ -90,4 +90,80 @@ describe('RelayIdentityProvisionerService', () => {
     expect(identity.previousAppClientCertPath).toBeUndefined();
     expect(existsSync(join(identityDir, 'app-relay-client.previous.crt'))).toBe(false);
   });
+
+  /** A provisioner whose three service leaves are current in the database and expire in `remainingMs`. */
+  function provisionerWithCurrentLeaves(remainingMs: number) {
+    const external = { certPath: join(directory, 'grpc.crt'), keyPath: join(directory, 'grpc.key') };
+    writeFileSync(external.certPath, 'external-certificate');
+    writeFileSync(external.keyPath, 'external-key');
+    const notAfter = new Date(Date.now() + remainingMs);
+    const current = new Map<string, string>();
+    // ensure() looks the three leaves up in this order, each with one query.
+    const owners = ['app-internal-server', 'app-relay-client', 'relay-app-client'];
+    let lookups = 0;
+    const db = {
+      select: () => {
+        const ownerId = owners[lookups++ % owners.length]!;
+        const query: any = {
+          from: () => query,
+          where: () => query,
+          limit: () => {
+            if (!current.has(ownerId)) current.set(ownerId, certificatePem(ownerId, notAfter));
+            return Promise.resolve([{ id: ownerId, certificatePem: current.get(ownerId), notAfter }]);
+          },
+        };
+        return query;
+      },
+    };
+    const lifecycle = {
+      issueCurrent: vi.fn(async (input: { commonName: string }) => ({
+        certificate: { certificatePem: certificatePem(input.commonName, new Date(Date.now() + 365 * DAY)) },
+        privateKeyPem: `${input.commonName}-renewed-key`,
+      })),
+    };
+    const service = new RelayIdentityProvisionerService(
+      db as never,
+      { getCertificatePrivateKey: async (id: string) => `${id}-key` } as never,
+      lifecycle as never,
+      { getSystemCACertPem: async () => 'system-ca', getSystemCAId: async () => 'ca-1' } as never,
+      { resolve: async () => external } as never,
+      join(directory, 'identity')
+    );
+    return { service, lifecycle };
+  }
+
+  it('renews service leaves a month before they expire, not a week', async () => {
+    const reused = provisionerWithCurrentLeaves(31 * DAY);
+    const first = await reused.service.ensure();
+    expect(reused.lifecycle.issueCurrent).not.toHaveBeenCalled();
+    // Unchanged material needs no relay reload.
+    expect((await reused.service.refresh()).materialDigest).toBe(first.materialDigest);
+
+    const due = provisionerWithCurrentLeaves(29 * DAY);
+    const renewed = await due.service.ensure();
+    expect(due.lifecycle.issueCurrent).toHaveBeenCalledTimes(3);
+    expect(renewed.materialDigest).not.toBe(first.materialDigest);
+  });
+
+  it('keeps the provisioned identity when a refresh fails', async () => {
+    const { service, lifecycle } = provisionerWithCurrentLeaves(29 * DAY);
+    const current = await service.ensure();
+    lifecycle.issueCurrent.mockRejectedValueOnce(new Error('issuance failed'));
+
+    await expect(service.refresh()).rejects.toThrow('issuance failed');
+    const issued = lifecycle.issueCurrent.mock.calls.length;
+    await expect(service.ensure()).resolves.toBe(current);
+    expect(lifecycle.issueCurrent).toHaveBeenCalledTimes(issued);
+  });
+
+  it('names the certificates the relay loads for expiry checks', () => {
+    const { service } = provisionerWithCurrentLeaves(200 * DAY);
+    const identityDir = join(directory, 'identity');
+    expect(service.installedCertificatePaths()).toEqual({
+      externalServer: join(identityDir, 'external-server.crt'),
+      appInternalServer: join(identityDir, 'app-internal-server.crt'),
+      appRelayClient: join(identityDir, 'app-relay-client.crt'),
+      relayAppClient: join(identityDir, 'relay-app-client.crt'),
+    });
+  });
 });

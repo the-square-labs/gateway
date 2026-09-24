@@ -12,7 +12,11 @@ import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
-import { validateGrpcServerCertificate } from './grpc-server-certificate.js';
+import {
+  GATEWAY_GRPC_CERTIFICATE_FINAL_RENEW_BEFORE_MS,
+  GATEWAY_IDENTITY_RENEW_BEFORE_MS,
+  validateGrpcServerCertificate,
+} from './grpc-server-certificate.js';
 import type {
   SystemCertificateBindingHandle,
   SystemCertificateCurrentBinding,
@@ -298,16 +302,36 @@ export class SystemCAService {
   /**
    * Ensure the gRPC server has a TLS certificate issued by the system CA.
    * Returns the cert/key file paths. Reuses existing files if still valid.
+   * Enrollment commands pin this certificate's fingerprint, so by default it is renewed only in
+   * its last week; running renewal passes an earlier `renewBeforeMs` when no command is pending.
    */
-  async ensureGrpcServerCert(certPath: string, keyPath: string): Promise<{ certPath: string; keyPath: string }> {
+  async ensureGrpcServerCert(
+    certPath: string,
+    keyPath: string,
+    options: { renewBeforeMs?: number } = {}
+  ): Promise<{ certPath: string; keyPath: string }> {
     const expectedSans = await this.collectGrpcServerSans();
-    return this.ensureServerCert(certPath, keyPath, 'gateway-grpc', expectedSans, 'gRPC');
+    return this.ensureServerCert(
+      certPath,
+      keyPath,
+      'gateway-grpc',
+      expectedSans,
+      'gRPC',
+      options.renewBeforeMs ?? GATEWAY_GRPC_CERTIFICATE_FINAL_RENEW_BEFORE_MS
+    );
   }
 
   /** Ensure the native web listener has its own leaf issued by the existing system CA. */
   async ensureWebServerCert(certPath: string, keyPath: string): Promise<{ certPath: string; keyPath: string }> {
     const expectedSans = await this.collectWebServerSans();
-    return this.ensureServerCert(certPath, keyPath, 'gateway-web', expectedSans, 'web');
+    return this.ensureServerCert(
+      certPath,
+      keyPath,
+      'gateway-web',
+      expectedSans,
+      'web',
+      GATEWAY_IDENTITY_RENEW_BEFORE_MS
+    );
   }
 
   private async ensureServerCert(
@@ -315,10 +339,11 @@ export class SystemCAService {
     keyPath: string,
     commonName: string,
     expectedSans: string[],
-    listener: 'gRPC' | 'web'
+    listener: 'gRPC' | 'web',
+    renewBeforeMs: number
   ): Promise<{ certPath: string; keyPath: string }> {
     await recoverListenerMaterial(this.db, certPath, keyPath, listener);
-    // Reuse if files exist and cert is still valid (> 7 days remaining)
+    // Reuse if files exist and the cert is not yet due for renewal
     if (existsSync(certPath) && existsSync(keyPath)) {
       try {
         const certPem = readFileSync(certPath, 'utf-8');
@@ -330,7 +355,7 @@ export class SystemCAService {
             logger.info(`Existing ${listener} server cert is missing required SANs, regenerating`, { expectedSans });
           } else {
             const remaining = cert.notAfter.getTime() - Date.now();
-            if (remaining > 7 * 24 * 60 * 60 * 1000) {
+            if (remaining > renewBeforeMs) {
               logger.debug(`Reusing existing ${listener} server cert`, {
                 expiresAt: cert.notAfter.toISOString(),
               });

@@ -1,8 +1,25 @@
+import { createHash, X509Certificate } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import forge from 'node-forge';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const testKeys = forge.pki.rsa.generateKeyPair(1024);
+let testSerial = 1;
+
+function selfSignedPem(commonName: string): string {
+  const certificate = forge.pki.createCertificate();
+  certificate.publicKey = testKeys.publicKey;
+  certificate.serialNumber = (testSerial++).toString(16).padStart(2, '0');
+  certificate.validity.notBefore = new Date(Date.now() - 60_000);
+  certificate.validity.notAfter = new Date(Date.now() + 86_400_000);
+  certificate.setSubject([{ name: 'commonName', value: commonName }]);
+  certificate.setIssuer([{ name: 'commonName', value: commonName }]);
+  certificate.sign(testKeys.privateKey, forge.md.sha256.create());
+  return forge.pki.certificateToPem(certificate);
+}
 
 const fakeGrpc = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
@@ -58,7 +75,11 @@ const fakeGrpc = vi.hoisted(() => {
     ) => void;
     close: () => void;
   }> = [];
-  const brokers: Array<{ tunnel: TunnelStream; closed: boolean }> = [];
+  const brokers: Array<{
+    tunnel: TunnelStream;
+    closed: boolean;
+    credentials?: { ca: Buffer; key: Buffer; certificate: Buffer };
+  }> = [];
   const reloadRequests: string[] = [];
   const commitRequests: string[] = [];
   let commitFailures = 0;
@@ -113,8 +134,10 @@ const fakeGrpc = vi.hoisted(() => {
   class TunnelBroker {
     tunnel = new TunnelStream();
     closed = false;
+    credentials?: { ca: Buffer; key: Buffer; certificate: Buffer };
 
-    constructor() {
+    constructor(_target?: string, credentials?: { ca: Buffer; key: Buffer; certificate: Buffer }) {
+      this.credentials = credentials;
       brokers.push(this);
     }
 
@@ -269,6 +292,165 @@ describe('RelayControlClient identity rotation', () => {
     expect(previousBroker.closed).toBe(false);
     expect(fakeGrpc.admins[1]!.closed).toBe(false);
     expect(fakeGrpc.brokers[1]!.closed).toBe(false);
+  });
+
+  it('re-targets an unconfirmed reload at the client identity a later renewal installed', async () => {
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+    });
+    const previousAdmin = fakeGrpc.admins[0]!;
+    let available = false;
+    previousAdmin.ReloadIdentity = vi.fn((request, _options, callback) => {
+      if (!available) {
+        callback(new Error('unavailable'));
+        return;
+      }
+      fakeGrpc.reloadRequests.push(request.operationId ?? '');
+      callback(null, { reloaded: true });
+    });
+
+    writeFileSync(certificatePath, 'renewed-once');
+    await expect(client.reloadIdentity()).rejects.toThrow('unavailable');
+    const stale = fakeGrpc.admins[1]!;
+
+    writeFileSync(certificatePath, 'renewed-twice');
+    available = true;
+    await expect(client.reloadIdentity()).resolves.toBe(true);
+
+    expect(stale.closed).toBe(true);
+    const current = fakeGrpc.admins[2]!;
+    expect(current.credentials.certificate.toString()).toBe('renewed-twice');
+    expect(current.closed).toBe(false);
+    expect(fakeGrpc.commitRequests).toEqual(fakeGrpc.reloadRequests);
+  });
+
+  it('reports the client identity it moved to and presents it to remote relay candidates', async () => {
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+    });
+    const activated = vi.fn();
+    client.setIdentityActivationListener(activated);
+    const candidate = {
+      relayInstanceId: 'relay-1',
+      addresses: ['192.0.2.10'],
+      port: 9443,
+      certificateIdentity: 'relay-relay-1',
+      certificateFingerprint: 'sha256:00',
+      grant: { keyId: 'key-1', payload: Buffer.from('{}'), signature: Buffer.alloc(64) },
+    };
+    const candidateCertificate = () => {
+      void client.openCandidateTunnel(candidate as never, 10).catch(() => undefined);
+      return fakeGrpc.brokers.at(-1)!.credentials!.certificate.toString();
+    };
+
+    // Renewed files are installed, but the relay has not confirmed them: keep presenting the old client.
+    writeFileSync(certificatePath, 'new-certificate');
+    writeFileSync(privateKeyPath, 'new-private-key');
+    expect(candidateCertificate()).toBe('old-certificate');
+
+    await expect(client.reloadIdentity()).resolves.toBe(true);
+    expect(activated).toHaveBeenCalledWith({
+      certificate: Buffer.from('new-certificate'),
+      certificateSha256: null,
+      loaded: null,
+    });
+    expect(candidateCertificate()).toBe('new-certificate');
+  });
+
+  it('waits for a reload already in flight and sends a fresh one for files written since', async () => {
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+    });
+    const previousAdmin = fakeGrpc.admins[0]!;
+    let answer: ((error: Error | null, value?: unknown) => void) | undefined;
+    previousAdmin.ReloadIdentity = vi.fn((request, _options, callback) => {
+      fakeGrpc.reloadRequests.push(request.operationId ?? '');
+      answer = callback;
+    });
+
+    writeFileSync(certificatePath, 'renewed-once');
+    const inFlight = client.reloadIdentity();
+    await vi.waitFor(() => expect(previousAdmin.ReloadIdentity).toHaveBeenCalledOnce());
+    // A renewal writes new files while the relay still answers the earlier reload.
+    writeFileSync(certificatePath, 'renewed-twice');
+    const reload = client.reloadIdentity();
+    answer!(null, { reloaded: true });
+
+    await expect(inFlight).resolves.toBe(true);
+    await expect(reload).resolves.toBe(true);
+    expect(fakeGrpc.reloadRequests).toHaveLength(2);
+    expect(new Set(fakeGrpc.reloadRequests).size).toBe(2);
+    expect(fakeGrpc.admins.at(-1)!.credentials.certificate.toString()).toBe('renewed-twice');
+    expect(fakeGrpc.admins.at(-1)!.closed).toBe(false);
+  });
+
+  it('stays on its current client when the relay loaded a different one, and reports what it loaded', async () => {
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+    });
+    const activated = vi.fn();
+    client.setIdentityActivationListener(activated);
+    const previousAdmin = fakeGrpc.admins[0]!;
+    const renewed = selfSignedPem('app-relay-client');
+    writeFileSync(certificatePath, renewed);
+    const renewedSha256 = `sha256:${createHash('sha256').update(new X509Certificate(renewed).raw).digest('hex')}`;
+    const loaded = {
+      externalCertificateSha256: 'sha256:external',
+      relayClientCertificateSha256: 'sha256:relay-client',
+      appClientCertificateSha256: 'sha256:another-client',
+    };
+    previousAdmin.ReloadIdentity = vi.fn((_request, _options, callback) =>
+      callback(null, { reloaded: true, ...loaded })
+    );
+
+    await expect(client.reloadIdentity()).resolves.toBe(false);
+    expect(activated).not.toHaveBeenCalled();
+    expect(previousAdmin.closed).toBe(false);
+    expect(client.activeClientCertificateSha256()).toBeNull(); // still the old, non-PEM test client
+
+    previousAdmin.ReloadIdentity = vi.fn((_request, _options, callback) =>
+      callback(null, { reloaded: true, ...loaded, appClientCertificateSha256: renewedSha256 })
+    );
+    await expect(client.reloadIdentity()).resolves.toBe(true);
+    expect(activated).toHaveBeenCalledWith({
+      certificate: Buffer.from(renewed),
+      certificateSha256: renewedSha256,
+      loaded: { ...loaded, appClientCertificateSha256: renewedSha256 },
+    });
+    expect(client.activeClientCertificateSha256()).toBe(renewedSha256);
+  });
+
+  it('starts on the previous client after a restart, the one Gateway grants name until the relay confirms', () => {
+    const previousPem = selfSignedPem('app-relay-client-previous');
+    const previousCertificatePath = join(directory, 'client.previous.crt');
+    const previousPrivateKeyPath = join(directory, 'client.previous.key');
+    writeFileSync(previousCertificatePath, previousPem);
+    writeFileSync(previousPrivateKeyPath, 'previous-private-key');
+    writeFileSync(certificatePath, selfSignedPem('app-relay-client'));
+    const client = new RelayControlClient({
+      target: 'relay:9443',
+      systemCaPath: caPath,
+      certificatePath,
+      privateKeyPath,
+      previousCertificatePath,
+      previousPrivateKeyPath,
+    });
+
+    expect(client.activeClientCertificateSha256()).toBe(
+      `sha256:${createHash('sha256').update(new X509Certificate(previousPem).raw).digest('hex')}`
+    );
   });
 
   it('retries the same reload operation after an ambiguous lost response', async () => {

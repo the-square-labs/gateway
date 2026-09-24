@@ -20,32 +20,87 @@ const (
 	metadataPrefix   = "x-wiolett-relay-"
 )
 
+// upstreamConn is one connection to Gateway and the number of proxied RPCs on it.
+type upstreamConn struct {
+	conn    *grpc.ClientConn
+	active  int
+	retired bool
+}
+
 type Handler struct {
-	mu       sync.RWMutex
-	upstream *grpc.ClientConn
+	mu       sync.Mutex
+	current  *upstreamConn
+	retiring map[*upstreamConn]struct{}
 	connect  func() (*grpc.ClientConn, error)
 }
 
 func New(upstream *grpc.ClientConn, connect func() (*grpc.ClientConn, error)) *Handler {
-	return &Handler{upstream: upstream, connect: connect}
+	return &Handler{current: &upstreamConn{conn: upstream}, retiring: map[*upstreamConn]struct{}{}, connect: connect}
 }
 
+// ReloadUpstream moves new RPCs onto a fresh connection, which presents the
+// relay's reloaded client certificate to Gateway. Closing the previous
+// connection would cancel every daemon stream proxied over it, so RPCs already
+// running keep it until they end, and it closes after the last one.
 func (h *Handler) ReloadUpstream() error {
 	next, err := h.connect()
 	if err != nil {
 		return err
 	}
 	h.mu.Lock()
-	previous := h.upstream
-	h.upstream = next
+	previous := h.current
+	if previous.conn == next {
+		h.mu.Unlock()
+		return nil
+	}
+	h.current = &upstreamConn{conn: next}
+	previous.retired = true
+	idle := previous.active == 0
+	if !idle {
+		h.retiring[previous] = struct{}{}
+	}
 	h.mu.Unlock()
-	return previous.Close()
+	if idle {
+		return previous.conn.Close()
+	}
+	return nil
 }
 
 func (h *Handler) Close() error {
 	h.mu.Lock()
+	connections := []*grpc.ClientConn{h.current.conn}
+	for retired := range h.retiring {
+		connections = append(connections, retired.conn)
+	}
+	h.retiring = map[*upstreamConn]struct{}{}
+	h.mu.Unlock()
+	var first error
+	for _, connection := range connections {
+		if err := connection.Close(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (h *Handler) acquire() *upstreamConn {
+	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.upstream.Close()
+	h.current.active++
+	return h.current
+}
+
+func (h *Handler) release(used *upstreamConn) {
+	h.mu.Lock()
+	used.active--
+	idleRetired := used.retired && used.active == 0
+	if idleRetired {
+		delete(h.retiring, used)
+	}
+	h.mu.Unlock()
+	if idleRetired {
+		_ = used.conn.Close()
+	}
 }
 
 func (h *Handler) Handle(_ any, downstream grpc.ServerStream) error {
@@ -64,12 +119,11 @@ func (h *Handler) Handle(_ any, downstream grpc.ServerStream) error {
 		outgoing.Set("x-wiolett-relay-cert-serial", identity.CertificateSerial)
 		outgoing.Set("x-wiolett-relay-cert-sha256", identity.CertificateFingerprint)
 	}
+	used := h.acquire()
+	defer h.release(used)
 	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(downstream.Context(), outgoing))
 	defer cancel()
-	h.mu.RLock()
-	connection := h.upstream
-	h.mu.RUnlock()
-	upstream, err := connection.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}, method, grpc.ForceCodec(codec.Codec{}))
+	upstream, err := used.conn.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}, method, grpc.ForceCodec(codec.Codec{}))
 	if err != nil {
 		return err
 	}

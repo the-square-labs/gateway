@@ -840,7 +840,7 @@ describe('RelayPolicyService policy signing trust', () => {
       health: null,
       buildVersion: 'test',
       protocolMajor: 1,
-      capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] },
+      capabilities: { protocolMajor: 1, features: ['relay_pool_v1', 'policy_trust_reset_v1'] },
     };
     const db: any = {
       select: () => {
@@ -977,18 +977,64 @@ describe('RelayPolicyService policy signing trust', () => {
 
   it('reports an actionable status when the local relay predates the reset call', async () => {
     const refusal = signedRotationRefusal();
-    const { service, relay } = localPoolFixture({
+    const { service, relay, local } = localPoolFixture({
       bootstrapPolicyTrust: vi.fn().mockRejectedValue(refusal),
-      resetLocalPolicyTrust: vi.fn().mockRejectedValue(Object.assign(new Error('unimplemented'), { code: 12 })),
+    });
+    relay.getHealth.mockResolvedValue({
+      ...local,
+      relayInstanceId: local.id,
+      capabilities: ['relay_pool_v1'],
+      policyKeyIds: ['stale'],
     });
 
     await expect(service.syncSnapshot()).rejects.toThrow('Update the Relay Pool');
+    expect(relay.resetLocalPolicyTrust).not.toHaveBeenCalled();
     expect(relay.applyEncodedSnapshot).not.toHaveBeenCalled();
     expect(service.getLocalPolicyTrustStatus()).toMatchObject({
       state: 'recovery_unsupported',
       message: LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
       trustedKeyIds: ['stale'],
     });
+  });
+
+  it('recovers a locked-out local relay on the first sync after it is updated to a build that can reset', async () => {
+    const { service, relay, local } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(signedRotationRefusal()),
+    });
+    relay.getHealth.mockResolvedValue({
+      ...local,
+      relayInstanceId: local.id,
+      capabilities: ['relay_pool_v1'],
+      policyKeyIds: ['stale'],
+    });
+    await expect(service.syncSnapshot()).rejects.toThrow('Update the Relay Pool');
+
+    // The Relay Pool update replaced the container; no cooldown holds the reset back.
+    relay.getHealth.mockResolvedValue({
+      ...local,
+      relayInstanceId: local.id,
+      capabilities: ['relay_pool_v1', 'policy_trust_reset_v1'],
+      policyKeyIds: ['stale'],
+    });
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(relay.resetLocalPolicyTrust).toHaveBeenCalledOnce();
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({ state: 'recovered' });
+  });
+
+  it('starts no cooldown when a relay answers that it cannot reset', async () => {
+    const reset = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('12 UNIMPLEMENTED'), { code: 12 }))
+      .mockResolvedValueOnce({ replacedKeyIds: ['stale'] });
+    const { service } = localPoolFixture({
+      bootstrapPolicyTrust: vi.fn().mockRejectedValue(signedRotationRefusal()),
+      resetLocalPolicyTrust: reset,
+    });
+
+    await expect(service.syncSnapshot()).rejects.toThrow('Update the Relay Pool');
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({ state: 'recovery_unsupported' });
+    await expect(service.syncSnapshot()).resolves.toBe(101);
+    expect(reset).toHaveBeenCalledTimes(2);
   });
 
   it('audits a reset, shows the recovery, and never repeats it within the cooldown', async () => {

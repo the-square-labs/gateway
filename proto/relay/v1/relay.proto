@@ -256,7 +256,15 @@ message RouteRuntimeResponse {
 }
 
 message ReloadIdentityRequest { string operation_id = 1; }
-message ReloadIdentityResponse { bool reloaded = 1; }
+message ReloadIdentityResponse {
+  bool reloaded = 1;
+  // Fingerprints ("sha256:<hex>") of the identity the relay loaded, so Gateway
+  // confirms a rotation only once the relay serves the files it installed.
+  // Empty from relays built before these fields existed.
+  string external_certificate_sha256 = 2;
+  string relay_client_certificate_sha256 = 3;
+  string app_client_certificate_sha256 = 4;
+}
 message CommitIdentityRotationRequest { string operation_id = 1; }
 message CommitIdentityRotationResponse { bool committed = 1; }
 message SetDrainRequest {

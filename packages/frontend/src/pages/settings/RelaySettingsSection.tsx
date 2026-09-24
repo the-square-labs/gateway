@@ -110,10 +110,15 @@ function relayReenrollmentCommand(reenrollment: RelayReenrollment, gateway: stri
   const addressArgument = reenrollment.advertiseAddress
     ? ` \\\n  --advertise-address ${reenrollment.advertiseAddress}`
     : "";
+  // Reinstall the release the pool runs: "latest" can resolve to an older release whose
+  // supervisor ignores a re-enrollment token.
+  const versionArgument = reenrollment.relayVersion
+    ? ` \\\n  --version ${reenrollment.relayVersion}`
+    : "";
   return `curl -sSL ${RELAY_INSTALLER_URL} | sudo bash -s -- \\
   --gateway ${gateway} \\
   --token ${reenrollment.enrollmentToken} \\
-  --gateway-cert-sha256 ${reenrollment.gatewayCertSha256}${addressArgument}${portArgument}`;
+  --gateway-cert-sha256 ${reenrollment.gatewayCertSha256}${addressArgument}${portArgument}${versionArgument}`;
 }
 
 /** Remote relays that need, or may need, a fresh enrollment to recover. */

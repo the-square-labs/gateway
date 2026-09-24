@@ -171,6 +171,49 @@ describe('RelayDockerRecoveryService', () => {
     expect(mock.restartContainer).not.toHaveBeenCalled();
   });
 
+  it('acts on the running relay when a stopped leftover of an interrupted recreate remains', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'leftover-id' }, { Id: 'relay-id' }]);
+    mock.inspectContainer.mockImplementation(async (id: string) => ({
+      Id: id,
+      State: { Running: id === 'relay-id' },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    }));
+    await expect(recovery.recover()).resolves.toBe('restart');
+    expect(mock.restartContainer).toHaveBeenCalledWith('relay-id', 10);
+    expect(mock.startContainer).not.toHaveBeenCalled();
+    await expect(recovery.ensureStarted()).resolves.toBe('already_running');
+  });
+
+  it('lets Compose reconcile when only stopped relay containers remain', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'leftover-id' }, { Id: 'relay-id' }]);
+    mock.inspectContainer.mockImplementation(async (id: string) => ({
+      Id: id,
+      State: { Running: false },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    }));
+    await expect(recovery.recover()).resolves.toBe('compose_up');
+    expect(mock.startContainer).not.toHaveBeenCalled();
+    expect(mock.runOneShot).toHaveBeenCalledWith(
+      expect.objectContaining({ Cmd: expect.arrayContaining(['--project-name', 'gateway', 'up', '-d', 'relay']) })
+    );
+    await expect(recovery.ensureStarted()).resolves.toBe('compose_up');
+  });
+
+  it('still refuses two running relay containers for one deployment', async () => {
+    const { service: recovery, mock } = service();
+    mock.listContainersByLabel.mockResolvedValue([{ Id: 'relay-a' }, { Id: 'relay-b' }]);
+    mock.inspectContainer.mockImplementation(async (id: string) => ({
+      Id: id,
+      State: { Running: true },
+      Config: { Image: IMAGE, Labels: labels('relay') },
+    }));
+    await expect(recovery.recover()).rejects.toMatchObject({ reason: 'ownership_unverified' });
+    expect(mock.restartContainer).not.toHaveBeenCalled();
+    expect(mock.runOneShot).not.toHaveBeenCalled();
+  });
+
   it('does not mutate manual deployments', async () => {
     const { service: recovery } = service(docker(), { GATEWAY_RELAY_MANAGED: false });
     await expect(recovery.recover()).rejects.toMatchObject({ reason: 'ownership_unverified' });

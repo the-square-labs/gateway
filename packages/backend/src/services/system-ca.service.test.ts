@@ -23,11 +23,13 @@ function createCertificatePair(
     serverAuth?: boolean;
     clientAuth?: boolean;
     altNames?: Array<{ type: 2; value: string } | { type: 7; ip: string }>;
+    validDays?: number;
   } = {}
 ) {
   const {
     serverAuth = true,
     clientAuth = false,
+    validDays = 90,
     altNames = [
       { type: 2, value: 'localhost' },
       { type: 2, value: 'relay' },
@@ -40,7 +42,7 @@ function createCertificatePair(
   caCert.publicKey = caKeys.publicKey;
   caCert.serialNumber = '01';
   caCert.validity.notBefore = new Date(now - 60_000);
-  caCert.validity.notAfter = new Date(now + 30 * 86_400_000);
+  caCert.validity.notAfter = new Date(now + validDays * 86_400_000);
   caCert.setSubject([{ name: 'commonName', value: 'gateway-system-ca' }]);
   caCert.setIssuer(caCert.subject.attributes);
   caCert.setExtensions([
@@ -54,7 +56,7 @@ function createCertificatePair(
   leafCert.publicKey = leafKeys.publicKey;
   leafCert.serialNumber = '02';
   leafCert.validity.notBefore = new Date(now - 60_000);
-  leafCert.validity.notAfter = new Date(now + 30 * 86_400_000);
+  leafCert.validity.notAfter = new Date(now + validDays * 86_400_000);
   leafCert.setSubject([{ name: 'commonName', value: 'gateway-grpc' }]);
   leafCert.setIssuer(caCert.subject.attributes);
   const extKeyUsage: { name: 'extKeyUsage'; serverAuth?: boolean; clientAuth?: boolean } = { name: 'extKeyUsage' };
@@ -139,6 +141,30 @@ describe('SystemCAService.ensureGrpcServerCert', () => {
 
     await expect(service.ensureGrpcServerCert(certPath, keyPath)).resolves.toEqual({ certPath, keyPath });
     expect(certService.issueCertificate).not.toHaveBeenCalled();
+  });
+
+  it('keeps the gRPC certificate enrollment commands pin until its last week unless asked earlier', async () => {
+    const { caPem, certPem, keyPem } = createCertificatePair({ validDays: 29 });
+    const { certPath, keyPath } = writeTlsFiles(certPem, keyPem);
+    const reused = createService([[{ certificatePem: caPem }]]);
+    await expect(reused.service.ensureGrpcServerCert(certPath, keyPath)).resolves.toEqual({ certPath, keyPath });
+    expect(reused.certService.issueCertificate).not.toHaveBeenCalled();
+
+    // Running renewal asks for the month-ahead window when no enrollment command is pending.
+    const renewed = createService([[{ certificatePem: caPem }], [{ id: 'system-ca-id' }]]);
+    await expect(
+      renewed.service.ensureGrpcServerCert(certPath, keyPath, { renewBeforeMs: 30 * 86_400_000 })
+    ).resolves.toEqual({ certPath, keyPath });
+    expect(renewed.certService.issueCertificate).toHaveBeenCalledOnce();
+  });
+
+  it('renews the gRPC certificate in its last week by default', async () => {
+    const { caPem, certPem, keyPem } = createCertificatePair({ validDays: 6 });
+    const { certPath, keyPath } = writeTlsFiles(certPem, keyPem);
+    const { service, certService } = createService([[{ certificatePem: caPem }], [{ id: 'system-ca-id' }]]);
+
+    await expect(service.ensureGrpcServerCert(certPath, keyPath)).resolves.toEqual({ certPath, keyPath });
+    expect(certService.issueCertificate).toHaveBeenCalledOnce();
   });
 
   it('includes configured public gateway names and addresses in issued gRPC TLS SANs', async () => {

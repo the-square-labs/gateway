@@ -128,6 +128,68 @@ describe('GrpcIdentityService', () => {
     expect(systemCA.ensureGrpcServerCert).toHaveBeenCalledTimes(2);
   });
 
+  it('advertises the served certificate until a renewed one is marked served', async () => {
+    const first = writeTlsFiles(TEST_CERT_PEM);
+    const renewed = writeTlsFiles(createCertificatePair().certPem);
+    const systemCA = {
+      ensureGrpcServerCert: vi.fn().mockResolvedValueOnce(first).mockResolvedValue(renewed),
+      getSystemCACertPem: vi.fn(),
+    };
+    const service = new GrpcIdentityService({ GRPC_TLS_AUTO_DIR: '/tmp/gateway-tls' } as any, systemCA as any);
+    const served = (await service.resolve()).gatewayCertSha256;
+
+    const next = await service.refresh({ renewBeforeMs: 30 * 86_400_000 });
+    expect(systemCA.ensureGrpcServerCert).toHaveBeenLastCalledWith(
+      '/tmp/gateway-tls/grpc-server.crt',
+      '/tmp/gateway-tls/grpc-server.key',
+      { renewBeforeMs: 30 * 86_400_000 }
+    );
+    expect(next.gatewayCertSha256).not.toBe(served);
+    // Installed, not yet served: enrollment commands keep the fingerprint daemons get today.
+    await expect(service.getGatewayCertSha256()).resolves.toBe(served);
+
+    service.markServed(next.gatewayCertSha256);
+    await expect(service.getGatewayCertSha256()).resolves.toBe(next.gatewayCertSha256);
+  });
+
+  it('keeps the current identity when a refresh fails', async () => {
+    const { certPath, keyPath } = writeTlsFiles();
+    const systemCA = {
+      ensureGrpcServerCert: vi
+        .fn()
+        .mockResolvedValueOnce({ certPath, keyPath })
+        .mockRejectedValueOnce(new Error('issuance failed')),
+      getSystemCACertPem: vi.fn(),
+    };
+    const service = new GrpcIdentityService({ GRPC_TLS_AUTO_DIR: '/tmp/gateway-tls' } as any, systemCA as any);
+    const current = await service.resolve();
+
+    await expect(service.refresh()).rejects.toThrow('issuance failed');
+    await expect(service.resolve()).resolves.toEqual(current);
+    await expect(service.getGatewayCertSha256()).resolves.toBe(current.gatewayCertSha256);
+    expect(systemCA.ensureGrpcServerCert).toHaveBeenCalledTimes(2);
+  });
+
+  it('never issues two certificates at once', async () => {
+    const { certPath, keyPath } = writeTlsFiles();
+    let active = 0;
+    let overlapped = false;
+    const systemCA = {
+      ensureGrpcServerCert: vi.fn(async () => {
+        active += 1;
+        overlapped ||= active > 1;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return { certPath, keyPath };
+      }),
+      getSystemCACertPem: vi.fn(),
+    };
+    const service = new GrpcIdentityService({ GRPC_TLS_AUTO_DIR: '/tmp/gateway-tls' } as any, systemCA as any);
+
+    await Promise.all([service.resolve(), service.refresh(), service.getGatewayCertSha256(), service.refresh()]);
+    expect(overlapped).toBe(false);
+  });
+
   it('rejects partial custom gRPC TLS configuration', async () => {
     const service = new GrpcIdentityService(
       { GRPC_TLS_CERT: '/tmp/server.crt', GRPC_TLS_AUTO_DIR: '/tmp/gateway-tls' } as any,

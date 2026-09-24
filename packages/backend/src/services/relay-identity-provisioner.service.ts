@@ -7,12 +7,13 @@ import { certificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
 import type { GrpcIdentityService } from './grpc-identity.service.js';
+import { GATEWAY_IDENTITY_RENEW_BEFORE_MS } from './grpc-server-certificate.js';
 import type { SystemCAService } from './system-ca.service.js';
 import type { SystemCertificateLifecycleService } from './system-certificate-lifecycle.service.js';
 
 const logger = createChildLogger('RelayIdentityProvisioner');
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
-const RENEW_BEFORE_MS = 7 * 24 * 60 * 60 * 1000;
+const RENEW_BEFORE_MS = GATEWAY_IDENTITY_RENEW_BEFORE_MS;
 
 type ServiceOwnerId = 'app-internal-server' | 'app-relay-client' | 'relay-app-client';
 
@@ -31,6 +32,21 @@ export interface AppRelayIdentity {
   /** The client pair the running relay may still trust after a renewal; see RelayControlClient. */
   previousAppClientCertPath?: string;
   previousAppClientKeyPath?: string;
+  /** Digest of every certificate the relay loads: equal digests need no relay reload. */
+  materialDigest: string;
+  /** The external server certificate the relay serves to daemons, which enrollment commands pin. */
+  externalFingerprint: string;
+}
+
+export interface InstalledRelayCertificatePaths {
+  /** Copy of Gateway's gRPC listener certificate, served by the relay to daemons. */
+  externalServer: string;
+  /** Served by Gateway's own gRPC listener to the relay. */
+  appInternalServer: string;
+  /** Gateway's client certificate toward the relay admin and broker. */
+  appRelayClient: string;
+  /** The relay's client certificate toward Gateway. */
+  relayAppClient: string;
 }
 
 function fingerprint(certificatePem: string | Buffer): string {
@@ -52,6 +68,14 @@ function readIfExists(path: string): Buffer | null {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
+  }
+}
+
+function parsedFingerprint(certificatePem: string): string | null {
+  try {
+    return fingerprint(certificatePem);
+  } catch {
+    return null;
   }
 }
 
@@ -157,6 +181,18 @@ export class RelayIdentityProvisionerService {
         )}\n`,
         0o644
       );
+      const externalCertificate = readFileSync(paths.externalCertificate, 'utf8');
+      const materialDigest = createHash('sha256')
+        .update(
+          [
+            systemCa,
+            externalCertificate,
+            appServer.certificatePem,
+            appClient.certificatePem,
+            relayClient.certificatePem,
+          ].join('\n')
+        )
+        .digest('hex');
       logger.info('Provisioned relay service identities and trust manifest');
       this.identity = {
         internalServerCertPath: paths.appServerCertificate,
@@ -165,6 +201,8 @@ export class RelayIdentityProvisionerService {
         appClientKeyPath: paths.appClientPrivateKey,
         relayClientFingerprint,
         appClientFingerprint,
+        materialDigest,
+        externalFingerprint: parsedFingerprint(externalCertificate) ?? '',
         ...(previousFingerprint && previousFingerprint !== appClientFingerprint
           ? {
               previousAppClientCertPath: paths.previousAppClientCertificate,
@@ -178,9 +216,26 @@ export class RelayIdentityProvisionerService {
     }
   }
 
+  /** Re-provisions, renewing leaves that are due. A failure keeps the current identity. */
   async refresh(): Promise<AppRelayIdentity> {
+    const previous = this.identity;
     this.identity = null;
-    return this.ensure();
+    try {
+      return await this.ensure();
+    } catch (error) {
+      this.identity = previous;
+      throw error;
+    }
+  }
+
+  /** The certificates installed for the local relay and Gateway's internal listener, for expiry checks. */
+  installedCertificatePaths(): InstalledRelayCertificatePaths {
+    return {
+      externalServer: resolve(this.identityDir, 'external-server.crt'),
+      appInternalServer: resolve(this.identityDir, 'app-internal-server.crt'),
+      appRelayClient: resolve(this.identityDir, 'app-relay-client.crt'),
+      relayAppClient: resolve(this.identityDir, 'relay-app-client.crt'),
+    };
   }
 
   private async ensureLeaf(

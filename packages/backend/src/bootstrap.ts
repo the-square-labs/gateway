@@ -15,7 +15,11 @@ import { hostingResources } from '@/db/schema/index.js';
 import { COMMERCIAL_HOST_API_VERSION } from '@/edition/contract.js';
 import { initializeCommercialEdition } from '@/edition/runtime.js';
 import { RelayControlClient } from '@/grpc/relay-control.client.js';
-import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
+import {
+  currentGrpcServerCertificate,
+  refreshGrpcServerCredentials,
+  stageGrpcServerRelayTrust,
+} from '@/grpc/server.js';
 import { logger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AccessListService } from '@/modules/access-lists/access-list.service.js';
@@ -234,6 +238,10 @@ import { DaemonUpdateService } from '@/services/daemon-update.service.js';
 import { DatabaseCAService } from '@/services/database-ca.service.js';
 import { DockerService } from '@/services/docker.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import {
+  GatewayIdentityRenewalService,
+  hasUnexpiredEnrollmentTokens,
+} from '@/services/gateway-identity-renewal.service.js';
 import { GatewayLifecycleService } from '@/services/gateway-lifecycle.service.js';
 import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
@@ -698,6 +706,33 @@ export async function initializeContainer(): Promise<void> {
 
   const webIdentityService = new WebIdentityService(env, systemCA);
   container.registerInstance(WebIdentityService, webIdentityService);
+  // Renews Gateway's own TLS identities while it runs and hot-reloads them; also the one
+  // refresh path settings changes and first-run setup use.
+  const gatewayIdentityRenewal = new GatewayIdentityRenewalService({
+    env,
+    grpcIdentity: grpcIdentityService,
+    grpcListener: {
+      refreshCredentials: (certPath, keyPath) => refreshGrpcServerCredentials(certPath, keyPath, systemCA),
+      servedCertificate: currentGrpcServerCertificate,
+      stageRelayTrust: stageGrpcServerRelayTrust,
+    },
+    relayIdentity: env.GATEWAY_RELAY_REQUIRED ? relayIdentityProvisioner : undefined,
+    relayControl: relayControlClient,
+    startupRelayIdentity: env.GATEWAY_RELAY_REQUIRED ? await relayIdentityProvisioner.ensure() : undefined,
+    onAppClientFingerprint: (fingerprint) => {
+      // Before the tunnel proxies exist they are created with the active fingerprint below.
+      if (container.isRegistered(ManagedDatabaseTunnelProxy)) {
+        container.resolve(ManagedDatabaseTunnelProxy).setAppCertificateFingerprint(fingerprint);
+      }
+      if (container.isRegistered(ManagedStorageTunnelProxy)) {
+        container.resolve(ManagedStorageTunnelProxy).setAppCertificateFingerprint(fingerprint);
+      }
+    },
+    webIdentity: webIdentityService,
+    hasPendingEnrollments: () => hasUnexpiredEnrollmentTokens(db),
+    audit: auditService,
+  });
+  container.registerInstance(GatewayIdentityRenewalService, gatewayIdentityRenewal);
 
   // Nginx config generator (pure config generation, no I/O)
   const configValidator = new ConfigValidatorService();
@@ -1058,6 +1093,9 @@ export async function initializeContainer(): Promise<void> {
   nginxTemplateService.setEventBus(eventBus);
   dockerRegistryService.setEventBus(eventBus);
 
+  // Grants for Gateway's own tunnels name the client certificate the relay client presents. After
+  // a restart that is the previous one until the local relay confirms the renewed identity.
+  appRelayClientFingerprint = relayControlClient?.activeClientCertificateSha256() ?? appRelayClientFingerprint;
   const managedDatabaseTunnelProxy = commercialEdition.createManagedDatabase(
     'ManagedDatabaseTunnelProxy',
     [relayPolicyService, appRelayClientFingerprint],
@@ -1719,29 +1757,7 @@ export async function initializeContainer(): Promise<void> {
       finalizeSetupService,
       mcpSettingsService,
       async () => {
-        const externalIdentity = await grpcIdentityService.refresh();
-        if (!env.GATEWAY_RELAY_REQUIRED) {
-          await refreshGrpcServerCredentials(externalIdentity.certPath, externalIdentity.keyPath, systemCA);
-          return;
-        }
-        const relayIdentity = await relayIdentityProvisioner.refresh();
-        const commitRelayTrust = stageGrpcServerRelayTrust(relayIdentity.relayClientFingerprint);
-        await refreshGrpcServerCredentials(
-          relayIdentity.internalServerCertPath,
-          relayIdentity.internalServerKeyPath,
-          systemCA
-        );
-        try {
-          if (await relayControlClient?.reloadIdentity()) {
-            managedDatabaseTunnelProxy.setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
-            managedStorageTunnelProxy.setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
-            commitRelayTrust();
-          }
-        } catch (error) {
-          logger.warn('Relay identity refresh was not acknowledged; retaining both trusted relay identities', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
+        await gatewayIdentityRenewal.refreshGrpcIdentity();
       },
       async () => {
         const transport = await webTransportSettingsService.getConfig();

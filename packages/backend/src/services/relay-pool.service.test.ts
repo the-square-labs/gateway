@@ -762,11 +762,17 @@ describe('RelayPoolService remote relay liveness and recovery', () => {
 
   it('issues a single-use re-enrollment token only for an enrolled remote relay', async () => {
     const remote = { ...instance('relay-1', 'host'), nodeId: 'node-1', servicePort: 9443 };
-    const { db, writes } = queuedDb([[remote]]);
+    const { db, writes } = queuedDb([[remote], [{ buildVersion: 'v2.11.0-rc.7' }]]);
     const { pool, audit } = service(db);
     db.updateResult = [{ id: 'node-1' }];
     const issued = await pool.issueRelayReenrollment('relay-1', 'admin');
-    expect(issued).toMatchObject({ instanceId: 'relay-1', nodeId: 'node-1', advertiseAddress: '127.0.0.1' });
+    expect(issued).toMatchObject({
+      instanceId: 'relay-1',
+      nodeId: 'node-1',
+      advertiseAddress: '127.0.0.1',
+      // The installer pins the release the pool runs.
+      relayVersion: 'v2.11.0-rc.7',
+    });
     expect(issued.enrollmentToken).toMatch(/^gw_node_v2_[0-9a-f]{16}_[0-9a-f]{48}$/);
     const write = writes[0];
     expect(write.values.enrollmentTokenSelector).toBe(issued.enrollmentToken.split('_')[3]);
@@ -788,6 +794,13 @@ describe('RelayPoolService remote relay liveness and recovery', () => {
     pending.db.updateResult = [];
     await expect(service(pending.db).pool.issueRelayReenrollment('relay-1', 'admin')).rejects.toMatchObject({
       code: 'RELAY_NOT_ENROLLED',
+    });
+
+    // A development build has no release to pin: the installer resolves one itself.
+    const development = queuedDb([[remote], [{ buildVersion: 'dev' }]]);
+    development.db.updateResult = [{ id: 'node-1' }];
+    await expect(service(development.db).pool.issueRelayReenrollment('relay-1', 'admin')).resolves.toMatchObject({
+      relayVersion: null,
     });
   });
 });

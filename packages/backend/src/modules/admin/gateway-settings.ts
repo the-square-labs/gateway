@@ -1,8 +1,5 @@
 import { isIP } from 'node:net';
-import type { Env } from '@/config/env.js';
-import { container, TOKENS } from '@/container.js';
-import { RelayControlClient } from '@/grpc/relay-control.client.js';
-import { refreshGrpcServerCredentials, stageGrpcServerRelayTrust } from '@/grpc/server.js';
+import { container } from '@/container.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope, isScopeSubset } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -13,7 +10,6 @@ import { AuthService } from '@/modules/auth/auth.service.js';
 import { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
 import { AuthMailService } from '@/modules/auth/auth-mail.service.js';
 import { OidcSettingsService } from '@/modules/auth/oidc-settings.service.js';
-import { ManagedDatabaseTunnelProxy } from '@/modules/databases/managed-database-tunnel-proxy.js';
 import { isDemoVisitor } from '@/modules/demo/demo-mode.js';
 import { GroupService } from '@/modules/groups/group.service.js';
 import { LoggingRuntimeService } from '@/modules/logging/logging-runtime.service.js';
@@ -26,12 +22,9 @@ import {
 } from '@/modules/settings/general-settings.service.js';
 import { NetworkSettingsService } from '@/modules/settings/network-settings.service.js';
 import { OutboundWebhookPolicyService } from '@/modules/settings/outbound-webhook-policy.service.js';
-import { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
 import { EventBusService } from '@/services/event-bus.service.js';
-import { GrpcIdentityService } from '@/services/grpc-identity.service.js';
-import { RelayIdentityProvisionerService } from '@/services/relay-identity-provisioner.service.js';
+import { GatewayIdentityRenewalService } from '@/services/gateway-identity-renewal.service.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
-import { SystemCAService } from '@/services/system-ca.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
 import type { User } from '@/types.js';
@@ -81,33 +74,7 @@ function touchesGrpcEndpointSettings(input: unknown): boolean {
 }
 
 async function refreshActiveGrpcServerIdentity(): Promise<void> {
-  const env = container.resolve<Env>(TOKENS.Env);
-  const grpcIdentityService = container.resolve(GrpcIdentityService);
-  const systemCA = container.resolve(SystemCAService);
-  const externalIdentity = await grpcIdentityService.refresh();
-  if (!env.GATEWAY_RELAY_REQUIRED) {
-    await refreshGrpcServerCredentials(externalIdentity.certPath, externalIdentity.keyPath, systemCA);
-    return;
-  }
-
-  const relayIdentity = await container.resolve(RelayIdentityProvisionerService).refresh();
-  const commitRelayTrust = stageGrpcServerRelayTrust(relayIdentity.relayClientFingerprint);
-  await refreshGrpcServerCredentials(
-    relayIdentity.internalServerCertPath,
-    relayIdentity.internalServerKeyPath,
-    systemCA
-  );
-  try {
-    if (await container.resolve(RelayControlClient).reloadIdentity()) {
-      container.resolve(ManagedDatabaseTunnelProxy).setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
-      container.resolve(ManagedStorageTunnelProxy).setAppCertificateFingerprint(relayIdentity.appClientFingerprint);
-      commitRelayTrust();
-    }
-  } catch (error) {
-    logger.warn('Relay identity refresh was not acknowledged; retaining both trusted relay identities', {
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
+  await container.resolve(GatewayIdentityRenewalService).refreshGrpcIdentity();
 }
 
 export async function readGatewaySettings(

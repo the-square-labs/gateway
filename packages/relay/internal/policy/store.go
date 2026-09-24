@@ -23,7 +23,12 @@ import (
 const (
 	PolicyLease       = 15 * time.Minute
 	IssuedAtClockSkew = 5 * time.Minute
-	PoolCapability    = "relay_pool_v1"
+	// LeaseExpiryClockSkew lets a relay whose clock runs ahead of Gateway keep a
+	// lease Gateway still considers current. It only delays how long a relay
+	// keeps admitting after Gateway stopped refreshing its policy; what the
+	// policy admits is unchanged, and revocations arrive as new snapshots.
+	LeaseExpiryClockSkew = 2 * time.Minute
+	PoolCapability       = "relay_pool_v1"
 	// TrustResetCapability tells Gateway that this local relay implements
 	// ResetLocalPolicyTrust, so a trust lockout can be repaired without an operator.
 	TrustResetCapability = "policy_trust_reset_v1"
@@ -351,7 +356,7 @@ func (s *Store) AdmissionError(at time.Time) error {
 	if current.Revision == 0 {
 		return fmt.Errorf("policy snapshot is required")
 	}
-	if !current.ExpiresAt.IsZero() && !at.Before(current.ExpiresAt) {
+	if !current.ExpiresAt.IsZero() && !at.Before(current.ExpiresAt.Add(LeaseExpiryClockSkew)) {
 		return fmt.Errorf("policy snapshot expired")
 	}
 	return nil
@@ -497,7 +502,7 @@ func (s *Store) normalizeSignedPayload(payload *relayv1.PolicyEnvelopePayload, d
 	if !allowExpired && issuedAt.After(now.Add(IssuedAtClockSkew)) {
 		return nil, nil, fmt.Errorf("policy envelope was issued in the future")
 	}
-	if !allowExpired && !now.Before(expiresAt) {
+	if !allowExpired && !now.Before(expiresAt.Add(LeaseExpiryClockSkew)) {
 		return nil, nil, fmt.Errorf("policy envelope is expired")
 	}
 	if !contains(payload.Capabilities, PoolCapability) {

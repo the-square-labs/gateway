@@ -27,6 +27,11 @@ const (
 	// a peer from making it buffer huge messages.
 	maxRemoteMessageBytes  = 64 * 1024 * 1024
 	clientKeepaliveMinTime = 20 * time.Second
+	// gracefulStopTimeout bounds how long Stop waits for open RPCs. Tunnels and
+	// proxied daemon streams are long-lived and do not end on their own, and the
+	// supervisor and Docker kill the relay ten seconds after asking it to stop,
+	// which would skip closing the policy state cleanly.
+	gracefulStopTimeout = 5 * time.Second
 )
 
 type Runtime struct {
@@ -112,7 +117,32 @@ func (r *Runtime) Stop() {
 	_ = r.State.Close()
 }
 
-func (r *Runtime) GRPCStop() { r.GRPC.GracefulStop() }
+func (r *Runtime) GRPCStop() { stopWithin(r.GRPC, gracefulStopTimeout) }
+
+type grpcStopper interface {
+	GracefulStop()
+	Stop()
+}
+
+// stopWithin stops accepting RPCs and lets open ones finish for up to timeout,
+// then closes whatever is still open. It reports whether it had to force.
+func stopWithin(server grpcStopper, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return false
+	case <-timer.C:
+		server.Stop()
+		<-done
+		return true
+	}
+}
 
 func targetServerName(target string) (string, error) {
 	parsed, err := url.Parse("dns://" + target)

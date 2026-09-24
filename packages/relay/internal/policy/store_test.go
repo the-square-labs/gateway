@@ -246,7 +246,11 @@ func TestSignedPolicyLeaseReplayAndRestart(t *testing.T) {
 	if err := store.AdmissionError(now.Add(PolicyLease - time.Second)); err != nil {
 		t.Fatalf("policy expired early: %v", err)
 	}
-	now = now.Add(PolicyLease)
+	// A relay clock running slightly ahead of Gateway keeps the lease.
+	if err := store.AdmissionError(now.Add(PolicyLease + LeaseExpiryClockSkew - time.Second)); err != nil {
+		t.Fatalf("policy expired within the clock skew allowance: %v", err)
+	}
+	now = now.Add(PolicyLease + LeaseExpiryClockSkew)
 	if err := store.AdmissionError(now); err == nil {
 		t.Fatal("expired policy still admitted new tunnels")
 	}
@@ -465,6 +469,32 @@ func TestPromotedKeyValidFromAllowsIssuedAtClockSkew(t *testing.T) {
 		t.Fatal("key was accepted long before its validity window")
 	}
 	reopened.Close()
+}
+
+func TestLeaseExpiryAllowsRelayClockAheadOfGateway(t *testing.T) {
+	policyPublic, policyPrivate, _ := ed25519.GenerateKey(nil)
+	grantPublic, _, _ := ed25519.GenerateKey(nil)
+	gatewayNow := time.Unix(1_800_000_000, 0)
+	// Gateway issued the lease a full lease ago by the relay's clock, which runs ahead.
+	relayNow := gatewayNow.Add(PolicyLease + time.Minute)
+	store := remoteStore(t, t.TempDir(), &relayNow)
+	defer store.Close()
+	if _, err := store.BootstrapPolicyTrust("policy-1", policyPublic, PublicKeyFingerprint(policyPublic)); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.Apply(signedSnapshot(t, policyPrivate, "policy-1", policyPublic, grantPublic, 1, gatewayNow)); err != nil {
+		t.Fatalf("lease inside the clock skew allowance was refused: %v", err)
+	}
+	if !store.Ready(relayNow) {
+		t.Fatal("lease inside the clock skew allowance did not admit tunnels")
+	}
+	relayNow = gatewayNow.Add(PolicyLease + LeaseExpiryClockSkew)
+	if store.Ready(relayNow) {
+		t.Fatal("lease past the clock skew allowance still admitted tunnels")
+	}
+	if _, _, err := store.Apply(signedSnapshot(t, policyPrivate, "policy-1", policyPublic, grantPublic, 2, gatewayNow)); err == nil {
+		t.Fatal("envelope past the clock skew allowance was accepted")
+	}
 }
 
 func TestPersistedSnapshotLoadsAfterSignerWindowCloses(t *testing.T) {

@@ -444,7 +444,27 @@ export class RelayPoolService {
       enrollmentTokenExpiresAt: expiresAt.toISOString(),
       advertiseAddress: instance.advertisedAddresses[0] ?? null,
       servicePort: instance.servicePort,
+      relayVersion: await this.poolRelayVersion(instance.poolId),
     };
+  }
+
+  /**
+   * The relay release the pool runs, read from its local relay, which every Relay Pool update
+   * moves too. The re-enrollment installer pins it: left to resolve "latest", it may install a
+   * release older than the pool (on a prerelease channel) whose supervisor ignores the token.
+   */
+  private async poolRelayVersion(poolId: string): Promise<string | null> {
+    try {
+      const [local] = await this.db
+        .select({ buildVersion: relayInstances.buildVersion })
+        .from(relayInstances)
+        .where(and(eq(relayInstances.poolId, poolId), eq(relayInstances.kind, 'local')))
+        .limit(1);
+      const version = local?.buildVersion ?? '';
+      return /^v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$/.test(version) ? version : null;
+    } catch {
+      return null;
+    }
   }
 
   /**

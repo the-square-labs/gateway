@@ -170,6 +170,8 @@ async function main() {
           port: env.PORT,
           hostname: env.BIND_HOST,
         });
+    // Lets identity renewal switch the HTTPS listener to a renewed certificate without a restart.
+    if (webTransport.tlsEnabled) container.resolve(WebIdentityService).attachServer(server);
 
     // Inject WebSocket support into the HTTP server
     injectWebSocket(server);

@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
+import { createSecureContext } from 'node:tls';
 import { fileURLToPath } from 'node:url';
 import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
@@ -80,6 +81,10 @@ class ReloadableCertificateProvider {
     this.identityListeners.delete(listener);
   }
 
+  currentCertificate(): Buffer {
+    return this.certificate;
+  }
+
   update(caCertificate: Buffer, certificate: Buffer, privateKey: Buffer) {
     this.caCertificate = caCertificate;
     this.certificate = certificate;
@@ -125,8 +130,13 @@ async function readGrpcServerTlsMaterial(
     throw new Error('gRPC server requires the Gateway system CA certificate for daemon mTLS');
   }
   validateGrpcServerCertificate(cert, key, caPem);
+  const ca = Buffer.from(caPem);
+  // grpc-js builds the listener's secure context from exactly these options. Material it
+  // cannot load there makes the running server refuse every new connection, so it must
+  // fail here, before the listener is switched to it.
+  createSecureContext({ ca, cert, key });
 
-  return { cert, key, ca: Buffer.from(caPem) };
+  return { cert, key, ca };
 }
 
 export async function createGrpcServerCredentials(
@@ -157,9 +167,17 @@ export async function refreshGrpcServerCredentials(
     return;
   }
 
+  // Validated before the switch: on failure the listener keeps serving its current
+  // material. The switch applies to new handshakes only; established connections
+  // keep the certificate they were opened with.
   const { cert, key, ca } = await readGrpcServerTlsMaterial(tlsCertPath, tlsKeyPath, systemCA);
   certificateProvider.update(ca, cert, key);
   logger.info('Refreshed gRPC server TLS material');
+}
+
+/** The certificate the running gRPC server presents to new connections, or null when it is not running. */
+export function currentGrpcServerCertificate(): Buffer | null {
+  return certificateProvider?.currentCertificate() ?? null;
 }
 
 export function stageGrpcServerRelayTrust(nextFingerprint: string): () => void {

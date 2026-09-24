@@ -174,6 +174,8 @@ export interface RelayReenrollment {
   enrollmentTokenExpiresAt: string;
   advertiseAddress: string | null;
   servicePort: number;
+  /** The relay release the pool runs; the installer pins it. */
+  relayVersion?: string | null;
   gatewayCertSha256: string;
   gatewayEnrollmentTargets?: {
     public?: { label: string; gateway: string | null };

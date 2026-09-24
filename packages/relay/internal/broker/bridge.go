@@ -151,14 +151,22 @@ type tunnelSender interface {
 type connectionTunnelStream struct {
 	connection net.Conn
 	maxFrame   int
+	// readBuffer is reused by every Recv; only one pump reads a stream.
+	readBuffer []byte
 	writeMu    sync.Mutex
 }
 
 func (s *connectionTunnelStream) Recv() (*relayv1.TunnelFrame, error) {
-	buffer := make([]byte, s.maxFrame)
-	count, err := s.connection.Read(buffer)
+	if len(s.readBuffer) != s.maxFrame {
+		s.readBuffer = make([]byte, s.maxFrame)
+	}
+	count, err := s.connection.Read(s.readBuffer)
 	if count > 0 {
-		return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: buffer[:count]}}}, nil
+		// A sent message must not change afterwards, so each frame gets its own
+		// copy sized to what was read rather than a fresh full-size frame.
+		data := make([]byte, count)
+		copy(data, s.readBuffer[:count])
+		return &relayv1.TunnelFrame{Payload: &relayv1.TunnelFrame_Data{Data: &relayv1.TunnelData{Data: data}}}, nil
 	}
 	return nil, err
 }

@@ -132,7 +132,22 @@ export class RelayDockerRecoveryService {
       }
     }
     if (owned.length > 1) {
-      throw new RelayRecoverySafetyError('ownership_unverified', 'Multiple relay containers belong to this deployment');
+      // An interrupted Compose recreate leaves a renamed, stopped copy of the relay behind. Such a
+      // leftover must not block recovery: act on the one running relay, and with none running let
+      // Compose reconcile the service back to a single container. Two running relays stay ambiguous.
+      const running = owned.filter(({ container }) => container.State?.Running === true);
+      if (running.length > 1) {
+        throw new RelayRecoverySafetyError(
+          'ownership_unverified',
+          'Multiple running relay containers belong to this deployment'
+        );
+      }
+      const [active] = running;
+      return {
+        container: active?.container ?? null,
+        composeProject: (active ?? owned[0]!).ownership.composeProject,
+        composeWorkingDir,
+      };
     }
     if (owned.length === 1) {
       return {
