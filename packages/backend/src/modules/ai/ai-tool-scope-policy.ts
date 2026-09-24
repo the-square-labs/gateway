@@ -193,6 +193,8 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'pages:settings:edit',
     'pages:folders:manage',
   ],
+  // nodeId is a list filter, not the target: the handler returns only routes inside the proxy:view grants.
+  list_routes: ['proxy:view'],
   manage_additional_route: ['proxy:view', 'proxy:edit'],
   manage_additional_secure_link: ['proxy:view', 'proxy:edit'],
   // The handler checks the destination with hasScopeForCreation, like POST /proxy-hosts.

@@ -30,8 +30,14 @@ const (
 	workerAppClientKey              = "relay-app-client.key"
 	workerTrustManifest             = "trust-manifest.json"
 	workerIdentityUpdatingMarker    = ".updating"
+	workerIdentityStagingSuffix     = ".renewal-staging"
+	workerIdentityBackupSuffix      = ".renewal-previous"
+	workerIdentityFailedSuffix      = ".renewal-failed"
 	adminClientSyncInterval         = 10 * time.Minute
 	workerRestartReadyTimeout       = 30 * time.Second
+	// serverCertificateRolloverCapability is what a worker advertises when it
+	// keeps serving external-server.previous.* by that certificate's identity.
+	serverCertificateRolloverCapability = "server_certificate_rollover_v1"
 )
 
 // errNoIdentityChange means the worker already holds the material.
@@ -93,6 +99,10 @@ type stagedWorkerIdentity struct {
 	files       []identityFile
 	removals    []string
 	adminChange bool
+	// The certificate daemons may still pin, kept as "previous", and the
+	// identity (TLS server name) they ask for it by.
+	retainedIdentity    string
+	retainedFingerprint string
 }
 
 // planWorkerIdentity decides what the worker identity directory needs: a
@@ -112,27 +122,49 @@ func planWorkerIdentity(identityDir string, renewal *pb.RenewRelayIdentityComman
 		if err != nil {
 			return nil, fmt.Errorf("renewed relay server certificate: %w", err)
 		}
-		// Keep the certificate daemons pin, whichever file holds it now.
-		var retained *[2][]byte
-		for _, pair := range [][2]string{{workerServerCertificate, workerServerKey}, {workerPreviousServerCertificate, workerPreviousServerKey}} {
-			certificatePEM, certErr := os.ReadFile(filepath.Join(identityDir, pair[0]))
-			keyPEM, keyErr := os.ReadFile(filepath.Join(identityDir, pair[1]))
+		// Keep the certificate daemons pin, whichever file holds it now. When
+		// Gateway names none the worker holds, keep the one it serves today:
+		// daemons were handed that one most recently.
+		type pair struct {
+			certificate, key []byte
+			fingerprint      string
+			leaf             *x509.Certificate
+		}
+		load := func(certificateName, keyName string) *pair {
+			certificatePEM, certErr := os.ReadFile(filepath.Join(identityDir, certificateName))
+			keyPEM, keyErr := os.ReadFile(filepath.Join(identityDir, keyName))
 			if certErr != nil || keyErr != nil {
-				continue
+				return nil
 			}
 			fingerprint, leaf, parseErr := pemFingerprint(certificatePEM)
-			if parseErr != nil || fingerprint != renewal.GetRetainServerFingerprint() || fingerprint == renewed || !now.Before(leaf.NotAfter) {
-				continue
+			if parseErr != nil || fingerprint == renewed || !now.Before(leaf.NotAfter) {
+				return nil
 			}
-			retained = &[2][]byte{certificatePEM, keyPEM}
-			break
+			return &pair{certificatePEM, keyPEM, fingerprint, leaf}
+		}
+		current := load(workerServerCertificate, workerServerKey)
+		previous := load(workerPreviousServerCertificate, workerPreviousServerKey)
+		var retained *pair
+		for _, candidate := range []*pair{current, previous} {
+			if candidate != nil && candidate.fingerprint == renewal.GetRetainServerFingerprint() {
+				retained = candidate
+				break
+			}
+		}
+		if retained == nil {
+			retained = current
 		}
 		if retained != nil {
 			plan.files = append(plan.files,
-				identityFile{workerPreviousServerCertificate, retained[0], 0o644},
-				identityFile{workerPreviousServerKey, retained[1], 0o600},
+				identityFile{workerPreviousServerCertificate, retained.certificate, 0o644},
+				identityFile{workerPreviousServerKey, retained.key, 0o600},
 			)
-		} else {
+			plan.retainedFingerprint = retained.fingerprint
+			plan.retainedIdentity = retained.leaf.Subject.CommonName
+			if plan.retainedIdentity == "" && len(retained.leaf.DNSNames) > 0 {
+				plan.retainedIdentity = retained.leaf.DNSNames[0]
+			}
+		} else if previous == nil {
 			plan.removals = append(plan.removals, workerPreviousServerCertificate, workerPreviousServerKey)
 		}
 		plan.files = append(plan.files,
@@ -170,24 +202,117 @@ func planWorkerIdentity(identityDir string, renewal *pb.RenewRelayIdentityComman
 	return plan, nil
 }
 
-// writeWorkerIdentity writes the plan under the worker's update marker, so a
-// worker that reads its identity meanwhile waits instead of loading a mix.
-func writeWorkerIdentity(identityDir string, plan *stagedWorkerIdentity) error {
-	marker := filepath.Join(identityDir, workerIdentityUpdatingMarker)
-	if err := os.WriteFile(marker, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+// identitySwap is a worker identity directory replaced as a whole. The
+// previous directory stays until commit, so a failed renewal is rolled back
+// completely: a certificate is never left without its key.
+type identitySwap struct{ dir string }
+
+func (s identitySwap) commit() { _ = os.RemoveAll(s.dir + workerIdentityBackupSuffix) }
+
+func (s identitySwap) rollback() error {
+	backup := s.dir + workerIdentityBackupSuffix
+	if _, err := os.Stat(backup); err != nil {
 		return err
 	}
-	defer os.Remove(marker)
+	failed := s.dir + workerIdentityFailedSuffix
+	_ = os.RemoveAll(failed)
+	if err := os.Rename(s.dir, failed); err != nil {
+		return err
+	}
+	if err := os.Rename(backup, s.dir); err != nil {
+		_ = os.Rename(failed, s.dir)
+		return err
+	}
+	return os.RemoveAll(failed)
+}
+
+// swapWorkerIdentity builds the new identity in a staging directory and swaps
+// it in with two renames. The worker reads its identity only when it starts
+// (and retries a missing directory) or when asked to reload afterwards.
+func swapWorkerIdentity(identityDir string, plan *stagedWorkerIdentity) (identitySwap, error) {
+	staging := identityDir + workerIdentityStagingSuffix
+	backup := identityDir + workerIdentityBackupSuffix
+	_ = os.RemoveAll(staging)
+	if err := copyIdentityDir(identityDir, staging); err != nil {
+		_ = os.RemoveAll(staging)
+		return identitySwap{}, err
+	}
 	for _, file := range plan.files {
-		if err := atomicWrite(filepath.Join(identityDir, file.name), file.content, file.mode); err != nil {
-			return err
+		if err := os.WriteFile(filepath.Join(staging, file.name), file.content, file.mode); err != nil {
+			_ = os.RemoveAll(staging)
+			return identitySwap{}, err
 		}
 	}
 	for _, name := range plan.removals {
-		if err := os.Remove(filepath.Join(identityDir, name)); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(filepath.Join(staging, name)); err != nil && !os.IsNotExist(err) {
+			_ = os.RemoveAll(staging)
+			return identitySwap{}, err
+		}
+	}
+	_ = os.RemoveAll(backup)
+	if err := os.Rename(identityDir, backup); err != nil {
+		_ = os.RemoveAll(staging)
+		return identitySwap{}, err
+	}
+	if err := os.Rename(staging, identityDir); err != nil {
+		_ = os.Rename(backup, identityDir)
+		_ = os.RemoveAll(staging)
+		return identitySwap{}, err
+	}
+	return identitySwap{dir: identityDir}, nil
+}
+
+func copyIdentityDir(source, target string) error {
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || entry.Name() == workerIdentityUpdatingMarker {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		content, err := os.ReadFile(filepath.Join(source, entry.Name()))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(target, entry.Name()), content, info.Mode().Perm()); err != nil {
 			return err
 		}
 	}
+	return nil
+}
+
+// RecoverWorkerIdentity repairs what an interrupted enrollment or renewal left
+// in the worker identity directory, before the worker starts. A stale update
+// marker would otherwise keep the worker from ever loading its identity.
+func RecoverWorkerIdentity(identityDir string) error {
+	if identityDir == "" {
+		return nil
+	}
+	_ = os.RemoveAll(identityDir + workerIdentityStagingSuffix)
+	_ = os.RemoveAll(identityDir + workerIdentityFailedSuffix)
+	for _, backup := range []string{identityDir + workerIdentityBackupSuffix, identityDir + ".previous"} {
+		if _, err := os.Stat(backup); err != nil {
+			continue
+		}
+		if _, err := os.Stat(identityDir); os.IsNotExist(err) {
+			// Killed between the two renames: the previous identity is complete.
+			if err := os.Rename(backup, identityDir); err != nil {
+				return err
+			}
+			continue
+		}
+		// The swap completed; the new identity serves both certificates.
+		_ = os.RemoveAll(backup)
+	}
+	_ = os.Remove(filepath.Join(identityDir, workerIdentityUpdatingMarker))
 	return nil
 }
 
@@ -202,19 +327,48 @@ func randomOperationID() string {
 func (m *workerManager) renewIdentity(ctx context.Context, renewal *pb.RenewRelayIdentityCommand, adminCertificatePath, adminKeyPath string) (string, error) {
 	m.updateMu.Lock()
 	defer m.updateMu.Unlock()
+	// An older worker serves only its current certificate: renewing it would cut
+	// off every daemon that still pins the one it replaces.
+	health, err := m.health(ctx)
+	if err != nil {
+		return "", fmt.Errorf("relay worker is unavailable for a certificate renewal: %w", err)
+	}
+	if !hasCapability(health.GetCapabilities(), serverCertificateRolloverCapability) {
+		return "", fmt.Errorf("relay worker %s cannot keep serving the certificate daemons pin during a renewal; update the relay worker first", health.GetBuildVersion())
+	}
 	adminCertificate, adminKey := readOptionalPair(adminCertificatePath, adminKeyPath)
 	plan, err := planWorkerIdentity(m.cfg.IdentityDir, renewal, adminCertificate, adminKey, time.Now())
 	if err != nil && !errors.Is(err, errNoIdentityChange) {
 		return "", err
 	}
-	if plan != nil {
-		if err := writeWorkerIdentity(m.cfg.IdentityDir, plan); err != nil {
-			return "", fmt.Errorf("write relay worker identity: %w", err)
-		}
-		if err := m.applyStagedIdentity(ctx, renewal.GetServerIdentity()); err != nil {
-			return "", err
-		}
+	if plan == nil {
+		// Already installed (a retried command): only confirm what is served.
+		return m.verifyServedCertificates(ctx, renewal, nil)
 	}
+	previousIdentity := m.serverIdentity()
+	swap, err := swapWorkerIdentity(m.cfg.IdentityDir, plan)
+	if err != nil {
+		return "", fmt.Errorf("write relay worker identity: %w", err)
+	}
+	served, err := "", m.applyStagedIdentity(ctx, renewal.GetServerIdentity())
+	if err == nil {
+		served, err = m.verifyServedCertificates(ctx, renewal, plan)
+	}
+	if err != nil {
+		// Put the worker back on the identity daemons use now.
+		if rollbackErr := swap.rollback(); rollbackErr == nil {
+			_ = m.applyStagedIdentity(ctx, previousIdentity)
+		}
+		return "", err
+	}
+	swap.commit()
+	return served, nil
+}
+
+// verifyServedCertificates checks, as a daemon would, that the worker serves
+// the renewed certificate by its new identity and still serves the one daemons
+// pin by the old identity.
+func (m *workerManager) verifyServedCertificates(ctx context.Context, renewal *pb.RenewRelayIdentityCommand, plan *stagedWorkerIdentity) (string, error) {
 	served, err := m.servedServerFingerprint(ctx, renewal.GetServerIdentity())
 	if err != nil {
 		return "", fmt.Errorf("relay worker does not serve the renewed certificate: %w", err)
@@ -223,7 +377,30 @@ func (m *workerManager) renewIdentity(ctx context.Context, renewal *pb.RenewRela
 	if served != expected {
 		return "", fmt.Errorf("relay worker serves %s for %s, expected %s", served, renewal.GetServerIdentity(), expected)
 	}
+	if plan != nil && plan.retainedIdentity != "" {
+		retained, err := m.servedServerFingerprint(ctx, plan.retainedIdentity)
+		if err != nil || retained != plan.retainedFingerprint {
+			return "", fmt.Errorf("relay worker no longer serves the certificate daemons pin for %s", plan.retainedIdentity)
+		}
+	}
 	return served, nil
+}
+
+func (m *workerManager) serverIdentity() string {
+	state, err := loadEnrollmentState(m.enrollmentStateDir)
+	if err != nil {
+		return ""
+	}
+	return state.RelayServerIdentity
+}
+
+func hasCapability(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
 }
 
 // syncAdminClient keeps the worker's admin client on the supervisor's current
@@ -245,10 +422,18 @@ func (m *workerManager) syncAdminClient(ctx context.Context, adminCertificatePat
 	if err != nil {
 		return err
 	}
-	if err := writeWorkerIdentity(m.cfg.IdentityDir, plan); err != nil {
+	swap, err := swapWorkerIdentity(m.cfg.IdentityDir, plan)
+	if err != nil {
 		return err
 	}
-	return m.applyStagedIdentity(ctx, "")
+	if err := m.applyStagedIdentity(ctx, ""); err != nil {
+		if rollbackErr := swap.rollback(); rollbackErr == nil {
+			_ = m.applyStagedIdentity(ctx, "")
+		}
+		return err
+	}
+	swap.commit()
+	return nil
 }
 
 func readOptionalPair(certificatePath, keyPath string) ([]byte, []byte) {

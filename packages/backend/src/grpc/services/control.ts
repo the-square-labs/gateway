@@ -898,7 +898,10 @@ export function createControlHandlers(deps: GrpcServerDeps) {
               )
                 ? (runtime.state as 'joining' | 'synchronizing' | 'ready' | 'draining' | 'offline' | 'error')
                 : 'error';
-              const appliedPolicyRevision = Number(runtime.appliedPolicyRevision || 0);
+              const reportedRevision = Number(runtime.appliedPolicyRevision || 0);
+              // A remote report; the policy service caps how far it may move revisions.
+              const appliedPolicyRevision =
+                Number.isSafeInteger(reportedRevision) && reportedRevision > 0 ? reportedRevision : 0;
               const runtimeStateChanged =
                 instance.state !== nextState || Number(instance.appliedPolicyRevision || 0) !== appliedPolicyRevision;
               // A report that raced the stream's replacement must not overwrite the state the

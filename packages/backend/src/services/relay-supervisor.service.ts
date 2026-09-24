@@ -48,6 +48,12 @@ export interface RelayAttemptRecord {
 export interface RelaySupervisorState {
   state: RelayLifecycleState;
   reason: RelayHealthReason | null;
+  /**
+   * Automatic recovery spent its attempt budget, or stopped at a Docker safety error. Until the
+   * relay is healthy again or an administrator retries, no probe restarts it: otherwise a relay
+   * whose failure reason keeps changing would be restarted without bound.
+   */
+  recoveryBlocked?: 'budget' | 'safety' | null;
   attempt: number;
   maxAttempts: 3;
   attemptHistory: RelayAttemptRecord[];
@@ -229,7 +235,7 @@ export class RelaySupervisorService {
       canRetry:
         this.state.state === 'critical' &&
         this.state.reason !== null &&
-        this.isRecoverable(this.state.reason) &&
+        (this.isRecoverable(this.state.reason) || this.state.recoveryBlocked === 'safety') &&
         !this.recoveryCycle &&
         !this.manualRetryStarting,
     };
@@ -283,6 +289,7 @@ export class RelaySupervisorService {
         await this.transition({
           state: 'healthy',
           reason: null,
+          recoveryBlocked: null,
           attempt: 0,
           attemptHistory: [],
           ...healthyUpdate,
@@ -302,8 +309,13 @@ export class RelaySupervisorService {
         });
       });
       if (this.state.state === 'recovering' || this.recoveryCycle) return;
-      // A critical relay stays critical for the same cause. A new cause is recorded, so the retry
-      // decision and automatic recovery act on what is wrong now, not on a stale reason.
+      if (this.state.recoveryBlocked) {
+        // Keep the current cause visible; only a healthy probe or a manual retry lifts the block.
+        if (this.state.reason !== result.reason) await this.transition({ reason: result.reason });
+        return;
+      }
+      // Critical without a spent budget means automatic recovery was never tried for this cause
+      // (it was not recoverable, or automatic recovery is off). A recoverable cause gets one budget.
       if (this.state.state === 'critical' && this.state.reason === result.reason) return;
       const autoRecovery = (await this.settings.getConfig()).relayAutoRecovery;
       if (this.isRecoverable(result.reason) && autoRecovery && this.options.managed && this.recovery) {
@@ -324,12 +336,15 @@ export class RelaySupervisorService {
 
   async retryRecovery(userId: string): Promise<ReturnType<RelaySupervisorService['getSnapshot']>> {
     if (!this.options.required || !this.relayClient) throw new Error('Gateway relay is not enabled');
+    // Offered exactly when canRetry is: the stored reason is kept current by every probe, and a
+    // relay stopped by a Docker safety error may be retried once Docker is back. The fresh probe
+    // below then decides.
     if (
       this.recoveryCycle ||
       this.manualRetryStarting ||
       this.state.state !== 'critical' ||
       !this.state.reason ||
-      !this.isRecoverable(this.state.reason)
+      !(this.isRecoverable(this.state.reason) || this.state.recoveryBlocked === 'safety')
     ) {
       return this.getSnapshot(true);
     }
@@ -349,6 +364,7 @@ export class RelaySupervisorService {
         await this.transition({
           state: 'healthy',
           reason: null,
+          recoveryBlocked: null,
           attempt: 0,
           attemptHistory: [],
           lastHealthyAt: new Date().toISOString(),
@@ -375,7 +391,7 @@ export class RelaySupervisorService {
       }
       await this.transition({ state: 'critical', reason: current.reason });
       if (!this.isRecoverable(current.reason)) return this.getSnapshot(true);
-      await this.transition({ state: 'recovering', attempt: 0, attemptHistory: [] });
+      await this.transition({ state: 'recovering', recoveryBlocked: null, attempt: 0, attemptHistory: [] });
       await this.audit.log({
         userId,
         action: 'relay.recovery.retry',
@@ -412,7 +428,11 @@ export class RelaySupervisorService {
         logger.error('Gateway relay recovery cycle failed internally', {
           error: error instanceof Error ? error.message : String(error),
         });
-        await this.transition({ state: 'critical', reason: this.state.reason ?? 'unreachable' }).catch(() => {});
+        await this.transition({
+          state: 'critical',
+          reason: this.state.reason ?? 'unreachable',
+          recoveryBlocked: 'budget',
+        }).catch(() => {});
       })
       .finally(() => {
         this.recoveryCycle = null;
@@ -437,7 +457,13 @@ export class RelaySupervisorService {
         if (this.inMaintenance()) return;
         if (current.healthy) {
           this.failureCount = 0;
-          await this.transition({ state: 'healthy', reason: null, attempt: 0, attemptHistory: [] });
+          await this.transition({
+            state: 'healthy',
+            reason: null,
+            recoveryBlocked: null,
+            attempt: 0,
+            attemptHistory: [],
+          });
           return;
         }
       }
@@ -454,6 +480,7 @@ export class RelaySupervisorService {
           await this.transition({
             state: error.reason === 'ownership_unverified' ? 'degraded' : 'critical',
             reason: error.reason,
+            recoveryBlocked: 'safety',
           });
           return;
         }
@@ -463,7 +490,13 @@ export class RelaySupervisorService {
       const healthy = await this.waitForReadiness();
       if (healthy) {
         this.updateAttempt(attempt, { result: 'healthy' });
-        await this.transition({ state: 'healthy', reason: null, attempt: 0, attemptHistory: [] });
+        await this.transition({
+          state: 'healthy',
+          reason: null,
+          recoveryBlocked: null,
+          attempt: 0,
+          attemptHistory: [],
+        });
         await this.audit.log({
           userId: null,
           action: 'relay.recovery.succeeded',
@@ -476,7 +509,7 @@ export class RelaySupervisorService {
       this.updateAttempt(attempt, { result: 'failed' });
       await this.persistAndPublish();
     }
-    await this.transition({ state: 'critical', reason: this.state.reason ?? 'unreachable' });
+    await this.transition({ state: 'critical', reason: this.state.reason ?? 'unreachable', recoveryBlocked: 'budget' });
     await this.audit.log({
       userId: null,
       action: 'relay.recovery.failed',

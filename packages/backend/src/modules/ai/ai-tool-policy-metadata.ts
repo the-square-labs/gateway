@@ -1,4 +1,10 @@
-import type { AIToolApprovalClass, AIToolDefinition, AIToolEffect, AIToolOperationPolicy } from './ai.types.js';
+import type {
+  AIToolApprovalClass,
+  AIToolDefinition,
+  AIToolEffect,
+  AIToolOperationArgumentPolicy,
+  AIToolOperationPolicy,
+} from './ai.types.js';
 
 type OperationGroups = Partial<Record<AIToolApprovalClass | 'external', readonly string[]>>;
 
@@ -13,9 +19,36 @@ function operationPolicies(groups: OperationGroups): Record<string, AIToolOperat
   return result;
 }
 
+function withArgumentPolicy(
+  policies: Record<string, AIToolOperationPolicy>,
+  operation: string,
+  argumentPolicy: AIToolOperationArgumentPolicy
+): Record<string, AIToolOperationPolicy> {
+  return { ...policies, [operation]: { ...policies[operation], argumentPolicy } };
+}
+
+// Credential reveals and key or secret exports are `execute`, like manage_ca export_key, so every
+// approval mode except bypass-everything asks before secret material reaches the model.
 const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> = {
   manage_ca: operationPolicies({ update: ['update'], destructive: ['revoke'], execute: ['export_key'] }),
-  manage_certificate: operationPolicies({ read: ['export', 'chain'], create: ['issue_from_csr'] }),
+  manage_certificate: withArgumentPolicy(
+    operationPolicies({ read: ['chain'], create: ['issue_from_csr'], execute: ['export'] }),
+    'export',
+    // Public formats are plain reads; the private-key formats export key material.
+    {
+      path: ['format'],
+      approvalClasses: {
+        pem: 'read',
+        der: 'read',
+        chain: 'read',
+        fullchain: 'read',
+        'private-key': 'execute',
+        'pem-bundle': 'execute',
+        pkcs12: 'execute',
+        jks: 'execute',
+      },
+    }
+  ),
   manage_template: operationPolicies({ read: ['get'], update: ['update'] }),
   manage_resource_folder: operationPolicies({
     create: ['create'],
@@ -140,23 +173,28 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   }),
   manage_docker_task: operationPolicies({ read: ['list', 'get'] }),
   manage_docker_deployment: operationPolicies({ create: ['create'], update: ['update'], delete: ['delete'] }),
-  manage_docker_container_config: operationPolicies({
-    read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_webhook', 'get_health_check'],
-    create: ['create_secret', 'create_file', 'create_directory', 'upload_init'],
-    update: [
-      'update_env',
-      'write_file',
-      'move_file',
-      'upload_chunk',
-      'upload_complete',
-      'update_secret',
-      'upsert_webhook',
-      'regenerate_webhook_token',
-      'upsert_health_check',
-    ],
-    delete: ['delete_secret', 'delete_webhook', 'delete_file', 'upload_abort'],
-    external: ['test_health_check'],
-  }),
+  manage_docker_container_config: withArgumentPolicy(
+    operationPolicies({
+      read: ['get_env', 'list_files', 'read_file', 'list_secrets', 'get_webhook', 'get_health_check'],
+      create: ['create_secret', 'create_file', 'create_directory', 'upload_init'],
+      update: [
+        'update_env',
+        'write_file',
+        'move_file',
+        'upload_chunk',
+        'upload_complete',
+        'update_secret',
+        'upsert_webhook',
+        'regenerate_webhook_token',
+        'upsert_health_check',
+      ],
+      delete: ['delete_secret', 'delete_webhook', 'delete_file', 'upload_abort'],
+      external: ['test_health_check'],
+    }),
+    'list_secrets',
+    // reveal: true returns the secret values.
+    { path: ['reveal'], approvalClasses: { false: 'read', true: 'execute' } }
+  ),
   manage_docker_container: operationPolicies({
     read: ['processes', 'stats_history', 'gpu_usage', 'image_cleanup_get', 'archive_plan_import'],
     update: ['live_update', 'image_cleanup_upsert'],
@@ -183,11 +221,12 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     delete: ['close'],
   }),
   manage_database_connection: operationPolicies({
-    read: ['reveal_credentials', 'health_history', 'monitoring'],
+    read: ['health_history', 'monitoring'],
     create: ['create'],
     update: ['update'],
     delete: ['delete'],
     external: ['test'],
+    execute: ['reveal_credentials'],
   }),
   manage_postgres_data: operationPolicies({
     read: [
@@ -213,19 +252,11 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     execute: ['execute_command'],
   }),
   manage_managed_database: operationPolicies({
-    read: [
-      'catalog',
-      'list',
-      'get',
-      'list_bindings',
-      'logs',
-      'get_binding_runtime',
-      'reveal_credentials',
-      'reveal_binding_credentials',
-    ],
+    read: ['catalog', 'list', 'get', 'list_bindings', 'logs', 'get_binding_runtime'],
     create: ['create', 'create_binding'],
-    update: ['update', 'retry', 'rotate_certificate', 'rotate_credentials'],
-    execute: ['restart', 'pause', 'unpause'],
+    update: ['update', 'retry', 'rotate_certificate'],
+    // Rotation returns the new direct-access password.
+    execute: ['restart', 'pause', 'unpause', 'reveal_credentials', 'reveal_binding_credentials', 'rotate_credentials'],
     delete: ['delete', 'delete_binding'],
   }),
   manage_pages: operationPolicies({
@@ -380,28 +411,34 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_storage_connection: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['reveal_credentials', 'health_history', 'monitoring'],
+      read: ['health_history', 'monitoring'],
       create: ['create'],
       update: ['update'],
       delete: ['delete'],
       external: ['test'],
+      execute: ['reveal_credentials'],
     }),
   },
   manage_storage_objects: {
     arguments: ['action'],
-    operations: operationPolicies({
-      read: ['list_buckets', 'list_objects', 'head', 'presign', 'read_object'],
-      create: ['create_bucket', 'create_prefix'],
-      delete: ['delete_bucket', 'delete_objects'],
-    }),
+    // A presigned PUT URL lets its holder write the object; config.operation defaults to get.
+    operations: withArgumentPolicy(
+      operationPolicies({
+        read: ['list_buckets', 'list_objects', 'head', 'presign', 'read_object'],
+        create: ['create_bucket', 'create_prefix'],
+        delete: ['delete_bucket', 'delete_objects'],
+      }),
+      'presign',
+      { path: ['config', 'operation'], approvalClasses: { get: 'read', put: 'update' } }
+    ),
   },
   manage_managed_storage: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys', 'reveal_credentials'],
+      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys'],
       create: ['create', 'create_binding', 'create_access_key'],
       update: ['update', 'retry'],
-      execute: ['restart'],
+      execute: ['restart', 'reveal_credentials'],
       delete: ['delete', 'delete_binding', 'remove_access_key'],
     }),
   },

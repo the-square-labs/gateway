@@ -92,7 +92,30 @@ function directResourceIdsForScopes(scopes: string[], baseScope: string): string
 }
 
 const SENSITIVE_TOOL_ARG_RE =
-  /(?:password|passwd|passphrase|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
+  /(?:password|passwd|passphrase|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64|connectionstring|connection_string|connectionuri|connection_uri)/i;
+/** URL-valued arguments (url, baseUrl, repositoryUrl...) keep their shape; only embedded credentials go. */
+const URL_TOOL_ARG_RE = /(?:url|uri)$/i;
+const SENSITIVE_URL_QUERY_RE = /^(?:key|code|sig|auth|pass|pwd)$|signature|credential|access_?key/i;
+
+function redactUrlCredentials(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return value;
+  }
+  const hasUserinfo = Boolean(url.username || url.password);
+  const sensitiveParams = [...new Set(url.searchParams.keys())].filter(
+    (name) => SENSITIVE_TOOL_ARG_RE.test(name) || SENSITIVE_URL_QUERY_RE.test(name)
+  );
+  if (!hasUserinfo && sensitiveParams.length === 0) return value;
+  if (hasUserinfo) {
+    url.username = 'REDACTED';
+    url.password = '';
+  }
+  for (const name of sensitiveParams) url.searchParams.set(name, 'REDACTED');
+  return url.toString();
+}
 
 function redactToolArgs(value: unknown, depth = 0): unknown {
   if (value === null || typeof value !== 'object') return value;
@@ -104,7 +127,11 @@ function redactToolArgs(value: unknown, depth = 0): unknown {
 
   const redacted: Record<string, unknown> = {};
   for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    redacted[key] = SENSITIVE_TOOL_ARG_RE.test(key) ? '[REDACTED]' : redactToolArgs(nested, depth + 1);
+    redacted[key] = SENSITIVE_TOOL_ARG_RE.test(key)
+      ? '[REDACTED]'
+      : URL_TOOL_ARG_RE.test(key) && typeof nested === 'string'
+        ? redactUrlCredentials(nested)
+        : redactToolArgs(nested, depth + 1);
   }
   return redacted;
 }

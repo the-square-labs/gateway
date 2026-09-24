@@ -31,11 +31,14 @@ function relay(overrides: Record<string, unknown> = {}) {
     advertisedAddresses: ['relay.example.test', '[2001:db8::1]'],
     certificateFingerprint: 'sha256:pinned',
     certificateExpiresAt: new Date(Date.now() + 10 * DAY),
+    capabilities: { protocolMajor: 1, features: ['relay_pool_v1', 'server_certificate_rollover_v1'] },
     ...overrides,
   };
 }
 
-function harness(options: { dispatchResult?: { success: boolean; error?: string }; connected?: boolean } = {}) {
+function harness(
+  options: { dispatchResult?: { success: boolean; error?: string }; connected?: boolean; rows?: unknown[] } = {}
+) {
   const renewedExpiry = new Date(Date.now() + 365 * DAY);
   let issuedName = '';
   const lifecycle = {
@@ -61,7 +64,7 @@ function harness(options: { dispatchResult?: { success: boolean; error?: string 
       }),
     }),
   };
-  const rows: unknown[] = [relay()];
+  const rows: unknown[] = options.rows ?? [relay()];
   const db = {
     select: () => {
       const query: any = Promise.resolve(rows);
@@ -173,5 +176,35 @@ describe('RelayCertificateRenewalService', () => {
     expect(renewDue).toHaveBeenCalledTimes(1);
     await service.renewDueIfScheduled(1_000 + 60 * 60 * 1000);
     expect(renewDue).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to renew on a worker that would stop serving the certificate daemons pin', async () => {
+    const { service, dispatch, lifecycle } = harness({
+      rows: [relay({ capabilities: { protocolMajor: 1, features: ['relay_pool_v1'] } })],
+    });
+    await expect(service.renewDue()).resolves.toBe(0);
+    expect(lifecycle.issuePending).not.toHaveBeenCalled();
+    expect(dispatch.renewRelayIdentity).not.toHaveBeenCalled();
+    expect(service.describeCertificates([relay()] as never).get('relay-1')).toMatchObject({
+      state: 'renewal_failed',
+      message: expect.stringContaining('Update the Relay Pool'),
+    });
+  });
+
+  it('refreshes daemon grants once for a whole renewal pass', async () => {
+    const { service, policy, dispatch } = harness({ rows: [relay(), relay({ id: 'relay-2', nodeId: 'node-2' })] });
+    await expect(service.renewDue()).resolves.toBe(2);
+    expect(dispatch.renewRelayIdentity).toHaveBeenCalledTimes(2);
+    expect(policy.refreshAllNodeGrantsIfDue).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not renew again before daemons had a day to receive the last renewal', async () => {
+    const { service, dispatch } = harness({
+      rows: [relay({ certificateExpiresAt: new Date(Date.now() + 365 * DAY - 60_000) })],
+    });
+    await expect(service.renewInstanceCertificate('relay-1', 'admin')).rejects.toMatchObject({
+      code: 'RELAY_CERTIFICATE_RECENTLY_RENEWED',
+    });
+    expect(dispatch.renewRelayIdentity).not.toHaveBeenCalled();
   });
 });

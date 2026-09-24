@@ -1086,6 +1086,78 @@ describe('admin user browser sessions', () => {
   });
 });
 
+describe('admin actions on the caller sign-in', () => {
+  const OWNER = { ...USER, scopes: ['admin:system', 'admin:users'], authMethod: 'password' as const };
+
+  it('refuses bearer tokens acting on the sign-in, MFA or sessions of their own account', async () => {
+    const getUserById = vi.fn().mockResolvedValue(OWNER);
+    const updateUserAuthMethod = vi.fn();
+    container.registerInstance(AuthService, { getUserById, updateUserAuthMethod } as unknown as AuthService);
+    const sessionService = {
+      listPublicUserSessions: vi.fn(),
+      revokeUserSessionByPublicId: vi.fn(),
+      destroyAllUserSessions: vi.fn(),
+    };
+    container.registerInstance(SessionService, sessionService as unknown as SessionService);
+    container.registerInstance(TokensService, {
+      validateToken: vi.fn().mockResolvedValue({
+        user: OWNER,
+        scopes: ['admin:system', 'admin:users'],
+        tokenId: 'token-1',
+        tokenPrefix: 'gw_test',
+      }),
+    } as unknown as TokensService);
+    const headers = { Authorization: 'Bearer gw_test', 'Content-Type': 'application/json' };
+
+    const responses = await Promise.all([
+      createApp().request(`/api/admin/users/${OWNER.id}/auth-method`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ authMethod: 'oidc' }),
+      }),
+      createApp().request(`/api/admin/users/${OWNER.id}/password-setup`, { method: 'POST', headers }),
+      createApp().request(`/api/admin/users/${OWNER.id}/mfa/reset`, { method: 'POST', headers }),
+      createApp().request(`/api/admin/users/${OWNER.id}/sessions`, { headers }),
+      createApp().request(`/api/admin/users/${OWNER.id}/sessions/public-session-id`, { method: 'DELETE', headers }),
+      createApp().request(`/api/admin/users/${OWNER.id}/sessions`, { method: 'DELETE', headers }),
+    ]);
+
+    for (const response of responses) {
+      expect(response.status).toBe(403);
+      await expect(response.json()).resolves.toMatchObject({ code: 'SELF_SIGN_IN_PROGRAMMATIC' });
+    }
+    expect(getUserById).not.toHaveBeenCalled();
+    expect(updateUserAuthMethod).not.toHaveBeenCalled();
+    expect(sessionService.listPublicUserSessions).not.toHaveBeenCalled();
+    expect(sessionService.revokeUserSessionByPublicId).not.toHaveBeenCalled();
+    expect(sessionService.destroyAllUserSessions).not.toHaveBeenCalled();
+  });
+
+  it('still lets a browser session end its own sessions', async () => {
+    registerSession(['admin:users']);
+    const destroyAllUserSessions = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(SessionService, {
+      getSession: vi.fn().mockResolvedValue(SESSION),
+      validateCsrfToken: vi.fn().mockResolvedValue(true),
+      updateSession: vi.fn().mockResolvedValue(undefined),
+      refreshSession: vi.fn().mockResolvedValue(false),
+      destroyAllUserSessions,
+    } as unknown as SessionService);
+    container.registerInstance(AuthService, {
+      getUserById: vi.fn().mockResolvedValue({ ...USER, scopes: ['admin:users'] }),
+    } as unknown as AuthService);
+    container.registerInstance(AuditService, { log: vi.fn() } as unknown as AuditService);
+
+    const response = await createApp().request(`/api/admin/users/${USER.id}/sessions`, {
+      method: 'DELETE',
+      headers: sessionHeaders(),
+    });
+
+    expect(response.status).toBe(200);
+    expect(destroyAllUserSessions).toHaveBeenCalledWith(USER.id);
+  });
+});
+
 describe('admin password link delivery', () => {
   it('sends a setup link before the first completed sign-in and records the action', async () => {
     registerSession(['admin:users', 'nodes:details:node-1']);
@@ -1253,7 +1325,7 @@ describe('deleted user administration', () => {
       body: JSON.stringify({ groupId: restoredUser.groupId }),
     });
     expect(restoreResponse.status).toBe(200);
-    expect(restoreUser).toHaveBeenCalledWith(deletedUser.id, restoredUser.groupId);
+    expect(restoreUser).toHaveBeenCalledWith(deletedUser.id, restoredUser.groupId, expect.any(Array));
     expect(auditLog).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'user.restore', details: expect.objectContaining({ remainsBlocked: true }) })
     );

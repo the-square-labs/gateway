@@ -133,10 +133,24 @@ describe('AIService notification tool routing', () => {
         resourceIds: [],
         webhookIds: ['12121212-1212-4121-8121-121212121212'],
         cooldownSeconds: 900,
-        enabled: false,
+        enabled: true,
       }),
       'user-1'
     );
+
+    // An explicit false still creates the rule disabled.
+    await service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:create'] }, 'create_alert_rule', {
+      name: 'CPU High',
+      type: 'threshold',
+      category: 'node',
+      severity: 'warning',
+      metric: 'cpu',
+      operator: '>',
+      thresholdValue: 90,
+      webhookIds: ['12121212-1212-4121-8121-121212121212'],
+      enabled: false,
+    });
+    expect(notifRuleService.create).toHaveBeenLastCalledWith(expect.objectContaining({ enabled: false }), 'user-1');
   });
 
   it('creates webhooks with default POST method, signing header, and enabled state', async () => {

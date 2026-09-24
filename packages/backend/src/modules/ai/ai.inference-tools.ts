@@ -274,9 +274,9 @@ async function requireInferenceEnabled(): Promise<void> {
 }
 
 /**
- * Mirrors requireAccountScope('feat:ai:use'): remote MCP callers carry
- * token-bounded scopes, which never include the user-only feat:ai:use, so the
- * account's own scopes decide.
+ * Mirrors requireAccountScope('feat:ai:use'): feat:ai:use is delegable, but a
+ * remote MCP token does not have to carry this account baseline itself, so the
+ * owner's live account scopes decide when the token-bounded scopes lack it.
  */
 async function requireAccountAiUse(user: User): Promise<void> {
   if (hasScope(user.scopes, 'feat:ai:use')) return;

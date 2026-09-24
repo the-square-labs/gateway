@@ -30,7 +30,7 @@ const CREDENTIAL_TOOL_CALLS: Readonly<Record<string, (args: ToolArgs) => boolean
   manage_pages: (args) => args.operation === 'token_create',
   manage_logging: (args) => args.resource === 'token' && args.operation === 'create',
   manage_managed_storage: (args) => args.action === 'create_access_key' || args.action === 'reveal_credentials',
-  // The storage reveal route has no impersonation guard; refuse it like every other credential reveal.
+  // Mirrors the storage reveal route, which also refuses impersonation.
   manage_storage_connection: (args) => args.action === 'reveal_credentials',
   manage_database_connection: (args) => args.operation === 'reveal_credentials',
   // Rotation returns the new direct-access password.

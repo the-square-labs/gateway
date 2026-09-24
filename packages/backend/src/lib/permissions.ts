@@ -257,11 +257,20 @@ export function boundScopes(delegatedScopes: string[], principalScopes: string[]
  * Scopes used for "cannot touch what you do not hold" checks. A programmatic caller can never hold the
  * account-only scopes (AI workspace, impersonation, ...), so those come from the live account behind it.
  */
-export function privilegeBoundaryScopes(actorScopes: string[], accountScopes?: string[]): string[] {
+export function privilegeBoundaryScopes(
+  actorScopes: string[],
+  accountScopes?: string[],
+  purpose: 'manage' | 'grant' = 'manage'
+): string[] {
   if (!accountScopes) return actorScopes;
   return [
     ...actorScopes,
-    ...accountScopes.filter((scope) => PROGRAMMATIC_DENIED_SCOPE_SET.has(extractBaseScope(scope))),
+    ...accountScopes.filter((scope) => {
+      const base = extractBaseScope(scope);
+      // A programmatic caller may never hand out impersonation, even when its owner holds it.
+      if (purpose === 'grant' && base.startsWith('admin:users:impersonate')) return false;
+      return PROGRAMMATIC_DENIED_SCOPE_SET.has(base);
+    }),
   ];
 }
 

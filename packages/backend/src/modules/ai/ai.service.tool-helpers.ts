@@ -1,3 +1,4 @@
+import { redactWebhookHeaders, redactWebhookUrl } from '@/modules/notifications/notification-webhook.service.js';
 import { isRecord, type ModelTool, type QueuedApproval, SEND_COMMENT_TOOL_NAME } from './ai.service.runtime-helpers.js';
 import { redactToolArgs } from './ai.service-helpers.js';
 import { AI_TOOLS, inferDiscoveredToolsetsFromText } from './ai.tools.js';
@@ -182,13 +183,35 @@ export function normalizeReadChatSliceMode(value: unknown): 'latest' | 'first' |
 export const GITLAB_TOOL_ARG_SECRET_KEY_RE =
   /^(?:token|secret|password|value|privateKey|private_key|webhookSecret|webhook_secret)$/i;
 
-/** Docker tools whose plain `value` argument carries a secret value. */
-const DOCKER_SECRET_VALUE_TOOLS = new Set(['manage_docker_container_config', 'manage_docker_compose']);
+/** Tools whose plain `value` argument carries a secret value (GitLab variables are covered below). */
+const SECRET_VALUE_TOOLS = new Set([
+  'manage_docker_container_config',
+  'manage_docker_compose',
+  'github_upsert_actions_secret',
+]);
+const WEBHOOK_TOOLS = new Set(['create_webhook', 'update_webhook']);
 
 export function redactArgsForTool(toolName: string, args: Record<string, unknown>): unknown {
   const redacted = redactToolArgs(args);
-  if (DOCKER_SECRET_VALUE_TOOLS.has(toolName) && isRecord(redacted) && redacted.value !== undefined) {
+  if (!isRecord(redacted)) return redacted;
+  if (SECRET_VALUE_TOOLS.has(toolName) && redacted.value !== undefined) {
     return { ...redacted, value: '[REDACTED]' };
+  }
+  if (WEBHOOK_TOOLS.has(toolName)) {
+    // Webhook URLs routinely embed bearer tokens (Slack, Discord, Telegram); keep the webhook audit form.
+    return {
+      ...redacted,
+      ...(redacted.url !== undefined
+        ? { url: typeof args.url === 'string' ? redactWebhookUrl(args.url) : '[REDACTED]' }
+        : {}),
+      ...(redacted.headers !== undefined
+        ? { headers: isRecord(redacted.headers) ? redactWebhookHeaders(redacted.headers) : '[REDACTED]' }
+        : {}),
+    };
+  }
+  // The pasted-back OAuth redirect carries the authorization code.
+  if (toolName === 'manage_inference_provider' && redacted.callback !== undefined) {
+    return { ...redacted, callback: '[REDACTED]' };
   }
   if (!toolName.startsWith('gitlab_')) return redacted;
   return redactGitLabToolArgs(redacted);

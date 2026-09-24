@@ -7,7 +7,11 @@ import {
   normalizeOidcClaims,
   type OidcSessionMetadata,
 } from '@/modules/auth/auth.service.js';
-import { computeEffectiveUserAccess, fetchGroupScopeMap } from '@/modules/auth/live-session-user.js';
+import {
+  computeEffectiveGroupAccess,
+  computeEffectiveUserAccess,
+  fetchGroupScopeMap,
+} from '@/modules/auth/live-session-user.js';
 
 const authorizationCodeGrantMock = vi.hoisted(() => vi.fn());
 
@@ -132,6 +136,41 @@ describe('AuthService.deleteUser', () => {
       groupId: null,
       reason: 'user_deleted',
     });
+  });
+});
+
+describe('AuthService.restoreUser', () => {
+  function restoreHarness() {
+    const deletedUser = {
+      id: '33333333-3333-4333-8333-333333333333',
+      groupId: 'group-system-admin',
+      deletedAt: new Date(),
+      deletedFromGroupId: 'group-admins',
+      deletedFromAdditionalGroupIds: [],
+    };
+    vi.mocked(fetchGroupScopeMap).mockResolvedValue(new Map([['group-admins', { id: 'group-admins' }]]) as any);
+    vi.mocked(computeEffectiveGroupAccess).mockReturnValue({ groupName: 'admins', scopes: ['admin:system', 'proxy:edit'] });
+    const update = vi.fn();
+    const db = {
+      query: {
+        users: { findFirst: vi.fn().mockResolvedValue(deletedUser) },
+        permissionGroups: { findFirst: vi.fn().mockResolvedValue({ id: 'group-admins', name: 'admins' }) },
+      },
+      update,
+    };
+    const service = new AuthService(db as any, {} as any, {} as any, {} as any, {} as any);
+    service.setLicenseQuotaService({ run: (_kind: string, _count: unknown, fn: (tx: unknown) => unknown) => fn(db) } as any);
+    return { service, deletedUser, update };
+  }
+
+  it('refuses to restore a user into groups with permissions the caller cannot grant', async () => {
+    const { service, deletedUser, update } = restoreHarness();
+
+    await expect(service.restoreUser(deletedUser.id, undefined, ['admin:system'])).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'PRIVILEGE_BOUNDARY',
+    });
+    expect(update).not.toHaveBeenCalled();
   });
 });
 

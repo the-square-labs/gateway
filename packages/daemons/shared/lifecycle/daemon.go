@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"sort"
 	"sync/atomic"
 	"time"
 
@@ -203,43 +204,117 @@ func runProcessRelayPool(
 	identityChanged <-chan struct{},
 	logger *slog.Logger,
 ) {
-	for ctx.Err() == nil {
-		laneCount := plugin.RelayTunnelLaneCount()
-		if laneCount < 1 {
-			laneCount = 1
+	// Each relay target runs on its own. A grant refresh that adds, removes or
+	// changes one relay must not reconnect the lanes to the others: every tunnel
+	// on those lanes (database, storage and backup streams) would drop with them.
+	type targetRun struct {
+		target *atomic.Pointer[RelayTunnelTarget]
+		cancel context.CancelFunc
+		done   chan struct{}
+	}
+	running := map[string]*targetRun{}
+	laneCount := 0
+	stop := func(ids ...string) {
+		for _, id := range ids {
+			if run := running[id]; run != nil {
+				run.cancel()
+				<-run.done
+				delete(running, id)
+			}
 		}
-		if laneCount > 16 {
-			laneCount = 16
+	}
+	stopAll := func() {
+		ids := make([]string, 0, len(running))
+		for id := range running {
+			ids = append(ids, id)
+		}
+		stop(ids...)
+	}
+	defer stopAll()
+	for ctx.Err() == nil {
+		lanes := plugin.RelayTunnelLaneCount()
+		if lanes < 1 {
+			lanes = 1
+		}
+		if lanes > 16 {
+			lanes = 16
+		}
+		if lanes != laneCount {
+			stopAll()
+			laneCount = lanes
 		}
 		targets := plugin.RelayTunnelTargets()
 		if len(targets) == 0 {
 			targets = []RelayTunnelTarget{{ID: "local"}}
 		}
-		generationCtx, cancelGeneration := context.WithCancel(ctx)
-		ended := make(chan struct{}, len(targets))
-		for _, target := range targets {
-			target := target
+		runningIDs := make(map[string]bool, len(running))
+		for id := range running {
+			runningIDs[id] = true
+		}
+		plan := planRelayTargets(runningIDs, targets)
+		stop(plan.stop...)
+		for _, target := range plan.update {
+			// A changed address or certificate (a renewal) applies to the next
+			// connection; lanes that are up stay up.
+			next := target
+			running[target.ID].target.Store(&next)
+		}
+		for _, target := range plan.start {
+			id := target.ID
+			current := &atomic.Pointer[RelayTunnelTarget]{}
+			initial := target
+			current.Store(&initial)
+			targetCtx, cancel := context.WithCancel(ctx)
+			run := &targetRun{target: current, cancel: cancel, done: make(chan struct{})}
+			running[id] = run
 			go func() {
-				runRelayPoolTarget(generationCtx, connector, plugin, nodeID, target, laneCount, logger)
-				ended <- struct{}{}
+				defer close(run.done)
+				runRelayPoolTarget(targetCtx, connector, plugin, nodeID, current.Load, lanes, logger)
 			}()
 		}
 		select {
 		case <-ctx.Done():
+			return
 		case <-identityChanged:
+			// This daemon's own certificate changed: every lane must reconnect with it.
 			logger.Info("relay tunnel identity changed, reconnecting pool lanes")
+			stopAll()
 		case <-plugin.RelayTunnelRuntimeChanged():
 			logger.Info("relay tunnel targets changed, reconciling pool lanes")
 		}
-		cancelGeneration()
-		for range targets {
-			select {
-			case <-ended:
-			case <-ctx.Done():
-				return
-			}
+	}
+}
+
+type relayTargetPlan struct {
+	start  []RelayTunnelTarget
+	update []RelayTunnelTarget
+	stop   []string
+}
+
+// planRelayTargets compares running relay targets with the desired ones: only
+// new targets start and only removed ones stop. A target whose address or
+// certificate changed keeps its lanes and uses the new data to reconnect.
+func planRelayTargets(running map[string]bool, desired []RelayTunnelTarget) relayTargetPlan {
+	plan := relayTargetPlan{}
+	wanted := make(map[string]bool, len(desired))
+	for _, target := range desired {
+		if wanted[target.ID] {
+			continue
+		}
+		wanted[target.ID] = true
+		if running[target.ID] {
+			plan.update = append(plan.update, target)
+		} else {
+			plan.start = append(plan.start, target)
 		}
 	}
+	for id := range running {
+		if !wanted[id] {
+			plan.stop = append(plan.stop, id)
+		}
+	}
+	sort.Strings(plan.stop)
+	return plan
 }
 
 func runRelayPoolTarget(
@@ -247,11 +322,12 @@ func runRelayPoolTarget(
 	connector *connector.Connector,
 	plugin RelayPoolTunnelPlugin,
 	nodeID string,
-	target RelayTunnelTarget,
+	currentTarget func() *RelayTunnelTarget,
 	laneCount int,
 	logger *slog.Logger,
 ) {
 	for ctx.Err() == nil {
+		target := *currentTarget()
 		connections := make([]*grpc.ClientConn, 0, laneCount)
 		for len(connections) < laneCount && ctx.Err() == nil {
 			var conn *grpc.ClientConn

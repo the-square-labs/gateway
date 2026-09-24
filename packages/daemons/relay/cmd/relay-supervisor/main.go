@@ -56,8 +56,14 @@ func main() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel(cfg.LogLevel)}))
 	lifecycle.Version = Version
+	if err := supervisor.RecoverWorkerIdentity(cfg.Worker.IdentityDir); err != nil {
+		logger.Error("repair the relay worker identity", "error", err)
+	}
 	if err := supervisor.RecoverInterruptedReenrollment(&cfg.BaseConfig); err != nil {
 		logger.Error("restore relay supervisor identity from an interrupted re-enrollment", "error", err)
+	}
+	if completeInterruptedEnrollment(cfg, configPath, logger) != nil {
+		os.Exit(1)
 	}
 	reenrollment, err := supervisor.BeginReenrollment(&cfg.BaseConfig)
 	if err != nil {
@@ -75,7 +81,17 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
 	err = daemon.Run(ctx)
-	if err != nil && reenrollment != nil && !cfg.IsEnrolled() && ctx.Err() == nil {
+	if err != nil && reenrollment != nil && ctx.Err() == nil && supervisor.HasPendingEnrollment(cfg) {
+		// Gateway handed over the new identity but persisting it failed: finish
+		// it, since the previous identity is already superseded.
+		if completeInterruptedEnrollment(cfg, configPath, logger) != nil {
+			os.Exit(1)
+		}
+		daemon, err = lifecycle.NewDaemonBase(&cfg.BaseConfig, configPath, supervisor.New(cfg), logger)
+		if err == nil {
+			err = daemon.Run(ctx)
+		}
+	} else if err != nil && reenrollment != nil && !cfg.IsEnrolled() && ctx.Err() == nil {
 		// The enrollment did not complete: keep running as the relay was.
 		logger.Error("re-enrollment failed; continuing with the previous identity", "error", err)
 		if !restoreIdentity(reenrollment, logger) {
@@ -96,6 +112,24 @@ func main() {
 		logger.Error("relay supervisor stopped", "error", err)
 		os.Exit(lifecycle.DaemonExitCode(err))
 	}
+}
+
+// completeInterruptedEnrollment finishes an enrollment whose bundle arrived
+// but was not fully persisted. That enrollment consumed the token.
+func completeInterruptedEnrollment(cfg *config.Config, configPath string, logger *slog.Logger) error {
+	completed, err := supervisor.CompletePendingEnrollment(cfg)
+	if err != nil {
+		logger.Error("complete the interrupted relay enrollment", "error", err)
+		return err
+	}
+	if completed {
+		logger.Warn("completed an interrupted relay enrollment")
+		cfg.Gateway.Token = ""
+		if clearErr := lifecycle.ClearTokenFromFile(configPath); clearErr != nil {
+			logger.Warn("failed to clear the used enrollment token from the configuration", "error", clearErr)
+		}
+	}
+	return nil
 }
 
 func restoreIdentity(reenrollment *supervisor.Reenrollment, logger *slog.Logger) bool {

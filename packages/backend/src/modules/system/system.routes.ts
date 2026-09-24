@@ -6,7 +6,7 @@ import { openApiValidationHook } from '@/lib/openapi.js';
 import { hasScope } from '@/lib/permissions.js';
 import { RELEASE_VERSION_PATTERN } from '@/lib/semver.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
+import { assertNotImpersonating, authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
 import { LoggingFeatureService } from '@/modules/logging/logging-feature.service.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
@@ -122,6 +122,8 @@ systemRoutes.post('/relay/instances/:instanceId/force-disconnect', requireScope(
 
 // Re-enrollment token for an enrolled remote relay; the relay installer run with it repairs the relay.
 systemRoutes.post('/relay/instances/:instanceId/reenroll', requireScope('admin:system'), async (c) => {
+  // The single-use enrollment token outlives the impersonation session.
+  assertNotImpersonating(c, 'Relay re-enrollment tokens cannot be issued while impersonating');
   const user = c.get('user')!;
   const instanceId = z.string().uuid().parse(c.req.param('instanceId'));
   z.object({ confirm: z.literal(true) }).parse(await c.req.json());

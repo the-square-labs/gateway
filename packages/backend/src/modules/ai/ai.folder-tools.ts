@@ -35,6 +35,7 @@ import { PageProjectFolderService } from '@/modules/pages/page-project-folder.se
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { MoveHostsToFolderSchema, ReorderHostsSchema } from '@/modules/proxy/folder.schemas.js';
 import { FolderService } from '@/modules/proxy/folder.service.js';
+import { redactFolderTreeProxyHostsForScopes } from '@/modules/proxy/page-target-visibility.js';
 import { stripFolderTreeRawProxyConfigForProgrammaticResponse } from '@/modules/proxy/raw-visibility.js';
 import {
   CreateResourceFolderSchema,
@@ -377,10 +378,11 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
   const service = container.resolve(FolderService);
   const operation = operationArg(args.operation);
   if (operation === 'list') {
+    // Same host redaction as GET /api/proxy-host-folders: advanced config and Page targets follow their own scopes.
+    const present = (tree: unknown[]) =>
+      redactFolderTreeProxyHostsForScopes(stripFolderTreeRawProxyConfigForProgrammaticResponse(tree), user.scopes);
     if (hasScope(user.scopes, 'proxy:folders:manage')) {
-      return stripFolderTreeRawProxyConfigForProgrammaticResponse(
-        await service.getFolderTree({ includeAllFolders: true })
-      );
+      return present(await service.getFolderTree({ includeAllFolders: true }));
     }
     if (!hasScopeBase(user.scopes, 'proxy:view')) {
       throw new Error('PERMISSION_DENIED: Missing required scope proxy:view');
@@ -388,7 +390,7 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
     const tree = hasScope(user.scopes, 'proxy:view')
       ? await service.getFolderTree()
       : await service.getFolderTree({ allowedHostIds: allowedResourceIdsForScopes(user.scopes, 'proxy:view') });
-    return stripFolderTreeRawProxyConfigForProgrammaticResponse(tree);
+    return present(tree);
   }
 
   ensureScope(user, 'proxy:folders:manage');

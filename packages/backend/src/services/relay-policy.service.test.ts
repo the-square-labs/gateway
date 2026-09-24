@@ -222,8 +222,10 @@ describe('RelayPolicyService route runtime', () => {
     (service as any).policyKeys.signPayload = async () => ({ signingKeyId: 'test', signature: Buffer.alloc(64) });
     expect(await (service as any).buildInstanceSnapshot('local')).toMatchObject({ revision: 901, globalRevision: 900 });
     const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].desiredPolicyRevision);
-    expect(expression.sql).toBe('greatest("relay_pools"."desired_policy_revision", $1) + 1');
-    expect(expression.params).toEqual([900]);
+    expect(expression.sql).toBe(
+      'greatest(greatest("relay_pools"."desired_policy_revision", $1), least($2, greatest("relay_pools"."desired_policy_revision", $3) + $4)) + 1'
+    );
+    expect(expression.params).toEqual([900, 0, 900, 1_000_000]);
   });
   it('reads managed database binding runtime from its owned Relay route', async () => {
     const limit = vi.fn().mockResolvedValue([{ id: 'route-binding-1' }]);
@@ -1093,7 +1095,8 @@ describe('RelayPolicyService relay recovery surfaces', () => {
 
     await (service as any).buildInstanceSnapshot('remote', undefined, 6500);
     const expression = new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].desiredPolicyRevision);
-    expect(expression.params).toEqual([7000]);
+    // The relay's report counts, but one report moves the sequence by a bounded jump only.
+    expect(expression.params).toEqual([900, 7000, 900, 1_000_000]);
   });
 
   it('flags remote relays only re-enrollment repairs and local relays that cannot reset', async () => {
@@ -1179,6 +1182,7 @@ describe('RelayPolicyService relay recovery surfaces', () => {
 describe('RelayPolicyService grant issuance around the local relay', () => {
   it('issues grants without the local relay acknowledgement only while that relay is unreachable', async () => {
     const service = createService({}, { applySnapshot: vi.fn() });
+    service.setNodeDispatch({} as never);
     const issuer = (service as any).grantIssuer;
     const push = vi.spyOn(service as any, 'pushChangedRemotePolicies').mockResolvedValue(undefined);
     const allow = vi.spyOn(issuer, 'allowUnacknowledgedRevision');
@@ -1289,6 +1293,7 @@ describe('RelayPolicyService grant issuance around the local relay', () => {
     const set = vi.fn(() => ({ where: async () => undefined }));
     const db: any = { update: () => ({ set }) };
     const service = createService(db, { applySnapshot: vi.fn() });
+    (service as any).grantIssuer.requireState = async () => ({ revision: 40, gatewayInstanceId: 'gateway' });
     const sync = vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
     const bundles = vi
       .spyOn(service, 'syncNodeGrantBundle')
@@ -1307,5 +1312,85 @@ describe('RelayPolicyService grant issuance around the local relay', () => {
     bundles.mockResolvedValueOnce({ success: false, error: 'stale relay grant bundle' } as never);
     await expect(service.syncNodeGrants('node-1')).rejects.toThrow('stale relay grant bundle');
     expect(set).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats only real restore evidence as a reason to raise the revision, by a bounded jump', async () => {
+    const set = vi.fn(() => ({ where: async () => undefined }));
+    const service = createService({ update: () => ({ set }) } as never, { applySnapshot: vi.fn() });
+    (service as any).grantIssuer.requireState = async () => ({ revision: 40, gatewayInstanceId: 'gateway' });
+    vi.spyOn(service, 'syncSnapshot').mockResolvedValue(1);
+    const raise = (error: string) => (service as any).raiseRevisionAboveDaemon('node-1', error);
+
+    // An older bundle delivered late: the daemon holds a revision Gateway issued.
+    await expect(raise('relay grant revision 30 is older than 35')).resolves.toBe(false);
+    // One stale refusal without a revision is ordinary out-of-order delivery.
+    await expect(raise('stale relay grant bundle')).resolves.toBe(false);
+    await expect(raise('stale relay grant bundle')).resolves.toBe(false);
+    expect(set).not.toHaveBeenCalled();
+    // A daemon that keeps refusing holds a sequence Gateway lost.
+    await expect(raise('stale relay grant bundle')).resolves.toBe(true);
+    expect(new PgDialect().sqlToQuery((set.mock.calls[0] as any)[0].revision).params).toEqual([1_000_041]);
+
+    // A daemon claiming a revision near the precision limit moves it by the bounded jump only.
+    (service as any).lastRevisionRaiseAt = 0;
+    await expect(raise(`relay grant revision 1 is older than ${Number.MAX_SAFE_INTEGER - 10}`)).resolves.toBe(true);
+    expect(new PgDialect().sqlToQuery((set.mock.calls[1] as any)[0].revision).params).toEqual([1_000_041]);
+  });
+
+  it('never makes the local snapshot sync wait for remote relays', async () => {
+    const service = createService({}, { applySnapshot: vi.fn() });
+    service.setNodeDispatch({} as never);
+    const push = vi.spyOn(service as any, 'pushChangedRemotePolicies').mockReturnValue(new Promise(() => undefined));
+    (service as any).startRemotePush(7);
+    expect((service as any).remotePushRevision).toBe(7);
+    // A grant dispatch waits for the push only briefly.
+    vi.useFakeTimers();
+    try {
+      const waited = (service as any).waitForRemotePush();
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(waited).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+    await Promise.resolve();
+    expect(push).toHaveBeenCalledWith(7);
+  });
+});
+
+describe('RelayPolicyService local trust reset guards', () => {
+  const ACTIVE = { keyId: 'active', publicKey: Buffer.alloc(32, 1), fingerprint: 'sha256:active' };
+  function recoveryService(resetLocalPolicyTrust: ReturnType<typeof vi.fn>) {
+    const service = createService({}, { applySnapshot: vi.fn(), resetLocalPolicyTrust });
+    return service as any;
+  }
+  const health = (capabilities: string[]) => ({ policyKeyIds: ['old'], relayInstanceId: 'local', capabilities });
+
+  it('does not start the reset cooldown when the relay could not be reached', async () => {
+    const reset = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error('14 UNAVAILABLE'), { code: 14 }))
+      .mockResolvedValueOnce({ replacedKeyIds: ['old'] });
+    const service = recoveryService(reset);
+    const refusal = Object.assign(new Error('9 FAILED_PRECONDITION: policy envelope signature is invalid'), {
+      code: 9,
+    });
+    await expect(service.recoverLocalPolicyTrust(ACTIVE, health(['policy_trust_reset_v1']), refusal)).rejects.toThrow(
+      'UNAVAILABLE'
+    );
+    await expect(
+      service.recoverLocalPolicyTrust(ACTIVE, health(['policy_trust_reset_v1']), refusal)
+    ).resolves.toBeUndefined();
+    expect(reset).toHaveBeenCalledTimes(2);
+  });
+
+  it('tells the operator to update a local relay that cannot rebind to this Gateway', async () => {
+    const reset = vi.fn();
+    const service = recoveryService(reset);
+    const refusal = Object.assign(new Error('9 FAILED_PRECONDITION: snapshot gateway instance changed'), { code: 9 });
+    await expect(service.recoverLocalPolicyTrust(ACTIVE, health(['relay_pool_v1']), refusal)).rejects.toThrow(
+      'Update the Relay Pool'
+    );
+    expect(reset).not.toHaveBeenCalled();
+    expect(service.getLocalPolicyTrustStatus()).toMatchObject({ state: 'recovery_unsupported' });
   });
 });

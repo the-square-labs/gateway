@@ -56,9 +56,21 @@ export interface AIToolTargetIdentity {
   arguments: string[];
 }
 
+/** Refines one operation's approval class by a nested argument, e.g. a presigned GET vs PUT. */
+export interface AIToolOperationArgumentPolicy {
+  /** Argument path below the tool arguments, e.g. ['config', 'operation']. */
+  path: string[];
+  /**
+   * Approval class per string or boolean argument value. An absent argument keeps the operation
+   * class; any other value fails closed to `destructive`.
+   */
+  approvalClasses: Record<string, AIToolApprovalClass>;
+}
+
 export interface AIToolOperationPolicy {
   effect: AIToolEffect;
   approvalClass: AIToolApprovalClass;
+  argumentPolicy?: AIToolOperationArgumentPolicy;
   requiredScopes?: string[];
   targetIdentity?: AIToolTargetIdentity;
 }

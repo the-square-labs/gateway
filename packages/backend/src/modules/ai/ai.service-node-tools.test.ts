@@ -303,6 +303,25 @@ describe('AIService node parity tools', () => {
     );
   });
 
+  it('rejects a node update without fields instead of skipping every per-field check', async () => {
+    const nodesService = {
+      get: vi.fn().mockResolvedValue({ id: NODE_ID, type: 'nginx' }),
+      update: vi.fn().mockResolvedValue({ id: NODE_ID }),
+    };
+    const service = createService(nodesService);
+
+    for (const fields of [{}, { confirmDomainDnsUpdate: true }]) {
+      await expect(
+        service.executeTool({ ...BASE_USER, scopes: [`nodes:logs:${NODE_ID}`] }, 'manage_node', {
+          operation: 'update',
+          nodeId: NODE_ID,
+          ...fields,
+        })
+      ).resolves.toMatchObject({ error: 'Provide at least one node field to update' });
+    }
+    expect(nodesService.update).not.toHaveBeenCalled();
+  });
+
   it('regenerates an enrollment token only with nodes:create on the node and never while impersonating', async () => {
     const nodesService = {
       regenerateEnrollmentToken: vi.fn().mockResolvedValue({ enrollmentToken: 'gw_enroll_new' }),

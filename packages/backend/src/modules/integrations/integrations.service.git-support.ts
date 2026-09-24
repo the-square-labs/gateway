@@ -70,6 +70,7 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       }
       return { connector, token: await this.resolveGitHubConnectorToken(connector) };
     }
+    this.assertPersonalGitCredentialAllowed(user, 'github', connector);
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
     if (!personal) throw this.gitUserCredentialRequired('github', connector);
     return { connector, token: personal.auth.token };
@@ -379,6 +380,7 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
         token: await this.resolveGitHubConnectorToken(connector),
       };
     }
+    this.assertPersonalGitCredentialAllowed(user, provider, connector);
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
     if (!personal) throw this.gitUserCredentialRequired(provider, connector);
     return {
@@ -435,6 +437,26 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       status === 404 ? 404 : status === 401 || status === 403 ? 403 : 400,
       'GITHUB_REPOSITORY_REQUEST_FAILED',
       message
+    );
+  }
+
+  /**
+   * Personal Git credentials can only be set up in AI Workspace (browser session with ai:workspace:use).
+   * A remote MCP caller (token-bounded `scopes`, live `accountScopes`) without the connector's `:system`
+   * scope may fall back to its owner's personal credential only while that owner can still use AI Workspace.
+   */
+  protected assertPersonalGitCredentialAllowed(
+    user: User,
+    provider: 'gitlab' | 'github' | 'git',
+    connector: ConnectorRow
+  ): void {
+    if (!user.accountScopes || hasScope(user.accountScopes, 'ai:workspace:use')) return;
+    const label = provider === 'gitlab' ? 'GitLab' : provider === 'github' ? 'GitHub' : 'Git';
+    throw new AppError(
+      403,
+      'PERSONAL_GIT_CREDENTIAL_NOT_ALLOWED',
+      `This token cannot use a personal ${label} credential for ${connector.name} because its owner lacks ai:workspace:use. Grant the token integrations:${provider}:system, or give the owner AI Workspace access and set up a personal ${label} credential there.`,
+      { provider, connectorId: connector.id, connectorName: connector.name }
     );
   }
 

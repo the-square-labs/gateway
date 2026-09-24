@@ -12,6 +12,8 @@ vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
   assertComposeVolumeMutationAllowed: vi.fn().mockResolvedValue(undefined),
 }));
 
+const MANAGE_ON_CREATE = ['docker:containers:create:node-1', 'docker:containers:manage:node-1'];
+
 const BASE_USER = {
   id: 'user-1',
   oidcSubject: 'oidc-user',
@@ -245,13 +247,15 @@ describe('AIService Docker tool routing', () => {
       createContainer: vi.fn().mockResolvedValue({ Id: 'container-1', id: 'container-1', name: 'generated-name' }),
       connectContainerToNetwork: vi.fn().mockResolvedValue(undefined),
       startContainer: vi.fn().mockResolvedValue(undefined),
-      inspectContainer: vi.fn().mockResolvedValue({ Name: '/generated-name', State: { Status: 'running' } }),
+      inspectContainer: vi
+        .fn()
+        .mockResolvedValue({ Name: '/generated-name', scopeResourceId: 'scope-1', State: { Status: 'running' } }),
       rollbackCreatedContainer: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(dockerService);
     const user = {
       ...BASE_USER,
-      scopes: ['docker:containers:create:node-1', 'docker:networks:edit:node-1'],
+      scopes: ['docker:containers:create:node-1', 'docker:containers:manage:node-1', 'docker:networks:edit:node-1'],
     };
 
     await expect(
@@ -283,18 +287,47 @@ describe('AIService Docker tool routing', () => {
     expect(dockerService.rollbackCreatedContainer).not.toHaveBeenCalled();
   });
 
-  it('removes a newly created container when assistant start orchestration fails', async () => {
+  it('creates but does not start a container without docker:containers:manage on it', async () => {
     const dockerService = {
       createContainer: vi.fn().mockResolvedValue({ id: 'container-1', name: 'generated-name' }),
       connectContainerToNetwork: vi.fn().mockResolvedValue(undefined),
-      startContainer: vi.fn().mockRejectedValue(new Error('start failed')),
-      inspectContainer: vi.fn(),
+      startContainer: vi.fn().mockResolvedValue(undefined),
+      inspectContainer: vi
+        .fn()
+        .mockResolvedValue({ Name: '/generated-name', scopeResourceId: 'scope-1', State: { Status: 'created' } }),
       rollbackCreatedContainer: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(dockerService);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['docker:containers:create:node-1'] }, 'create_docker_container', {
+      service.executeTool(
+        { ...BASE_USER, scopes: ['docker:containers:create:node-1', 'docker:containers:manage:node-2'] },
+        'create_docker_container',
+        { nodeId: 'node-1', image: 'nginx:alpine' }
+      )
+    ).resolves.toMatchObject({
+      result: {
+        success: true,
+        message: 'Container created but not started: starting it requires docker:containers:manage',
+        data: { id: 'container-1', name: 'generated-name', state: 'created' },
+      },
+    });
+    expect(dockerService.startContainer).not.toHaveBeenCalled();
+    expect(dockerService.rollbackCreatedContainer).not.toHaveBeenCalled();
+  });
+
+  it('removes a newly created container when assistant start orchestration fails', async () => {
+    const dockerService = {
+      createContainer: vi.fn().mockResolvedValue({ id: 'container-1', name: 'generated-name' }),
+      connectContainerToNetwork: vi.fn().mockResolvedValue(undefined),
+      startContainer: vi.fn().mockRejectedValue(new Error('start failed')),
+      inspectContainer: vi.fn().mockResolvedValue({ scopeResourceId: 'scope-1' }),
+      rollbackCreatedContainer: vi.fn().mockResolvedValue(undefined),
+    };
+    const service = createService(dockerService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: MANAGE_ON_CREATE }, 'create_docker_container', {
         nodeId: 'node-1',
         image: 'nginx:alpine',
       })
@@ -312,13 +345,16 @@ describe('AIService Docker tool routing', () => {
       createContainer: vi.fn().mockResolvedValue({ id: 'container-1', name: 'generated-name' }),
       connectContainerToNetwork: vi.fn().mockResolvedValue(undefined),
       startContainer: vi.fn().mockResolvedValue(undefined),
-      inspectContainer: vi.fn().mockRejectedValue(new Error('inspect failed')),
+      inspectContainer: vi
+        .fn()
+        .mockResolvedValueOnce({ scopeResourceId: 'scope-1' })
+        .mockRejectedValue(new Error('inspect failed')),
       rollbackCreatedContainer: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(dockerService);
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['docker:containers:create:node-1'] }, 'create_docker_container', {
+      service.executeTool({ ...BASE_USER, scopes: MANAGE_ON_CREATE }, 'create_docker_container', {
         nodeId: 'node-1',
         image: 'nginx:alpine',
       })

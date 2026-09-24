@@ -371,4 +371,42 @@ describe('RelaySupervisorService', () => {
     await supervisor.probeNow();
     await vi.waitFor(() => expect(recover).toHaveBeenCalled());
   });
+
+  it('never restarts a relay again after Docker refused recovery, whatever the next failure is', async () => {
+    let next = 0;
+    const reasons = [new Error('connect refused'), Object.assign(new Error('listener down'), { code: 14 })];
+    const getHealth = vi.fn(async () => {
+      next += 1;
+      if (next % 2) throw reasons[0];
+      return { ...healthy(), liveness: false };
+    });
+    const recover = vi.fn().mockRejectedValue(new RelayRecoverySafetyError('docker_unavailable', 'Docker is down'));
+    const { supervisor } = harness({ getHealth, recover });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical' }));
+    // The cause now flips between unreachable and listener_unavailable on every probe.
+    for (let probe = 0; probe < 6; probe += 1) await supervisor.probeNow();
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical', canRetry: true });
+  });
+
+  it('keeps the attempt budget across failure causes until the relay recovers or an admin retries', async () => {
+    let next = 0;
+    const getHealth = vi.fn(async () => {
+      next += 1;
+      if (next % 2) throw new Error('connect refused');
+      return { ...healthy(), liveness: false };
+    });
+    const { supervisor, recover } = harness({ getHealth });
+    await supervisor.probeNow();
+    await supervisor.probeNow();
+    await vi.waitFor(() => expect(supervisor.getSnapshot(true)).toMatchObject({ state: 'critical' }));
+    expect(recover).toHaveBeenCalledTimes(3);
+    for (let probe = 0; probe < 6; probe += 1) await supervisor.probeNow();
+    expect(recover).toHaveBeenCalledTimes(3);
+
+    await supervisor.retryRecovery('admin-1');
+    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(6));
+  });
 });

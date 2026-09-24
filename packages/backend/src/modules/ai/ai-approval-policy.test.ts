@@ -134,6 +134,56 @@ describe('AI backend approval policy', () => {
     }
   });
 
+  it('asks before credential reveals and key or secret exports reach the model', () => {
+    const calls: Array<[string, Record<string, unknown>]> = [
+      ['manage_managed_database', { operation: 'reveal_credentials' }],
+      ['manage_managed_database', { operation: 'reveal_binding_credentials' }],
+      ['manage_managed_database', { operation: 'rotate_credentials' }],
+      ['manage_database_connection', { operation: 'reveal_credentials' }],
+      ['manage_storage_connection', { action: 'reveal_credentials' }],
+      ['manage_managed_storage', { action: 'reveal_credentials' }],
+      ['manage_ca', { operation: 'export_key' }],
+      ['manage_certificate', { operation: 'export', format: 'pkcs12' }],
+      ['manage_certificate', { operation: 'export', format: 'private-key' }],
+      ['manage_docker_container_config', { operation: 'list_secrets', reveal: true }],
+    ];
+    for (const [toolName, args] of calls) {
+      const label = `${toolName} ${JSON.stringify(args)}`;
+      expect(classifyAIToolForApproval(toolName, args), label).toBe('execute');
+      expect(getAIToolApprovalDecision(toolName, 'normal', args).requiresApproval, label).toBe(true);
+      expect(getAIToolApprovalDecision(toolName, 'bypass-non-destructive', args).requiresApproval, label).toBe(true);
+    }
+
+    expect(classifyAIToolForApproval('manage_certificate', { operation: 'export', format: 'pem' })).toBe('read');
+    expect(classifyAIToolForApproval('manage_certificate', { operation: 'export' })).toBe('execute');
+    expect(classifyAIToolForApproval('manage_docker_container_config', { operation: 'list_secrets' })).toBe('read');
+    expect(
+      classifyAIToolForApproval('manage_docker_container_config', { operation: 'list_secrets', reveal: false })
+    ).toBe('read');
+    expect(
+      classifyAIToolForApproval('manage_docker_container_config', { operation: 'list_secrets', reveal: 'yes' })
+    ).toBe('destructive');
+  });
+
+  it('classifies storage presign by the signed operation', () => {
+    const presign = (config?: unknown) => ({ action: 'presign', storageId: 'storage-1', config });
+    expect(classifyAIToolForApproval('manage_storage_objects', presign({ bucket: 'b', key: 'k' }))).toBe('read');
+    expect(
+      classifyAIToolForApproval('manage_storage_objects', presign({ bucket: 'b', key: 'k', operation: 'get' }))
+    ).toBe('read');
+    expect(
+      getAIToolApprovalDecision(
+        'manage_storage_objects',
+        'normal',
+        presign({ bucket: 'b', key: 'k', operation: 'put' })
+      )
+    ).toMatchObject({ classification: 'update', requiresApproval: true });
+    expect(
+      classifyAIToolForApproval('manage_storage_objects', presign({ bucket: 'b', key: 'k', operation: 'PUT' }))
+    ).toBe('destructive');
+    expect(classifyAIToolForApproval('manage_storage_objects', presign({ operation: ['put'] }))).toBe('destructive');
+  });
+
   it('requires approval for outbound test side effects even in bypass-non-destructive mode', () => {
     for (const toolName of ['test_webhook', 'test_siem_destination']) {
       expect(getAIToolApprovalDecision(toolName, 'normal'), toolName).toMatchObject({

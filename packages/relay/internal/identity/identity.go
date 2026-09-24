@@ -19,6 +19,12 @@ import (
 
 var ErrMaterialUpdating = errors.New("relay identity material is being updated")
 
+// ServerCertificateRolloverCapability tells a supervisor, and Gateway, that this
+// worker keeps serving external-server.previous.* by that certificate's own
+// identity. A renewal must not be installed on a worker without it: daemons
+// still pinning the previous certificate would be cut off.
+const ServerCertificateRolloverCapability = "server_certificate_rollover_v1"
+
 type TrustManifest struct {
 	Version                   int    `json:"version"`
 	AppRelayClientFingerprint string `json:"appRelayClientFingerprint"`

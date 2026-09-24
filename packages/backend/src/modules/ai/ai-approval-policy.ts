@@ -5,6 +5,7 @@ import {
 } from '@/modules/integrations/gitlab-approval-policy.js';
 import type { User } from '@/types.js';
 import { AI_TOOLS } from './ai.tools.js';
+import type { AIToolOperationPolicy } from './ai.types.js';
 
 export type AIApprovalMode = NonNullable<User['aiApprovalMode']>;
 
@@ -58,7 +59,8 @@ export function classifyAIToolForApproval(
     const discriminatorValues = operationMetadata.arguments.map((argument) => toolArguments[argument]);
     if (discriminatorValues.some((value) => typeof value !== 'string')) return 'destructive';
     const operationKey = discriminatorValues.join('.');
-    return operationMetadata.operations[operationKey]?.approvalClass ?? 'destructive';
+    const operationPolicy = operationMetadata.operations[operationKey];
+    return operationPolicy ? operationApprovalClass(operationPolicy, toolArguments) : 'destructive';
   }
   if (tool?.approvalClass) return tool.approvalClass;
 
@@ -69,6 +71,25 @@ export function classifyAIToolForApproval(
   if (READ_PREFIXES.test(toolName)) return 'read';
 
   return tool?.destructive ? 'destructive' : 'read';
+}
+
+/** Applies an operation's argument refinement, failing closed on values the policy does not list. */
+function operationApprovalClass(
+  policy: AIToolOperationPolicy,
+  toolArguments: Record<string, unknown>
+): AIToolApprovalClass {
+  const refinement = policy.argumentPolicy;
+  if (!refinement) return policy.approvalClass;
+  let value: unknown = toolArguments;
+  for (const key of refinement.path) {
+    value =
+      value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>)[key] : undefined;
+  }
+  if (value === undefined) return policy.approvalClass;
+  if (typeof value !== 'string' && typeof value !== 'boolean') return 'destructive';
+  return Object.hasOwn(refinement.approvalClasses, String(value))
+    ? refinement.approvalClasses[String(value)]
+    : 'destructive';
 }
 
 export function getAIToolApprovalDecision(

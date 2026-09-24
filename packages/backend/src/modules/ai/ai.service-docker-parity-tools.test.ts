@@ -27,7 +27,7 @@ import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creatio
 import { PageProjectService } from '@/modules/pages/page-project.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
-import { dockerArchiveTransferStore } from './ai.docker-archive-transfer.js';
+import { DockerArchiveTransferStore, dockerArchiveTransferStore } from './ai.docker-archive-transfer.js';
 import { AIService } from './ai.service.js';
 import { redactArgsForTool } from './ai.service.tool-helpers.js';
 import { isImpersonationBlockedToolCall } from './ai-impersonation-policy.js';
@@ -1063,5 +1063,22 @@ describe('Docker credential and secret handling', () => {
         value: 'super-secret',
       })
     ).toEqual({ operation: 'secret_create', key: 'TOKEN', value: '[REDACTED]' });
+  });
+});
+
+describe('Docker archive transfer spool budget', () => {
+  it('counts bytes already spooled for downloads against the shared disk budget', () => {
+    const store = new DockerArchiveTransferStore() as any;
+    const gib = 1024 ** 3;
+    store.downloads.set('download-1', { id: 'download-1', userId: 'user-1', sizeBytes: 60 * gib });
+
+    // A new upload reservation must fit next to the bytes downloads already wrote.
+    expect(() => store.reserveSlot('user-2', 8 * gib)).toThrow('Too many archive transfers in progress');
+    expect(() => store.reserveSlot('user-2', 2 * gib)).not.toThrow();
+    // A download that keeps spooling fails once the budget is used up.
+    expect(() => store.assertSpoolCapacity(5 * gib)).toThrow('archive transfer spool is full');
+
+    store.downloads.get('download-1').sizeBytes = 64 * gib;
+    expect(() => store.reserveSlot('user-2')).toThrow('Too many archive transfers in progress');
   });
 });

@@ -338,6 +338,7 @@ describe('Enroll token lookup', () => {
         fingerprint: `sha256:${'a'.repeat(64)}`,
       })),
       refreshNodeIdentity: vi.fn(async () => undefined),
+      refreshAllNodeGrantsIfDue: vi.fn(async () => undefined),
     };
     const callback = vi.fn();
 
@@ -378,6 +379,10 @@ describe('Enroll token lookup', () => {
     expect(deps.auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({ details: expect.objectContaining({ reenrollment: true }) })
     );
+    // Daemons pin the relay certificate from their bundles: the new one must reach them now.
+    const bump = updates.find(({ value }) => 'revision' in value);
+    expect(dialect.sqlToQuery(bump!.value.revision).sql).toBe('"relay_policy_state"."revision" + 1');
+    expect(deps.relayPolicy.refreshAllNodeGrantsIfDue).toHaveBeenCalledWith(true);
   });
 
   it('creates the Relay Pool instance only when a pending Relay actually enrolls', async () => {

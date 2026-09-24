@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -51,15 +52,39 @@ func (p *Plugin) PersistEnrollmentBundle(response *pb.EnrollResponse) error {
 	if _, err := validateEnrollmentBundle(response); err != nil {
 		return err
 	}
-	p.worker.shutdown()
-	if err := resetWorkerPolicyState(p.cfg.Worker.StateDir, time.Now()); err != nil {
+	// From here on Gateway considers the relay enrolled with this bundle; the
+	// previous identity is superseded. Record the bundle first, so a failure
+	// below is completed on the next start rather than leaving the relay half
+	// re-enrolled.
+	if err := savePendingEnrollment(p.cfg.StateDir, response); err != nil {
 		return err
 	}
+	return p.completeEnrollment(response)
+}
+
+func (p *Plugin) completeEnrollment(response *pb.EnrollResponse) error {
+	p.worker.shutdown()
 	if err := persistEnrollmentBundle(p.cfg.StateDir, p.cfg.Worker.IdentityDir, response); err != nil {
 		return err
 	}
+	if err := resetWorkerPolicyState(p.cfg.Worker.StateDir, time.Now()); err != nil {
+		return err
+	}
 	discardStashedIdentity(&p.cfg.BaseConfig)
-	return nil
+	return removePendingEnrollment(p.cfg.StateDir)
+}
+
+// CompletePendingEnrollment finishes an enrollment whose bundle arrived but
+// was not fully persisted. It reports whether there was one.
+func CompletePendingEnrollment(cfg *config.Config) (bool, error) {
+	response, err := loadPendingEnrollment(cfg.StateDir)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	return true, New(cfg).completeEnrollment(response)
 }
 
 func (p *Plugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
@@ -273,4 +298,10 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 		status.State = "synchronizing"
 	}
 	return status
+}
+
+// HasPendingEnrollment reports a received but not fully persisted enrollment.
+func HasPendingEnrollment(cfg *config.Config) bool {
+	_, err := os.Stat(filepath.Join(cfg.StateDir, pendingEnrollmentFile))
+	return err == nil
 }

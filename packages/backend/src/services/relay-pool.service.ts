@@ -34,6 +34,7 @@ const MANUAL_DRAIN_TIMEOUT_MS = 10 * 60_000;
 /** Supervisors report every 5 s; a remote relay silent this long is offline. */
 const REMOTE_HEARTBEAT_TIMEOUT_MS = 90_000;
 const UPDATE_DRAIN_RELEASE_INTERVAL_MS = 30_000;
+const EVACUATION_RETRY_MS = 30_000;
 /** Update runs that may still hold a relay drained, and the step states in which they do. */
 const UNFINISHED_UPDATE_RUN_STATES = [
   'preflight',
@@ -104,7 +105,9 @@ export class RelayPoolService {
   private reconciliationFlight: Promise<void> | null = null;
   private rebalanceFlight = false;
   private readonly preparingGenerations = new Set<string>();
-  private readonly drainActions = new Set<string>();
+  /** The drain action running per relay instance; see withDrainAction. */
+  private readonly drainActions = new Map<string, Promise<unknown>>();
+  private readonly nextEvacuationAt = new Map<string, number>();
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
   private readonly startedAt = Date.now();
@@ -179,6 +182,7 @@ export class RelayPoolService {
     const now = Date.now();
     if (snapshot.automaticRebalancePaused || snapshot.blockers.length) {
       this.stablePlan = null;
+      if (snapshot.automaticRebalancePaused) await this.evacuateDrainingInstances(snapshot.instances);
       return;
     }
     if (snapshot.staging.length) {
@@ -312,9 +316,20 @@ export class RelayPoolService {
     let released = 0;
     for (const { id } of drained) {
       if (this.drainActions.has(id)) continue;
-      if (await this.isHeldByUnfinishedUpdate(id)) continue;
       try {
-        await this.drainInstance(id, null, false, { manual: false });
+        // Decided under the drain lock: a retried update run may be taking this relay right now.
+        const resumed = await this.withDrainAction(id, async () => {
+          if (await this.isHeldByUnfinishedUpdate(id)) return false;
+          const [instance] = await this.db
+            .select({ state: relayInstances.state, manualDrainStartedAt: relayInstances.manualDrainStartedAt })
+            .from(relayInstances)
+            .where(eq(relayInstances.id, id))
+            .limit(1);
+          if (instance?.state !== 'draining' || instance.manualDrainStartedAt) return false;
+          await this.setInstanceDrain(id, null, false, false);
+          return true;
+        });
+        if (!resumed) continue;
         released += 1;
         logger.info('Resumed a relay left drained by a finished Relay Pool update', { instanceId: id });
       } catch (error) {
@@ -325,6 +340,30 @@ export class RelayPoolService {
       }
     }
     return released;
+  }
+
+  /**
+   * While an update pauses automatic placement, keeps moving workloads off drained relays. The
+   * evacuation that starts with a drain can find another placement running, or fail for want of
+   * capacity; without a retry the drained relay would keep its workloads for the whole update.
+   */
+  private async evacuateDrainingInstances(
+    instances: Array<{ id: string; kind: string; state: string; activeAssignments: number }>
+  ): Promise<void> {
+    const now = Date.now();
+    for (const instance of instances) {
+      if (instance.kind !== 'remote' || instance.state !== 'draining' || instance.activeAssignments === 0) continue;
+      if (now < (this.nextEvacuationAt.get(instance.id) ?? 0)) continue;
+      this.nextEvacuationAt.set(instance.id, now + EVACUATION_RETRY_MS);
+      try {
+        await this.evacuateInstance(instance.id);
+      } catch (error) {
+        logger.warn('Moving workloads off a drained relay failed; it is retried', {
+          instanceId: instance.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   /** An update run that has not finished, paused ones included, holds this relay drained. */
@@ -408,14 +447,27 @@ export class RelayPoolService {
     };
   }
 
-  private async withDrainAction<T>(instanceId: string, action: () => Promise<T>): Promise<T> {
-    if (this.drainActions.has(instanceId))
-      throw new AppError(409, 'RELAY_DRAIN_IN_PROGRESS', 'A relay drain action is already running');
-    this.drainActions.add(instanceId);
+  /**
+   * Runs one drain action per relay at a time. An operator gets a conflict while another action
+   * runs; an update run waits its turn instead, so a concurrent cleanup cannot fail its drain.
+   */
+  private async withDrainAction<T>(
+    instanceId: string,
+    action: () => Promise<T>,
+    options: { wait?: boolean } = {}
+  ): Promise<T> {
+    for (;;) {
+      const running = this.drainActions.get(instanceId);
+      if (!running) break;
+      if (!options.wait) throw new AppError(409, 'RELAY_DRAIN_IN_PROGRESS', 'A relay drain action is already running');
+      await running.catch(() => undefined);
+    }
+    const current = action();
+    this.drainActions.set(instanceId, current);
     try {
-      return await action();
+      return await current;
     } finally {
-      this.drainActions.delete(instanceId);
+      if (this.drainActions.get(instanceId) === current) this.drainActions.delete(instanceId);
     }
   }
 
@@ -1225,8 +1277,10 @@ export class RelayPoolService {
   }
 
   async drainInstance(instanceId: string, userId: string | null, enabled = true, options: { manual?: boolean } = {}) {
-    return this.withDrainAction(instanceId, () =>
-      this.setInstanceDrain(instanceId, userId, enabled, options.manual !== false)
+    return this.withDrainAction(
+      instanceId,
+      () => this.setInstanceDrain(instanceId, userId, enabled, options.manual !== false),
+      { wait: options.manual === false }
     );
   }
 

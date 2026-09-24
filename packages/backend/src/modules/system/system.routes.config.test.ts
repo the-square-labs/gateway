@@ -6,6 +6,8 @@ import type { AppEnv } from '@/types.js';
 
 const mocks = vi.hoisted(() => ({
   scopes: [] as string[],
+  impersonating: false,
+  relayPool: { issueRelayReenrollment: vi.fn() },
   generalSettings: {
     getConfig: vi.fn(),
   },
@@ -18,9 +20,10 @@ vi.mock('@/container.js', () => ({
   TOKENS: {},
   container: {
     isRegistered: vi.fn().mockReturnValue(false),
-    resolve: vi.fn((token) =>
-      token?.name === 'GeneralSettingsService' ? mocks.generalSettings : mocks.loggingFeature
-    ),
+    resolve: vi.fn((token) => {
+      if (token?.name === 'RelayPoolService') return mocks.relayPool;
+      return token?.name === 'GeneralSettingsService' ? mocks.generalSettings : mocks.loggingFeature;
+    }),
   },
 }));
 
@@ -31,6 +34,7 @@ vi.mock('@/modules/auth/auth.middleware.js', async (importOriginal) => {
     authMiddleware: async (c: any, next: () => Promise<void>) => {
       c.set('user', { id: 'user-1' });
       c.set('effectiveScopes', mocks.scopes);
+      if (mocks.impersonating) c.set('impersonation', { adminUserId: 'admin-1' });
       await next();
     },
   };
@@ -89,5 +93,28 @@ describe('system config projection', () => {
         relay: { dataLanes: 4 },
       },
     });
+  });
+});
+
+describe('relay re-enrollment', () => {
+  beforeEach(() => {
+    mocks.scopes = ['admin:system'];
+    mocks.impersonating = true;
+    mocks.relayPool.issueRelayReenrollment.mockReset();
+  });
+
+  it('never issues a re-enrollment token while impersonating', async () => {
+    const response = await app().request('/relay/instances/11111111-1111-4111-8111-111111111111/reenroll', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      code: 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN',
+      message: 'Relay re-enrollment tokens cannot be issued while impersonating',
+    });
+    expect(mocks.relayPool.issueRelayReenrollment).not.toHaveBeenCalled();
   });
 });

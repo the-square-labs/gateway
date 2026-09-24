@@ -7,7 +7,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'create_docker_container',
     description:
-      'Create and start a new Docker container on a node from an image already present on that node. Before first creation, use list_docker_images and pull_docker_image when the requested image is absent, then wait for the pull task to complete. Volume mounts may reference only existing Gateway-managed volumes; never provide host bind paths. Secure runtime requires a healthy Secure Runtime capability on the node and does not support GPU or device attachments. For public Docker Hub images such as nginx:alpine, omit registryId; a saved registry is not required.',
+      'Create a new Docker container on a node from an image already present on that node, and start it when you also have docker:containers:manage on it (otherwise it stays stopped). Before first creation, use list_docker_images and pull_docker_image when the requested image is absent, then wait for the pull task to complete. Volume mounts may reference only existing Gateway-managed volumes; never provide host bind paths. Secure runtime requires a healthy Secure Runtime capability on the node and does not support GPU or device attachments. For public Docker Hub images such as nginx:alpine, omit registryId; a saved registry is not required.',
     parameters: {
       type: 'object',
       properties: {

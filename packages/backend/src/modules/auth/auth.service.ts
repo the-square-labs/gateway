@@ -1122,7 +1122,11 @@ export class AuthService {
     }));
   }
 
-  async restoreUser(userId: string, requestedGroups?: string | string[]): Promise<User> {
+  /**
+   * `grantableScopes`, when given, bounds the permissions the restored account receives: the caller
+   * cannot restore someone into groups with permissions it does not hold.
+   */
+  async restoreUser(userId: string, requestedGroups?: string | string[], grantableScopes?: string[]): Promise<User> {
     const requestedGroupIds = typeof requestedGroups === 'string' ? [requestedGroups] : requestedGroups;
     if (requestedGroupIds?.length === 0) throw new AppError(400, 'GROUP_REQUIRED', 'Select at least one group');
     const requestedGroupId = requestedGroupIds?.[0];
@@ -1149,6 +1153,16 @@ export class AuthService {
         ? [...new Set(requestedGroupIds)].slice(1)
         : (deletedUser.deletedFromAdditionalGroupIds ?? []).filter((id) => id !== group.id && groupMap.has(id));
       const groupIds = userGroupIds(group.id, additionalGroupIds);
+      if (grantableScopes) {
+        const restoredScopes = groupIds.flatMap((id) => computeEffectiveGroupAccess(id, groupMap).scopes);
+        if (!isScopeSubset(restoredScopes, grantableScopes)) {
+          throw new AppError(
+            403,
+            'PRIVILEGE_BOUNDARY',
+            'Cannot restore a user into groups with permissions you do not possess'
+          );
+        }
+      }
       const assignedGroups = await executor
         .select({ id: permissionGroups.id })
         .from(permissionGroups)

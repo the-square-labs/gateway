@@ -17,6 +17,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /** Relay server certificates live 365 days; renewal starts this long before they expire. */
 export const RELAY_CERTIFICATE_RENEW_BEFORE_MS = 60 * DAY_MS;
 const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000;
+/** Relay server certificates are issued for this long. */
+const CERTIFICATE_LIFETIME_MS = 365 * DAY_MS;
+/**
+ * A relay keeps serving one previous certificate. Renewing again before daemons received grant
+ * bundles naming the last renewal would drop the certificate some of them still pin.
+ */
+const MIN_RENEWAL_INTERVAL_MS = DAY_MS;
+/** Advertised by relay workers that keep serving the previous certificate during a renewal. */
+export const SERVER_CERTIFICATE_ROLLOVER_CAPABILITY = 'server_certificate_rollover_v1';
 const CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
@@ -111,7 +120,7 @@ export class RelayCertificateRenewalService {
       // The control stream is the authenticated channel; an offline relay waits for it.
       if (!this.dispatch.isNodeConnected(instance.nodeId)) continue;
       try {
-        await this.renew(instance, null);
+        await this.renew(instance, null, { refreshGrants: false });
         renewed += 1;
       } catch (error) {
         logger.warn('Relay certificate renewal failed; it is retried later', {
@@ -120,7 +129,18 @@ export class RelayCertificateRenewalService {
         });
       }
     }
+    // One grant refresh for the whole pass: every refresh makes daemons re-register.
+    if (renewed > 0) await this.refreshGrants();
     return renewed;
+  }
+
+  private async refreshGrants(): Promise<void> {
+    // Daemons pin the relay certificate from their grant bundles; hand them the renewed one.
+    await this.policy.refreshAllNodeGrantsIfDue(true).catch((error) =>
+      logger.warn('Relay certificate renewed; daemon grant bundles follow on the next refresh', {
+        error: error instanceof Error ? error.message : String(error),
+      })
+    );
   }
 
   /** Renews one remote relay's certificate now, for an operator or an automation tool. */
@@ -144,8 +164,30 @@ export class RelayCertificateRenewalService {
     return this.renew(instance, userId);
   }
 
-  private async renew(instance: RelayInstanceRow, userId: string | null) {
+  private async renew(
+    instance: RelayInstanceRow,
+    userId: string | null,
+    options: { refreshGrants: boolean } = { refreshGrants: true }
+  ) {
     const nodeId = instance.nodeId!;
+    // An older worker serves only its newest certificate: daemons that still pin the previous
+    // one would be cut off until their next bundle. Such a relay is updated, not renewed.
+    if (!instance.capabilities?.features?.includes(SERVER_CERTIFICATE_ROLLOVER_CAPABILITY)) {
+      const message =
+        'The relay worker is too old to renew its certificate without cutting off daemons. Update the Relay Pool, or re-enroll this relay.';
+      this.failures.set(instance.id, { at: Date.now(), message });
+      throw new AppError(409, 'RELAY_CERTIFICATE_ROLLOVER_UNSUPPORTED', message);
+    }
+    if (
+      instance.certificateExpiresAt &&
+      Date.now() - (instance.certificateExpiresAt.getTime() - CERTIFICATE_LIFETIME_MS) < MIN_RENEWAL_INTERVAL_MS
+    ) {
+      throw new AppError(
+        409,
+        'RELAY_CERTIFICATE_RECENTLY_RENEWED',
+        'This relay certificate was renewed less than a day ago; daemons may still pin the previous one.'
+      );
+    }
     const owner = { type: 'relay_node_server', id: instance.id } as const;
     const identity = `relay-${instance.id}-${randomBytes(4).toString('hex')}`;
     const sans = [...new Set([identity, ...instance.advertisedAddresses].map(normalizeSan).filter(Boolean))];
@@ -211,13 +253,7 @@ export class RelayCertificateRenewalService {
           },
         })
         .catch(() => undefined);
-      // Daemons pin the relay certificate from their grant bundles; hand them the renewed one.
-      await this.policy.refreshAllNodeGrantsIfDue(true).catch((error) =>
-        logger.warn('Relay certificate renewed; daemon grant bundles follow on the next refresh', {
-          instanceId: instance.id,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+      if (options.refreshGrants) await this.refreshGrants();
       this.events?.publish('system.relay.health.changed', { poolId: instance.poolId, instanceId: instance.id });
       return { instanceId: instance.id, serverIdentity, fingerprint, expiresAt };
     } catch (error) {

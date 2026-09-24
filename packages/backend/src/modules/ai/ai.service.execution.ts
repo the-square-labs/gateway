@@ -51,6 +51,23 @@ import {
   toolInvalidationContext,
 } from './ai-tool-store-invalidation.js';
 
+const GIT_CREDENTIAL_REQUIRED_CODES = new Set([
+  'GITLAB_CREDENTIAL_REQUIRED',
+  'GITHUB_CREDENTIAL_REQUIRED',
+  'GIT_CREDENTIAL_REQUIRED',
+]);
+
+/** Remote MCP has no credential sign-in prompt, so the 428 challenge becomes an actionable tool error. */
+function mcpGitCredentialRequiredMessage(err: AppError): string {
+  const details = isRecord(err.details) ? err.details : {};
+  const provider =
+    err.code === 'GITLAB_CREDENTIAL_REQUIRED' ? 'gitlab' : err.code === 'GITHUB_CREDENTIAL_REQUIRED' ? 'github' : 'git';
+  const label = provider === 'gitlab' ? 'GitLab' : provider === 'github' ? 'GitHub' : 'Git';
+  const connector = typeof details.connectorName === 'string' ? details.connectorName : 'this connector';
+  const state = details.reason === 'invalid' ? 'was rejected' : 'is not set up';
+  return `${err.code}: The personal ${label} credential for ${connector} ${state}, and remote MCP cannot start that sign-in. Grant this token integrations:${provider}:system, or set up the personal ${label} credential in AI Workspace, then retry.`;
+}
+
 export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
   protected abstract executeInteractionTool(
     user: User,
@@ -197,11 +214,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
 
       return { result, invalidateStores };
     } catch (err) {
-      if (
-        source === 'ai' &&
-        err instanceof AppError &&
-        ['GITLAB_CREDENTIAL_REQUIRED', 'GITHUB_CREDENTIAL_REQUIRED', 'GIT_CREDENTIAL_REQUIRED'].includes(err.code)
-      ) {
+      if (source === 'ai' && err instanceof AppError && GIT_CREDENTIAL_REQUIRED_CODES.has(err.code)) {
         const details = isRecord(err.details) ? err.details : {};
         const provider = details.provider ?? (err.code === 'GITLAB_CREDENTIAL_REQUIRED' ? 'gitlab' : null);
         if (
@@ -214,7 +227,12 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
           };
         }
       }
-      const message = err instanceof Error ? err.message : 'Tool execution failed';
+      const message =
+        source === 'mcp' && err instanceof AppError && GIT_CREDENTIAL_REQUIRED_CODES.has(err.code)
+          ? mcpGitCredentialRequiredMessage(err)
+          : err instanceof Error
+            ? err.message
+            : 'Tool execution failed';
       logger.error(`Tool execution failed: ${toolName}`, { error: err, args: redactArgsForTool(toolName, args) });
       if (source === 'mcp' && !auditEmittedDuringTool()) {
         await this.auditService.log({

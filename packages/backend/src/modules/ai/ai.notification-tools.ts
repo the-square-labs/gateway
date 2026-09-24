@@ -145,7 +145,8 @@ export async function executeNotificationTool(
           messageTemplate: a.messageTemplate,
           webhookIds: a.webhookIds,
           cooldownSeconds: a.cooldownSeconds,
-          enabled: a.enabled,
+          // The tool creates active rules unless told otherwise; the route schema defaults to disabled.
+          enabled: a.enabled ?? true,
         })
       );
       return createAlertRuleWithEffects(context.notifRuleService, input, user.scopes, user.id);

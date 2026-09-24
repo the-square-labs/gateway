@@ -159,3 +159,45 @@ func validEnrollResponse(t *testing.T) *pb.EnrollResponse {
 		RelayServerCertificate: serverCert, RelayServerKey: serverKey,
 	}
 }
+
+// Gateway binds the new identity as soon as it answers the enrollment. When
+// persisting it fails on the relay, the next start completes it instead of
+// leaving the relay half re-enrolled.
+func TestInterruptedEnrollmentIsCompletedOnTheNextStart(t *testing.T) {
+	root := t.TempDir()
+	cfg := &config.Config{BaseConfig: *enrolledBaseConfig(t, "token")}
+	cfg.StateDir = filepath.Join(root, "state")
+	cfg.Worker.IdentityDir = filepath.Join(root, "worker-identity")
+	cfg.Worker.StateDir = filepath.Join(root, "worker-state")
+	if err := os.MkdirAll(cfg.Worker.StateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.Worker.StateDir, "relay.db"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	response := validEnrollResponse(t)
+	// The bundle was recorded, then the process died before persisting it.
+	if err := savePendingEnrollment(cfg.StateDir, response); err != nil {
+		t.Fatal(err)
+	}
+	if !HasPendingEnrollment(cfg) {
+		t.Fatal("the recorded enrollment was not found")
+	}
+	completed, err := CompletePendingEnrollment(cfg)
+	if err != nil || !completed {
+		t.Fatalf("pending enrollment was not completed: %v %v", completed, err)
+	}
+	state, err := loadEnrollmentState(cfg.StateDir)
+	if err != nil || state.InstanceID != "relay-1" {
+		t.Fatalf("enrollment state was not persisted: %#v %v", state, err)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Worker.StateDir, "relay.db")); !os.IsNotExist(err) {
+		t.Fatal("the worker's previous policy trust was kept")
+	}
+	if HasPendingEnrollment(cfg) {
+		t.Fatal("the completed enrollment is still pending")
+	}
+	if completed, err := CompletePendingEnrollment(cfg); completed || err != nil {
+		t.Fatalf("nothing should be pending: %v %v", completed, err)
+	}
+}

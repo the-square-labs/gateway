@@ -99,7 +99,7 @@ func (s *Service) GetHealth(ctx context.Context, _ *relayv1.HealthRequest) (*rel
 // healthCapabilities lists what Gateway may rely on. Only the local relay
 // advertises the trust reset: a remote relay refuses it.
 func healthCapabilities(mode relayv1.RelayMode) []string {
-	capabilities := []string{policy.PoolCapability, "signed_policy_envelope_v1"}
+	capabilities := []string{policy.PoolCapability, "signed_policy_envelope_v1", identity.ServerCertificateRolloverCapability}
 	if mode == relayv1.RelayMode_RELAY_MODE_LOCAL_COMBINED {
 		capabilities = append(capabilities, policy.TrustResetCapability)
 	}

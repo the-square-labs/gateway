@@ -126,6 +126,42 @@ describe('AIService GitLab tool routing', () => {
     });
   });
 
+  it('turns missing personal GitLab authorization into an actionable remote MCP error', async () => {
+    const integrationsService = {
+      gitLabReadFile: vi.fn().mockRejectedValue(
+        new AppError(428, 'GITLAB_CREDENTIAL_REQUIRED', 'Personal GitLab authorization is required', {
+          provider: 'gitlab',
+          connectorId: 'connector-1',
+          connectorName: 'Main GitLab',
+          reason: 'missing',
+        })
+      ),
+    };
+    const auditService = { log: vi.fn() };
+    vi.spyOn(container, 'resolve').mockImplementation((token) => {
+      if (token === IntegrationsService) return integrationsService as never;
+      throw new Error('unexpected resolver call');
+    });
+
+    const result = await createService(auditService).executeTool(
+      { ...BASE_USER, scopes: ['integrations:gitlab:repo:read'] },
+      'gitlab_read_file',
+      { connectorId: 'connector-1', project: 'group/app', path: 'README.md' },
+      { source: 'mcp', scopes: ['integrations:gitlab:repo:read'] }
+    );
+
+    expect(result.credentialChallenge).toBeUndefined();
+    expect(result.error).toMatch(
+      /^GITLAB_CREDENTIAL_REQUIRED: .*Main GitLab.*integrations:gitlab:system.*AI Workspace/
+    );
+    expect(auditService.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.gitlab_read_file',
+        details: expect.objectContaining({ success: false, error: result.error }),
+      })
+    );
+  });
+
   it('returns the stable GitLab authorization rejection error when the user cancels', async () => {
     const stream = createService().resumeAfterApproval(
       BASE_USER,

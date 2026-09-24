@@ -270,9 +270,10 @@ export class NodesService {
 
     const connectedNode = this.registry.getNode(id);
     const isConnected = !!connectedNode;
+    const { enrollmentTokenHash: _hash, enrollmentTokenSelector: _selector, ...publicNode } = node;
 
     return {
-      ...stripNodeHealthHistory(node),
+      ...stripNodeHealthHistory(publicNode),
       publicServiceAddresses:
         node.type === 'nginx'
           ? getReportedPublicNodeAddresses({
@@ -299,9 +300,10 @@ export class NodesService {
 
     const connectedNode = this.registry.getNode(node.id);
     const isConnected = !!connectedNode;
+    const { enrollmentTokenHash: _hash, enrollmentTokenSelector: _selector, ...publicNode } = node;
 
     return {
-      ...stripNodeHealthHistory(node),
+      ...stripNodeHealthHistory(publicNode),
       publicServiceAddresses:
         node.type === 'nginx'
           ? getReportedPublicNodeAddresses({
@@ -627,7 +629,8 @@ export class NodesService {
       });
     }
 
-    return updated;
+    const { enrollmentTokenHash: _hash, enrollmentTokenSelector: _selector, ...publicNode } = updated;
+    return publicNode;
   }
 
   async updateServiceCreationLock(id: string, input: UpdateNodeServiceCreationLockInput, userId: string) {

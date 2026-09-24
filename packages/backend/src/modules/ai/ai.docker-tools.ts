@@ -195,13 +195,26 @@ export async function executeDockerTool(
         for (const network of input.networks?.slice(1) ?? []) {
           await context.dockerService.connectContainerToNetwork(a.nodeId, network, containerId, user.id);
         }
-        await context.dockerService.startContainer(a.nodeId, containerId, user.id);
-        const inspect = await context.dockerService.inspectContainer(a.nodeId, containerId);
+        // Creating never implies starting: like POST .../start, it needs docker:containers:manage
+        // on the new container, otherwise the container is returned stopped.
+        const created = await context.dockerService.inspectContainer(a.nodeId, containerId);
+        const canStart =
+          hasScopeForResource(user.scopes, 'docker:containers:manage', a.nodeId) ||
+          hasDockerContainerScope(user, 'docker:containers:manage', a.nodeId, created);
+        if (canStart) await context.dockerService.startContainer(a.nodeId, containerId, user.id);
+        const inspect = canStart ? await context.dockerService.inspectContainer(a.nodeId, containerId) : created;
         const name = String((inspect as any)?.Name ?? (data as any)?.name ?? '').replace(/^\//, '');
         return {
           success: true,
-          message: 'Container created and started',
-          data: { ...(data as object), id: containerId, name, state: (inspect as any)?.State?.Status ?? 'running' },
+          message: canStart
+            ? 'Container created and started'
+            : 'Container created but not started: starting it requires docker:containers:manage',
+          data: {
+            ...(data as object),
+            id: containerId,
+            name,
+            state: (inspect as any)?.State?.Status ?? (canStart ? 'running' : 'created'),
+          },
         };
       } catch (error) {
         try {

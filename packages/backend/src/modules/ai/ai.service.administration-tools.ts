@@ -359,7 +359,8 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
   }
 
   private adminUserActor(user: User): AdminUserActor {
-    return { user, scopes: user.scopes, accountScopes: user.accountScopes };
+    // The assistant and MCP clients are never the browser session of the account they act for.
+    return { user, scopes: user.scopes, accountScopes: user.accountScopes, programmatic: true };
   }
 
   private adminUserServices(): AdminUserActionServices {

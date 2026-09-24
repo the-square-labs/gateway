@@ -6,6 +6,7 @@ import { nodes, relayInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { validateEnrollmentDaemonProfile } from '@/modules/nodes/node-daemon-profile.js';
 import { isNodeEnrollmentTokenExpired, parseNodeEnrollmentToken } from '@/modules/nodes/node-enrollment-token.js';
+import { bumpRelayPolicyRevision } from '@/services/relay-policy-reconciler.js';
 import type { EnrollRequest, EnrollResponse, RenewCertRequest, RenewCertResponse } from '../generated/types.js';
 import { extractDaemonCertificateIdentity, normalizeCertificateSerial } from '../interceptors/auth.js';
 import { matchEnrolledNodeCertificate } from '../node-certificate.js';
@@ -257,6 +258,9 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               updatedAt: new Date(),
             };
             await tx.update(relayInstances).set(relayValues).where(eq(relayInstances.id, relayBundle.instanceId));
+            // A re-enrolled relay serves only its new certificate. Daemons pin the certificate
+            // from their grant bundles, so the change must reach them (see the refresh below).
+            if (relayReenrollment) await bumpRelayPolicyRevision(tx);
           }
         });
 
@@ -298,6 +302,16 @@ export function createEnrollmentHandlers(deps: GrpcServerDeps) {
               error: error instanceof Error ? error.message : String(error),
             });
           });
+        if (relayReenrollment && relayBundle) {
+          // Daemons pinning the relay's previous certificate cannot reach it any more: hand them
+          // the new one now rather than at their next scheduled refresh.
+          await deps.relayPolicy?.refreshAllNodeGrantsIfDue(true).catch((error) => {
+            logger.warn('Relay re-enrolled; daemon grant bundles follow on the next refresh', {
+              nodeId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
       } catch (err) {
         if (err instanceof EnrollmentTokenConsumedError) {
           callback({ code: 16, message: 'Invalid enrollment token' });

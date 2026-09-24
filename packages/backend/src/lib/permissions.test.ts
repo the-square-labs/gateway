@@ -228,6 +228,14 @@ describe('Scope-based permissions', () => {
       expect(scopes).not.toContain('proxy:edit');
     });
 
+    it('never lets a token grant impersonation, even when the owner holds it', () => {
+      const grant = privilegeBoundaryScopes(token, account, 'grant');
+      expect(grant).toContain('ai:workspace:use');
+      expect(grant).not.toContain('admin:users:impersonate');
+      expect(isScopeSubset(['admin:users:impersonate'], grant)).toBe(false);
+      expect(privilegeBoundaryScopes(token, account)).toContain('admin:users:impersonate');
+    });
+
     it('lets a token manage a user whose extra scopes are account-only and held by the owner', () => {
       const target = ['proxy:view', 'ai:workspace:use'];
       expect(canManageUser(token, target)).not.toBe(null);

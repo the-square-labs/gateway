@@ -893,6 +893,36 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledTimes(1);
   });
 
+  it('treats the redacted rawConfig null echoed by a caller without raw read as absent', async () => {
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
+    const put = (body: unknown) =>
+      createApp().request('/host-1', {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+    const echoed = await put({
+      domainNames: ['app.example.com'],
+      rawConfig: null,
+      rawConfigEnabled: true,
+    });
+    expect(echoed.status).toBe(200);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledWith(
+      'host-1',
+      expect.objectContaining({ domainNames: ['app.example.com'] }),
+      'user-1',
+      expect.any(Object)
+    );
+    expect(mocks.proxyService.updateProxyHost.mock.calls[0]?.[1]).not.toHaveProperty('rawConfig');
+
+    // A caller who can read the raw config and clears it still needs raw write access.
+    mocks.scopes = ['proxy:view', 'proxy:edit:host-1', 'proxy:raw:read:host-1'];
+    const cleared = await put({ rawConfig: null });
+    expect(cleared.status).toBe(403);
+    expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledTimes(1);
+  });
+
   it('applies the move endpoint checks to a folderId change and ignores an unchanged folderId', async () => {
     mocks.authType = 'session';
     mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];

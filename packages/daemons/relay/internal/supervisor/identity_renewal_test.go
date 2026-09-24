@@ -117,9 +117,11 @@ func TestRenewalStagesServerCertificateAndKeepsThePinnedOne(t *testing.T) {
 	if !plan.adminChange {
 		t.Fatal("renewed supervisor certificate was not planned as the admin client")
 	}
-	if err := writeWorkerIdentity(dir, plan); err != nil {
+	swap, err := swapWorkerIdentity(dir, plan)
+	if err != nil {
 		t.Fatal(err)
 	}
+	swap.commit()
 	if got := fileFingerprint(t, filepath.Join(dir, workerPreviousServerCertificate)); got != oldFingerprint {
 		t.Fatal("the certificate daemons pin was not retained")
 	}
@@ -133,8 +135,11 @@ func TestRenewalStagesServerCertificateAndKeepsThePinnedOne(t *testing.T) {
 	if err := json.Unmarshal(manifest, &trust); err != nil || trust["appRelayClientFingerprint"] != adminFingerprint {
 		t.Fatalf("trust manifest does not name the renewed admin client: %s", manifest)
 	}
-	if _, err := os.Stat(filepath.Join(dir, workerIdentityUpdatingMarker)); !os.IsNotExist(err) {
-		t.Fatal("update marker was left behind")
+	if plan.retainedIdentity != "relay-instance" || plan.retainedFingerprint != oldFingerprint {
+		t.Fatalf("retained identity = %q %q", plan.retainedIdentity, plan.retainedFingerprint)
+	}
+	if _, err := os.Stat(dir + workerIdentityBackupSuffix); !os.IsNotExist(err) {
+		t.Fatal("committed renewal left its backup behind")
 	}
 
 	// A second renewal retains the certificate daemons were moved to, not the oldest one.
@@ -149,9 +154,11 @@ func TestRenewalStagesServerCertificateAndKeepsThePinnedOne(t *testing.T) {
 	if plan.adminChange {
 		t.Fatal("an unchanged admin client was rewritten")
 	}
-	if err := writeWorkerIdentity(dir, plan); err != nil {
+	swap, err = swapWorkerIdentity(dir, plan)
+	if err != nil {
 		t.Fatal(err)
 	}
+	swap.commit()
 	if got := fileFingerprint(t, filepath.Join(dir, workerPreviousServerCertificate)); got != newFingerprint {
 		t.Fatal("the pinned certificate was not the one retained")
 	}
@@ -180,5 +187,74 @@ func TestRenewalRefusesMaterialThatDoesNotBelongToTheRelay(t *testing.T) {
 	// Nothing to do when the admin client is already current.
 	if _, err := planWorkerIdentity(dir, nil, admin, adminKey, time.Now()); err != errNoIdentityChange {
 		t.Fatalf("unchanged admin client: %v", err)
+	}
+}
+
+// A failed renewal puts the whole identity back, so the worker never ends up
+// with a certificate whose key belongs to another one.
+func TestFailedRenewalRollsTheIdentityBackCompletely(t *testing.T) {
+	ca := newTestCA(t)
+	year := time.Now().Add(365 * 24 * time.Hour)
+	oldServer, oldServerKey := ca.issue(t, "relay-instance", x509.ExtKeyUsageServerAuth, year)
+	newServer, newServerKey := ca.issue(t, "relay-instance-r2", x509.ExtKeyUsageServerAuth, year)
+	admin, adminKey := ca.issue(t, "node-1", x509.ExtKeyUsageClientAuth, year)
+	dir := workerIdentityDir(t, ca, oldServer, oldServerKey, admin, adminKey)
+	oldFingerprint := fileFingerprint(t, filepath.Join(dir, workerServerCertificate))
+	plan, err := planWorkerIdentity(dir, &pb.RenewRelayIdentityCommand{
+		ServerCertificate: newServer, ServerKey: newServerKey, ServerIdentity: "relay-instance-r2",
+		// Gateway names a certificate the worker does not hold: keep the served one.
+		RetainServerFingerprint: "sha256:unknown",
+	}, admin, adminKey, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.retainedFingerprint != oldFingerprint {
+		t.Fatal("the certificate the worker serves today was not kept")
+	}
+	swap, err := swapWorkerIdentity(dir, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := swap.rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if got := fileFingerprint(t, filepath.Join(dir, workerServerCertificate)); got != oldFingerprint {
+		t.Fatal("rollback did not restore the previous server certificate")
+	}
+	key, _ := os.ReadFile(filepath.Join(dir, workerServerKey))
+	if string(key) != string(oldServerKey) {
+		t.Fatal("rollback did not restore the matching key")
+	}
+	if _, err := os.Stat(filepath.Join(dir, workerPreviousServerCertificate)); !os.IsNotExist(err) {
+		t.Fatal("rollback left the staged previous certificate")
+	}
+}
+
+func TestRecoverWorkerIdentityRepairsAnInterruptedSwap(t *testing.T) {
+	ca := newTestCA(t)
+	year := time.Now().Add(365 * 24 * time.Hour)
+	server, serverKey := ca.issue(t, "relay-instance", x509.ExtKeyUsageServerAuth, year)
+	admin, adminKey := ca.issue(t, "node-1", x509.ExtKeyUsageClientAuth, year)
+	dir := workerIdentityDir(t, ca, server, serverKey, admin, adminKey)
+	// Killed between the two renames, with a stale update marker.
+	if err := os.WriteFile(filepath.Join(dir, workerIdentityUpdatingMarker), []byte("1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dir, dir+workerIdentityBackupSuffix); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir+workerIdentityStagingSuffix, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := RecoverWorkerIdentity(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, workerServerCertificate)); err != nil {
+		t.Fatal("the previous identity was not restored")
+	}
+	for _, leftover := range []string{filepath.Join(dir, workerIdentityUpdatingMarker), dir + workerIdentityStagingSuffix, dir + workerIdentityBackupSuffix} {
+		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+			t.Fatalf("%s was left behind", leftover)
+		}
 	}
 }

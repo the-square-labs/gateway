@@ -453,6 +453,21 @@ describe('nodesRoutes service address access', () => {
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'docker' });
   });
 
+  it('rejects a patch without node fields before touching the node', async () => {
+    mocks.scopes = [];
+
+    for (const body of [{}, { confirmDomainDnsUpdate: true }]) {
+      const response = await createApp().request(`/${nodeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      expect(response.status).toBe(400);
+      await expect(response.json()).resolves.toMatchObject({ code: 'NO_NODE_CHANGES' });
+    }
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+
   it('rejects service address changes with rename-only access', async () => {
     mocks.scopes = ['nodes:rename'];
 

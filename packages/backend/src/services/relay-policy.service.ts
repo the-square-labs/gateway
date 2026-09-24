@@ -141,9 +141,19 @@ const LOCAL_POLICY_TRUST_RECOVERED_VISIBLE_MS = 24 * 60 * 60 * 1000;
 /** Pushes on the policy-change path must not hold local publication behind a slow remote relay. */
 const REMOTE_POLICY_PUSH_TIMEOUT_MS = 10_000;
 const REMOTE_POLICY_PUSH_RETRY_MS = 60_000;
+/** How long a grant dispatch waits for remote relays to take the policy it depends on. */
+const REMOTE_POLICY_PUSH_GRACE_MS = 3_000;
 const REVISION_RAISE_INTERVAL_MS = 5 * 60 * 1000;
 /** Largest revision floor a relay report may impose; beyond it JavaScript numbers lose precision. */
 const MAX_REVISION_FLOOR = Number.MAX_SAFE_INTEGER - 1_000_000;
+/**
+ * How far one report may move a revision sequence. A database restore leaves Gateway behind by
+ * at most the policy changes and snapshots since the backup, far below this; a relay or daemon,
+ * even a compromised one, cannot push the sequence toward the precision limit of its column.
+ */
+const MAX_REVISION_JUMP = 1_000_000;
+/** Refusals without a revision a daemon must repeat before they count as a restore. */
+const STALE_REFUSALS_BEFORE_RAISE = 3;
 
 export const LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE =
   'The local relay trusts only policy signing keys Gateway can no longer sign with, and its version cannot reset ' +
@@ -197,10 +207,14 @@ export class RelayPolicyService {
   /** Per remote node: the global policy revision it last acknowledged from the policy-change path. */
   private readonly remotePolicyRevisions = new Map<string, number>();
   private readonly remotePolicyPushFailedAt = new Map<string, number>();
+  private remotePush: Promise<void> = Promise.resolve();
+  private remotePushRevision = 0;
   private audit?: Pick<AuditService, 'log'>;
   private events?: EventBusService;
   private localPolicyTrust: RelayPolicyTrustStatus | null = null;
   private lastRevisionRaiseAt = 0;
+  /** Per daemon: consecutive grant bundle refusals that named no revision. */
+  private readonly staleGrantRefusals = new Map<string, number>();
   private lastLocalPolicyTrustResetAt = 0;
 
   constructor(
@@ -440,7 +454,19 @@ export class RelayPolicyService {
         const trust = await this.policyKeys.getEnrollmentTrust();
         await this.recoverLocalPolicyTrust(trust, health, error);
         signed = await this.buildInstanceSnapshot(local.id, [trust.keyId], revisionFloor);
-        response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
+        try {
+          response = await this.relay.applyEncodedSnapshot(signed.encodedRequest);
+        } catch (retryError) {
+          if (errorMessage(retryError).includes('snapshot gateway instance changed')) {
+            // The reset took, but this relay build cannot rebind to this Gateway instance.
+            this.setLocalPolicyTrust(
+              'recovery_unsupported',
+              LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE,
+              health.policyKeyIds ?? []
+            );
+          }
+          throw retryError;
+        }
       }
       const applied = Number(response.appliedRevision);
       if (!Number.isSafeInteger(applied) || applied !== signed.revision) {
@@ -450,7 +476,9 @@ export class RelayPolicyService {
       // global grant revision. Only acknowledge the projection actually sent.
       this.grantIssuer.acknowledgeRevision(signed.globalRevision);
       this.settleLocalPolicyTrust();
-      await this.pushChangedRemotePolicies(signed.globalRevision);
+      // Beside the snapshot chain, never inside it: a remote relay that is busy (renewing,
+      // updating) must not hold up every local sync, grant issue and tunnel open behind it.
+      this.startRemotePush(signed.globalRevision);
       return applied;
     }
     const snapshot = await this.buildSnapshot();
@@ -507,6 +535,15 @@ export class RelayPolicyService {
       this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
       throw refusal;
     }
+    // Rebinding to another Gateway instance ships with the reset capability; a relay without it
+    // would accept the reset and still refuse every snapshot.
+    if (
+      reason.includes('snapshot gateway instance changed') &&
+      !health.capabilities?.includes(LOCAL_POLICY_TRUST_RESET_CAPABILITY)
+    ) {
+      this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
+      throw new Error(`${LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE} Relay refusal: ${reason}`);
+    }
     const now = Date.now();
     const nextAttemptAt = this.lastLocalPolicyTrustResetAt + LOCAL_POLICY_TRUST_RESET_COOLDOWN_MS;
     if (now < nextAttemptAt) {
@@ -521,11 +558,13 @@ export class RelayPolicyService {
       }
       throw new Error(`Local relay refuses Gateway policy; trust reset retries after the cooldown: ${reason}`);
     }
-    this.lastLocalPolicyTrustResetAt = now;
     let replacedKeyIds: string[];
     try {
       ({ replacedKeyIds } = await this.relay.resetLocalPolicyTrust(trust.keyId, trust.publicKey, trust.fingerprint));
+      this.lastLocalPolicyTrustResetAt = now;
     } catch (error) {
+      // The cooldown starts only once the relay answered: an unreachable relay was not reset.
+      if (!isRelayUnavailable(error)) this.lastLocalPolicyTrustResetAt = now;
       if ((error as { code?: number } | null)?.code === GrpcStatus.UNIMPLEMENTED) {
         this.setLocalPolicyTrust('recovery_unsupported', LOCAL_POLICY_TRUST_UNSUPPORTED_MESSAGE, trustedKeyIds);
         logger.error('Local relay refuses Gateway policy and cannot reset its trust', { reason });
@@ -627,6 +666,30 @@ export class RelayPolicyService {
       }
     });
     return result;
+  }
+
+  /** Queues a push of this revision to remote relays; pushes run one after another. */
+  private startRemotePush(revision: number): void {
+    if (!this.dispatch || revision <= this.remotePushRevision) return;
+    this.remotePushRevision = revision;
+    this.remotePush = this.remotePush
+      .then(() => this.pushChangedRemotePolicies(revision))
+      .catch((error) => {
+        logger.warn('Remote relay policy push failed', { revision, error: errorMessage(error) });
+      });
+  }
+
+  /** Waits for queued remote pushes, but never longer than a short grace. */
+  private async waitForRemotePush(): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      this.remotePush,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, REMOTE_POLICY_PUSH_GRACE_MS);
+        timer.unref?.();
+      }),
+    ]);
+    if (timer) clearTimeout(timer);
   }
 
   /**
@@ -1379,6 +1442,8 @@ export class RelayPolicyService {
             data: Buffer.alloc(0),
           };
         }
+        // Give the remote relays a moment to take the policy these grants depend on.
+        await this.waitForRemotePush();
         const bundle = await this.getNodeGrantBundle(nodeId);
         if (!epoch.valid) {
           return {
@@ -1413,6 +1478,7 @@ export class RelayPolicyService {
     if (!result.success && (await this.raiseRevisionAboveDaemon(nodeId, result.error))) {
       result = await this.syncNodeGrantBundle(nodeId);
     }
+    if (result.success) this.staleGrantRefusals.delete(nodeId);
     if (!result.success) throw new Error(result.error || `Daemon ${nodeId} rejected relay grants`);
   }
 
@@ -1425,15 +1491,31 @@ export class RelayPolicyService {
   private async raiseRevisionAboveDaemon(nodeId: string, error: string | undefined): Promise<boolean> {
     const message = error ?? '';
     const olderRevision = message.match(/relay grant revision \d+ is older than (\d+)/);
-    const olderRefresh = /relay grant refresh \d+ is older than \d+/.test(message);
-    // This daemon reports no revision: jump past any sequence a restore can have left behind.
+    // This daemon names no revision. One such refusal is ordinary out-of-order delivery; only a
+    // daemon that keeps refusing every bundle holds a sequence Gateway lost to a restore.
     const staleWithoutRevision = /stale relay grant bundle/.test(message);
-    if (!olderRevision && !olderRefresh && !staleWithoutRevision) return false;
+    if (!olderRevision && !staleWithoutRevision) {
+      this.staleGrantRefusals.delete(nodeId);
+      return false;
+    }
+    const current = Number((await this.grantIssuer.requireState()).revision);
+    let floor: number;
+    if (olderRevision) {
+      const held = Number(olderRevision[1]);
+      // At or below Gateway's own revision this is an older bundle delivered late, not a restore.
+      if (!Number.isSafeInteger(held) || held <= current) return false;
+      floor = Math.min(held, current + MAX_REVISION_JUMP);
+    } else {
+      const refusals = (this.staleGrantRefusals.get(nodeId) ?? 0) + 1;
+      this.staleGrantRefusals.set(nodeId, refusals);
+      if (refusals < STALE_REFUSALS_BEFORE_RAISE) return false;
+      floor = current + MAX_REVISION_JUMP;
+    }
     const now = Date.now();
     if (now - this.lastRevisionRaiseAt < REVISION_RAISE_INTERVAL_MS) return false;
-    this.lastRevisionRaiseAt = now;
-    const floor = olderRevision ? Number(olderRevision[1]) : staleWithoutRevision ? Math.floor(now / 1000) : 0;
     if (!Number.isSafeInteger(floor) || floor > MAX_REVISION_FLOOR) return false;
+    this.lastRevisionRaiseAt = now;
+    this.staleGrantRefusals.delete(nodeId);
     await this.db
       .update(relayPolicyState)
       .set({ revision: sql`greatest(${relayPolicyState.revision} + 1, ${floor + 1})`, updatedAt: new Date() })
@@ -1492,7 +1574,8 @@ export class RelayPolicyService {
             revision: error.revision,
             error: errorMessage(syncError),
           });
-          await this.pushChangedRemotePolicies(error.revision);
+          this.startRemotePush(error.revision);
+          await this.waitForRemotePush();
           this.grantIssuer.allowUnacknowledgedRevision(error.revision);
           return issue();
         }
@@ -1826,20 +1909,21 @@ export class RelayPolicyService {
       // A relay refuses any revision below the one it applied, and Gateway's own sequence can
       // fall behind it (a database restored from a backup). Continue above what the relay
       // reports, or has reported, so it is never locked out until the sequence catches up.
-      const floor = Math.min(
+      // The floor comes from a relay's report; one report moves the sequence by a bounded jump.
+      const reported = Math.min(
         MAX_REVISION_FLOOR,
         Math.max(
-          state.revision,
           Number.isSafeInteger(instance.appliedPolicyRevision) ? instance.appliedPolicyRevision : 0,
           Number.isSafeInteger(appliedRevisionFloor) ? appliedRevisionFloor : 0
         )
       );
+      const own = sql`greatest(${relayPools.desiredPolicyRevision}, ${state.revision})`;
       const [poolRevision] = await tx
         .update(relayPools)
         // Legacy snapshots use the global revision as their transport sequence.
         // Keep pool snapshots strictly newer when upgrading from that format.
         .set({
-          desiredPolicyRevision: sql`greatest(${relayPools.desiredPolicyRevision}, ${floor}) + 1`,
+          desiredPolicyRevision: sql`greatest(${own}, least(${reported}, ${own} + ${MAX_REVISION_JUMP})) + 1`,
           updatedAt: issuedAt,
         })
         .where(eq(relayPools.id, instance.poolId))

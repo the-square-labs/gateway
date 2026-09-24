@@ -83,6 +83,36 @@ describe('AI folder tools', () => {
     ]);
   });
 
+  it('redacts advanced config and Page targets in route folder listings like the folder route', async () => {
+    const host = {
+      id: 'proxy-1',
+      domainNames: ['app.example.com'],
+      advancedConfig: 'proxy_set_header X-Internal secret;',
+      pageTarget: { projectId: 'project-1' },
+    };
+    const proxyFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([{ id: 'folder-1', name: 'Apps', hosts: [host], children: [] }]),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === FolderService) return proxyFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'list_resource_folders', {
+        resourceType: 'routes',
+      })
+    ).resolves.toMatchObject([{ hosts: [{ id: 'proxy-1', advancedConfig: null, pageTarget: null }] }]);
+
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['proxy:view:proxy-1', 'proxy:advanced:proxy-1', 'pages:view:project-1'] },
+        'list_resource_folders',
+        { resourceType: 'routes' }
+      )
+    ).resolves.toMatchObject([{ hosts: [host] }]);
+  });
+
   it('lists domain folders with the same access rules as GET /domains/folders', async () => {
     const domainFolderService = {
       getFolderTree: vi.fn().mockResolvedValue([{ id: 'folder-1', name: 'Domains', children: [] }]),

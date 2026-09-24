@@ -423,6 +423,44 @@ describe('AIService manage_user tool', () => {
     );
   });
 
+  it('never changes the sign-in, MFA or sessions of the account it acts for', async () => {
+    const mfaService = { resetMfa: vi.fn() };
+    const sessionService = {
+      listPublicUserSessions: vi.fn(),
+      revokeUserSessionByPublicId: vi.fn(),
+      destroyAllUserSessions: vi.fn(),
+    };
+    container.registerInstance(MfaService, mfaService as unknown as MfaService);
+    container.registerInstance(SessionService, sessionService as unknown as SessionService);
+    const auth = authService(systemAdmin, { updateUserAuthMethod: vi.fn(), updateLocalUserName: vi.fn() });
+    const service = createService({ authService: auth });
+    const self = { userId: systemAdmin.id };
+
+    for (const args of [
+      { operation: 'set_auth_method', authMethod: 'oidc', ...self },
+      { operation: 'send_password_link', ...self },
+      { operation: 'reset_mfa', ...self },
+      { operation: 'list_sessions', ...self },
+      { operation: 'revoke_session', sessionId: 'public-1', ...self },
+      { operation: 'revoke_all_sessions', ...self },
+    ]) {
+      await expect(service.executeTool(systemAdmin, 'manage_user', args)).resolves.toMatchObject({
+        error: expect.stringContaining('cannot change the sign-in, MFA or sessions of their own account'),
+      });
+    }
+    expect(auth.updateUserAuthMethod).not.toHaveBeenCalled();
+    expect(mfaService.resetMfa).not.toHaveBeenCalled();
+    expect(sessionService.listPublicUserSessions).not.toHaveBeenCalled();
+    expect(sessionService.revokeUserSessionByPublicId).not.toHaveBeenCalled();
+    expect(sessionService.destroyAllUserSessions).not.toHaveBeenCalled();
+
+    // Profile fields of the own account stay manageable.
+    auth.updateLocalUserName.mockResolvedValue({ ...systemAdmin, name: 'Root' });
+    await expect(
+      service.executeTool(systemAdmin, 'manage_user', { operation: 'rename', name: 'Root', ...self })
+    ).resolves.toMatchObject({ result: { name: 'Root' } });
+  });
+
   it('keeps deleted-account inspection and restore behind admin:system', async () => {
     const extra = {
       listDeletedUsers: vi.fn().mockResolvedValue([{ id: 'user-9' }]),
@@ -442,7 +480,8 @@ describe('AIService manage_user tool', () => {
     await expect(
       service.executeTool(systemAdmin, 'manage_user', { operation: 'restore', userId: 'user-9', groupIds: [GROUP_ID] })
     ).resolves.toEqual({ result: { id: 'user-9', groupId: GROUP_ID }, invalidateStores: ['users'] });
-    expect(extra.restoreUser).toHaveBeenCalledWith('user-9', [GROUP_ID]);
+    // The restored groups are bounded by what the caller may grant.
+    expect(extra.restoreUser).toHaveBeenCalledWith('user-9', [GROUP_ID], systemAdmin.scopes);
   });
 
   it('rejects unknown operations and missing user ids before any target lookup', async () => {

@@ -231,6 +231,70 @@ describe('NodesService enrollment token creation', () => {
     expect(result.slug).toBe(existing.slug);
   });
 
+  it('never returns the stored enrollment token hash or selector from an update', async () => {
+    const existing = {
+      id: 'node-1',
+      type: 'docker',
+      hostname: 'node.local',
+      displayName: 'Primary node',
+      appearanceColor: null,
+      slug: 'primary-node',
+      status: 'pending',
+      enrollmentTokenHash: '$2b$10$stored-hash',
+      enrollmentTokenSelector: 'selector',
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn(() => ({ limit: vi.fn(async () => [existing]) })),
+        })),
+      })),
+      update: vi.fn(() => ({
+        set: vi.fn((values) => ({
+          where: vi.fn(() => ({ returning: vi.fn(async () => [{ ...existing, ...values }]) })),
+        })),
+      })),
+    } as any;
+    const service = new NodesService(
+      db,
+      { log: vi.fn(async () => undefined) } as any,
+      { getNode: vi.fn() } as any,
+      { getGatewayCertSha256: vi.fn() } as any,
+      {} as any
+    );
+
+    const result = await service.update(existing.id, { appearanceColor: 'blue' }, 'user-1');
+
+    expect(result).toMatchObject({ id: 'node-1', appearanceColor: 'blue' });
+    expect(result).not.toHaveProperty('enrollmentTokenHash');
+    expect(result).not.toHaveProperty('enrollmentTokenSelector');
+  });
+
+  it('does not return enrollment token material from node reads', async () => {
+    const row = {
+      id: 'node-1',
+      type: 'docker',
+      hostname: 'node.local',
+      slug: 'primary-node',
+      status: 'pending',
+      lastHealthReport: null,
+      enrollmentTokenHash: '$2b$10$stored-hash',
+      enrollmentTokenSelector: 'selector',
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn(async () => [row]) })) })),
+      })),
+    } as any;
+    const service = new NodesService(db, {} as any, { getNode: vi.fn() } as any, {} as any, {} as any);
+
+    for (const result of [await service.get('node-1'), await service.getBySlug('primary-node')]) {
+      expect(result).toMatchObject({ id: 'node-1' });
+      expect(result).not.toHaveProperty('enrollmentTokenHash');
+      expect(result).not.toHaveProperty('enrollmentTokenSelector');
+    }
+  });
+
   it('rejects hostname and private Nginx service addresses', async () => {
     const existing = {
       id: 'node-1',

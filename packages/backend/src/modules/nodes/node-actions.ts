@@ -35,6 +35,16 @@ export async function updateNodeForActor(
     input.serviceAddresses !== undefined ||
     input.serviceAddress !== undefined ||
     input.secondaryServiceAddress !== undefined;
+  // Authorization is per field, so a patch must carry at least one field: an empty
+  // patch or a bare confirmDomainDnsUpdate would otherwise pass every check below.
+  if (
+    input.displayName === undefined &&
+    input.appearanceColor === undefined &&
+    input.builderSettings === undefined &&
+    !serviceAddressesUpdateRequested
+  ) {
+    throw new AppError(400, 'NO_NODE_CHANGES', 'Provide at least one node field to update');
+  }
   if (
     (input.displayName !== undefined || input.appearanceColor !== undefined || serviceAddressesUpdateRequested) &&
     !hasScope(scopes, `nodes:rename:${id}`)

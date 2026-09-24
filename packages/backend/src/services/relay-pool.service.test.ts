@@ -87,6 +87,7 @@ function reconciliationHarness() {
     failures: [],
     staging: [],
     automaticRebalancePaused: false,
+    instances: [],
   };
   vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
   vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
@@ -748,12 +749,13 @@ describe('RelayPoolService remote relay liveness and recovery', () => {
     const { db } = queuedDb([
       [{ id: 'orphaned' }, { id: 'held' }],
       [], // orphaned: no in-flight step of an unfinished run
+      [{ state: 'draining', manualDrainStartedAt: null }],
       [{ id: 'step' }], // held: a paused run still owns the drain
     ]);
     const { pool } = service(db);
-    const resume = vi.spyOn(pool, 'drainInstance').mockResolvedValue(undefined);
+    const resume = vi.spyOn(pool as any, 'setInstanceDrain').mockResolvedValue(undefined);
     expect(await pool.releaseOrphanedUpdateDrains(0)).toBe(1);
-    expect(resume).toHaveBeenCalledExactlyOnceWith('orphaned', null, false, { manual: false });
+    expect(resume).toHaveBeenCalledExactlyOnceWith('orphaned', null, false, false);
     // Throttled between passes.
     expect(await pool.releaseOrphanedUpdateDrains(1)).toBe(0);
   });
@@ -917,5 +919,51 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     );
     // Already on the local relay: nothing to do, even though spread would add the remote relay.
     expect((await snapshotFor('local')).rebalanceAvailable).toBe(false);
+  });
+
+  it('lets an update run wait for a running drain action instead of failing', async () => {
+    const { pool } = service({});
+    let release!: () => void;
+    const running = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const setDrain = vi
+      .spyOn(pool as any, 'setInstanceDrain')
+      .mockReturnValueOnce(running)
+      .mockResolvedValue(undefined);
+    const cleanup = (pool as any).withDrainAction('remote', () => (pool as any).setInstanceDrain('remote'));
+    // An operator gets a conflict while another action runs.
+    await expect(pool.drainInstance('remote', 'user', true)).rejects.toMatchObject({ code: 'RELAY_DRAIN_IN_PROGRESS' });
+    // An update run waits its turn.
+    const update = pool.drainInstance('remote', null, true, { manual: false });
+    await Promise.resolve();
+    expect(setDrain).toHaveBeenCalledTimes(1);
+    release();
+    await cleanup;
+    await expect(update).resolves.toBeUndefined();
+    expect(setDrain).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps moving workloads off drained relays while an update pauses placement', async () => {
+    const { pool } = reconciliationHarness();
+    const evacuate = vi.spyOn(pool as any, 'evacuateInstance').mockRejectedValueOnce(new Error('rebalance running'));
+    evacuate.mockResolvedValue(undefined);
+    const snapshot = await pool.getSnapshot();
+    Object.assign(snapshot, {
+      automaticRebalancePaused: true,
+      instances: [
+        { id: 'drained', kind: 'remote', state: 'draining', activeAssignments: 2 },
+        { id: 'empty', kind: 'remote', state: 'draining', activeAssignments: 0 },
+        { id: 'ready', kind: 'remote', state: 'ready', activeAssignments: 3 },
+      ],
+    });
+    await pool.reconcile();
+    expect(evacuate).toHaveBeenCalledExactlyOnceWith('drained');
+    // Retried after a pause, not on every tick.
+    await pool.reconcile();
+    expect(evacuate).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(30_000);
+    await pool.reconcile();
+    expect(evacuate).toHaveBeenCalledTimes(2);
   });
 });

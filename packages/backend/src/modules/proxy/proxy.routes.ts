@@ -327,6 +327,11 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
   const id = c.req.param('id')!;
   const input = UpdateProxyHostSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
+  // A caller without raw read access received rawConfig: null (see serializeProxyHostForBrowser);
+  // echoing it back in a full-object PUT is not a raw config write.
+  if (input.rawConfig === null && !canReadRawProxyConfig(scopes, id)) {
+    delete input.rawConfig;
+  }
   const existing = await proxyService.getProxyHost(id);
   // Moving a route between folders goes through the same checks as the move
   // endpoint. An unchanged folderId (full-object PUT) is ignored.

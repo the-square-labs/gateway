@@ -103,6 +103,25 @@ describe('AIService proxy tool routing', () => {
     });
   });
 
+  it('filters list_routes by node for per-route proxy:view holders and keeps the per-route filter', async () => {
+    const proxyService = { listProxyHosts: vi.fn().mockResolvedValue({ data: [FULL_HOST], total: 1 }) };
+    const service = createService(proxyService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:view:${COMPACT_HOST.id}`] }, 'list_routes', {
+        nodeId: COMPACT_HOST.nodeId,
+      })
+    ).resolves.toEqual({ result: { data: [COMPACT_HOST], total: 1 }, invalidateStores: [] });
+    expect(proxyService.listProxyHosts).toHaveBeenCalledWith(expect.objectContaining({ nodeId: COMPACT_HOST.nodeId }), {
+      allowedIds: [COMPACT_HOST.id],
+    });
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'list_routes', { nodeId: COMPACT_HOST.nodeId })
+    ).resolves.toMatchObject({ error: expect.stringContaining('PERMISSION_DENIED') });
+    expect(proxyService.listProxyHosts).toHaveBeenCalledTimes(1);
+  });
+
   it('routes proxy host list/get/create/delete operations through proxy service and compacts host output', async () => {
     const proxyService = {
       listProxyHosts: vi.fn().mockResolvedValue({ data: [FULL_HOST], total: 1 }),

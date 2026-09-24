@@ -110,6 +110,8 @@ function adminUserActor(c: any): AdminUserActor {
     user: c.get('user')!,
     scopes: c.get('effectiveScopes') || [],
     accountScopes: c.get('isTokenAuth') ? c.get('user')!.scopes : undefined,
+    // Anything but a browser session counts as programmatic, so an unknown auth type fails closed.
+    programmatic: Boolean(c.get('isTokenAuth')) || c.get('authType') !== 'session',
     userAgent: c.req.header('user-agent'),
   };
 }

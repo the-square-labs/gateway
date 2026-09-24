@@ -62,7 +62,7 @@ export async function createGroupForActor(
   if (!hasScopeForCreation(actor.scopes, 'admin:groups', input.folderId))
     throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination group folder');
   if (input.folderId) await container.resolve(PermissionGroupFolderService).assertFolderExists(input.folderId);
-  await groupService.assertCanCreateGroup(input, privilegeBoundaryScopes(actor.scopes, actor.accountScopes));
+  await groupService.assertCanCreateGroup(input, privilegeBoundaryScopes(actor.scopes, actor.accountScopes, 'grant'));
 
   const group = await groupService.createGroup(input);
   await grantCreatedResourcePermissions(actor.id, 'admin:groups', group.id);
@@ -90,7 +90,11 @@ export async function updateGroupForActor(
     ...parsedInput,
     ...(parsedInput.scopes !== undefined && { scopes: canonicalizeScopes(parsedInput.scopes) }),
   };
-  await groupService.assertCanUpdateGroup(groupId, input, privilegeBoundaryScopes(actor.scopes, actor.accountScopes));
+  await groupService.assertCanUpdateGroup(
+    groupId,
+    input,
+    privilegeBoundaryScopes(actor.scopes, actor.accountScopes, 'grant')
+  );
 
   const group = await groupService.updateGroup(groupId, input);
 

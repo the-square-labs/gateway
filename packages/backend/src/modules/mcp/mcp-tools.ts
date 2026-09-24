@@ -7,6 +7,7 @@ import {
 import { container } from '@/container.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AIService } from '@/modules/ai/ai.service.js';
+import { redactArgsForTool } from '@/modules/ai/ai.service.tool-helpers.js';
 import { AI_TOOLS, validateAIToolArguments } from '@/modules/ai/ai.tools.js';
 import type { AIToolDefinition } from '@/modules/ai/ai.types.js';
 import { getAIToolResourceId } from '@/modules/ai/ai-tool-policy-metadata.js';
@@ -77,8 +78,6 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'open_connector_setup',
   'set_resource_pin',
 ]);
-const SENSITIVE_TOOL_ARG_RE =
-  /(?:password|passwd|secret|signingsecret|privatekey|private_key|token|authorization|cookie|apikey|api_key|clientsecret|client_secret|refresh|contentbase64)/i;
 const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource', 'read_gateway_documentation']);
 const MCP_TOOLS_PAGE_SIZE = 80;
 const MCP_DISCOVERY_STATE_TTL_MS = 24 * 60 * 60 * 1000;
@@ -453,21 +452,6 @@ function paginateTools<T>(items: T[], cursor: unknown): { items: T[]; nextCursor
   };
 }
 
-function redactToolArgs(value: unknown, depth = 0): unknown {
-  if (value === null || typeof value !== 'object') return value;
-  if (depth > 8) return '[REDACTED_DEPTH_LIMIT]';
-
-  if (Array.isArray(value)) {
-    return value.map((item) => redactToolArgs(item, depth + 1));
-  }
-
-  const redacted: Record<string, unknown> = {};
-  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
-    redacted[key] = SENSITIVE_TOOL_ARG_RE.test(key) ? '[REDACTED]' : redactToolArgs(nested, depth + 1);
-  }
-  return redacted;
-}
-
 function getToolAuthorizationResourceId(tool: AIToolDefinition, args: Record<string, unknown>): string {
   return getAIToolResourceId(tool, args);
 }
@@ -481,7 +465,8 @@ async function auditDeniedMcpTool(
   reason: string
 ): Promise<void> {
   const category = tool?.category ?? 'Unknown';
-  const redactedArgs = redactToolArgs(args) as Record<string, unknown>;
+  // Same per-tool redaction as executed calls, so denied and invalid calls never audit a secret either.
+  const redactedArgs = redactArgsForTool(toolName, args) as Record<string, unknown>;
   setAuditMcpContext({
     toolName,
     category,

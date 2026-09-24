@@ -523,6 +523,56 @@ describe('MCP tools', () => {
     );
   });
 
+  it('applies per-tool secret redaction to denied MCP audit records', async () => {
+    registerToken(['nodes:details']);
+    const executeTool = vi.fn();
+    const log = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(AIService, { executeTool } as unknown as AIService);
+    container.registerInstance(AuditService, { log } as unknown as AuditService);
+
+    await mcpRequest('tools/call', {
+      name: 'github_upsert_actions_secret',
+      arguments: {
+        connectorId: 'connector-1',
+        repositoryUrl: 'https://github.com/acme/app',
+        name: 'DEPLOY_KEY',
+        value: 'raw-actions-secret',
+      },
+    });
+    await mcpRequest('tools/call', {
+      name: 'create_webhook',
+      arguments: {
+        name: 'Slack',
+        url: 'https://hooks.slack.com/services/T000/B000/raw-slack-token',
+        headers: { 'X-Custom': 'raw-header-secret' },
+      },
+    });
+
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.github_upsert_actions_secret',
+        details: expect.objectContaining({
+          denied: true,
+          arguments: expect.objectContaining({ name: 'DEPLOY_KEY', value: '[REDACTED]' }),
+        }),
+      })
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.create_webhook',
+        details: expect.objectContaining({
+          denied: true,
+          arguments: expect.objectContaining({
+            url: 'https://hooks.slack.com/********',
+            headers: { 'X-Custom': '********' },
+          }),
+        }),
+      })
+    );
+    expect(JSON.stringify(log.mock.calls)).not.toMatch(/raw-(?:actions-secret|slack-token|header-secret)/);
+  });
+
   it('passes effective token scopes and token metadata to AI tool execution', async () => {
     registerToken(['nodes:details']);
     const executeTool = vi.fn().mockResolvedValue({ result: { data: [] }, invalidateStores: [] });

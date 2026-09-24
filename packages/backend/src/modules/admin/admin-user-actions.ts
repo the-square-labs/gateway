@@ -29,11 +29,32 @@ export interface AdminUserActor {
   scopes: string[];
   /** Live account scopes behind a programmatic caller; only account-only scopes are taken from them. */
   accountScopes?: string[];
+  /**
+   * True for API tokens, MCP clients and the AI assistant. They may manage other
+   * accounts, but never the sign-in, MFA or sessions of the account they act for.
+   */
+  programmatic: boolean;
   userAgent?: string;
 }
 
 function boundaryScopes(actor: AdminUserActor): string[] {
   return privilegeBoundaryScopes(actor.scopes, actor.accountScopes);
+}
+
+/** Boundary for scopes being granted to someone else (groups, additional permissions). */
+function grantBoundaryScopes(actor: AdminUserActor): string[] {
+  return privilegeBoundaryScopes(actor.scopes, actor.accountScopes, 'grant');
+}
+
+/** Only a browser session may change its own sign-in method, MFA or sessions. */
+function assertNotOwnSignInFromProgrammaticCaller(actor: AdminUserActor, userId: string): void {
+  if (actor.programmatic && userId === actor.user.id) {
+    throw new AppError(
+      403,
+      'SELF_SIGN_IN_PROGRAMMATIC',
+      'API tokens, MCP clients and the AI assistant cannot change the sign-in, MFA or sessions of their own account'
+    );
+  }
 }
 
 /** Services the AI runtime injects directly; anything omitted resolves from the container. */
@@ -122,7 +143,7 @@ export async function createAdminUser(
     throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination user folder');
   if (input.folderId) await container.resolve(AdminUserFolderService).assertFolderExists(input.folderId);
   const destGroups = await Promise.all(input.groupIds.map((id) => groupService.getGroup(id)));
-  if (!isScopeSubset(destGroups.flatMap(effectiveGroupScopes), boundaryScopes(actor))) {
+  if (!isScopeSubset(destGroups.flatMap(effectiveGroupScopes), grantBoundaryScopes(actor))) {
     throw new AppError(403, 'PRIVILEGE_BOUNDARY', 'Cannot assign a group with permissions you do not possess');
   }
 
@@ -165,6 +186,7 @@ export async function updateAdminUserAuthMethod(
   authMethod: AuthMethod,
   services: AdminUserActionServices = {}
 ): Promise<User> {
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   const targetUser = await requireManageableUser(actor, userId, services);
   if (authMethod === 'password' || authMethod === 'email_otp') {
     await assertSmtpVerified('SMTP must be verified before switching to email sign-in');
@@ -232,6 +254,7 @@ export async function sendAdminUserPasswordLink(
   userId: string,
   services: AdminUserActionServices = {}
 ): Promise<{ message: string; purpose: 'password_setup' | 'password_reset' }> {
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   const targetUser = await requireManageableUser(actor, userId, services);
   if (targetUser.authMethod !== 'password') {
     throw new AppError(409, 'PASSWORD_AUTH_REQUIRED', 'User does not use password sign-in');
@@ -261,6 +284,7 @@ export async function resetAdminUserMfa(
   services: AdminUserActionServices = {}
 ): Promise<{ message: string }> {
   assertSystemAdministrator(actor.scopes);
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   const targetUser = await authServiceOf(services).getUserById(userId);
   if (!targetUser) throw new AppError(404, 'NOT_FOUND', 'User not found');
   const denyReason = canManageUser(boundaryScopes(actor), targetUser.scopes);
@@ -286,7 +310,12 @@ export async function updateAdminUserGroups(
 ): Promise<User> {
   assertAdminUserScope(actor.scopes, userId);
   const authService = authServiceOf(services);
-  const targetUser = await authService.assertCanUpdateUserGroup(actor.user.id, boundaryScopes(actor), userId, groupIds);
+  const targetUser = await authService.assertCanUpdateUserGroup(
+    actor.user.id,
+    grantBoundaryScopes(actor),
+    userId,
+    groupIds
+  );
   const updatedUser = await authService.updateUserGroup(userId, groupIds);
   await auditServiceOf(services).log({
     userId: actor.user.id,
@@ -319,7 +348,7 @@ export async function updateAdminUserAdditionalPermissions(
   const authService = authServiceOf(services);
   const { targetUser, additionalScopes } = await authService.assertCanUpdateUserAdditionalScopes(
     actor.user.id,
-    boundaryScopes(actor),
+    grantBoundaryScopes(actor),
     userId,
     requestedScopes
   );
@@ -436,7 +465,11 @@ export async function restoreAdminUser(
   services: AdminUserActionServices = {}
 ): Promise<User> {
   assertSystemAdministrator(actor.scopes);
-  const restoredUser = await authServiceOf(services).restoreUser(userId, groups.groupIds ?? groups.groupId);
+  const restoredUser = await authServiceOf(services).restoreUser(
+    userId,
+    groups.groupIds ?? groups.groupId,
+    grantBoundaryScopes(actor)
+  );
   await auditServiceOf(services).log({
     userId: actor.user.id,
     action: 'user.restore',
@@ -461,6 +494,7 @@ export async function listAdminUserSessions(
   currentSessionId: string,
   services: AdminUserActionServices = {}
 ) {
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   await requireManageableUser(actor, userId, services);
   return container.resolve(SessionService).listPublicUserSessions(userId, currentSessionId);
 }
@@ -471,6 +505,7 @@ export async function revokeAdminUserSession(
   sessionId: string,
   services: AdminUserActionServices = {}
 ): Promise<void> {
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   const targetUser = await requireManageableUser(actor, userId, services);
   const revoked = await container.resolve(SessionService).revokeUserSessionByPublicId(userId, sessionId);
   if (!revoked) throw new AppError(404, 'SESSION_NOT_FOUND', 'Session not found');
@@ -493,6 +528,7 @@ export async function revokeAllAdminUserSessions(
   userId: string,
   services: AdminUserActionServices = {}
 ): Promise<void> {
+  assertNotOwnSignInFromProgrammaticCaller(actor, userId);
   const targetUser = await requireManageableUser(actor, userId, services);
   await container.resolve(SessionService).destroyAllUserSessions(userId);
   await auditServiceOf(services).log({

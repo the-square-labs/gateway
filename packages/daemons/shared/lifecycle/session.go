@@ -415,6 +415,12 @@ func runSession(ctx context.Context, conn *grpc.ClientConn, d *DaemonBase) error
 				return result
 			})
 			continue
+		case *pb.GatewayCommand_RenewRelayIdentity, *pb.GatewayCommand_UpdateRelayWorker:
+			// Relay supervisor work that takes tens of seconds. Handled off the
+			// receive loop, so policy pushes and drains for the relay are not
+			// queued behind it until they time out.
+			sendAsyncCommandResult(cmd, d.plugin.HandleCommand)
+			continue
 		case *pb.GatewayCommand_ProbeRelayCandidate:
 			sendAsyncCommandResult(cmd, func(c *pb.GatewayCommand) *pb.CommandResult {
 				result := &pb.CommandResult{CommandId: c.CommandId, Success: true}

@@ -37,7 +37,8 @@ import { ensureDockerContainerScopes, requiredToolString } from './ai.docker-too
 export const DOCKER_ARCHIVE_TRANSFER_CHUNK_BYTES = 1024 * 1024;
 const SESSION_TTL_MS = 60 * 60 * 1000;
 const ARCHIVE_MAX_BYTES = 32 * 1024 ** 3;
-const RESERVED_UPLOAD_BYTES_MAX = 64 * 1024 ** 3;
+/** Disk budget shared by upload reservations and bytes already spooled for downloads. */
+const SPOOL_BYTES_MAX = 64 * 1024 ** 3;
 const ACTIVE_SESSIONS_MAX = 16;
 const ACTIVE_SESSIONS_PER_USER_MAX = 4;
 const RESOLUTION_JSON_MAX_BYTES = 32 * 1024;
@@ -217,18 +218,35 @@ export class DockerArchiveTransferStore {
       ...[...this.uploads.values()].filter((session) => session.directory !== null),
       ...this.downloads.values(),
     ];
-    const reservedUploadBytes = [...this.uploads.values()]
-      .filter((session) => session.directory !== null)
-      .reduce((total, session) => total + session.declaredSizeBytes, 0);
+    const spooled = this.spooledBytes();
     if (
       active.length >= ACTIVE_SESSIONS_MAX ||
       active.filter((session) => session.userId === userId).length >= ACTIVE_SESSIONS_PER_USER_MAX ||
-      reservedUploadBytes + uploadBytes > RESERVED_UPLOAD_BYTES_MAX
+      (uploadBytes > 0 ? spooled + uploadBytes > SPOOL_BYTES_MAX : spooled >= SPOOL_BYTES_MAX)
     ) {
       throw new AppError(
         429,
         'DOCKER_ARCHIVE_TRANSFER_CAPACITY',
         'Too many archive transfers in progress; finish or abort unused transfers'
+      );
+    }
+  }
+
+  /** Upload reservations plus the bytes downloads have written so far. */
+  private spooledBytes(): number {
+    const uploads = [...this.uploads.values()]
+      .filter((session) => session.directory !== null)
+      .reduce((total, session) => total + session.declaredSizeBytes, 0);
+    const downloads = [...this.downloads.values()].reduce((total, session) => total + session.sizeBytes, 0);
+    return uploads + downloads;
+  }
+
+  private assertSpoolCapacity(extraBytes: number) {
+    if (this.spooledBytes() + extraBytes > SPOOL_BYTES_MAX) {
+      throw new AppError(
+        507,
+        'DOCKER_ARCHIVE_TRANSFER_SPOOL_FULL',
+        'The Gateway archive transfer spool is full; finish or abort other transfers and retry'
       );
     }
   }
@@ -440,10 +458,12 @@ export class DockerArchiveTransferStore {
         if (bytes.byteLength > ARCHIVE_MAX_BYTES) {
           throw new AppError(413, 'DOCKER_ARCHIVE_TOO_LARGE', 'Archive exceeds the MCP transfer limit');
         }
+        this.assertSpoolCapacity(bytes.byteLength);
         await writeFile(path, bytes, { mode: 0o600, flag: 'wx' });
         hash.update(bytes);
         size = bytes.byteLength;
       } else {
+        const assertSpoolCapacity = (extraBytes: number) => this.assertSpoolCapacity(extraBytes);
         const meter = new Transform({
           transform(chunk: Buffer, _encoding, callback) {
             size += chunk.byteLength;
@@ -451,6 +471,14 @@ export class DockerArchiveTransferStore {
               callback(new AppError(413, 'DOCKER_ARCHIVE_TOO_LARGE', 'Archive exceeds the MCP transfer limit'));
               return;
             }
+            try {
+              assertSpoolCapacity(chunk.byteLength);
+            } catch (error) {
+              callback(error as Error);
+              return;
+            }
+            // Counted while spooling so concurrent transfers see the bytes already on disk.
+            session.sizeBytes = size;
             hash.update(chunk);
             callback(null, chunk);
           },
@@ -467,6 +495,7 @@ export class DockerArchiveTransferStore {
       session.state = 'ready';
     } catch (error) {
       session.state = 'failed';
+      session.sizeBytes = 0;
       session.error =
         error instanceof AppError
           ? { code: error.code, message: error.message }

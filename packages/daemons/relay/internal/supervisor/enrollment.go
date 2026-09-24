@@ -12,6 +12,7 @@ import (
 	"time"
 
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
+	"google.golang.org/protobuf/proto"
 )
 
 type enrollmentState struct {
@@ -141,6 +142,38 @@ func persistEnrollmentBundle(stateDir, identityDir string, response *pb.EnrollRe
 		return err
 	}
 	return atomicWrite(filepath.Join(stateDir, "enrollment.json"), encoded, 0o600)
+}
+
+const pendingEnrollmentFile = "enrollment-pending.pb"
+
+func savePendingEnrollment(stateDir string, response *pb.EnrollResponse) error {
+	encoded, err := proto.Marshal(response)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return err
+	}
+	return atomicWrite(filepath.Join(stateDir, pendingEnrollmentFile), encoded, 0o600)
+}
+
+func loadPendingEnrollment(stateDir string) (*pb.EnrollResponse, error) {
+	encoded, err := os.ReadFile(filepath.Join(stateDir, pendingEnrollmentFile))
+	if err != nil {
+		return nil, err
+	}
+	response := &pb.EnrollResponse{}
+	if err := proto.Unmarshal(encoded, response); err != nil {
+		return nil, fmt.Errorf("decode pending relay enrollment: %w", err)
+	}
+	return response, nil
+}
+
+func removePendingEnrollment(stateDir string) error {
+	if err := os.Remove(filepath.Join(stateDir, pendingEnrollmentFile)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func loadEnrollmentState(stateDir string) (*enrollmentState, error) {
