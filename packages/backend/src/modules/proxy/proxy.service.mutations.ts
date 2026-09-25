@@ -16,12 +16,31 @@ import {
   storedRawConfigForRawModeEnablement,
 } from './proxy.service-helpers.js';
 import { assertRegisteredDomainsUseNode } from './proxy-domain-node.js';
+import { assertNoProxyDomainOverlap } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
 import { isDockerUpstream, logger, ProxyServiceCore, sameDomainNames } from './proxy.service.core.js';
+
+/**
+ * A proxy host write that names an SSL certificate waits on that certificate's
+ * row lock (the foreign-key check), so a concurrent certificate delete either
+ * sees the host and refuses, or commits first and fails this write here.
+ */
+function mapProxyHostCertificateReferenceError(error: unknown): never {
+  const candidate = error as { code?: unknown; constraint?: unknown; cause?: unknown } | null;
+  const pgError = candidate?.code === '23503' ? candidate : (candidate?.cause as typeof candidate | undefined);
+  if (
+    pgError?.code === '23503' &&
+    typeof pgError.constraint === 'string' &&
+    pgError.constraint.startsWith('proxy_hosts_ssl_certificate_id')
+  ) {
+    throw new AppError(409, 'SSL_CERT_DELETED', 'The selected SSL certificate was deleted; choose another certificate');
+  }
+  throw error;
+}
 
 export abstract class ProxyServiceMutations extends ProxyServiceCore {
   async createProxyHost(input: CreateProxyHostInput, userId: string, validationOptions: ProxyValidationInput = {}) {
@@ -74,58 +93,65 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       await this.assertPagesTemplateCompatible(input.nginxTemplateId);
     }
 
-    // 1. Insert into DB
-    let host = await writeWithAllocatedSlug({
-      source: input.domainNames[0] ?? '',
-      fallback: 'proxy-host',
-      reserved: ['new'],
-      constraint: 'proxy_hosts_slug_unique',
-      write: async (slug) => {
-        const [created] = await this.db
-          .insert(proxyHosts)
-          .values({
-            type: input.type,
-            nodeId: input.nodeId,
-            domainNames: input.domainNames,
-            slug,
-            forwardHost: input.forwardHost ?? null,
-            forwardPort: input.forwardPort ?? null,
-            forwardScheme: input.forwardScheme,
-            ...upstreamData,
-            sslEnabled: input.sslEnabled,
-            sslForced: input.sslForced,
-            http2Support: input.http2Support,
-            websocketSupport: input.websocketSupport,
-            sslCertificateId: input.sslCertificateId ?? null,
-            internalCertificateId: input.internalCertificateId ?? null,
-            redirectUrl: input.redirectUrl ?? null,
-            redirectStatusCode: input.redirectStatusCode ?? 301,
-            customHeaders: input.customHeaders,
-            cacheEnabled: input.cacheEnabled,
-            cacheOptions: input.cacheOptions ?? null,
-            rateLimitEnabled: input.rateLimitEnabled,
-            rateLimitMode: input.rateLimitMode,
-            rateLimitOptions: input.rateLimitOptions ?? null,
-            customRewrites: input.customRewrites,
-            advancedConfig: input.advancedConfig ?? null,
-            rawConfig: (input as any).rawConfig ?? null,
-            rawConfigEnabled: (input as any).rawConfigEnabled ?? false,
-            accessListId: input.accessListId ?? null,
-            folderId: input.folderId ?? null,
-            nginxTemplateId: input.nginxTemplateId ?? null,
-            templateVariables: input.templateVariables ?? {},
-            healthCheckEnabled: input.healthCheckEnabled,
-            healthCheckUrl: input.healthCheckUrl ?? '/',
-            healthCheckInterval: input.healthCheckInterval ?? 30,
-            healthCheckExpectedStatus: input.healthCheckExpectedStatus ?? null,
-            healthCheckExpectedBody: input.healthCheckExpectedBody ?? null,
-            healthCheckBodyMatchMode: input.healthCheckBodyMatchMode ?? 'includes',
-            healthStatus: input.healthCheckEnabled ? 'unknown' : 'disabled',
-            createdById: userId,
-          })
-          .returning();
-        return created;
-      },
+    // 1. Insert into DB. The node lock makes the domain check and the insert
+    // atomic against other creates, moves and enables on this node, so a
+    // retried or double-submitted create cannot add a second server block.
+    const nodeId = input.nodeId;
+    let host = await withProxyLocks([proxyNodeLockKey(nodeId)], async () => {
+      await assertNoProxyDomainOverlap(this.db, nodeId, input.domainNames);
+      return writeWithAllocatedSlug({
+        source: input.domainNames[0] ?? '',
+        fallback: 'proxy-host',
+        reserved: ['new'],
+        constraint: 'proxy_hosts_slug_unique',
+        write: async (slug) => {
+          const [created] = await this.db
+            .insert(proxyHosts)
+            .values({
+              type: input.type,
+              nodeId: input.nodeId,
+              domainNames: input.domainNames,
+              slug,
+              forwardHost: input.forwardHost ?? null,
+              forwardPort: input.forwardPort ?? null,
+              forwardScheme: input.forwardScheme,
+              ...upstreamData,
+              sslEnabled: input.sslEnabled,
+              sslForced: input.sslForced,
+              http2Support: input.http2Support,
+              websocketSupport: input.websocketSupport,
+              sslCertificateId: input.sslCertificateId ?? null,
+              internalCertificateId: input.internalCertificateId ?? null,
+              redirectUrl: input.redirectUrl ?? null,
+              redirectStatusCode: input.redirectStatusCode ?? 301,
+              customHeaders: input.customHeaders,
+              cacheEnabled: input.cacheEnabled,
+              cacheOptions: input.cacheOptions ?? null,
+              rateLimitEnabled: input.rateLimitEnabled,
+              rateLimitMode: input.rateLimitMode,
+              rateLimitOptions: input.rateLimitOptions ?? null,
+              customRewrites: input.customRewrites,
+              advancedConfig: input.advancedConfig ?? null,
+              rawConfig: (input as any).rawConfig ?? null,
+              rawConfigEnabled: (input as any).rawConfigEnabled ?? false,
+              accessListId: input.accessListId ?? null,
+              folderId: input.folderId ?? null,
+              nginxTemplateId: input.nginxTemplateId ?? null,
+              templateVariables: input.templateVariables ?? {},
+              healthCheckEnabled: input.healthCheckEnabled,
+              healthCheckUrl: input.healthCheckUrl ?? '/',
+              healthCheckInterval: input.healthCheckInterval ?? 30,
+              healthCheckExpectedStatus: input.healthCheckExpectedStatus ?? null,
+              healthCheckExpectedBody: input.healthCheckExpectedBody ?? null,
+              healthCheckBodyMatchMode: input.healthCheckBodyMatchMode ?? 'includes',
+              healthStatus: input.healthCheckEnabled ? 'unknown' : 'disabled',
+              createdById: userId,
+            })
+            .returning()
+            .catch(mapProxyHostCertificateReferenceError);
+          return created;
+        },
+      });
     });
 
     // 2. Resolve SSL cert paths and build nginx config. The host and node locks
@@ -422,19 +448,31 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         .update(proxyHosts)
         .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
         .where(eq(proxyHosts.id, id))
-        .returning();
+        .returning()
+        .catch(mapProxyHostCertificateReferenceError);
       return updated;
     };
     const primaryDomainChanged = input.domainNames !== undefined && input.domainNames[0] !== existing.domainNames[0];
-    let updated = primaryDomainChanged
-      ? await writeWithAllocatedSlug({
-          source: input.domainNames?.[0] ?? '',
-          fallback: 'proxy-host',
-          reserved: ['new'],
-          constraint: 'proxy_hosts_slug_unique',
-          write: updateHost,
-        })
-      : await updateHost();
+    const writeHost = () =>
+      primaryDomainChanged
+        ? writeWithAllocatedSlug({
+            source: input.domainNames?.[0] ?? '',
+            fallback: 'proxy-host',
+            reserved: ['new'],
+            constraint: 'proxy_hosts_slug_unique',
+            write: updateHost,
+          })
+        : updateHost();
+    // A domain change or move of a serving host takes the target node's lock
+    // for the overlap check and the write (host lock, then node lock, the same
+    // order every other proxy operation uses).
+    let updated =
+      domainAssignmentChanged && existing.enabled && !options.skipDomainNodeValidation
+        ? await withProxyLocks([proxyNodeLockKey(effectiveNodeId)], async () => {
+            await assertNoProxyDomainOverlap(this.db, effectiveNodeId, input.domainNames ?? existing.domainNames, id);
+            return writeHost();
+          })
+        : await writeHost();
 
     // The UI can submit a complete form on an unrelated edit. Gate old
     // daemons on an actual TLS or placement change, not on field presence,

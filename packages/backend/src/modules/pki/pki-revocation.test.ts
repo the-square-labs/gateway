@@ -5,6 +5,7 @@ vi.mock('@/modules/settings/environment-settings.service.js', () => ({
   getEnvironmentSettingsSnapshot: () => ({ pkiDefaults: { crlValidityHours: 24 } }),
 }));
 
+import { createFakeAdvisoryLockDb } from '@/db/advisory-lock.test-helpers.js';
 import { x509 } from '@/lib/x509.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import { CAService } from './ca.service.js';
@@ -25,6 +26,47 @@ function selectChain(rows: unknown[]) {
   for (const method of ['from', 'where']) chain[method] = vi.fn(() => chain);
   chain.limit = vi.fn().mockResolvedValue(rows);
   return vi.fn(() => chain);
+}
+
+type RevokedRow = { serialNumber: string; revokedAt: Date };
+
+/** In-memory CA row for CRL generation, behind fake transaction-scoped advisory locks. */
+function crlStore(
+  initial: { revoked?: RevokedRow[]; childCAs?: RevokedRow[] },
+  options: { onRequest?: (key: string) => void } = {}
+) {
+  const state = {
+    crlNumber: 0,
+    lastCrlDer: null as string | null,
+    revoked: [...(initial.revoked ?? [])],
+    childCAs: [...(initial.childCAs ?? [])],
+  };
+  const findRevoked = vi.fn(async () => [...state.revoked]);
+  const apply = (values: Record<string, unknown>) => {
+    if ('crlNumber' in values) state.crlNumber += 1;
+    if ('lastCrlDer' in values) state.lastCrlDer = values.lastCrlDer as string;
+  };
+  const makeTx = () => ({
+    update: vi.fn(() => ({
+      set: (values: Record<string, unknown>) => ({
+        where: () => {
+          if (!('crlNumber' in values)) apply(values);
+          return Object.assign(Promise.resolve(undefined), {
+            returning: async () => {
+              apply(values);
+              return [{ crlNumber: state.crlNumber, status: 'active', notAfter: new Date('2099-01-01T00:00:00Z') }];
+            },
+          });
+        },
+      }),
+    })),
+    query: {
+      certificates: { findMany: findRevoked },
+      certificateAuthorities: { findMany: vi.fn(async () => [...state.childCAs]) },
+    },
+  });
+  const locks = createFakeAdvisoryLockDb(makeTx, options);
+  return { state, findRevoked, locks, db: { transaction: locks.transaction } };
 }
 
 async function createRoot() {
@@ -99,27 +141,87 @@ describe('CRL publication on revocation', () => {
     const { row, privateKeyPem } = await createRoot();
     const caService = new CAService({} as never, cryptoService, audit as never);
     const signing = vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
-    const { update, set } = updateChain();
-    const db = {
-      query: {
-        certificates: {
-          findMany: vi.fn().mockResolvedValue([{ serialNumber: '0a01', revokedAt: new Date() }]),
-        },
-        certificateAuthorities: {
-          findMany: vi.fn().mockResolvedValue([{ serialNumber: '0b02', revokedAt: new Date() }]),
-        },
-      },
-      update,
-    };
+    const store = crlStore({
+      revoked: [{ serialNumber: '0a01', revokedAt: new Date() }],
+      childCAs: [{ serialNumber: '0b02', revokedAt: new Date() }],
+    });
     const cache = { get: vi.fn(), set: vi.fn(), delete: vi.fn() };
-    const crlService = new CRLService(db as never, caService, cache as never);
+    const crlService = new CRLService(store.db as never, caService, cache as never);
 
     const der = await crlService.generateCRL('root-1');
 
     expect(signing).toHaveBeenCalledWith('root-1', undefined);
     const serials = new x509.X509Crl(der).entries.map((entry) => entry.serialNumber.toLowerCase());
     expect(serials).toEqual(expect.arrayContaining(['0a01', '0b02']));
-    expect(set).toHaveBeenCalledWith(expect.objectContaining({ lastCrlDer: der.toString('base64') }));
+    expect(store.state.lastCrlDer).toBe(der.toString('base64'));
+    expect(store.state.crlNumber).toBe(1);
+    expect(store.locks.acquired).toEqual(['pki-crl:root-1']);
+  });
+
+  // Regression (rc10 audit F1): a slower generation that read the revoked set
+  // before a second revocation overwrote the newer CRL, and both used one number.
+  it('serializes concurrent CRL generations so the published CRL lists every revocation', async () => {
+    const { row, privateKeyPem } = await createRoot();
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
+    let secondAtLock!: () => void;
+    const secondWaitsForLock = new Promise<void>((resolve) => {
+      secondAtLock = resolve;
+    });
+    let lockRequests = 0;
+    const store = crlStore(
+      { revoked: [{ serialNumber: '0a01', revokedAt: new Date() }] },
+      {
+        onRequest: () => {
+          lockRequests += 1;
+          if (lockRequests === 2) secondAtLock();
+        },
+      }
+    );
+    let firstReadStarted!: () => void;
+    const firstReading = new Promise<void>((resolve) => {
+      firstReadStarted = resolve;
+    });
+    let releaseFirstRead!: () => void;
+    const firstReadGate = new Promise<void>((resolve) => {
+      releaseFirstRead = resolve;
+    });
+    let reads = 0;
+    store.findRevoked.mockImplementation(async () => {
+      const snapshot = [...store.state.revoked];
+      reads += 1;
+      if (reads === 1) {
+        firstReadStarted();
+        await firstReadGate;
+      }
+      return snapshot;
+    });
+    const cached = new Map<string, string>();
+    const cache = {
+      get: vi.fn(async (key: string) => cached.get(key) ?? null),
+      set: vi.fn(async (key: string, value: string) => void cached.set(key, value)),
+      delete: vi.fn(async (key: string) => void cached.delete(key)),
+    };
+    const crlService = new CRLService(store.db as never, caService, cache as never);
+
+    const first = crlService.generateCRL('root-1');
+    await firstReading;
+    // A second certificate is revoked and republishes while the first
+    // generation still holds its revoked set.
+    store.state.revoked.push({ serialNumber: '0b02', revokedAt: new Date() });
+    const second = crlService.generateCRL('root-1');
+    await secondWaitsForLock;
+    expect(reads).toBe(1);
+
+    releaseFirstRead();
+    const [firstCrl, secondCrl] = await Promise.all([first, second]);
+
+    const serials = (der: Buffer) => new x509.X509Crl(der).entries.map((entry) => entry.serialNumber.toLowerCase());
+    expect(serials(firstCrl)).toEqual(['0a01']);
+    expect(serials(secondCrl).sort()).toEqual(['0a01', '0b02']);
+    expect(store.state.crlNumber).toBe(2);
+    expect(store.state.lastCrlDer).toBe(secondCrl.toString('base64'));
+    expect(cached.get('crl:root-1')).toBe(secondCrl.toString('base64'));
   });
 
   it('keeps serving a revoked CA its final CRL instead of failing', async () => {

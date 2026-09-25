@@ -1,9 +1,9 @@
-import { and, count, eq, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, count, eq, inArray, isNotNull, isNull, ne, notLike, or, sql } from 'drizzle-orm';
 import * as client from 'openid-client';
 import { inject, injectable } from 'tsyringe';
 import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
-import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import {
   apiTokens,
   databaseConnections,
@@ -63,6 +63,8 @@ const logger = createChildLogger('AuthService');
 const PKCE_STATE_PREFIX = 'oidc:pkce:';
 const PRECREATED_SUBJECT_PREFIX = 'manual:';
 const SYSTEM_SUBJECT_PREFIX = 'system:';
+/** Advisory lock serializing changes that can remove a system administrator. */
+const SYSTEM_ADMINS_LOCK = 'gateway-system-admins';
 /** Subject namespaces Gateway writes itself; an identity provider must never be able to claim them. */
 const RESERVED_SUBJECT_PREFIXES = [PRECREATED_SUBJECT_PREFIX, SYSTEM_SUBJECT_PREFIX] as const;
 const GATEWAY_SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
@@ -978,6 +980,7 @@ export class AuthService {
         .for('key share');
       if (assignedGroups.length !== groupIds.length)
         throw new AppError(404, 'GROUP_NOT_FOUND', 'Permission group not found');
+      await this.assertSystemAdminRemains(tx, userId, 'demote', groupIds);
       return tx
         .update(users)
         .set({ groupId, additionalGroupIds: groupIds.slice(1), updatedAt: new Date() })
@@ -1122,12 +1125,52 @@ export class AuthService {
     return targetUser;
   }
 
+  /**
+   * Refuse a block, delete or group change that would leave no active system
+   * administrator. Runs in the caller's transaction under one advisory lock, so
+   * two administrators removing each other at the same moment cannot both pass
+   * (each would otherwise still count the other).
+   */
+  private async assertSystemAdminRemains(
+    tx: DrizzleTransaction,
+    targetUserId: string,
+    action: 'block' | 'delete' | 'demote',
+    nextGroupIds?: readonly string[]
+  ): Promise<void> {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${SYSTEM_ADMINS_LOCK}))`);
+    const activeAdmins = await tx
+      .select({ id: users.id, adminGroupId: permissionGroups.id })
+      .from(users)
+      .innerJoin(permissionGroups, eq(permissionGroups.name, 'system-admin'))
+      .where(
+        and(
+          isNull(users.deletedAt),
+          eq(users.isBlocked, false),
+          // The built-in system account cannot sign in, so it does not count.
+          or(isNull(users.oidcSubject), notLike(users.oidcSubject, `${SYSTEM_SUBJECT_PREFIX}%`)),
+          or(eq(users.groupId, permissionGroups.id), sql`${permissionGroups.id} = any(${users.additionalGroupIds})`)
+        )
+      );
+    if (!activeAdmins.some((admin) => admin.id === targetUserId)) return;
+    if (nextGroupIds?.includes(activeAdmins[0]!.adminGroupId)) return;
+    if (activeAdmins.some((admin) => admin.id !== targetUserId)) return;
+    const verb = action === 'block' ? 'block' : action === 'delete' ? 'delete' : 'remove from the system-admin group';
+    throw new AppError(
+      409,
+      'LAST_SYSTEM_ADMIN',
+      `Cannot ${verb} the last active system administrator; promote or unblock another administrator first`
+    );
+  }
+
   async blockUser(userId: string): Promise<User> {
-    const [updatedUser] = await this.db
-      .update(users)
-      .set({ isBlocked: true, updatedAt: new Date() })
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .returning();
+    const [updatedUser] = await this.db.transaction(async (tx) => {
+      await this.assertSystemAdminRemains(tx, userId, 'block');
+      return tx
+        .update(users)
+        .set({ isBlocked: true, updatedAt: new Date() })
+        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+        .returning();
+    });
 
     if (!updatedUser) {
       throw new Error('User not found');
@@ -1166,20 +1209,23 @@ export class AuthService {
     if (!systemAdminGroup) throw new Error('System administrator group not found');
 
     const deletedAt = new Date();
-    const [deleted] = await this.db
-      .update(users)
-      .set({
-        isBlocked: true,
-        deletedAt,
-        deletedByUserId,
-        deletedFromGroupId: target.groupId,
-        deletedFromAdditionalGroupIds: target.additionalGroupIds ?? [],
-        additionalGroupIds: [],
-        groupId: systemAdminGroup.id,
-        updatedAt: deletedAt,
-      })
-      .where(and(eq(users.id, userId), isNull(users.deletedAt)))
-      .returning({ id: users.id });
+    const [deleted] = await this.db.transaction(async (tx) => {
+      await this.assertSystemAdminRemains(tx, userId, 'delete');
+      return tx
+        .update(users)
+        .set({
+          isBlocked: true,
+          deletedAt,
+          deletedByUserId,
+          deletedFromGroupId: target.groupId,
+          deletedFromAdditionalGroupIds: target.additionalGroupIds ?? [],
+          additionalGroupIds: [],
+          groupId: systemAdminGroup.id,
+          updatedAt: deletedAt,
+        })
+        .where(and(eq(users.id, userId), isNull(users.deletedAt)))
+        .returning({ id: users.id });
+    });
     if (!deleted) throw new AppError(409, 'USER_DELETED', 'User is already deleted');
 
     await this.sessionService.destroyAllUserSessions(userId);

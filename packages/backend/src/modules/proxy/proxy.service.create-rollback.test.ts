@@ -33,6 +33,9 @@ describe('ProxyService create rollback', () => {
         })
         .mockReturnValueOnce({
           from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([]) })),
+        })
+        .mockReturnValueOnce({
+          from: vi.fn(() => ({ where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue([]) })) })),
         }),
       insert: vi.fn(() => ({
         values: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([host]) })),

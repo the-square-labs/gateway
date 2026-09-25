@@ -906,6 +906,44 @@ describe('DomainsService Cloudflare lifecycle', () => {
     );
   });
 
+  // Regression (rc10 audit F13): when the domain row was not stored (here a
+  // concurrent create of the same domain won the unique index), the Cloudflare
+  // records this call created stayed behind with no owner to clean them up.
+  it('deletes the Cloudflare records it created when a concurrent create stores the domain first', async () => {
+    const stored = {
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
+      dnsOwnership: 'created',
+      providerRecordIds: ['record-1'],
+    };
+    const uniqueViolation = Object.assign(new Error('duplicate key value violates unique constraint'), {
+      code: '23505',
+      constraint: 'domains_domain_unique',
+    });
+    const db = createInsertDb(stored);
+    db.values
+      .mockImplementationOnce(() => ({ returning: vi.fn().mockResolvedValue([stored]) }))
+      .mockImplementationOnce(() => ({ returning: vi.fn().mockRejectedValue(uniqueViolation) }));
+    const { service, client } = createService(db, []);
+    let created = 0;
+    client.createDnsRecord.mockImplementation(async (_zoneId: string, record: Record<string, unknown>) => ({
+      id: `record-${++created}`,
+      ...record,
+    }));
+
+    const results = await Promise.allSettled([
+      service.createDomain({ domain: 'app.example.com' }, 'user-1'),
+      service.createDomain({ domain: 'app.example.com' }, 'user-2'),
+    ]);
+
+    expect(results[0]).toMatchObject({ status: 'fulfilled', value: { id: 'domain-1' } });
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { statusCode: 409, code: 'DUPLICATE' } });
+    expect(client.createDnsRecord).toHaveBeenCalledTimes(2);
+    expect(client.deleteDnsRecord).toHaveBeenCalledTimes(1);
+    expect(client.deleteDnsRecord).toHaveBeenCalledWith('zone-1', 'record-2');
+  });
+
   it('creates an external domain only after DNS matches the selected Nginx node', async () => {
     const db = createInsertDb({
       id: 'domain-1',

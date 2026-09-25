@@ -5,6 +5,7 @@ import { pageWildcardProfiles } from '@/db/schema/pages.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { sslCertificates } from '@/db/schema/ssl-certificates.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
+import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
@@ -20,6 +21,8 @@ import type {
 import { DomainsServiceRuntime } from './domain.service.runtime.js';
 import { type DomainUsage, logger } from './domain.service.shared.js';
 import { assertDomainIngressMoveAccess } from './domain-creation-access.js';
+
+const DOMAIN_UNIQUE_CONSTRAINT = 'domains_domain_unique';
 
 export * from './domain.service.shared.js';
 
@@ -336,38 +339,62 @@ export class DomainsService extends DomainsServiceRuntime {
       }
     }
 
-    if (providerRecordIds.length === 0) {
-      const createdRecords = [];
-      for (const record of desiredRecords) {
-        createdRecords.push(await context.client.createDnsRecord(context.zone.remoteId, record));
+    // Records created by this call are deleted again if the domain row is not
+    // stored (a concurrent create of the same domain wins the unique index, or
+    // any other failure): nothing else would record or clean them up.
+    const createdRecordIds: string[] = [];
+    let row: typeof domains.$inferSelect;
+    try {
+      if (providerRecordIds.length === 0) {
+        for (const record of desiredRecords) {
+          const created = await context.client.createDnsRecord(context.zone.remoteId, record);
+          createdRecordIds.push(created.id);
+        }
+        providerRecordIds = [...createdRecordIds];
       }
-      providerRecordIds = createdRecords.map((record) => record.id);
-    }
 
-    const dnsRecords = this.dnsRecordsFromTargetIps(targetIps);
-    const [row] = await this.db
-      .insert(domains)
-      .values({
-        domain: domainName,
-        description: input.description,
-        folderId: input.folderId ?? null,
-        dnsStatus: 'valid',
-        dnsRecords,
-        lastDnsCheckAt: new Date(),
-        dnsProvider: 'cloudflare',
-        dnsOwnership: ownership,
-        integrationConnectorId: context.connector.id,
-        providerZoneId: context.zone.remoteId,
-        providerZoneName: context.zone.name,
-        providerRecordIds,
-        nginxNodeId: plan.nginxNode.id,
-        dnsRecordType: this.recordTypeLabel(targetIps),
-        dnsTargetIps: targetIps,
-        dnsTtl: ttl,
-        dnsProxied: proxied,
-        createdById: userId,
-      })
-      .returning();
+      const dnsRecords = this.dnsRecordsFromTargetIps(targetIps);
+      [row] = await this.db
+        .insert(domains)
+        .values({
+          domain: domainName,
+          description: input.description,
+          folderId: input.folderId ?? null,
+          dnsStatus: 'valid',
+          dnsRecords,
+          lastDnsCheckAt: new Date(),
+          dnsProvider: 'cloudflare',
+          dnsOwnership: ownership,
+          integrationConnectorId: context.connector.id,
+          providerZoneId: context.zone.remoteId,
+          providerZoneName: context.zone.name,
+          providerRecordIds,
+          nginxNodeId: plan.nginxNode.id,
+          dnsRecordType: this.recordTypeLabel(targetIps),
+          dnsTargetIps: targetIps,
+          dnsTtl: ttl,
+          dnsProxied: proxied,
+          createdById: userId,
+        })
+        .returning();
+    } catch (error) {
+      for (const recordId of createdRecordIds.reverse()) {
+        try {
+          await context.client.deleteDnsRecord(context.zone.remoteId, recordId);
+        } catch (cleanupError) {
+          logger.warn('Failed to delete a Cloudflare record after the domain was not created', {
+            domain: domainName,
+            zoneId: context.zone.remoteId,
+            recordId,
+            error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          });
+        }
+      }
+      if (isMatchingUniqueConstraintViolation(error, DOMAIN_UNIQUE_CONSTRAINT)) {
+        throw new AppError(409, 'DUPLICATE', 'Domain already exists');
+      }
+      throw error;
+    }
 
     await this.auditService.log({
       userId,
@@ -486,7 +513,13 @@ export class DomainsService extends DomainsServiceRuntime {
         dnsProxied: null,
         createdById: userId,
       })
-      .returning();
+      .returning()
+      .catch((error: unknown) => {
+        if (isMatchingUniqueConstraintViolation(error, DOMAIN_UNIQUE_CONSTRAINT)) {
+          throw new AppError(409, 'DUPLICATE', 'Domain already exists');
+        }
+        throw error;
+      });
 
     await this.auditService.log({
       userId,

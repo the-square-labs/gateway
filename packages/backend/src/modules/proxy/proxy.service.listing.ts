@@ -10,6 +10,7 @@ export { __testOnly } from './proxy.service-helpers.js';
 
 import { logger, type ProxyHostRow, type ProxyHostView } from './proxy.service.core.js';
 import { ProxyServiceSecureLinks } from './proxy.service.secure-links.js';
+import { assertNoProxyDomainOverlap } from './proxy-domain-overlap.js';
 import { proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
 
 export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
@@ -117,9 +118,14 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
     }
     if (existing.enabled === enabled) return (await attachDockerUpstreamDisplay(this.db, [existing]))[0]!;
 
-    // Enabling makes the host serve on its node again: fence reconnect cleanup.
-    if (enabled && existing.nodeId) {
-      return withProxyLocks([proxyNodeLockKey(existing.nodeId)], () => this.applyToggle(existing, enabled, userId));
+    // Enabling makes the host serve on its node again: fence reconnect cleanup
+    // and refuse a domain another enabled host on the node already serves.
+    const nodeId = existing.nodeId;
+    if (enabled && nodeId) {
+      return withProxyLocks([proxyNodeLockKey(nodeId)], async () => {
+        await assertNoProxyDomainOverlap(this.db, nodeId, existing.domainNames, existing.id);
+        return this.applyToggle(existing, enabled, userId);
+      });
     }
     return this.applyToggle(existing, enabled, userId);
   }

@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { inject, injectable } from 'tsyringe';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -13,6 +13,7 @@ import type { CAService } from './ca.service.js';
 const logger = createChildLogger('CRLService');
 
 const CRL_CACHE_PREFIX = 'crl:';
+const CRL_LOCK_PREFIX = 'pki-crl:';
 
 @injectable()
 export class CRLService {
@@ -64,73 +65,99 @@ export class CRLService {
     return this.generateCRL(caId);
   }
 
+  /**
+   * Sign and publish a new CRL. Generations for one CA run one at a time under a
+   * transaction-scoped advisory lock: the CRL number is taken with
+   * `UPDATE ... RETURNING` and the revoked set is read inside the lock, so a
+   * later CRL never lists fewer revocations than an earlier one and no two CRLs
+   * share a number. The cache is written before the lock is released, so a
+   * slower generation cannot overwrite a newer CRL there either.
+   */
   async generateCRL(caId: string, options?: { allowSystem?: boolean; allowInactive?: boolean }): Promise<Buffer> {
     const validityHours = getEnvironmentSettingsSnapshot().pkiDefaults.crlValidityHours;
     const { ca, privateKeyPem } = await this.caService.getCASigningMaterials(caId, options);
-
-    // Get all revoked certificates for this CA
-    const revokedCerts = await this.db.query.certificates.findMany({
-      where: and(eq(certificates.caId, caId), eq(certificates.status, 'revoked')),
-      columns: {
-        serialNumber: true,
-        revokedAt: true,
-        revocationReason: true,
-      },
-    });
-    // A revoked intermediate CA is a certificate this CA issued, so it belongs
-    // in this CA's CRL as well.
-    const revokedChildCAs = await this.db.query.certificateAuthorities.findMany({
-      where: and(eq(certificateAuthorities.parentId, caId), eq(certificateAuthorities.status, 'revoked')),
-      columns: {
-        serialNumber: true,
-        revokedAt: true,
-      },
-    });
-
     const algorithm = this.caService.getAlgorithm(ca.keyAlgorithm);
     const caKeys = await this.caService.importKeyPair(ca.certificatePem, privateKeyPem, algorithm, true);
 
-    // Increment CRL number
-    const newCrlNumber = ca.crlNumber + 1;
+    try {
+      const published = await this.db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${CRL_LOCK_PREFIX}${caId}`}))`);
+        const [numbered] = await tx
+          .update(certificateAuthorities)
+          .set({ crlNumber: sql`${certificateAuthorities.crlNumber} + 1`, updatedAt: new Date() })
+          .where(eq(certificateAuthorities.id, caId))
+          .returning({
+            crlNumber: certificateAuthorities.crlNumber,
+            status: certificateAuthorities.status,
+            notAfter: certificateAuthorities.notAfter,
+          });
+        if (!numbered) throw new AppError(404, 'CA_NOT_FOUND', 'CA not found');
 
-    // Build CRL entries
-    const entries = [...revokedCerts, ...revokedChildCAs].map((revoked) => ({
-      serialNumber: revoked.serialNumber,
-      revocationDate: revoked.revokedAt || new Date(),
-    })) as unknown as x509.X509CrlEntry[];
+        // Read inside the lock: every revocation committed before this CRL's
+        // number was taken is listed.
+        const revokedCerts = await tx.query.certificates.findMany({
+          where: and(eq(certificates.caId, caId), eq(certificates.status, 'revoked')),
+          columns: {
+            serialNumber: true,
+            revokedAt: true,
+            revocationReason: true,
+          },
+        });
+        // A revoked intermediate CA is a certificate this CA issued, so it belongs
+        // in this CA's CRL as well.
+        const revokedChildCAs = await tx.query.certificateAuthorities.findMany({
+          where: and(eq(certificateAuthorities.parentId, caId), eq(certificateAuthorities.status, 'revoked')),
+          columns: {
+            serialNumber: true,
+            revokedAt: true,
+          },
+        });
 
-    const thisUpdate = new Date();
-    const nextUpdate = new Date();
-    nextUpdate.setHours(nextUpdate.getHours() + validityHours);
-    // A CA that is no longer active publishes no further CRL, so its final
-    // CRL stays current until the CA itself expires.
-    if (ca.status !== 'active' && ca.notAfter > nextUpdate) {
-      nextUpdate.setTime(ca.notAfter.getTime());
+        // Build CRL entries
+        const entries = [...revokedCerts, ...revokedChildCAs].map((revoked) => ({
+          serialNumber: revoked.serialNumber,
+          revocationDate: revoked.revokedAt || new Date(),
+        })) as unknown as x509.X509CrlEntry[];
+
+        const thisUpdate = new Date();
+        const nextUpdate = new Date();
+        nextUpdate.setHours(nextUpdate.getHours() + validityHours);
+        // A CA that is no longer active publishes no further CRL, so its final
+        // CRL stays current until the CA itself expires.
+        if (numbered.status !== 'active' && numbered.notAfter > nextUpdate) {
+          nextUpdate.setTime(numbered.notAfter.getTime());
+        }
+
+        const crl = await x509.X509CrlGenerator.create({
+          issuer: ca.subjectDn,
+          thisUpdate,
+          nextUpdate,
+          entries,
+          signingKey: caKeys.privateKey,
+          signingAlgorithm: algorithm,
+        });
+
+        const crlDer = Buffer.from(crl.rawData);
+        const crlBase64 = crlDer.toString('base64');
+
+        // Keep the published CRL for later serving.
+        await tx
+          .update(certificateAuthorities)
+          .set({ lastCrlAt: new Date(), lastCrlDer: crlBase64, updatedAt: new Date() })
+          .where(eq(certificateAuthorities.id, caId));
+
+        await this.cacheCrl(caId, crlBase64);
+        return { crlDer, crlNumber: numbered.crlNumber, entries: entries.length };
+      });
+
+      logger.info('Generated CRL', { caId, entries: published.entries, crlNumber: published.crlNumber });
+      return published.crlDer;
+    } catch (error) {
+      // The cache may hold a CRL whose transaction did not commit; the next
+      // request regenerates it.
+      await this.invalidateCache(caId).catch(() => undefined);
+      throw error;
     }
-
-    const crl = await x509.X509CrlGenerator.create({
-      issuer: ca.subjectDn,
-      thisUpdate,
-      nextUpdate,
-      entries,
-      signingKey: caKeys.privateKey,
-      signingAlgorithm: algorithm,
-    });
-
-    const crlDer = Buffer.from(crl.rawData);
-    const crlBase64 = crlDer.toString('base64');
-
-    // Update CA CRL tracking and keep the published CRL for later serving.
-    await this.db
-      .update(certificateAuthorities)
-      .set({ crlNumber: newCrlNumber, lastCrlAt: new Date(), lastCrlDer: crlBase64, updatedAt: new Date() })
-      .where(eq(certificateAuthorities.id, caId));
-
-    await this.cacheCrl(caId, crlBase64);
-
-    logger.info('Generated CRL', { caId, entries: entries.length, crlNumber: newCrlNumber });
-
-    return crlDer;
   }
 
   async invalidateCache(caId: string): Promise<void> {

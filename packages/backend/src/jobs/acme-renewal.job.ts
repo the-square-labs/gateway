@@ -2,6 +2,7 @@ import { and, eq, inArray, isNull, lte, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { sslCertificates } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { AlertService } from '@/modules/audit/alert.service.js';
 import { SSL_DISTRIBUTION_ERROR_PREFIX, type SSLService } from '@/modules/ssl/ssl.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -59,6 +60,7 @@ export class ACMERenewalJob {
     let renewed = 0;
     let failed = 0;
     let manualRequired = 0;
+    let busy = 0;
 
     for (const cert of certsToRenew) {
       try {
@@ -124,6 +126,13 @@ export class ACMERenewalJob {
           }
         }
       } catch (error) {
+        // A renewal or verify started by hand is still running; the next pass
+        // looks at the certificate again.
+        if (error instanceof AppError && error.code === 'ACME_OPERATION_IN_PROGRESS') {
+          busy++;
+          logger.info(`Skipping certificate with an ACME operation in progress: ${cert.name}`, { certId: cert.id });
+          continue;
+        }
         failed++;
         const message = error instanceof Error ? error.message : 'Unknown error';
         logger.error(`Failed to renew certificate: ${cert.name}`, { certId: cert.id, error: message });
@@ -139,7 +148,7 @@ export class ACMERenewalJob {
       }
     }
 
-    logger.info('ACME renewal job completed', { renewed, failed, manualRequired, total: certsToRenew.length });
+    logger.info('ACME renewal job completed', { renewed, failed, manualRequired, busy, total: certsToRenew.length });
   }
 
   /** A renewed certificate that did not reach every proxy host still expires there. */

@@ -1,5 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
-import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import {
   certificateAuthorities,
@@ -65,6 +66,11 @@ type DNSChallenge = {
   };
 };
 
+type AcmeOperationKind = 'issue' | 'renew' | 'verify';
+
+/** ACME operation keys held by the current async call chain (see SSLService.runAcmeOperation). */
+const heldAcmeOperations = new AsyncLocalStorage<ReadonlySet<string>>();
+
 type AutoRenewDnsBinding = {
   domain: string;
   connectorId: string;
@@ -88,6 +94,11 @@ export class SSLService {
   private internalCertRenewal?: InternalCertificateRenewer;
   /** Errors whose renewal failure is already persisted by an inner step. */
   private readonly recordedRenewalFailures = new WeakSet<object>();
+  /** Running ACME operations, one per certificate (or per requested domain set for a new request). */
+  private readonly acmeOperations = new Map<
+    string,
+    { kind: AcmeOperationKind; actor: string; promise: Promise<unknown> }
+  >();
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
   }
@@ -211,11 +222,68 @@ export class SSLService {
     this.eventBus?.publish('ssl.cert.changed', { id, action, name });
   }
 
+  /**
+   * Single flight for ACME work on one certificate: issue, renew, DNS-01
+   * renewal start and DNS-01 verify. Two orders for one certificate would burn
+   * the CA's duplicate-certificate limit, and a losing verify used to overwrite
+   * the winner's result. The same caller repeating the same operation (double
+   * click, retried request) shares the running one; any other operation on the
+   * certificate gets 409 until it finishes. Calls made by the running operation
+   * itself (renew, then verify for Cloudflare DNS-01) run directly.
+   *
+   * In-process, like the internal and system certificate renewal single
+   * flights; the conditional order-state writes below keep a second writer
+   * from overwriting a newer order.
+   */
+  private runAcmeOperation<T>(key: string, kind: AcmeOperationKind, actor: string, task: () => Promise<T>): Promise<T> {
+    const held = heldAcmeOperations.getStore();
+    if (held?.has(key)) return task();
+    const running = this.acmeOperations.get(key);
+    if (running) {
+      if (running.kind === kind && running.actor === actor) return running.promise as Promise<T>;
+      return Promise.reject(
+        new AppError(
+          409,
+          'ACME_OPERATION_IN_PROGRESS',
+          kind === 'issue' && running.kind === 'issue'
+            ? 'A certificate request for these domains is already running'
+            : `An ACME ${running.kind} is already running for this certificate`,
+          { operation: running.kind }
+        )
+      );
+    }
+    const promise = heldAcmeOperations.run(new Set([...(held ?? []), key]), task).finally(() => {
+      if (this.acmeOperations.get(key)?.promise === promise) this.acmeOperations.delete(key);
+    });
+    this.acmeOperations.set(key, { kind, actor, promise });
+    return promise;
+  }
+
+  /** Matches the certificate row only while it still holds the ACME order an operation started from. */
+  private acmeOrderGuard(
+    cert: Pick<typeof sslCertificates.$inferSelect, 'id' | 'acmeOrderUrl' | 'acmePendingOperation'>
+  ): SQL {
+    return and(
+      eq(sslCertificates.id, cert.id),
+      cert.acmeOrderUrl ? eq(sslCertificates.acmeOrderUrl, cert.acmeOrderUrl) : isNull(sslCertificates.acmeOrderUrl),
+      cert.acmePendingOperation
+        ? eq(sslCertificates.acmePendingOperation, cert.acmePendingOperation)
+        : isNull(sslCertificates.acmePendingOperation)
+    )!;
+  }
+
   // ---------------------------------------------------------------------------
   // ACME certificate request
   // ---------------------------------------------------------------------------
 
-  async requestACMECert(input: RequestACMECertInput, userId: string, contactEmail?: string) {
+  requestACMECert(input: RequestACMECertInput, userId: string, contactEmail?: string) {
+    const domainSet = [...new Set(input.domains.map((domain) => domain.trim().toLowerCase()))].sort().join(',');
+    return this.runAcmeOperation(`acme-request:${domainSet}`, 'issue', `${userId}:${JSON.stringify(input)}`, () =>
+      this.requestACMECertOnce(input, userId, contactEmail)
+    );
+  }
+
+  private async requestACMECertOnce(input: RequestACMECertInput, userId: string, contactEmail?: string) {
     const isStaging = input.provider === 'letsencrypt-staging';
     const name = input.domains[0];
 
@@ -432,10 +500,20 @@ export class SSLService {
   // Complete DNS-01 verification
   // ---------------------------------------------------------------------------
 
-  async completeDNS01Verification(
+  completeDNS01Verification(
     certId: string,
     userId: string,
     options: { cleanupCloudflare?: boolean; clearPendingOnFailure?: boolean; contactEmail?: string } = {}
+  ) {
+    return this.runAcmeOperation(`cert:${certId}`, 'verify', userId, () =>
+      this.completeDNS01VerificationOnce(certId, userId, options)
+    );
+  }
+
+  private async completeDNS01VerificationOnce(
+    certId: string,
+    userId: string,
+    options: { cleanupCloudflare?: boolean; clearPendingOnFailure?: boolean; contactEmail?: string }
   ) {
     const cert = await this.db.query.sslCertificates.findFirst({
       where: eq(sslCertificates.id, certId),
@@ -457,6 +535,8 @@ export class SSLService {
     if (pendingOperation === 'renewal' && !RENEWABLE_STATUSES.has(cert.status)) {
       throw new AppError(400, 'CERT_NOT_RENEWABLE', 'Certificate is not in a renewable state');
     }
+    // Every write below applies only while the row still holds this order.
+    const orderGuard = this.acmeOrderGuard(cert);
 
     let cloudflareCleanupDone = false;
     try {
@@ -484,7 +564,7 @@ export class SSLService {
 
       try {
         // Update cert in DB
-        await this.db
+        const stored = await this.db
           .update(sslCertificates)
           .set({
             certificatePem: result.certificatePem,
@@ -507,7 +587,15 @@ export class SSLService {
             acmePendingChallenges: null,
             updatedAt: new Date(),
           })
-          .where(eq(sslCertificates.id, certId));
+          .where(orderGuard)
+          .returning({ id: sslCertificates.id });
+        if (stored.length === 0) {
+          throw new AppError(
+            409,
+            'ACME_ORDER_SUPERSEDED',
+            'The certificate or its ACME order changed while the order was being verified'
+          );
+        }
 
         // Deploy to nginx — separate try/catch since cert is already valid at this point
         try {
@@ -553,8 +641,14 @@ export class SSLService {
       if (options.cleanupCloudflare && !cloudflareCleanupDone) {
         await this.cleanupCloudflareDnsChallenges((cert.acmePendingChallenges ?? []) as DNSChallenge[]);
       }
-      // DEPLOY_FAILED means the certificate itself was obtained and stored.
-      if (error instanceof AppError && (pendingOperation !== 'renewal' || error.code === 'DEPLOY_FAILED')) throw error;
+      // DEPLOY_FAILED means the certificate itself was obtained and stored;
+      // ACME_ORDER_SUPERSEDED means another operation owns the row now.
+      if (
+        error instanceof AppError &&
+        (pendingOperation !== 'renewal' || error.code === 'DEPLOY_FAILED' || error.code === 'ACME_ORDER_SUPERSEDED')
+      ) {
+        throw error;
+      }
       const message = error instanceof Error ? error.message : 'Unknown verification error';
       if (pendingOperation === 'renewal') {
         await this.recordRenewalFailure(
@@ -562,7 +656,8 @@ export class SSLService {
           `Renewal failed: ${message}`,
           options.clearPendingOnFailure
             ? { acmeOrderUrl: null, acmePendingOperation: null, acmePendingChallenges: null }
-            : {}
+            : {},
+          orderGuard
         );
         const failure =
           error instanceof AppError
@@ -588,7 +683,8 @@ export class SSLService {
               : {}),
             updatedAt: new Date(),
           })
-          .where(eq(sslCertificates.id, certId));
+          // A newer order (or a verify that already succeeded) is not marked failed.
+          .where(orderGuard);
       }
 
       throw new AppError(400, 'DNS01_VERIFICATION_FAILED', `DNS-01 verification failed: ${message}`);
@@ -786,7 +882,18 @@ export class SSLService {
   // Renew certificate
   // ---------------------------------------------------------------------------
 
-  async renewCert(certId: string, userId: string, requesterEmail?: string, options?: { actorScopes?: string[] }) {
+  renewCert(certId: string, userId: string, requesterEmail?: string, options?: { actorScopes?: string[] }) {
+    return this.runAcmeOperation(`cert:${certId}`, 'renew', userId, () =>
+      this.renewCertOnce(certId, userId, requesterEmail, options)
+    );
+  }
+
+  private async renewCertOnce(
+    certId: string,
+    userId: string,
+    requesterEmail?: string,
+    options?: { actorScopes?: string[] }
+  ) {
     const cert = await this.db.query.sslCertificates.findFirst({
       where: eq(sslCertificates.id, certId),
     });
@@ -822,7 +929,13 @@ export class SSLService {
       result = await this.acmeService.requestCertHTTP01(cert.domainNames, renewIsStaging, contactEmail);
     } catch (error) {
       // DEPLOY_FAILED: the new certificate was obtained and stored already.
-      if (error instanceof AppError && (error.code === 'DEPLOY_FAILED' || this.recordedRenewalFailures.has(error))) {
+      // ACME_ORDER_SUPERSEDED: another operation owns the row now.
+      if (
+        error instanceof AppError &&
+        (error.code === 'DEPLOY_FAILED' ||
+          error.code === 'ACME_ORDER_SUPERSEDED' ||
+          this.recordedRenewalFailures.has(error))
+      ) {
         throw error;
       }
       const message = error instanceof Error ? error.message : 'Unknown renewal error';
@@ -864,8 +977,16 @@ export class SSLService {
       });
     }
 
-    // Update cert data in DB
-    await this.db.update(sslCertificates).set(renewUpdateData).where(eq(sslCertificates.id, certId));
+    // Update cert data in DB. A certificate deleted meanwhile is not
+    // redistributed.
+    const renewed = await this.db
+      .update(sslCertificates)
+      .set(renewUpdateData)
+      .where(eq(sslCertificates.id, certId))
+      .returning({ id: sslCertificates.id });
+    if (renewed.length === 0) {
+      throw new AppError(409, 'SSL_CERT_DELETED', 'The certificate was deleted while it was being renewed');
+    }
 
     // Refresh the canonical asset and atomically synchronize active hosts.
     // The certificate is renewed at this point; a delivery problem must not
@@ -909,7 +1030,8 @@ export class SSLService {
   private async recordRenewalFailure(
     cert: Pick<typeof sslCertificates.$inferSelect, 'id' | 'name' | 'notAfter'>,
     message: string,
-    extra: Partial<typeof sslCertificates.$inferInsert> = {}
+    extra: Partial<typeof sslCertificates.$inferInsert> = {},
+    guard: SQL = eq(sslCertificates.id, cert.id)
   ): Promise<void> {
     const now = new Date();
     const status = !cert.notAfter ? 'error' : cert.notAfter.getTime() > now.getTime() ? 'active' : 'expired';
@@ -923,7 +1045,7 @@ export class SSLService {
         lastRenewalAttemptAt: now,
         updatedAt: now,
       })
-      .where(eq(sslCertificates.id, cert.id));
+      .where(guard);
     this.emitCert(cert.id, 'renewal_failed', cert.name);
   }
 
@@ -1116,9 +1238,11 @@ export class SSLService {
         'Cloudflare DNS automation is no longer available for this certificate'
       );
     }
-    const pendingChallenges = cloudflareChallenges ?? result.challenges;
+    const pendingChallenges: DNSChallenge[] = cloudflareChallenges ?? result.challenges;
 
-    await this.db
+    // Replace only the order this renewal started from: a verify in another
+    // process must not find its order swapped underneath it.
+    const started = await this.db
       .update(sslCertificates)
       .set({
         acmeAccountKey: acmeAccountKeyBlob,
@@ -1128,7 +1252,23 @@ export class SSLService {
         renewalError: null,
         updatedAt: new Date(),
       })
-      .where(eq(sslCertificates.id, cert.id));
+      .where(this.acmeOrderGuard(cert))
+      .returning({ id: sslCertificates.id });
+    if (started.length === 0) {
+      if (cloudflareChallenges) await this.cleanupCloudflareDnsChallenges(cloudflareChallenges);
+      throw new AppError(
+        409,
+        'ACME_ORDER_SUPERSEDED',
+        'The certificate or its ACME order changed while the renewal was starting'
+      );
+    }
+    // TXT records Gateway created for the order this one replaces are no longer needed.
+    const currentRecordIds = new Set(pendingChallenges.flatMap((challenge) => challenge.cloudflare?.recordId ?? []));
+    await this.cleanupCloudflareDnsChallenges(
+      ((cert.acmePendingChallenges ?? []) as DNSChallenge[]).filter(
+        (challenge) => !challenge.cloudflare || !currentRecordIds.has(challenge.cloudflare.recordId)
+      )
+    );
 
     await this.auditService.log({
       userId,
@@ -1386,41 +1526,44 @@ export class SSLService {
   }
 
   async deleteCert(certId: string, userId: string) {
-    const cert = await this.db.query.sslCertificates.findFirst({
-      where: eq(sslCertificates.id, certId),
-    });
+    const cert = await this.db.transaction(async (tx) => {
+      // Lock the row before looking for references. A proxy host write that
+      // names this certificate waits on this lock (its foreign-key check) and
+      // fails once the delete commits; one that committed first is seen below.
+      const [cert] = await tx.select().from(sslCertificates).where(eq(sslCertificates.id, certId)).for('update');
 
-    if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
-    if (cert.isSystem) throw new AppError(403, 'SYSTEM_CERT', 'System certificates cannot be deleted');
+      if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
+      if (cert.isSystem) throw new AppError(403, 'SYSTEM_CERT', 'System certificates cannot be deleted');
 
-    // Check no proxy hosts reference this cert
-    const { proxyHosts } = await import('@/db/schema/index.js');
-    const referencingHosts = await this.db.query.proxyHosts.findMany({
-      where: eq(proxyHosts.sslCertificateId, certId),
-      columns: { id: true, domainNames: true },
-    });
-
-    if (referencingHosts.length > 0) {
-      throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by proxy hosts', {
-        proxyHostIds: referencingHosts.map((h) => h.id),
+      // Check no proxy hosts reference this cert
+      const referencingHosts = await tx.query.proxyHosts.findMany({
+        where: eq(proxyHosts.sslCertificateId, certId),
+        columns: { id: true, domainNames: true },
       });
-    }
 
-    const [pagesProfile] = await this.db
-      .select({ id: pageWildcardProfiles.id })
-      .from(pageWildcardProfiles)
-      .where(and(eq(pageWildcardProfiles.certificateId, certId), eq(pageWildcardProfiles.enabled, true)))
-      .limit(1);
-    if (pagesProfile) {
-      throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by the Pages wildcard profile', {
-        pagesProfileId: pagesProfile.id,
-      });
-    }
+      if (referencingHosts.length > 0) {
+        throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by proxy hosts', {
+          proxyHostIds: referencingHosts.map((h) => h.id),
+        });
+      }
 
-    await this.certificateDistribution.removeSslCertificateAsset(certId);
+      const [pagesProfile] = await tx
+        .select({ id: pageWildcardProfiles.id })
+        .from(pageWildcardProfiles)
+        .where(and(eq(pageWildcardProfiles.certificateId, certId), eq(pageWildcardProfiles.enabled, true)))
+        .limit(1);
+      if (pagesProfile) {
+        throw new AppError(409, 'CERT_IN_USE', 'Certificate is in use by the Pages wildcard profile', {
+          pagesProfileId: pagesProfile.id,
+        });
+      }
 
-    // Delete from DB
-    await this.db.delete(sslCertificates).where(eq(sslCertificates.id, certId));
+      await this.certificateDistribution.removeSslCertificateAsset(certId);
+
+      // Delete from DB
+      await tx.delete(sslCertificates).where(eq(sslCertificates.id, certId));
+      return cert;
+    });
 
     await this.auditService.log({
       userId,

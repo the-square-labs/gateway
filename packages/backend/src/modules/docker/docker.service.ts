@@ -43,7 +43,11 @@ import {
   updateContainer as updateDockerContainer,
   updateContainerEnv as updateDockerContainerEnv,
 } from './docker-container-mutation-operations.js';
-import { type ContainerTransition, DockerContainerTransitions } from './docker-container-transitions.js';
+import {
+  type ContainerTransition,
+  type ContainerTransitionClaim,
+  DockerContainerTransitions,
+} from './docker-container-transitions.js';
 import { assertDockerCreationAccess, placeCreatedDockerResource } from './docker-creation-access.js';
 import type { DockerDeploymentService } from './docker-deployment.service.js';
 import { DOCKER_DEPLOYMENT_ID_LABEL, DOCKER_DEPLOYMENT_MANAGED_LABEL } from './docker-deployment-labels.js';
@@ -552,8 +556,8 @@ export class DockerManagementService {
    * (2) lists containers and rejects if the name already exists.
    * Should be called BEFORE dispatching create/rename/duplicate to the daemon.
    */
-  private async assertNameAvailable(nodeId: string, name: string) {
-    if (this.getTransition(nodeId, name)) {
+  private async assertNameAvailable(nodeId: string, name: string, claim?: ContainerTransitionClaim) {
+    if (this.getTransition(nodeId, name) && !this.containerTransitions.isClaimedBy(nodeId, name, claim)) {
       throw new AppError(409, 'NAME_IN_USE', `A container named "${name}" is currently being modified on this node`);
     }
     const [deployment] = await this.db
@@ -1241,7 +1245,7 @@ export class DockerManagementService {
       assertDockerPortBindIpCapability: (nodeId) => this.assertDockerPortBindIpCapability(nodeId),
       assertDockerRuntimeProfileAvailable: (nodeId, profile, currentProfile) =>
         this.assertDockerRuntimeProfileAvailable(nodeId, profile, currentProfile),
-      assertNameAvailable: (nodeId, name) => this.assertNameAvailable(nodeId, name),
+      assertNameAvailable: (nodeId, name, claim) => this.assertNameAvailable(nodeId, name, claim),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertContainerMutationAllowed(nodeId, containerId),
       translateNameConflict: (err, name) => this.translateNameConflict(err, name),
@@ -1257,6 +1261,8 @@ export class DockerManagementService {
       requireNoTransition: (nodeId, name) => this.requireNoTransition(nodeId, name),
       setTransition: (nodeId, name, state) => this.setTransition(nodeId, name, state),
       clearTransition: (nodeId, name) => this.clearTransition(nodeId, name),
+      claimTransitions: (nodeId, entries) => this.containerTransitions.claim(nodeId, entries),
+      releaseTransitions: (claim) => this.containerTransitions.release(claim),
       emitContainer: (nodeId, name, id, action, extra) => this.emitContainer(nodeId, name, id, action, extra),
       emitTransition: (nodeId, name, id, transition) => this.emitTransition(nodeId, name, id, transition),
       createTask: (nodeId, containerId, containerName, type) =>

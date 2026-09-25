@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
 import {
   createContainer,
   daemonContainerCreateConfig,
@@ -11,6 +12,7 @@ import {
   updateContainer,
   updateContainerEnv,
 } from './docker-container-mutation-operations.js';
+import { type ContainerTransitionClaim, DockerContainerTransitions } from './docker-container-transitions.js';
 
 describe('killContainer emergency path', () => {
   it('reuses an already-authorized transition identity and kills by stable name', async () => {
@@ -198,6 +200,8 @@ describe('createContainer compensation', () => {
       assertNameAvailable: vi.fn(),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       inspectContainer: vi.fn().mockRejectedValue(new Error('inspect unavailable')),
       resolveContainerName: vi.fn().mockRejectedValue(new Error('inspect unavailable')),
       emitContainer: vi.fn(),
@@ -239,6 +243,8 @@ describe('createContainer compensation', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       parseResult: (result: { success: boolean; detail?: string }) => JSON.parse(result.detail || '{}'),
     };
 
@@ -293,6 +299,8 @@ describe('duplicateContainer compensation', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -373,6 +381,8 @@ describe('container name-keyed metadata lifecycle', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       folderService: {
         deleteContainerAssignment: vi.fn().mockResolvedValue(undefined),
         renameContainerAssignment: vi.fn().mockResolvedValue(undefined),
@@ -413,6 +423,8 @@ describe('container name-keyed metadata lifecycle', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -458,6 +470,8 @@ describe('container name-keyed metadata lifecycle', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -501,7 +515,7 @@ describe('container name-keyed metadata lifecycle', () => {
       renameContainer: vi.fn().mockRejectedValueOnce(new Error('access metadata unavailable')),
     };
     const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
-    const clearTransition = vi.fn();
+    const transitions = new DockerContainerTransitions();
     const emitContainer = vi.fn();
     const ctx = {
       db: unlockedDockerNodeDb(),
@@ -516,7 +530,10 @@ describe('container name-keyed metadata lifecycle', () => {
       requireNoTransition: vi.fn(),
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
-      clearTransition,
+      clearTransition: vi.fn(),
+      claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
+        transitions.claim(nodeId, entries),
+      releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
       emitContainer,
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -547,7 +564,8 @@ describe('container name-keyed metadata lifecycle', () => {
         expect.objectContaining({ values: expect.objectContaining({ targetResourceId: 'current-name' }) }),
       ])
     );
-    expect(clearTransition).toHaveBeenCalledWith('node-1', 'new-name');
+    expect(transitions.get('node-1', 'new-name')).toBeUndefined();
+    expect(transitions.get('node-1', 'current-name')).toBeUndefined();
     expect(emitContainer).not.toHaveBeenCalled();
   });
 });
@@ -586,6 +604,8 @@ describe('container webhooks follow the container name', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -619,6 +639,8 @@ describe('createContainer network restrictions', () => {
       assertNameAvailable: vi.fn().mockResolvedValue(undefined),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitContainer: vi.fn(),
       parseResult: (result: { success: boolean; detail?: string }) => JSON.parse(result.detail || 'null'),
     };
@@ -695,6 +717,8 @@ describe('updateContainerEnv persistence', () => {
       requireNoTransition: vi.fn(),
       setTransition: vi.fn(),
       clearTransition: vi.fn(),
+      claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
+      releaseTransitions: vi.fn(),
       emitTransition: vi.fn(),
       createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
       watchRecreateByName: vi.fn(),
@@ -900,5 +924,110 @@ describe('updateContainer image changes', () => {
     const onDaemonTaskFailed = watchRecreateByName.mock.calls[0][9] as () => Promise<void>;
     await onDaemonTaskFailed();
     expect(environmentService.replace).toHaveBeenLastCalledWith('node-1', 'app', { APP_MODE: 'prod' });
+  });
+});
+
+describe('container rename claims both names', () => {
+  function renameContext(transitions: DockerContainerTransitions, names: Record<string, string>) {
+    const environmentService = {
+      deleteImported: vi.fn().mockResolvedValue(undefined),
+      rename: vi.fn().mockResolvedValue(undefined),
+    };
+    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+    let releaseRenameCheck!: () => void;
+    const renameCheck = new Promise<void>((resolve) => {
+      releaseRenameCheck = resolve;
+    });
+    let reachedRenameCheck!: () => void;
+    const firstRenameChecking = new Promise<void>((resolve) => {
+      reachedRenameCheck = resolve;
+    });
+    const assertNameAvailable = vi.fn(async (nodeId: string, name: string, claim?: ContainerTransitionClaim) => {
+      // Mirrors DockerService.assertNameAvailable: only a transition this
+      // rename holds itself is not "in use".
+      if (transitions.get(nodeId, name) && !transitions.isClaimedBy(nodeId, name, claim)) {
+        throw new AppError(409, 'NAME_IN_USE', `A container named "${name}" is currently being modified on this node`);
+      }
+    });
+    const ctx = {
+      db: unlockedDockerNodeDb(),
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+      environmentService,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn(async (_nodeId: string, containerId: string) => names[containerId]!),
+      requireNoTransition: (nodeId: string, name: string) => transitions.requireIdle(nodeId, name),
+      assertNameAvailable,
+      setTransition: (nodeId: string, name: string, state: 'creating') => transitions.set(nodeId, name, state),
+      clearTransition: (nodeId: string, name: string) => transitions.clear(nodeId, name),
+      claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
+        transitions.claim(nodeId, entries),
+      releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
+      // The first rename stalls in its permission check, after claiming.
+      accessResourceService: {
+        assertContainerRenameAllowed: vi.fn(() => {
+          reachedRenameCheck();
+          return renameCheck;
+        }),
+        removeContainer: vi.fn().mockResolvedValue(undefined),
+        renameContainer: vi.fn().mockResolvedValue(undefined),
+      },
+      emitContainer: vi.fn(),
+      translateNameConflict: (error: unknown) => {
+        throw error;
+      },
+      parseResult: vi.fn(),
+    };
+    return { ctx, environmentService, renameRuntime, releaseRenameCheck, firstRenameChecking };
+  }
+
+  // Regression (rc10 audit F7): a double-submitted rename to X passed the name
+  // checks twice and the loser's pre-clean deleted the env and secrets the
+  // winner had already moved to X.
+  it('refuses a second rename to the same name before it touches any metadata', async () => {
+    const transitions = new DockerContainerTransitions();
+    const { ctx, environmentService, renameRuntime, releaseRenameCheck, firstRenameChecking } = renameContext(
+      transitions,
+      {
+        'container-1': 'orders-api',
+        'container-2': 'billing-api',
+      }
+    );
+
+    const first = renameContainer(ctx as never, 'node-1', 'container-1', 'orders-v2', 'user-1');
+    await firstRenameChecking;
+    const sameContainer = renameContainer(ctx as never, 'node-1', 'container-1', 'orders-v3', 'user-1');
+    const otherContainer = renameContainer(ctx as never, 'node-1', 'container-2', 'orders-v2', 'user-1');
+
+    await expect(sameContainer).rejects.toMatchObject({ statusCode: 409, code: 'CONTAINER_BUSY' });
+    await expect(otherContainer).rejects.toMatchObject({ statusCode: 409, code: 'NAME_IN_USE' });
+    // Nothing else may act on the old name while it is being renamed.
+    expect(() => transitions.requireIdle('node-1', 'orders-api')).toThrow(/currently updating/);
+
+    releaseRenameCheck();
+    await first;
+
+    expect(environmentService.deleteImported).toHaveBeenCalledTimes(1);
+    expect(environmentService.deleteImported).toHaveBeenCalledWith('node-1', 'orders-v2');
+    expect(renameRuntime).toHaveBeenCalledTimes(1);
+    expect(transitions.get('node-1', 'orders-api')).toBeUndefined();
+    expect(transitions.get('node-1', 'orders-v2')).toBeUndefined();
+  });
+
+  it('releases only the names its own claim still holds', () => {
+    const transitions = new DockerContainerTransitions();
+    const claim = transitions.claim('node-1', [
+      { name: 'old', state: 'updating' },
+      { name: 'new', state: 'creating' },
+    ]);
+    // Another operation took over "new" meanwhile (legacy set/clear path).
+    transitions.clear('node-1', 'new');
+    transitions.set('node-1', 'new', 'recreating');
+
+    transitions.release(claim);
+
+    expect(transitions.get('node-1', 'old')).toBeUndefined();
+    expect(transitions.get('node-1', 'new')).toBe('recreating');
   });
 });

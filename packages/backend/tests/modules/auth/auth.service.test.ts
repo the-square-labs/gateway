@@ -1,5 +1,8 @@
 import 'reflect-metadata';
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
+import { createFakeAdvisoryLockDb } from '@/db/advisory-lock.test-helpers.js';
 import { inferenceProviderConnections, users } from '@/db/schema/index.js';
 import {
   AuthService,
@@ -38,6 +41,11 @@ vi.mock('@/modules/auth/live-session-user.js', async () => ({
   fetchGroupScopeMap: vi.fn(),
 }));
 
+/** `tx.select(...).from(users).innerJoin(...).where(...)` for the remaining-admin check. */
+function activeAdminsQuery(rows: Array<{ id: string; adminGroupId: string }> = []) {
+  return { innerJoin: vi.fn(() => ({ where: vi.fn().mockResolvedValue(rows) })) };
+}
+
 describe('AuthService.blockUser', () => {
   it('keeps sessions available so blocked users can reach status and logout endpoints', async () => {
     const dbUser = {
@@ -49,7 +57,7 @@ describe('AuthService.blockUser', () => {
       groupId: 'group-1',
       isBlocked: true,
     };
-    const db = {
+    const db: Record<string, unknown> = {
       update: vi.fn(() => ({
         set: vi.fn(() => ({
           where: vi.fn(() => ({
@@ -57,7 +65,10 @@ describe('AuthService.blockUser', () => {
           })),
         })),
       })),
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({ from: vi.fn(() => activeAdminsQuery()) })),
     };
+    db.transaction = async (run: (tx: unknown) => Promise<unknown>) => run(db);
     const sessionService = {
       destroyAllUserSessions: vi.fn(),
     };
@@ -77,6 +88,99 @@ describe('AuthService.blockUser', () => {
       groupId: null,
       reason: 'user_blocked',
     });
+  });
+});
+
+describe('AuthService remaining system administrator', () => {
+  const ADMIN_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const ADMIN_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+
+  /** Two active system admins; every statement yields, so unserialized checks interleave. */
+  function twoAdmins() {
+    const dialect = new PgDialect();
+    const rows = new Map(
+      [ADMIN_A, ADMIN_B].map((id) => [
+        id,
+        {
+          id,
+          oidcSubject: `oidc-${id}`,
+          email: `${id}@example.com`,
+          name: id,
+          avatarUrl: null,
+          groupId: 'group-system-admin',
+          additionalGroupIds: [],
+          additionalScopes: [],
+          isBlocked: false,
+          deletedAt: null,
+        },
+      ])
+    );
+    const makeTx = () => ({
+      select: () => ({
+        from: () => ({
+          innerJoin: () => ({
+            where: async () => {
+              await Promise.resolve();
+              return [...rows.values()]
+                .filter((row) => !row.isBlocked && !row.deletedAt)
+                .map((row) => ({ id: row.id, adminGroupId: 'group-system-admin' }));
+            },
+          }),
+        }),
+      }),
+      update: () => ({
+        set: (values: Record<string, unknown>) => ({
+          where: (condition: SQL) => ({
+            returning: async () => {
+              await Promise.resolve();
+              const params = dialect.sqlToQuery(condition).params;
+              const row = [...rows.values()].find((candidate) => params.includes(candidate.id));
+              if (!row) return [];
+              Object.assign(row, values);
+              return [{ ...row }];
+            },
+          }),
+        }),
+      }),
+    });
+    const locks = createFakeAdvisoryLockDb(makeTx);
+    const service = new AuthService(
+      { transaction: locks.transaction } as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any
+    );
+    return { service, rows, locks };
+  }
+
+  // Regression (rc10 audit F11): two admins blocking each other at once both
+  // still counted the other as remaining, leaving no active administrator.
+  it('lets only one of two admins blocking each other at once succeed', async () => {
+    const { service, rows, locks } = twoAdmins();
+
+    const results = await Promise.allSettled([service.blockUser(ADMIN_B), service.blockUser(ADMIN_A)]);
+
+    expect(results[0]).toMatchObject({ status: 'fulfilled' });
+    expect(results[1]).toMatchObject({ status: 'rejected', reason: { statusCode: 409, code: 'LAST_SYSTEM_ADMIN' } });
+    expect(rows.get(ADMIN_A)!.isBlocked).toBe(false);
+    expect(rows.get(ADMIN_B)!.isBlocked).toBe(true);
+    expect(locks.acquired).toEqual(['gateway-system-admins', 'gateway-system-admins']);
+  });
+
+  it('refuses to demote the last active admin but allows keeping the admin group', async () => {
+    const { service, rows } = twoAdmins();
+    rows.get(ADMIN_B)!.isBlocked = true;
+    const tx = (service as any).db;
+    const assertRemains = (service as any).assertSystemAdminRemains.bind(service);
+
+    await expect(
+      tx.transaction((t: unknown) => assertRemains(t, ADMIN_A, 'demote', ['group-operators']))
+    ).rejects.toMatchObject({ code: 'LAST_SYSTEM_ADMIN' });
+    await expect(
+      tx.transaction((t: unknown) => assertRemains(t, ADMIN_A, 'demote', ['group-operators', 'group-system-admin']))
+    ).resolves.toBeUndefined();
+    await expect(tx.transaction((t: unknown) => assertRemains(t, ADMIN_B, 'delete'))).resolves.toBeUndefined();
   });
 });
 
@@ -105,14 +209,17 @@ describe('AuthService.deleteUser', () => {
         };
       }),
     }));
-    const db = {
+    const db: Record<string, unknown> = {
       query: {
         users: { findFirst: vi.fn().mockResolvedValue(target) },
         permissionGroups: { findFirst: vi.fn().mockResolvedValue({ id: 'group-system-admin', name: 'system-admin' }) },
       },
       update: updateQuery,
       delete: deleteQuery,
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({ from: vi.fn(() => activeAdminsQuery()) })),
     };
+    db.transaction = async (run: (tx: unknown) => Promise<unknown>) => run(db);
     const sessionService = { destroyAllUserSessions: vi.fn().mockResolvedValue(undefined) };
     const eventBus = { publish: vi.fn() };
     const service = new AuthService(db as any, sessionService as any, {} as any, {} as any, {} as any);
@@ -414,7 +521,13 @@ describe('AuthService additional permissions', () => {
         users: { findFirst: vi.fn().mockResolvedValue(currentDbUser) },
       },
       update,
-      select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ orderBy: vi.fn(() => ({ for: vi.fn().mockResolvedValue([{ id: 'group-2' }]) })) })) })) })),
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          ...activeAdminsQuery(),
+          where: vi.fn(() => ({ orderBy: vi.fn(() => ({ for: vi.fn().mockResolvedValue([{ id: 'group-2' }]) })) })),
+        })),
+      })),
+      execute: vi.fn().mockResolvedValue(undefined),
       transaction: async (run: (tx: unknown) => Promise<unknown>): Promise<unknown> => run(db),
     };
     const service = new AuthService(

@@ -1,5 +1,5 @@
 import { and, asc, desc, eq, inArray, isNull, type SQL, sql } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor, DrizzleTransaction } from '@/db/client.js';
 import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -91,8 +91,23 @@ export class FolderedResourceService {
     this.eventBus?.publish(this.config.eventName, { action, folderId });
   }
 
-  private async getFolderOrThrow(id: string): Promise<FolderRow> {
-    const [folder] = await this.db
+  /**
+   * Folder create, move and delete run one at a time per folder tree, in one
+   * transaction under an advisory lock. Two concurrent moves (A under B, B
+   * under A) would otherwise both pass the descendant check and commit a
+   * parent cycle, and depth bookkeeping would drift.
+   */
+  private withTreeLock<T>(fn: (tx: DrizzleTransaction) => Promise<T>): Promise<T> {
+    return this.db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select pg_advisory_xact_lock(hashtext(${`resource-folders:${this.config.auditResourceType}`}))`
+      );
+      return fn(tx);
+    });
+  }
+
+  private async getFolderOrThrow(id: string, db: DrizzleExecutor = this.db): Promise<FolderRow> {
+    const [folder] = await db
       .select()
       .from(this.config.folderTable)
       .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
@@ -105,8 +120,8 @@ export class FolderedResourceService {
     if (id) await this.getFolderOrThrow(id);
   }
 
-  private async getNextSortOrder(parentId: string | null): Promise<number> {
-    const siblings = await this.db
+  private async getNextSortOrder(parentId: string | null, db: DrizzleExecutor = this.db): Promise<number> {
+    const siblings = await db
       .select({ sortOrder: this.config.folderTable.sortOrder })
       .from(this.config.folderTable)
       .where(
@@ -121,28 +136,31 @@ export class FolderedResourceService {
   }
 
   async createFolder(input: CreateResourceFolderInput, userId: string) {
-    let depth = 0;
-    if (input.parentId) {
-      const parent = await this.getFolderOrThrow(input.parentId);
-      if (parent.depth >= MAX_DEPTH) {
-        throw new AppError(400, 'MAX_DEPTH_EXCEEDED', `Maximum folder nesting depth is ${MAX_DEPTH + 1} levels`);
+    const folder = await this.withTreeLock(async (tx) => {
+      let depth = 0;
+      if (input.parentId) {
+        const parent = await this.getFolderOrThrow(input.parentId, tx);
+        if (parent.depth >= MAX_DEPTH) {
+          throw new AppError(400, 'MAX_DEPTH_EXCEEDED', `Maximum folder nesting depth is ${MAX_DEPTH + 1} levels`);
+        }
+        depth = parent.depth + 1;
       }
-      depth = parent.depth + 1;
-    }
 
-    const rows = (await this.db
-      .insert(this.config.folderTable)
-      .values({
-        ...this.config.folderDefaults,
-        name: input.name,
-        parentId: input.parentId ?? null,
-        sortOrder: await this.getNextSortOrder(input.parentId ?? null),
-        depth,
-        createdById: userId,
-      })
-      .returning()) as FolderRow[];
-    const folder = rows[0];
-    if (!folder) throw new AppError(500, 'FOLDER_CREATE_FAILED', 'Folder was not created');
+      const rows = (await tx
+        .insert(this.config.folderTable)
+        .values({
+          ...this.config.folderDefaults,
+          name: input.name,
+          parentId: input.parentId ?? null,
+          sortOrder: await this.getNextSortOrder(input.parentId ?? null, tx),
+          depth,
+          createdById: userId,
+        })
+        .returning()) as FolderRow[];
+      const created = rows[0];
+      if (!created) throw new AppError(500, 'FOLDER_CREATE_FAILED', 'Folder was not created');
+      return created;
+    });
 
     await this.auditService.log({
       userId,
@@ -175,90 +193,93 @@ export class FolderedResourceService {
   }
 
   async moveFolder(id: string, input: MoveResourceFolderInput, userId: string, access?: FolderMoveAccess) {
-    const folder = await this.getFolderOrThrow(id);
-    if (folder.parentId === input.parentId) return folder;
+    const result = await this.withTreeLock(async (tx) => {
+      const folder = await this.getFolderOrThrow(id, tx);
+      if (folder.parentId === input.parentId) return { folder, moved: false as const };
 
-    const descendants = await this.getDescendantIds(id);
-    let newDepth = 0;
-    if (input.parentId) {
-      const parent = await this.getFolderOrThrow(input.parentId);
-      if (descendants.includes(input.parentId)) {
-        throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+      // Read inside the lock: a concurrent move has either committed or not started.
+      const descendants = await this.getDescendantIds(id, tx);
+      let newDepth = 0;
+      if (input.parentId) {
+        const parent = await this.getFolderOrThrow(input.parentId, tx);
+        if (input.parentId === id || descendants.includes(input.parentId)) {
+          throw new AppError(400, 'CIRCULAR_REFERENCE', 'Cannot move folder into its own descendant');
+        }
+        newDepth = parent.depth + 1;
       }
-      newDepth = parent.depth + 1;
-    }
 
-    const subtreeHeight = (await this.getMaxSubtreeDepth(id)) - folder.depth;
-    if (newDepth + subtreeHeight > MAX_DEPTH) {
-      throw new AppError(
-        400,
-        'MAX_DEPTH_EXCEEDED',
-        `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
-      );
-    }
+      const subtreeHeight = (await this.getMaxSubtreeDepth(id, tx)) - folder.depth;
+      if (newDepth + subtreeHeight > MAX_DEPTH) {
+        throw new AppError(
+          400,
+          'MAX_DEPTH_EXCEEDED',
+          `Moving this folder would exceed the maximum nesting depth of ${MAX_DEPTH + 1} levels`
+        );
+      }
 
-    if (access) {
-      const movedResources = (await this.db
-        .select({ id: this.config.resourceTable.id })
-        .from(this.config.resourceTable)
-        .where(
-          and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, [id, ...descendants]))
-        )) as Array<{ id: string }>;
-      assertFolderMoveAccess(
-        access,
-        movedResources.map((resource) => resource.id),
-        input.parentId
-      );
-    }
+      if (access) {
+        const movedResources = (await tx
+          .select({ id: this.config.resourceTable.id })
+          .from(this.config.resourceTable)
+          .where(
+            and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, [id, ...descendants]))
+          )) as Array<{ id: string }>;
+        assertFolderMoveAccess(
+          access,
+          movedResources.map((resource) => resource.id),
+          input.parentId
+        );
+      }
 
-    const depthDelta = newDepth - folder.depth;
-    const [updated] = await this.db
-      .update(this.config.folderTable)
-      .set({
-        parentId: input.parentId,
-        depth: newDepth,
-        sortOrder: await this.getNextSortOrder(input.parentId),
-        updatedAt: new Date(),
-      })
-      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
-      .returning();
+      const depthDelta = newDepth - folder.depth;
+      const [updated] = await tx
+        .update(this.config.folderTable)
+        .set({
+          parentId: input.parentId,
+          depth: newDepth,
+          sortOrder: await this.getNextSortOrder(input.parentId, tx),
+          updatedAt: new Date(),
+        })
+        .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)))
+        .returning();
 
-    if (depthDelta !== 0) {
-      const descendantIds = await this.getDescendantIds(id);
-      if (descendantIds.length > 0) {
-        await this.db
+      if (depthDelta !== 0 && descendants.length > 0) {
+        await tx
           .update(this.config.folderTable)
           .set({
             depth: sql`${this.config.folderTable.depth} + ${depthDelta}`,
             updatedAt: new Date(),
           })
-          .where(and(this.config.folderScope, inArray(this.config.folderTable.id, descendantIds)));
+          .where(and(this.config.folderScope, inArray(this.config.folderTable.id, descendants)));
       }
-    }
+      return { folder, moved: true as const, updated };
+    });
+    if (!result.moved) return result.folder;
 
     await this.auditService.log({
       userId,
       action: `${this.config.auditResourceType}.move`,
       resourceType: this.config.auditResourceType,
       resourceId: id,
-      details: { oldParentId: folder.parentId, newParentId: input.parentId },
+      details: { oldParentId: result.folder.parentId, newParentId: input.parentId },
     });
     this.emitLayoutChanged('folder_updated', id);
-    return updated;
+    return result.updated;
   }
 
   async deleteFolder(id: string, userId: string) {
-    const folder = await this.getFolderOrThrow(id);
-    const descendantIds = await this.getDescendantIds(id);
-    const folderIds = [id, ...descendantIds];
-    const affected = await this.db
-      .select({ id: this.config.resourceTable.id })
-      .from(this.config.resourceTable)
-      .where(and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, folderIds)));
+    const { folder, descendantIds, affected } = await this.withTreeLock(async (tx) => {
+      const folder = await this.getFolderOrThrow(id, tx);
+      const descendantIds = await this.getDescendantIds(id, tx);
+      const folderIds = [id, ...descendantIds];
+      const affected = await tx
+        .select({ id: this.config.resourceTable.id })
+        .from(this.config.resourceTable)
+        .where(and(this.config.resourceScope, inArray(this.config.resourceTable.folderId, folderIds)));
 
-    await this.db
-      .delete(this.config.folderTable)
-      .where(and(this.config.folderScope, eq(this.config.folderTable.id, id)));
+      await tx.delete(this.config.folderTable).where(and(this.config.folderScope, eq(this.config.folderTable.id, id)));
+      return { folder, descendantIds, affected };
+    });
     await this.auditService.log({
       userId,
       action: `${this.config.auditResourceType}.delete`,
@@ -352,25 +373,36 @@ export class FolderedResourceService {
       .filter((node) => folderIdsWithResources.has(node.id) || node.children.length > 0);
   }
 
-  private async getDescendantIds(folderId: string): Promise<string[]> {
+  /**
+   * Every folder below `folderId`. The visited set keeps this finite even if
+   * the stored tree already contains a parent cycle (written before moves were
+   * serialized), instead of walking the cycle forever.
+   */
+  private async getDescendantIds(folderId: string, db: DrizzleExecutor = this.db): Promise<string[]> {
+    const visited = new Set<string>([folderId]);
     const descendants: string[] = [];
     let currentLevel = [folderId];
     while (currentLevel.length > 0) {
-      const children = await this.db
+      const children = await db
         .select({ id: this.config.folderTable.id })
         .from(this.config.folderTable)
         .where(and(this.config.folderScope, inArray(this.config.folderTable.parentId, currentLevel)));
-      const childIds = children.map((child) => child.id);
-      descendants.push(...childIds);
-      currentLevel = childIds;
+      const nextLevel: string[] = [];
+      for (const child of children as Array<{ id: string }>) {
+        if (visited.has(child.id)) continue;
+        visited.add(child.id);
+        descendants.push(child.id);
+        nextLevel.push(child.id);
+      }
+      currentLevel = nextLevel;
     }
     return descendants;
   }
 
-  private async getMaxSubtreeDepth(folderId: string): Promise<number> {
-    const descendantIds = await this.getDescendantIds(folderId);
+  private async getMaxSubtreeDepth(folderId: string, db: DrizzleExecutor = this.db): Promise<number> {
+    const descendantIds = await this.getDescendantIds(folderId, db);
     const ids = [folderId, ...descendantIds];
-    const [result] = await this.db
+    const [result] = await db
       .select({ maxDepth: sql<number>`max(${this.config.folderTable.depth})` })
       .from(this.config.folderTable)
       .where(and(this.config.folderScope, inArray(this.config.folderTable.id, ids)));

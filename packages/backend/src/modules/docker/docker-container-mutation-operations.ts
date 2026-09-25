@@ -8,6 +8,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { DockerAccessResourceService } from './docker-access-resource.service.js';
+import type { ContainerTransition, ContainerTransitionClaim } from './docker-container-transitions.js';
 import { placeCreatedDockerResource } from './docker-creation-access.js';
 import { envListToMap, envMapToList, normalizeEnvRecord } from './docker-env-operations.js';
 import { dockerGpuAttachmentFromInspect, hasRequestedGpuChange } from './docker-gpu-attachment.js';
@@ -67,7 +68,8 @@ export interface DockerContainerMutationContext {
   assertDockerGpuCapability(nodeId: string): Promise<void>;
   assertDockerPortBindIpCapability(nodeId: string): Promise<void>;
   assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown, currentProfile?: unknown): Promise<void>;
-  assertNameAvailable(nodeId: string, name: string): Promise<void>;
+  /** `claim`: a transition on `name` held by this claim does not count as "in use". */
+  assertNameAvailable(nodeId: string, name: string, claim?: ContainerTransitionClaim): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
   resolveContainerName(nodeId: string, containerId: string): Promise<string>;
@@ -84,6 +86,11 @@ export interface DockerContainerMutationContext {
     state: 'creating' | 'stopping' | 'restarting' | 'killing' | 'updating' | 'recreating'
   ): void;
   clearTransition(nodeId: string, name: string): void;
+  claimTransitions(
+    nodeId: string,
+    entries: ReadonlyArray<{ name: string; state: ContainerTransition }>
+  ): ContainerTransitionClaim;
+  releaseTransitions(claim: ContainerTransitionClaim): void;
   emitContainer(
     nodeId: string,
     name: string,
@@ -749,10 +756,25 @@ export async function renameContainer(
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const oldName = await ctx.resolveContainerName(nodeId, containerId);
   ctx.requireNoTransition(nodeId, oldName);
-  await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
-  await ctx.assertNameAvailable(nodeId, newName);
-  ctx.setTransition(nodeId, newName, 'creating');
+  // Claim both names before the next await: a second rename to the same name
+  // would otherwise pass the checks too and pre-clean records the first one
+  // has already moved, and nothing else may act on the old name meanwhile.
+  let claim: ContainerTransitionClaim;
   try {
+    claim = ctx.claimTransitions(nodeId, [
+      { name: oldName, state: 'updating' },
+      { name: newName, state: 'creating' },
+    ]);
+  } catch (error) {
+    // The old name was idle a moment ago, so the new name is the busy one.
+    if (error instanceof AppError && error.code === 'CONTAINER_BUSY') {
+      throw new AppError(409, 'NAME_IN_USE', `A container named "${newName}" is currently being modified on this node`);
+    }
+    throw error;
+  }
+  try {
+    await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
+    await ctx.assertNameAvailable(nodeId, newName, claim);
     // The runtime name is available, so any name-keyed records left behind by a
     // previously deleted container are stale and must not block reuse.
     await Promise.all([
@@ -835,7 +857,7 @@ export async function renameContainer(
     });
     ctx.emitContainer(nodeId, newName, containerId, 'renamed', { oldName });
   } finally {
-    ctx.clearTransition(nodeId, newName);
+    ctx.releaseTransitions(claim);
   }
 }
 
