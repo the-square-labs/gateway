@@ -55,7 +55,11 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <Comp
         data-button=""
-        className={cn(buttonVariants({ variant, size, className }))}
+        className={cn(
+          buttonVariants({ variant, size, className }),
+          // The spinner takes the place of a leading icon, so the width holds.
+          pending && "[&>[data-pending-spinner]+svg]:hidden"
+        )}
         ref={ref}
         disabled={disabled || pending}
         aria-busy={pending || undefined}
@@ -65,7 +69,9 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           children
         ) : (
           <>
-            {pending ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+            {pending ? (
+              <Loader2 data-pending-spinner="" className="animate-spin" aria-hidden="true" />
+            ) : null}
             {children}
           </>
         )}
