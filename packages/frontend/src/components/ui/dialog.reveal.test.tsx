@@ -12,7 +12,7 @@ function Body() {
       finish
     </button>
   ) : (
-    <p>Loaded body</p>
+    <input aria-label="Name" />
   );
 }
 
@@ -52,7 +52,7 @@ describe("dialog reveal", () => {
     act(() => screen.getByText("finish", { selector: "button" }).click());
     await act(() => vi.advanceTimersByTimeAsync(500));
     expect(panel()).toHaveAttribute("data-reveal-phase", "revealed");
-    expect(screen.getByText("Loaded body")).toBeInTheDocument();
+    expect(screen.getByLabelText("Name")).toHaveFocus();
   });
 
   it("opens at once when nothing loads", () => {

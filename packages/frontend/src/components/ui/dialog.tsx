@@ -110,8 +110,18 @@ const DialogContentPanel = React.forwardRef<
   const previousPhase = React.useRef(gate.phase);
   React.useLayoutEffect(() => {
     if (previousPhase.current === "loading" && gate.phase === "revealed" && bodyRef.current) {
-      growToNaturalHeight(bodyRef.current, DIALOG_LOADER_HEIGHT_PX);
-      staggerReveal(bodyRef.current, 4);
+      const body = bodyRef.current;
+      growToNaturalHeight(body, DIALOG_LOADER_HEIGHT_PX);
+      staggerReveal(body, 4);
+      // The body was hidden when the dialog opened, so its first field could
+      // not take focus then; give it focus now unless the user moved on.
+      if (!body.contains(document.activeElement)) {
+        body
+          .querySelector<HTMLElement>(
+            "input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])"
+          )
+          ?.focus();
+      }
     }
     previousPhase.current = gate.phase;
   }, [gate.phase]);
