@@ -41,9 +41,22 @@ const configVolume = `${prefix}-config`, workVolume = `${prefix}-work`;
 const fixture = mkdtempSync(join(tmpdir(), 'gateway-backup-smoke-'));
 const postgresImage = readFileSync(new URL('../packages/daemons/backup-runner/Dockerfile', import.meta.url), 'utf8').match(/^FROM (\S+)/m)?.[1];
 // The disposable S3 fixture must not depend on the private managed-storage catalog. MinIO withdrew its public
-// images, so the fixture is SeaweedFS 4.47 pinned by digest.
-const s3Image = 'chrislusf/seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882';
-assert.ok(postgresImage && s3Image, 'use the repository-pinned fixture images');
+// images, so the fixture is SeaweedFS 4.47 pinned by digest in the third-party mirror list. Prefer the GHCR
+// mirror (same digest); fall back to the upstream source while the mirror does not exist yet.
+const mirrorList = JSON.parse(readFileSync(new URL('../config/third-party-images.json', import.meta.url), 'utf8'));
+const seaweedfs = mirrorList.images.find(image => image.name === 'seaweedfs' && image.tag === '4.47');
+const s3Digest = seaweedfs?.source.match(/@(sha256:[0-9a-f]{64})$/)?.[1];
+assert.ok(s3Digest, 'SeaweedFS 4.47 must be digest-pinned in config/third-party-images.json');
+function pullFixture(candidates) {
+  for (const image of candidates) {
+    const pulled = spawnSync('docker', ['pull', '--quiet', image], { encoding: 'utf8', timeout: 300_000 });
+    if (pulled.status === 0) return image;
+    console.warn(`Fixture image ${image} is unavailable (${(pulled.stderr || String(pulled.error)).trim().split('\n')[0]}); trying the next source`);
+  }
+  throw new Error(`No fixture image source is available: ${candidates.join(', ')}`);
+}
+const s3Image = pullFixture([`${mirrorList.mirrorRepository}/seaweedfs@${s3Digest}`, seaweedfs.source]);
+assert.ok(postgresImage && s3Image.endsWith(`@${s3Digest}`), 'use the repository-pinned fixture images');
 const password = randomUUID();
 const resources = { containers: [], volumes: [], network: false };
 const mount = (name, target, readonly = false) => ['--mount', `type=volume,src=${name},dst=${target}${readonly ? ',readonly' : ''}`];

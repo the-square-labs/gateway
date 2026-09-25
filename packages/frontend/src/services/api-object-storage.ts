@@ -12,6 +12,7 @@ import type {
 } from "@/types";
 import type {
   ManagedObjectStorage,
+  ManagedObjectStorageCaCertificate,
   ManagedObjectStorageCatalogEntry,
   ManagedObjectStorageCreateInput,
   ManagedStorageAccessKey,
@@ -258,6 +259,17 @@ export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Bas
       return this.unwrapData(
         this.request<{ data: { accessKey: string; secretKey: string } }>(
           `/managed-storage/${encodeURIComponent(id)}/reveal-credentials`
+        )
+      );
+    }
+
+    /** 404/409 when the cluster has TLS off. */
+    async getManagedObjectStorageCaCertificate(
+      id: string
+    ): Promise<ManagedObjectStorageCaCertificate> {
+      return this.unwrapData(
+        this.request<{ data: ManagedObjectStorageCaCertificate }>(
+          `/managed-storage/${encodeURIComponent(id)}/ca-certificate`
         )
       );
     }

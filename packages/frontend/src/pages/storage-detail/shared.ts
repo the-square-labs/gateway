@@ -23,6 +23,7 @@ export const PROVIDER_LABELS: Record<ObjectStorageConnection["provider"], string
   aws: "AWS S3",
   cloudflare_r2: "Cloudflare R2",
   minio: "MinIO",
+  seaweedfs: "SeaweedFS",
   other: "S3-compatible",
   ftp: "FTP",
   ftps: "FTPS",

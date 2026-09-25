@@ -35,7 +35,11 @@ import {
 } from "@/components/ui/select";
 import { formatDate } from "@/lib/utils";
 import { api } from "@/services/api";
-import type { ManagedStorageAccessKey, ManagedStorageAccessKeyAccess } from "@/types";
+import type {
+  ManagedStorageAccessKey,
+  ManagedStorageAccessKeyAccess,
+  ManagedStorageEngine,
+} from "@/types";
 
 const KEY_COLUMNS: ResourceListColumn[] = [
   { id: "name", label: "Name" },
@@ -97,9 +101,12 @@ function describeKeyExpiry(key: ManagedStorageAccessKey): string {
 
 export function StorageIamKeysTab({
   managedId,
+  engine = "minio",
   canManage,
 }: {
   managedId: string;
+  /** Older backends omit the engine; those clusters are MinIO. */
+  engine?: ManagedStorageEngine;
   canManage: boolean;
 }) {
   const [keys, setKeys] = useState<ManagedStorageAccessKey[]>([]);
@@ -287,7 +294,9 @@ export function StorageIamKeysTab({
           <DialogHeader>
             <DialogTitle>Create Access Key</DialogTitle>
             <DialogDescription>
-              MinIO generates the access key id and secret; only a display name is set here.
+              {engine === "seaweedfs"
+                ? "The access key ID and secret are generated for you — by Gateway for keys without an expiry. Only a display name is set here."
+                : "The access key ID and secret are generated for you; only a display name is set here."}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -380,7 +389,9 @@ export function StorageIamKeysTab({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                MinIO automatically invalidates the key after it expires.
+                {newKeyExpiry === "never"
+                  ? "The key stays valid until it is revoked."
+                  : "The storage engine enforces the expiry and rejects the key after it expires."}
               </p>
             </div>
           </div>

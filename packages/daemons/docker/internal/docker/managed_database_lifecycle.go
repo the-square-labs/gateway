@@ -445,7 +445,7 @@ func (m *managedDatabaseManager) create(ctx context.Context, id string, input ma
 	if err := m.ensureMounted(ctx, &record); err != nil {
 		return managedDatabaseRecord{}, err
 	}
-	if err := m.client.PullImage(ctx, input.Image, ""); err != nil {
+	if _, err := m.client.EnsureThirdPartyImage(ctx, input.Image); err != nil {
 		return managedDatabaseRecord{}, err
 	}
 	if err := m.createNetwork(ctx, record.NetworkName); err != nil {
@@ -598,6 +598,11 @@ var curatedManagedDatabaseImages = map[string]map[string]struct{}{
 func isCuratedDigestImage(engine, image string) bool {
 	if !digestImagePattern.MatchString(image) {
 		return false
+	}
+	// The GHCR mirror of a curated image carries the same digest, so it is the
+	// same trusted content under the Gateway-owned registry name.
+	if upstream, ok := thirdPartyUpstreamReference(image); ok {
+		image = upstream
 	}
 	_, ok := curatedManagedDatabaseImages[engine][image]
 	return ok

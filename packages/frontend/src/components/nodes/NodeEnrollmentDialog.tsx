@@ -63,7 +63,7 @@ export const NODE_ENROLLMENT_TYPES: Array<{
   {
     value: "storage",
     label: "Storage",
-    description: "Hosts managed databases, private MinIO storage, and database backup runners.",
+    description: "Hosts managed databases, private S3 object storage, and database backup runners.",
   },
   {
     value: "monitoring",

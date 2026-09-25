@@ -32,6 +32,15 @@ import { users } from './users.js';
 // the schema barrel (./index.ts), and a re-export here would collide with
 // object-storage.ts's own export of the same name.
 
+/**
+ * The object storage server a managed cluster runs. `seaweedfs` is the only
+ * engine new clusters are created with; `minio` rows are legacy clusters that
+ * stay manageable on their cached image (see `MANAGED_STORAGE_CATALOG`).
+ */
+export const managedStorageEngineEnum = pgEnum('managed_storage_engine', ['minio', 'seaweedfs']);
+
+export type ManagedStorageEngine = (typeof managedStorageEngineEnum.enumValues)[number];
+
 export const managedStorageStatusEnum = pgEnum('managed_storage_status', [
   'creating',
   'updating',
@@ -68,12 +77,13 @@ export const managedStorageMemberStatusEnum = pgEnum('managed_storage_member_sta
 ]);
 
 /**
- * Deployment and storage state for a managed (MinIO) object storage cluster.
- * The linked object_storage_connections row is the canonical user-facing
- * resource; this table only owns the storage-node lifecycle. Mirrors
- * `managedDatabaseInstances` in databases.ts, with storage-specific columns
- * in place of database engine config: no `publishedNativePort`, no
- * `engineConfig` (MinIO needs none beyond root credentials + size).
+ * Deployment and storage state for a managed object storage cluster (SeaweedFS,
+ * or a legacy MinIO cluster). The linked object_storage_connections row is the
+ * canonical user-facing resource; this table only owns the storage-node
+ * lifecycle. Mirrors `managedDatabaseInstances` in databases.ts, with
+ * storage-specific columns in place of database engine config: no
+ * `publishedNativePort`, no `engineConfig` (neither engine needs any beyond
+ * root credentials + size).
  */
 export const managedStorageClusters = pgTable(
   'managed_storage_clusters',
@@ -87,7 +97,9 @@ export const managedStorageClusters = pgTable(
       .references(() => nodes.id, { onDelete: 'restrict' }),
     name: varchar('name', { length: 255 }).notNull(),
     slug: varchar('slug', { length: 60 }).notNull(),
-    // MinIO version key into MANAGED_STORAGE_CATALOG.
+    // Rows created before SeaweedFS existed are MinIO clusters, hence the default.
+    engine: managedStorageEngineEnum('engine').notNull().default('minio'),
+    // Version key into MANAGED_STORAGE_CATALOG[engine].
     version: varchar('version', { length: 128 }).notNull(),
     imageRef: varchar('image_ref', { length: 512 }).notNull(),
     // {username(accessKey),password(secretKey)} JSON, encryptString'd.
@@ -111,6 +123,7 @@ export const managedStorageClusters = pgTable(
     certificateId: uuid('certificate_id').references(() => certificates.id, { onDelete: 'restrict' }),
     // Opt-in exposure of MinIO's built-in SFTP server (see
     // `StorageWorkloadDispatch.renderCommandPayload`'s `--sftp=...` flag).
+    // Legacy MinIO only: SeaweedFS clusters are created without SFTP/FTP.
     // Default false ⇒ every existing/non-SFTP cluster is unaffected: no
     // `--sftp` flag, no extra port binding, no host-key staged_mounts entry.
     // `sftpPort` is operator-supplied at create time (same no-conflict-check
@@ -172,10 +185,10 @@ export const managedStorageClusters = pgTable(
 export type ManagedStorageClusterRow = typeof managedStorageClusters.$inferSelect;
 
 /**
- * A single storage node's membership in a managed MinIO cluster's erasure
- * set. One row per node participating in the pool arg for a given cluster,
- * ordered by `memberIndex` (0-based, stable — matches the MinIO server pool
- * argument order). Single-node clusters have exactly one member row.
+ * A single storage node's membership in a managed storage cluster. One row per
+ * node participating in the cluster, ordered by `memberIndex` (0-based, stable
+ * — matches the legacy MinIO server pool argument order). Single-node clusters,
+ * which includes every SeaweedFS cluster, have exactly one member row.
  */
 export const managedStorageClusterMembers = pgTable(
   'managed_storage_cluster_members',
@@ -206,13 +219,15 @@ export const managedStorageClusterMembers = pgTable(
 export type ManagedStorageClusterMemberRow = typeof managedStorageClusterMembers.$inferSelect;
 
 /**
- * One MinIO IAM service-account access key issued for a managed storage
- * cluster, created via the daemon's `docker_storage_iam` `create_key`
- * dispatch (madmin-go against the cluster's own admin API — see
- * `NodeDispatchService.sendDockerStorageIamCommand`). This table is the
- * source of truth for a key's display `name`/ownership/existence from
- * Gateway's side; MinIO itself is the source of truth for whether the key
- * still works. `encryptedSecretKey` holds the one-shot-revealed secret
+ * One IAM access key issued for a managed storage cluster, created via the
+ * daemon's managed-storage `create_key` IAM action (see
+ * `NodeDispatchService.sendDockerStorageIamCommand`). On a legacy MinIO
+ * cluster the key is a service account of the root user (madmin-go against
+ * the cluster's admin API); on SeaweedFS it belongs to its own IAM user,
+ * `principal`, which carries the key's policy. This table is the source of
+ * truth for a key's display `name`/ownership/existence from Gateway's side;
+ * the storage server is the source of truth for whether the key still
+ * works. `encryptedSecretKey` holds the one-shot-revealed secret
  * (`CryptoService.encryptString`'d, mirroring
  * `managedStorageClusters.encryptedRootCredentials`) purely so a future
  * re-reveal could be added later — today's `createAccessKey` returns the
@@ -225,24 +240,29 @@ export const managedStorageAccessKeys = pgTable(
     clusterId: uuid('cluster_id')
       .notNull()
       .references(() => managedStorageClusters.id, { onDelete: 'cascade' }),
-    // MinIO-generated (or caller-supplied) access key id — an identifier,
+    // Server-generated (or Gateway-chosen) access key id — an identifier,
     // not a secret; safe to store and return in plaintext from `listAccessKeys`.
     accessKeyId: varchar('access_key_id', { length: 128 }).notNull(),
+    // SeaweedFS only: the IAM user (`gw-<key row id>`) that owns this key and
+    // its policy. Revoking the key deletes the whole principal. Null on
+    // MinIO keys, which are service accounts of the root user.
+    principal: varchar('principal', { length: 128 }),
     encryptedSecretKey: text('encrypted_secret_key').notNull(),
     name: varchar('name', { length: 255 }),
     // The access level and bucket scope this key's inline IAM policy grants
     // (Phase 2b-vii Task 2 — see `buildManagedStoragePolicy` in
     // `managed-storage-iam-policy.ts`). Persisted purely as a display/audit
-    // summary of what was dispatched at create time; MinIO's own service
-    // account policy remains the source of truth for what the key can
-    // actually do. `access` is nullable so pre-Phase-2b-vii rows (created
+    // summary of what was dispatched at create time; the storage server's
+    // own policy remains the source of truth for what the key can actually
+    // do. `access` is nullable so pre-Phase-2b-vii rows (created
     // before this column existed) don't need a backfill; `buckets` defaults
     // to `[]` (all buckets) matching `createAccessKey`'s own default.
     access: varchar('access', { length: 16 }),
     buckets: jsonb('buckets').$type<string[]>().notNull().default([]),
-    // Optional expiration (Phase 2b-ix): when set, MinIO auto-invalidates the
-    // service account after this instant. Null means the key never expires.
-    // Display source of truth — MinIO enforces the actual expiry.
+    // Optional expiration (Phase 2b-ix): when set, the storage server
+    // invalidates the key after this instant (a MinIO service account, or a
+    // SeaweedFS service account of `principal`). Null means the key never
+    // expires. Display source of truth — the server enforces the expiry.
     expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdById: uuid('created_by_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -300,6 +320,9 @@ export const managedStorageBindings = pgTable(
     // a FK so revoking the key on the cluster cannot orphan the binding row
     // before its own teardown runs.
     accessKeyId: varchar('access_key_id', { length: 255 }),
+    // SeaweedFS only: the IAM user that owns the binding's key and policy;
+    // teardown deletes the whole principal. Null for legacy MinIO bindings.
+    principal: varchar('principal', { length: 128 }),
     buckets: jsonb('buckets').$type<string[]>().notNull().default([]),
     status: storageBindingStatusEnum('status').notNull().default('creating'),
     lastError: text('last_error'),

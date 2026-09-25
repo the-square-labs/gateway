@@ -435,7 +435,7 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_managed_storage: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys'],
+      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys', 'ca_certificate'],
       create: ['create', 'create_binding', 'create_access_key'],
       update: ['update', 'retry'],
       execute: ['restart', 'reveal_credentials'],

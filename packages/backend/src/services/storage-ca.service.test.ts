@@ -100,7 +100,7 @@ describe('StorageCAService', () => {
           caId: 'ca-storage-1',
           type: 'tls-server',
           commonName: 'managed-storage-cluster-1',
-          sans: ['10.0.0.5', 'storage-node.internal'],
+          sans: ['10.0.0.5', 'storage-node.internal', 'localhost', '127.0.0.1'],
           keyAlgorithm: 'ecdsa-p256',
           validityDays: 365,
         },
@@ -121,7 +121,20 @@ describe('StorageCAService', () => {
       await service.issueManagedStorageCertificate('cluster-1', ['10.0.0.5', '10.0.0.5']);
 
       const callArgs = certService.issueCertificate.mock.calls[0]?.[0] as { sans: string[] };
-      expect(callArgs.sans).toEqual(['10.0.0.5']);
+      expect(callArgs.sans).toEqual(['10.0.0.5', 'localhost', '127.0.0.1']);
+    });
+
+    // The backup relay reaches every cluster on loopback, relay-enabled or not.
+    it('always adds the loopback names, once, even for a directly published cluster', async () => {
+      const db = createDb([[{ id: 'ca-storage-1', certificatePem: 'CA_PEM' }]]);
+      const certService = createCertService();
+      const service = new StorageCAService(db as never, {} as CAService, certService as unknown as CertService);
+      service.setSystemCertificateLifecycleService({ issueCurrent: certService.issueCertificate } as never);
+
+      await service.issueManagedStorageCertificate('cluster-1', ['storage.example', 'localhost']);
+
+      const callArgs = certService.issueCertificate.mock.calls[0]?.[0] as { sans: string[] };
+      expect(callArgs.sans).toEqual(['storage.example', 'localhost', '127.0.0.1']);
     });
 
     it('throws when no usable addresses remain after filtering', async () => {
@@ -145,6 +158,27 @@ describe('StorageCAService', () => {
       await expect(service.issueManagedStorageCertificate('cluster-1', [])).rejects.toThrow(
         'Managed storage node has no addresses for TLS'
       );
+    });
+  });
+
+  describe('managedStorageCertificateServesLoopback', () => {
+    it.each([
+      [['10.0.0.5', 'localhost', '127.0.0.1'], true],
+      // A cluster created without the relay before loopback names were added.
+      [['10.0.0.5', 'storage-node.internal'], false],
+      [['10.0.0.5', 'localhost'], false],
+    ])('checks the certificate the cluster serves (%j)', async (sans, expected) => {
+      const db = createDb([[{ certificateId: 'cert-1' }], [{ sans }]]);
+      const service = new StorageCAService(db as never, {} as CAService, {} as CertService);
+
+      await expect(service.managedStorageCertificateServesLoopback('cluster-1')).resolves.toBe(expected);
+    });
+
+    it('reports false for a cluster without a certificate', async () => {
+      const db = createDb([[{ certificateId: null }]]);
+      const service = new StorageCAService(db as never, {} as CAService, {} as CertService);
+
+      await expect(service.managedStorageCertificateServesLoopback('cluster-1')).resolves.toBe(false);
     });
   });
 

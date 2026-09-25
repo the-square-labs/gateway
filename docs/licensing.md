@@ -64,7 +64,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Pages | Ready | — | ✅ | ✅ | ✅ |
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
 | Database Backup and Restore for Managed and External Databases | Ready | — | ✅ | ✅ | ✅ |
-| Managed Object Storage (MinIO) with Private Bindings and Secure Links | Ready | — | ✅ | ✅ | ✅ |
+| Managed Object Storage (SeaweedFS, Single Node) with Private Bindings and Secure Links | Ready | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |

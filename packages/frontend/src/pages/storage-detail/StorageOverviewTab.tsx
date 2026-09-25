@@ -7,6 +7,11 @@ import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
 import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
 import {
+  formatManagedStorageError,
+  MANAGED_STORAGE_ENGINE_LABELS,
+  managedStorageEngine,
+} from "./managed-storage-engine";
+import {
   formatHealthStatusLabel,
   formatMetricValue,
   formatProviderLabel,
@@ -30,6 +35,7 @@ export function StorageOverviewTab({
   monitoringLoading,
 }: StorageOverviewTabProps) {
   const latest = history.at(-1);
+  const engine = managedStorageEngine(storage);
   const showMonitoring = canViewMonitoring && healthStatus !== "offline";
   const overviewMetrics = useMemo<
     Array<{
@@ -161,6 +167,19 @@ export function StorageOverviewTab({
             label="Provider"
             value={<span>{formatProviderLabel(storage.provider)}</span>}
           />
+          {engine && storage.managed && (
+            <DetailRow
+              label="Engine"
+              value={
+                <span className="inline-flex items-center gap-2">
+                  <span>
+                    {MANAGED_STORAGE_ENGINE_LABELS[engine]} {storage.managed.version}
+                  </span>
+                  {engine === "minio" && <Badge variant="warning">Legacy</Badge>}
+                </span>
+              }
+            />
+          )}
           <DetailRow
             label="Last Check"
             value={
@@ -174,7 +193,7 @@ export function StorageOverviewTab({
               label="Last Error"
               value={
                 <span className="block max-w-96 wrap-break-word text-right">
-                  {storage.lastError}
+                  {formatManagedStorageError(storage.lastError)}
                 </span>
               }
             />

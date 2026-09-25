@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
+import type { ManagedStorageEngine } from '@/db/schema/managed-storage.js';
 import type { CommandResult, GatewayCommand } from '@/grpc/generated/types.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -10,6 +11,11 @@ import type { RelayGrantBundle } from './relay-policy.service.js';
 
 const logger = createChildLogger('NodeDispatch');
 const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_v1';
+// Reported by Storage daemons that can run SeaweedFS clusters (config payload
+// version 2 and the SeaweedFS IAM path). Legacy MinIO work needs only the
+// base managed-storage capabilities.
+const MANAGED_STORAGE_SEAWEEDFS_CAPABILITY = 'managed_storage_seaweedfs_v1';
+
 // The background collector runs every 10s. Leave scheduler/queue headroom so a
 // sample just under ten seconds old is refreshed in the current round instead
 // of being deferred to the next one.
@@ -76,7 +82,11 @@ export class NodeDispatchService {
     }
   }
 
-  private async assertStorageNodeCapability(nodeId: string, capability: string) {
+  private async assertStorageNodeCapability(
+    nodeId: string,
+    capability: string,
+    engine: ManagedStorageEngine = 'minio'
+  ) {
     const [node] = await this.db
       .select({ type: nodes.type, capabilities: nodes.capabilities })
       .from(nodes)
@@ -92,6 +102,15 @@ export class NodeDispatchService {
         409,
         'STORAGE_CAPABILITY_UNAVAILABLE',
         'The connected Storage node does not support this operation'
+      );
+    }
+    // An older daemon would reject the version 2 payload anyway, but only after
+    // the controller had committed to the operation; refuse before sending.
+    if (engine === 'seaweedfs' && !reported.includes(MANAGED_STORAGE_SEAWEEDFS_CAPABILITY)) {
+      throw new AppError(
+        409,
+        'STORAGE_ENGINE_UNAVAILABLE',
+        'The Storage node daemon is too old to run SeaweedFS managed storage; update the node daemon first'
       );
     }
   }
@@ -466,9 +485,10 @@ export class NodeDispatchService {
     action: string,
     managedStorageId: string,
     configJson = '',
-    timeoutMs?: number
+    timeoutMs?: number,
+    engine: ManagedStorageEngine = 'minio'
   ): Promise<CommandResult> {
-    await this.assertStorageNodeCapability(nodeId, 'managed_storage_v1');
+    await this.assertStorageNodeCapability(nodeId, 'managed_storage_v1', engine);
     await this.assertNodeMutable(nodeId);
     return this.registry.sendCommand(
       nodeId,
@@ -493,13 +513,29 @@ export class NodeDispatchService {
       name?: string;
       policy?: string;
       expiresAt?: string;
+      /** Omitted or `minio`: the legacy service-account payload, byte for byte. */
+      engine?: ManagedStorageEngine;
+      /** SeaweedFS only: the IAM user that owns the key and its policy (`gw-<id>`). */
+      principal?: string;
     },
     timeoutMs?: number
   ): Promise<CommandResult> {
     const storageAction =
       action === 'create_key' ? 'iam_create_key' : action === 'list_keys' ? 'iam_list_keys' : 'iam_remove_key';
-    await this.assertStorageNodeCapability(nodeId, 'managed_storage_iam_v1');
+    const engine = opts.engine ?? 'minio';
+    await this.assertStorageNodeCapability(nodeId, 'managed_storage_iam_v1', engine);
+    if (engine === 'seaweedfs' && !opts.principal) {
+      throw new AppError(400, 'MANAGED_STORAGE_IAM_PRINCIPAL_REQUIRED', 'SeaweedFS access keys require a principal');
+    }
     if (action !== 'list_keys') await this.assertNodeMutable(nodeId);
+    const iam = {
+      action,
+      targetAccessKey: opts.targetAccessKey ?? '',
+      targetSecretKey: opts.targetSecretKey ?? '',
+      name: opts.name ?? '',
+      policy: opts.policy ?? '',
+      expiresAt: opts.expiresAt ?? '',
+    };
     return this.registry.sendCommand(
       nodeId,
       {
@@ -508,16 +544,14 @@ export class NodeDispatchService {
           managedStorageId,
           configJson: JSON.stringify({
             version: 1,
+            // SeaweedFS keys belong to their own IAM user: create_key creates the
+            // principal, attaches `policy`, then adds `targetAccessKey`/
+            // `targetSecretKey` (or, with `expiresAt`, a daemon-generated
+            // expiring service account); remove_key deletes the whole principal.
+            ...(engine === 'seaweedfs' ? { engine } : {}),
             rootCredentials: { accessKey: opts.rootAccessKey, secretKey: opts.rootSecretKey },
             tls: opts.useTls ? { caPem: opts.caPem ?? '', serverName: opts.serverName ?? '' } : undefined,
-            iam: {
-              action,
-              targetAccessKey: opts.targetAccessKey ?? '',
-              targetSecretKey: opts.targetSecretKey ?? '',
-              name: opts.name ?? '',
-              policy: opts.policy ?? '',
-              expiresAt: opts.expiresAt ?? '',
-            },
+            iam: engine === 'seaweedfs' ? { ...iam, principal: opts.principal } : iam,
           }),
         } as any,
       },

@@ -4,7 +4,16 @@ const nameSchema = z.string().trim().min(1).max(255);
 const optionalTextSchema = z.string().trim().max(10_000).optional().nullable();
 const tagsSchema = z.array(z.string().trim().min(1).max(64)).max(32).optional();
 
-export const StorageProviderSchema = z.enum(['aws', 'cloudflare_r2', 'minio', 'other', 'ftp', 'ftps', 'sftp']);
+export const StorageProviderSchema = z.enum([
+  'aws',
+  'cloudflare_r2',
+  'minio',
+  'other',
+  'ftp',
+  'ftps',
+  'sftp',
+  'seaweedfs',
+]);
 
 /**
  * A base path is confined to plain, non-relative segments: `..` would let a

@@ -3,6 +3,7 @@ export type ObjectStorageProvider =
   | "aws"
   | "cloudflare_r2"
   | "minio"
+  | "seaweedfs"
   | "other"
   | "ftp"
   | "ftps"
@@ -30,8 +31,15 @@ export interface ObjectStorageHealthEntry {
   slow?: boolean;
 }
 
+/**
+ * The engine behind a managed storage cluster. New clusters run SeaweedFS; MinIO
+ * is a legacy engine kept for existing clusters. Views from older backends omit
+ * it, which means `minio`.
+ */
+export type ManagedStorageEngine = "minio" | "seaweedfs";
+
 export interface ManagedObjectStorageCatalogEntry {
-  type: "minio";
+  type: ManagedStorageEngine;
   versions: string[];
 }
 
@@ -41,6 +49,8 @@ export interface ManagedObjectStorage {
   name: string;
   slug: string;
   nodeId: string;
+  /** Absent on views from older backends — treat as `minio`. */
+  engine?: ManagedStorageEngine;
   version: string;
   storageSizeBytes: number;
   publishS3?: boolean;
@@ -62,6 +72,8 @@ export interface ManagedObjectStorageCreateInput {
   memberNodeIds?: string[];
   drivesPerNode?: number;
   relayEnabled?: boolean;
+  /** Only `seaweedfs` is creatable; MinIO clusters are legacy. */
+  engine?: ManagedStorageEngine;
   name: string;
   version: string;
   nodeId: string;
@@ -83,14 +95,20 @@ export interface ManagedObjectStorageCreateInput {
   ftpPassivePortCount?: number;
 }
 
+/** The Storage CA that signs a TLS-enabled managed cluster's S3 certificate. */
+export interface ManagedObjectStorageCaCertificate {
+  certificatePem: string;
+  fingerprintSha256: string;
+}
+
 /** The access level an IAM key's inline policy grants — `null` only for keys created before this field existed. */
 export type ManagedStorageAccessKeyAccess = "read-only" | "read-write";
 
-/** A managed storage IAM (MinIO) access key, as listed — never carries a secret. */
+/** A managed storage IAM access key, as listed — never carries a secret. */
 export interface ManagedStorageAccessKey {
   accessKeyId: string;
   name: string | null;
-  /** `null` for keys created before access-level tracking existed; treat as "read-write" (MinIO's prior default). */
+  /** `null` for keys created before access-level tracking existed; treat as "read-write" (the prior default). */
   access: ManagedStorageAccessKeyAccess | null;
   /** Bucket names this key is scoped to; empty means "all buckets". */
   buckets: string[];
@@ -159,6 +177,8 @@ export interface ObjectStorageConnection {
   managed?: {
     id: string;
     nodeId: string;
+    /** Absent on views from older backends — treat as `minio`. */
+    engine?: ManagedStorageEngine;
     version: string;
     storageSizeBytes: number;
     runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };

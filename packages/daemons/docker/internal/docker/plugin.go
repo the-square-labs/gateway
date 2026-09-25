@@ -394,6 +394,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_storage_ext4_quota_v1",
 				"managed_storage_iam_v1",
 				"managed_storage_private_relay_v1",
+				"managed_storage_seaweedfs_v1",
 				"generic_relay_tunnel_v1",
 				"relay_pool_v1",
 			}

@@ -26,6 +26,11 @@ import { useAuthStore } from "@/stores/auth";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
 import { ManagedObjectStorageSettingsTab } from "./storage-detail/ManagedObjectStorageSettingsTab";
+import { ManagedStorageLegacyEngineBanner } from "./storage-detail/ManagedStorageLegacyEngineBanner";
+import {
+  managedStorageEngine,
+  managedStorageErrorMessage,
+} from "./storage-detail/managed-storage-engine";
 import { ObjectBrowser } from "./storage-detail/ObjectBrowser";
 import { StorageCredentialsDialog } from "./storage-detail/StorageCredentialsDialog";
 import { StorageHeader } from "./storage-detail/StorageHeader";
@@ -264,7 +269,7 @@ function StorageDetailContent({
       toast.success("Storage restart requested");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to restart storage");
+      toast.error(managedStorageErrorMessage(error, "Failed to restart storage"));
     }
   };
 
@@ -275,7 +280,7 @@ function StorageDetailContent({
       toast.success("Storage provisioning retry requested");
       await load();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to retry provisioning");
+      toast.error(managedStorageErrorMessage(error, "Failed to retry provisioning"));
     }
   };
 
@@ -323,6 +328,7 @@ function StorageDetailContent({
   }
 
   const browserDisabled = liveHealthStatus === "offline";
+  const engine = managedStorageEngine(storage);
 
   return (
     <PageTransition>
@@ -346,6 +352,8 @@ function StorageDetailContent({
         />
 
         <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
+
+        <ManagedStorageLegacyEngineBanner storage={storage} />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col">
           <TabsList className="shrink-0">
@@ -395,7 +403,11 @@ function StorageDetailContent({
 
           {storage.managed && (
             <TabsContent value="iam-keys" className="space-y-4">
-              <StorageIamKeysTab managedId={storage.managed.id} canManage={canManageIam} />
+              <StorageIamKeysTab
+                managedId={storage.managed.id}
+                engine={engine ?? undefined}
+                canManage={canManageIam}
+              />
             </TabsContent>
           )}
         </Tabs>
@@ -427,6 +439,10 @@ function StorageDetailContent({
         <StorageCredentialsDialog
           managedId={storage.managed.id}
           endpoint={storage.endpoint}
+          region={storage.region}
+          engine={engine ?? undefined}
+          // Managed endpoints are https exactly when the cluster serves TLS.
+          tlsEnabled={storage.endpoint?.startsWith("https://") ?? false}
           publishedPort={storage.managed.publishedPort}
           connectionName={storage.name}
           open={managedCredentialsOpen}

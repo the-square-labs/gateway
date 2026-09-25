@@ -4,6 +4,7 @@ export declare function safeManagedStorageView(row: ManagedStorageClusterRow): {
   name: string;
   slug: string;
   nodeId: string;
+  engine: 'minio' | 'seaweedfs';
   version: string;
   imageRef: string;
   storageSizeBytes: number;

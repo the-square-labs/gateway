@@ -3,7 +3,7 @@ import { CreateManagedStorageAccessKeySchema, CreateManagedStorageSchema } from 
 
 const baseInput = {
   name: 'artifacts',
-  version: '2025-04-22',
+  version: '4.47',
   nodeId: '22222222-2222-4222-8222-222222222222',
   storageSizeGb: 10,
   cpuCores: 1,
@@ -11,218 +11,78 @@ const baseInput = {
   publishedPort: 9500,
 };
 
-describe('CreateManagedStorageSchema — sftpEnabled/sftpPort', () => {
-  it('accepts sftpEnabled:true with a valid sftpPort', () => {
-    const result = CreateManagedStorageSchema.parse({ ...baseInput, sftpEnabled: true, sftpPort: 8022 });
+function issuePaths(input: Record<string, unknown>): string[] {
+  const result = CreateManagedStorageSchema.safeParse(input);
+  expect(result.success).toBe(false);
+  return result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+}
 
-    expect(result.sftpEnabled).toBe(true);
-    expect(result.sftpPort).toBe(8022);
+describe('CreateManagedStorageSchema — SeaweedFS single-node shape', () => {
+  it('accepts the plain single-node create', () => {
+    const result = CreateManagedStorageSchema.parse(baseInput);
+
+    expect(result.memberNodeIds).toBeUndefined();
+    expect(result.sftpEnabled).toBeUndefined();
+    expect(result.ftpEnabled).toBeUndefined();
   });
 
-  it('rejects sftpEnabled:true without sftpPort', () => {
-    const result = CreateManagedStorageSchema.safeParse({ ...baseInput, sftpEnabled: true });
-
+  it('accepts engine seaweedfs and refuses any other engine', () => {
+    expect(CreateManagedStorageSchema.parse({ ...baseInput, engine: 'seaweedfs' }).engine).toBe('seaweedfs');
+    const result = CreateManagedStorageSchema.safeParse({ ...baseInput, engine: 'minio' });
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.includes('sftpPort'))).toBe(true);
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ['engine'], message: expect.stringContaining('legacy engine') }),
+      ]);
     }
   });
 
-  it('omitting sftpEnabled/sftpPort entirely stays valid (opt-in, unchanged default behavior)', () => {
-    const result = CreateManagedStorageSchema.parse(baseInput);
-
-    expect(result.sftpEnabled).toBeUndefined();
-    expect(result.sftpPort).toBeUndefined();
+  it('requires at least 512 MiB of memory', () => {
+    expect(issuePaths({ ...baseInput, memoryMb: 511 })).toContain('memoryMb');
+    expect(CreateManagedStorageSchema.parse({ ...baseInput, memoryMb: 512 }).memoryMb).toBe(512);
   });
 
-  it('sftpEnabled:false with no sftpPort stays valid (not required when explicitly disabled)', () => {
-    const result = CreateManagedStorageSchema.parse({ ...baseInput, sftpEnabled: false });
+  it('refuses a distributed member list with a single-node message', () => {
+    const result = CreateManagedStorageSchema.safeParse({
+      ...baseInput,
+      memberNodeIds: [
+        '44444444-4444-4444-8444-444444444441',
+        '44444444-4444-4444-8444-444444444442',
+        '44444444-4444-4444-8444-444444444443',
+        '44444444-4444-4444-8444-444444444444',
+      ],
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({ path: ['memberNodeIds'], message: expect.stringContaining('single-node') }),
+      ]);
+    }
+  });
+
+  it('accepts a single member entry as the same single-node shape', () => {
+    const result = CreateManagedStorageSchema.parse({ ...baseInput, memberNodeIds: [baseInput.nodeId] });
+
+    expect(result.memberNodeIds).toEqual([baseInput.nodeId]);
+  });
+
+  it('refuses more than one drive per node', () => {
+    expect(issuePaths({ ...baseInput, drivesPerNode: 2 })).toContain('drivesPerNode');
+  });
+
+  it('refuses SFTP and FTP listeners instead of silently dropping them', () => {
+    expect(issuePaths({ ...baseInput, sftpEnabled: true, sftpPort: 8022 })).toEqual(['sftpEnabled']);
+    expect(issuePaths({ ...baseInput, ftpEnabled: true, ftpPort: 8021, ftpPassivePortStart: 30_000 })).toEqual([
+      'ftpEnabled',
+    ]);
+  });
+
+  it('keeps explicit sftpEnabled:false / ftpEnabled:false valid for older clients', () => {
+    const result = CreateManagedStorageSchema.parse({ ...baseInput, sftpEnabled: false, ftpEnabled: false });
 
     expect(result.sftpEnabled).toBe(false);
-  });
-
-  it('rejects an out-of-range sftpPort', () => {
-    const result = CreateManagedStorageSchema.safeParse({ ...baseInput, sftpEnabled: true, sftpPort: 70_000 });
-
-    expect(result.success).toBe(false);
-  });
-});
-
-describe('CreateManagedStorageSchema — ftpEnabled/ftpPort/ftpPassivePortStart', () => {
-  it('accepts ftpEnabled:true with a valid ftpPort and ftpPassivePortStart', () => {
-    const result = CreateManagedStorageSchema.parse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 30_000,
-    });
-
-    expect(result.ftpEnabled).toBe(true);
-    expect(result.ftpPort).toBe(8021);
-    expect(result.ftpPassivePortStart).toBe(30_000);
-  });
-
-  it('rejects ftpEnabled:true without ftpPort', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPassivePortStart: 30_000,
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.includes('ftpPort'))).toBe(true);
-    }
-  });
-
-  it('rejects ftpEnabled:true without ftpPassivePortStart', () => {
-    const result = CreateManagedStorageSchema.safeParse({ ...baseInput, ftpEnabled: true, ftpPort: 8021 });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.includes('ftpPassivePortStart'))).toBe(true);
-    }
-  });
-
-  it('rejects ftpEnabled:true with neither ftpPort nor ftpPassivePortStart', () => {
-    const result = CreateManagedStorageSchema.safeParse({ ...baseInput, ftpEnabled: true });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      const paths = result.error.issues.map((issue) => issue.path.join('.'));
-      expect(paths).toEqual(expect.arrayContaining(['ftpPort', 'ftpPassivePortStart']));
-    }
-  });
-
-  it('omitting ftpEnabled/ftpPort/ftpPassivePortStart entirely stays valid (opt-in, unchanged default behavior)', () => {
-    const result = CreateManagedStorageSchema.parse(baseInput);
-
-    expect(result.ftpEnabled).toBeUndefined();
-    expect(result.ftpPort).toBeUndefined();
-    expect(result.ftpPassivePortStart).toBeUndefined();
-  });
-
-  it('ftpEnabled:false with no ftpPort/ftpPassivePortStart stays valid (not required when explicitly disabled)', () => {
-    const result = CreateManagedStorageSchema.parse({ ...baseInput, ftpEnabled: false });
-
     expect(result.ftpEnabled).toBe(false);
-  });
-
-  it('rejects an out-of-range ftpPort', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 70_000,
-      ftpPassivePortStart: 30_000,
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects a ftpPassivePortStart whose +9 span exceeds 65535', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 65_530,
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(result.error.issues.some((issue) => issue.path.includes('ftpPassivePortStart'))).toBe(true);
-    }
-  });
-
-  it('accepts a ftpPassivePortStart whose +9 span lands exactly on 65535', () => {
-    const result = CreateManagedStorageSchema.parse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 65_526,
-    });
-
-    expect(result.ftpPassivePortStart).toBe(65_526);
-  });
-});
-
-describe('CreateManagedStorageSchema — ftpPassivePortCount', () => {
-  it('accepts an in-range ftpPassivePortStart/ftpPassivePortCount pair', () => {
-    const result = CreateManagedStorageSchema.parse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 65_500,
-      ftpPassivePortCount: 36,
-    });
-
-    expect(result.ftpPassivePortCount).toBe(36);
-  });
-
-  it('omitting ftpPassivePortCount entirely stays valid (opt-in, defaults to 10-port behavior downstream)', () => {
-    const result = CreateManagedStorageSchema.parse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 30_000,
-    });
-
-    expect(result.ftpPassivePortCount).toBeUndefined();
-  });
-
-  it('rejects ftpPassivePortStart + ftpPassivePortCount - 1 exceeding 65535', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 65_530,
-      ftpPassivePortCount: 10,
-    });
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
-      expect(
-        result.error.issues.some(
-          (issue) => issue.path.includes('ftpPassivePortStart') || issue.path.includes('ftpPassivePortCount')
-        )
-      ).toBe(true);
-    }
-  });
-
-  it('accepts ftpPassivePortStart + ftpPassivePortCount - 1 landing exactly on 65535', () => {
-    const result = CreateManagedStorageSchema.parse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 65_500,
-      ftpPassivePortCount: 36,
-    });
-
-    expect(result.ftpPassivePortStart).toBe(65_500);
-    expect(result.ftpPassivePortCount).toBe(36);
-  });
-
-  it('rejects ftpPassivePortCount of 0 (below the [1,64] range)', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 30_000,
-      ftpPassivePortCount: 0,
-    });
-
-    expect(result.success).toBe(false);
-  });
-
-  it('rejects ftpPassivePortCount of 65 (above the [1,64] range)', () => {
-    const result = CreateManagedStorageSchema.safeParse({
-      ...baseInput,
-      ftpEnabled: true,
-      ftpPort: 8021,
-      ftpPassivePortStart: 30_000,
-      ftpPassivePortCount: 65,
-    });
-
-    expect(result.success).toBe(false);
   });
 });
 

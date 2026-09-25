@@ -114,7 +114,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
     name: 'manage_managed_storage',
     historyRetention: { mode: 'never_full' },
     description:
-      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating). delete follows the same backup-history rule as manage_storage_connection (config.backupHistory "forget" after the user confirms); backup files stored in the cluster are deleted with it.',
+      'Provision and manage Gateway-managed object storage, private workload links, and scoped IAM keys. New clusters run single-node SeaweedFS (S3 only, no FTP/SFTP, at least 512 MiB memory); existing MinIO clusters are legacy (engine "minio") and stay manageable but cannot be created. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating). ca_certificate returns the public Storage CA certificate (certificatePem, fingerprintSha256) that S3 clients of a TLS cluster must trust (storage:view; refused when the cluster has TLS off). delete follows the same backup-history rule as manage_storage_connection (config.backupHistory "forget" after the user confirms); backup files stored in the cluster are deleted with it.',
     parameters: {
       type: 'object',
       properties: {
@@ -136,6 +136,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
             'create_access_key',
             'remove_access_key',
             'reveal_credentials',
+            'ca_certificate',
           ],
         },
         managedStorageId: { type: 'string' },

@@ -20,7 +20,8 @@ import (
 
 // TestManagedStorageLifecycleE2E exercises the actual Linux allocator path.
 // It is intentionally opt-in because it creates a loop-backed ext4 image and
-// pulls the digest-pinned MinIO runtime through a disposable Docker daemon.
+// runs the digest-pinned legacy MinIO runtime through a disposable Docker
+// daemon; it skips when that withdrawn image is not already cached.
 func TestManagedStorageLifecycleE2E(t *testing.T) {
 	if os.Getenv("GATEWAY_MANAGED_STORAGE_E2E") != "1" {
 		t.Skip("set GATEWAY_MANAGED_STORAGE_E2E=1 on a privileged Linux runner")
@@ -40,6 +41,15 @@ func TestManagedStorageLifecycleE2E(t *testing.T) {
 	defer cancel()
 	if err := client.Ping(ctx); err != nil {
 		t.Fatal(err)
+	}
+	// MinIO withdrew its public images (quay.io and Docker Hub deny pulls), so
+	// the legacy lifecycle can only be exercised where the pinned image is still
+	// cached. SeaweedFS is covered by TestManagedStorageSeaweedFSE2E, and the
+	// legacy MinIO paths keep their unit coverage in managed_storage_test.go.
+	if present, err := client.localImagePresent(ctx, trustedMinioImage); err != nil {
+		t.Fatal(err)
+	} else if !present {
+		t.Skipf("legacy MinIO image %s is not cached on this Docker host and can no longer be pulled", trustedMinioImage)
 	}
 	manager, err := newManagedStorageManager(&config.Config{Docker: config.DockerConfig{Database: config.DatabaseConfig{StorageRoot: root}}}, client, logger)
 	if err != nil {

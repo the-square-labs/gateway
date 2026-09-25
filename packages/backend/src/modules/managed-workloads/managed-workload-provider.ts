@@ -35,7 +35,7 @@ export interface CanonicalConnectionContext {
   userId: string;
   tags?: string[];
   /** Storage-kind only: shapes the auto-registered `object_storage_connections` row. Ignored by the database provider. */
-  storage?: { endpoint: string; region: string; forcePathStyle: boolean; s3Provider: 'minio' };
+  storage?: { endpoint: string; region: string; forcePathStyle: boolean; s3Provider: 'minio' | 'seaweedfs' };
 }
 
 /**

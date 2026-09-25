@@ -179,7 +179,7 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
         name: "Storage",
         href: "/storage",
         icon: HardDrive,
-        keywords: ["s3", "minio", "r2", "ftp", "sftp", "backups"],
+        keywords: ["s3", "seaweedfs", "minio", "r2", "ftp", "sftp", "backups"],
       },
       {
         id: "logging",

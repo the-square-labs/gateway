@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/netip"
 	"net/url"
@@ -35,6 +34,7 @@ const (
 	minimumStorageNanoCPUs       = 100_000_000
 	maximumStorageNanoCPUs       = 256_000_000_000
 	trustedMinioImage            = "quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e"
+	minioCatalogID               = "minio-release-2025-04-22"
 )
 
 var (
@@ -43,7 +43,10 @@ var (
 )
 
 type managedStorageCommand struct {
-	Version         int                     `json:"version"`
+	Version int `json:"version"`
+	// Engine is empty or "minio" for version 1 and "seaweedfs" for version 2.
+	// decodeManagedStorageCommand normalizes it for workload commands.
+	Engine          string                  `json:"engine,omitempty"`
 	OperationID     string                  `json:"operationId"`
 	Image           string                  `json:"image"`
 	ImageCatalogID  string                  `json:"imageCatalogId"`
@@ -107,13 +110,19 @@ type managedStorageIAM struct {
 	Name            string `json:"name"`
 	Policy          string `json:"policy"`
 	ExpiresAt       string `json:"expiresAt"`
+	// Principal is the SeaweedFS IAM user that owns one Gateway-issued key
+	// (see managed_storage_seaweedfs_iam.go). MinIO ignores it.
+	Principal string `json:"principal,omitempty"`
 }
 
 // managedStorageRecord intentionally has no root credentials or IAM secrets.
 // It is sufficient to recover the derived local storage and container after a
 // daemon restart without turning the state file into a credential store.
 type managedStorageRecord struct {
-	ID              string `json:"id"`
+	ID string `json:"id"`
+	// Engine is empty for records written before SeaweedFS existed; those are
+	// MinIO. Use record.engine() rather than the raw field.
+	Engine          string `json:"engine,omitempty"`
 	ContainerID     string `json:"containerId"`
 	ContainerName   string `json:"containerName"`
 	NetworkName     string `json:"networkName"`
@@ -203,6 +212,12 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if err != nil {
 			return "", err
 		}
+		if record.Removed {
+			return "", errors.New("managed storage was removed")
+		}
+		if input.Engine != record.engine() {
+			return "", fmt.Errorf("managed storage engine mismatch: record is %s, update is %s", record.engine(), input.Engine)
+		}
 		if err := m.update(ctx, &record, input); err != nil {
 			return "", err
 		}
@@ -287,12 +302,25 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 		if err != nil {
 			return "", err
 		}
+		if record.Removed {
+			return "", errors.New("managed storage was removed")
+		}
+		if input.Engine != "" && input.Engine != record.engine() {
+			return "", fmt.Errorf("managed storage engine mismatch: record is %s, IAM command is %s", record.engine(), input.Engine)
+		}
+		if record.engine() == managedStorageEngineSeaweedFS {
+			return m.handleSeaweedFSIAM(ctx, action, record, input)
+		}
 		return m.handleIAM(ctx, action, record, input)
 	default:
 		return "", fmt.Errorf("unsupported managed storage action: %s", action)
 	}
 }
 
+// decodeManagedStorageCommand parses the shared JSON envelope. Version 1 is the
+// MinIO contract and version 2 the SeaweedFS contract; an old daemon rejects
+// version 2 on its own version check, so a SeaweedFS payload can never be
+// misread as a MinIO one.
 func decodeManagedStorageCommand(raw string) (managedStorageCommand, error) {
 	var input managedStorageCommand
 	if raw == "" {
@@ -301,8 +329,8 @@ func decodeManagedStorageCommand(raw string) (managedStorageCommand, error) {
 	if err := json.Unmarshal([]byte(raw), &input); err != nil {
 		return input, fmt.Errorf("parse managed storage config: %w", err)
 	}
-	if input.Version != 1 {
-		return input, errors.New("managed storage config version must be 1")
+	if input.Version != 1 && input.Version != 2 {
+		return input, errors.New("managed storage config version must be 1 or 2")
 	}
 	if input.OperationID != "" && !managedStorageIDPattern.MatchString(input.OperationID) {
 		return input, errors.New("managed storage operation id must be a UUID")
@@ -310,10 +338,33 @@ func decodeManagedStorageCommand(raw string) (managedStorageCommand, error) {
 	return input, nil
 }
 
+// normalizeWorkloadEngine binds the payload version to its engine for create
+// and update commands.
+func normalizeWorkloadEngine(input *managedStorageCommand) error {
+	switch input.Version {
+	case 1:
+		if input.Engine != "" && input.Engine != managedStorageEngineMinIO {
+			return errors.New("managed storage config version 1 is only valid for the MinIO engine")
+		}
+		input.Engine = managedStorageEngineMinIO
+	case 2:
+		if input.Engine != managedStorageEngineSeaweedFS {
+			return errors.New("managed storage config version 2 requires engine seaweedfs")
+		}
+	}
+	return nil
+}
+
+// parseManagedStorageIAMCommand accepts either payload version: the IAM
+// envelope is shared and the stored record decides the engine. A present
+// engine field must still match the record (checked by the caller).
 func parseManagedStorageIAMCommand(raw string) (managedStorageCommand, error) {
 	input, err := decodeManagedStorageCommand(raw)
 	if err != nil {
 		return input, err
+	}
+	if input.Engine != "" && input.Engine != managedStorageEngineMinIO && input.Engine != managedStorageEngineSeaweedFS {
+		return input, errors.New("managed storage engine is not supported")
 	}
 	if input.TLS != nil {
 		transport, err := managedStorageTLSTransport(input.TLS)
@@ -330,13 +381,22 @@ func parseManagedStorageCommand(raw string, creating bool) (managedStorageComman
 	if err != nil {
 		return input, err
 	}
+	if err := normalizeWorkloadEngine(&input); err != nil {
+		return input, err
+	}
+	if input.Engine == managedStorageEngineSeaweedFS {
+		return input, validateSeaweedFSCommand(input, creating)
+	}
 	if !creating {
 		if err := validateManagedStorageTransport(input); err != nil {
 			return input, err
 		}
+		if input.PublishS3 && input.PublishedPort == 0 {
+			return input, errors.New("public managed storage requires a published port")
+		}
 		return input, nil
 	}
-	if input.ImageCatalogID != "minio-release-2025-04-22" || input.Image != trustedMinioImage {
+	if input.ImageCatalogID != minioCatalogID || input.Image != trustedMinioImage {
 		return input, errors.New("managed storage image must be a trusted digest-pinned MinIO catalog image")
 	}
 	if input.RootCredentials.AccessKey == "" || input.RootCredentials.SecretKey == "" {
@@ -355,17 +415,8 @@ func parseManagedStorageCommand(raw string, creating bool) (managedStorageComman
 	if input.MemberIndex < 0 || input.MemberIndex > 9999 {
 		return input, errors.New("managed storage member index is invalid")
 	}
-	if input.Resources.StorageBytes < minimumStorageBytes || input.Resources.StorageBytes > maximumStorageBytes {
-		return input, errors.New("managed storage size is outside the supported range")
-	}
-	if input.Resources.NanoCPUs < minimumStorageNanoCPUs || input.Resources.NanoCPUs > maximumStorageNanoCPUs {
-		return input, errors.New("managed storage CPU limit is outside the supported range")
-	}
-	if input.Resources.MemoryBytes < 256*1024*1024 || input.Resources.MemoryBytes > maximumStorageMemoryBytes {
-		return input, errors.New("managed storage memory limit is outside the supported range")
-	}
-	if input.Resources.MemorySwapBytes != 0 && input.Resources.MemorySwapBytes < input.Resources.MemoryBytes {
-		return input, errors.New("managed storage swap limit must be zero or at least memory limit")
+	if err := validateManagedStorageResources(input.Resources, 256*1024*1024); err != nil {
+		return input, err
 	}
 	if err := validateManagedStorageTransport(input); err != nil {
 		return input, err
@@ -376,6 +427,22 @@ func parseManagedStorageCommand(raw string, creating bool) (managedStorageComman
 		}
 	}
 	return input, nil
+}
+
+func validateManagedStorageResources(resources managedStorageResources, minimumMemory int64) error {
+	if resources.StorageBytes < minimumStorageBytes || resources.StorageBytes > maximumStorageBytes {
+		return errors.New("managed storage size is outside the supported range")
+	}
+	if resources.NanoCPUs < minimumStorageNanoCPUs || resources.NanoCPUs > maximumStorageNanoCPUs {
+		return errors.New("managed storage CPU limit is outside the supported range")
+	}
+	if resources.MemoryBytes < minimumMemory || resources.MemoryBytes > maximumStorageMemoryBytes {
+		return errors.New("managed storage memory limit is outside the supported range")
+	}
+	if resources.MemorySwapBytes != 0 && resources.MemorySwapBytes < resources.MemoryBytes {
+		return errors.New("managed storage swap limit must be zero or at least memory limit")
+	}
+	return nil
 }
 
 func validateManagedStorageTransport(input managedStorageCommand) error {
@@ -409,6 +476,9 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 		if existing.OperationID != input.OperationID || existing.OperationID == "" {
 			return managedStorageRecord{}, errors.New("managed storage id is already allocated")
 		}
+		if existing.engine() != input.Engine {
+			return managedStorageRecord{}, errors.New("managed storage id is already allocated to another engine")
+		}
 		if err := m.repairCreate(ctx, &existing, input); err != nil {
 			return managedStorageRecord{}, err
 		}
@@ -424,11 +494,17 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 	if err := m.ensureCapacity(input.Resources.StorageBytes); err != nil {
 		return managedStorageRecord{}, err
 	}
+	// Resolve the runtime image before allocating anything: a node that cannot
+	// obtain it must fail with a typed error and leave no disk image behind.
+	image, err := m.ensureEngineImage(ctx, input.Engine)
+	if err != nil {
+		return managedStorageRecord{}, err
+	}
 	record := managedStorageRecord{
-		ID: id, ContainerName: fmt.Sprintf("gateway-storage-%s-%d", id, input.MemberIndex), NetworkName: "gateway-storage-" + id,
+		ID: id, Engine: input.Engine, ContainerName: fmt.Sprintf("gateway-storage-%s-%d", id, input.MemberIndex), NetworkName: "gateway-storage-" + id,
 		ImagePath: filepath.Join(m.root, "storage", "images", fmt.Sprintf("%s-%d.img", id, input.MemberIndex)), MountPath: filepath.Join(m.root, "storage", "mounts", fmt.Sprintf("%s-%d", id, input.MemberIndex)),
 		StorageBytes: input.Resources.StorageBytes, NanoCPUs: input.Resources.NanoCPUs, MemoryBytes: input.Resources.MemoryBytes,
-		MemorySwapBytes: input.Resources.MemorySwapBytes, Image: input.Image, MemberIndex: input.MemberIndex, MemberCount: max(1, len(input.Members)), PublishS3: input.PublishS3,
+		MemorySwapBytes: input.Resources.MemorySwapBytes, Image: image, MemberIndex: input.MemberIndex, MemberCount: max(1, len(input.Members)), PublishS3: input.PublishS3,
 		PublishedPort: input.PublishedPort, PeerBindAddress: input.PeerBindAddress, TLSEnabled: input.TLS != nil,
 		DesiredRunning: true, OperationID: input.OperationID,
 	}
@@ -450,11 +526,15 @@ func (m *managedStorageManager) create(ctx context.Context, id string, input man
 		_ = os.Remove(record.ImagePath)
 		return managedStorageRecord{}, err
 	}
+	if err := m.prepareEngineDataRoot(record); err != nil {
+		_ = m.cleanupStorage(ctx, &record, true)
+		return managedStorageRecord{}, err
+	}
 	if err := m.createNetwork(ctx, record); err != nil {
 		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
 	}
-	containerID, err := m.createContainer(ctx, &record, input)
+	containerID, err := m.createEngineContainer(ctx, &record, input)
 	if err != nil {
 		_ = m.cleanupStorage(ctx, &record, true)
 		return managedStorageRecord{}, err
@@ -496,13 +576,21 @@ func (m *managedStorageManager) repairCreate(ctx context.Context, record *manage
 	if record.ContainerID != "" && err == nil {
 		return errors.New("managed storage container identity is invalid")
 	}
+	image, err := m.ensureEngineImage(ctx, record.engine())
+	if err != nil {
+		return err
+	}
+	record.Image = image
 	if err := m.ensureMounted(ctx, record); err != nil {
+		return err
+	}
+	if err := m.prepareEngineDataRoot(*record); err != nil {
 		return err
 	}
 	if err := m.createNetwork(ctx, *record); err != nil {
 		return err
 	}
-	containerID, err := m.createContainer(ctx, record, input)
+	containerID, err := m.createEngineContainer(ctx, record, input)
 	if err != nil {
 		return err
 	}
@@ -512,6 +600,7 @@ func (m *managedStorageManager) repairCreate(ctx context.Context, record *manage
 }
 
 func (m *managedStorageManager) update(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) error {
+	previousStorageBytes := record.StorageBytes
 	if input.Resources.StorageBytes != 0 {
 		if input.Resources.StorageBytes < record.StorageBytes {
 			return errors.New("managed storage cannot be reduced")
@@ -533,7 +622,7 @@ func (m *managedStorageManager) update(ctx context.Context, record *managedStora
 		resources.NanoCPUs = record.NanoCPUs
 	}
 	if input.Resources.MemoryBytes != 0 {
-		if input.Resources.MemoryBytes < 256*1024*1024 || input.Resources.MemoryBytes > maximumStorageMemoryBytes {
+		if input.Resources.MemoryBytes < managedStorageMinimumMemory(record.engine()) || input.Resources.MemoryBytes > maximumStorageMemoryBytes {
 			return errors.New("managed storage memory limit is outside the supported range")
 		}
 		record.MemoryBytes = input.Resources.MemoryBytes
@@ -549,6 +638,20 @@ func (m *managedStorageManager) update(ctx context.Context, record *managedStora
 	if _, err := m.client.cli.ContainerUpdate(ctx, record.ContainerID, mobyclient.ContainerUpdateOptions{Resources: &resources}); err != nil {
 		return fmt.Errorf("update managed storage resources: %w", err)
 	}
+	if input.OperationID != "" {
+		record.OperationID = input.OperationID
+	}
+	// A publication change cannot be applied to a live container: the port
+	// binding (and the network's internal flag) are fixed at creation. A
+	// SeaweedFS disk grow also recreates, because volume sizing flags are
+	// derived from the disk size.
+	grewSeaweedFS := record.engine() == managedStorageEngineSeaweedFS && record.StorageBytes > previousStorageBytes
+	if managedStoragePublicationChanged(*record, input) || grewSeaweedFS {
+		return m.recreate(ctx, record, input)
+	}
+	if record.engine() == managedStorageEngineSeaweedFS {
+		return m.updateSeaweedFSInPlace(ctx, record, input)
+	}
 	if input.FTP != nil && (record.FTPPort != input.FTP.Port || record.FTPPassiveStart != input.FTP.PassivePortStart || record.FTPPassiveCount != input.FTP.PassivePortCount) {
 		return errors.New("managed storage FTP configuration requires recreation")
 	}
@@ -561,9 +664,6 @@ func (m *managedStorageManager) update(ctx context.Context, record *managedStora
 			return err
 		}
 		restartRequired = true
-	}
-	if input.OperationID != "" {
-		record.OperationID = input.OperationID
 	}
 	if input.TLS != nil {
 		if _, err := m.stageTLS(*record, *input.TLS); err != nil {
@@ -584,17 +684,37 @@ func (m *managedStorageManager) update(ctx context.Context, record *managedStora
 	return nil
 }
 
+// managedStoragePublicationChanged compares an update's publication with the
+// running container's. Update payloads always carry the full publication, so a
+// difference is a requested change, never an omitted field.
+func managedStoragePublicationChanged(record managedStorageRecord, input managedStorageCommand) bool {
+	if input.PublishS3 != record.PublishS3 || input.PublishedPort != record.PublishedPort {
+		return true
+	}
+	return input.PeerBindAddress != "" && input.PeerBindAddress != record.PeerBindAddress
+}
+
+func managedStorageMinimumMemory(engine string) int64 {
+	if engine == managedStorageEngineSeaweedFS {
+		return minimumSeaweedFSMemoryBytes
+	}
+	return 256 * 1024 * 1024
+}
+
+func (m *managedStorageManager) createEngineContainer(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) (string, error) {
+	if record.engine() == managedStorageEngineSeaweedFS {
+		return m.createSeaweedFSContainer(ctx, record, input)
+	}
+	return m.createContainer(ctx, record, input)
+}
+
 func (m *managedStorageManager) createContainer(ctx context.Context, record *managedStorageRecord, input managedStorageCommand) (string, error) {
-	if _, err := m.client.cli.ImageInspect(ctx, input.Image); err != nil {
-		stream, pullErr := m.client.cli.ImagePull(ctx, input.Image, mobyclient.ImagePullOptions{})
-		if pullErr != nil {
-			return "", fmt.Errorf("pull managed storage image: %w", pullErr)
-		}
-		_, _ = io.Copy(io.Discard, stream)
-		_ = stream.Close()
+	image := record.Image
+	if image == "" {
+		image = input.Image
 	}
 	s3Port, _ := network.ParsePort("9000/tcp")
-	containerCfg := &container.Config{Image: input.Image, Env: []string{"MINIO_ROOT_USER=" + input.RootCredentials.AccessKey, "MINIO_ROOT_PASSWORD=" + input.RootCredentials.SecretKey}, Cmd: minioCommand(input), Labels: map[string]string{managedStorageLabel: record.ID, managedStorageMemberLabel: strconv.Itoa(record.MemberIndex)}}
+	containerCfg := &container.Config{Image: image, Env: []string{"MINIO_ROOT_USER=" + input.RootCredentials.AccessKey, "MINIO_ROOT_PASSWORD=" + input.RootCredentials.SecretKey}, Cmd: minioCommand(input), Labels: map[string]string{managedStorageLabel: record.ID, managedStorageMemberLabel: strconv.Itoa(record.MemberIndex)}}
 	binds := []string{record.MountPath + ":/data"}
 	if input.TLS != nil {
 		tlsDirectory, err := m.stageTLS(*record, *input.TLS)

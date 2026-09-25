@@ -8,6 +8,7 @@ export interface StorageIamDispatchOpts {
   serverName?: string;
   rootAccessKey: string;
   rootSecretKey: string;
+  engine: 'minio' | 'seaweedfs';
 }
 export declare function resolveStorageIamDispatchOpts(
   db: DrizzleClient,
@@ -18,3 +19,10 @@ export declare function resolveStorageIamDispatchOpts(
   },
   storageCA?: StorageCAService
 ): Promise<StorageIamDispatchOpts>;
+export declare function isRevokedKeyAlreadyGone(engine: 'minio' | 'seaweedfs', error: string | undefined): boolean;
+export declare function revokeFailureMessage(engine: 'minio' | 'seaweedfs', error: string | undefined): string;
+export declare function seaweedfsPrincipal(id: string): string;
+export declare function generateSeaweedfsAccessKey(): {
+  accessKeyId: string;
+  secretKey: string;
+};

@@ -42,3 +42,50 @@ describe("storage resource sampling gaps", () => {
     expect(screen.getByTestId("CPU")).toHaveTextContent("25");
   });
 });
+
+describe("managed storage engine details", () => {
+  const managed = {
+    id: "cluster-1",
+    nodeId: "node-1",
+    storageSizeBytes: 1024,
+    runtimeConfig: { cpuCores: 1, memoryMb: 1024, swapMb: 0 },
+    publishedPort: 9000,
+    status: "ready",
+    lastError: null,
+  } as const;
+  const view = (value: ObjectStorageConnection) => (
+    <StorageOverviewTab
+      storage={value}
+      canViewMonitoring={false}
+      healthStatus="online"
+      history={[]}
+      monitoringLoading={false}
+    />
+  );
+
+  it("shows the SeaweedFS engine and version for new clusters", () => {
+    render(
+      view({
+        ...storage,
+        provider: "seaweedfs",
+        managed: { ...managed, engine: "seaweedfs", version: "4.47" },
+      })
+    );
+    expect(screen.getByText("SeaweedFS 4.47")).toBeInTheDocument();
+    expect(screen.getAllByText("SeaweedFS").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Legacy")).not.toBeInTheDocument();
+  });
+
+  it("labels a cluster without an engine as legacy MinIO and explains the image error", () => {
+    render(
+      view({
+        ...storage,
+        managed: { ...managed, version: "2025-04-22" },
+        lastError: "managed storage engine image unavailable",
+      })
+    );
+    expect(screen.getByText("MinIO 2025-04-22")).toBeInTheDocument();
+    expect(screen.getByText("Legacy")).toBeInTheDocument();
+    expect(screen.getByText(/can no longer be downloaded/)).toBeInTheDocument();
+  });
+});

@@ -86,6 +86,14 @@ export const PROVIDER_PRESETS: Record<ObjectStorageProvider, ProviderPreset> = {
     region: "us-east-1",
     forcePathStyle: true,
   },
+  // Managed SeaweedFS clusters; not offered as a preset for external connections.
+  seaweedfs: {
+    endpoint: "",
+    endpointPlaceholder: "http://seaweedfs:8333",
+    endpointDisabled: false,
+    region: "us-east-1",
+    forcePathStyle: true,
+  },
   other: {
     endpoint: "",
     endpointPlaceholder: "https://s3.example.com",
@@ -622,7 +630,7 @@ export function StorageConnectionForm({
             <div>
               <p className="text-sm font-medium">Force path-style addressing</p>
               <p className="text-xs text-muted-foreground">
-                Required for MinIO and most S3-compatible providers
+                Required for MinIO, SeaweedFS and most self-hosted S3-compatible servers
               </p>
             </div>
             <Switch

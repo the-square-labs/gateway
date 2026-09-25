@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
-import { certificateAuthorities, certificates } from '@/db/schema/index.js';
+import { certificateAuthorities, certificates, managedStorageClusters } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
@@ -13,6 +13,15 @@ import type {
 const logger = createChildLogger('StorageCA');
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
 const STORAGE_CA_CN = 'Gateway Storage CA';
+
+/**
+ * Names every managed storage server certificate carries besides the node's
+ * own addresses. The Gateway relay tunnel and the backup relay both reach the
+ * container through a local `127.0.0.1` listener and verify it as `localhost`
+ * or `127.0.0.1` — for every cluster, whether or not it also publishes its S3
+ * port directly.
+ */
+export const MANAGED_STORAGE_LOOPBACK_SANS: readonly string[] = ['localhost', '127.0.0.1'];
 
 /**
  * Purpose-specific CA for direct managed-storage TLS. It intentionally does
@@ -73,16 +82,13 @@ export class StorageCAService {
     serviceAddresses: readonly string[],
     bindCurrent?: SystemCertificateCurrentBinding
   ) {
-    const sans = [
-      ...new Set(
-        serviceAddresses
-          .map((address) => address.trim())
-          .filter(
-            (address) => isIP(address) !== 0 || /^(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(address)
-          )
-      ),
-    ];
-    if (sans.length === 0) throw new Error('Managed storage node has no addresses for TLS');
+    const addressSans = serviceAddresses
+      .map((address) => address.trim())
+      .filter(
+        (address) => isIP(address) !== 0 || /^(?=.{1,253}$)[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?$/.test(address)
+      );
+    if (addressSans.length === 0) throw new Error('Managed storage node has no addresses for TLS');
+    const sans = [...new Set([...addressSans, ...MANAGED_STORAGE_LOOPBACK_SANS])];
     const ca = await this.getStorageCA();
     const issueInput = {
       caId: ca.id,
@@ -98,6 +104,28 @@ export class StorageCAService {
       { type: 'managed_storage', id: managedStorageId },
       bindCurrent
     );
+  }
+
+  /**
+   * Whether the certificate a managed storage cluster currently serves names
+   * the loopback identities (see {@link MANAGED_STORAGE_LOOPBACK_SANS}).
+   * Certificates of clusters created without the relay before that rule do
+   * not, until they are reissued.
+   */
+  async managedStorageCertificateServesLoopback(managedStorageId: string): Promise<boolean> {
+    const [cluster] = await this.db
+      .select({ certificateId: managedStorageClusters.certificateId })
+      .from(managedStorageClusters)
+      .where(eq(managedStorageClusters.id, managedStorageId))
+      .limit(1);
+    if (!cluster?.certificateId) return false;
+    const [certificate] = await this.db
+      .select({ sans: certificates.sans })
+      .from(certificates)
+      .where(eq(certificates.id, cluster.certificateId))
+      .limit(1);
+    const sans = certificate?.sans ?? [];
+    return MANAGED_STORAGE_LOOPBACK_SANS.every((name) => sans.includes(name));
   }
 
   async retireManagedStorageCertificates(managedStorageId: string, transaction?: DrizzleTransaction) {

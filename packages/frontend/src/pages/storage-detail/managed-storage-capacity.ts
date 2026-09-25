@@ -1,4 +1,8 @@
 import type { ManagedObjectStorageCreateInput, Node } from "@/types";
+import {
+  MANAGED_STORAGE_CREATE_ENGINE,
+  managedStorageMinimumMemoryMb,
+} from "./managed-storage-engine";
 
 const MEBIBYTE = 1024 * 1024;
 const GIBIBYTE = 1024 * MEBIBYTE;
@@ -69,6 +73,7 @@ function withinKnownStorageLimit(value: number, maximum: number | undefined) {
   return maximum !== undefined && value <= maximum;
 }
 
+/** Validates a create draft; new clusters are single-node SeaweedFS without FTP/SFTP. */
 export function canDeployManagedStorage(
   draft: ManagedObjectStorageCreateInput,
   versions: string[],
@@ -78,9 +83,6 @@ export function canDeployManagedStorage(
     draft.name.trim().length > 0 &&
     versions.includes(draft.version) &&
     draft.nodeId.length > 0 &&
-    (!draft.memberNodeIds ||
-      (draft.memberNodeIds.length >= 4 &&
-        new Set(draft.memberNodeIds).size === draft.memberNodeIds.length)) &&
     Number.isFinite(draft.storageSizeGb) &&
     draft.storageSizeGb >= 1 &&
     withinKnownStorageLimit(draft.storageSizeGb, capacity.maxStorageGb) &&
@@ -88,29 +90,14 @@ export function canDeployManagedStorage(
     draft.cpuCores >= 0.1 &&
     withinLimit(draft.cpuCores, capacity.maxCpuCores) &&
     Number.isInteger(draft.memoryMb) &&
-    draft.memoryMb >= 256 &&
+    draft.memoryMb >=
+      managedStorageMinimumMemoryMb(draft.engine ?? MANAGED_STORAGE_CREATE_ENGINE) &&
     withinLimit(draft.memoryMb, capacity.maxMemoryMb) &&
     Number.isInteger(draft.swapMb) &&
     draft.swapMb >= 0 &&
     withinLimit(draft.swapMb, capacity.maxSwapMb) &&
     Number.isInteger(draft.publishedPort) &&
     draft.publishedPort >= 1 &&
-    draft.publishedPort <= 65_535 &&
-    (!draft.sftpEnabled ||
-      (Number.isInteger(draft.sftpPort) &&
-        (draft.sftpPort as number) >= 1 &&
-        (draft.sftpPort as number) <= 65_535)) &&
-    (!draft.ftpEnabled ||
-      (Number.isInteger(draft.ftpPort) &&
-        (draft.ftpPort as number) >= 1 &&
-        (draft.ftpPort as number) <= 65_535 &&
-        Number.isInteger(draft.ftpPassivePortStart) &&
-        (draft.ftpPassivePortStart as number) >= 1 &&
-        (draft.ftpPassivePortStart as number) <= 65_535 &&
-        Number.isInteger(draft.ftpPassivePortCount) &&
-        (draft.ftpPassivePortCount as number) >= 1 &&
-        (draft.ftpPassivePortCount as number) <= 64 &&
-        (draft.ftpPassivePortStart as number) + (draft.ftpPassivePortCount as number) - 1 <=
-          65_535))
+    draft.publishedPort <= 65_535
   );
 }

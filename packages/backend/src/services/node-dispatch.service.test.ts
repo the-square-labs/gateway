@@ -182,6 +182,88 @@ describe('NodeDispatchService', () => {
     );
   });
 
+  it('refuses SeaweedFS storage work on a daemon without the SeaweedFS capability', async () => {
+    const oldDaemon = createService('storage', {
+      capabilities: { capabilities: ['managed_storage_v1', 'managed_storage_iam_v1'] },
+    });
+
+    await expect(
+      oldDaemon.service.sendDockerStorageCommand(
+        'node-1',
+        'create',
+        'storage-1',
+        '{"version":2}',
+        undefined,
+        'seaweedfs'
+      )
+    ).rejects.toMatchObject({ statusCode: 409, code: 'STORAGE_ENGINE_UNAVAILABLE' });
+    await expect(
+      oldDaemon.service.sendDockerStorageIamCommand('node-1', 'create_key', 'storage-1', {
+        publishedPort: 0,
+        useTls: false,
+        rootAccessKey: 'root-access',
+        rootSecretKey: 'root-secret',
+        engine: 'seaweedfs',
+        principal: 'gw-key-1',
+      })
+    ).rejects.toMatchObject({ code: 'STORAGE_ENGINE_UNAVAILABLE' });
+    expect(oldDaemon.registry.sendCommand).not.toHaveBeenCalled();
+
+    // Legacy MinIO work on the same daemon is unaffected.
+    await oldDaemon.service.sendDockerStorageCommand('node-1', 'update', 'storage-1', '{"version":1}');
+    expect(oldDaemon.registry.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the SeaweedFS IAM payload with the engine and principal', async () => {
+    const { registry, service } = createService('storage', {
+      capabilities: {
+        capabilities: ['managed_storage_v1', 'managed_storage_iam_v1', 'managed_storage_seaweedfs_v1'],
+      },
+    });
+
+    await service.sendDockerStorageIamCommand('node-1', 'create_key', 'storage-1', {
+      publishedPort: 0,
+      useTls: true,
+      caPem: 'ca-pem',
+      serverName: 'localhost',
+      rootAccessKey: 'root-access',
+      rootSecretKey: 'root-secret',
+      engine: 'seaweedfs',
+      principal: 'gw-key-1',
+      targetAccessKey: 'GWKEY',
+      targetSecretKey: 'secret',
+      name: 'ci',
+      policy: '{"Version":"2012-10-17","Statement":[]}',
+    });
+
+    const command = registry.sendCommand.mock.calls[0]![1] as { dockerStorage: { configJson: string } };
+    expect(JSON.parse(command.dockerStorage.configJson)).toEqual({
+      version: 1,
+      engine: 'seaweedfs',
+      rootCredentials: { accessKey: 'root-access', secretKey: 'root-secret' },
+      tls: { caPem: 'ca-pem', serverName: 'localhost' },
+      iam: {
+        action: 'create_key',
+        principal: 'gw-key-1',
+        targetAccessKey: 'GWKEY',
+        targetSecretKey: 'secret',
+        name: 'ci',
+        policy: '{"Version":"2012-10-17","Statement":[]}',
+        expiresAt: '',
+      },
+    });
+
+    await expect(
+      service.sendDockerStorageIamCommand('node-1', 'remove_key', 'storage-1', {
+        publishedPort: 0,
+        useTls: false,
+        rootAccessKey: 'root-access',
+        rootSecretKey: 'root-secret',
+        engine: 'seaweedfs',
+      })
+    ).rejects.toMatchObject({ code: 'MANAGED_STORAGE_IAM_PRINCIPAL_REQUIRED' });
+  });
+
   it('capability-gates and dispatches typed Compose commands', async () => {
     const unsupported = createService();
     unsupported.registry.hasCapability.mockReturnValue(false);

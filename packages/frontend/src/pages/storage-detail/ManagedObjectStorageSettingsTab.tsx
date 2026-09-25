@@ -8,8 +8,11 @@ import { DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { api } from "@/services/api";
 import type { ObjectStorageConnection } from "@/types";
-
-const MINIMUM_MEMORY_MB = 256;
+import {
+  managedStorageEngine,
+  managedStorageErrorMessage,
+  managedStorageMinimumMemoryMb,
+} from "./managed-storage-engine";
 
 function parseTags(value: string) {
   return Array.from(
@@ -30,11 +33,13 @@ export function ManagedObjectStorageSettingsTab({
   onSaved: () => void;
 }) {
   const managed = storage.managed!;
+  const engine = managedStorageEngine(storage) ?? "minio";
+  const minimumMemoryMb = managedStorageMinimumMemoryMb(engine);
   const [name, setName] = useState(storage.name);
   const [tags, setTags] = useState(storage.tags.join(", "));
   const [cpuCores, setCpuCores] = useState(String(managed.runtimeConfig.cpuCores || 1));
   const [memoryMb, setMemoryMb] = useState(
-    String(Math.max(MINIMUM_MEMORY_MB, managed.runtimeConfig.memoryMb))
+    String(Math.max(minimumMemoryMb, managed.runtimeConfig.memoryMb))
   );
   const [swapMb, setSwapMb] = useState(String(Math.max(0, managed.runtimeConfig.swapMb)));
   const [publishS3, setPublishS3] = useState(managed.publishS3 ?? false);
@@ -45,11 +50,11 @@ export function ManagedObjectStorageSettingsTab({
     setName(storage.name);
     setTags(storage.tags.join(", "));
     setCpuCores(String(managed.runtimeConfig.cpuCores || 1));
-    setMemoryMb(String(Math.max(MINIMUM_MEMORY_MB, managed.runtimeConfig.memoryMb)));
+    setMemoryMb(String(Math.max(minimumMemoryMb, managed.runtimeConfig.memoryMb)));
     setSwapMb(String(Math.max(0, managed.runtimeConfig.swapMb)));
     setPublishS3(managed.publishS3 ?? false);
     setPublishedPort(String(managed.publishedPort));
-  }, [storage.name, storage.tags, managed]);
+  }, [storage.name, storage.tags, managed, minimumMemoryMb]);
 
   const requestedPort = Number(publishedPort);
   const portIsValid =
@@ -66,7 +71,7 @@ export function ManagedObjectStorageSettingsTab({
       !name.trim() ||
       !(cpu > 0) ||
       !Number.isInteger(memory) ||
-      memory < MINIMUM_MEMORY_MB ||
+      memory < minimumMemoryMb ||
       !Number.isInteger(swap) ||
       swap < 0 ||
       !portIsValid
@@ -88,7 +93,7 @@ export function ManagedObjectStorageSettingsTab({
       toast.success("Managed storage settings updated");
       onSaved();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update managed storage");
+      toast.error(managedStorageErrorMessage(error, "Failed to update managed storage"));
     } finally {
       setSaving(false);
     }
@@ -148,7 +153,7 @@ export function ManagedObjectStorageSettingsTab({
             <Input
               id="managed-storage-memory"
               type="number"
-              min={MINIMUM_MEMORY_MB}
+              min={minimumMemoryMb}
               value={memoryMb}
               onChange={(event) => setMemoryMb(event.target.value)}
               disabled={saving}
@@ -192,7 +197,10 @@ export function ManagedObjectStorageSettingsTab({
             disabled={saving}
           />
           <p className="text-xs text-muted-foreground">
-            Changing the published port recreates the storage container; its data is retained.
+            Turning publication on or off, or changing the published port, recreates the storage
+            container; its data is retained.
+            {engine === "minio" &&
+              " A legacy MinIO cluster can be recreated only while its image is still on the node."}
           </p>
         </div>
 

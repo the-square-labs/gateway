@@ -28,8 +28,14 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		return "", err
 	}
 	env := engineEnvironment(input)
+	// Resolve the reference actually present locally (GHCR mirror or the
+	// upstream name) so a recreate never re-pulls or fails on the other name.
+	image, err := m.client.EnsureThirdPartyImage(ctx, input.Image)
+	if err != nil {
+		return "", err
+	}
 	containerCfg := &container.Config{
-		Image: input.Image,
+		Image: image,
 		Env:   env,
 		Labels: map[string]string{
 			managedDatabaseLabel:   record.ID,

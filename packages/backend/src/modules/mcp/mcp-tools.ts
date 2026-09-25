@@ -173,7 +173,7 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     id: 'storage',
     title: 'Storage',
     description:
-      'External storage connections, object operations, managed MinIO lifecycle, and private workload links.',
+      'External storage connections, object operations, managed SeaweedFS storage lifecycle (legacy MinIO clusters included), and private workload links.',
     toolNames: toolNamesForCategories(['Storage']),
   },
   {

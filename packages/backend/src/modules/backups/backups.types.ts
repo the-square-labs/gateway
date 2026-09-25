@@ -115,7 +115,7 @@ export interface BackupDestination extends BackupRuntimeConnection {
 /** Structural view of ObjectStorageService.getBackupTarget; central storage owns the concrete type. */
 export interface StorageBackupTargetConfig {
   connectionId: string;
-  provider: 'aws' | 'cloudflare_r2' | 'minio' | 'other' | 'ftp' | 'ftps' | 'sftp';
+  provider: 'aws' | 'cloudflare_r2' | 'minio' | 'other' | 'ftp' | 'ftps' | 'sftp' | 'seaweedfs';
   endpoint?: string;
   host?: string;
   port?: number;

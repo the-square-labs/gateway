@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
@@ -109,6 +109,46 @@ describe("Storage detail monitoring lifecycle", () => {
     });
     expect(first.close).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("monitoring")).toHaveTextContent("[]");
+  });
+
+  it("shows the legacy MinIO banner for managed MinIO clusters only", async () => {
+    vi.spyOn(api, "createObjectStorageMonitoringStream").mockReturnValue(stream() as never);
+    const managed = {
+      id: "cluster-1",
+      nodeId: "node-1",
+      version: "2025-04-22",
+      storageSizeBytes: 1024,
+      runtimeConfig: { cpuCores: 1, memoryMb: 1024, swapMb: 0 },
+      publishedPort: 9000,
+      status: "ready",
+      lastError: null,
+    } as const;
+    vi.mocked(api.getObjectStorage).mockResolvedValue({ ...storage, managed });
+    const view = render(
+      <MemoryRouter>
+        <StorageDetail resolvedStorageId="s1" />
+      </MemoryRouter>
+    );
+    const banner = await screen.findByRole("note");
+    expect(banner).toHaveTextContent("MinIO is no longer distributed by its vendor");
+    expect(within(banner).getByRole("link", { name: "See the migration guide" })).toHaveAttribute(
+      "href",
+      "https://docs.goodgateway.dev/en/storage/overview/#migrating-from-minio"
+    );
+    view.unmount();
+
+    vi.mocked(api.getObjectStorage).mockResolvedValue({
+      ...storage,
+      provider: "seaweedfs",
+      managed: { ...managed, engine: "seaweedfs", version: "4.47" },
+    });
+    render(
+      <MemoryRouter>
+        <StorageDetail resolvedStorageId="s1" />
+      </MemoryRouter>
+    );
+    await screen.findByText("App Storage");
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
   });
 
   it("lets Objects grow inside the page scroll container", async () => {

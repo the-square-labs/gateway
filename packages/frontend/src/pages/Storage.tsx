@@ -69,6 +69,12 @@ import {
   managedStorageClusterCapacity,
 } from "./storage-detail/managed-storage-capacity";
 import {
+  catalogEngineVersions,
+  MANAGED_STORAGE_CREATE_ENGINE,
+  MANAGED_STORAGE_ENGINE_LABELS,
+  managedStorageMinimumMemoryMb,
+} from "./storage-detail/managed-storage-engine";
+import {
   buildStoragePayload,
   draftFromConnection,
   type StorageConnectionDraft,
@@ -113,8 +119,6 @@ async function waitForManagedObjectStorageReady(id: string): Promise<ManagedObje
   throw new Error("Managed storage is still starting. Check its status from the storage list.");
 }
 
-const DEFAULT_MANAGED_STORAGE_VERSIONS = ["RELEASE.2025-04-08T15-41-24Z"];
-
 const MANAGED_STORAGE_FORM_ANIMATION = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
@@ -122,18 +126,22 @@ const MANAGED_STORAGE_FORM_ANIMATION = {
   transition: { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] as const },
 };
 
+/** Versions of the engine new clusters run; the wizard only offers catalog keys. */
 function catalogStorageVersions(catalog: ManagedObjectStorageCatalogEntry[]): string[] {
-  return (
-    catalog.find((entry) => entry.type === "minio")?.versions ?? DEFAULT_MANAGED_STORAGE_VERSIONS
-  );
+  return catalogEngineVersions(catalog, MANAGED_STORAGE_CREATE_ENGINE);
 }
 
-function defaultManagedStorageDraft(
+const MANAGED_STORAGE_MINIMUM_MEMORY_MB = managedStorageMinimumMemoryMb(
+  MANAGED_STORAGE_CREATE_ENGINE
+);
+
+export function defaultManagedStorageDraft(
   catalog: ManagedObjectStorageCatalogEntry[] = []
 ): ManagedObjectStorageCreateInput {
   return {
+    engine: MANAGED_STORAGE_CREATE_ENGINE,
     name: "",
-    version: catalogStorageVersions(catalog)[0]!,
+    version: catalogStorageVersions(catalog)[0] ?? "",
     nodeId: "",
     storageSizeGb: 10,
     cpuCores: 1,
@@ -143,12 +151,6 @@ function defaultManagedStorageDraft(
     publishS3: false,
     relayEnabled: true,
     tlsEnabled: true,
-    sftpEnabled: false,
-    sftpPort: 8022,
-    ftpEnabled: false,
-    ftpPort: 2121,
-    ftpPassivePortStart: 30000,
-    ftpPassivePortCount: 10,
     tags: [],
   };
 }
@@ -336,22 +338,9 @@ export function ManagedObjectStorageCreateForm({
     memoryMb: String(draft.memoryMb),
     swapMb: String(draft.swapMb),
     publishedPort: String(draft.publishedPort),
-    sftpPort: String(draft.sftpPort ?? 8022),
-    ftpPort: String(draft.ftpPort ?? 2121),
-    ftpPassivePortStart: String(draft.ftpPassivePortStart ?? 30000),
-    ftpPassivePortCount: String(draft.ftpPassivePortCount ?? 10),
   }));
   const setResourceInput = (
-    key:
-      | "storageSizeGb"
-      | "cpuCores"
-      | "memoryMb"
-      | "swapMb"
-      | "publishedPort"
-      | "sftpPort"
-      | "ftpPort"
-      | "ftpPassivePortStart"
-      | "ftpPassivePortCount",
+    key: "storageSizeGb" | "cpuCores" | "memoryMb" | "swapMb" | "publishedPort",
     value: string
   ) => {
     setResourceInputs((current) => ({ ...current, [key]: value }));
@@ -359,6 +348,7 @@ export function ManagedObjectStorageCreateForm({
   };
   const [tagsInput, setTagsInput] = useState(() => (draft.tags ?? []).join(", "));
   const versions = catalogStorageVersions(catalog);
+  const engineLabel = MANAGED_STORAGE_ENGINE_LABELS[MANAGED_STORAGE_CREATE_ENGINE];
 
   return (
     <AnimatePresence mode="popLayout" initial={false}>
@@ -404,60 +394,28 @@ export function ManagedObjectStorageCreateForm({
               )}
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Curated version</label>
+              <label className="text-sm font-medium" htmlFor="managed-storage-version">
+                Engine version
+              </label>
               <Select value={draft.version} onValueChange={(value) => set("version", value)}>
-                <SelectTrigger>
+                <SelectTrigger id="managed-storage-version">
                   <SelectValue placeholder="Select version" />
                 </SelectTrigger>
                 <SelectContent>
                   {versions.map((version) => (
                     <SelectItem key={version} value={version}>
-                      {version}
+                      {engineLabel} {version}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                {versions.length > 0
+                  ? `New clusters run ${engineLabel} on a single Storage node.`
+                  : `The storage catalog lists no ${engineLabel} version yet. Refresh the page and try again.`}
+              </p>
             </div>
           </div>
-          <ToggleField
-            title="Distributed cluster"
-            description="Use at least four Storage nodes, one disk per node. Resources below apply to every member."
-            checked={Boolean(draft.memberNodeIds)}
-            onChange={(enabled) =>
-              set("memberNodeIds", enabled ? [draft.nodeId].filter(Boolean) : undefined)
-            }
-            ariaLabel="Distributed cluster"
-          />
-          {draft.memberNodeIds && (
-            <div className="space-y-2">
-              {nodes.map((node) => (
-                <ToggleField
-                  key={node.id}
-                  title={node.displayName || node.hostname}
-                  description={
-                    node.serviceAddress || "Configure a service IP before adding this member"
-                  }
-                  checked={draft.memberNodeIds!.includes(node.id)}
-                  onChange={(enabled) => {
-                    const selected = enabled
-                      ? [...draft.memberNodeIds!, node.id]
-                      : draft.memberNodeIds!.filter((id) => id !== node.id);
-                    onChange({
-                      ...draft,
-                      memberNodeIds: selected,
-                      nodeId: selected[0] ?? draft.nodeId,
-                    });
-                  }}
-                  ariaLabel={node.displayName || node.hostname}
-                />
-              ))}
-              {draft.memberNodeIds.length < 4 && (
-                <p className="text-xs text-muted-foreground">
-                  Select at least four distinct nodes.
-                </p>
-              )}
-            </div>
-          )}
           <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="managed-storage-tags">
               Tags
@@ -496,7 +454,8 @@ export function ManagedObjectStorageCreateForm({
             }}
             onChange={setResourceInput}
             minimumStorageGb={1}
-            minimumMemoryMb={256}
+            minimumMemoryMb={MANAGED_STORAGE_MINIMUM_MEMORY_MB}
+            memoryHint={`${engineLabel} requires at least ${MANAGED_STORAGE_MINIMUM_MEMORY_MB} MB. `}
           />
           {capacity.maxStorageGb === undefined && (
             <p role="status" className="text-sm text-muted-foreground">
@@ -541,95 +500,11 @@ export function ManagedObjectStorageCreateForm({
           </PanelShell>
           <ToggleField
             title="TLS"
-            description="Encrypt S3 and enable FTPS using the Gateway Storage CA."
+            description="Encrypt the S3 endpoint with a certificate from the Gateway Storage CA."
             checked={draft.tlsEnabled ?? false}
             onChange={(enabled) => set("tlsEnabled", enabled)}
             ariaLabel="TLS"
           />
-          <PanelShell
-            title="SFTP access"
-            description="Enable encrypted file access over SSH."
-            headerBorder={draft.sftpEnabled ?? false}
-            actions={
-              <Switch
-                checked={draft.sftpEnabled ?? false}
-                onChange={(enabled) => set("sftpEnabled", enabled)}
-                ariaLabel="SFTP access"
-              />
-            }
-          >
-            {draft.sftpEnabled && (
-              <SettingsControlRow title="SFTP port">
-                <Input
-                  id="managed-storage-sftpPort"
-                  aria-label="SFTP port"
-                  type="number"
-                  min="1"
-                  max={65535}
-                  disabled={!draft.sftpEnabled}
-                  value={resourceInputs.sftpPort}
-                  onChange={(event) => setResourceInput("sftpPort", event.target.value)}
-                />
-              </SettingsControlRow>
-            )}
-          </PanelShell>
-          <PanelShell
-            title="FTP access"
-            description="Enable FTP file access. Turn on TLS to use FTPS."
-            headerBorder={draft.ftpEnabled ?? false}
-            actions={
-              <Switch
-                checked={draft.ftpEnabled ?? false}
-                onChange={(enabled) => set("ftpEnabled", enabled)}
-                ariaLabel="FTP access"
-              />
-            }
-          >
-            {draft.ftpEnabled && (
-              <>
-                <SettingsControlRow title="FTP port">
-                  <Input
-                    id="managed-storage-ftpPort"
-                    aria-label="FTP port"
-                    type="number"
-                    min="1"
-                    max={65535}
-                    disabled={!draft.ftpEnabled}
-                    value={resourceInputs.ftpPort}
-                    onChange={(event) => setResourceInput("ftpPort", event.target.value)}
-                  />
-                </SettingsControlRow>
-                <SettingsControlRow title="FTP passive port range start">
-                  <Input
-                    id="managed-storage-ftpPassivePortStart"
-                    aria-label="FTP passive port range start"
-                    type="number"
-                    min="1"
-                    max={65526}
-                    disabled={!draft.ftpEnabled}
-                    value={resourceInputs.ftpPassivePortStart}
-                    onChange={(event) =>
-                      setResourceInput("ftpPassivePortStart", event.target.value)
-                    }
-                  />
-                </SettingsControlRow>
-                <SettingsControlRow title="FTP passive port count">
-                  <Input
-                    id="managed-storage-ftpPassivePortCount"
-                    aria-label="FTP passive port count"
-                    type="number"
-                    min="1"
-                    max={64}
-                    disabled={!draft.ftpEnabled}
-                    value={resourceInputs.ftpPassivePortCount}
-                    onChange={(event) =>
-                      setResourceInput("ftpPassivePortCount", event.target.value)
-                    }
-                  />
-                </SettingsControlRow>
-              </>
-            )}
-          </PanelShell>
         </motion.div>
       )}
     </AnimatePresence>
@@ -772,6 +647,14 @@ function StorageContent() {
   );
 
   const managedVersions = useMemo(() => catalogStorageVersions(managedCatalog), [managedCatalog]);
+  // The catalog can arrive after the wizard opened; keep the draft on a catalog version.
+  useEffect(() => {
+    setManagedDraft((current) =>
+      managedVersions.includes(current.version)
+        ? current
+        : { ...current, version: managedVersions[0] ?? "" }
+    );
+  }, [managedVersions]);
   const storageNodeById = useMemo(
     () => new Map(storageNodes.map((node) => [node.id, node])),
     [storageNodes]
@@ -785,12 +668,8 @@ function StorageContent() {
     [deployableStorageNodes, managedDraft.nodeId]
   );
   const managedCapacity = useMemo(
-    () =>
-      managedStorageClusterCapacity(
-        { nodeId: managedDraft.nodeId, memberNodeIds: managedDraft.memberNodeIds },
-        deployableStorageNodes
-      ),
-    [managedDraft.nodeId, managedDraft.memberNodeIds, deployableStorageNodes]
+    () => managedStorageClusterCapacity({ nodeId: managedDraft.nodeId }, deployableStorageNodes),
+    [managedDraft.nodeId, deployableStorageNodes]
   );
   const canDeployManaged = useMemo(
     () =>
@@ -807,7 +686,7 @@ function StorageContent() {
         deployableStorageNodes.some((node) => node.id === managedDraft.nodeId) &&
         managedVersions.includes(managedDraft.version)
       : canDeployManagedStorage(
-          { ...managedDraft, publishedPort: 9000, sftpEnabled: false, ftpEnabled: false },
+          { ...managedDraft, publishedPort: 9000 },
           managedVersions,
           managedCapacity
         );
@@ -1054,6 +933,7 @@ function StorageContent() {
                     <SelectItem value="all">All providers</SelectItem>
                     <SelectItem value="aws">AWS S3</SelectItem>
                     <SelectItem value="cloudflare_r2">Cloudflare R2</SelectItem>
+                    <SelectItem value="seaweedfs">SeaweedFS</SelectItem>
                     <SelectItem value="minio">MinIO</SelectItem>
                     <SelectItem value="other">Other</SelectItem>
                     <SelectItem value="sftp">SFTP</SelectItem>

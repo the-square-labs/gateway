@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/moby/moby/api/types/container"
 	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"golang.org/x/sys/unix"
@@ -29,7 +30,9 @@ type managedStorageManager struct {
 	root           string
 	reserve        int64
 	statFilesystem func(string, *unix.Statfs_t) error
-	mu             sync.Mutex
+	// chown overrides runtime-user ownership changes (tests run unprivileged).
+	chown func(string, int, int) error
+	mu    sync.Mutex
 }
 
 func (m *managedStorageManager) stageTLS(record managedStorageRecord, tlsConfig managedStorageTLS) (string, error) {
@@ -119,7 +122,13 @@ func (m *managedStorageManager) createImage(ctx context.Context, record managedS
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync managed storage image: %w", err)
 	}
-	if output, err := exec.CommandContext(ctx, "mkfs.ext4", "-q", "-F", record.ImagePath).CombinedOutput(); err != nil {
+	args := []string{"-q", "-F"}
+	if record.engine() == managedStorageEngineSeaweedFS {
+		// SeaweedFS runs unprivileged, so root-reserved blocks would only be
+		// unusable space; its own minFreeSpace guard keeps metadata headroom.
+		args = append(args, "-m", "0")
+	}
+	if output, err := exec.CommandContext(ctx, "mkfs.ext4", append(args, record.ImagePath)...).CombinedOutput(); err != nil {
 		return fmt.Errorf("format managed storage image: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return nil
@@ -212,7 +221,17 @@ func (m *managedStorageManager) remove(ctx context.Context, record *managedStora
 	record.DesiredRunning = false
 	record.Removed = true
 	record.ContainerID = ""
+	// A removed workload cannot be started again, so staged secrets (root
+	// identity, TLS keys, SFTP host key) have no further use.
+	if record.engine() == managedStorageEngineSeaweedFS {
+		if err := m.removeSeaweedFSStaging(*record); err != nil {
+			return err
+		}
+	}
 	if deleteData {
+		for _, directory := range []string{"tls", "sftp"} {
+			_ = os.RemoveAll(filepath.Join(m.root, "storage", directory, fmt.Sprintf("%s-%d", record.ID, record.MemberIndex)))
+		}
 		return m.cleanupStorage(ctx, record, true)
 	}
 	return m.saveRecord(*record)
@@ -311,7 +330,11 @@ func (m *managedStorageManager) storageStatus(ctx context.Context, record manage
 }
 
 func (m *managedStorageManager) waitForReady(ctx context.Context, record managedStorageRecord) error {
-	deadline := time.NewTimer(90 * time.Second)
+	timeout := 90 * time.Second
+	if record.engine() == managedStorageEngineSeaweedFS {
+		timeout = seaweedfsReadyTimeout
+	}
+	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -333,6 +356,9 @@ func (m *managedStorageManager) waitForReady(ctx context.Context, record managed
 }
 
 func managedStorageHealthPath(record managedStorageRecord) string {
+	if record.engine() == managedStorageEngineSeaweedFS {
+		return "/healthz"
+	}
 	if record.MemberCount > 1 {
 		return "/minio/health/cluster"
 	}
@@ -340,6 +366,9 @@ func managedStorageHealthPath(record managedStorageRecord) string {
 }
 
 func (m *managedStorageManager) checkReady(ctx context.Context, record managedStorageRecord) error {
+	if record.engine() == managedStorageEngineSeaweedFS {
+		return m.checkSeaweedFSReady(ctx, record)
+	}
 	endpoint, err := m.privateEndpoint(ctx, record)
 	if err != nil {
 		return err
@@ -358,8 +387,38 @@ func (m *managedStorageManager) checkReady(ctx context.Context, record managedSt
 		transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool, ServerName: record.TLSServerName}
 		scheme = "https"
 	}
-	healthPath := managedStorageHealthPath(record)
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, scheme+"://"+endpoint+healthPath, nil)
+	return probeManagedStorageHealth(ctx, transport, scheme+"://"+endpoint+managedStorageHealthPath(record))
+}
+
+// checkSeaweedFSReady requires the in-container healthcheck (master leader,
+// filer store, volume server, S3 listener) to report healthy and the S3
+// listener to answer over the private network with the expected TLS identity.
+func (m *managedStorageManager) checkSeaweedFSReady(ctx context.Context, record managedStorageRecord) error {
+	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
+	if err != nil || inspect.Container.State == nil || !inspect.Container.State.Running {
+		return errors.New("managed storage container is not running")
+	}
+	if inspect.Container.State.Health == nil || inspect.Container.State.Health.Status != container.Healthy {
+		status := "unknown"
+		if inspect.Container.State.Health != nil {
+			status = string(inspect.Container.State.Health.Status)
+		}
+		return fmt.Errorf("managed storage container health is %s", status)
+	}
+	endpoint, err := m.privateEndpoint(ctx, record)
+	if err != nil {
+		return err
+	}
+	transport, scheme, err := m.seaweedfsTransport(record)
+	if err != nil {
+		return err
+	}
+	return probeManagedStorageHealth(ctx, transport, scheme+"://"+endpoint+managedStorageHealthPath(record))
+}
+
+func probeManagedStorageHealth(ctx context.Context, transport *http.Transport, target string) error {
+	defer transport.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return err
 	}
@@ -382,6 +441,7 @@ func (m *managedStorageManager) marshalManagedStorageDetail(ctx context.Context,
 	}
 	return jsonString(map[string]any{
 		"status": status, "id": record.ID, "operationId": record.OperationID,
+		"engine": record.engine(), "image": record.Image,
 		"containerName": record.ContainerName, "memberIndex": record.MemberIndex,
 		"privateEndpoint": privateEndpoint, "publishS3": record.PublishS3,
 		"peerPublished": record.PeerBindAddress != "", "peerBindAddress": record.PeerBindAddress,

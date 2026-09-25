@@ -1,6 +1,6 @@
 # Storage nodes, external storage and database backups
 
-Storage nodes use the existing Docker daemon with `docker.mode: storage`. They can provision managed PostgreSQL, Redis, ClickHouse and MinIO, and execute native backup jobs. Generic application containers and builds remain on Docker and Build nodes. Existing `databases` nodes retain their configuration and database data; upgrading a daemon does not move its data directory.
+Storage nodes use the existing Docker daemon with `docker.mode: storage`. They can provision managed PostgreSQL, Redis, ClickHouse and SeaweedFS object storage, and execute native backup jobs. Generic application containers and builds remain on Docker and Build nodes. Existing `databases` nodes retain their configuration and database data; upgrading a daemon does not move its data directory.
 
 Enroll a new **Storage** node through the node enrollment dialog or `scripts/setup-storage-node.sh`. The existing `docker.database.storage_root` remains the allocation root for compatibility. Managed databases, object storage and backup workspaces use preallocated ext4 images and respect the configured free-space reserve. Set CPU, memory and disk limits when provisioning a resource.
 
@@ -8,11 +8,19 @@ Enroll a new **Storage** node through the node enrollment dialog or `scripts/set
 
 The Storage section connects to AWS S3, Cloudflare R2, MinIO and compatible S3 endpoints, FTP, explicit or implicit FTPS, and SFTP. File protocols expose directories below the configured base path as buckets. SFTP requires the server's SHA256 host-key fingerprint; FTPS verifies the server certificate using the system trust store or a configured private CA.
 
-Managed MinIO is private by default. Gateway accesses it over authenticated relay routes. Public S3 publication is a separate setting. FTP/SFTP listeners are opt-in public listeners with their own ports. The MinIO console is not published. Application bindings issue bucket-scoped credentials and provide an endpoint on the application's private binding network.
+## Managed object storage
 
-A distributed MinIO cluster requires at least four distinct Storage nodes, each with an explicit service IP reachable by the other members. Each node contributes one independently bounded disk. Configure member connectivity before provisioning; Gateway does not change host firewalls. The member health checks must report cluster write quorum before provisioning completes. The primary member currently owns the Gateway relay endpoint; this is not a separate highly available endpoint product.
+New managed storage clusters run SeaweedFS 4.47 (catalog `seaweedfs-4.47`), pinned to an immutable image digest. Storage nodes pull it from the Gateway mirror `ghcr.io/the-square-labs/gateway/seaweedfs` first and fall back to `docker.io/chrislusf/seaweedfs`; the digest is the trust anchor for both. When both pulls fail, provisioning stops with `MANAGED_STORAGE_IMAGE_PULL_FAILED`. The same mirror-first pull applies to the managed database images, the Redis restore staging image, and the default Compose sidecar. SeaweedFS work is dispatched only to nodes that report the `managed_storage_seaweedfs_v1` capability.
 
-The curated MinIO runtime is pinned to an immutable image digest. Runtime version selection is deliberately separate from a claim of ongoing upstream support. Review the image maintenance and upgrade policy before deploying it to a new production environment.
+A SeaweedFS cluster is single-node, speaks S3 only (no FTP or SFTP), and needs at least 512 MiB of memory. S3 listens on container port 9000; the cluster is private by default and Gateway reaches it over authenticated relay routes. Public S3 publication is a separate setting, and turning it on or off or changing its port recreates the container while keeping data and keys. TLS uses the Gateway Storage CA and is chosen at creation. Every managed storage certificate includes `localhost` and `127.0.0.1`, which backups through the relay require; clusters created before that receive a new certificate on their next settings save, and until then backups to them fail with `BACKUP_STORAGE_CERTIFICATE_OUTDATED`.
+
+Each access key is its own SeaweedFS IAM principal (`gw-<key id>`) with a bucket-scoped read-only or read-write policy that never grants `s3:ListAllMyBuckets`; scoped keys cannot create or delete buckets. Expiring keys are SeaweedFS service accounts, so the engine enforces the expiry, and revoking a key deletes its principal. Application bindings issue bucket-scoped credentials and provide an endpoint on the application's private binding network. rclone needs `no_check_bucket = true` with a bucket-scoped key.
+
+Each bucket is its own SeaweedFS collection with at least one volume, and volume size and count are derived from the disk size. A full disk returns HTTP 500 for writes while reads keep working; grow the disk, which recreates the container, and writes resume.
+
+### Legacy MinIO clusters
+
+MinIO withdrew its public images, so new MinIO clusters cannot be created. Existing managed MinIO clusters keep running as a legacy engine while the MinIO image is still on the node. Operations that need to pull the image, such as recreating the container after a publication change, a disk grow, or a lost container, fail with `MANAGED_STORAGE_ENGINE_IMAGE_UNAVAILABLE` before the container or its data is touched. Migrate them manually to SeaweedFS with rclone as described in the [public documentation](https://docs.goodgateway.dev/en/storage/overview/#migrating-from-minio); an in-place migration is planned for a later release.
 
 ## Backup configuration
 

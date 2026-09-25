@@ -4,12 +4,14 @@ import { systemCAPurposeEnum } from './certificate-authorities.js';
 import {
   type ManagedStorageClusterRow,
   managedStorageAccessKeys,
+  managedStorageBindings,
   managedStorageClusterMembers,
   managedStorageClusters,
+  managedStorageEngineEnum,
   managedStorageMemberStatusEnum,
   managedStorageStatusEnum,
 } from './managed-storage.js';
-import { objectStorageConnectionOriginEnum } from './object-storage.js';
+import { objectStorageConnectionOriginEnum, objectStorageProviderEnum } from './object-storage.js';
 
 // Compile-time guard: `ManagedStorageClusterRow` must stay assignable to the
 // `ManagedWorkloadStore` seam's `WorkloadRow` (it has strictly more columns,
@@ -27,6 +29,22 @@ describe('managed-storage schema', () => {
       'error',
       'deleting',
     ]);
+  });
+
+  it('defines the managed storage engine enum with MinIO kept as the legacy default', () => {
+    expect(managedStorageEngineEnum.enumValues).toEqual(['minio', 'seaweedfs']);
+    expect(managedStorageClusters.engine.notNull).toBe(true);
+    expect(managedStorageClusters.engine.default).toBe('minio');
+  });
+
+  it('appends seaweedfs to the object storage provider enum', () => {
+    expect(objectStorageProviderEnum.enumValues.at(-1)).toBe('seaweedfs');
+    expect(objectStorageProviderEnum.enumValues).toContain('minio');
+  });
+
+  it('keeps the SeaweedFS IAM principal nullable on keys and bindings', () => {
+    expect(managedStorageAccessKeys.principal.notNull).toBe(false);
+    expect(managedStorageBindings.principal.notNull).toBe(false);
   });
 
   it('defines the object storage connection origin enum', () => {

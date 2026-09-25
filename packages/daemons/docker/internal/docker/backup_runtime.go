@@ -845,7 +845,8 @@ func (r *backupRuntime) startRedisStage(ctx context.Context, runID string, paylo
 	if !strings.Contains(payload.RedisStageImage, "@sha256:") {
 		return nil, errors.New("immutable Redis staging image is required for external Redis restore")
 	}
-	if err := r.plugin.client.EnsureImage(ctx, payload.RedisStageImage, ""); err != nil {
+	stageImage, err := r.plugin.client.EnsureThirdPartyImage(ctx, payload.RedisStageImage)
+	if err != nil {
 		return nil, err
 	}
 	stageMemory, redisMaxMemory, err := redisStageMemoryLimits(payload.Limits.MemoryMB)
@@ -898,7 +899,7 @@ func (r *backupRuntime) startRedisStage(ctx context.Context, runID string, paylo
 	}
 	command := "until [ -f /work/redis-stage/dump.rdb ]; do sleep 0.1; done; exec redis-server /work/redis-stage/redis.conf"
 	created, err := r.plugin.client.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config: &container.Config{Image: payload.RedisStageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{"wiolett.gateway.managed": "backup-redis-stage", "wiolett.gateway.backup-run-id": runID}},
+		Config: &container.Config{Image: stageImage, User: "65532:65532", Cmd: []string{"sh", "-ec", command}, Labels: map[string]string{"wiolett.gateway.managed": "backup-redis-stage", "wiolett.gateway.backup-run-id": runID}},
 		HostConfig: func() *container.HostConfig {
 			hostConfig.Mounts = []mount.Mount{{Type: mount.TypeBind, Source: workdir, Target: "/work"}}
 			return hostConfig

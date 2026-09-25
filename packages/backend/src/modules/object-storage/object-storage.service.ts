@@ -148,7 +148,7 @@ export class ObjectStorageService {
       id: string;
       name: string;
       slug: string;
-      provider: 'aws' | 'cloudflare_r2' | 'minio' | 'other' | 'ftp' | 'ftps' | 'sftp';
+      provider: 'aws' | 'cloudflare_r2' | 'minio' | 'other' | 'ftp' | 'ftps' | 'sftp' | 'seaweedfs';
       origin: 'user' | 'managed';
       description: string | null;
       tags: string[];

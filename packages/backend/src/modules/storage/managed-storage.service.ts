@@ -41,6 +41,14 @@ export interface ClusterPortFields {
   ftpPassivePortCount?: number | null;
 }
 export declare function collectClusterHostPorts(fields: ClusterPortFields): ClusterHostPorts;
+export declare function managedStorageCanonicalEndpoint(
+  row: {
+    relayEnabled: boolean;
+    tlsEnabled: boolean;
+    publishedPort: number;
+  },
+  host: string
+): string;
 export declare function managedStorageServiceAddresses(
   node: {
     serviceAddress: string | null;
@@ -78,6 +86,7 @@ export class ManagedStorageService {
       name: string;
       slug: string;
       nodeId: string;
+      engine: 'minio' | 'seaweedfs';
       version: string;
       imageRef: string;
       storageSizeBytes: number;
@@ -109,6 +118,7 @@ export class ManagedStorageService {
     name: string;
     slug: string;
     nodeId: string;
+    engine: 'minio' | 'seaweedfs';
     version: string;
     imageRef: string;
     storageSizeBytes: number;
@@ -139,6 +149,7 @@ export class ManagedStorageService {
     name: string;
     slug: string;
     nodeId: string;
+    engine: 'minio' | 'seaweedfs';
     version: string;
     imageRef: string;
     storageSizeBytes: number;
@@ -180,6 +191,12 @@ export class ManagedStorageService {
     return commercialModuleUnavailable();
   }
   async retryProvisioning(_id: string, _userId: string): Promise<unknown> {
+    return commercialModuleUnavailable();
+  }
+  async getCaCertificate(_id: string): Promise<{
+    certificatePem: string;
+    fingerprintSha256: string;
+  }> {
     return commercialModuleUnavailable();
   }
   async revealCredentials(_id: string): Promise<{

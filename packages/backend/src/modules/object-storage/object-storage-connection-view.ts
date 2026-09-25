@@ -7,6 +7,8 @@ export type ObjectStorageConnectionOrigin = 'user' | 'managed';
 export interface ObjectStorageManagedView {
   id: string;
   nodeId: string;
+  /** `minio` marks a legacy cluster: manageable, but no longer creatable. */
+  engine: 'minio' | 'seaweedfs';
   version: string;
   storageSizeBytes: number;
   runtimeConfig: { cpuCores: number; memoryMb: number; swapMb: number };
@@ -226,6 +228,8 @@ export function toObjectStorageConnectionView(
           managed: {
             id: managedCluster.id,
             nodeId: managedCluster.nodeId,
+            // Rows written before the engine column existed are MinIO clusters.
+            engine: managedCluster.engine === 'seaweedfs' ? 'seaweedfs' : 'minio',
             version: managedCluster.version,
             storageSizeBytes: Number(managedCluster.storageSizeBytes),
             runtimeConfig: deriveManagedRuntimeConfig(managedCluster.runtimeConfig),

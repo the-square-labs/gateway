@@ -2,6 +2,7 @@ import { z } from '@hono/zod-openapi';
 import {
   appRoute,
   createdJson,
+  dataResponseSchema,
   IdParamSchema,
   jsonBody,
   okJson,
@@ -92,6 +93,26 @@ export const restartManagedStorageRoute = appRoute({
   summary: 'Restart a managed object storage container',
   request: { params: IdParamSchema },
   responses: okJson(UnknownDataResponseSchema),
+});
+
+/** Public certificate material: the Storage CA an S3 client of a TLS cluster must trust. */
+export const ManagedStorageCaCertificateSchema = z.object({
+  certificatePem: z.string().openapi({ description: 'PEM-encoded Storage CA certificate' }),
+  fingerprintSha256: z.string().openapi({
+    description: 'SHA-256 fingerprint of the CA certificate (DER), as upper-case hex pairs joined by colons',
+    example: 'AB:12:CD:34:EF:56:78:90:AB:12:CD:34:EF:56:78:90:AB:12:CD:34:EF:56:78:90:AB:12:CD:34:EF:56:78:90',
+  }),
+});
+
+export const getManagedStorageCaCertificateRoute = appRoute({
+  method: 'get',
+  path: '/{id}/ca-certificate',
+  tags: [TAG],
+  summary: 'Get the Storage CA certificate that TLS clients of a managed object storage cluster must trust',
+  description:
+    'Returns the public certificate of the Storage CA that issued the cluster TLS certificate. Requires the same view permission as reading the cluster. Refused with 409 MANAGED_STORAGE_TLS_DISABLED when the cluster does not serve TLS.',
+  request: { params: IdParamSchema },
+  responses: okJson(dataResponseSchema(ManagedStorageCaCertificateSchema)),
 });
 
 export const revealManagedStorageCredentialsRoute = appRoute({

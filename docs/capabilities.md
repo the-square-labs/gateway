@@ -212,13 +212,13 @@ Credential reveal and query execution are intentionally separate permissions. Us
 
 ## Storage
 
-Gateway supports external storage connections and managed MinIO on Storage nodes. Managed storage is private by default; workload links use a private connector with bucket-scoped credentials, and public S3, FTP, or SFTP listeners require explicit publication.
+Gateway supports external storage connections and managed SeaweedFS object storage on Storage nodes. Managed storage is single-node and private by default; workload links use a private connector with bucket-scoped credentials, and a public S3 listener requires explicit publication. Existing managed MinIO clusters keep running as a legacy engine; new clusters use SeaweedFS.
 
 Supported connection types:
 
 - S3-compatible object storage.
 - Cloudflare R2.
-- MinIO.
+- MinIO and other S3-compatible servers you operate.
 - FTP and FTPS.
 - SFTP.
 

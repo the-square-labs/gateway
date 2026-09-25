@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"regexp"
 	"sort"
@@ -21,11 +20,10 @@ import (
 )
 
 const (
-	composeCapability                 = "docker_compose_v1"
-	composeOperationCacheLimit        = 256
-	composeSidecarInitializationLimit = 5 * time.Second
-	composeSidecarPullLimit           = 5 * time.Minute
-	composeErrorDetailLimit           = 4 * 1024
+	composeCapability          = "docker_compose_v1"
+	composeOperationCacheLimit = 256
+	composeSidecarPullLimit    = 5 * time.Minute
+	composeErrorDetailLimit    = 4 * 1024
 )
 
 var (
@@ -92,28 +90,16 @@ func newComposeExecutor(cfg *config.Config, dockerClient *Client, logger *slog.L
 	if cfg.Docker.Compose.SidecarImage == "" {
 		return nil, errors.New("compose sidecar image is not configured")
 	}
-	availabilityCtx, cancel := context.WithTimeout(context.Background(), composeSidecarInitializationLimit)
-	_, inspectErr := dockerClient.cli.ImageInspect(availabilityCtx, cfg.Docker.Compose.SidecarImage)
-	cancel()
-	if inspectErr != nil {
-		pullCtx, pullCancel := context.WithTimeout(context.Background(), composeSidecarPullLimit)
-		stream, pullErr := dockerClient.cli.ImagePull(pullCtx, cfg.Docker.Compose.SidecarImage, client.ImagePullOptions{})
-		if pullErr == nil {
-			_, pullErr = io.Copy(io.Discard, stream)
-			_ = stream.Close()
-		}
-		pullCancel()
-		if pullErr != nil {
-			return nil, errors.New("pull configured compose sidecar image")
-		}
-		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), composeSidecarInitializationLimit)
-		_, verifyErr := dockerClient.cli.ImageInspect(verifyCtx, cfg.Docker.Compose.SidecarImage)
-		verifyCancel()
-		if verifyErr != nil {
-			return nil, errors.New("configured compose sidecar image is unavailable after pull")
-		}
+	// The default sidecar is allow-listed for the GHCR mirror; an operator-set
+	// image is pulled exactly as configured. The sidecar runs from whichever
+	// reference is actually present so it never re-pulls under the other name.
+	pullCtx, pullCancel := context.WithTimeout(context.Background(), composeSidecarPullLimit)
+	sidecarImage, pullErr := dockerClient.EnsureThirdPartyImage(pullCtx, cfg.Docker.Compose.SidecarImage)
+	pullCancel()
+	if pullErr != nil {
+		return nil, fmt.Errorf("pull configured compose sidecar image: %w", pullErr)
 	}
-	sidecar, err := newDockerComposeSidecar(dockerClient, cfg.Docker.Socket, cfg.Docker.Compose.SidecarImage)
+	sidecar, err := newDockerComposeSidecar(dockerClient, cfg.Docker.Socket, sidecarImage)
 	if err != nil {
 		return nil, err
 	}

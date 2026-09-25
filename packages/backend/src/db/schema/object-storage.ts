@@ -14,12 +14,14 @@ import {
 import { objectStorageFolders } from './object-storage-folders.js';
 import { users } from './users.js';
 
-// `aws`…`other` address S3-compatible object stores; `ftp`/`ftps`/`sftp` address
-// file-protocol servers, which have no buckets, regions, or access keys. Both
-// families share this table because a connection is the same thing to the rest
-// of Gateway — a named, credentialed, health-checked place to read and write
-// blobs. `isFileProtocolProvider` in object-storage-protocol.ts is the single
-// place that decides which family a provider belongs to.
+// `aws`…`other` and `seaweedfs` address S3-compatible object stores;
+// `ftp`/`ftps`/`sftp` address file-protocol servers, which have no buckets,
+// regions, or access keys. Both families share this table because a connection
+// is the same thing to the rest of Gateway — a named, credentialed,
+// health-checked place to read and write blobs. `isFileProtocolProvider` in
+// object-storage-protocol.ts is the single place that decides which family a
+// provider belongs to. `seaweedfs` (what new managed clusters register as) is
+// appended last so its migration is a plain `ADD VALUE`.
 export const objectStorageProviderEnum = pgEnum('object_storage_provider', [
   'aws',
   'cloudflare_r2',
@@ -28,6 +30,7 @@ export const objectStorageProviderEnum = pgEnum('object_storage_provider', [
   'ftp',
   'ftps',
   'sftp',
+  'seaweedfs',
 ]);
 export const objectStorageHealthStatusEnum = pgEnum('object_storage_health_status', [
   'online',
