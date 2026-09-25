@@ -459,6 +459,7 @@ export abstract class ProxyServiceCore {
     return this.requireDockerUpstreams().resolve(input, {
       actorScopes: normalized.actorScopes,
       requireAvailable: true,
+      refreshOnMiss: true,
     });
   }
 
@@ -556,6 +557,7 @@ export abstract class ProxyServiceCore {
     const resolved = await this.requireDockerUpstreams().resolve(reference, {
       actorScopes: normalized.actorScopes,
       requireAvailable: true,
+      refreshOnMiss: true,
     });
     // Create-time Docker resolution uses loopback placeholders, but an update
     // must retain the real legacy endpoint until Secure Link cutover commits.

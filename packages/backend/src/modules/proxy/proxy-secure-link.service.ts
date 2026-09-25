@@ -1853,7 +1853,7 @@ export class ProxySecureLinkService {
         dockerContainerPort: input.dockerContainerPort,
         dockerProtocol: 'tcp',
       },
-      { actorScopes }
+      { actorScopes, refreshOnMiss: true }
     );
   }
 
@@ -1926,7 +1926,7 @@ export class ProxySecureLinkService {
             dockerContainerPort: input.dockerContainerPort!,
             dockerProtocol: 'tcp',
           },
-          { actorScopes, requireAvailable: true }
+          { actorScopes, requireAvailable: true, refreshOnMiss: true }
         );
         return {
           nodeId: resolved.dockerNodeId!,

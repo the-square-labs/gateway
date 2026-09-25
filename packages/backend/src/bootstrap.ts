@@ -1300,7 +1300,8 @@ export async function initializeContainer(): Promise<void> {
     db,
     dockerSnapshotService,
     nodeRegistry,
-    dockerAccessResourceService
+    dockerAccessResourceService,
+    dockerSnapshotReconciler
   );
   container.registerInstance(ProxyDockerUpstreamService, proxyDockerUpstreamService);
   const proxySecureLinkService = relayPolicyService

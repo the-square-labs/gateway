@@ -353,4 +353,101 @@ describe('ProxyDockerUpstreamService', () => {
       )
     ).rejects.toMatchObject({ code: 'FORBIDDEN', statusCode: 403 });
   });
+
+  describe('when the container snapshot lags behind the node', () => {
+    const dockerNode = () => [{ id: 'node-1', type: 'docker', status: 'online', serviceAddress: null }];
+    const reference = {
+      upstreamKind: 'docker_container' as const,
+      dockerNodeId: 'node-1',
+      dockerContainerName: 'api',
+      dockerContainerPort: 80,
+      dockerProtocol: 'tcp' as const,
+    };
+    const options = { actorScopes: ['docker:containers:view:node-1'], refreshOnMiss: true };
+    const apiContainer = { id: 'container-1', name: 'api', ports: [] };
+
+    it('asks the node once for a container created a moment ago', async () => {
+      const listed: unknown[] = [];
+      const refresher = {
+        refreshNow: vi.fn(async () => {
+          listed.push(apiContainer);
+        }),
+      };
+      const service = new ProxyDockerUpstreamService(
+        queuedDb([dockerNode(), dockerNode()]) as never,
+        snapshots(listed) as never,
+        connectedRegistry as never,
+        undefined,
+        refresher
+      );
+
+      await expect(service.resolve(reference, options)).resolves.toMatchObject({ dockerContainerName: 'api' });
+      expect(refresher.refreshNow).toHaveBeenCalledTimes(1);
+      expect(refresher.refreshNow).toHaveBeenCalledWith('node-1', 'containers');
+    });
+
+    it('names the container when the node really does not have it', async () => {
+      const refresher = { refreshNow: vi.fn(async () => undefined) };
+      const service = new ProxyDockerUpstreamService(
+        queuedDb([dockerNode(), dockerNode()]) as never,
+        snapshots([]) as never,
+        connectedRegistry as never,
+        undefined,
+        refresher
+      );
+
+      await expect(service.resolve(reference, options)).rejects.toMatchObject({
+        statusCode: 404,
+        code: 'DOCKER_CONTAINER_NOT_FOUND',
+        message: 'Container "api" was not found on this Docker node',
+      });
+      expect(refresher.refreshNow).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports an offline node instead of a missing container', async () => {
+      const refresher = { refreshNow: vi.fn(async () => undefined) };
+      const service = new ProxyDockerUpstreamService(
+        queuedDb([dockerNode()]) as never,
+        snapshots([]) as never,
+        { getNode: vi.fn(() => undefined) } as never,
+        undefined,
+        refresher
+      );
+
+      await expect(service.resolve(reference, options)).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DOCKER_TARGET_UNAVAILABLE',
+      });
+      expect(refresher.refreshNow).not.toHaveBeenCalled();
+    });
+
+    it('reports the node as unavailable when it does not answer the refresh', async () => {
+      const service = new ProxyDockerUpstreamService(
+        queuedDb([dockerNode()]) as never,
+        snapshots([]) as never,
+        connectedRegistry as never,
+        undefined,
+        { refreshNow: vi.fn(async () => Promise.reject(new Error('timeout'))) }
+      );
+
+      await expect(service.resolve(reference, options)).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DOCKER_TARGET_UNAVAILABLE',
+      });
+    });
+
+    it('does not ask the node from background reconciliation', async () => {
+      const refresher = { refreshNow: vi.fn(async () => undefined) };
+      const service = new ProxyDockerUpstreamService(
+        queuedDb([dockerNode()]) as never,
+        snapshots([]) as never,
+        connectedRegistry as never,
+        undefined,
+        refresher
+      );
+
+      await expect(service.resolve(reference, { allowPortRebind: true })).rejects.toMatchObject({ statusCode: 404 });
+      expect(refresher.refreshNow).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -248,7 +248,7 @@ export class AdditionalRouteService extends AdditionalRouteServiceRuntime {
           dockerHostPort: target.dockerHostPort,
           dockerProtocol: target.dockerProtocol,
         },
-        { actorScopes, requireAvailable: true }
+        { actorScopes, requireAvailable: true, refreshOnMiss: true }
       );
       return;
     }

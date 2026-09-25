@@ -16,6 +16,7 @@ import {
 } from '@/modules/docker/docker-access-resource.service.js';
 import { DOCKER_DEPLOYMENT_MANAGED_LABEL } from '@/modules/docker/docker-deployment-labels.js';
 import type { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
+import type { DockerSnapshotReconciler } from '@/modules/docker/docker-snapshot-reconciler.service.js';
 import type { NodeRegistryService } from '@/services/node-registry.service.js';
 
 export type ProxyUpstreamKind = 'manual' | 'docker_container' | 'docker_deployment' | 'managed_storage' | 'pages';
@@ -51,6 +52,8 @@ interface ResolveOptions {
   actorScopes?: string[];
   requireAvailable?: boolean;
   allowPortRebind?: boolean;
+  /** Ask the node for a fresh container list once before calling the target missing (interactive edits only). */
+  refreshOnMiss?: boolean;
 }
 
 interface SnapshotPort {
@@ -132,12 +135,21 @@ export function clearDockerUpstreamFields() {
   } as const;
 }
 
+function targetUnavailable() {
+  return new AppError(
+    409,
+    'DOCKER_TARGET_UNAVAILABLE',
+    'The Docker node is offline or has not reported its containers yet. Try again once it is online.'
+  );
+}
+
 export class ProxyDockerUpstreamService {
   constructor(
     private readonly db: DrizzleClient,
     private readonly snapshots: DockerSnapshotService,
     private readonly registry: NodeRegistryService,
-    private readonly accessResources?: DockerAccessResourceService
+    private readonly accessResources?: DockerAccessResourceService,
+    private readonly containerRefresher?: Pick<DockerSnapshotReconciler, 'refreshNow'>
   ) {}
 
   async resolve(reference: DockerUpstreamReference, options: ResolveOptions = {}): Promise<ResolvedDockerUpstream> {
@@ -193,6 +205,15 @@ export class ProxyDockerUpstreamService {
     return node;
   }
 
+  /** Asks the node for a fresh container list when the caller allows it. */
+  private async refreshContainers(nodeId: string, options: ResolveOptions): Promise<'fresh' | 'failed' | 'skipped'> {
+    if (!options.refreshOnMiss || !this.containerRefresher || !this.registry.getNode(nodeId)) return 'skipped';
+    return this.containerRefresher.refreshNow(nodeId, 'containers').then(
+      () => 'fresh' as const,
+      () => 'failed' as const
+    );
+  }
+
   private choosePort(reference: DockerUpstreamReference, ports: SnapshotPort[]): number {
     const containerPort = reference.dockerContainerPort;
     const protocol = reference.dockerProtocol ?? 'tcp';
@@ -218,7 +239,10 @@ export class ProxyDockerUpstreamService {
     await this.getDockerNode(nodeId, options);
     const snapshot = await this.snapshots.getList<Record<string, unknown>[]>(nodeId, 'containers');
     if (options.requireAvailable && (snapshot.revision === 0 || snapshot.refreshStatus === 'error')) {
-      throw new AppError(409, 'DOCKER_TARGET_UNAVAILABLE', 'Docker container snapshot is unavailable');
+      if ((await this.refreshContainers(nodeId, options)) === 'fresh') {
+        return this.resolveContainer(reference, { ...options, refreshOnMiss: false });
+      }
+      throw targetUnavailable();
     }
     let containerName = reference.dockerContainerName?.replace(/^\/+/, '') ?? '';
     let container: Record<string, unknown> | undefined;
@@ -302,7 +326,23 @@ export class ProxyDockerUpstreamService {
         : undefined;
     }
     if (!container || isDeploymentInternal(container)) {
-      throw new AppError(404, 'DOCKER_CONTAINER_NOT_FOUND', 'Docker container snapshot not found');
+      // The snapshot lags behind the node: a container created a moment ago, or a node that
+      // has not reported yet. An interactive edit asks the node once before giving up.
+      const refresh = await this.refreshContainers(nodeId, options);
+      if (refresh === 'fresh') return this.resolveContainer(reference, { ...options, refreshOnMiss: false });
+      const reported =
+        refresh !== 'failed' &&
+        Boolean(this.registry.getNode(nodeId)) &&
+        snapshot.revision > 0 &&
+        snapshot.refreshStatus !== 'error';
+      if (!reported) throw targetUnavailable();
+      throw new AppError(
+        404,
+        'DOCKER_CONTAINER_NOT_FOUND',
+        composeTarget
+          ? `Compose service "${reference.dockerComposeServiceName}" has no container on this Docker node`
+          : `Container "${containerName}" was not found on this Docker node`
+      );
     }
     if (!reference.dockerComposeProjectId) {
       const runtimeId = String(container.id ?? container.Id ?? '');
