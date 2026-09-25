@@ -99,6 +99,10 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         tag: { type: 'string', description: 'Mutable Tag name for move/delete.' },
         page: { type: 'number' },
         limit: { type: 'number' },
+        includeDeleted: {
+          type: 'boolean',
+          description: 'deployment_list only: also list deployments whose files retention already removed.',
+        },
         search: { type: 'string' },
         folderId: { type: 'string' },
         name: { type: 'string' },

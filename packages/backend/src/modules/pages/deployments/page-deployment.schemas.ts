@@ -25,6 +25,11 @@ export const CreatePageDeploymentSchema = z.object({
 export const PageDeploymentListQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
+  /** Deployments whose files retention already removed; they can no longer be previewed, published or restored. */
+  includeDeleted: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .optional()
+    .transform((value) => value === true || value === 'true'),
 });
 
 export type CreatePageDeploymentInput = z.infer<typeof CreatePageDeploymentSchema>;

@@ -43,7 +43,7 @@ describe('AI tool registry characterization', () => {
 
     expect(summary).toEqual({
       count: 257,
-      digest: '51b0f48db850ad7a62b8cbb053f123aa17f18b3ae87a48bef1948501bb091140',
+      digest: '467ff31be8d4cb471db3d886c904df91cfd1ff6233d64c336ffb5d293fab26cd',
       categoryCounts: {
         Discovery: 6,
         Artifact: 2,
