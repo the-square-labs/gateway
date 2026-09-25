@@ -8,6 +8,7 @@ import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { DEFAULT_SYSTEM_CONFIG, useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
+import { waitForReveal } from "@/test/reveal";
 import { Profile } from "./Profile";
 
 vi.mock("@simplewebauthn/browser", () => ({
@@ -247,6 +248,7 @@ describe("Profile", () => {
     expect(await screen.findByText("No active browser sessions")).toBeInTheDocument();
     expect(screen.queryByText("Inference usage panel")).not.toBeInTheDocument();
 
+    await waitForReveal();
     await user.click(screen.getByRole("tab", { name: "Preferences" }));
     expect(screen.getByTestId("location")).toHaveTextContent("/profile");
   });
@@ -331,6 +333,7 @@ describe("Profile", () => {
 
     // A raw or one-off button cannot satisfy this contract: data-button is
     // emitted only by the shared Button primitive.
+    await waitForReveal();
     const signOutOtherSessions = screen.getByRole("button", { name: "Sign out other sessions" });
     expect(signOutOtherSessions).toHaveAttribute("data-button");
     expect(signOutOtherSessions).toHaveClass("h-9", "px-4");

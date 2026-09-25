@@ -1,14 +1,11 @@
-import { useContext, useLayoutEffect } from "react";
-import { InitialPageLoadContext } from "@/components/common/PageTransition";
+import { useContentLoading } from "@/components/common/reveal-gate";
 
+/**
+ * Reports a load to the enclosing page, tab or dialog while mounted. Prefer
+ * `useContentLoading(isLoading)` in new code.
+ */
 function Skeleton(_props: React.HTMLAttributes<HTMLDivElement>) {
-  const registerInitialPageLoad = useContext(InitialPageLoadContext);
-
-  useLayoutEffect(() => {
-    if (!registerInitialPageLoad) return;
-    return registerInitialPageLoad();
-  }, [registerInitialPageLoad]);
-
+  useContentLoading(true);
   return null;
 }
 

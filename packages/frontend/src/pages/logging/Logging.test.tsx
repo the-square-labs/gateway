@@ -8,6 +8,7 @@ import { useResourceFolderStore } from "@/stores/resource-folders";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { LoggingEnvironment, LoggingSchema } from "@/types";
 import { LoggingEnvironmentDialog } from "./LoggingEnvironmentDialog";
 import { LoggingExplorer } from "./LoggingExplorer";
@@ -258,6 +259,7 @@ describe("Logging UI", () => {
 
     await screen.findByText("Schemas");
     expect(screen.queryByRole("tab", { name: "Settings" })).not.toBeInTheDocument();
+    await waitForReveal();
     fireEvent.click(screen.getAllByRole("button", { name: "Create Schema" })[0]!);
     expect(screen.getByPlaceholderText("Audit Events")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Optional description")).toBeInTheDocument();

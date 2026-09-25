@@ -6,6 +6,7 @@ import { useAuthStore } from "@/stores/auth";
 import { DEFAULT_GATEWAY_FEATURES, useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { AlertRule, SiemDelivery, SiemDestination } from "@/types";
 
 vi.mock("@/hooks/use-realtime", () => ({
@@ -132,6 +133,7 @@ describe("Notifications page", () => {
     await waitFor(() => {
       expect(screen.getByText("Security Operations")).toBeInTheDocument();
     });
+    await waitForReveal();
     expect(screen.getByRole("tab", { name: "SIEM" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "SIEM Delivery Log" })).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Alerts" })).not.toBeInTheDocument();

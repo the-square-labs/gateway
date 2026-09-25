@@ -5,6 +5,7 @@ import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { makeNode, makeUser } from "@/test/fixtures";
+import { waitForReveal } from "@/test/reveal";
 import { Docker } from "./Docker";
 
 vi.mock("@/lib/docker-node-access", async (importOriginal) => ({
@@ -49,6 +50,7 @@ it("preserves the page header and tabs while checking the next tab's node access
     </MemoryRouter>
   );
   await screen.findByText(/containers list for/);
+  await waitForReveal();
   const heading = screen.getByRole("heading", { name: "Docker" });
   const tablist = screen.getByRole("tablist");
   let resolveNodes!: (nodes: (typeof node)[]) => void;
@@ -133,6 +135,7 @@ it("preserves the selected node and expanded-filter intent when switching tabs",
     </MemoryRouter>
   );
   await screen.findByText("containers list for node-1");
+  await waitForReveal();
   await userEvent.click(screen.getByRole("tab", { name: "Images" }));
   await screen.findByText("images list for node-1");
   expect(screen.getByLabelText("List URL")).toHaveTextContent(
@@ -153,6 +156,7 @@ it("never mounts an unscoped list for an unavailable deep-link node", async () =
   );
   expect(screen.queryByText(/list for/)).not.toBeInTheDocument();
   expect(useDockerStore.getState().fetchContainers).not.toHaveBeenCalled();
+  await waitForReveal();
   await userEvent.click(screen.getByRole("button", { name: "View all nodes" }));
   await waitFor(() => expect(screen.getByText("containers list for all")).toBeInTheDocument());
 });

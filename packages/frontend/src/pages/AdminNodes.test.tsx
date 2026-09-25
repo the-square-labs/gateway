@@ -10,6 +10,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { makeNode, makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import { DEFAULT_HOSTING_SETTINGS, type HostingConnector } from "@/types/hosting";
 
 vi.mock("@/hooks/use-realtime", () => ({
@@ -65,6 +66,7 @@ describe("AdminNodes", () => {
     await waitFor(() => expect(list).toHaveBeenCalled());
     expect(screen.queryByRole("tab", { name: "Providers" })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Nodes" })).not.toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getAllByRole("button", { name: /add node/i }).length).toBeGreaterThan(0);
   });
   it("reuses the integration account list in Providers and opens the selected account", async () => {
@@ -80,6 +82,7 @@ describe("AdminNodes", () => {
     expect(screen.queryByRole("button", { name: /add node/i })).not.toBeInTheDocument();
     expect(await screen.findByText("DigitalOcean")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Disconnect DO test" })).not.toBeInTheDocument();
+    await waitForReveal();
     await user.click(screen.getByRole("link", { name: "Open DO test" }));
     expect(await screen.findByText("Hosting account detail")).toBeInTheDocument();
   });

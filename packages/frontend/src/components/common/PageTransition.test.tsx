@@ -1,6 +1,6 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { StrictMode, useContext } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Skeleton } from "@/components/ui/skeleton";
 import { InitialPageReadyContext, PageTransition } from "./PageTransition";
 
@@ -54,11 +54,16 @@ describe("PageTransition", () => {
     });
   });
 
-  it("does not hide a page for later local loading states", () => {
+  it("does not hide a page for later local loading states", async () => {
     const { rerender } = render(
       <PageTransition>
         <div>Ready content</div>
       </PageTransition>
+    );
+    await waitFor(() =>
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "visible",
+      })
     );
 
     rerender(
@@ -105,7 +110,7 @@ describe("PageTransition", () => {
     );
 
     const generalTransition = document.querySelector<HTMLElement>("[data-page-transition]");
-    expect(generalTransition).toHaveStyle({ visibility: "visible" });
+    await waitFor(() => expect(generalTransition).toHaveStyle({ visibility: "visible" }));
 
     rerender(
       <PageTransition key="features">
@@ -127,6 +132,98 @@ describe("PageTransition", () => {
     await waitFor(() => {
       expect(screen.getByText("Features settings")).toBeVisible();
       expect(featuresTransition).toHaveStyle({ visibility: "visible" });
+    });
+  });
+
+  describe("loader timing", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const page = (loading: boolean) => (
+      <PageTransition>{loading ? <Skeleton /> : <div>Loaded content</div>}</PageTransition>
+    );
+
+    it("reveals fast content without a loader", async () => {
+      vi.useFakeTimers();
+      const { rerender } = render(page(true));
+      await act(() => vi.advanceTimersByTimeAsync(300));
+      rerender(page(false));
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "visible",
+      });
+    });
+
+    it("shows a loader after half a second and keeps it for at least half a second", async () => {
+      vi.useFakeTimers();
+      const { rerender } = render(page(true));
+      await act(() => vi.advanceTimersByTimeAsync(499));
+      expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+      await act(() => vi.advanceTimersByTimeAsync(2));
+      expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      rerender(page(false));
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "hidden",
+      });
+
+      await act(() => vi.advanceTimersByTimeAsync(250));
+      expect(screen.queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "visible",
+      });
+    });
+
+    it("waits for a follow-up load that starts right after the first one", async () => {
+      vi.useFakeTimers();
+      const { rerender } = render(
+        <PageTransition>
+          <Skeleton key="list" />
+        </PageTransition>
+      );
+      rerender(<PageTransition>{null}</PageTransition>);
+      await act(() => vi.advanceTimersByTimeAsync(20));
+      rerender(
+        <PageTransition>
+          <Skeleton key="details" />
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "hidden",
+      });
+      rerender(
+        <PageTransition>
+          <div>Loaded content</div>
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      expect(document.querySelector("[data-page-transition]")).toHaveStyle({
+        visibility: "visible",
+      });
+    });
+
+    it("lets the resolved page continue the loader of the route guard before it", async () => {
+      vi.useFakeTimers();
+      const { rerender } = render(
+        <PageTransition key="guard">
+          <Skeleton />
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(600));
+      expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+
+      rerender(
+        <PageTransition key="page">
+          <Skeleton />
+        </PageTransition>
+      );
+      expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
     });
   });
 });

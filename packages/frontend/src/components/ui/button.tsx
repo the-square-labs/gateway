@@ -1,5 +1,6 @@
 import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
+import { Loader2 } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
@@ -17,9 +18,13 @@ const buttonVariants = cva(
       },
       size: {
         default: "h-9 px-4 py-2",
-        sm: "h-8 px-3 text-xs",
+        // Every size keeps the same text size; smaller buttons are only lower.
+        sm: "h-8 px-3",
         lg: "h-10 px-8",
         icon: "h-9 w-9 shrink-0 aspect-square",
+        "icon-lg": "h-10 w-10 shrink-0 aspect-square",
+        "icon-sm": "h-8 w-8 shrink-0 aspect-square",
+        "icon-xs": "h-7 w-7 shrink-0 aspect-square",
       },
     },
     defaultVariants: {
@@ -33,18 +38,37 @@ export interface ButtonProps
   extends React.ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof buttonVariants> {
   asChild?: boolean;
+  /**
+   * The action this button started is running: the button is disabled and
+   * shows a spinner, so a second click cannot start it again.
+   */
+  pending?: boolean;
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant, size, asChild = false, ...props }, ref) => {
+  (
+    { className, variant, size, asChild = false, pending = false, disabled, children, ...props },
+    ref
+  ) => {
     const Comp = asChild ? Slot : "button";
     return (
       <Comp
         data-button=""
         className={cn(buttonVariants({ variant, size, className }))}
         ref={ref}
+        disabled={disabled || pending}
+        aria-busy={pending || undefined}
         {...props}
-      />
+      >
+        {asChild ? (
+          children
+        ) : (
+          <>
+            {pending ? <Loader2 className="animate-spin" aria-hidden="true" /> : null}
+            {children}
+          </>
+        )}
+      </Comp>
     );
   }
 );

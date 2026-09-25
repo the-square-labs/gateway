@@ -1,87 +1,50 @@
-import { motion, useReducedMotion } from "framer-motion";
-import {
-  createContext,
-  type ReactNode,
-  useCallback,
-  useContext,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from "react";
+import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
+import {
+  ContentLoader,
+  InitialPageLoadContext,
+  InitialPageReadyContext,
+  staggerReveal,
+  useRevealGate,
+} from "./reveal-gate";
 
-type RegisterInitialPageLoad = () => () => void;
+export { InitialPageLoadContext, InitialPageReadyContext } from "./reveal-gate";
 
-export const InitialPageLoadContext = createContext<RegisterInitialPageLoad | null>(null);
-export const InitialPageReadyContext = createContext(true);
-
+/**
+ * Page and tab panel gate: hidden while its content loads, then revealed block
+ * by block. A loader appears only when loading takes longer than half a second.
+ */
 export function PageTransition({
   children,
   className,
-  offsetY = 8,
+  offsetY = 6,
 }: {
   children: ReactNode;
   className?: string;
   offsetY?: number;
 }) {
-  const prefersReducedMotion = useReducedMotion();
-  const registerParentInitialLoad = useContext(InitialPageLoadContext);
-  const [pendingInitialLoads, setPendingInitialLoads] = useState(0);
-  const [initialLoadCollectionComplete, setInitialLoadCollectionComplete] = useState(false);
-  const acceptsInitialLoads = useRef(true);
-
-  const registerInitialLoad = useCallback<RegisterInitialPageLoad>(() => {
-    if (!acceptsInitialLoads.current) return () => undefined;
-    setPendingInitialLoads((current) => current + 1);
-    let registered = true;
-    return () => {
-      if (!registered) return;
-      registered = false;
-      setPendingInitialLoads((current) => Math.max(0, current - 1));
-    };
-  }, []);
+  const { phase, revealed, register, animateReveal } = useRevealGate();
+  const rootRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
-    acceptsInitialLoads.current = false;
-    setInitialLoadCollectionComplete(true);
-    return () => {
-      // React StrictMode replays layout effects in development. Reopen the
-      // registration window so child Skeleton effects can register again on
-      // the replay instead of leaving the page visible with partial content.
-      acceptsInitialLoads.current = true;
-    };
-  }, []);
-
-  const waitingForInitialData = !initialLoadCollectionComplete || pendingInitialLoads > 0;
-
-  // Nested tab/list transitions must hold the initial page reveal too. Later
-  // tab changes cannot hide an already settled parent registration window.
-  useLayoutEffect(() => {
-    if (waitingForInitialData) return registerParentInitialLoad?.();
-  }, [registerParentInitialLoad, waitingForInitialData]);
+    if (!revealed || !animateReveal || !rootRef.current) return;
+    staggerReveal(rootRef.current, offsetY);
+  }, [revealed, animateReveal, offsetY]);
 
   return (
-    <InitialPageLoadContext.Provider value={registerInitialLoad}>
-      <InitialPageReadyContext.Provider value={!waitingForInitialData}>
-        <motion.div
-          initial={{ opacity: 0, y: prefersReducedMotion ? 0 : offsetY }}
-          animate={
-            waitingForInitialData
-              ? { opacity: 0, y: prefersReducedMotion ? 0 : offsetY }
-              : { opacity: 1, y: 0 }
-          }
-          transition={
-            waitingForInitialData || prefersReducedMotion
-              ? { duration: 0 }
-              : { duration: 0.2, ease: [0.25, 0.1, 0.25, 1] }
-          }
-          className={cn("h-full", className)}
-          style={{ visibility: waitingForInitialData ? "hidden" : "visible" }}
-          aria-busy={waitingForInitialData || undefined}
-          data-page-transition
+    <InitialPageLoadContext.Provider value={register}>
+      <InitialPageReadyContext.Provider value={revealed}>
+        <div
+          ref={rootRef}
+          className={cn("relative h-full", className)}
+          style={{ visibility: revealed ? "visible" : "hidden" }}
+          aria-busy={revealed ? undefined : true}
+          data-page-transition=""
+          data-reveal-phase={phase}
         >
           {children}
-        </motion.div>
+          {phase === "loading" ? <ContentLoader /> : null}
+        </div>
       </InitialPageReadyContext.Provider>
     </InitialPageLoadContext.Provider>
   );

@@ -5,6 +5,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { StatusPageConfig, StatusPageIncident, StatusPageServiceItem } from "@/types";
 
 vi.mock("@/hooks/use-realtime", () => ({
@@ -215,6 +216,7 @@ describe("StatusPage", () => {
 
     expect(await screen.findByText("Core Infrastructure")).toBeInTheDocument();
     expect(screen.queryByText("PERSONAL")).not.toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByRole("button", { name: "Reorder Core Infrastructure" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Open Gateway API editor" }));

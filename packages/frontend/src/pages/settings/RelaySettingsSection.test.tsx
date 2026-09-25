@@ -7,6 +7,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { buttonVariants } from "@/components/ui/button";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { waitForReveal } from "@/test/reveal";
 import type { AuthProvisioningSettings, DashboardRelaySnapshot } from "@/types";
 import { RelaySettingsSection } from "./RelaySettingsSection";
 
@@ -128,6 +129,7 @@ describe("RelaySettingsSection", () => {
     expect(
       screen.getByText("Pool candidate grant is unavailable").closest('[role="alert"]')
     ).toBeNull();
+    await waitForReveal();
     expect(screen.getByRole("button", { name: "Rebalance" })).toBeDisabled();
   });
 
@@ -347,6 +349,7 @@ describe("RelaySettingsSection", () => {
     expect(screen.getByText("0/1 ready")).toBeInTheDocument();
     expect(screen.getByText("1 fault domain")).toBeInTheDocument();
     expect(screen.getByText("Update: verifying")).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByRole("button", { name: "Force disconnect" }).className).toBe(
       buttonVariants({ variant: "destructive" })
     );
@@ -591,6 +594,7 @@ describe("RelaySettingsSection", () => {
     expect(
       await screen.findByText(/trusts only policy signing keys Gateway can no longer sign with/)
     ).toHaveAttribute("role", "alert");
+    await waitForReveal();
     await user.click(screen.getByRole("button", { name: "Re-enroll" }));
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Re-enroll relay-eu-2?" })
@@ -702,6 +706,7 @@ describe("RelaySettingsSection", () => {
       "alert"
     );
     // An expired certificate can also be repaired by re-enrolling the relay.
+    await waitForReveal();
     expect(screen.getByRole("button", { name: "Re-enroll" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Renew certificate" }));
     expect(renew).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111");
