@@ -551,6 +551,31 @@ env_value() {
   sed -n "s/^${key}=//p" "$env_file" | tail -n1
 }
 
+# Host Docker logging defaults. Gateway adds bounded json-file logs to its
+# Compose services only when the daemon default is json-file and daemon.json
+# sets no default log-opts; any other operator choice wins.
+DOCKER_LOG_DRIVER=""
+DOCKER_LOG_OPTS=""
+detect_docker_log_defaults() {
+  local config="${GATEWAY_DOCKER_DAEMON_CONFIG:-/etc/docker/daemon.json}" compact
+  DOCKER_LOG_DRIVER="$("${DOCKER[@]}" info --format '{{.LoggingDriver}}' 2>/dev/null | tr -d '[:space:]' || true)"
+  DOCKER_LOG_OPTS=""
+  [[ -n "$DOCKER_LOG_DRIVER" ]] || return 0
+  if [[ ! -e "$config" ]]; then
+    DOCKER_LOG_OPTS="none"
+  elif compact="$(tr -d ' \t\r\n' <"$config" 2>/dev/null)"; then
+    if [[ "$compact" == *'"log-opts":{"'* ]]; then
+      DOCKER_LOG_OPTS="set"
+    else
+      DOCKER_LOG_OPTS="none"
+    fi
+  fi
+}
+
+docker_bounded_logging_allowed() {
+  [[ "$DOCKER_LOG_DRIVER" == "json-file" && "$DOCKER_LOG_OPTS" == "none" ]]
+}
+
 version_is_newer() {
   local candidate="$1" current="$2"
   [[ "$candidate" != "$current" && "$(printf '%s\n%s\n' "$candidate" "$current" | sort -V | tail -n1)" == "$candidate" ]]
@@ -898,6 +923,11 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   relay:
     image: ${GATEWAY_RELAY_IMAGE_REF}
@@ -922,6 +952,11 @@ services:
       timeout: 3s
       retries: 2
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   registry:
     image: ${GATEWAY_REGISTRY_IMAGE_REF}
@@ -953,6 +988,11 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   postgres:
     image: postgres:16-alpine
@@ -968,6 +1008,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
   redis:
     image: redis:7-alpine
@@ -980,6 +1025,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
 
 volumes:
   gateway_data:
@@ -990,6 +1040,18 @@ volumes:
   postgres_data:
   redis_data:
 COMPOSE
+  detect_docker_log_defaults
+  if ! docker_bounded_logging_allowed; then
+    # Keep the host's own logging (another driver, daemon.json log-opts, or unknown).
+    tmp_compose="$(mktemp)"
+    awk '
+      /^    logging:$/ { skip = 1; next }
+      skip && /^      / { next }
+      { skip = 0; print }
+    ' docker-compose.yml >"$tmp_compose"
+    cat "$tmp_compose" >docker-compose.yml
+    rm -f "$tmp_compose"
+  fi
 else
   info "Migrating the existing installer-managed Compose foundation"
   run_quiet "Gateway image pull" "${DOCKER[@]}" pull "$IMAGE_REF"
@@ -1022,7 +1084,11 @@ else
   if [[ -n "${SECURE_LINK_CONNECTOR_IMAGE_REF:-}" ]]; then
     foundation_args+=(--secure-link-connector-image "$SECURE_LINK_CONNECTOR_IMAGE_REF")
   fi
-  run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm -v "$INSTALL_DIR:/host" "$IMAGE_REF" "${foundation_args[@]}"
+  detect_docker_log_defaults
+  foundation_env=()
+  [[ -n "$DOCKER_LOG_DRIVER" ]] && foundation_env+=(-e "GATEWAY_DOCKER_LOG_DRIVER=$DOCKER_LOG_DRIVER")
+  [[ -n "$DOCKER_LOG_OPTS" ]] && foundation_env+=(-e "GATEWAY_DOCKER_LOG_OPTS=$DOCKER_LOG_OPTS")
+  run_quiet "Gateway foundation migration" "${DOCKER[@]}" run --rm ${foundation_env[@]+"${foundation_env[@]}"} -v "$INSTALL_DIR:/host" "$IMAGE_REF" "${foundation_args[@]}"
 fi
 
 if [[ -z "$SOURCE_DIR" ]]; then

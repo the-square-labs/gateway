@@ -100,6 +100,7 @@ func (c *Client) createStoppedDeploymentRouter(ctx context.Context, payload depl
 	if err != nil {
 		return "", err
 	}
+	applyDefaultWorkloadLogConfig(options.HostConfig, c.defaultWorkloadLogDriver())
 	resp, err := c.cli.ContainerCreate(ctx, options)
 	if err != nil {
 		return "", fmt.Errorf("create stopped deployment router: %w", err)

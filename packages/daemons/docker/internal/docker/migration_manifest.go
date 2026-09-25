@@ -83,7 +83,7 @@ func (c *Client) CaptureMigrationManifest(ctx context.Context, id string) (docke
 	}
 	sort.Strings(manifest.EnvKeys)
 	config.Env = nil
-	if len(hostConfig.LogConfig.Config) > 0 {
+	if len(hostConfig.LogConfig.Config) > 0 && !isGatewayDefaultLogConfig(hostConfig.LogConfig) {
 		manifest.Blockers = append(manifest.Blockers, "Docker log driver options may contain secrets and require explicit migration support")
 		for key := range hostConfig.LogConfig.Config {
 			hostConfig.LogConfig.Config[key] = ""
@@ -223,8 +223,10 @@ func (c *Client) CreateContainerStopped(ctx context.Context, req createStoppedCo
 		config.Labels = map[string]string{}
 	}
 	config.Labels[migrationOwnershipLabel] = req.MigrationID
+	hostConfig := cloneHostConfig(manifest.HostConfig)
+	applyDefaultWorkloadLogConfig(hostConfig, c.defaultWorkloadLogDriver())
 	resp, err := c.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
-		Config: config, HostConfig: cloneHostConfig(manifest.HostConfig), NetworkingConfig: manifest.NetworkingConfig, Name: manifest.Name,
+		Config: config, HostConfig: hostConfig, NetworkingConfig: manifest.NetworkingConfig, Name: manifest.Name,
 	})
 	if err != nil {
 		return "", fmt.Errorf("create stopped migration container: %w", err)

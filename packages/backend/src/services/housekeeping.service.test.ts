@@ -1,3 +1,4 @@
+import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { settings } from '@/db/schema/settings.js';
 import { HousekeepingService } from './housekeeping.service.js';
@@ -123,7 +124,55 @@ describe('HousekeepingService system certificate cleanup', () => {
       dockerPrune: { enabled: true },
       orphanedCerts: { enabled: true },
       acmeCleanup: { enabled: true },
+      operationHistory: { enabled: true, retentionDays: 90 },
+      oauthCleanup: { enabled: true },
     });
+  });
+
+  it('prunes Docker tasks, old operation history and expired OAuth grants when enabled', async () => {
+    const deleted: string[] = [];
+    const db = {
+      execute: vi.fn(async (statement: any) => {
+        const text = new PgDialect().sqlToQuery(statement).sql;
+        const match = /^DELETE FROM "([a-z_]+)"/.exec(text);
+        if (!match) return { rows: [], rowCount: 0 };
+        deleted.push(match[1]!);
+        return { rowCount: 1 };
+      }),
+    };
+    const service = new HousekeepingService(db as any, {} as any, {} as any, {} as any);
+    const cleanup = vi.fn().mockResolvedValue(4);
+    service.setDockerTaskService({ cleanup });
+    vi.spyOn(service, 'getConfig').mockResolvedValue({
+      enabled: true,
+      cronExpression: '0 2 * * *',
+      nginxLogs: { enabled: false, retentionDays: 30 },
+      auditLog: { enabled: false, retentionDays: 90 },
+      dismissedAlerts: { enabled: false, retentionDays: 30 },
+      deliveryLog: { enabled: false, retentionDays: 7 },
+      structuredLogs: { enabled: false, maxRows: 100_000, maxSizeBytes: 10 * 1024 ** 3 },
+      clickHouseInternals: { enabled: false, maxSizeBytes: 512 * 1024 ** 2 },
+      orphanedAIArtifacts: { enabled: false },
+      internalRegistry: { enabled: true, retentionSuccessfulArtifacts: 1 },
+      orphanedVolumes: { enabled: false, retentionDays: 30 },
+      dockerPrune: { enabled: false },
+      orphanedCerts: { enabled: false },
+      acmeCleanup: { enabled: false },
+      operationHistory: { enabled: true, retentionDays: 60 },
+      oauthCleanup: { enabled: true },
+    });
+    vi.spyOn(service as any, 'saveRunResult').mockResolvedValue(undefined);
+
+    const result = await service.runAll('scheduled');
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(deleted).toEqual(
+      expect.arrayContaining(['docker_compose_operations', 'hosting_operations', 'oauth_clients'])
+    );
+    expect(result.categories).toEqual([
+      expect.objectContaining({ category: 'Operation History', success: true, itemsCleaned: 4 + 4 }),
+      expect.objectContaining({ category: 'Expired OAuth Grants', success: true, itemsCleaned: 4 }),
+    ]);
   });
 
   it('normalizes persisted registry history retention to one artifact per source', async () => {
@@ -210,6 +259,8 @@ describe('HousekeepingService system certificate cleanup', () => {
       dockerPrune: { enabled: false },
       orphanedCerts: { enabled: false },
       acmeCleanup: { enabled: false },
+      operationHistory: { enabled: false, retentionDays: 90 },
+      oauthCleanup: { enabled: false },
     });
     vi.spyOn(service as any, 'saveRunResult').mockResolvedValue(undefined);
 
@@ -248,6 +299,8 @@ describe('HousekeepingService system certificate cleanup', () => {
       dockerPrune: { enabled: false },
       orphanedCerts: { enabled: false },
       acmeCleanup: { enabled: false },
+      operationHistory: { enabled: false, retentionDays: 90 },
+      oauthCleanup: { enabled: false },
     });
     vi.spyOn(service as any, 'saveRunResult').mockResolvedValue(undefined);
 
@@ -280,6 +333,8 @@ describe('HousekeepingService system certificate cleanup', () => {
       dockerPrune: { enabled: false },
       orphanedCerts: { enabled: false },
       acmeCleanup: { enabled: false },
+      operationHistory: { enabled: false, retentionDays: 90 },
+      oauthCleanup: { enabled: false },
     });
     vi.spyOn(service as any, 'saveRunResult').mockResolvedValue(undefined);
 

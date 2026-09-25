@@ -59,6 +59,10 @@ func (p *DockerPlugin) OnSessionStart(ctx context.Context, writer *stream.Writer
 	p.buildEventMu.Unlock()
 	p.sessionCtx = ctx
 	p.logStreamCancel = make(map[string]context.CancelFunc)
+	if p.registryProxy != nil {
+		// Renews the registry proxy server certificate before it expires.
+		go p.registryProxy.runIdentityRenewal(ctx)
+	}
 	if p.cfg.Docker.Mode == "builder" {
 		return nil
 	}

@@ -30,8 +30,40 @@ function sanitizeCertificate<T extends { encryptedPrivateKey?: unknown; encrypte
   return rest;
 }
 
+/** A clamped leaf shorter than this is refused: the CA is effectively at its end. */
+const MIN_CLAMPED_LEAF_VALIDITY_MS = 60 * 60 * 1000;
+
+/**
+ * Resolve a leaf's notAfter against its issuing CA. A leaf that would outlive
+ * the CA is either refused (VALIDITY_EXCEEDS_CA) or, when clamping applies,
+ * shortened to end with the CA. System CAs always clamp: their leaves (node
+ * mTLS, Gateway listeners, relays, managed storage and database TLS) must keep
+ * renewing through the CA's final year instead of failing outright.
+ */
+export function resolveLeafNotAfter(
+  requested: Date,
+  ca: { notAfter: Date; isSystem?: boolean | null },
+  clamp: boolean,
+  now = new Date()
+): { notAfter: Date; clamped: boolean } {
+  if (requested.getTime() <= ca.notAfter.getTime()) return { notAfter: requested, clamped: false };
+  if (!clamp && !ca.isSystem) {
+    throw new AppError(
+      400,
+      'VALIDITY_EXCEEDS_CA',
+      `Certificate validity exceeds CA validity (the CA expires on ${ca.notAfter.toISOString()}). Shorten the validity or set clampToCaValidity to end the certificate with the CA.`
+    );
+  }
+  if (ca.notAfter.getTime() - now.getTime() < MIN_CLAMPED_LEAF_VALIDITY_MS) {
+    throw new AppError(400, 'CA_EXPIRING', 'The issuing CA expires too soon to issue a certificate');
+  }
+  return { notAfter: new Date(ca.notAfter.getTime()), clamped: true };
+}
+
 interface IssueCertificateOptions {
   allowSystem?: boolean;
+  /** End the leaf with its CA instead of failing when the requested validity outlives the CA. */
+  clampToCaValidity?: boolean;
   /**
    * Reserved for the lifecycle service. Issuing a system leaf starts as
    * report-only `unknown` until its owner swap is committed.
@@ -84,14 +116,25 @@ export class CertService {
 
     // Validate validity
     const notBefore = new Date();
-    const notAfter = new Date();
-    notAfter.setDate(notAfter.getDate() + input.validityDays);
+    const requestedNotAfter = new Date();
+    requestedNotAfter.setDate(requestedNotAfter.getDate() + input.validityDays);
 
     if (input.validityDays > ca.maxValidityDays) {
       throw new AppError(400, 'VALIDITY_EXCEEDED', `Validity exceeds CA maximum of ${ca.maxValidityDays} days`);
     }
-    if (notAfter > ca.notAfter) {
-      throw new AppError(400, 'VALIDITY_EXCEEDS_CA', 'Certificate validity exceeds CA validity');
+    const { notAfter, clamped } = resolveLeafNotAfter(
+      requestedNotAfter,
+      ca,
+      Boolean(input.clampToCaValidity || options?.clampToCaValidity),
+      notBefore
+    );
+    if (clamped) {
+      logger.warn('Certificate validity clamped to the issuing CA lifetime', {
+        caId: ca.id,
+        cn: input.commonName,
+        requestedNotAfter: requestedNotAfter.toISOString(),
+        notAfter: notAfter.toISOString(),
+      });
     }
 
     const serialNumber = this.cryptoService.generateSerialNumber();
@@ -205,7 +248,13 @@ export class CertService {
       action: 'cert.issue',
       resourceType: 'certificate',
       resourceId: certificate.id,
-      details: { type: input.type, caId: input.caId, cn: input.commonName, serverGenerated: true },
+      details: {
+        type: input.type,
+        caId: input.caId,
+        cn: input.commonName,
+        serverGenerated: true,
+        ...(clamped ? { clampedToCaValidity: true } : {}),
+      },
     });
 
     logger.info('Issued certificate', { certId: certificate.id, cn: input.commonName });
@@ -244,12 +293,19 @@ export class CertService {
     const sans = input.overrideSans || [];
 
     const notBefore = new Date();
-    const notAfter = new Date();
-    notAfter.setDate(notAfter.getDate() + input.validityDays);
+    const requestedNotAfter = new Date();
+    requestedNotAfter.setDate(requestedNotAfter.getDate() + input.validityDays);
 
     if (input.validityDays > ca.maxValidityDays) {
       throw new AppError(400, 'VALIDITY_EXCEEDED', `Validity exceeds CA maximum of ${ca.maxValidityDays} days`);
     }
+    // A leaf that outlives its CA never validates past the CA's end.
+    const { notAfter, clamped } = resolveLeafNotAfter(
+      requestedNotAfter,
+      ca,
+      Boolean(input.clampToCaValidity),
+      notBefore
+    );
 
     const serialNumber = this.cryptoService.generateSerialNumber();
     const caAlgorithm = this.caService.getAlgorithm(ca.keyAlgorithm);
@@ -340,7 +396,13 @@ export class CertService {
       action: 'cert.issue',
       resourceType: 'certificate',
       resourceId: certificate.id,
-      details: { type: input.type, caId: input.caId, cn: commonName, serverGenerated: false },
+      details: {
+        type: input.type,
+        caId: input.caId,
+        cn: commonName,
+        serverGenerated: false,
+        ...(clamped ? { clampedToCaValidity: true } : {}),
+      },
     });
 
     this.emitCert(certificate.id, certificate.caId, 'created');

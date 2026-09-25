@@ -47,6 +47,8 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
           dockerPrune: { enabled: true },
           orphanedCerts: { enabled: true },
           acmeCleanup: { enabled: true },
+          operationHistory: { enabled: true, retentionDays: 90 },
+          oauthCleanup: { enabled: true },
         }
   );
   const [hkSavedConfig, setHkSavedConfig] = useState<HousekeepingConfig | null>(() =>
@@ -563,6 +565,49 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               }
               lastResult={hkStats?.lastRun?.categories.find(
                 (c) => c.category === "Orphaned Volumes"
+              )}
+              disabled={controlsDisabled}
+            />
+            <HousekeepingCard
+              label="Operation History"
+              description="Delete finished Docker tasks, builds, compose, availability and hosting operations (the latest 10 per resource are kept)"
+              stat={
+                hkStats?.operationHistory ? hkStats.operationHistory.count.toLocaleString() : "..."
+              }
+              statDetail="eligible rows"
+              enabled={hkConfig.operationHistory.enabled}
+              onToggle={(v) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  operationHistory: { ...current.operationHistory, enabled: v },
+                }))
+              }
+              retentionDays={hkConfig.operationHistory.retentionDays}
+              onRetentionChange={(v) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  operationHistory: { ...current.operationHistory, retentionDays: v },
+                }))
+              }
+              lastResult={hkStats?.lastRun?.categories.find(
+                (c) => c.category === "Operation History"
+              )}
+              disabled={controlsDisabled}
+            />
+            <HousekeepingCard
+              label="Expired OAuth Grants"
+              description="Purge expired OAuth codes and tokens, and client registrations that never completed sign-in"
+              stat={hkStats?.oauthCleanup ? hkStats.oauthCleanup.count.toLocaleString() : "..."}
+              statDetail="eligible rows"
+              enabled={hkConfig.oauthCleanup.enabled}
+              onToggle={(v) =>
+                setHkConfig((current) => ({
+                  ...current,
+                  oauthCleanup: { enabled: v },
+                }))
+              }
+              lastResult={hkStats?.lastRun?.categories.find(
+                (c) => c.category === "Expired OAuth Grants"
               )}
               disabled={controlsDisabled}
             />

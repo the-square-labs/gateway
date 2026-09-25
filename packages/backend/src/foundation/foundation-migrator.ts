@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { parseDocument } from 'yaml';
 import type { PreparedCommercialUpdate } from '@/edition/prepare-update.js';
 
 export const DEFAULT_SANDBOX_WORKSPACE_DIR = '/var/lib/gateway/sandbox-workspaces';
@@ -12,6 +13,10 @@ const RELAY_SERVICE_END = '# gateway-managed:end relay-service';
 const REGISTRY_SERVICE_START = '# gateway-managed:start registry-service';
 const REGISTRY_SERVICE_END = '# gateway-managed:end registry-service';
 const DEFAULT_REGISTRY_IMAGE_REF = 'registry:3';
+/** Bounded container logs for installer-managed services; Docker keeps json-file logs forever otherwise. */
+export const COMPOSE_LOG_MAX_SIZE = '50m';
+export const COMPOSE_LOG_MAX_FILE = '3';
+const LOG_LIMITED_SERVICES = ['app', 'postgres', 'redis'] as const;
 
 export interface FoundationMigrationOptions {
   commercial?: PreparedCommercialUpdate;
@@ -23,6 +28,80 @@ export interface FoundationMigrationOptions {
   relayProtocolMajor?: number;
   relayImageRef?: string;
   sandboxWorkspaceDir?: string;
+  /**
+   * The host Docker daemon's default logging, as the caller (which has the
+   * Docker socket) sees it. Bounded json-file logs are added only when the
+   * default is json-file without default log-opts; see dockerLogDefaultsFromEnv.
+   */
+  dockerLogDefaults?: DockerLogDefaults;
+}
+
+/** The host Docker daemon's default log driver and whether daemon.json sets default log-opts. */
+export interface DockerLogDefaults {
+  driver: string | null;
+  logOpts: 'none' | 'set' | null;
+}
+
+/**
+ * Whether bounded json-file logging may be added to installer-managed
+ * services: true when the host default is json-file without default log-opts,
+ * false when the operator configured anything else (their logging wins), null
+ * when unknown (nothing is added, and what earlier updates added is kept).
+ */
+export function composeLoggingEligibility(defaults: DockerLogDefaults | undefined): boolean | null {
+  if (!defaults?.driver) return null;
+  if (defaults.driver !== 'json-file') return false;
+  if (defaults.logOpts === 'set') return false;
+  return defaults.logOpts === 'none' ? true : null;
+}
+
+const GATEWAY_LOG_OPTIONS: Record<string, string> = {
+  'max-size': COMPOSE_LOG_MAX_SIZE,
+  'max-file': COMPOSE_LOG_MAX_FILE,
+};
+
+/**
+ * Derive the host logging defaults from what a caller with the Docker socket
+ * sees: the daemon's default driver (Docker info) and the log configuration
+ * of the Gateway app container. Docker copies the daemon's default log-opts
+ * into a container that has no logging of its own, so the app shows them
+ * unless it already carries Gateway's own bounded logging (or the operator
+ * set another driver for it, which leaves the defaults unknown).
+ */
+export function hostDockerLogDefaults(
+  daemonDriver: string | null | undefined,
+  appLogConfig: { Type?: string; Config?: Record<string, string> | null } | null | undefined
+): DockerLogDefaults | undefined {
+  const driver = daemonDriver?.trim();
+  if (!driver) return undefined;
+  if (driver !== 'json-file') return { driver, logOpts: null };
+  if (appLogConfig?.Type !== 'json-file') return { driver, logOpts: null };
+  const options = Object.entries(appLogConfig.Config ?? {});
+  const gatewayOwn =
+    options.length === Object.keys(GATEWAY_LOG_OPTIONS).length &&
+    options.every(([key, value]) => GATEWAY_LOG_OPTIONS[key] === value);
+  return { driver, logOpts: options.length === 0 || gatewayOwn ? 'none' : 'set' };
+}
+
+/** Environment for the migrator container (see dockerLogDefaultsFromEnv). */
+export function dockerLogDefaultsEnv(defaults: DockerLogDefaults | undefined): string[] {
+  if (!defaults?.driver) return [];
+  return [
+    `GATEWAY_DOCKER_LOG_DRIVER=${defaults.driver}`,
+    ...(defaults.logOpts ? [`GATEWAY_DOCKER_LOG_OPTS=${defaults.logOpts}`] : []),
+  ];
+}
+
+/**
+ * Read the host logging defaults the update caller passes in the environment
+ * (GATEWAY_DOCKER_LOG_DRIVER, GATEWAY_DOCKER_LOG_OPTS=none|set). Environment
+ * variables, unlike new CLI flags, are ignored by older migrator images.
+ */
+export function dockerLogDefaultsFromEnv(env: NodeJS.ProcessEnv): DockerLogDefaults | undefined {
+  const driver = env.GATEWAY_DOCKER_LOG_DRIVER?.trim();
+  if (!driver) return undefined;
+  const opts = env.GATEWAY_DOCKER_LOG_OPTS?.trim();
+  return { driver, logOpts: opts === 'none' || opts === 'set' ? opts : null };
 }
 
 export interface FoundationMigrationResult {
@@ -96,7 +175,9 @@ export async function runFoundationMigrations(options: FoundationMigrationOption
   });
 
   const composeContent = await fs.readFile(composePath, 'utf8');
-  const composePatch = patchCompose(composeContent, Boolean(options.commercial));
+  const composePatch = patchCompose(composeContent, Boolean(options.commercial), {
+    boundedLogging: composeLoggingEligibility(options.dockerLogDefaults),
+  });
 
   const effectiveSandboxWorkspaceDir =
     envPatch.values.get('SANDBOX_RUNNER_WORKSPACE_DIR') ?? defaultSandboxWorkspaceDir;
@@ -189,7 +270,12 @@ function removeEnvKeys(content: string, keys: string[]): string {
     .join('\n');
 }
 
-export function patchCompose(content: string, commercialPrepared = false): string {
+export function patchCompose(
+  content: string,
+  commercialPrepared = false,
+  options: { boundedLogging?: boolean | null } = {}
+): string {
+  const boundedLogging = options.boundedLogging ?? null;
   let lines = content.replace(/\r\n/g, '\n').split('\n');
   const hadTrailingNewline = lines.at(-1) === '';
   if (hadTrailingNewline) lines = lines.slice(0, -1);
@@ -206,9 +292,77 @@ export function patchCompose(content: string, commercialPrepared = false): strin
   const healthcheckPatched = patchAppHealthcheck(runtimePatched);
   const environmentPatched = removeLegacyAppEnvironment(healthcheckPatched);
   const clickHousePatched = removeLegacyClickHouseService(environmentPatched);
-  const relayPatched = patchRelayFoundation(clickHousePatched);
-  const registryPatched = patchRegistryFoundation(relayPatched);
-  return `${registryPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+  const relayPatched = patchRelayFoundation(clickHousePatched, boundedLogging);
+  const registryPatched = patchRegistryFoundation(relayPatched, boundedLogging);
+  const loggingPatched =
+    boundedLogging === true ? keepValidYaml(registryPatched, patchServiceLogging(registryPatched)) : registryPatched;
+  return `${loggingPatched.join('\n')}${hadTrailingNewline ? '\n' : ''}`;
+}
+
+function yamlErrorCount(lines: string[]): number {
+  try {
+    return parseDocument(lines.join('\n'), { uniqueKeys: true }).errors.length;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * An optional patch must never turn a valid Compose file into an invalid one
+ * (the updater validates the result and rolls the whole update back). Keep the
+ * unpatched lines when the patch adds any YAML error, such as a duplicate key.
+ */
+function keepValidYaml(before: string[], after: string[]): string[] {
+  if (after === before) return before;
+  return yamlErrorCount(after) > yamlErrorCount(before) ? before : after;
+}
+
+function composeLoggingBlock(indent: number): string[] {
+  const pad = ' '.repeat(indent);
+  return [
+    `${pad}logging:`,
+    `${pad}  driver: json-file`,
+    `${pad}  options:`,
+    `${pad}    max-size: "${COMPOSE_LOG_MAX_SIZE}"`,
+    `${pad}    max-file: "${COMPOSE_LOG_MAX_FILE}"`,
+  ];
+}
+
+/**
+ * Service keys that mean the operator already decides the logging: an explicit
+ * `logging` in any form (block, inline map, alias), a YAML merge key that may
+ * carry one, or `extends` from another service.
+ */
+const OPERATOR_LOGGING_KEYS = ['logging', '<<', 'extends'];
+
+function hasDirectKey(lines: string[], block: { start: number; end: number; indent: number }, keys: string[]) {
+  const childIndent = firstChildIndent(lines, block);
+  if (childIndent === null) return false;
+  const pattern = new RegExp(
+    `^ {${childIndent}}(?:["']?)(?:${keys.map(escapeRegExp).join('|')})(?:["']?)\\s*:(?:\\s|$)`
+  );
+  for (let index = block.start + 1; index < block.end; index += 1) {
+    if (pattern.test(lines[index] ?? '')) return true;
+  }
+  return false;
+}
+
+/**
+ * Give installer-managed services bounded json-file logs (only when the host
+ * default is json-file without log-opts, see composeLoggingEligibility). A
+ * service where the operator already decides logging is left untouched; the
+ * relay and registry blocks carry the limit in their canonical form.
+ */
+function patchServiceLogging(lines: string[]): string[] {
+  let next = lines;
+  for (const name of LOG_LIMITED_SERVICES) {
+    const service = findServiceBlock(next, name);
+    if (!service) continue;
+    if (hasDirectKey(next, service, OPERATOR_LOGGING_KEYS)) continue;
+    const indent = firstChildIndent(next, service) ?? service.indent + 2;
+    next = [...next.slice(0, service.end), ...composeLoggingBlock(indent), ...next.slice(service.end)];
+  }
+  return next;
 }
 
 function patchCommercialCore(lines: string[]): string[] {
@@ -383,14 +537,42 @@ function removeLegacyClickHouseService(lines: string[]): string[] {
   return next;
 }
 
-function patchRelayFoundation(lines: string[]): string[] {
+/**
+ * Whether the canonical relay/registry block carries bounded logging: added
+ * when eligible, removed when the host has its own defaults, and otherwise
+ * (unknown) kept as the current block has it.
+ */
+function managedBlockLogging(
+  lines: string[],
+  serviceName: string,
+  start: string,
+  end: string,
+  boundedLogging: boolean | null
+): boolean {
+  if (boundedLogging !== null) return boundedLogging;
+  const markerStart = findLineInRange(lines, 0, lines.length, start);
+  const markerEnd = findLineInRange(lines, 0, lines.length, end);
+  const block =
+    markerStart >= 0 && markerEnd > markerStart
+      ? { start: markerStart, end: markerEnd }
+      : findServiceBlock(lines, serviceName);
+  if (!block) return false;
+  const logging = composeLoggingBlock(4);
+  const body = lines.slice(block.start, block.end);
+  return body.some((_, index) => logging.every((expected, offset) => body[index + offset] === expected));
+}
+
+function patchRelayFoundation(lines: string[], boundedLogging: boolean | null = null): string[] {
   let next = removeAppPublicGrpcPort(lines);
   next = upsertAppRelayEnvironment(next);
   next = upsertAppRelayDependency(next);
   next = upsertAppLabel(next);
   next = upsertAppRelayIdentityVolume(next);
   next = upsertAppGrpcExpose(next);
-  next = upsertRelayService(next);
+  next = upsertRelayService(
+    next,
+    managedBlockLogging(next, 'relay', RELAY_SERVICE_START, RELAY_SERVICE_END, boundedLogging)
+  );
   next = ensureTopLevelVolume(next, 'gateway_relay_identity');
   return ensureTopLevelVolume(next, 'gateway_relay_state');
 }
@@ -584,8 +766,8 @@ function upsertAppGrpcExpose(lines: string[]): string[] {
   return [...next.slice(0, refreshed.end), `${' '.repeat(indent)}- "9443"`, ...next.slice(refreshed.end)];
 }
 
-function upsertRelayService(lines: string[]): string[] {
-  const canonical = relayServiceBlock();
+function upsertRelayService(lines: string[], logging: boolean): string[] {
+  const canonical = relayServiceBlock(logging);
   const markerStart = findLineInRange(lines, 0, lines.length, RELAY_SERVICE_START);
   const markerEnd = findLineInRange(lines, 0, lines.length, RELAY_SERVICE_END);
   if (markerStart >= 0 || markerEnd >= 0) {
@@ -609,7 +791,7 @@ function upsertRelayService(lines: string[]): string[] {
   return [...lines.slice(0, services.end), '', ...canonical, ...lines.slice(services.end)];
 }
 
-function relayServiceBlock(): string[] {
+function relayServiceBlock(logging: boolean): string[] {
   return [
     `  ${RELAY_SERVICE_START}`,
     '  relay:',
@@ -635,12 +817,15 @@ function relayServiceBlock(): string[] {
     '      timeout: 3s',
     '      retries: 2',
     '      start_period: 20s',
+    ...(logging ? composeLoggingBlock(4) : []),
     `  ${RELAY_SERVICE_END}`,
   ];
 }
 
-function patchRegistryFoundation(lines: string[]): string[] {
-  const canonical = registryServiceBlock();
+function patchRegistryFoundation(lines: string[], boundedLogging: boolean | null = null): string[] {
+  const canonical = registryServiceBlock(
+    managedBlockLogging(lines, 'registry', REGISTRY_SERVICE_START, REGISTRY_SERVICE_END, boundedLogging)
+  );
   const markerStart = findLineInRange(lines, 0, lines.length, REGISTRY_SERVICE_START);
   const markerEnd = findLineInRange(lines, 0, lines.length, REGISTRY_SERVICE_END);
   let next: string[];
@@ -687,7 +872,7 @@ function upsertAppRegistryAuthVolume(lines: string[]): string[] {
   ];
 }
 
-function registryServiceBlock(): string[] {
+function registryServiceBlock(logging: boolean): string[] {
   return [
     `  ${REGISTRY_SERVICE_START}`,
     '  registry:',
@@ -720,6 +905,7 @@ function registryServiceBlock(): string[] {
     '      timeout: 5s',
     '      retries: 6',
     '      start_period: 20s',
+    ...(logging ? composeLoggingBlock(4) : []),
     `  ${REGISTRY_SERVICE_END}`,
   ];
 }

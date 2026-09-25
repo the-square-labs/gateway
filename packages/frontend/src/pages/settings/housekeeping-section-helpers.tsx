@@ -29,6 +29,10 @@ const HOUSEKEEPING_HELP: Record<string, string> = {
     "Removes expired certificate-validation tokens and temporary challenge files left after ACME issuance attempts.",
   "Docker Images":
     "Prunes old Gateway-managed images while preserving images still used by containers or required by the active release.",
+  "Operation History":
+    "Deletes finished Docker container tasks after a day, and finished builds (with their logs), compose, availability and hosting operations and source webhook deliveries after the retention period, in batches. Each resource keeps its 10 latest runs (a Compose build batch counts once) and its latest operation of each kind, and anything still referenced (a build artifact, a hosted node's origin, a snapshot) is kept.",
+  "Expired OAuth Grants":
+    "Purges expired OAuth authorization codes, access and refresh tokens. Refresh tokens are kept until they expire. A registered OAuth client is removed only if it never completed an authorization and is older than 30 days; a client that was ever granted keeps its registration.",
 };
 
 export function normalizeHousekeepingConfig(config: HousekeepingConfig): HousekeepingConfig {
@@ -42,6 +46,8 @@ export function normalizeHousekeepingConfig(config: HousekeepingConfig): Houseke
       enabled: config.clickHouseInternals?.enabled ?? false,
       maxSizeBytes: config.clickHouseInternals?.maxSizeBytes ?? 512 * 1024 ** 2,
     },
+    operationHistory: config.operationHistory ?? { enabled: true, retentionDays: 90 },
+    oauthCleanup: config.oauthCleanup ?? { enabled: true },
   };
 }
 

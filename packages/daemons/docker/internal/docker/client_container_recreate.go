@@ -482,6 +482,9 @@ func (c *Client) createContainerFromInspect(
 	if len(netNames) > 0 {
 		hostConfig.NetworkMode = container.NetworkMode(netNames[0])
 	}
+	// Containers created before the workload default carry json-file without
+	// options; give them rotation. Explicit configurations are kept.
+	applyDefaultWorkloadLogConfig(&hostConfig, c.defaultWorkloadLogDriver())
 
 	createResult, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           &createConfig,

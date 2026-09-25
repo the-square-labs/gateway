@@ -1,0 +1,151 @@
+import type { SQL } from 'drizzle-orm';
+import { PgDialect } from 'drizzle-orm/pg-core';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  cleanOperationHistory,
+  countExpiredOAuthGrants,
+  countOperationHistory,
+  OPERATION_HISTORY_KEEP_PER_OWNER,
+  purgeExpiredOAuthGrants,
+  RETENTION_DELETE_BATCH,
+} from './operation-history-retention.js';
+
+const dialect = new PgDialect();
+const now = new Date('2030-06-01T00:00:00.000Z');
+
+type Responder = (query: { sql: string; params: unknown[] }) => { rowCount?: number; rows?: unknown[] } | undefined;
+
+function executingDb(respond: Responder = () => undefined) {
+  const statements: Array<{ sql: string; params: unknown[] }> = [];
+  const db = {
+    execute: vi.fn(async (statement: SQL) => {
+      const query = dialect.sqlToQuery(statement);
+      statements.push(query);
+      return respond(query) ?? { rowCount: 0, rows: [] };
+    }),
+  };
+  return { db, statements };
+}
+
+const compact = (value: string) => value.replace(/\s+/g, ' ');
+
+describe('operation history retention', () => {
+  it('deletes each kind of finished history in batches', async () => {
+    let composeBatches = 0;
+    const { db, statements } = executingDb((query) => {
+      if (query.sql.startsWith('DELETE FROM "docker_compose_operations"')) {
+        composeBatches += 1;
+        return { rowCount: composeBatches === 1 ? RETENTION_DELETE_BATCH : 3 };
+      }
+      if (query.sql.startsWith('DELETE FROM "hosting_operations"')) return { rowCount: 2 };
+      return undefined;
+    });
+
+    const result = await cleanOperationHistory(db as never, 90, now);
+
+    expect(composeBatches).toBe(2);
+    expect(result.removed).toMatchObject({
+      'docker compose operations': RETENTION_DELETE_BATCH + 3,
+      'hosting operations': 2,
+    });
+    expect(result.total).toBe(RETENTION_DELETE_BATCH + 5);
+    const deletes = statements.filter((query) => query.sql.startsWith('DELETE FROM'));
+    for (const query of deletes.filter((statement) => !statement.sql.includes('"docker_build'))) {
+      expect(query.sql).toContain(' IN (SELECT ');
+      expect(query.params).toContain(RETENTION_DELETE_BATCH);
+    }
+    const cutoff = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    expect(deletes.find((query) => query.sql.startsWith('DELETE FROM "hosting_operations"'))!.params).toContainEqual(
+      cutoff
+    );
+  });
+
+  it('removes build log chunks in batches before the builds that own them', async () => {
+    const buildIds = ['build-1', 'build-2'];
+    let chunkBatches = 0;
+    const { db, statements } = executingDb((query) => {
+      if (query.sql.startsWith('SELECT "id" FROM "docker_builds" WHERE "batch_id" IS NULL')) {
+        return { rows: buildIds.map((id) => ({ id })) };
+      }
+      if (query.sql.startsWith('DELETE FROM "docker_build_log_chunks"')) {
+        chunkBatches += 1;
+        return { rowCount: chunkBatches === 1 ? RETENTION_DELETE_BATCH : 10 };
+      }
+      if (query.sql.startsWith('DELETE FROM "docker_builds"')) return { rowCount: 2 };
+      return undefined;
+    });
+
+    const result = await cleanOperationHistory(db as never, 30, now);
+
+    const order = statements.map((query) => query.sql.slice(0, 40));
+    const lastChunkDelete = order.lastIndexOf(order.find((line) => line.includes('docker_build_log_chunks'))!);
+    const buildDelete = order.findIndex((line) => line.startsWith('DELETE FROM "docker_builds"'));
+    expect(lastChunkDelete).toBeLessThan(buildDelete);
+    expect(chunkBatches).toBe(2);
+    expect(result.removed).toMatchObject({
+      'docker builds': 2,
+      'docker build log chunks': RETENTION_DELETE_BATCH + 10,
+    });
+    expect(result.total).toBe(2);
+  });
+
+  it('keeps what later work still depends on', async () => {
+    const { db, statements } = executingDb();
+
+    await cleanOperationHistory(db as never, 30, now);
+
+    const find = (prefix: string) => compact(statements.find((query) => query.sql.startsWith(prefix))!.sql);
+    const singleBuilds = find('SELECT "id" FROM "docker_builds"');
+    // A build that owns a live artifact would cascade into the registry-managed artifact.
+    expect(singleBuilds).toContain('NOT EXISTS (SELECT 1 FROM "docker_build_artifacts"');
+    // The latest runs are counted per build group, so a Compose batch is never split.
+    expect(singleBuilds).toContain('coalesce("batch_id", "id") AS "group_key"');
+    expect(singleBuilds).toContain(`"rn" <= ${OPERATION_HISTORY_KEEP_PER_OWNER}`);
+    const batches = find('SELECT "id" FROM "docker_build_batches"');
+    expect(batches).toContain('"build"."status" NOT IN');
+    const availability = find('DELETE FROM "docker_availability_operations"');
+    expect(availability).toContain('PARTITION BY "policy_id", "type"');
+    expect(availability).toContain('"docker_availability_placements"');
+    const hosting = find('DELETE FROM "hosting_operations"');
+    expect(hosting).toContain(`"action" NOT IN ('create', 'install')`);
+    expect(hosting).toContain('"hosting_snapshot_entities"');
+  });
+
+  it('counts eligible rows for the housekeeping stats', async () => {
+    const { db } = executingDb((query) =>
+      query.sql.startsWith('SELECT count(*)') && query.sql.includes('FROM "docker_compose_operations"')
+        ? { rows: [{ value: '4' }] }
+        : { rows: [{ value: 1 }] }
+    );
+
+    await expect(countOperationHistory(db as never, 90, now)).resolves.toBe(4 + 5);
+  });
+});
+
+describe('expired OAuth grant purge', () => {
+  it('purges expired grants but never a client that was ever granted', async () => {
+    const { db, statements } = executingDb((query) =>
+      query.sql.startsWith('DELETE FROM "oauth_access_tokens"') ? { rowCount: 7 } : undefined
+    );
+
+    const result = await purgeExpiredOAuthGrants(db as never, now);
+
+    expect(result.total).toBe(7);
+    const find = (prefix: string) => compact(statements.find((query) => query.sql.startsWith(prefix))!.sql);
+    // Refresh tokens go only once expired, so a revoked one still trips reuse detection until then.
+    expect(find('DELETE FROM "oauth_refresh_tokens"')).toContain('"expires_at" <');
+    const clients = find('DELETE FROM "oauth_clients"');
+    expect(clients).toContain('"last_grant_at" IS NULL');
+    expect(clients).toContain('NOT EXISTS (SELECT 1 FROM "oauth_refresh_tokens"');
+    expect(clients).toContain('NOT EXISTS (SELECT 1 FROM "oauth_access_tokens"');
+    expect(clients).toContain('NOT EXISTS (SELECT 1 FROM "oauth_authorization_codes"');
+    const clientParams = statements.find((query) => query.sql.startsWith('DELETE FROM "oauth_clients"'))!.params;
+    expect(clientParams).toContainEqual(new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000));
+  });
+
+  it('counts purgeable grants', async () => {
+    const { db } = executingDb(() => ({ rows: [{ value: 2 }] }));
+
+    await expect(countExpiredOAuthGrants(db as never, now)).resolves.toBe(8);
+  });
+});

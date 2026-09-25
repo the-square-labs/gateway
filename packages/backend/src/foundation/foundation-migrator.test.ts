@@ -2,7 +2,18 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { patchCompose, patchEnv, runFoundationMigrations } from './foundation-migrator.js';
+import { parseDocument } from 'yaml';
+import {
+  composeLoggingEligibility,
+  dockerLogDefaultsEnv,
+  dockerLogDefaultsFromEnv,
+  hostDockerLogDefaults,
+  patchCompose,
+  patchEnv,
+  runFoundationMigrations,
+} from './foundation-migrator.js';
+
+const BOUNDED = { boundedLogging: true };
 
 const OLD_COMPOSE = `services:
   app:
@@ -260,6 +271,134 @@ ${OLD_COMPOSE}`;
     expect(() => patchCompose(compose)).toThrow('existing registry service is not installer-managed');
   });
 
+  it('bounds container logs of installer-managed services and keeps operator logging choices', () => {
+    const patched = patchCompose(OLD_COMPOSE, false, BOUNDED);
+    const logging = [
+      '    logging:',
+      '      driver: json-file',
+      '      options:',
+      '        max-size: "50m"',
+      '        max-file: "3"',
+    ].join('\n');
+    // app, redis, and the canonical relay and registry blocks
+    expect(patched.split(logging).length - 1).toBe(4);
+    expect(patchCompose(patched, false, BOUNDED)).toBe(patched);
+
+    const custom = OLD_COMPOSE.replace(
+      '  redis:\n    image: redis:7-alpine\n',
+      '  redis:\n    image: redis:7-alpine\n    logging:\n      driver: journald\n'
+    );
+    const customPatched = patchCompose(custom, false, BOUNDED);
+    expect(customPatched).toContain('    logging:\n      driver: journald\n');
+    expect(customPatched.split(logging).length - 1).toBe(3);
+  });
+
+  it('treats any logging form, merge key or extends as the operator logging choice', () => {
+    const logging = '    logging:\n      driver: json-file\n';
+    const variants = [
+      '    logging: *default-logging\n',
+      '    logging: {driver: local}\n',
+      '    "logging":\n      driver: journald\n',
+      '    <<: *service-defaults\n',
+      '    extends:\n      service: base\n',
+    ];
+    for (const variant of variants) {
+      const compose = `x-defaults: &service-defaults\n  restart: always\nx-logging: &default-logging\n  driver: local\n${OLD_COMPOSE.replace(
+        '  redis:\n    image: redis:7-alpine\n',
+        `  redis:\n    image: redis:7-alpine\n${variant}`
+      )}`;
+      const patched = patchCompose(compose, false, BOUNDED);
+      // app plus the canonical relay and registry blocks; redis keeps the operator choice
+      expect(patched.split(logging).length - 1, variant).toBe(3);
+      expect(patched, variant).toContain(`  redis:\n    image: redis:7-alpine\n${variant}`);
+      expect(parseDocument(patched, { uniqueKeys: true }).errors, variant).toEqual([]);
+      expect(patchCompose(patched, false, BOUNDED)).toBe(patched);
+    }
+  });
+
+  it('never writes a duplicate logging key, even for a form it does not recognize', () => {
+    const compose = OLD_COMPOSE.replace(
+      '  redis:\n    image: redis:7-alpine\n',
+      '  redis:\n    image: redis:7-alpine\n    ? logging\n    : driver: local\n'
+    );
+    expect(parseDocument(compose, { uniqueKeys: true }).errors).toEqual([]);
+
+    const patched = patchCompose(compose, false, BOUNDED);
+
+    expect(parseDocument(patched, { uniqueKeys: true }).errors).toEqual([]);
+  });
+
+  it('adds no logging when the host Docker logging defaults are unknown', () => {
+    const patched = patchCompose(OLD_COMPOSE);
+
+    expect(patched).not.toContain('    logging:');
+    expect(patchCompose(patched)).toBe(patched);
+  });
+
+  it('removes its own relay and registry limits when the host keeps its own logging defaults', async () => {
+    const installer = await readFile(path.resolve(__dirname, '../../../../scripts/install.sh'), 'utf8');
+    const start = installer.indexOf("cat >docker-compose.yml <<'COMPOSE'\n");
+    const fresh = installer.slice(installer.indexOf('\n', start) + 1, installer.indexOf('\nCOMPOSE\n', start) + 1);
+
+    const hostOwned = patchCompose(fresh, false, { boundedLogging: false });
+
+    // app, postgres and redis already name logging in the file; relay and registry are rewritten.
+    expect(hostOwned.match(/^ {4}logging:$/gm)).toHaveLength(3);
+    expect(parseDocument(hostOwned, { uniqueKeys: true }).errors).toEqual([]);
+    expect(patchCompose(hostOwned, false, BOUNDED).match(/^ {4}logging:$/gm)).toHaveLength(5);
+  });
+
+  it('allows bounded logging only for a json-file default without daemon log-opts', () => {
+    expect(composeLoggingEligibility({ driver: 'json-file', logOpts: 'none' })).toBe(true);
+    expect(composeLoggingEligibility({ driver: 'json-file', logOpts: 'set' })).toBe(false);
+    expect(composeLoggingEligibility({ driver: 'journald', logOpts: null })).toBe(false);
+    expect(composeLoggingEligibility({ driver: 'json-file', logOpts: null })).toBeNull();
+    expect(composeLoggingEligibility(undefined)).toBeNull();
+  });
+
+  it('derives the host defaults from Docker info and the app container log configuration', () => {
+    expect(hostDockerLogDefaults('json-file', { Type: 'json-file', Config: {} })).toEqual({
+      driver: 'json-file',
+      logOpts: 'none',
+    });
+    // Docker copies daemon.json log-opts into a container without logging of its own.
+    expect(hostDockerLogDefaults('json-file', { Type: 'json-file', Config: { 'max-size': '10m' } })).toEqual({
+      driver: 'json-file',
+      logOpts: 'set',
+    });
+    // Gateway's own bounded logging on the app says nothing about the daemon.
+    expect(
+      hostDockerLogDefaults('json-file', { Type: 'json-file', Config: { 'max-size': '50m', 'max-file': '3' } })
+    ).toEqual({ driver: 'json-file', logOpts: 'none' });
+    expect(hostDockerLogDefaults('json-file', { Type: 'local', Config: {} })).toEqual({
+      driver: 'json-file',
+      logOpts: null,
+    });
+    expect(hostDockerLogDefaults('journald', { Type: 'journald' })).toEqual({ driver: 'journald', logOpts: null });
+    expect(hostDockerLogDefaults(undefined, { Type: 'json-file' })).toBeUndefined();
+  });
+
+  it('passes the host defaults to the migrator through the environment', () => {
+    const env = dockerLogDefaultsEnv({ driver: 'json-file', logOpts: 'none' });
+    expect(env).toEqual(['GATEWAY_DOCKER_LOG_DRIVER=json-file', 'GATEWAY_DOCKER_LOG_OPTS=none']);
+    expect(
+      dockerLogDefaultsFromEnv(Object.fromEntries(env.map((entry) => entry.split('=') as [string, string])))
+    ).toEqual({ driver: 'json-file', logOpts: 'none' });
+    expect(dockerLogDefaultsFromEnv({})).toBeUndefined();
+    expect(dockerLogDefaultsEnv(undefined)).toEqual([]);
+  });
+
+  it('leaves the installer compose logging limits as they are', async () => {
+    const installer = await readFile(path.resolve(__dirname, '../../../../scripts/install.sh'), 'utf8');
+    const start = installer.indexOf("cat >docker-compose.yml <<'COMPOSE'\n");
+    const fresh = installer.slice(installer.indexOf('\n', start) + 1, installer.indexOf('\nCOMPOSE\n', start) + 1);
+    expect(fresh.match(/^ {4}logging:$/gm)).toHaveLength(5);
+
+    const patched = patchCompose(fresh);
+    expect(patched.match(/^ {4}logging:$/gm)).toHaveLength(5);
+    expect(patchCompose(patched)).toBe(patched);
+  });
+
   it('upserts env keys without leaving duplicates', () => {
     const patched = patchEnv('GATEWAY_VERSION=v2.4.2\nGATEWAY_VERSION=old\nOTHER=value\n', {
       GATEWAY_VERSION: 'v2.4.3',
@@ -276,6 +415,29 @@ describe('runFoundationMigrations', () => {
   afterEach(async () => {
     if (tempDir) await rm(tempDir, { recursive: true, force: true });
     tempDir = '';
+  });
+
+  it('adds bounded Compose logging only with json-file host defaults', async () => {
+    const run = async (dockerLogDefaults?: { driver: string; logOpts: 'none' | 'set' | null }) => {
+      tempDir = await mkdtemp(path.join(os.tmpdir(), 'gateway-foundation-migrator-test-'));
+      await writeFile(path.join(tempDir, '.env'), 'GATEWAY_VERSION=v2.4.2\n');
+      await writeFile(path.join(tempDir, 'docker-compose.yml'), OLD_COMPOSE);
+      await runFoundationMigrations({
+        hostDir: tempDir,
+        relayImageRef: `registry/gateway/relay@sha256:${'a'.repeat(64)}`,
+        sandboxWorkspaceDir: path.join(tempDir, 'sandbox-workspaces'),
+        dockerLogDefaults,
+      });
+      const compose = await readFile(path.join(tempDir, 'docker-compose.yml'), 'utf8');
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = '';
+      return compose.match(/^ {4}logging:$/gm)?.length ?? 0;
+    };
+
+    expect(await run({ driver: 'json-file', logOpts: 'none' })).toBe(4);
+    expect(await run({ driver: 'json-file', logOpts: 'set' })).toBe(0);
+    expect(await run({ driver: 'journald', logOpts: null })).toBe(0);
+    expect(await run(undefined)).toBe(0);
   });
 
   it('patches host foundation files and writes backups only when files change', async () => {

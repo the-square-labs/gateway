@@ -21,6 +21,8 @@ const config: HousekeepingConfig = {
   dockerPrune: { enabled: true },
   orphanedCerts: { enabled: true },
   acmeCleanup: { enabled: true },
+  operationHistory: { enabled: true, retentionDays: 90 },
+  oauthCleanup: { enabled: true },
 };
 
 const stats = {
@@ -46,6 +48,8 @@ const stats = {
   orphanedCerts: { count: 0, certIds: [], currentCount: 0, supersededCount: 0, unknownCount: 0 },
   acmeChallenges: { fileCount: 0, totalSizeBytes: 0 },
   dockerImages: { oldImageCount: 0, reclaimableBytes: 0 },
+  operationHistory: { count: 12 },
+  oauthCleanup: { count: 3 },
   lastRun: null,
   isRunning: false,
 } satisfies HousekeepingStats;
@@ -107,5 +111,41 @@ describe("HousekeepingSection ClickHouse internals", () => {
     expect(
       screen.queryByRole("spinbutton", { name: "Retained successful registry artifacts" })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("HousekeepingSection retention of operation history", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    api.invalidateCache("housekeeping:");
+  });
+
+  it("saves the operation history switch alongside the OAuth grant purge", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getHousekeepingConfig").mockResolvedValue(structuredClone(config));
+    vi.spyOn(api, "getHousekeepingStats").mockResolvedValue(stats);
+    const update = vi
+      .spyOn(api, "updateHousekeepingConfig")
+      .mockImplementation(async (next) => next as HousekeepingConfig);
+
+    render(
+      <MemoryRouter>
+        <HousekeepingSection canRun canConfigure />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("12 eligible rows");
+    expect(screen.getByText("3 eligible rows")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Operation History cleanup" }));
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          operationHistory: { enabled: false, retentionDays: 90 },
+          oauthCleanup: { enabled: true },
+        })
+      )
+    );
   });
 });

@@ -70,6 +70,7 @@ func (c *Client) createDeploymentSlot(ctx context.Context, deploymentID, network
 		hostCfg.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(desired.RestartPolicy)}
 	}
 	applyDeploymentRuntime(hostCfg, desired)
+	applyDefaultWorkloadLogConfig(hostCfg, c.defaultWorkloadLogDriver())
 	c.applyResolvedGPUSelection(cfg, hostCfg, gpuSelection)
 	resp, err := c.cli.ContainerCreate(ctx, mobyclient.ContainerCreateOptions{
 		Config:     cfg,

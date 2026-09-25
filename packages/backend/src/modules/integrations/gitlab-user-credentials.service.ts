@@ -1,6 +1,7 @@
 import { and, eq } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
-import { gitLabUserCredentials } from '@/db/schema/index.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
+import { gitLabUserCredentials, integrationConnectors, users } from '@/db/schema/index.js';
+import { AppError } from '@/middleware/error-handler.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { VcsConnectorAuth } from './integration-provider.types.js';
 
@@ -52,9 +53,11 @@ export class GitLabUserCredentialsService {
       };
     }
 
+    // An expired token is kept (so the user sees when it lapsed) but no longer authorizes anything.
+    const expired = isCredentialExpired(row);
     return {
-      authorized: row.status === 'valid',
-      status: row.status,
+      authorized: row.status === 'valid' && !expired,
+      status: expired ? 'invalid' : row.status,
       tokenMasked: `****${row.tokenLast4}`,
       gitlabUserId: row.gitlabUserId,
       gitlabUsername: row.gitlabUsername,
@@ -113,6 +116,26 @@ export class GitLabUserCredentialsService {
   ): Promise<ResolvedGitLabUserCredential | null> {
     const row = await this.find(userId, connectorId);
     if (!row || row.status !== 'valid') return null;
+    if (isCredentialExpired(row)) {
+      const [connector] = await this.db
+        .select({ provider: integrationConnectors.provider, name: integrationConnectors.name })
+        .from(integrationConnectors)
+        .where(eq(integrationConnectors.id, connectorId))
+        .limit(1);
+      throw new AppError(
+        428,
+        'GIT_CREDENTIAL_EXPIRED',
+        `Your personal access token for this integration expired on ${row.tokenExpiresAt!.toISOString().slice(0, 10)}. Authorize a new token to continue.`,
+        {
+          provider: connector?.provider ?? 'gitlab',
+          connectorId,
+          connectorName: connector?.name,
+          baseUrl,
+          reason: 'expired',
+          expiredAt: row.tokenExpiresAt!.toISOString(),
+        }
+      );
+    }
     return {
       auth: {
         baseUrl,
@@ -124,12 +147,75 @@ export class GitLabUserCredentialsService {
     };
   }
 
-  async markInvalid(userId: string, connectorId: string): Promise<void> {
+  /**
+   * Every valid credential of a user who is not blocked (token maintenance:
+   * expiry, rotation and shared-token detection). A blocked user's token is
+   * never rotated, so Gateway does not keep it alive.
+   */
+  async listValid(): Promise<CredentialRow[]> {
+    const rows = await this.db
+      .select({ credential: gitLabUserCredentials })
+      .from(gitLabUserCredentials)
+      .innerJoin(users, eq(users.id, gitLabUserCredentials.userId))
+      .where(and(eq(gitLabUserCredentials.status, 'valid'), eq(users.isBlocked, false)));
+    return rows.map((row) => row.credential);
+  }
+
+  decryptToken(row: Pick<CredentialRow, 'encryptedToken'>): string {
+    return this.cryptoService.decryptString(JSON.parse(row.encryptedToken));
+  }
+
+  /**
+   * Store a token the provider rotated in place of the credential's current
+   * one, only while the stored token is still `expectedEncryptedToken`.
+   * Returns whether the row was updated.
+   */
+  async storeRotated(
+    id: string,
+    token: string,
+    rotated: { scopes: string[]; expiresAt: Date | null },
+    options: { expectedEncryptedToken: string; executor?: DrizzleExecutor }
+  ): Promise<boolean> {
     const now = new Date();
-    await this.db
+    const updated = await (options.executor ?? this.db)
+      .update(gitLabUserCredentials)
+      .set({
+        encryptedToken: JSON.stringify(this.cryptoService.encryptString(token)),
+        tokenLast4: token.slice(-4),
+        ...(rotated.scopes.length > 0 ? { tokenScopes: rotated.scopes } : {}),
+        tokenExpiresAt: rotated.expiresAt,
+        status: 'valid',
+        lastValidatedAt: now,
+        invalidatedAt: null,
+        updatedAt: now,
+      })
+      .where(
+        and(eq(gitLabUserCredentials.id, id), eq(gitLabUserCredentials.encryptedToken, options.expectedEncryptedToken))
+      )
+      .returning({ id: gitLabUserCredentials.id });
+    return updated.length === 1;
+  }
+
+  /**
+   * Mark the credential invalid. With `token`, only while the stored token is
+   * still that one: a request that read the token just before an automatic
+   * rotation must not invalidate the newly stored token when GitLab rejects
+   * the old one. Returns whether the credential was marked.
+   */
+  async markInvalid(userId: string, connectorId: string, options: { token?: string } = {}): Promise<boolean> {
+    const now = new Date();
+    const conditions = [eq(gitLabUserCredentials.userId, userId), eq(gitLabUserCredentials.connectorId, connectorId)];
+    if (options.token !== undefined) {
+      const row = await this.find(userId, connectorId);
+      if (!row || this.decryptToken(row) !== options.token) return false;
+      conditions.push(eq(gitLabUserCredentials.encryptedToken, row.encryptedToken));
+    }
+    const updated = await this.db
       .update(gitLabUserCredentials)
       .set({ status: 'invalid', invalidatedAt: now, updatedAt: now })
-      .where(and(eq(gitLabUserCredentials.userId, userId), eq(gitLabUserCredentials.connectorId, connectorId)));
+      .where(and(...conditions))
+      .returning({ id: gitLabUserCredentials.id });
+    return updated.length > 0;
   }
 
   async disconnect(userId: string, connectorId: string): Promise<boolean> {
@@ -148,4 +234,8 @@ export class GitLabUserCredentialsService {
       .limit(1);
     return row ?? null;
   }
+}
+
+function isCredentialExpired(row: Pick<CredentialRow, 'tokenExpiresAt'>, now = Date.now()): boolean {
+  return !!row.tokenExpiresAt && row.tokenExpiresAt.getTime() <= now;
 }

@@ -118,6 +118,7 @@ func (c *Client) createDeploymentRouter(ctx context.Context, payload deploymentC
 	if err != nil {
 		return "", err
 	}
+	applyDefaultWorkloadLogConfig(options.HostConfig, c.defaultWorkloadLogDriver())
 	resp, err := c.cli.ContainerCreate(ctx, options)
 	if err != nil {
 		return "", fmt.Errorf("create deployment router: %w", err)

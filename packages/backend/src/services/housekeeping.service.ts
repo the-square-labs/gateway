@@ -17,10 +17,17 @@ import {
   selectObsoleteGatewayConnectorImages,
 } from '@/modules/docker/docker-internal-images.js';
 import type { DockerInternalRegistryService } from '@/modules/docker/docker-registry-internal.service.js';
+import type { DockerTaskService } from '@/modules/docker/docker-task.service.js';
 import type { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
 import type { NotificationDeliveryService } from '@/modules/notifications/notification-delivery.service.js';
 import type { DockerService } from './docker.service.js';
 import type { NodeDispatchService } from './node-dispatch.service.js';
+import {
+  cleanOperationHistory,
+  countExpiredOAuthGrants,
+  countOperationHistory,
+  purgeExpiredOAuthGrants,
+} from './operation-history-retention.js';
 import type { SystemCertificateLifecycleService } from './system-certificate-lifecycle.service.js';
 
 const logger = createChildLogger('HousekeepingService');
@@ -46,6 +53,10 @@ export interface HousekeepingConfig {
   dockerPrune: { enabled: boolean };
   orphanedCerts: { enabled: boolean };
   acmeCleanup: { enabled: boolean };
+  /** Finished Docker tasks, builds, compose/availability/hosting operations and webhook deliveries. */
+  operationHistory: { enabled: boolean; retentionDays: number };
+  /** Expired OAuth codes and tokens, and registered clients left without grants. */
+  oauthCleanup: { enabled: boolean };
 }
 
 export interface CategoryResult {
@@ -91,6 +102,8 @@ export interface HousekeepingStats {
   };
   acmeChallenges: { fileCount: number; totalSizeBytes: number };
   dockerImages: { oldImageCount: number; reclaimableBytes: number };
+  operationHistory: { count: number };
+  oauthCleanup: { count: number };
   lastRun: HousekeepingRunResult | null;
   isRunning: boolean;
 }
@@ -122,6 +135,9 @@ const KEYS = {
   dockerPruneEnabled: 'housekeeping:docker_prune:enabled',
   orphanedCertsEnabled: 'housekeeping:orphaned_certs:enabled',
   acmeCleanupEnabled: 'housekeeping:acme_cleanup:enabled',
+  operationHistoryEnabled: 'housekeeping:operation_history:enabled',
+  operationHistoryRetention: 'housekeeping:operation_history:retention_days',
+  oauthCleanupEnabled: 'housekeeping:oauth_cleanup:enabled',
   lastRunResult: 'housekeeping:last_run_result',
   runHistory: 'housekeeping:run_history',
 } as const;
@@ -148,6 +164,9 @@ const DEFAULTS: Record<string, unknown> = {
   [KEYS.dockerPruneEnabled]: true,
   [KEYS.orphanedCertsEnabled]: true,
   [KEYS.acmeCleanupEnabled]: true,
+  [KEYS.operationHistoryEnabled]: true,
+  [KEYS.operationHistoryRetention]: 90,
+  [KEYS.oauthCleanupEnabled]: true,
 };
 
 const MAX_HISTORY = 20;
@@ -254,6 +273,13 @@ export class HousekeepingService {
       acmeCleanup: {
         enabled: get(KEYS.acmeCleanupEnabled, DEFAULTS[KEYS.acmeCleanupEnabled] as boolean),
       },
+      operationHistory: {
+        enabled: get(KEYS.operationHistoryEnabled, DEFAULTS[KEYS.operationHistoryEnabled] as boolean),
+        retentionDays: get(KEYS.operationHistoryRetention, DEFAULTS[KEYS.operationHistoryRetention] as number),
+      },
+      oauthCleanup: {
+        enabled: get(KEYS.oauthCleanupEnabled, DEFAULTS[KEYS.oauthCleanupEnabled] as boolean),
+      },
     };
   }
 
@@ -300,6 +326,12 @@ export class HousekeepingService {
       updates.push([KEYS.orphanedCertsEnabled, partial.orphanedCerts.enabled]);
     if (partial.acmeCleanup?.enabled !== undefined)
       updates.push([KEYS.acmeCleanupEnabled, partial.acmeCleanup.enabled]);
+    if (partial.operationHistory?.enabled !== undefined)
+      updates.push([KEYS.operationHistoryEnabled, partial.operationHistory.enabled]);
+    if (partial.operationHistory?.retentionDays !== undefined)
+      updates.push([KEYS.operationHistoryRetention, partial.operationHistory.retentionDays]);
+    if (partial.oauthCleanup?.enabled !== undefined)
+      updates.push([KEYS.oauthCleanupEnabled, partial.oauthCleanup.enabled]);
 
     await this.db.transaction(async (tx) => {
       for (const [key, value] of updates) {
@@ -331,6 +363,8 @@ export class HousekeepingService {
       orphanedCerts,
       acme,
       docker,
+      operationHistory,
+      oauthCleanup,
       lastRun,
     ] = await Promise.all([
       this.getNginxLogStats(),
@@ -344,6 +378,8 @@ export class HousekeepingService {
       this.getOrphanedCertStats(),
       this.getAcmeChallengeStats(),
       this.getDockerImageStats(),
+      this.getOperationHistoryStats(),
+      this.getOAuthCleanupStats(),
       this.getLastRunResult(),
     ]);
 
@@ -369,6 +405,8 @@ export class HousekeepingService {
       orphanedCerts,
       acmeChallenges: acme,
       dockerImages: docker,
+      operationHistory,
+      oauthCleanup,
       lastRun,
       isRunning: this.running,
     };
@@ -461,6 +499,16 @@ export class HousekeepingService {
       }
       if (config.dockerPrune.enabled) {
         categories.push(await this.runCategory('Docker Images', () => this.pruneDockerImages()));
+      }
+      if (config.operationHistory?.enabled) {
+        categories.push(
+          await this.runCategory('Operation History', () =>
+            this.cleanOperationHistory(config.operationHistory.retentionDays)
+          )
+        );
+      }
+      if (config.oauthCleanup?.enabled) {
+        categories.push(await this.runCategory('Expired OAuth Grants', () => this.cleanExpiredOAuthGrants()));
       }
 
       const completedAt = new Date().toISOString();
@@ -555,6 +603,25 @@ export class HousekeepingService {
   private systemCertificateLifecycle?: SystemCertificateLifecycleService;
   setSystemCertificateLifecycleService(svc: SystemCertificateLifecycleService) {
     this.systemCertificateLifecycle = svc;
+  }
+
+  private dockerTaskService?: Pick<DockerTaskService, 'cleanup'>;
+  setDockerTaskService(svc: Pick<DockerTaskService, 'cleanup'>) {
+    this.dockerTaskService = svc;
+  }
+
+  /** Finished tasks (24 h, fixed) and operation history older than the retention period. */
+  private async cleanOperationHistory(retentionDays: number): Promise<{ itemsCleaned: number }> {
+    const tasks = (await this.dockerTaskService?.cleanup()) ?? 0;
+    const history = await cleanOperationHistory(this.db, retentionDays);
+    if (history.total > 0) logger.info('Removed old operation history', { retentionDays, ...history.removed });
+    return { itemsCleaned: tasks + history.total };
+  }
+
+  private async cleanExpiredOAuthGrants(): Promise<{ itemsCleaned: number }> {
+    const purged = await purgeExpiredOAuthGrants(this.db);
+    if (purged.total > 0) logger.info('Removed expired OAuth grants', purged.removed);
+    return { itemsCleaned: purged.total };
   }
 
   private async cleanDeliveryLog(retentionDays: number): Promise<{ itemsCleaned: number }> {
@@ -791,6 +858,25 @@ export class HousekeepingService {
       return { count: 0, certIds: [], currentCount: 0, supersededCount: 0, unknownCount: 0 };
     }
     return this.systemCertificateLifecycle.getPrivateKeyCleanupStats(SYSTEM_CERTIFICATE_KEY_RETENTION_DAYS);
+  }
+
+  private async getOperationHistoryStats(): Promise<HousekeepingStats['operationHistory']> {
+    try {
+      const config = await this.getConfig();
+      return { count: await countOperationHistory(this.db, config.operationHistory.retentionDays) };
+    } catch (error) {
+      logger.debug('Failed to count old operation history', { error });
+      return { count: 0 };
+    }
+  }
+
+  private async getOAuthCleanupStats(): Promise<HousekeepingStats['oauthCleanup']> {
+    try {
+      return { count: await countExpiredOAuthGrants(this.db) };
+    } catch (error) {
+      logger.debug('Failed to count expired OAuth grants', { error });
+      return { count: 0 };
+    }
   }
 
   private async getAcmeChallengeStats(): Promise<HousekeepingStats['acmeChallenges']> {

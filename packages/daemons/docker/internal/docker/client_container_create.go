@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -414,6 +415,7 @@ func (c *Client) CreateContainer(ctx context.Context, configJSON string) (string
 		ExtraHosts:  cfg.ExtraHosts,
 	}
 	applyUserWorkloadBaseline(hostCfg)
+	applyDefaultWorkloadLogConfig(hostCfg, c.defaultWorkloadLogDriver())
 	if err := c.applyRuntimeProfile(hostCfg, cfg.RuntimeProfile, cfg.GPU); err != nil {
 		return "", "", err
 	}
@@ -506,6 +508,130 @@ func applyUserWorkloadBaseline(hostCfg *container.HostConfig) {
 	hostCfg.Privileged = false
 	hostCfg.CapAdd = nil
 	hostCfg.SecurityOpt = appendUniqueStrings(hostCfg.SecurityOpt, "no-new-privileges:true")
+}
+
+// Log rotation applied to user workloads that have no log configuration of
+// their own, so a busy container cannot fill the disk with json-file logs.
+const (
+	jsonFileLogDriver      = "json-file"
+	workloadLogMaxSize     = "50m"
+	workloadLogMaxFile     = "3"
+	logDriverDetectTimeout = 10 * time.Second
+	// hostConfiguredLogDefaults marks a host whose daemon.json sets default
+	// log-opts; containers then inherit the operator's options unchanged.
+	hostConfiguredLogDefaults = "host-configured"
+	defaultDockerDaemonConfig = "/etc/docker/daemon.json"
+)
+
+// dockerDaemonConfigPath is the Docker daemon configuration read for the
+// operator's default log options (GATEWAY_DOCKER_DAEMON_CONFIG overrides it).
+func dockerDaemonConfigPath() string {
+	if value := strings.TrimSpace(os.Getenv("GATEWAY_DOCKER_DAEMON_CONFIG")); value != "" {
+		return value
+	}
+	return defaultDockerDaemonConfig
+}
+
+// hostDefaultLogOptions reports whether the Docker daemon configuration at
+// path sets default log-opts. A missing file means no; a file that cannot be
+// read or parsed is treated as yes, so the operator's choice is never
+// overridden by guesswork.
+func hostDefaultLogOptions(path string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var config struct {
+		LogOpts map[string]any `json:"log-opts"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return true, err
+	}
+	return len(config.LogOpts) > 0, nil
+}
+
+// DetectDefaultLoggingDriver asks the Docker daemon for its default logging
+// driver once and caches it for workload creation. When the query fails the
+// driver is assumed to be json-file, Docker's built-in default. When the
+// host's daemon.json sets default log-opts, workloads keep them.
+func (c *Client) DetectDefaultLoggingDriver(ctx context.Context) string {
+	driver := jsonFileLogDriver
+	if c.cli != nil {
+		infoCtx, cancel := context.WithTimeout(ctx, logDriverDetectTimeout)
+		info, err := c.cli.Info(infoCtx, client.InfoOptions{})
+		cancel()
+		switch {
+		case err != nil:
+			if c.logger != nil {
+				c.logger.Warn("docker default logging driver unknown, assuming json-file", "error", err)
+			}
+		case strings.TrimSpace(info.Info.LoggingDriver) != "":
+			driver = strings.TrimSpace(info.Info.LoggingDriver)
+		}
+	}
+	if driver == jsonFileLogDriver {
+		configured, err := hostDefaultLogOptions(dockerDaemonConfigPath())
+		if err != nil && c.logger != nil {
+			c.logger.Warn("cannot read the Docker daemon log options; keeping the host defaults for workloads", "error", err)
+		}
+		if configured {
+			driver = hostConfiguredLogDefaults
+		}
+	}
+	c.defaultLogDriver.Store(&driver)
+	return driver
+}
+
+// defaultWorkloadLogDriver returns the cached default logging driver, or
+// json-file when it was never detected.
+func (c *Client) defaultWorkloadLogDriver() string {
+	if driver := c.defaultLogDriver.Load(); driver != nil {
+		return *driver
+	}
+	return jsonFileLogDriver
+}
+
+// applyDefaultWorkloadLogConfig gives a user workload without its own log
+// configuration json-file rotation (50m x 3). It only does so when the
+// Docker daemon's default driver is json-file: a host that configured
+// another default driver (local, journald, ...) keeps its policy. A
+// configuration with options or another driver is never changed.
+func applyDefaultWorkloadLogConfig(hostCfg *container.HostConfig, defaultDriver string) {
+	if hostCfg == nil || !isUnsetWorkloadLogConfig(hostCfg.LogConfig) {
+		return
+	}
+	if driver := strings.TrimSpace(defaultDriver); driver != "" && driver != jsonFileLogDriver {
+		return
+	}
+	hostCfg.LogConfig = container.LogConfig{
+		Type:   jsonFileLogDriver,
+		Config: map[string]string{"max-size": workloadLogMaxSize, "max-file": workloadLogMaxFile},
+	}
+}
+
+// isUnsetWorkloadLogConfig reports whether cfg carries no user choice: no
+// options and either no driver or json-file, which Docker records on inspect
+// for containers created without a log configuration.
+func isUnsetWorkloadLogConfig(cfg container.LogConfig) bool {
+	return (cfg.Type == "" || cfg.Type == jsonFileLogDriver) && len(cfg.Config) == 0
+}
+
+// isGatewayDefaultLogConfig reports whether cfg holds only json-file rotation
+// options (max-size, max-file), such as the Gateway workload default. These
+// are portable and carry no secrets, unlike other log driver options.
+func isGatewayDefaultLogConfig(cfg container.LogConfig) bool {
+	if (cfg.Type != "" && cfg.Type != jsonFileLogDriver) || len(cfg.Config) == 0 {
+		return false
+	}
+	for key := range cfg.Config {
+		if key != "max-size" && key != "max-file" {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) applyRuntimeProfile(hostCfg *container.HostConfig, profile string, gpuConfig *GPUConfig) error {
@@ -648,6 +774,7 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 	// Clone config, clear runtime fields.
 	cfg := *insp.Config
 	cfg.Hostname = ""
+	applyDefaultWorkloadLogConfig(insp.HostConfig, c.defaultWorkloadLogDriver())
 	netNames := inspectNetworkNames(&insp)
 	result, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{
 		Config:           &cfg,

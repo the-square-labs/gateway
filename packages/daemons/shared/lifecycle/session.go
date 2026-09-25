@@ -2,9 +2,13 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -503,73 +507,209 @@ func collectFullHealth(d *DaemonBase) *pb.HealthReport {
 	return d.plugin.CollectHealth(report)
 }
 
-// runCertRenewal checks cert expiry daily and renews when within 7 days.
-func runCertRenewal(ctx context.Context, d *DaemonBase) {
-	ticker := time.NewTicker(24 * time.Hour)
-	defer ticker.Stop()
+// Client certificate renewal timing. The node renews once a third of the
+// certificate lifetime remains, so an outage of up to that long (about four
+// months for a one-year certificate) never forces a re-enrollment.
+const (
+	certRenewalCheckInterval = time.Hour
+	certRenewalRetryBase     = 5 * time.Minute
+	certRenewalRetryMax      = time.Hour
+	// certRenewalAssumedLifetime is used when the certificate file cannot be
+	// parsed and only the expiry recorded in the state is known.
+	certRenewalAssumedLifetime = 365 * 24 * time.Hour
+)
 
-	check := func() {
-		expiresAt := d.state.GetCertExpiry()
-		if expiresAt == 0 {
-			return
-		}
-		remaining := time.Until(time.Unix(expiresAt, 0))
-		if remaining > 7*24*time.Hour {
-			return
-		}
-
-		d.logger.Info("mTLS cert expiring soon, renewing", "remaining", remaining)
-
-		conn, err := d.connector.Connect(ctx)
-		if err != nil {
-			d.logger.Warn("cert renewal: failed to connect", "error", err)
-			return
-		}
-		defer conn.Close()
-
-		client := pb.NewNodeEnrollmentClient(conn)
-		renewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		defer cancel()
-
-		resp, err := client.RenewCertificate(renewCtx, &pb.RenewCertRequest{
-			NodeId: d.state.NodeID,
-		})
-		if err != nil {
-			d.logger.Warn("cert renewal failed", "error", err)
-			return
-		}
-
-		if err := d.saveCertificates(nil, resp.ClientCertificate, resp.ClientKey); err != nil {
-			d.logger.Warn("cert renewal: save failed", "error", err)
-			return
-		}
-
-		// Hot-swap the TLS credentials
-		if err := d.connector.TLSMgr.LoadCredentials(); err != nil {
-			d.logger.Warn("cert renewal: hot-swap failed", "error", err)
-			return
-		}
-
-		d.state.SetCertExpiry(resp.CertExpiresAt)
-		if err := d.state.Save(); err != nil {
-			d.logger.Warn("cert renewal: state save failed", "error", err)
-		}
-		// The gateway promotes the renewed certificate (and tells relays its
-		// fingerprint) when the control session registers with it. Reconnect
-		// that session first; the tunnel switches once it is accepted.
-		d.requestControlReconnect()
-		d.logger.Info("mTLS cert renewed successfully")
+// clientCertRenewalDue reports whether a certificate valid from notBefore to
+// notAfter should be renewed at now: once the remaining lifetime is at most a
+// third of the total lifetime. A window that is empty or inverted is due.
+func clientCertRenewalDue(notBefore, notAfter, now time.Time) bool {
+	lifetime := notAfter.Sub(notBefore)
+	if lifetime <= 0 {
+		return true
 	}
+	return notAfter.Sub(now) <= lifetime/3
+}
 
-	check() // Run immediately
+// certRenewalRetryDelay is the wait before the next renewal attempt after
+// the given number of consecutive failures: 5m, 10m, 20m, 40m, then 1h.
+// It returns 0 when there were no failures.
+func certRenewalRetryDelay(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	delay := certRenewalRetryBase
+	for i := 1; i < failures; i++ {
+		delay *= 2
+		if delay >= certRenewalRetryMax {
+			return certRenewalRetryMax
+		}
+	}
+	return min(delay, certRenewalRetryMax)
+}
+
+// loadCertificateValidity returns the validity window of the first
+// certificate in the PEM file at path.
+func loadCertificateValidity(path string) (notBefore, notAfter time.Time, err error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}, time.Time{}, err
+	}
+	for {
+		var block *pem.Block
+		block, data = pem.Decode(data)
+		if block == nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("no certificate found in %s", path)
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return time.Time{}, time.Time{}, fmt.Errorf("parse certificate %s: %w", path, err)
+		}
+		return cert.NotBefore, cert.NotAfter, nil
+	}
+}
+
+// clientCertValidityWindow returns the validity window of the client
+// certificate at certPath. When the file cannot be parsed it falls back to
+// fallbackExpiresAt (unix seconds, from the daemon state) with an assumed
+// one-year lifetime. ok is false when neither source knows the expiry.
+func clientCertValidityWindow(certPath string, fallbackExpiresAt int64) (notBefore, notAfter time.Time, source string, ok bool, loadErr error) {
+	notBefore, notAfter, loadErr = loadCertificateValidity(certPath)
+	if loadErr == nil {
+		return notBefore, notAfter, "certificate", true, nil
+	}
+	if fallbackExpiresAt == 0 {
+		return time.Time{}, time.Time{}, "", false, loadErr
+	}
+	notAfter = time.Unix(fallbackExpiresAt, 0)
+	return notAfter.Add(-certRenewalAssumedLifetime), notAfter, "state", true, loadErr
+}
+
+// runCertRenewal checks the mTLS client certificate hourly and renews it once
+// a third of its lifetime remains. Failed attempts are retried with
+// exponential backoff (5m doubling up to 1h) until one succeeds.
+func runCertRenewal(ctx context.Context, d *DaemonBase) {
+	failures := 0
+	// pendingExpiresAt is the expiry of a renewed certificate that was saved
+	// to disk but not loaded yet; the next attempt only finishes installing it.
+	var pendingExpiresAt int64
+
+	timer := time.NewTimer(0) // run immediately
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			check()
+		case <-timer.C:
 		}
+
+		var err error
+		if pendingExpiresAt != 0 {
+			err = d.installRenewedClientCert(pendingExpiresAt)
+			if err == nil {
+				pendingExpiresAt = 0
+			}
+		} else {
+			pendingExpiresAt, err = d.renewClientCertIfDue(ctx)
+		}
+		if ctx.Err() != nil {
+			return
+		}
+
+		next := certRenewalCheckInterval
+		if err != nil {
+			failures++
+			next = min(next, certRenewalRetryDelay(failures))
+			d.logger.Warn("mTLS cert renewal attempt failed",
+				"error", err,
+				"consecutive_failures", failures,
+				"next_retry", next,
+			)
+		} else {
+			if failures > 0 {
+				d.logger.Info("mTLS cert renewal recovered", "previous_failures", failures)
+			}
+			failures = 0
+		}
+		timer.Reset(next)
 	}
+}
+
+// renewClientCertIfDue renews the client certificate when it is due. It
+// returns nil when no renewal was needed or it succeeded. When the renewed
+// certificate was saved but could not be loaded, it returns its expiry so
+// the caller retries only the install step.
+func (d *DaemonBase) renewClientCertIfDue(ctx context.Context) (int64, error) {
+	notBefore, notAfter, source, ok, loadErr := clientCertValidityWindow(d.cfg.TLS.ClientCert, d.state.GetCertExpiry())
+	if !ok {
+		d.logger.Debug("cert renewal: client certificate expiry unknown, skipping", "error", loadErr)
+		return 0, nil
+	}
+	if loadErr != nil {
+		d.logger.Warn("cert renewal: cannot parse client certificate, using stored expiry with assumed lifetime",
+			"error", loadErr,
+			"assumed_lifetime", certRenewalAssumedLifetime,
+		)
+	}
+	now := time.Now()
+	if !clientCertRenewalDue(notBefore, notAfter, now) {
+		return 0, nil
+	}
+
+	d.logger.Info("mTLS cert renewal due, renewing",
+		"remaining", notAfter.Sub(now).Round(time.Second),
+		"lifetime", notAfter.Sub(notBefore).Round(time.Second),
+		"expires_at", notAfter.UTC().Format(time.RFC3339),
+		"source", source,
+	)
+
+	conn, err := d.connector.Connect(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("connect: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewNodeEnrollmentClient(conn)
+	renewCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	resp, err := client.RenewCertificate(renewCtx, &pb.RenewCertRequest{
+		NodeId: d.state.NodeID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("renew RPC: %w", err)
+	}
+
+	if err := d.saveCertificates(nil, resp.ClientCertificate, resp.ClientKey); err != nil {
+		return 0, fmt.Errorf("save: %w", err)
+	}
+
+	if err := d.installRenewedClientCert(resp.CertExpiresAt); err != nil {
+		return resp.CertExpiresAt, err
+	}
+	return 0, nil
+}
+
+// installRenewedClientCert hot-swaps a renewed certificate that is already
+// saved to disk, records its expiry and reconnects the control session.
+func (d *DaemonBase) installRenewedClientCert(expiresAt int64) error {
+	// Hot-swap the TLS credentials
+	if err := d.connector.TLSMgr.LoadCredentials(); err != nil {
+		return fmt.Errorf("hot-swap: %w", err)
+	}
+
+	d.state.SetCertExpiry(expiresAt)
+	if err := d.state.Save(); err != nil {
+		d.logger.Warn("cert renewal: state save failed", "error", err)
+	}
+	// The gateway promotes the renewed certificate (and tells relays its
+	// fingerprint) when the control session registers with it. Reconnect
+	// that session first; the tunnel switches once it is accepted.
+	d.requestControlReconnect()
+	d.logger.Info("mTLS cert renewed successfully", "expires_at", time.Unix(expiresAt, 0).UTC().Format(time.RFC3339))
+	return nil
 }
 
 // handleNodeExec handles node-level console create/resize commands.

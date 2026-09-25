@@ -14,6 +14,8 @@ export interface HousekeepingConfig {
   dockerPrune: { enabled: boolean };
   orphanedCerts: { enabled: boolean };
   acmeCleanup: { enabled: boolean };
+  operationHistory: { enabled: boolean; retentionDays: number };
+  oauthCleanup: { enabled: boolean };
 }
 
 export interface HousekeepingCategoryResult {
@@ -64,6 +66,8 @@ export interface HousekeepingStats {
   };
   acmeChallenges: { fileCount: number; totalSizeBytes: number };
   dockerImages: { oldImageCount: number; reclaimableBytes: number };
+  operationHistory?: { count: number };
+  oauthCleanup?: { count: number };
   lastRun: HousekeepingRunResult | null;
   isRunning: boolean;
 }

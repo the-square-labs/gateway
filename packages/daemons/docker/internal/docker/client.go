@@ -39,6 +39,9 @@ type Client struct {
 	recreateStateDirectory   string
 	runscHealthy             atomic.Bool
 	managedVolumeCreateMutex sync.Mutex
+	// defaultLogDriver caches the Docker daemon's default logging driver,
+	// detected once at startup; nil means unknown (treated as json-file).
+	defaultLogDriver atomic.Pointer[string]
 }
 
 func (c *Client) SetRunscHealthy(healthy bool) {

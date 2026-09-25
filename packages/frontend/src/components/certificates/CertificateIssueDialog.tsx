@@ -128,6 +128,7 @@ export function CertificateIssueDialog({
         sans: sans.length > 0 ? sans : [],
         validityDays,
         keyAlgorithm,
+        ...(validityOutlivesCA ? { clampToCaValidity: true } : {}),
         ...(Object.keys(subjectDnFields).length > 0 ? { subjectDnFields } : {}),
       });
       toast.success(`Certificate issued for ${commonName}`);
@@ -148,6 +149,11 @@ export function CertificateIssueDialog({
       !ca.isSystem &&
       (hasScope("pki:cert:issue") || hasScope(`pki:cert:issue:${ca.id}`))
   );
+  const selectedCA = activeCAs.find((ca) => ca.id === selectedCAId);
+  const selectedCAEnd = selectedCA ? new Date(selectedCA.notAfter) : null;
+  // A leaf never validates past its CA: offer to end it with the CA instead of failing.
+  const validityOutlivesCA =
+    !!selectedCAEnd && Date.now() + validityDays * 24 * 60 * 60 * 1000 > selectedCAEnd.getTime();
   const sansRequired = type === "tls-server" || type === "email";
   const step2Valid =
     commonName.trim() !== "" &&
@@ -282,6 +288,12 @@ export function CertificateIssueDialog({
                     min={1}
                     max={3650}
                   />
+                  {validityOutlivesCA && selectedCAEnd && (
+                    <p className="text-xs text-muted-foreground">
+                      The CA expires on {selectedCAEnd.toLocaleDateString()}. The certificate will
+                      end with the CA.
+                    </p>
+                  )}
                 </div>
 
                 {/* SANs */}

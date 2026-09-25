@@ -254,7 +254,8 @@ func validateGwcaExportSupport(config *container.Config, host *container.HostCon
 		hostNamespaceMode(string(host.UsernsMode)) || hostNamespaceMode(string(host.CgroupnsMode)) {
 		unsupported = append(unsupported, "host/container namespace sharing")
 	}
-	if len(host.LogConfig.Config) > 0 || (host.LogConfig.Type != "" && host.LogConfig.Type != "json-file") {
+	if !isGatewayDefaultLogConfig(host.LogConfig) &&
+		(len(host.LogConfig.Config) > 0 || (host.LogConfig.Type != "" && host.LogConfig.Type != "json-file")) {
 		unsupported = append(unsupported, "custom log driver configuration")
 	}
 	if len(host.DNS) > 0 || len(host.DNSOptions) > 0 || len(host.DNSSearch) > 0 || len(host.ExtraHosts) > 0 || len(host.GroupAdd) > 0 {

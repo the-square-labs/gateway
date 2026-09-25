@@ -1,5 +1,5 @@
 import { readPreparedCommercialUpdate } from './edition/prepare-update.js';
-import { runFoundationMigrations } from './foundation/foundation-migrator.js';
+import { dockerLogDefaultsFromEnv, runFoundationMigrations } from './foundation/foundation-migrator.js';
 
 interface CliOptions {
   hostDir: string;
@@ -73,7 +73,11 @@ async function main(): Promise<void> {
     options.imageRef && options.targetVersion
       ? await readPreparedCommercialUpdate(options.hostDir, options.targetVersion)
       : undefined;
-  const result = await runFoundationMigrations({ ...options, commercial });
+  const result = await runFoundationMigrations({
+    ...options,
+    commercial,
+    dockerLogDefaults: dockerLogDefaultsFromEnv(process.env),
+  });
   console.log(
     JSON.stringify({
       ok: true,

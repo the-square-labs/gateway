@@ -8,6 +8,8 @@ export const IssueCertificateSchema = z.object({
   sans: z.array(z.string()).default([]),
   keyAlgorithm: z.enum(['rsa-2048', 'rsa-4096', 'ecdsa-p256', 'ecdsa-p384']),
   validityDays: z.number().int().min(1).max(3650),
+  /** End the certificate with its CA when the requested validity would outlive it (instead of failing). */
+  clampToCaValidity: z.boolean().optional(),
   subjectDnFields: z
     .object({
       o: z.string().max(255).optional(),
@@ -26,6 +28,8 @@ export const IssueCertFromCSRSchema = z.object({
   csrPem: z.string().min(1),
   validityDays: z.number().int().min(1).max(3650),
   overrideSans: z.array(z.string()).optional(),
+  /** End the certificate with its CA when the requested validity would outlive it (instead of failing). */
+  clampToCaValidity: z.boolean().optional(),
 });
 
 export const RevokeCertificateSchema = z.object({

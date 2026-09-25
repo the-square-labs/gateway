@@ -56,6 +56,10 @@ export const HousekeepingConfigUpdateSchema = z
     dockerPrune: z.object({ enabled: z.boolean().optional() }).optional(),
     orphanedCerts: z.object({ enabled: z.boolean().optional() }).optional(),
     acmeCleanup: z.object({ enabled: z.boolean().optional() }).optional(),
+    operationHistory: z
+      .object({ enabled: z.boolean().optional(), retentionDays: z.number().int().min(1).max(3650).optional() })
+      .optional(),
+    oauthCleanup: z.object({ enabled: z.boolean().optional() }).optional(),
   })
   .strict();
 
