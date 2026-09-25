@@ -22,6 +22,7 @@ import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { AddDomainDialog } from "@/components/domains/AddDomainDialog";
+import { DomainCertificateFolderDialog } from "@/components/domains/DomainCertificateFolderDialog";
 import { DomainDetailDialog } from "@/components/domains/DomainDetailDialog";
 import { getDomainPermissions } from "@/components/domains/domain-permissions";
 import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
@@ -49,6 +50,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
+import { hasCreationDestination } from "@/lib/creation-folders";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -116,8 +119,21 @@ export function getDomainCreationBlocker(
 export function Domains() {
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedDomainName = searchParams.get("domain");
-  const { hasScope } = useAuthStore();
-  const { canCreateDomain, canInspectCloudflare } = getDomainPermissions(hasScope);
+  const { hasScope, hasScopedAccess, user } = useAuthStore();
+  const userScopes = user?.scopes ?? [];
+  const { canCreateDomain, canInspectCloudflare } = getDomainPermissions(
+    hasScope,
+    undefined,
+    hasScopedAccess
+  );
+  // Issuing from a domain creates an SSL certificate: any ssl:cert:issue destination
+  // (broad or folder) qualifies; the folder is picked when the root is not allowed.
+  const canIssueDomainCertificates = hasCreationDestination(userScopes, "ssl:cert:issue");
+  const canIssueCertificateAtRoot = canCreateInFolder(userScopes, "ssl:cert:issue", null);
+  const hasRouteFolderCreationGrant = userScopes.some((scope) =>
+    scope.startsWith("proxy:create:folder/")
+  );
+  const [issueCertDomain, setIssueCertDomain] = useState<Domain | null>(null);
   const hasCloudflareIntegration = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
   );
@@ -264,13 +280,21 @@ export function Domains() {
     }
   };
 
-  const handleIssueCert = async (d: Domain) => {
+  const issueCertificate = async (d: Domain, folderId: string | null) => {
     try {
-      await api.issueDomainCert(d.id);
+      await api.issueDomainCert(d.id, folderId);
       toast.success(`Certificate issued for ${d.domain}`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to issue cert");
     }
+  };
+
+  const handleIssueCert = async (d: Domain) => {
+    if (!canIssueCertificateAtRoot) {
+      setIssueCertDomain(d);
+      return;
+    }
+    await issueCertificate(d, null);
   };
 
   const handleDelete = async (d: Domain) => {
@@ -430,10 +454,10 @@ export function Domains() {
       renderCell: (d) => {
         const permissions = getDomainPermissions(hasScope, d.id);
         const canCheckDns = permissions.canEditDomain;
-        const canIssueCert = canCheckDns && hasScope("ssl:cert:issue");
+        const canIssueCert = canCheckDns && canIssueDomainCertificates;
         const canCreateRoute =
-          hasScope("proxy:create") ||
-          (!!d.nginxNodeId && hasScope(`proxy:create:${d.nginxNodeId}`));
+          hasRouteFolderCreationGrant ||
+          canCreateInFolder(userScopes, "proxy:create", null, d.nginxNodeId ?? undefined);
         const canDeleteRow = !d.isSystem && permissions.canDeleteDomain;
         if (!canCheckDns && !canIssueCert && !canCreateRoute && !canDeleteRow) return null;
         return (
@@ -672,6 +696,16 @@ export function Domains() {
             if (!nextOpen) setDetailInitialView("details");
           }}
           onUpdated={loadDomains}
+        />
+        <DomainCertificateFolderDialog
+          open={issueCertDomain !== null}
+          onOpenChange={(open) => {
+            if (!open) setIssueCertDomain(null);
+          }}
+          domainName={issueCertDomain?.domain ?? null}
+          onIssue={async (folderId) => {
+            if (issueCertDomain) await issueCertificate(issueCertDomain, folderId);
+          }}
         />
         <CreateProxyHostDialog
           open={routeCreateDomain !== null}

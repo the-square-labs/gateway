@@ -273,6 +273,7 @@ describe('resource setup AI tools', () => {
       pause: vi.fn().mockResolvedValue({ id: 'database-1', status: 'paused' }),
       unpause: vi.fn().mockResolvedValue({ id: 'database-1', status: 'ready' }),
       rotateCertificate: vi.fn().mockResolvedValue({ id: 'database-1', certificateVersion: 2 }),
+      getCertificateStatus: vi.fn().mockResolvedValue({ ownerId: 'database-1' }),
       getCanonicalScopeResourceId: vi.fn().mockResolvedValue('database-1'),
     };
     container.registerInstance(ManagedDatabaseService, service as unknown as ManagedDatabaseService);
@@ -295,6 +296,20 @@ describe('resource setup AI tools', () => {
     expect(service.restart).toHaveBeenCalledWith('database-1', 'user-1');
     expect(service.pause).toHaveBeenCalledWith('database-1', 'user-1');
     expect(service.unpause).toHaveBeenCalledWith('database-1', 'user-1');
-    expect(service.rotateCertificate).toHaveBeenCalledWith('database-1', 'user-1');
+    expect(service.rotateCertificate).toHaveBeenCalledWith('database-1', 'user-1', { allowRestart: false });
+
+    await executeResourceSetupTool(USER, 'manage_managed_database', {
+      operation: 'rotate_certificate',
+      databaseId: 'database-1',
+      allowRestart: true,
+    });
+    expect(service.rotateCertificate).toHaveBeenLastCalledWith('database-1', 'user-1', { allowRestart: true });
+    await expect(
+      executeResourceSetupTool(USER, 'manage_managed_database', {
+        operation: 'certificate_status',
+        databaseId: 'database-1',
+      })
+    ).resolves.toEqual({ ownerId: 'database-1' });
+    expect(service.getCertificateStatus).toHaveBeenCalledWith('database-1');
   });
 });

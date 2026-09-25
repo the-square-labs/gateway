@@ -15,12 +15,25 @@ const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const CONNECTOR_ID = '22222222-2222-4222-8222-222222222222';
 const PROJECT_ID = '33333333-3333-4333-8333-333333333333';
 
+/** No deployment, Compose Project or folder rows. */
+function emptyDb(deploymentNames: string[] = []) {
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: vi.fn().mockResolvedValue(deploymentNames.map((name) => ({ id: `deployment-${name}` }))),
+        }),
+      }),
+    }),
+  };
+}
+
 function app(
   requireFeature = vi.fn().mockResolvedValue(undefined),
   scopes = [`docker:containers:create:${NODE_ID}`, `docker:compose:create:${NODE_ID}`]
 ) {
   const router = new OpenAPIHono<AppEnv>();
-  container.registerInstance(TOKENS.DrizzleClient, {});
+  container.registerInstance(TOKENS.DrizzleClient, emptyDb() as never);
   container.registerInstance(LicensePolicyService, { requireFeature } as never);
   router.onError(errorHandler);
   router.use('*', async (c, next) => {
@@ -58,6 +71,24 @@ function body() {
 afterEach(() => container.reset());
 
 describe('Docker source resource route', () => {
+  it('refuses a Git container named like a deployment on the node, whose folder placement it would take over', async () => {
+    const source = { upsert: vi.fn(), createBuild: vi.fn(), remove: vi.fn() };
+    container.registerInstance(DockerSourceService, source as never);
+    container.registerInstance(DockerDeploymentService, {} as never);
+    container.registerInstance(DockerManagementService, { listContainers: vi.fn().mockResolvedValue([]) } as never);
+    const router = app();
+    container.registerInstance(TOKENS.DrizzleClient, emptyDb(['payments-api']) as never);
+
+    const response = await router.request(`/nodes/${NODE_ID}/source-resources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body()),
+    });
+
+    expect(response.status).toBe(409);
+    expect(source.upsert).not.toHaveBeenCalled();
+  });
+
   it('reserves a missing container through the normal source binding and queues its first build', async () => {
     const source = {
       upsert: vi.fn().mockResolvedValue({ id: 'source-1' }),

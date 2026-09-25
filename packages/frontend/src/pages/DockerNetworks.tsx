@@ -32,10 +32,11 @@ import {
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
-import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { canCreateDockerResourceOnNode, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -109,14 +110,14 @@ export function DockerNetworks({
   const [createOpen, setCreateOpen] = useState(false);
   const [createNodeId, setCreateNodeId] = useState<string>("");
   const openCreate = useCallback(() => {
-    setCreateNodeId(selectedNodeId || "");
+    setCreateNodeId(fixedNodeId || selectedNodeId || "");
     setCreateName("");
     setCreateDriver("bridge");
     setCreateSubnet("");
     setCreateGateway("");
     setCreateFolderId("");
     setCreateOpen(true);
-  }, [selectedNodeId]);
+  }, [fixedNodeId, selectedNodeId]);
   useEffect(() => {
     onCreateRef?.(() => openCreate());
   }, [onCreateRef, openCreate]);
@@ -130,6 +131,40 @@ export function DockerNetworks({
   const [createFolderId, setCreateFolderId] = useState("");
   const [creating, setCreating] = useState(false);
   const folderList = useMemo(() => flattenFolders(networkFolders), [networkFolders]);
+  // Same destination rules as POST /nodes/:nodeId/networks: root needs create on the node (or broadly), a folder
+  // needs create on that folder.
+  const canCreateAtRoot = canCreateInFolder(
+    user?.scopes ?? [],
+    "docker:networks:create",
+    null,
+    createNodeId || undefined
+  );
+  const createFolderOptions = useMemo(
+    () =>
+      folderList.filter(
+        (folder) =>
+          !folder.isSystem &&
+          canCreateInFolder(
+            user?.scopes ?? [],
+            "docker:networks:create",
+            folder.id,
+            createNodeId || undefined
+          )
+      ),
+    [createNodeId, folderList, user?.scopes]
+  );
+  const canCreateHere = canCreateInFolder(
+    user?.scopes ?? [],
+    "docker:networks:create",
+    createFolderId || null,
+    createNodeId || undefined
+  );
+  useEffect(() => {
+    // A folder-only creator has exactly one valid choice more often than not: preselect it.
+    if (createOpen && !createFolderId && !canCreateAtRoot && createFolderOptions.length === 1) {
+      setCreateFolderId(createFolderOptions[0].id);
+    }
+  }, [canCreateAtRoot, createFolderId, createFolderOptions, createOpen]);
 
   // Details dialog
   const {
@@ -202,7 +237,7 @@ export function DockerNetworks({
     try {
       const onlineNodes = await loadVisibleDockerNodes(
         user?.scopes ?? [],
-        ["docker:networks:view"],
+        ["docker:networks:view", "docker:networks:create"],
         hasScopedAccess("nodes:details")
       );
       setDockerNodes(onlineNodes);
@@ -250,7 +285,7 @@ export function DockerNetworks({
     );
   }, [networks, search]);
   const truncatedListMeta = networks.find((network) => network._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
 
   const containerCount = useCallback((net: DockerNetwork): number => {
     if (typeof (net as any).containersCount === "number") return (net as any).containersCount;
@@ -292,7 +327,7 @@ export function DockerNetworks({
   );
 
   const handleCreate = async () => {
-    if (!createNodeId || !createName.trim()) return;
+    if (!createNodeId || !createName.trim() || !canCreateHere) return;
     setCreating(true);
     try {
       await api.createNetwork(createNodeId, {
@@ -317,6 +352,14 @@ export function DockerNetworks({
   };
 
   const selectedNode = dockerNodes.find((n) => n.id === selectedNodeId);
+  // Only nodes the backend accepts a network on, for some destination this user may pick.
+  const createNodes = (
+    useDockerStore.getState().dockerNodes.length > 0
+      ? useDockerStore.getState().dockerNodes
+      : dockerNodes
+  ).filter((node) =>
+    canCreateDockerResourceOnNode(user?.scopes ?? [], "docker:networks:create", node.id)
+  );
 
   const allNetworkColumns: ResourceListColumn<DockerNetworkListItem>[] = useMemo(
     () => [
@@ -624,10 +667,7 @@ export function DockerNetworks({
                   <SelectValue placeholder="Select a node" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(useDockerStore.getState().dockerNodes.length > 0
-                    ? useDockerStore.getState().dockerNodes
-                    : dockerNodes
-                  ).map((n) => (
+                  {createNodes.map((n) => (
                     <SelectItem key={n.id} value={n.id}>
                       {n.displayName || n.hostname}
                     </SelectItem>
@@ -638,22 +678,20 @@ export function DockerNetworks({
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Destination folder</label>
               <Select
-                value={createFolderId || "__none__"}
+                value={createFolderId || (canCreateAtRoot ? "__none__" : "")}
                 onValueChange={(value) => setCreateFolderId(value === "__none__" ? "" : value)}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="No folder" />
+                  <SelectValue placeholder="Select a folder" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">No folder</SelectItem>
-                  {folderList
-                    .filter((folder) => !folder.isSystem)
-                    .map((folder) => (
-                      <SelectItem key={folder.id} value={folder.id}>
-                        {"— ".repeat(folder.depth)}
-                        {folder.name}
-                      </SelectItem>
-                    ))}
+                  {canCreateAtRoot && <SelectItem value="__none__">No folder</SelectItem>}
+                  {createFolderOptions.map((folder) => (
+                    <SelectItem key={folder.id} value={folder.id}>
+                      {"— ".repeat(folder.depth)}
+                      {folder.name}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -708,7 +746,7 @@ export function DockerNetworks({
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={creating || !createName.trim() || !createNodeId}
+              disabled={creating || !createName.trim() || !createNodeId || !canCreateHere}
             >
               {creating ? "Creating..." : "Create"}
             </Button>

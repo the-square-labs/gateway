@@ -1,7 +1,7 @@
 import { container } from '@/container.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { hasScope, hasScopeForCreation, privilegeBoundaryScopes } from '@/lib/permissions.js';
-import { canonicalizeScopes } from '@/lib/scopes.js';
+import { canonicalizeInboundScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import type { CreateGroupInput, UpdateGroupInput } from './group.schemas.js';
@@ -52,13 +52,22 @@ export async function getGroupForActor(actor: GroupActor, groupId: string, servi
   return groupServiceOf(services).getGroup(groupId);
 }
 
+/** Rewrite retired names; a non-empty request whose scopes were all removed is an error, not an empty group. */
+function inboundGroupScopes(requested: readonly string[]): string[] {
+  const scopes = canonicalizeInboundScopes(requested);
+  if (requested.length > 0 && scopes.length === 0) {
+    throw new AppError(400, 'INVALID_SCOPE', 'None of the requested scopes exist any more');
+  }
+  return scopes;
+}
+
 export async function createGroupForActor(
   actor: GroupActor,
   parsedInput: CreateGroupInput,
   services: GroupActionServices = {}
 ) {
   const groupService = groupServiceOf(services);
-  const input = { ...parsedInput, scopes: canonicalizeScopes(parsedInput.scopes) };
+  const input = { ...parsedInput, scopes: inboundGroupScopes(parsedInput.scopes) };
   if (!hasScopeForCreation(actor.scopes, 'admin:groups', input.folderId))
     throw new AppError(403, 'FORBIDDEN', 'Select an authorized destination group folder');
   if (input.folderId) await container.resolve(PermissionGroupFolderService).assertFolderExists(input.folderId);
@@ -88,7 +97,7 @@ export async function updateGroupForActor(
   const groupService = groupServiceOf(services);
   const input = {
     ...parsedInput,
-    ...(parsedInput.scopes !== undefined && { scopes: canonicalizeScopes(parsedInput.scopes) }),
+    ...(parsedInput.scopes !== undefined && { scopes: inboundGroupScopes(parsedInput.scopes) }),
   };
   await groupService.assertCanUpdateGroup(
     groupId,

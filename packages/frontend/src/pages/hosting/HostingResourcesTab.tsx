@@ -234,7 +234,7 @@ export function HostingResourcesTab({
     const nodesVisible = resource.nodes.every(
       (node) =>
         hasScope(`nodes:details:${node.id}`) &&
-        hasScope(`${action === "delete" ? "nodes:delete" : "nodes:config:edit"}:${node.id}`)
+        hasScope(`${action === "delete" ? "nodes:delete" : "nodes:manage"}:${node.id}`)
     );
     return (
       managed(resource) &&
@@ -385,7 +385,7 @@ export function HostingResourcesTab({
           !!currentOperation.nodeId &&
           ["create", "install"].includes(currentOperation.action) &&
           hasScope(`hosting:resources:recover:${resource.id}`) &&
-          hasScope(`nodes:config:edit:${currentOperation.nodeId}`) &&
+          hasScope(`nodes:manage:${currentOperation.nodeId}`) &&
           (resource.capabilities.bootstrap.available || hasScope("integrations:ssh:use"));
         return (
           <DropdownMenu>

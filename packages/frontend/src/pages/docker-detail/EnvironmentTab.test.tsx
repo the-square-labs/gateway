@@ -312,9 +312,63 @@ describe("EnvironmentTab managed database links", () => {
     expect(screen.getByDisplayValue("new")).toBeInTheDocument();
   });
 
+  it.each([
+    [["docker:containers:environment", "docker:containers:secrets", "databases:edit"], false],
+    [
+      [
+        "docker:containers:environment",
+        "docker:containers:secrets",
+        "docker:containers:edit",
+        "docker:containers:manage",
+        "databases:edit",
+      ],
+      true,
+    ],
+  ])("only lets deployment links change with edit and manage, like the binding API (%j)", async (scopes, enabled) => {
+    useAuthStore.setState({
+      user: makeUser({ scopes }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    useDockerStore.setState({ invalidate: vi.fn().mockResolvedValue(undefined) });
+    vi.spyOn(api, "getContainerEnv").mockResolvedValue([]);
+    vi.spyOn(api, "listDockerSecrets").mockResolvedValue([]);
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [makeNode({ id: database.nodeId, type: "databases" })],
+      total: 1,
+      page: 1,
+      limit: 1,
+      totalPages: 1,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <EnvironmentTab
+          nodeId="node-1"
+          containerId="deployment-1"
+          containerName="web"
+          scopeResourceId="deployment-1"
+          serviceEnv={{}}
+          onSaveServiceEnv={vi.fn()}
+          databaseTargetType="deployment"
+          databaseTargetResourceId="deployment-1"
+        />
+      </MemoryRouter>
+    );
+
+    await screen.findByText("No managed database links");
+    const add = screen.getByRole("button", { name: "Add" });
+    if (enabled) expect(add).toBeEnabled();
+    else expect(add).toBeDisabled();
+  });
+
   it("hides a confirmed replacement from the ordinary env draft before save", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -357,7 +411,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("hides active managed database projections from the editable environment", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -407,7 +463,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("does not show managed database links when no databases node exists", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -437,7 +495,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("disables managed database link controls while the container is transitioning", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -467,7 +527,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("does not re-fetch the old container after saving a managed database link", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -511,7 +573,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("recreates a running container when only a secret changed", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });
@@ -583,7 +647,9 @@ describe("EnvironmentTab managed database links", () => {
 
   it("removes a deleted secret from runtime env during recreate", async () => {
     useAuthStore.setState({
-      user: makeUser({ scopes: ["docker:containers:environment", "docker:containers:secrets"] }),
+      user: makeUser({
+        scopes: ["docker:containers:environment", "docker:containers:secrets", "databases:edit"],
+      }),
       isAuthenticated: true,
       isLoading: false,
     });

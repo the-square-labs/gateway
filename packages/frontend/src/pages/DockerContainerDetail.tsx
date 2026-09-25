@@ -264,7 +264,6 @@ export function DockerContainerDetail({
       !!(
         container?.folderId && hasScope(`docker:containers:create:folder/${container.folderId}`)
       )) &&
-    hasContainerScope("docker:containers:config") &&
     hasContainerScope("docker:containers:environment") &&
     hasContainerScope("docker:containers:secrets");
   const canDelete = hasContainerScope("docker:containers:delete");

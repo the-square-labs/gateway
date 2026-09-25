@@ -38,14 +38,18 @@ function StatCard({
 interface QuickStatsCardProps {
   displayStats: DashboardStats;
   nodesList: Node[];
-  hasScope: (scope: string) => boolean;
+  /**
+   * Any grant of the scope base (broad, resource, folder or node). The server scopes the counts to
+   * what the caller can see, so a folder-scoped user gets the stats of their folder.
+   */
+  hasScopedAccess: (scopeBase: string) => boolean;
   pkiEnabled?: boolean;
 }
 
 export function QuickStatsCard({
   displayStats,
   nodesList,
-  hasScope,
+  hasScopedAccess: hasScope,
   pkiEnabled = true,
 }: QuickStatsCardProps) {
   if (

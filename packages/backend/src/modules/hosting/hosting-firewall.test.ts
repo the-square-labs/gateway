@@ -79,7 +79,7 @@ function fixture() {
     scopes: [
       'nodes:details',
       'nodes:config:view',
-      'nodes:config:edit',
+      'nodes:manage',
       'integrations:hosting:view',
       'integrations:hosting:manage',
     ],

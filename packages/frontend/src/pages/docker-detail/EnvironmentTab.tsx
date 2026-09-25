@@ -119,6 +119,13 @@ export function EnvironmentTab({
   const canEdit = canEditOverride ?? hasScope(`docker:containers:environment:${scopeSuffix}`);
   const canManageSecrets =
     canManageSecretsOverride ?? hasScope(`docker:containers:secrets:${scopeSuffix}`);
+  // Any link change on a deployment rolls it out (manage), and saving links here also sends the
+  // environment draft, which rewrites its config (edit). The binding API gates both, in addition
+  // to environment and secrets.
+  const canChangeManagedLinks =
+    databaseTargetType !== "deployment" ||
+    (hasScope(`docker:containers:edit:${scopeSuffix}`) &&
+      hasScope(`docker:containers:manage:${scopeSuffix}`));
   const recreatesRunningContainer = containerState === "running";
   const resolvedServiceSaveLabel =
     serviceSaveLabel ?? (recreatesRunningContainer ? "Save & Recreate" : "Save");
@@ -847,7 +854,7 @@ export function EnvironmentTab({
             targetType={databaseTargetType}
             targetResourceId={resolvedDatabaseTargetResourceId}
             containerName={containerName}
-            disabled={disabled || isSaving || hasErrors}
+            disabled={disabled || isSaving || hasErrors || !canChangeManagedLinks}
             existingVariableNames={[...existingVariableNames, ...managedStorageVariableNames]}
             onInitialLoadingChange={setDatabaseLinksLoading}
             onDraftChange={handleDatabaseLinkDraftChange}
@@ -865,7 +872,7 @@ export function EnvironmentTab({
           containerName={containerName}
           canManage={canManageManagedStorage}
           canManageCluster={canManageStorageCluster}
-          disabled={disabled || isSaving || hasErrors}
+          disabled={disabled || isSaving || hasErrors || !canChangeManagedLinks}
           existingVariableNames={[...existingVariableNames, ...managedDatabaseVariableNames]}
           onInitialLoadingChange={setStorageLinksLoading}
           onDraftChange={handleStorageLinkDraftChange}

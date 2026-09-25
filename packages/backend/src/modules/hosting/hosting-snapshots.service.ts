@@ -216,9 +216,11 @@ export class HostingSnapshotsService {
       if (action && node.status === 'pending')
         throw new AppError(409, 'HOSTING_NODE_NOT_READY', 'Wait for node provisioning to finish');
     }
+    // Seeing every bound node is the VM visibility baseline, as in the hosting resource list. Snapshot create,
+    // delete and folder layout act on the provider VM only; restoring rewrites the node's disk, which is node control.
     for (const binding of bindings) {
       assertHostingScope(user.scopes, 'nodes:details', binding.nodeId);
-      if (action) assertHostingScope(user.scopes, 'nodes:config:edit', binding.nodeId);
+      if (action === 'snapshot_restore') assertHostingScope(user.scopes, 'nodes:manage', binding.nodeId);
     }
     return { resource, connector, nodeIds: bindings.map((b) => b.nodeId).sort() };
   }
@@ -269,23 +271,15 @@ export class HostingSnapshotsService {
         observedAt: matches ? (cached?.observedAt ?? null) : null,
       },
       snapshots: await snapshotPlacements(this.db, resourceId, snapshots),
-      canManageFolders:
-        hasScope(user.scopes, `hosting:snapshots:folders:manage:${resourceId}`) &&
-        nodeIds.every((n) => hasScope(user.scopes, `nodes:config:edit:${n}`)),
+      canManageFolders: hasScope(user.scopes, `hosting:snapshots:folders:manage:${resourceId}`),
       operation: visibleOperation,
-      canCreate:
-        supported &&
-        hasScope(user.scopes, `hosting:snapshots:create:${resource.id}`) &&
-        nodeIds.every((n) => hasScope(user.scopes, `nodes:config:edit:${n}`)),
-      canDelete:
-        supported &&
-        hasScope(user.scopes, `hosting:snapshots:delete:${resource.id}`) &&
-        nodeIds.every((n) => hasScope(user.scopes, `nodes:config:edit:${n}`)),
+      canCreate: supported && hasScope(user.scopes, `hosting:snapshots:create:${resource.id}`),
+      canDelete: supported && hasScope(user.scopes, `hosting:snapshots:delete:${resource.id}`),
       canRestore:
         supported &&
         canRestorePower(connector.provider, powerState) &&
         hasScope(user.scopes, `hosting:snapshots:restore:${resource.id}`) &&
-        nodeIds.every((n) => hasScope(user.scopes, `nodes:config:edit:${n}`)),
+        nodeIds.every((n) => hasScope(user.scopes, `nodes:manage:${n}`)),
     };
   }
   async folders(resourceId: string, user: User) {
@@ -296,9 +290,8 @@ export class HostingSnapshotsService {
   }
   async folderAction(resourceId: string, user: User, operation: string, input: unknown, folderId?: string) {
     const target = await this.target(resourceId, user);
+    // Snapshot assignments are catalog metadata, never provider mutations: the snapshot folder scope is enough.
     assertHostingScope(user.scopes, 'hosting:snapshots:folders:manage', resourceId);
-    for (const nodeId of target.nodeIds) assertHostingScope(user.scopes, 'nodes:config:edit', nodeId);
-    // Snapshot assignments are catalog metadata, never provider mutations.
     let selected: HostingVmSnapshot[] = [];
     let move: ReturnType<typeof MoveResourcesToFolderSchema.parse> | undefined;
     let reorder: ReturnType<typeof ReorderResourcesSchema.parse> | undefined;

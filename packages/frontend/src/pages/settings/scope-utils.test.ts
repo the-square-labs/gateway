@@ -11,15 +11,15 @@ import {
 
 describe("scope editor utilities", () => {
   it("uses longest-match parsing for resource-scoped scope values", () => {
-    expect(parseScopesForForm(["proxy:advanced:bypass:host-1"])).toEqual({
-      baseScopes: ["proxy:advanced:bypass"],
-      resources: { "proxy:advanced:bypass": ["host-1"] },
+    expect(parseScopesForForm(["admin:users:impersonate:user-1"])).toEqual({
+      baseScopes: ["admin:users:impersonate"],
+      resources: { "admin:users:impersonate": ["user-1"] },
     });
   });
 
   it("does not parse exact restrictable scopes as narrower scope resources", () => {
-    expect(parseScopesForForm(["proxy:advanced:bypass"])).toEqual({
-      baseScopes: ["proxy:advanced:bypass"],
+    expect(parseScopesForForm(["admin:users:impersonate"])).toEqual({
+      baseScopes: ["admin:users:impersonate"],
       resources: {},
     });
   });
@@ -40,14 +40,13 @@ describe("scope editor utilities", () => {
   });
 
   it("does not let overlapping exact scopes imply each other", () => {
-    expect(scopeMatches(["proxy:advanced"], "proxy:advanced:bypass")).toBe(false);
-    expect(scopeMatches(["proxy:advanced:bypass:host-1"], "proxy:advanced")).toBe(false);
-    expect(scopeMatches(["proxy:advanced:bypass"], "proxy:advanced:bypass:host-1")).toBe(true);
-    expect(scopeMatches(["proxy:raw:bypass"], "proxy:raw:bypass:host-1")).toBe(true);
-    expect(scopeMatches(["proxy:raw:bypass:host-1"], "proxy:raw:bypass:host-1")).toBe(true);
-    expect(scopeMatches(["proxy:raw:bypass:host-1"], "proxy:raw:bypass:host-2")).toBe(false);
-    expect(scopeMatches(["proxy:raw:bypass:host-1"], "proxy:raw:write:host-1")).toBe(false);
-    expect(scopeMatches(["proxy:raw:write:host-1"], "proxy:raw:bypass:host-1")).toBe(false);
+    expect(scopeMatches(["admin:users"], "admin:users:impersonate")).toBe(false);
+    expect(scopeMatches(["admin:users:impersonate:user-1"], "admin:users")).toBe(false);
+    expect(scopeMatches(["proxy:unrestricted"], "proxy:unrestricted:host-1")).toBe(true);
+    expect(scopeMatches(["proxy:unrestricted:host-1"], "proxy:unrestricted:host-1")).toBe(true);
+    expect(scopeMatches(["proxy:unrestricted:host-1"], "proxy:unrestricted:host-2")).toBe(false);
+    expect(scopeMatches(["proxy:unrestricted:host-1"], "proxy:raw:write:host-1")).toBe(false);
+    expect(scopeMatches(["proxy:raw:write:host-1"], "proxy:unrestricted:host-1")).toBe(false);
   });
 
   it("lets write scopes satisfy matching read scopes", () => {
@@ -57,18 +56,44 @@ describe("scope editor utilities", () => {
     expect(scopeMatches(["databases:query:admin"], "databases:query:read")).toBe(true);
   });
 
-  it("does not let create-only or destructive action scopes satisfy read scopes", () => {
-    expect(scopeMatches(["proxy:create"], "proxy:view")).toBe(false);
-    expect(scopeMatches(["proxy:delete"], "proxy:view")).toBe(false);
+  it("applies the generated family rule: every action scope satisfies its family view", () => {
+    expect(scopeMatches(["proxy:delete"], "proxy:view")).toBe(true);
+    expect(scopeMatches(["notifications:webhooks:manage"], "notifications:webhooks:view")).toBe(
+      true
+    );
+    expect(scopeMatches(["databases:credentials:reveal:db-1"], "databases:view:db-1")).toBe(true);
+    expect(scopeMatches(["logs:schemas:delete"], "logs:schemas:view")).toBe(true);
+    expect(scopeMatches(["docker:tasks:manage"], "docker:tasks")).toBe(true);
+    expect(scopeMatches(["docker:compose:manage:node-1"], "docker:compose:view:node-1/p1")).toBe(
+      true
+    );
+    expect(
+      scopeMatches(["docker:availability:manage:node-1/c1"], "docker:containers:view:node-1/c1")
+    ).toBe(true);
+    expect(scopeMatches(["pki:ca:export:ca-1"], "pki:ca:view:ca-1")).toBe(true);
+  });
+
+  it("keeps sibling actions, other families, and folder trees apart", () => {
     expect(scopeMatches(["proxy:raw:write"], "proxy:raw:read")).toBe(false);
     expect(scopeMatches(["proxy:raw:write:host-1"], "proxy:raw:read:host-1")).toBe(false);
-    expect(scopeMatches(["notifications:webhooks:create"], "notifications:webhooks:view")).toBe(
+    expect(scopeMatches(["proxy:templates:manage"], "proxy:view")).toBe(false);
+    expect(scopeMatches(["docker:folders:manage"], "docker:containers:view")).toBe(false);
+    expect(scopeMatches(["pki:ca:export:ca-1"], "pki:ca:view:ca-2")).toBe(false);
+  });
+
+  it("never lets a creation scope reveal existing resources or destinations", () => {
+    expect(scopeMatches(["proxy:create"], "proxy:view")).toBe(false);
+    expect(scopeMatches(["databases:create"], "databases:view")).toBe(false);
+    expect(scopeMatches(["docker:containers:create"], "docker:containers:view:node-1/c1")).toBe(
       false
     );
-    expect(scopeMatches(["databases:create"], "databases:view")).toBe(false);
-    expect(scopeMatches(["databases:credentials:reveal"], "databases:view")).toBe(false);
-    expect(scopeMatches(["databases:credentials:reveal:db-1"], "databases:view:db-1")).toBe(false);
-    expect(scopeMatches(["logs:schemas:delete"], "logs:schemas:view")).toBe(false);
+    expect(
+      scopeMatches(["docker:containers:create:node-1"], "docker:containers:view:node-1/c1")
+    ).toBe(false);
+    expect(hasScopeBase(["databases:create:folder/f1"], "databases:view")).toBe(false);
+    expect(scopeMatches(["proxy:create:node/n1"], "proxy:view:node/n1")).toBe(false);
+    expect(scopeMatches(["acl:create"], "acl:view")).toBe(false);
+    expect(scopeMatches(["proxy:maintenance:bypass"], "proxy:view")).toBe(false);
   });
 
   it("keeps write-to-read implications inside the same resource boundary", () => {
@@ -84,8 +109,8 @@ describe("scope editor utilities", () => {
   });
 
   it("derives resource ids with longest-match parsing", () => {
-    expect(deriveAllowedResourceIdsByScope(["proxy:advanced:bypass:host-1"])).toEqual({
-      "proxy:advanced:bypass": ["host-1"],
+    expect(deriveAllowedResourceIdsByScope(["admin:users:impersonate:user-1"])).toEqual({
+      "admin:users:impersonate": ["user-1"],
     });
   });
 
@@ -93,7 +118,7 @@ describe("scope editor utilities", () => {
     expect(hasSelectableScopeBase(["proxy:view:host-1"], "proxy:view")).toBe(true);
     expect(hasSelectableScopeBase(["proxy:edit"], "proxy:view")).toBe(true);
     expect(hasSelectableScopeBase(["proxy:edit:host-1"], "proxy:view")).toBe(true);
-    expect(hasSelectableScopeBase(["proxy:advanced:bypass:host-1"], "proxy:advanced")).toBe(false);
+    expect(hasSelectableScopeBase(["admin:users:impersonate:user-1"], "admin:users")).toBe(false);
   });
 
   it("derives resource ids through implied scope relationships", () => {
@@ -113,6 +138,6 @@ describe("scope editor utilities", () => {
 
   it("matches resource-scoped write access as scoped read access", () => {
     expect(hasScopeBase(["proxy:edit:host-1"], "proxy:view")).toBe(true);
-    expect(hasScopeBase(["proxy:advanced:bypass:host-1"], "proxy:advanced")).toBe(false);
+    expect(hasScopeBase(["admin:users:impersonate:user-1"], "admin:users")).toBe(false);
   });
 });

@@ -8,16 +8,26 @@ import type { ManagedWorkloadLifecycle } from '@/modules/managed-workloads/manag
 import type { ManagedWorkloadProvider } from '@/modules/managed-workloads/managed-workload-provider.js';
 import type { ManagedWorkloadStore } from '@/modules/managed-workloads/managed-workload-store.js';
 import type { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
-import type { StorageBackupHistoryOptions } from '@/modules/object-storage/storage-backup-references.js';
+import type {
+  BackupHistoryRehomeResult,
+  StorageBackupHistoryOptions,
+} from '@/modules/object-storage/storage-backup-references.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { RelayPolicyService } from '@/services/relay-policy.service.js';
 import type { StorageCAService } from '@/services/storage-ca.service.js';
 import type {
+  CertificateRenewalStatusView,
+  RenewalOutcome,
+  SystemCertificateRenewalService,
+} from '@/services/system-certificate-renewal.service.js';
+import type {
   CreateManagedStorageAccessKeyInput,
   CreateManagedStorageInput,
+  ManagedStorageKeyImportResult,
   ManagedStorageListQuery,
+  ManagedStorageWriteFreezeResult,
   UpdateManagedStorageInput,
 } from './managed-storage.schemas.js';
 import type { ManagedStorageTunnelProxy } from './managed-storage-tunnel-proxy.js';
@@ -199,6 +209,17 @@ export class ManagedStorageService {
   }> {
     return commercialModuleUnavailable();
   }
+  setCertificateRenewal(_renewal: SystemCertificateRenewalService): void {}
+  async getCertificateStatus(_id: string): Promise<CertificateRenewalStatusView> {
+    return commercialModuleUnavailable();
+  }
+  async renewCertificate(
+    _id: string,
+    _userId: string,
+    _options?: { allowRestart?: boolean }
+  ): Promise<{ outcome: RenewalOutcome; status: CertificateRenewalStatusView }> {
+    return commercialModuleUnavailable();
+  }
   async revealCredentials(_id: string): Promise<{
     accessKey: string;
     secretKey: string;
@@ -236,6 +257,28 @@ export class ManagedStorageService {
   ): Promise<{
     success: boolean;
   }> {
+    return commercialModuleUnavailable();
+  }
+  async importAccessKeys(
+    _sourceId: string,
+    _targetId: string,
+    _userId: string,
+    _keyIds?: string[]
+  ): Promise<ManagedStorageKeyImportResult> {
+    return commercialModuleUnavailable();
+  }
+  async freezeWrites(_id: string, _userId: string): Promise<ManagedStorageWriteFreezeResult> {
+    return commercialModuleUnavailable();
+  }
+  async unfreezeWrites(_id: string, _userId: string): Promise<ManagedStorageWriteFreezeResult> {
+    return commercialModuleUnavailable();
+  }
+  async rehomeBackupHistory(
+    _sourceId: string,
+    _targetId: string,
+    _userId: string,
+    _options?: { dryRun?: boolean }
+  ): Promise<BackupHistoryRehomeResult & { sourceStorageId: string; targetStorageId: string }> {
     return commercialModuleUnavailable();
   }
   async reconcilePendingOperations(): Promise<void> {

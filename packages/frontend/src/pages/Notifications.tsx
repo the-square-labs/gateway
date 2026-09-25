@@ -37,54 +37,18 @@ export function Notifications() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { hasAnyScope } = useAuthStore();
   const siemEnabled = useSystemConfigStore((state) => state.config.features.siemEnabled);
-  const canReadAlerts = hasAnyScope(
-    "notifications:alerts:view",
-    "notifications:alerts:view",
-    "notifications:view",
-    "notifications:manage"
-  );
-  const canAccessAlerts = hasAnyScope(
-    "notifications:alerts:view",
-    "notifications:alerts:view",
-    "notifications:alerts:create",
-    "notifications:alerts:edit",
-    "notifications:alerts:delete",
-    "notifications:view",
-    "notifications:manage"
-  );
+  // Same scopes as the notification routes: *:view to read, *:manage to change (manage implies view).
+  const canReadAlerts = hasAnyScope("notifications:alerts:view", "notifications:alerts:manage");
+  const canAccessAlerts = canReadAlerts;
   const canReadWebhooks = hasAnyScope(
     "notifications:webhooks:view",
-    "notifications:webhooks:view",
-    "notifications:view",
-    "notifications:manage"
+    "notifications:webhooks:manage"
   );
-  const canManageAlerts = hasAnyScope(
-    "notifications:alerts:create",
-    "notifications:alerts:edit",
-    "notifications:alerts:delete",
-    "notifications:manage"
-  );
-  const canAccessWebhooks = hasAnyScope(
-    "notifications:webhooks:view",
-    "notifications:webhooks:view",
-    "notifications:webhooks:create",
-    "notifications:webhooks:edit",
-    "notifications:webhooks:delete",
-    "notifications:view",
-    "notifications:manage"
-  );
-  const canManageWebhooks = hasAnyScope(
-    "notifications:webhooks:create",
-    "notifications:webhooks:edit",
-    "notifications:webhooks:delete",
-    "notifications:manage"
-  );
-  const canViewDeliveries = hasAnyScope(
-    "notifications:deliveries:view",
-    "notifications:deliveries:view",
-    "notifications:view",
-    "notifications:manage"
-  );
+  const canManageAlerts = hasAnyScope("notifications:alerts:manage");
+  const canAccessWebhooks = canReadWebhooks;
+  const canManageWebhooks = hasAnyScope("notifications:webhooks:manage");
+  // Delivery history belongs to webhooks.
+  const canViewDeliveries = canReadWebhooks;
   const canViewSiem = siemEnabled && hasAnyScope("audit:siem:view", "audit:siem:manage");
   const canManageSiem = siemEnabled && hasAnyScope("audit:siem:manage");
   const visibleTabs = TABS.filter((tab) => {

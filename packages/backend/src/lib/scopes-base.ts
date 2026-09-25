@@ -25,10 +25,11 @@ export const ALL_SCOPES = [
   'nodes:backups:execute',
 
   // ── PKI: Certificate Authorities ─────────────────────────────────
-  'pki:ca:view:root',
-  'pki:ca:view:intermediate',
+  'pki:ca:view',
   'pki:ca:create:root',
   'pki:ca:create:intermediate',
+  'pki:ca:edit',
+  'pki:ca:export',
   'pki:ca:revoke:root',
   'pki:ca:revoke:intermediate',
   // ── PKI: Certificates ────────────────────────────────────────────
@@ -54,10 +55,8 @@ export const ALL_SCOPES = [
   'proxy:delete',
   'proxy:raw:read',
   'proxy:raw:write',
-  'proxy:raw:toggle',
-  'proxy:raw:bypass',
   'proxy:advanced',
-  'proxy:advanced:bypass',
+  'proxy:unrestricted',
   'proxy:maintenance:bypass',
   'proxy:folders:manage',
   // ── Pages ─────────────────────────────────────────────────────────
@@ -74,16 +73,12 @@ export const ALL_SCOPES = [
   'pages:settings:edit',
   // ── Proxy Templates ──────────────────────────────────────────────
   'proxy:templates:view',
-  'proxy:templates:create',
-  'proxy:templates:edit',
-  'proxy:templates:delete',
+  'proxy:templates:manage',
   // ── SSL Certificates ─────────────────────────────────────────────
   'ssl:cert:view',
   'ssl:cert:issue',
   'ssl:cert:folders:manage',
   'ssl:cert:delete',
-  'ssl:cert:revoke',
-  'ssl:cert:export',
   // ── Access Control Lists ─────────────────────────────────────────
   'acl:view',
   'acl:create',
@@ -94,8 +89,8 @@ export const ALL_SCOPES = [
   'nodes:create',
   'nodes:rename',
   'nodes:delete',
+  'nodes:manage',
   'nodes:config:view',
-  'nodes:config:edit',
   'nodes:logs',
   'nodes:console',
   'nodes:files:read',
@@ -118,31 +113,27 @@ export const ALL_SCOPES = [
   // ── Gateway Settings ─────────────────────────────────────────────
   'settings:gateway:view',
   'settings:gateway:edit',
-  // ── Integrations: GitLab ─────────────────────────────────────────
+  // ── Integrations: Git providers (GitLab, GitHub, generic Git) ────
+  // Every Git provider uses the same verbs: view connectors, manage (and sync) them, use the
+  // connector's system credential, and read or write repository content (files, CI, variables,
+  // secrets, webhooks, registry).
   'integrations:gitlab:view',
   'integrations:gitlab:manage',
-  'integrations:gitlab:sync',
-  'integrations:gitlab:system',
-  'integrations:gitlab:projects:view',
+  'integrations:gitlab:use',
   'integrations:gitlab:repo:read',
   'integrations:gitlab:repo:write',
-  'integrations:gitlab:ci:view',
-  'integrations:gitlab:ci:edit',
-  'integrations:gitlab:variables:view',
-  'integrations:gitlab:variables:edit',
-  'integrations:gitlab:variables:delete',
-  'integrations:gitlab:webhooks:manage',
-  'integrations:gitlab:registry:manage',
   'integrations:gitlab:sandbox:clone',
-  // ── Integrations: GitHub, generic Git, and external SSH ─────────
   'integrations:github:view',
   'integrations:github:manage',
-  'integrations:github:sync',
-  'integrations:github:system',
+  'integrations:github:use',
+  'integrations:github:repo:read',
+  'integrations:github:repo:write',
   'integrations:git:view',
   'integrations:git:manage',
-  'integrations:git:sync',
-  'integrations:git:system',
+  'integrations:git:use',
+  'integrations:git:repo:read',
+  'integrations:git:repo:write',
+  // ── Integrations: external SSH ───────────────────────────────────
   'integrations:ssh:view',
   'integrations:ssh:manage',
   'integrations:ssh:use',
@@ -194,7 +185,6 @@ export const ALL_SCOPES = [
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:edit',
-  'docker:containers:config',
   'docker:containers:manage',
   'docker:containers:environment',
   'docker:containers:delete',
@@ -207,7 +197,8 @@ export const ALL_SCOPES = [
   'docker:containers:mounts',
   'docker:containers:migrate',
   'docker:availability:manage',
-  'docker:containers:folders:manage',
+  // Folders for containers, deployments, Compose projects, networks, volumes, and images.
+  'docker:folders:manage',
   // ── Docker: Compose Projects ─────────────────────────────────────
   'docker:compose:view',
   'docker:compose:create',
@@ -220,6 +211,7 @@ export const ALL_SCOPES = [
   // ── Docker: Volumes ──────────────────────────────────────────────
   'docker:volumes:view',
   'docker:volumes:create',
+  'docker:volumes:edit',
   'docker:volumes:delete',
   'docker:volumes:export',
   'docker:volumes:files:read',
@@ -251,16 +243,9 @@ export const ALL_SCOPES = [
   'databases:folders:manage',
   // ── Notifications ────────────────────────────────────────────────
   'notifications:alerts:view',
-  'notifications:alerts:create',
-  'notifications:alerts:edit',
-  'notifications:alerts:delete',
+  'notifications:alerts:manage',
   'notifications:webhooks:view',
-  'notifications:webhooks:create',
-  'notifications:webhooks:edit',
-  'notifications:webhooks:delete',
-  'notifications:deliveries:view',
-  'notifications:view',
-  'notifications:manage',
+  'notifications:webhooks:manage',
   // ── External Logging ─────────────────────────────────────────────
   'logs:environments:view',
   'logs:environments:create',
@@ -276,7 +261,6 @@ export const ALL_SCOPES = [
   'logs:schemas:delete',
   'logs:schemas:folders:manage',
   'logs:read',
-  'logs:manage',
   // ── Status Page ──────────────────────────────────────────────────
   'status-page:view',
   'status-page:manage',

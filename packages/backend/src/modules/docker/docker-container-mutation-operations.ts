@@ -405,7 +405,10 @@ export async function createContainer(
     if (createdName && newId) {
       const resourceId = await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
       if (resourceId && resourceId !== previousResourceId)
-        await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
+        await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
+          folderId: (config.folderId as string | null | undefined) ?? null,
+          nodeId,
+        });
       await placeCreatedDockerResource(
         ctx.db,
         nodeId,
@@ -899,7 +902,11 @@ export async function duplicateContainer(
 
   try {
     const resourceId = await ctx.accessResourceService?.ensureContainer(nodeId, name, newId, false);
-    if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
+    if (resourceId)
+      await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
+        folderId: folderId ?? null,
+        nodeId,
+      });
     await placeCreatedDockerResource(ctx.db, nodeId, 'container', name, folderId);
     await ctx.environmentService?.copy(nodeId, sourceName, name);
     await ctx.runtimeSettingsService?.copy(nodeId, sourceName, name);

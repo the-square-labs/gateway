@@ -21,6 +21,7 @@ const EXPECTED_TOPICS = [
   'docker',
   'databases',
   'storage',
+  'storage-migration',
   'pages',
   'postgres',
   'redis',
@@ -85,7 +86,7 @@ describe('AI internal docs registry', () => {
     ['docker', ['ai:workspace:use']],
     ['proxy', ['pages:view']],
     ['inference', ['databases:view']],
-    ['siem', ['notifications:view']],
+    ['siem', ['notifications:alerts:view', 'notifications:webhooks:view']],
   ])('denies topic %s without a matching scope', (topic, scopes) => {
     expect(getInternalDocumentation(topic, scopes)).toEqual({
       topic,

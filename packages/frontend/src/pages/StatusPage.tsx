@@ -70,17 +70,12 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
-  DatabaseConnection,
-  DockerComposeProjectSummary,
-  DockerContainer,
-  Node,
-  PageProject,
-  ProxyHost,
   StatusPageConfig,
   StatusPageIncident,
   StatusPageIncidentSeverity,
   StatusPageIncidentUpdateStatus,
   StatusPageServiceItem,
+  StatusPageSourceOption,
 } from "@/types";
 import {
   Field,
@@ -136,18 +131,6 @@ const INCIDENT_UPDATE_DEFAULT_MESSAGES: Record<StatusPageIncidentUpdateStatus, s
   monitoring: "A fix has been applied and we are monitoring recovery.",
   resolved: "The incident has been resolved and service is operating normally.",
 };
-
-function normalizeDockerTarget(item: DockerContainer, node: Node): DockerContainer {
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(item as unknown as Record<string, unknown>)) {
-    normalized[key.charAt(0).toLowerCase() + key.slice(1)] = value;
-  }
-  return {
-    ...normalized,
-    _nodeId: node.id,
-    _nodeName: node.displayName || node.hostname,
-  } as unknown as DockerContainer;
-}
 
 function incidentStatusLabel(status: StatusPageIncidentUpdateStatus) {
   return {
@@ -223,23 +206,8 @@ export function StatusPage() {
   const [incidents, setIncidents] = useState<StatusPageIncident[]>(
     () => api.getCached<StatusPageIncident[]>("status-page:incidents") ?? []
   );
-  const [nodes, setNodes] = useState<Node[]>(
-    () => api.getCached<Node[]>("status-page:source-nodes") ?? []
-  );
-  const [proxies, setProxies] = useState<ProxyHost[]>(
-    () => api.getCached<ProxyHost[]>("status-page:source-proxies") ?? []
-  );
-  const [databases, setDatabases] = useState<DatabaseConnection[]>(
-    () => api.getCached<DatabaseConnection[]>("status-page:source-databases") ?? []
-  );
-  const [dockerTargets, setDockerTargets] = useState<DockerContainer[]>(
-    () => api.getCached<DockerContainer[]>("status-page:source-docker-targets") ?? []
-  );
-  const [composeProjects, setComposeProjects] = useState<DockerComposeProjectSummary[]>(
-    () => api.getCached<DockerComposeProjectSummary[]>("status-page:source-compose-projects") ?? []
-  );
-  const [pageProjects, setPageProjects] = useState<PageProject[]>(
-    () => api.getCached<PageProject[]>("status-page:source-page-projects") ?? []
+  const [sources, setSources] = useState<StatusPageSourceOption[]>(
+    () => api.getCached<StatusPageSourceOption[]>("status-page:sources") ?? []
   );
   const [loading, setLoading] = useState(
     () =>
@@ -262,43 +230,19 @@ export function StatusPage() {
     onOpenChange: onUpdateIncidentOpenChange,
   } = useDeferredDialogState<StatusPageIncident>();
 
+  // One status-page endpoint lists the resources the caller may expose (and can view), so the
+  // picker needs no view scope of each resource domain.
   const loadSourceOptions = useCallback(async () => {
+    if (!canManage) return;
     setSourceOptionsLoading(true);
     try {
-      const nodeRows = await api.listNodes({ limit: 100 }).then((res) => res.data ?? []);
-      api.setCache("status-page:source-nodes", nodeRows);
-      setNodes(nodeRows);
-      const dockerNodes = nodeRows.filter((node) => node.type === "docker");
-      const [dockerResults, proxyRows, databaseRows, composeRows, pageProjectRows] =
-        await Promise.all([
-          Promise.allSettled(
-            dockerNodes.map(async (node) => {
-              const rows = await api.listDockerContainers(node.id);
-              return rows.map((row) => normalizeDockerTarget(row, node));
-            })
-          ),
-          api.listProxyHosts({ limit: 100 }).then((res) => res.data ?? []),
-          api.listDatabases({ limit: 200 }).then((res) => res.data ?? []),
-          api.listDockerComposeProjects(),
-          api.listPageProjects({ page: 1, limit: 100 }).then((res) => res.data ?? []),
-        ]);
-      const nextDockerTargets = dockerResults.flatMap((result) =>
-        result.status === "fulfilled" ? result.value : []
-      );
-      api.setCache("status-page:source-docker-targets", nextDockerTargets);
-      api.setCache("status-page:source-proxies", proxyRows);
-      api.setCache("status-page:source-databases", databaseRows);
-      api.setCache("status-page:source-compose-projects", composeRows);
-      api.setCache("status-page:source-page-projects", pageProjectRows);
-      setDockerTargets(nextDockerTargets);
-      setProxies(proxyRows);
-      setDatabases(databaseRows);
-      setComposeProjects(composeRows);
-      setPageProjects(pageProjectRows);
+      const rows = await api.listStatusPageSources();
+      api.setCache("status-page:sources", rows);
+      setSources(rows);
     } finally {
       setSourceOptionsLoading(false);
     }
-  }, []);
+  }, [canManage]);
 
   const loadStatusPage = useCallback(async () => {
     const cachedConfig = api.getCached<StatusPageConfig>("status-page:config");
@@ -708,12 +652,7 @@ export function StatusPage() {
           onOpenChange={setServiceOpen}
           service={editingService}
           services={services}
-          nodes={nodes}
-          proxies={proxies}
-          databases={databases}
-          dockerTargets={dockerTargets}
-          composeProjects={composeProjects}
-          pageProjects={pageProjects}
+          sources={sources}
           sourceOptionsLoading={sourceOptionsLoading}
           onSaved={loadStatusPage}
         />
@@ -852,74 +791,80 @@ function SortableServiceGroup({
         headerClassName="px-3 py-2"
       >
         <div className="divide-y divide-border">
-          {services.map((service) => (
-            <div
-              key={service.id}
-              role={canManage ? "button" : undefined}
-              tabIndex={canManage ? 0 : undefined}
-              aria-label={canManage ? `Open ${service.publicName} editor` : undefined}
-              className={`flex items-center justify-between gap-3 p-3 transition-colors ${
-                canManage
-                  ? "cursor-pointer hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none"
-                  : ""
-              }`}
-              onClick={() => {
-                if (canManage) onEdit(service);
-              }}
-              onKeyDown={(event) => {
-                if (!canManage || event.target !== event.currentTarget) return;
-                if (event.key === "Enter" || event.key === " ") {
-                  event.preventDefault();
-                  onEdit(service);
-                }
-              }}
-            >
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <p className="text-sm font-medium">{service.publicName}</p>
-                  <Badge variant={statusBadge(service.currentStatus) as never} size="inline">
-                    {service.currentStatus}
-                  </Badge>
-                  {!service.enabled && (
-                    <Badge variant="secondary" size="inline">
-                      Hidden
+          {services.map((service) => {
+            // Editing a listing needs view access to its source, like the update API.
+            const canEdit = canManage && service.sourceVisible !== false;
+            return (
+              <div
+                key={service.id}
+                role={canEdit ? "button" : undefined}
+                tabIndex={canEdit ? 0 : undefined}
+                aria-label={canEdit ? `Open ${service.publicName} editor` : undefined}
+                className={`flex items-center justify-between gap-3 p-3 transition-colors ${
+                  canEdit
+                    ? "cursor-pointer hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none"
+                    : ""
+                }`}
+                onClick={() => {
+                  if (canEdit) onEdit(service);
+                }}
+                onKeyDown={(event) => {
+                  if (!canEdit || event.target !== event.currentTarget) return;
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onEdit(service);
+                  }
+                }}
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <p className="text-sm font-medium">{service.publicName}</p>
+                    <Badge variant={statusBadge(service.currentStatus) as never} size="inline">
+                      {service.currentStatus}
                     </Badge>
-                  )}
-                  {service.broken && (
-                    <Badge variant="warning" size="inline">
-                      Source missing
-                    </Badge>
-                  )}
+                    {!service.enabled && (
+                      <Badge variant="secondary" size="inline">
+                        Hidden
+                      </Badge>
+                    )}
+                    {service.broken && (
+                      <Badge variant="warning" size="inline">
+                        Source missing
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {service.source?.label || "Missing source"}
+                  </p>
                 </div>
-                <p className="truncate text-xs text-muted-foreground">
-                  {service.source?.label || "Missing source"}
-                </p>
+                {canManage && (
+                  <div
+                    className="flex items-center gap-1"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Edit ${service.publicName}`}
+                      disabled={!canEdit}
+                      title={canEdit ? undefined : "You cannot view this service's source"}
+                      onClick={() => onEdit(service)}
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Remove ${service.publicName}`}
+                      onClick={() => onDelete(service)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                )}
               </div>
-              {canManage && (
-                <div
-                  className="flex items-center gap-1"
-                  onClick={(event) => event.stopPropagation()}
-                >
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Edit ${service.publicName}`}
-                    onClick={() => onEdit(service)}
-                  >
-                    <Pencil className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Remove ${service.publicName}`}
-                    onClick={() => onDelete(service)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </PanelShell>
     </div>

@@ -7,6 +7,10 @@ import type { DatabaseCAService } from '@/services/database-ca.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type {
+  CertificateRenewalStatusView,
+  SystemCertificateRenewalService,
+} from '@/services/system-certificate-renewal.service.js';
+import type {
   CreateManagedDatabaseInput,
   ManagedDatabaseListQuery,
   UpdateManagedDatabaseInput,
@@ -30,6 +34,10 @@ export class ManagedDatabaseService {
   ) {}
   setLicensePolicyService(_service: LicensePolicyService): void {}
   setEventBus(_bus: EventBusService): void {}
+  setCertificateRenewal(_renewal: SystemCertificateRenewalService): void {}
+  async getCertificateStatus(_id: string): Promise<CertificateRenewalStatusView> {
+    return commercialModuleUnavailable();
+  }
   async ensureBindingIdentity(_managedDatabaseId: string, _userId?: string | null): Promise<ManagedDatabaseRow> {
     return commercialModuleUnavailable();
   }
@@ -208,7 +216,8 @@ export class ManagedDatabaseService {
   }
   async rotateCertificate(
     _id: string,
-    _userId: string
+    _userId: string,
+    _options?: { allowRestart?: boolean }
   ): Promise<{
     id: string;
     databaseConnectionId: string | null;

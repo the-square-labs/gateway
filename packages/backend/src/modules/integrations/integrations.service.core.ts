@@ -19,6 +19,7 @@ import type { SSLService } from '@/modules/ssl/ssl.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { CloudflareZoneRef } from './cloudflare-client.js';
+import { type GitTokenMaintenanceResult, runGitTokenMaintenance } from './git-token-maintenance.js';
 import { GitLabUserCredentialsService } from './gitlab-user-credentials.service.js';
 import type { ConnectorProvider, VcsConnectorAuth, VcsConnectorProvider } from './integration-provider.types.js';
 import type { GitLabAllowlistEntryInput } from './integrations.schemas.js';
@@ -220,6 +221,39 @@ export class IntegrationsCoreService {
     this.providers.set(provider.provider, provider);
   }
 
+  /**
+   * Record GitLab token expiry and self-rotate tokens that expire within 14
+   * days (see git-token-maintenance.ts). A no-op without a GitLab provider.
+   */
+  async maintainGitTokens(now = new Date()): Promise<GitTokenMaintenanceResult> {
+    return runGitTokenMaintenance(
+      {
+        db: this.db,
+        provider: this.providers.get('gitlab') as VcsConnectorProvider | undefined,
+        credentials: this.gitLabUserCredentials,
+        auditService: this.auditService,
+        encryptToken: (token) => this.encryptToken(token),
+        decryptToken: (encryptedToken) => this.decryptToken(encryptedToken),
+        emitConnector: (id, action) => this.emitConnector(id, action),
+      },
+      now
+    );
+  }
+
+  /** Expiry of a connector token as the provider reports it; null when unknown. */
+  protected async describeConnectorTokenExpiry(
+    provider: IntegrationProvider,
+    auth: VcsConnectorAuth
+  ): Promise<Date | null> {
+    const implementation = this.providers.get(provider) as VcsConnectorProvider | undefined;
+    if (!implementation?.describeToken) return null;
+    try {
+      return (await implementation.describeToken(auth))?.expiresAt ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   isGitLabProjectAllowed(
     project: Pick<ProjectRow, 'remoteId' | 'fullPath' | 'name'>,
     allowlistEntries: AllowlistRow[]
@@ -260,6 +294,14 @@ export class IntegrationsCoreService {
   protected systemAuthFor(row: ConnectorRow): VcsConnectorAuth {
     if (!row.encryptedToken) {
       throw new AppError(400, 'CONNECTOR_TOKEN_MISSING', 'GitLab connector token is not configured');
+    }
+    if (row.authMode === 'token' && row.tokenExpiresAt && row.tokenExpiresAt.getTime() <= Date.now()) {
+      throw new AppError(
+        409,
+        'CONNECTOR_TOKEN_EXPIRED',
+        `The access token of integration "${row.name}" expired on ${row.tokenExpiresAt.toISOString().slice(0, 10)}. Rotate the token to continue.`,
+        { connectorId: row.id, expiredAt: row.tokenExpiresAt.toISOString() }
+      );
     }
     return { baseUrl: row.baseUrl, token: this.decryptToken(row.encryptedToken) };
   }

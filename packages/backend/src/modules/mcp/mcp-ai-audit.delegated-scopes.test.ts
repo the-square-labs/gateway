@@ -201,7 +201,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     expect(result.error).toContain('PERMISSION_DENIED');
   });
 
-  it('filters CA list tools by root/intermediate view scopes', async () => {
+  it('filters CA list tools by CA-scoped view grants', async () => {
     const auditService = { log: vi.fn().mockResolvedValue(undefined) };
     const caService = {
       getCATree: vi.fn().mockResolvedValue([
@@ -232,7 +232,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
       requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     };
 
-    const result = await service.executeTool({ ...USER, scopes: ['pki:ca:view:intermediate'] }, 'list_cas', {});
+    const result = await service.executeTool({ ...USER, scopes: ['pki:ca:view:int-1'] }, 'list_cas', {});
 
     expect(result.result).toEqual([{ id: 'int-1', type: 'intermediate', commonName: 'Intermediate' }]);
   });
@@ -329,7 +329,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     const service = createService({ nodesService: {}, proxyService, auditService });
 
     const result = await service.executeTool(
-      { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:advanced:bypass'] },
+      { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:unrestricted'] },
       'update_route',
       { routeId: 'proxy-1', advancedConfig: 'proxy_set_header Host $host;' },
       { source: 'mcp', scopes: ['proxy:edit'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }
@@ -352,7 +352,7 @@ describe('AIService MCP delegated scope audit behavior', () => {
     const service = createService({ nodesService: {}, proxyService, auditService });
 
     const result = await service.executeTool(
-      { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:advanced:bypass'] },
+      { ...USER, scopes: ['proxy:edit', 'proxy:advanced', 'proxy:unrestricted'] },
       'update_route',
       { routeId: 'proxy-1', enabled: false },
       { source: 'mcp', scopes: ['proxy:edit:proxy-1'], tokenId: 'token-1', tokenPrefix: 'gwo_abc1234' }

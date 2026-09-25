@@ -36,10 +36,22 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     c.set('authType', mocks.authType);
     await next();
   },
-  requireScope: () => async (_c: any, next: () => Promise<void>) => next(),
-  requireAnyScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
-  requireScopeBase: () => async (_c: any, next: () => Promise<void>) => next(),
-  requireScopeForResource: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireScope: (scope: string) => async (c: any, next: () => Promise<void>) => {
+    const { hasScope } = await import('@/lib/permissions.js');
+    if (!hasScope(mocks.scopes, scope)) return c.json({ message: `Missing required scope: ${scope}` }, 403);
+    await next();
+  },
+  requireScopeBase: (scope: string) => async (c: any, next: () => Promise<void>) => {
+    const { hasScopeBase } = await import('@/lib/permissions.js');
+    if (!hasScopeBase(mocks.scopes, scope)) return c.json({ message: `Missing required scope: ${scope}` }, 403);
+    await next();
+  },
+  requireScopeForResource: (scope: string, param: string) => async (c: any, next: () => Promise<void>) => {
+    const { hasScope } = await import('@/lib/permissions.js');
+    const required = `${scope}:${c.req.param(param)}`;
+    if (!hasScope(mocks.scopes, required)) return c.json({ message: `Missing required scope: ${required}` }, 403);
+    await next();
+  },
   sessionOnly: async (c: any, next: () => Promise<void>) => {
     if (c.get('authType') !== 'session') {
       return c.json({ message: 'This endpoint requires browser session authentication.' }, 403);
@@ -109,47 +121,42 @@ describe('nginx template routes', () => {
     expect(await response.json()).toEqual({ data: [{ id: 'template-1', name: 'Default' }] });
   });
 
-  it('requires raw write scope, not a browser session, to create template content', async () => {
+  it('writes template content with proxy:templates:manage and without proxy:raw:write', async () => {
     const input = { name: 'Custom', type: 'proxy', content: 'server {}' };
+    const create = () =>
+      createApp().request('/', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
 
-    mocks.scopes = ['proxy:templates:create'];
-    const programmaticWithoutRawScope = await createApp().request('/', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    expect(programmaticWithoutRawScope.status).toBe(403);
+    mocks.scopes = ['proxy:raw:write'];
+    expect((await create()).status).toBe(403);
+    mocks.scopes = ['proxy:templates:manage:template-1'];
+    expect((await create()).status).toBe(403);
     expect(mocks.templateService.createTemplate).not.toHaveBeenCalled();
 
-    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
-    const programmatic = await createApp().request('/', {
-      method: 'POST',
-      headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    expect(programmatic.status).toBe(201);
+    mocks.scopes = ['proxy:templates:manage'];
+    expect((await create()).status).toBe(201);
     expect(mocks.templateService.createTemplate).toHaveBeenCalledTimes(1);
-
-    mocks.authType = 'session';
-    mocks.scopes = ['proxy:templates:create'];
-    const withoutRawScope = await createApp().request('/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    expect(withoutRawScope.status).toBe(403);
-
-    mocks.scopes = ['proxy:templates:create', 'proxy:raw:write'];
-    const allowed = await createApp().request('/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    });
-    expect(allowed.status).toBe(201);
   });
 
-  it('requires create scope when cloning a template', async () => {
-    mocks.scopes = ['proxy:templates:edit:template-1'];
+  it('updates only the templates covered by a resource-scoped manage grant', async () => {
+    mocks.scopes = ['proxy:templates:manage:template-1'];
+    const update = (id: string) =>
+      createApp().request(`/${id}`, {
+        method: 'PUT',
+        headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'server {}' }),
+      });
+
+    expect((await update('template-1')).status).toBe(200);
+    expect((await update('template-2')).status).toBe(403);
+    expect(mocks.templateService.updateTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires broad manage scope when cloning a template', async () => {
+    mocks.scopes = ['proxy:templates:view', 'proxy:templates:manage:template-1'];
 
     const denied = await createApp().request('/template-1/clone', {
       method: 'POST',
@@ -159,7 +166,7 @@ describe('nginx template routes', () => {
     expect(denied.status).toBe(403);
     expect(mocks.templateService.cloneTemplate).not.toHaveBeenCalled();
 
-    mocks.scopes = ['proxy:templates:create', 'proxy:templates:edit:template-1'];
+    mocks.scopes = ['proxy:templates:view', 'proxy:templates:manage'];
     const allowed = await createApp().request('/template-1/clone', {
       method: 'POST',
       headers: { Authorization: 'Bearer gw_token' },
@@ -205,9 +212,9 @@ describe('nginx template routes', () => {
     );
   });
 
-  it('does not let a resource-scoped edit grant test unrelated new template content', async () => {
+  it('does not let a resource-scoped manage grant test unrelated new template content', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:templates:edit:11111111-1111-4111-8111-111111111111', 'proxy:raw:write'];
+    mocks.scopes = ['proxy:templates:manage:11111111-1111-4111-8111-111111111111', 'proxy:raw:write'];
 
     const response = await createApp().request('/test', {
       method: 'POST',

@@ -216,9 +216,7 @@ export class AIServiceLifecycleTools extends AIServiceAdministrationTools {
         if (hasScopeBase(user.scopes, 'proxy:view')) filtered.proxyHosts = stats.proxyHosts;
         if (hasScopeBase(user.scopes, 'ssl:cert:view')) filtered.sslCertificates = stats.sslCertificates;
         if (hasScopeBase(user.scopes, 'pki:cert:view')) filtered.pkiCertificates = stats.pkiCertificates;
-        if (hasScope(user.scopes, 'pki:ca:view:root') || hasScope(user.scopes, 'pki:ca:view:intermediate')) {
-          filtered.cas = stats.cas;
-        }
+        if (hasScope(user.scopes, 'pki:ca:view')) filtered.cas = stats.cas;
         if (hasScopeBase(user.scopes, 'nodes:details')) filtered.nodes = stats.nodes;
         if (Object.keys(filtered).length === 0) {
           return {

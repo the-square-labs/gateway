@@ -98,7 +98,7 @@ func (m *managedStorageManager) handleSeaweedFSIAM(ctx context.Context, action s
 	if input.IAM == nil {
 		return "", errors.New("managed storage IAM request is required")
 	}
-	if action == "iam_create_key" && input.IAM.Action != "create_key" || action == "iam_list_keys" && input.IAM.Action != "list_keys" || action == "iam_remove_key" && input.IAM.Action != "remove_key" {
+	if managedStorageIAMActions[action] != input.IAM.Action {
 		return "", errors.New("managed storage IAM action mismatch")
 	}
 	iam := *input.IAM
@@ -123,6 +123,10 @@ func (m *managedStorageManager) handleSeaweedFSIAM(ctx context.Context, action s
 		if iam.TargetAccessKey != "" && !managedStorageKeyPattern.MatchString(iam.TargetAccessKey) && !seaweedfsCallerAccessKeyPattern.MatchString(iam.TargetAccessKey) {
 			return "", errors.New("managed storage IAM access key is invalid")
 		}
+	case "iam_update_policy":
+		if err := validateSeaweedFSPolicyUpdate(iam); err != nil {
+			return "", err
+		}
 	}
 	client, err := m.seaweedfsIAMClientFor(ctx, record)
 	if err != nil {
@@ -135,8 +139,17 @@ func (m *managedStorageManager) handleSeaweedFSIAM(ctx context.Context, action s
 		return client.listKeys(ctx, iam.Principal)
 	case "iam_remove_key":
 		return client.removeKey(ctx, iam)
+	case "iam_update_policy":
+		return client.updatePolicy(ctx, iam)
 	}
 	return "", errors.New("unsupported managed storage IAM action")
+}
+
+func validateSeaweedFSPolicyUpdate(iam managedStorageIAM) error {
+	if !seaweedfsPrincipalPattern.MatchString(iam.Principal) {
+		return errors.New("managed storage IAM principal is invalid")
+	}
+	return validateSeaweedFSPolicy(iam.Policy)
 }
 
 type seaweedfsCreateKeyPlan struct {
@@ -345,6 +358,25 @@ func (c *seaweedfsIAMClient) createKey(ctx context.Context, iam managedStorageIA
 	}
 	result["accessKeyId"] = result["accessKey"]
 	return jsonString(result)
+}
+
+// updatePolicy replaces the Gateway inline policy of an existing principal.
+// The migration write freeze uses it to make a key read-only and to restore it
+// afterwards; the principal's access keys and service accounts keep their ids,
+// secrets and expiry. A missing principal is an error rather than being
+// recreated: its keys would be gone. The static root identity is not an IAM
+// user and cannot be addressed here.
+func (c *seaweedfsIAMClient) updatePolicy(ctx context.Context, iam managedStorageIAM) (string, error) {
+	if err := validateSeaweedFSPolicyUpdate(iam); err != nil {
+		return "", err
+	}
+	if err := c.call(ctx, "GetUser", url.Values{"UserName": {iam.Principal}}, nil); err != nil {
+		return "", err
+	}
+	if err := c.call(ctx, "PutUserPolicy", url.Values{"UserName": {iam.Principal}, "PolicyName": {seaweedfsInlinePolicyName}, "PolicyDocument": {iam.Policy}}, nil); err != nil {
+		return "", err
+	}
+	return jsonString(map[string]string{"status": "updated", "principal": iam.Principal})
 }
 
 type seaweedfsKeyView struct {

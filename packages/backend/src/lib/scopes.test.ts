@@ -21,6 +21,7 @@ import {
   OPERATOR_SCOPES,
   PROGRAMMATIC_DENIED_BASE_SCOPES,
   RESOURCE_SCOPABLE,
+  RETIRED_SCOPE_REPLACEMENTS,
   SYSTEM_ADMIN_SCOPES,
   USER_ONLY_SCOPES,
   VIEWER_SCOPES,
@@ -94,8 +95,9 @@ describe('canonical scope definitions', () => {
     expect(MCP_TOKEN_SCOPES).toEqual(
       expect.arrayContaining([
         'integrations:gitlab:repo:write',
-        'integrations:gitlab:variables:edit',
+        'integrations:gitlab:use',
         'integrations:github:manage',
+        'integrations:github:repo:write',
         'integrations:git:manage',
         'integrations:ssh:use',
         'integrations:ssh:manage',
@@ -109,32 +111,104 @@ describe('canonical scope definitions', () => {
     expect(isMcpTokenScope('mcp:use')).toBe(false);
   });
 
-  it('delegates connector sync and administration to API and MCP tokens', () => {
-    for (const provider of ['gitlab', 'github', 'git', 'cloudflare']) {
-      for (const scope of [`integrations:${provider}:sync`, `integrations:${provider}:manage`]) {
+  it('gives every Git provider the same delegable verbs', () => {
+    for (const provider of ['gitlab', 'github', 'git']) {
+      for (const verb of ['view', 'manage', 'use', 'repo:read', 'repo:write']) {
+        const scope = `integrations:${provider}:${verb}`;
+        expect(ALL_SCOPES, scope).toContain(scope);
         expect(isApiTokenScope(scope), scope).toBe(true);
         expect(isMcpTokenScope(scope), scope).toBe(true);
-        expect(PROGRAMMATIC_DENIED_BASE_SCOPES, scope).not.toContain(scope);
       }
+      // Sync is part of manage; the system credential is `use`.
+      expect(ALL_SCOPES).not.toContain(`integrations:${provider}:sync`);
+      expect(ALL_SCOPES).not.toContain(`integrations:${provider}:system`);
+      expect(MANUAL_APPROVAL_SCOPES).toEqual(
+        expect.arrayContaining([`integrations:${provider}:use`, `integrations:${provider}:repo:write`])
+      );
     }
-    for (const scope of ['integrations:ssh:manage', 'integrations:ssh:use', 'integrations:gitlab:system']) {
+    for (const scope of ['integrations:ssh:manage', 'integrations:ssh:use', 'integrations:cloudflare:sync']) {
       expect(isApiTokenScope(scope), scope).toBe(true);
       expect(isMcpTokenScope(scope), scope).toBe(true);
     }
+    expect(ALL_SCOPES).toContain('integrations:gitlab:sandbox:clone');
     expect(ALL_SCOPES).not.toContain('integrations:ssh:sync');
   });
 
-  it('gives built-in groups the sync scope of every connector provider they manage', () => {
+  it('gives built-in groups the Cloudflare sync scope when they manage Cloudflare', () => {
     for (const group of BUILTIN_GROUPS) {
-      for (const provider of ['gitlab', 'github', 'git', 'cloudflare']) {
-        if (group.scopes.includes(`integrations:${provider}:manage`)) {
-          expect(group.scopes, `${group.name} ${provider}`).toContain(`integrations:${provider}:sync`);
-        }
+      if (group.scopes.includes('integrations:cloudflare:manage')) {
+        expect(group.scopes, group.name).toContain('integrations:cloudflare:sync');
       }
     }
     expect(DEMO_ADMIN_SCOPES.filter((scope) => scope.endsWith(':sync') && scope.startsWith('integrations:'))).toEqual(
       []
     );
+  });
+
+  it('applies the v2.11 catalog cleanup decisions', () => {
+    for (const retired of Object.keys(RETIRED_SCOPE_REPLACEMENTS)) {
+      expect(ALL_SCOPES, retired).not.toContain(retired);
+    }
+    // A: never-enforced SSL scopes are gone.
+    expect(ALL_SCOPES).not.toContain('ssl:cert:revoke');
+    expect(ALL_SCOPES).not.toContain('ssl:cert:export');
+    // B: one view and one manage scope per notification area.
+    expect(ALL_SCOPES.filter((scope) => scope.startsWith('notifications:'))).toEqual([
+      'notifications:alerts:view',
+      'notifications:alerts:manage',
+      'notifications:webhooks:view',
+      'notifications:webhooks:manage',
+    ]);
+    // C, D, I: logging catch-all and container config are removed; Docker folders are one scope.
+    expect(ALL_SCOPES).not.toContain('logs:manage');
+    expect(ALL_SCOPES).not.toContain('docker:containers:config');
+    expect(ALL_SCOPES).toContain('docker:folders:manage');
+    // E: general node control.
+    expect(ALL_SCOPES).toContain('nodes:manage');
+    expect(RESOURCE_SCOPABLE).toContain('nodes:manage');
+    expect(FOLDER_SCOPABLE).toContain('nodes:manage');
+    expect(MANUAL_APPROVAL_SCOPES).toContain('nodes:manage');
+    // F: CA scopes qualifiable by CA ID; key export needs manual approval.
+    for (const scope of ['pki:ca:view', 'pki:ca:edit', 'pki:ca:export']) {
+      expect(RESOURCE_SCOPABLE, scope).toContain(scope);
+      expect(FOLDER_SCOPABLE, scope).not.toContain(scope);
+      expect(isApiTokenScope(`${scope}:ca-1`), scope).toBe(true);
+    }
+    expect(MANUAL_APPROVAL_SCOPES).toContain('pki:ca:export');
+    expect(MANUAL_APPROVAL_SCOPES).not.toContain('pki:ca:edit');
+    expect(extractBaseScope('pki:ca:view:ca-1')).toBe('pki:ca:view');
+    // H: proxy bypasses and template verbs are merged.
+    expect(ALL_SCOPES).toContain('proxy:unrestricted');
+    expect(FOLDER_SCOPABLE).toContain('proxy:unrestricted');
+    expect(MANUAL_APPROVAL_SCOPES).toEqual(expect.arrayContaining(['proxy:unrestricted', 'proxy:templates:manage']));
+    expect(ALL_SCOPES.filter((scope) => scope.startsWith('proxy:templates:'))).toEqual([
+      'proxy:templates:view',
+      'proxy:templates:manage',
+    ]);
+    // K, L: logging tokens and availability grants can target folders.
+    for (const scope of [
+      'logs:tokens:view',
+      'logs:tokens:create',
+      'logs:tokens:delete',
+      'docker:availability:manage',
+    ]) {
+      expect(FOLDER_SCOPABLE, scope).toContain(scope);
+    }
+  });
+
+  it('keeps built-in groups on the current catalog', () => {
+    const catalog = new Set<string>(ALL_SCOPES);
+    for (const group of [...BUILTIN_GROUPS, { name: 'demo-admin', scopes: DEMO_ADMIN_SCOPES }]) {
+      expect(
+        group.scopes.filter((scope) => !catalog.has(scope)),
+        group.name
+      ).toEqual([]);
+    }
+    expect(DEMO_ADMIN_SCOPES).not.toContain('pki:ca:export');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('proxy:unrestricted');
+    expect(DEMO_ADMIN_SCOPES).not.toContain('integrations:gitlab:repo:read');
+    expect(OPERATOR_SCOPES).not.toContain('proxy:templates:manage');
+    expect(ADMIN_SCOPES).toEqual(expect.arrayContaining(['pki:ca:edit', 'pki:ca:export', 'nodes:manage']));
   });
 
   it('keeps system-admin on every canonical scope', () => {
@@ -164,13 +238,13 @@ describe('canonical scope definitions', () => {
     expect(ADMIN_SCOPES).not.toContain('docker:registries:edit');
     expect(ADMIN_SCOPES).not.toContain('docker:registries:delete');
     expect(ADMIN_SCOPES).toContain('docker:containers:mounts');
-    expect(ADMIN_SCOPES).toContain('proxy:raw:bypass');
+    expect(ADMIN_SCOPES).toContain('proxy:unrestricted');
     expect(ADMIN_SCOPES).toContain('audit:siem:view');
     expect(ADMIN_SCOPES).toContain('audit:siem:manage');
     expect(ADMIN_SCOPES).not.toContain('nodes:console');
     expect(SYSTEM_ADMIN_SCOPES).toContain('admin:users:impersonate');
     expect(ADMIN_SCOPES).not.toContain('admin:users:impersonate');
-    expect(OPERATOR_SCOPES).not.toContain('proxy:raw:bypass');
+    expect(OPERATOR_SCOPES).not.toContain('proxy:unrestricted');
     expect(OPERATOR_SCOPES).toContain('proxy:maintenance:bypass');
     expect(OPERATOR_SCOPES).not.toContain('nodes:console');
     expect(ADMIN_SCOPES).not.toContain('admin:system');
@@ -415,7 +489,7 @@ describe('canonical scope definitions', () => {
       'settings:gateway:view',
       'settings:gateway:edit',
       'integrations:gitlab:manage',
-      'integrations:gitlab:system',
+      'integrations:gitlab:use',
       'integrations:hosting:manage',
       'hosting:resources:create',
       'hosting:resources:delete',
@@ -424,12 +498,10 @@ describe('canonical scope definitions', () => {
       'hosting:billing:topup',
       'proxy:raw:read',
       'proxy:raw:write',
-      'proxy:raw:toggle',
-      'proxy:raw:bypass',
-      'proxy:advanced:bypass',
+      'proxy:unrestricted',
       'proxy:maintenance:bypass',
       'nodes:config:view',
-      'nodes:config:edit',
+      'nodes:manage',
       'nodes:files:read',
       'nodes:files:write',
       'databases:credentials:reveal',
@@ -444,8 +516,8 @@ describe('canonical scope definitions', () => {
       expect(isApiTokenScope(scope), scope).toBe(true);
     }
     expect(isApiTokenScope('proxy:raw:write:host-1')).toBe(true);
-    expect(isApiTokenScope('proxy:raw:bypass:host-1')).toBe(true);
-    expect(isApiTokenScope('nodes:config:edit:node-1')).toBe(true);
+    expect(isApiTokenScope('proxy:unrestricted:host-1')).toBe(true);
+    expect(isApiTokenScope('nodes:manage:node-1')).toBe(true);
     expect(isApiTokenScope('admin:users:team-1')).toBe(true);
   });
 
@@ -482,20 +554,19 @@ describe('canonical scope definitions', () => {
       'databases:backups:restore',
       'pki:ca:create:root',
       'pki:ca:create:intermediate',
+      'pki:ca:export',
       'pki:ca:revoke:root',
       'pki:ca:revoke:intermediate',
       'pki:cert:export',
       'ssl:cert:issue',
       'ssl:cert:delete',
-      'ssl:cert:revoke',
-      'ssl:cert:export',
       'proxy:raw:write',
-      'proxy:raw:bypass',
-      'proxy:advanced:bypass',
+      'proxy:unrestricted',
+      'proxy:templates:manage',
       'pages:delete',
       'pages:tokens:manage',
       'pages:settings:edit',
-      'nodes:config:edit',
+      'nodes:manage',
       'nodes:console',
       'nodes:files:read',
       'nodes:files:write',
@@ -513,16 +584,13 @@ describe('canonical scope definitions', () => {
       'databases:query:write',
       'databases:query:admin',
       'databases:credentials:reveal',
+      'integrations:gitlab:use',
       'integrations:gitlab:repo:write',
-      'integrations:gitlab:ci:edit',
-      'integrations:gitlab:variables:edit',
-      'integrations:gitlab:variables:delete',
-      'integrations:gitlab:webhooks:manage',
-      'integrations:gitlab:registry:manage',
       'integrations:gitlab:sandbox:clone',
-      'integrations:gitlab:system',
-      'integrations:github:system',
-      'integrations:git:system',
+      'integrations:github:use',
+      'integrations:github:repo:write',
+      'integrations:git:use',
+      'integrations:git:repo:write',
       'integrations:ssh:use',
       'integrations:hosting:manage',
       'hosting:resources:create',
@@ -559,7 +627,8 @@ describe('canonical scope definitions', () => {
   });
 
   it('uses longest-match parsing for resource-scoped scopes', () => {
-    expect(extractBaseScope('proxy:advanced:bypass:host-1')).toBe('proxy:advanced:bypass');
+    expect(extractBaseScope('docker:containers:files:read:node-1/c1')).toBe('docker:containers:files:read');
+    expect(extractBaseScope('proxy:unrestricted:host-1')).toBe('proxy:unrestricted');
     expect(extractBaseScope('proxy:advanced:host-1')).toBe('proxy:advanced');
     expect(isValidBaseScope('admin:users:team-1')).toBe(true);
   });

@@ -25,6 +25,7 @@ import {
   INFERENCE_USAGE_CHANGED_CHANNEL,
   type InferenceUsageChangedEvent,
 } from "@/lib/inference-self-usage";
+import { canViewLoggingHealth } from "@/lib/logging-permissions";
 import {
   databaseRoute,
   dockerContainerRoute,
@@ -508,7 +509,11 @@ function PagesPageGuard() {
   useEffect(() => {
     if (entitled === false) requireLicenseFeature("pages", "Pages");
   }, [entitled]);
-  if (!hasScopedAccess("pages:view") && !hasScope("pages:folders:manage")) {
+  if (
+    !hasScopedAccess("pages:view") &&
+    !hasScopedAccess("pages:create") &&
+    !hasScope("pages:folders:manage")
+  ) {
     return <Navigate to="/" replace />;
   }
   if (entitled === null) return null;
@@ -545,10 +550,11 @@ function PageProjectDetailGuard() {
 }
 
 function CAsPageGuard() {
-  const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
+  const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
 
-  if (!pkiEnabled || !hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate")) {
+  // pki:ca:view is CA-scopable: any CA view grant opens the list (filtered by the backend).
+  if (!pkiEnabled || !hasScopedAccess("pki:ca:view")) {
     return <Navigate to="/" replace />;
   }
 
@@ -556,10 +562,11 @@ function CAsPageGuard() {
 }
 
 function CADetailGuard() {
-  const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
+  const { id } = useParams<{ id: string }>();
+  const hasScope = useAuthStore((s) => s.hasScope);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
 
-  if (!pkiEnabled || !hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate")) {
+  if (!pkiEnabled || !id || !hasScope(`pki:ca:view:${id}`)) {
     return <Navigate to="/" replace />;
   }
 
@@ -603,11 +610,12 @@ function NginxTemplateEditGuard() {
   const { id } = useParams<{ id?: string }>();
   const hasScope = useAuthStore((s) => s.hasScope);
 
+  // Same grants as the template write routes: broad manage creates, manage:<id> edits.
   if (id) {
-    if (!hasScope("proxy:templates:edit") && !hasScope(`proxy:templates:edit:${id}`)) {
+    if (!hasScope(`proxy:templates:manage:${id}`)) {
       return <Navigate to="/" replace />;
     }
-  } else if (!hasScope("proxy:templates:create")) {
+  } else if (!hasScope("proxy:templates:manage")) {
     return <Navigate to="/" replace />;
   }
 
@@ -658,7 +666,7 @@ function DockerPageGuard() {
     hasScopedAccess("docker:networks:view") ||
     hasScopedAccess("docker:compose:view") ||
     hasScopedAccess("docker:tasks") ||
-    hasScope("docker:containers:folders:manage");
+    hasScope("docker:folders:manage");
 
   if (!canAccessDocker) {
     return <Navigate to="/" replace />;
@@ -676,8 +684,11 @@ function DatabasesPageGuard() {
   const hasScope = useAuthStore((s) => s.hasScope);
   const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
+  // Create-only (for example folder-scoped) grants open the page so the user can create.
   const canAccessDatabases =
-    hasScopedAccess("databases:view") || hasScope("databases:folders:manage");
+    hasScopedAccess("databases:view") ||
+    hasScopedAccess("databases:create") ||
+    hasScope("databases:folders:manage");
 
   if (!canAccessDatabases) {
     return <Navigate to="/" replace />;
@@ -717,7 +728,10 @@ function StoragePageGuard() {
   const hasScope = useAuthStore((s) => s.hasScope);
   const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
 
-  const canAccessStorage = hasScopedAccess("storage:view") || hasScope("storage:folders:manage");
+  const canAccessStorage =
+    hasScopedAccess("storage:view") ||
+    hasScopedAccess("storage:create") ||
+    hasScope("storage:folders:manage");
 
   if (!canAccessStorage) {
     return <Navigate to="/" replace />;
@@ -756,19 +770,9 @@ export function NotificationsPageGuard() {
 
   const hasCoreNotificationAccess = hasAnyScope(
     "notifications:alerts:view",
-    "notifications:alerts:view",
-    "notifications:alerts:create",
-    "notifications:alerts:edit",
-    "notifications:alerts:delete",
+    "notifications:alerts:manage",
     "notifications:webhooks:view",
-    "notifications:webhooks:view",
-    "notifications:webhooks:create",
-    "notifications:webhooks:edit",
-    "notifications:webhooks:delete",
-    "notifications:deliveries:view",
-    "notifications:deliveries:view",
-    "notifications:view",
-    "notifications:manage"
+    "notifications:webhooks:manage"
   );
   const canAccessNotifications =
     hasCoreNotificationAccess ||
@@ -797,25 +801,21 @@ function LoggingPageGuard({ detailType }: { detailType?: "environment" | "schema
   const systemConfigLoading = useSystemConfigStore((s) => s.isLoading);
   const loadSystemConfig = useSystemConfigStore((s) => s.load);
   const [systemConfigLoadFailed, setSystemConfigLoadFailed] = useState(false);
-  const hasAnyScope = useAuthStore((s) => s.hasAnyScope);
   const hasScopedAccess = useAuthStore((s) => s.hasScopedAccess);
+  // Same rules as the logging list routes (resource, folder and create-only grants count).
   const canAccessLoggingEnvironments =
     hasScopedAccess("logs:environments:view") ||
-    hasAnyScope("logs:environments:view", "logs:read", "logs:manage");
-  const canAccessLoggingSchemaList = hasAnyScope(
-    "logs:schemas:view",
-    "logs:schemas:create",
-    "logs:manage"
-  );
-  const hasResourceScopedSchemaView = hasScopedAccess("logs:schemas:view");
-  const canAccessLogging =
-    canAccessLoggingEnvironments || canAccessLoggingSchemaList || hasResourceScopedSchemaView;
+    hasScopedAccess("logs:read") ||
+    hasScopedAccess("logs:environments:create");
+  const canAccessLoggingSchemaList =
+    hasScopedAccess("logs:schemas:view") || hasScopedAccess("logs:schemas:create");
+  const canAccessLogging = canAccessLoggingEnvironments || canAccessLoggingSchemaList;
   const isEnvironmentDetail = detailType === "environment" && !!id;
   const isSchemaDetail = detailType === "schema" && !!id;
   const canResolveDetail = isEnvironmentDetail
-    ? hasScopedAccess("logs:environments:view") || hasAnyScope("logs:manage")
+    ? hasScopedAccess("logs:environments:view") || hasScopedAccess("logs:read")
     : isSchemaDetail
-      ? hasScopedAccess("logs:schemas:view") || hasAnyScope("logs:manage")
+      ? hasScopedAccess("logs:schemas:view")
       : false;
   const resolved = useResolvedPageRoute(
     systemConfigLoaded && loggingEnabled && canResolveDetail && id
@@ -913,12 +913,10 @@ export function RealtimeBridge() {
   const canViewDockerContainers = useAuthStore((s) => s.hasScopedAccess("docker:containers:view"));
   const canViewPkiCertificates = useAuthStore((s) => s.hasScopedAccess("pki:cert:view"));
   const canViewSslCertificates = useAuthStore((s) => s.hasScopedAccess("ssl:cert:view"));
-  const canViewCAs = useAuthStore(
-    (s) => s.hasScope("pki:ca:view:root") || s.hasScope("pki:ca:view:intermediate")
-  );
+  const canViewCAs = useAuthStore((s) => s.hasScopedAccess("pki:ca:view"));
   const canUseAIWorkspace = useAuthStore((s) => s.hasScope(AI_SCOPE));
   const canUseInference = useAuthStore((s) => s.hasScope("feat:ai:use"));
-  const canViewLogging = useAuthStore((s) => s.hasScope("housekeeping:view"));
+  const canViewLogging = useAuthStore((s) => canViewLoggingHealth(s.user?.scopes ?? []));
   const canViewAudit = useAuthStore((s) => s.hasScopedAccess("admin:audit"));
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
   const invalidateUIBootstrap = useUIBootstrapStore((s) => s.invalidate);
@@ -979,19 +977,15 @@ export function RealtimeBridge() {
           auth.hasScopedAccess("docker:compose:view"),
         "docker.build.log",
       ],
-      [auth.hasScope("housekeeping:view"), "logging.health.changed"],
+      [canViewLoggingHealth(auth.user?.scopes ?? []), "logging.health.changed"],
       [auth.hasScope("housekeeping:view"), "system.relay.health.changed"],
       [auth.hasScope("status-page:view"), "status-page.changed"],
       [
-        auth.hasAnyScope("notifications:alerts:view", "notifications:view", "notifications:manage"),
+        auth.hasAnyScope("notifications:alerts:view", "notifications:alerts:manage"),
         "notification.alert-rule.changed",
       ],
       [
-        auth.hasAnyScope(
-          "notifications:webhooks:view",
-          "notifications:view",
-          "notifications:manage"
-        ),
+        auth.hasAnyScope("notifications:webhooks:view", "notifications:webhooks:manage"),
         "notification.webhook.changed",
       ],
       [auth.hasScopedAccess("admin:users"), "user.changed"],

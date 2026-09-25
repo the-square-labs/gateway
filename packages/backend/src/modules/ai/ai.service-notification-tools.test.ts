@@ -107,7 +107,7 @@ describe('AIService notification tool routing', () => {
     const service = createService();
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:view'] }, 'list_alert_rules', {})
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:view'] }, 'list_alert_rules', {})
     ).resolves.toEqual({
       result: { error: 'Notification service not available' },
       invalidateStores: [],
@@ -122,7 +122,7 @@ describe('AIService notification tool routing', () => {
 
     // Threshold rules need metric, operator, and threshold, like POST /notifications/alert-rules.
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:manage'] }, 'create_alert_rule', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:manage'] }, 'create_alert_rule', {
         name: 'CPU High',
         type: 'threshold',
         category: 'node',
@@ -132,9 +132,9 @@ describe('AIService notification tool routing', () => {
     ).resolves.toMatchObject({ error: expect.stringContaining('Threshold rules require metric') });
     expect(notifRuleService.create).not.toHaveBeenCalled();
 
-    // The granular create scope is enough, as on the route.
+    // notifications:alerts:manage is the route scope.
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:create'] }, 'create_alert_rule', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:manage'] }, 'create_alert_rule', {
         name: 'CPU High',
         type: 'threshold',
         category: 'node',
@@ -164,7 +164,7 @@ describe('AIService notification tool routing', () => {
     );
 
     // An explicit false still creates the rule disabled.
-    await service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:create'] }, 'create_alert_rule', {
+    await service.executeTool({ ...BASE_USER, scopes: ['notifications:alerts:manage'] }, 'create_alert_rule', {
       name: 'CPU High',
       type: 'threshold',
       category: 'node',
@@ -185,7 +185,7 @@ describe('AIService notification tool routing', () => {
     const service = createService({ notifWebhookService });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:manage'] }, 'create_webhook', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:manage'] }, 'create_webhook', {
         name: 'Discord',
         url: 'https://example.test/webhook',
       })
@@ -220,7 +220,7 @@ describe('AIService notification tool routing', () => {
     const service = createService({ notifWebhookService, notifDispatcherService });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:manage'] }, 'test_webhook', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:manage'] }, 'test_webhook', {
         webhookId: 'webhook-1',
       })
     ).resolves.toMatchObject({
@@ -238,7 +238,7 @@ describe('AIService notification tool routing', () => {
     const service = createService({ notifDeliveryService });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:view'] }, 'list_webhook_deliveries', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:view'] }, 'list_webhook_deliveries', {
         webhookId: '12121212-1212-4121-8121-121212121212',
         status: 'failed',
         limit: 999,
@@ -247,7 +247,7 @@ describe('AIService notification tool routing', () => {
       result: { data: [], total: 0 },
       invalidateStores: [],
     });
-    // Payloads stay redacted without notifications:manage, like GET /notifications/deliveries.
+    // Payloads stay redacted without notifications:webhooks:manage, like GET /notifications/deliveries.
     expect(notifDeliveryService.list).toHaveBeenCalledWith(
       { page: 1, limit: 100, webhookId: '12121212-1212-4121-8121-121212121212', status: 'failed' },
       { revealSensitive: false }
@@ -363,7 +363,7 @@ describe('AIService notification tool routing', () => {
     );
     expect(Array.isArray(categories.result)).toBe(true);
 
-    // URL and headers are revealed only with webhook edit or notifications:manage.
+    // URL and headers are revealed only with notifications:webhooks:manage.
     await service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:view'] }, 'manage_notifications', {
       operation: 'webhook_get',
       webhookId: '12121212-1212-4121-8121-121212121212',
@@ -372,7 +372,7 @@ describe('AIService notification tool routing', () => {
       revealHeaders: false,
       revealUrl: false,
     });
-    await service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:edit'] }, 'manage_notifications', {
+    await service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:manage'] }, 'manage_notifications', {
       operation: 'webhook_get',
       webhookId: '12121212-1212-4121-8121-121212121212',
     });
@@ -381,22 +381,22 @@ describe('AIService notification tool routing', () => {
       revealUrl: true,
     });
 
-    // Preview needs webhook create/edit; view is not enough.
+    // Preview needs webhook manage; view is not enough.
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:view'] }, 'manage_notifications', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:view'] }, 'manage_notifications', {
         operation: 'webhook_preview',
         bodyTemplate: '{{ title }}',
       })
-    ).resolves.toMatchObject({ error: expect.stringContaining('notifications:webhooks:create') });
+    ).resolves.toMatchObject({ error: expect.stringContaining('notifications:webhooks:manage') });
     const preview = await service.executeTool(
-      { ...BASE_USER, scopes: ['notifications:webhooks:create'] },
+      { ...BASE_USER, scopes: ['notifications:webhooks:manage'] },
       'manage_notifications',
       { operation: 'webhook_preview', bodyTemplate: 'ok' }
     );
     expect(preview.result).toMatchObject({ rendered: 'ok' });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['notifications:deliveries:view'] }, 'manage_notifications', {
+      service.executeTool({ ...BASE_USER, scopes: ['notifications:webhooks:view'] }, 'manage_notifications', {
         operation: 'delivery_get',
         deliveryId: 'missing',
       })

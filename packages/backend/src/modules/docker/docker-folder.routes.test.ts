@@ -36,9 +36,7 @@ describe('Docker folder routes', () => {
     const folders = [{ id: FOLDER_ID, resourceType, children: [] }];
     const getFolderTree = vi.fn().mockResolvedValue(folders);
     container.registerInstance(DockerFolderService, { getFolderTree } as never);
-    const response = await appWithScopes(['docker:containers:folders:manage']).request(
-      `/folders?resourceType=${resourceType}`
-    );
+    const response = await appWithScopes(['docker:folders:manage']).request(`/folders?resourceType=${resourceType}`);
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ data: folders });
     expect(getFolderTree).toHaveBeenCalledExactlyOnceWith({ resourceType, includeAllFolders: true });
@@ -47,7 +45,7 @@ describe('Docker folder routes', () => {
   it('keeps the default container type when the query parameter is omitted', async () => {
     const getFolderTree = vi.fn().mockResolvedValue([]);
     container.registerInstance(DockerFolderService, { getFolderTree } as never);
-    const response = await appWithScopes(['docker:containers:folders:manage']).request('/folders');
+    const response = await appWithScopes(['docker:folders:manage']).request('/folders');
     expect(response.status).toBe(200);
     expect(getFolderTree).toHaveBeenCalledWith({ resourceType: 'container', includeAllFolders: true });
   });
@@ -55,9 +53,7 @@ describe('Docker folder routes', () => {
   it('still rejects unknown resource types before loading folders', async () => {
     const getFolderTree = vi.fn();
     container.registerInstance(DockerFolderService, { getFolderTree } as never);
-    const response = await appWithScopes(['docker:containers:folders:manage']).request(
-      '/folders?resourceType=not-a-resource'
-    );
+    const response = await appWithScopes(['docker:folders:manage']).request('/folders?resourceType=not-a-resource');
     expect(response.status).toBe(400);
     expect(getFolderTree).not.toHaveBeenCalled();
   });
@@ -122,7 +118,7 @@ describe('Docker folder routes', () => {
     container.registerInstance(DockerNetworkAccessResourceService, { resolveNetwork } as never);
 
     const app = appWithScopes([
-      'docker:containers:folders:manage',
+      'docker:folders:manage',
       `docker:networks:edit:${NODE_ID}/network-resource-id`,
       `docker:networks:edit:folder/${FOLDER_ID}`,
     ]);
@@ -155,7 +151,7 @@ describe('Docker folder routes', () => {
     container.registerInstance(DockerAccessResourceService, { resolveResourceByName } as never);
 
     const app = appWithScopes([
-      'docker:containers:folders:manage',
+      'docker:folders:manage',
       `docker:containers:edit:${NODE_ID}/container-resource-id`,
       `docker:containers:edit:folder/${FOLDER_ID}`,
     ]);

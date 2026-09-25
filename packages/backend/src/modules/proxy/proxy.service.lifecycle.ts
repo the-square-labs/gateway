@@ -230,6 +230,59 @@ export abstract class ProxyServiceLifecycle extends ProxyServiceMutations {
     return binding;
   }
 
+  /**
+   * Points an Additional Secure Link at another target without deleting it,
+   * so its name and id stay valid in the Route config. When the scheme
+   * changes (a managed storage cluster with TLS replacing one without), the
+   * Route config that renders the link upstream is applied again; when that
+   * fails, the retarget fails and a managed storage link goes back to its
+   * previous cluster.
+   */
+  async retargetAdditionalSecureLink(
+    id: string,
+    bindingId: string,
+    input: Omit<CreateProxyAdditionalSecureLinkInput, 'name'>,
+    userId: string,
+    actorScopes?: string[]
+  ) {
+    const host = await this.requireManagedProxyHost(id);
+    if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');
+    const before = (await this.secureLinks.listAdditional(id)).find((binding) => binding.id === bindingId);
+    // The Route upstream for the link carries its scheme, so a scheme change
+    // must reach nginx; a failure fails (and rolls back) the retarget. After
+    // an attempt, the rollback applies the config again for the old scheme.
+    let applied = false;
+    const binding = await this.secureLinks.retargetAdditional(host, bindingId, input, actorScopes, async (link) => {
+      if (!applied && before?.forwardScheme === link.forwardScheme) return;
+      applied = true;
+      await this.reapplyHostConfig(id);
+    });
+    await this.auditService.log({
+      userId,
+      action: 'proxy_host.additional_secure_link.retarget',
+      resourceType: 'proxy_host',
+      resourceId: id,
+      details: {
+        bindingId,
+        name: binding.name,
+        from: before
+          ? {
+              upstreamKind: before.upstreamKind,
+              managedStorageId: before.managedStorageId,
+              target: before.targetContainer,
+            }
+          : null,
+        to: {
+          upstreamKind: binding.upstreamKind,
+          managedStorageId: binding.managedStorageId,
+          target: binding.targetContainer,
+        },
+        status: binding.status,
+      },
+    });
+    return binding;
+  }
+
   async deleteAdditionalSecureLink(id: string, bindingId: string, userId: string) {
     const host = await this.requireManagedProxyHost(id);
     if (!this.secureLinks) throw new AppError(503, 'SECURE_LINK_UNAVAILABLE', 'Proxy Secure Links are unavailable');

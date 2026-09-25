@@ -1,14 +1,9 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import {
-  authMiddleware,
-  requireScope,
-  requireScopeBase,
-  requireScopeForResource,
-} from '@/modules/auth/auth.middleware.js';
+import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { PageProfileService } from '@/modules/pages/profile/page-profile.service.js';
 import type { AppEnv } from '@/types.js';
@@ -45,6 +40,7 @@ import {
   CreateAdditionalSecureLinkSchema,
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
+  parseRetargetAdditionalSecureLink,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -53,6 +49,7 @@ import {
 import { ProxyService } from './proxy.service.js';
 import { ProxyMaintenanceAccessService } from './proxy-maintenance-access.service.js';
 import { redactRawProxyConfigForBrowser } from './raw-visibility.js';
+import { assertTlsResyncAccess } from './tls-resync-access.js';
 
 export const proxyRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -83,6 +80,24 @@ function normalizedAdvancedConfig(value: unknown): string | null {
 function requestOnlyUpdatesRawProxyConfig(input: Record<string, unknown>): boolean {
   const rawKeys = new Set(['rawConfig']);
   return Object.keys(input).length > 0 && Object.keys(input).every((key) => rawKeys.has(key));
+}
+
+/**
+ * Destination-scoped proxy permissions for a route that does not exist yet (or
+ * is being moved): a broad grant, a grant on the destination folder, or a grant
+ * on the destination ingress node.
+ */
+function hasProxyDestinationScope(
+  scopes: string[],
+  baseScope: string,
+  folderId: string | null | undefined,
+  nodeId: string | null | undefined
+): boolean {
+  return (
+    hasScope(scopes, baseScope) ||
+    (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
+    (!!nodeId && !nodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${nodeId}`))
+  );
 }
 
 function canReadRawProxyConfig(scopes: string[], id: string) {
@@ -174,6 +189,25 @@ proxyRoutes.post(
       .retryAdditionalSecureLink(
         c.req.param('id')!,
         c.req.param('bindingId')!,
+        c.get('user')!.id,
+        c.get('effectiveScopes') || []
+      );
+    return c.json({ data });
+  }
+);
+
+// Moves the link to another target in place; the destination needs the same
+// access as creating the link (e.g. storage:view on a managed storage cluster).
+proxyRoutes.post(
+  '/:id/additional-secure-links/:bindingId/retarget',
+  requireScopeForResource('proxy:edit', 'id'),
+  async (c) => {
+    const data = await container
+      .resolve(ProxyService)
+      .retargetAdditionalSecureLink(
+        c.req.param('id')!,
+        c.req.param('bindingId')!,
+        parseRetargetAdditionalSecureLink(await c.req.json()),
         c.get('user')!.id,
         c.get('effectiveScopes') || []
       );
@@ -296,8 +330,12 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }
   await container.resolve(FolderService).assertFolderExists(input.folderId);
-  if (input.advancedConfig && !hasScope(scopes, 'proxy:advanced')) {
-    throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
+  // Advanced, raw and unrestricted grants apply to the new route's destination:
+  // a folder- or node-scoped grant covers routes created there.
+  if (input.advancedConfig && !hasProxyDestinationScope(scopes, 'proxy:advanced', input.folderId, input.nodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope for the selected destination', {
+      requiredScope: 'proxy:advanced',
+    });
   }
   if (
     input.upstreamKind === 'pages' &&
@@ -305,18 +343,22 @@ proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   ) {
     throw new AppError(403, 'FORBIDDEN', 'Viewing the selected Page Project is required');
   }
-  const bypassAdvancedValidation = hasScope(scopes, 'proxy:advanced:bypass');
-  const bypassRawValidation = hasScope(scopes, 'proxy:raw:bypass');
-  if (requestTogglesRawProxyConfig(input) && !hasScope(scopes, 'proxy:raw:toggle')) {
-    throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:toggle scope');
+  const unrestricted = hasProxyDestinationScope(scopes, 'proxy:unrestricted', input.folderId, input.nodeId);
+  const canWriteRaw = hasProxyDestinationScope(scopes, 'proxy:raw:write', input.folderId, input.nodeId);
+  if (requestTogglesRawProxyConfig(input) && !canWriteRaw) {
+    throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:write scope', {
+      requiredScope: 'proxy:raw:write',
+    });
   }
-  if (input.rawConfig !== undefined && !hasScope(scopes, 'proxy:raw:write')) {
-    throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope');
+  if (input.rawConfig !== undefined && !canWriteRaw) {
+    throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope', {
+      requiredScope: 'proxy:raw:write',
+    });
   }
   await proxyService.assertReferenceAccess(scopes, input);
   const host = await proxyService.createProxyHost(input, user.id, {
-    bypassAdvancedValidation,
-    bypassRawValidation,
+    bypassAdvancedValidation: unrestricted,
+    bypassRawValidation: unrestricted,
     actorScopes: scopes,
   });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, (host as any).id) }, 201);
@@ -394,25 +436,35 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
       throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
     }
   }
-  const bypassAdvancedValidation = hasScope(scopes, `proxy:advanced:bypass:${id}`);
-  const bypassRawValidation = hasScope(scopes, `proxy:raw:bypass:${id}`);
-  if (requestTogglesRawProxyConfig(input, existing)) {
-    if (!hasScope(scopes, `proxy:raw:toggle:${id}`) && !hasScope(scopes, 'proxy:raw:toggle')) {
-      throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:toggle scope');
-    }
+  const unrestricted = hasScope(scopes, `proxy:unrestricted:${id}`);
+  const canWriteRaw = hasScope(scopes, `proxy:raw:write:${id}`);
+  if (requestTogglesRawProxyConfig(input, existing) && !canWriteRaw) {
+    throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:write scope', {
+      requiredScope: `proxy:raw:write:${id}`,
+    });
   }
-  if (input.rawConfig !== undefined) {
-    if (!hasScope(scopes, `proxy:raw:write:${id}`) && !hasScope(scopes, 'proxy:raw:write')) {
-      throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope');
-    }
+  if (input.rawConfig !== undefined && !canWriteRaw) {
+    throw new AppError(403, 'FORBIDDEN', 'Writing raw config requires proxy:raw:write scope', {
+      requiredScope: `proxy:raw:write:${id}`,
+    });
   }
-  if (input.nodeId && input.nodeId !== existing.nodeId && !hasScopeForResource(scopes, 'proxy:create', input.nodeId)) {
-    throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${input.nodeId}`);
+  // Moving a route to another ingress node is creating it there: any destination
+  // grant form (broad, node, or the route's folder) is accepted.
+  const destinationFolderId =
+    input.folderId !== undefined ? input.folderId : ((existing as { folderId?: string | null }).folderId ?? null);
+  if (
+    input.nodeId &&
+    input.nodeId !== existing.nodeId &&
+    !hasScopeForCreation(scopes, 'proxy:create', destinationFolderId, input.nodeId)
+  ) {
+    throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:node/${input.nodeId}`, {
+      requiredScope: `proxy:create:node/${input.nodeId}`,
+    });
   }
   await proxyService.assertReferenceAccess(scopes, input, existing);
   const host = await proxyService.updateProxyHost(id, input, user.id, {
-    bypassAdvancedValidation,
-    bypassRawValidation,
+    bypassAdvancedValidation: unrestricted,
+    bypassRawValidation: unrestricted,
     actorScopes: scopes,
   });
   return c.json({ data: serializeProxyHostForBrowser(host as any, scopes, id) });
@@ -452,10 +504,14 @@ proxyRoutes.openapi(
   }
 );
 
-proxyRoutes.openapi({ ...resyncProxyHostTlsRoute, middleware: requireScope('admin:update') }, async (c) => {
+// Retrying TLS delivery is a route edit; system routes stay admin:update only, and
+// admin:update is still accepted for one release (rc.9 compatibility).
+proxyRoutes.openapi(resyncProxyHostTlsRoute, async (c) => {
+  const id = c.req.param('id')!;
+  await assertTlsResyncAccess(c.get('effectiveScopes') || [], 'route', id);
   const proxyService = container.resolve(ProxyService);
   const user = c.get('user')!;
-  const result = await proxyService.resyncTlsHost(c.req.param('id')!, user.id);
+  const result = await proxyService.resyncTlsHost(id, user.id);
   return c.json({ data: result });
 });
 
@@ -473,17 +529,15 @@ proxyRoutes.openapi(renderedProxyConfigRoute, async (c) => {
 proxyRoutes.openapi(validateProxyConfigRoute, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const scopes = c.get('effectiveScopes') || [];
-  const { snippet, mode, proxyHostId } = ValidateAdvancedConfigSchema.parse(await c.req.json());
+  const { snippet, mode, proxyHostId, folderId, nodeId } = ValidateAdvancedConfigSchema.parse(await c.req.json());
 
-  const requiredScope =
-    mode === 'raw'
-      ? proxyHostId
-        ? `proxy:raw:write:${proxyHostId}`
-        : 'proxy:raw:write'
-      : proxyHostId
-        ? `proxy:advanced:${proxyHostId}`
-        : 'proxy:advanced';
-  if (!hasScope(scopes, requiredScope)) {
+  // An existing route is checked on its own grants; a route about to be created
+  // on its destination folder or ingress node.
+  const holds = (baseScope: string) =>
+    proxyHostId
+      ? hasScope(scopes, `${baseScope}:${proxyHostId}`)
+      : hasProxyDestinationScope(scopes, baseScope, folderId, nodeId);
+  if (!holds(mode === 'raw' ? 'proxy:raw:write' : 'proxy:advanced')) {
     throw new AppError(
       403,
       'FORBIDDEN',
@@ -493,17 +547,10 @@ proxyRoutes.openapi(validateProxyConfigRoute, async (c) => {
     );
   }
 
-  const bypassAdvancedScope = proxyHostId ? `proxy:advanced:bypass:${proxyHostId}` : 'proxy:advanced:bypass';
-  const bypassRawScope = proxyHostId ? `proxy:raw:bypass:${proxyHostId}` : 'proxy:raw:bypass';
+  const unrestricted = holds('proxy:unrestricted');
   const result =
     mode === 'advanced'
-      ? await proxyService.validateAdvancedConfig(
-          snippet,
-          false,
-          hasScope(scopes, bypassAdvancedScope),
-          false,
-          proxyHostId
-        )
-      : await proxyService.validateAdvancedConfig(snippet, true, false, hasScope(scopes, bypassRawScope));
+      ? await proxyService.validateAdvancedConfig(snippet, false, unrestricted, false, proxyHostId)
+      : await proxyService.validateAdvancedConfig(snippet, true, false, unrestricted);
   return c.json({ data: result });
 });

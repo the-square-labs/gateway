@@ -188,6 +188,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	}
 	p.version = ver
 	p.logger.Info("docker engine connected", "version", ver, "socket", p.cfg.Docker.Socket)
+	// User workloads get json-file log rotation only when json-file is the
+	// host's default driver; detect it once.
+	p.logger.Info("docker default logging driver", "driver", c.DetectDefaultLoggingDriver(ctx))
 
 	// Initialize allowlist from config
 	p.allowlist = NewAllowlistChecker(p.cfg.Docker.Allowlist)
@@ -244,6 +247,8 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 			return fmt.Errorf("reconcile managed storage runtime: %w", err)
 		}
 		p.registerCompiledBackupHandler()
+		// Copy jobs do not survive a daemon restart; remove their credentials now.
+		p.recoverStorageCopyJobs()
 	}
 	if p.cfg.Docker.Mode != "databases" && p.cfg.Docker.Mode != "storage" {
 		composeExecutor, composeErr := newComposeExecutor(p.cfg, p.client, p.logger)
@@ -393,13 +398,16 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"managed_storage_v1",
 				"managed_storage_ext4_quota_v1",
 				"managed_storage_iam_v1",
+				// iam_update_policy: the migration write freeze rewrites key policies in place.
+				"managed_storage_iam_policy_v1",
 				"managed_storage_private_relay_v1",
 				"managed_storage_seaweedfs_v1",
+				managedTLSReloadCapability,
 				"generic_relay_tunnel_v1",
 				"relay_pool_v1",
 			}
 			if p.backupHandler != nil {
-				values = append(values, "database_backups_v1", "database_backups_deadline_v1", "database_backups_tls_verification_v1")
+				values = append(values, "database_backups_v1", "database_backups_deadline_v1", "database_backups_tls_verification_v1", storageCopyCapability)
 			}
 			return values
 		}

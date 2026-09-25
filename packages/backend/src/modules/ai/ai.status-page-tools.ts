@@ -34,18 +34,29 @@ export async function manageStatusPageTool(user: User, args: Record<string, unkn
     ensureToolScope(user, 'status-page:view');
     return service.listProxyTemplates();
   }
+  if (resource === 'sources' && operation === 'list') {
+    // Same as GET /status-page/sources: exposable resources the caller can view.
+    ensureToolScope(user, 'status-page:manage');
+    return service.listSources(user.scopes);
+  }
   if (resource === 'services') {
     if (operation === 'list') {
       ensureToolScope(user, 'status-page:view');
-      return service.listServices();
+      return service.listServices(user.scopes);
     }
     if (operation === 'create') {
       ensureToolScope(user, 'status-page:manage');
-      return service.createService(CreateStatusPageServiceSchema.parse(payload), user.id);
+      // The route passes the caller scopes: a service can only expose a source the caller can view.
+      return service.createService(CreateStatusPageServiceSchema.parse(payload), user.id, user.scopes);
     }
     if (operation === 'update') {
       ensureToolScope(user, 'status-page:manage');
-      return service.updateService(String(args.serviceId), UpdateStatusPageServiceSchema.parse(payload), user.id);
+      return service.updateService(
+        String(args.serviceId),
+        UpdateStatusPageServiceSchema.parse(payload),
+        user.id,
+        user.scopes
+      );
     }
     if (operation === 'reorder') {
       ensureToolScope(user, 'status-page:manage');

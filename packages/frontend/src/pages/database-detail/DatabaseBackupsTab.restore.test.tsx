@@ -1,7 +1,34 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
+import { makeUser } from "@/test/fixtures";
 import type { BackupRun } from "@/types/backups";
 import { RestoreDialog } from "./DatabaseBackupsTab";
+
+const FOLDER = {
+  id: "folder-1",
+  name: "Restores",
+  parentId: null,
+  sortOrder: 0,
+  depth: 0,
+  createdAt: "2026-09-01T00:00:00.000Z",
+  updatedAt: "2026-09-01T00:00:00.000Z",
+  children: [],
+};
+
+function withScopes(scopes: string[]) {
+  useAuthStore.setState({ user: makeUser({ scopes }), isAuthenticated: true, isLoading: false });
+}
+
+beforeEach(() => {
+  withScopes(["databases:create"]);
+  useResourceFolderStore.setState({
+    foldersByType: { ...useResourceFolderStore.getState().foldersByType, database: [FOLDER] },
+    loadingByType: { ...useResourceFolderStore.getState().loadingByType, database: false },
+    fetchFolders: vi.fn().mockResolvedValue(undefined),
+  });
+});
 
 function backupRun(overrides: Partial<BackupRun> = {}): BackupRun {
   return {
@@ -105,5 +132,46 @@ describe("RestoreDialog target database name", () => {
     );
 
     expect(screen.queryByLabelText("Database name (optional)")).not.toBeInTheDocument();
+  });
+});
+
+describe("RestoreDialog destination folder", () => {
+  it("restores a folder-scoped creator into the granted folder", async () => {
+    withScopes(["databases:create:folder/folder-1"]);
+    const onRestore = vi.fn().mockResolvedValue(undefined);
+    render(
+      <RestoreDialog
+        run={backupRun()}
+        onOpenChange={vi.fn()}
+        executors={[{ id: "node-1", label: "Storage A" }]}
+        onRestore={onRestore}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Folder" })).toHaveTextContent("Restores")
+    );
+    await fillRequiredFields();
+    fireEvent.click(screen.getByRole("button", { name: "Queue restore" }));
+
+    await waitFor(() =>
+      expect(onRestore).toHaveBeenCalledWith(expect.objectContaining({ folderId: "folder-1" }))
+    );
+  });
+
+  it("blocks a restore the caller could not create anywhere", async () => {
+    withScopes([]);
+    render(
+      <RestoreDialog
+        run={backupRun()}
+        onOpenChange={vi.fn()}
+        executors={[{ id: "node-1", label: "Storage A" }]}
+        onRestore={vi.fn()}
+      />
+    );
+
+    await fillRequiredFields();
+
+    expect(screen.getByRole("button", { name: "Queue restore" })).toBeDisabled();
   });
 });

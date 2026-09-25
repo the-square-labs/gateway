@@ -11,6 +11,7 @@ export const GITLAB_AUDIT_ACTIONS = {
   userCredentialAuthorize: 'connector.gitlab.user_credential.authorize',
   userCredentialDisconnect: 'connector.gitlab.user_credential.disconnect',
   userCredentialInvalidate: 'connector.gitlab.user_credential.invalidate',
+  userCredentialRotate: 'connector.gitlab.user_credential.rotate',
   projectSearch: 'connector.gitlab.project.search',
   projectList: 'connector.gitlab.project.list',
   projectSettingsUpdate: 'connector.gitlab.project.settings.update',

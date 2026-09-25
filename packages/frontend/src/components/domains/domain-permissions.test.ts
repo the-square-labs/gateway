@@ -22,4 +22,16 @@ describe("domain permissions", () => {
       canInspectCloudflare: true,
     });
   });
+
+  it("opens domain creation for folder or node creation grants when scoped access is supplied", () => {
+    const scopes = ["domains:create:folder/folder-1"];
+    const permissions = getDomainPermissions(
+      (scope) => scopes.includes(scope),
+      undefined,
+      (base) => scopes.some((scope) => scope === base || scope.startsWith(`${base}:`))
+    );
+
+    expect(permissions.canCreateDomain).toBe(true);
+    expect(permissionsFor(scopes).canCreateDomain).toBe(false);
+  });
 });

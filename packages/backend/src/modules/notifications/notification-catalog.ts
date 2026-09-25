@@ -490,6 +490,13 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'renewed', label: 'Certificate Renewed', defaultSeverity: 'info' },
       { id: 'renewal_failed', label: 'Certificate Renewal Failed', defaultSeverity: 'critical' },
       { id: 'expired', label: 'Certificate Expired', defaultSeverity: 'critical' },
+      {
+        // Managed storage / managed database TLS certificates renewed by Gateway itself.
+        id: 'internal.renewal_failed',
+        label: 'Managed Service Certificate Renewal Failed',
+        defaultSeverity: 'critical',
+        supportsThreshold: true,
+      },
     ],
     variables: [
       { name: '{{resource.name}}', description: 'Certificate domain(s)' },

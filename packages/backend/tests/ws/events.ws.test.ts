@@ -552,12 +552,12 @@ describe('events websocket authentication', () => {
     expect(ws.close).toHaveBeenCalledWith(4001, 'unauthenticated');
   });
 
-  it('filters CA change events by CA type view scope', async () => {
+  it('filters CA change events by CA-scoped view grants', async () => {
     const eventBus = new EventBusService();
     container.registerInstance(EventBusService, eventBus);
     mocks.resolveLiveSessionUser.mockResolvedValue({
-      user: { ...USER, scopes: ['pki:ca:view:intermediate'] },
-      effectiveScopes: ['pki:ca:view:intermediate'],
+      user: { ...USER, scopes: ['pki:ca:view:int-1'] },
+      effectiveScopes: ['pki:ca:view:int-1'],
     });
     const ws = createWs();
     const handlers = createEventsWSHandlers();

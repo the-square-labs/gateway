@@ -317,7 +317,10 @@ export class CommercialEditionRuntime {
 
   initializeBackups(scheduler: SchedulerService, runtime: typeof backupRuntime, relay?: RelayPolicyService): void {
     if (this.registration.initializeBackups) this.registration.initializeBackups(scheduler, runtime, relay);
-    else runtime.container.registerInstance(runtime.BackupService, new runtime.BackupService());
+    else {
+      runtime.container.registerInstance(runtime.BackupService, new runtime.BackupService());
+      runtime.container.registerInstance(runtime.StorageCopyService, new runtime.StorageCopyService());
+    }
   }
 
   async executeBackupTool(user: User, args: Record<string, unknown>, runtime: typeof backupRuntime): Promise<unknown> {

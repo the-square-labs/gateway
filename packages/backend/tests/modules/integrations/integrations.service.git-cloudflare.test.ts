@@ -113,7 +113,7 @@ describe('IntegrationsService', () => {
 
     await expect(
       service.githubListRepositoryTree(
-        { ...BASE_USER, scopes: ['integrations:github:view'] },
+        { ...BASE_USER, scopes: ['integrations:github:repo:read'] },
         {
           connectorId: '11111111-1111-4111-8111-111111111111',
           repositoryUrl: 'https://github.com/acme/app',
@@ -170,7 +170,7 @@ describe('IntegrationsService', () => {
         service.githubListRepositoryTree(
           {
             ...BASE_USER,
-            scopes: ['integrations:github:view', 'integrations:github:system'],
+            scopes: ['integrations:github:repo:read', 'integrations:github:use'],
           },
           {
             connectorId: '11111111-1111-4111-8111-111111111111',
@@ -213,7 +213,7 @@ describe('IntegrationsService', () => {
     try {
       await expect(
         service.githubListRepositories(
-          { ...BASE_USER, scopes: ['integrations:github:view'] },
+          { ...BASE_USER, scopes: ['integrations:github:repo:read'] },
           { connectorId: '11111111-1111-4111-8111-111111111111' }
         )
       ).resolves.toEqual([
@@ -254,7 +254,7 @@ describe('IntegrationsService', () => {
     try {
       await expect(
         service.githubUpsertRepositoryFile(
-          { ...BASE_USER, scopes: ['integrations:github:manage'] },
+          { ...BASE_USER, scopes: ['integrations:github:repo:write'] },
           {
             connectorId: '11111111-1111-4111-8111-111111111111',
             repositoryUrl: 'https://github.com/acme/app',
@@ -304,7 +304,7 @@ describe('IntegrationsService', () => {
     try {
       await expect(
         service.githubUpsertActionsSecret(
-          { ...BASE_USER, scopes: ['integrations:github:manage'] },
+          { ...BASE_USER, scopes: ['integrations:github:repo:write'] },
           {
             connectorId: '11111111-1111-4111-8111-111111111111',
             repositoryUrl: 'https://github.com/acme/app',
@@ -346,7 +346,7 @@ describe('IntegrationsService', () => {
     try {
       await expect(
         service.gitListRepositoryTree(
-          { ...BASE_USER, scopes: ['integrations:git:view'] },
+          { ...BASE_USER, scopes: ['integrations:git:repo:read'] },
           {
             connectorId: '11111111-1111-4111-8111-111111111111',
             repositoryUrl: 'https://git.example.com/acme/app.git',
@@ -358,7 +358,7 @@ describe('IntegrationsService', () => {
       ]);
       await expect(
         service.gitReadRepositoryFile(
-          { ...BASE_USER, scopes: ['integrations:git:view'] },
+          { ...BASE_USER, scopes: ['integrations:git:repo:read'] },
           {
             connectorId: '11111111-1111-4111-8111-111111111111',
             repositoryUrl: 'https://git.example.com/acme/app.git',

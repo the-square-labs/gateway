@@ -54,7 +54,7 @@ describe('AIService PKI CA tool routing', () => {
     container.registerInstance(TOKENS.CommercialEdition, CommercialEditionRuntime.community());
     const caService = { getCATree: vi.fn() };
     await expect(
-      createService(caService).executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})
+      createService(caService).executeTool({ ...BASE_USER, scopes: ['pki:ca:view'] }, 'list_cas', {})
     ).resolves.toMatchObject({ error: expect.stringContaining('commercial module') });
     expect(caService.getCATree).not.toHaveBeenCalled();
   });
@@ -68,9 +68,9 @@ describe('AIService PKI CA tool routing', () => {
     };
     (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
 
-    await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})
-    ).resolves.toMatchObject({ error: 'license denied' });
+    await expect(service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view'] }, 'list_cas', {})).resolves.toMatchObject(
+      { error: 'license denied' }
+    );
     expect(policy.requireFeatureForExistingRuntime).toHaveBeenCalledWith('internal-pki');
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'create_root_ca', { commonName: 'Root' })
@@ -79,7 +79,7 @@ describe('AIService PKI CA tool routing', () => {
     expect(caService.getCATree).not.toHaveBeenCalled();
   });
 
-  it('routes CA list/get/create operations through the CA service with type-specific scopes', async () => {
+  it('routes CA list/get/create operations through the CA service with CA-scoped view grants', async () => {
     const caService = {
       getCATree: vi.fn().mockResolvedValue([
         { id: 'root-ca', type: 'root' },
@@ -91,16 +91,28 @@ describe('AIService PKI CA tool routing', () => {
     };
     const service = createService(caService);
 
-    await expect(service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})).resolves.toEqual({
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root-ca'] }, 'list_cas', {})
+    ).resolves.toEqual({
       result: [{ id: 'root-ca', type: 'root' }],
       invalidateStores: [],
     });
     expect(caService.getCATree).toHaveBeenCalledWith(false);
+    await expect(service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view'] }, 'list_cas', {})).resolves.toEqual({
+      result: [
+        { id: 'root-ca', type: 'root' },
+        { id: 'intermediate-ca', type: 'intermediate' },
+      ],
+      invalidateStores: [],
+    });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'get_ca', { caId: 'root-ca' })
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root-ca'] }, 'get_ca', { caId: 'root-ca' })
     ).resolves.toEqual({ result: { id: 'root-ca', type: 'root' }, invalidateStores: [] });
     expect(caService.getCA).toHaveBeenCalledWith('root-ca', { includeSystem: false });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:intermediate-ca'] }, 'get_ca', { caId: 'root-ca' })
+    ).resolves.toMatchObject({ error: expect.stringContaining('PERMISSION_DENIED') });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'create_root_ca', {
@@ -141,7 +153,7 @@ describe('AIService PKI CA tool routing', () => {
     );
   });
 
-  it('routes CA delete/update operations with type-specific authorization', async () => {
+  it('routes CA delete by type and CA update by pki:ca:edit', async () => {
     const caService = {
       getCA: vi
         .fn()
@@ -160,7 +172,7 @@ describe('AIService PKI CA tool routing', () => {
     expect(caService.deleteCA).toHaveBeenCalledWith('intermediate-ca', 'user-1');
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'manage_ca', {
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:edit:root-ca'] }, 'manage_ca', {
         operation: 'update',
         caId: 'root-ca',
         crlDistributionUrl: null,
@@ -192,13 +204,11 @@ describe('AIService PKI CA tool routing', () => {
       service.executeTool({ ...BASE_USER, scopes: ['pki:cert:issue:issuing-ca'] }, 'list_cas', {})
     ).resolves.toEqual({ result: [{ id: 'issuing-ca', type: 'intermediate' }], invalidateStores: [] });
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', { showSystem: true })
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view'] }, 'list_cas', { showSystem: true })
     ).resolves.toEqual({ error: 'Missing required scope: admin:details:certificates', invalidateStores: [] });
-    await service.executeTool(
-      { ...BASE_USER, scopes: ['pki:ca:view:root', 'admin:details:certificates'] },
-      'list_cas',
-      { showSystem: true }
-    );
+    await service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view', 'admin:details:certificates'] }, 'list_cas', {
+      showSystem: true,
+    });
     expect(caService.getCATree).toHaveBeenLastCalledWith(true);
   });
 
@@ -218,17 +228,24 @@ describe('AIService PKI CA tool routing', () => {
     (service as any).auditService = audit;
     container.registerInstance(ExportService, { exportCAKey } as never);
 
-    // PUT /cas/{id} requires pki:ca:create:root regardless of the CA type.
+    // PUT /cas/{id} requires pki:ca:edit on that CA, regardless of the CA type.
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:intermediate'] }, 'manage_ca', {
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root', 'pki:ca:edit:root-ca'] }, 'manage_ca', {
         operation: 'update',
         caId: 'int-ca',
         maxValidityDays: 30,
       })
     ).resolves.toEqual({
-      error: 'PERMISSION_DENIED: Missing required scope pki:ca:create:root',
+      error: 'PERMISSION_DENIED: Missing required scope pki:ca:edit:int-ca',
       invalidateStores: [],
     });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:edit:int-ca'] }, 'manage_ca', {
+        operation: 'update',
+        caId: 'int-ca',
+        maxValidityDays: 30,
+      })
+    ).resolves.toMatchObject({ result: { id: 'int-ca' } });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:ca:revoke:intermediate'] }, 'manage_ca', {
@@ -249,15 +266,26 @@ describe('AIService PKI CA tool routing', () => {
     ).resolves.toMatchObject({ result: { success: true } });
     expect(caService.revokeCA).toHaveBeenCalledWith('root-ca', 'compromised', 'user-1');
 
+    // POST /cas/{id}/export-key requires pki:ca:export on that CA.
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'manage_ca', {
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:edit', 'pki:ca:export:int-ca'] }, 'manage_ca', {
+        operation: 'export_key',
+        caId: 'root-ca',
+        passphrase: 'long-enough-passphrase',
+      })
+    ).resolves.toEqual({
+      error: 'PERMISSION_DENIED: Missing required scope pki:ca:export:root-ca',
+      invalidateStores: [],
+    });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:export:root-ca'] }, 'manage_ca', {
         operation: 'export_key',
         caId: 'root-ca',
         passphrase: 'short',
       })
     ).resolves.toMatchObject({ error: expect.stringContaining('passphrase') });
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'manage_ca', {
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:export:root-ca'] }, 'manage_ca', {
         operation: 'export_key',
         caId: 'root-ca',
         passphrase: 'long-enough-passphrase',

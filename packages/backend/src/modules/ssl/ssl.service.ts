@@ -45,6 +45,11 @@ export const INTERNAL_CERT_KEY_USE_SCOPE = 'pki:cert:export';
 
 type ProxyHostSyncFailure = { hostId: string; error: string };
 
+/** Reissues the internal PKI leaf behind an `internal` SSL certificate (see InternalCertificateRenewalService). */
+export interface InternalCertificateRenewer {
+  renewSslCertificate(sslCertificateId: string, userId: string, options?: { actorScopes?: string[] }): Promise<unknown>;
+}
+
 const RENEWABLE_STATUSES: ReadonlySet<string> = new Set(['active', 'error', 'expired']);
 
 type DNSChallenge = {
@@ -80,6 +85,7 @@ export class SSLService {
   private eventBus?: EventBusService;
   private integrationsService?: IntegrationsService;
   private proxyService?: ProxyService;
+  private internalCertRenewal?: InternalCertificateRenewer;
   /** Errors whose renewal failure is already persisted by an inner step. */
   private readonly recordedRenewalFailures = new WeakSet<object>();
   setEventBus(bus: EventBusService) {
@@ -87,6 +93,10 @@ export class SSLService {
   }
   setIntegrationsService(service: IntegrationsService) {
     this.integrationsService = service;
+  }
+  /** Reissues linked internal PKI certificates (manual renew of an `internal` certificate). */
+  setInternalCertificateRenewal(renewer: InternalCertificateRenewer) {
+    this.internalCertRenewal = renewer;
   }
   setProxyService(service: ProxyService) {
     this.proxyService = service;
@@ -743,7 +753,9 @@ export class SSLService {
         internalCertId: input.internalCertId,
         notBefore: pkiCert.notBefore,
         notAfter: pkiCert.notAfter,
-        autoRenew: false,
+        // Gateway holds the key: reissue from the same CA and template before
+        // expiry. A CSR-issued leaf cannot be reissued here and only alerts.
+        autoRenew: !!privateKeyPem,
         status: 'active',
         createdById: userId,
       })
@@ -774,13 +786,20 @@ export class SSLService {
   // Renew certificate
   // ---------------------------------------------------------------------------
 
-  async renewCert(certId: string, userId: string, requesterEmail?: string) {
+  async renewCert(certId: string, userId: string, requesterEmail?: string, options?: { actorScopes?: string[] }) {
     const cert = await this.db.query.sslCertificates.findFirst({
       where: eq(sslCertificates.id, certId),
     });
 
     if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
-    if (cert.type !== 'acme') throw new AppError(400, 'NOT_ACME', 'Only ACME certificates can be renewed');
+    if (cert.type === 'internal' && this.internalCertRenewal) {
+      await this.internalCertRenewal.renewSslCertificate(certId, userId, { actorScopes: options?.actorScopes });
+      const renewed = await this.db.query.sslCertificates.findFirst({ where: eq(sslCertificates.id, certId) });
+      return this.sanitizeCert(renewed!);
+    }
+    if (cert.type !== 'acme') {
+      throw new AppError(400, 'NOT_ACME', 'Only ACME and linked internal certificates can be renewed');
+    }
     if (!RENEWABLE_STATUSES.has(cert.status)) {
       throw new AppError(400, 'CERT_NOT_RENEWABLE', 'Certificate is not in a renewable state');
     }
@@ -963,7 +982,10 @@ export class SSLService {
     });
 
     if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
-    if (cert.type !== 'acme') throw new AppError(400, 'NOT_ACME', 'Only ACME certificates support auto-renewal');
+    if (cert.type === 'internal') return this.setInternalAutoRenew(cert, input.enabled, userId);
+    if (cert.type !== 'acme') {
+      throw new AppError(400, 'NOT_ACME', 'Only ACME and linked internal certificates support auto-renewal');
+    }
 
     const updates: Partial<typeof sslCertificates.$inferInsert> = {
       autoRenew: false,
@@ -1493,6 +1515,114 @@ export class SSLService {
   // ---------------------------------------------------------------------------
   // Get single certificate
   // ---------------------------------------------------------------------------
+
+  private async setInternalAutoRenew(cert: typeof sslCertificates.$inferSelect, enabled: boolean, userId: string) {
+    if (enabled && (!cert.privateKeyPem || !cert.internalCertId)) {
+      throw new AppError(
+        400,
+        'INTERNAL_CERT_NOT_RENEWABLE',
+        'This certificate was issued from a CSR, so Gateway does not hold its private key and cannot reissue it'
+      );
+    }
+    const [updated] = await this.db
+      .update(sslCertificates)
+      .set({ autoRenew: enabled, renewalError: enabled ? cert.renewalError : null, updatedAt: new Date() })
+      .where(eq(sslCertificates.id, cert.id))
+      .returning();
+    await this.auditService.log({
+      userId,
+      action: 'ssl.auto_renew',
+      resourceType: 'ssl_certificate',
+      resourceId: cert.id,
+      details: { enabled, type: 'internal' },
+    });
+    this.emitCert(cert.id, 'updated', cert.name);
+    return this.sanitizeCert(updated!);
+  }
+
+  /**
+   * Put a reissued internal PKI leaf into service for a linked SSL certificate:
+   * store the new material, then refresh the canonical asset and every active
+   * proxy host through the existing atomic TLS distribution. A delivery
+   * problem is recorded on the certificate, never as a failed renewal.
+   */
+  async applyReissuedInternalCertificate(
+    certId: string,
+    material: {
+      internalCertId: string;
+      certificatePem: string;
+      privateKeyPem: string;
+      notBefore: Date;
+      notAfter: Date;
+    },
+    userId: string,
+    trigger: 'scheduled' | 'manual'
+  ): Promise<{ failures: ProxyHostSyncFailure[] }> {
+    const cert = await this.db.query.sslCertificates.findFirst({ where: eq(sslCertificates.id, certId) });
+    if (!cert) throw new AppError(404, 'SSL_CERT_NOT_FOUND', 'SSL certificate not found');
+    if (cert.type !== 'internal') throw new AppError(400, 'NOT_INTERNAL', 'Not a linked internal certificate');
+
+    let domains = cert.domainNames;
+    try {
+      const parsed = this.extractDomains(new x509.X509Certificate(material.certificatePem));
+      if (parsed.length > 0) domains = parsed;
+    } catch {
+      // Keep the linked domain list.
+    }
+    const encrypted = this.cryptoService.encryptPrivateKey(material.privateKeyPem);
+    const now = new Date();
+    await this.db
+      .update(sslCertificates)
+      .set({
+        certificatePem: material.certificatePem,
+        privateKeyPem: encrypted.encryptedPrivateKey,
+        encryptedDek: encrypted.encryptedDek,
+        dekIv: encrypted.dekIv,
+        internalCertId: material.internalCertId,
+        domainNames: domains,
+        notBefore: material.notBefore,
+        notAfter: material.notAfter,
+        status: 'active',
+        lastRenewedAt: now,
+        lastRenewalAttemptAt: now,
+        renewalError: null,
+        renewalFailureCount: 0,
+        updatedAt: now,
+      })
+      .where(eq(sslCertificates.id, certId));
+
+    let failures: ProxyHostSyncFailure[] = [];
+    try {
+      const delivery = await this.refreshGatewayAssetAndSyncProxyHosts(certId, userId);
+      await this.recordDistributionOutcome(certId, delivery.failures);
+      failures = delivery.failures;
+    } catch (deployError) {
+      const deployMsg = deployError instanceof Error ? deployError.message : 'Unknown deploy error';
+      logger.error('Internal certificate reissued but deploy to nginx failed', { certId, error: deployMsg });
+      await this.db
+        .update(sslCertificates)
+        .set({ renewalError: `Deploy failed: ${deployMsg}`, updatedAt: new Date() })
+        .where(eq(sslCertificates.id, certId));
+      throw new AppError(500, 'DEPLOY_FAILED', `Certificate reissued but deploy failed: ${deployMsg}`);
+    }
+
+    await this.auditService.log({
+      userId,
+      action: 'ssl.renew',
+      resourceType: 'ssl_certificate',
+      resourceId: certId,
+      details: {
+        type: 'internal',
+        trigger,
+        previousInternalCertId: cert.internalCertId,
+        internalCertId: material.internalCertId,
+        domains,
+      },
+    });
+    logger.info('Linked internal certificate reissued', { certId, internalCertId: material.internalCertId, trigger });
+    this.emitCert(certId, 'renewed', cert.name);
+    return { failures };
+  }
 
   async getCert(certId: string) {
     const cert = await this.db.query.sslCertificates.findFirst({

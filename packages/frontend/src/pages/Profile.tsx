@@ -256,7 +256,6 @@ export function Profile() {
       });
     if (
       scopeMatches(userScopes ?? [], "logs:schemas:view") ||
-      scopeMatches(userScopes ?? [], "logs:manage") ||
       (deriveAllowedResourceIdsByScope(userScopes ?? [])["logs:schemas:view"]?.length ?? 0) > 0
     ) {
       loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())

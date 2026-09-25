@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -9,16 +14,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError } from "@/stores/license-paywall";
 import { useResourceFolderStore } from "@/stores/resource-folders";
-import type { LoggingEnvironment, ResourceFolderTreeNode } from "@/types";
+import type { LoggingEnvironment } from "@/types";
 
 export function LoggingEnvironmentDialog({
   open,
@@ -40,7 +39,13 @@ export function LoggingEnvironmentDialog({
     (state) => state.loadingByType["logging-environment"]
   );
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
+  const scopes = useAuthStore((state) => state.user?.scopes);
+  // Same destination rule as the create route: folder-scoped creators only see their folders.
+  const folderChoices = useMemo(
+    () => getCreateFolderChoices(scopes ?? [], "logs:environments:create", folders),
+    [folders, scopes]
+  );
+  const destinationAllowed = !!environment || isCreateFolderAllowed(folderChoices, folderId);
 
   useEffect(() => {
     if (!open) return;
@@ -91,23 +96,12 @@ export function LoggingEnvironmentDialog({
           {!environment && (
             <label className="block space-y-1.5">
               <span className="text-sm font-medium">Folder</span>
-              <Select
-                value={folderId || "__none__"}
-                onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-                disabled={foldersLoading}
-              >
-                <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                  <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">No folder</SelectItem>
-                  {folderOptions.map((folder) => (
-                    <SelectItem key={folder.id} value={folder.id}>
-                      {"  ".repeat(folder.depth) + folder.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CreateFolderSelect
+                choices={folderChoices}
+                value={folderId}
+                onChange={setFolderId}
+                loading={foldersLoading}
+              />
             </label>
           )}
           {environment && (
@@ -128,15 +122,14 @@ export function LoggingEnvironmentDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!name.trim() || saving} onClick={() => void save()}>
+          <Button
+            disabled={!name.trim() || saving || !destinationAllowed}
+            onClick={() => void save()}
+          >
             Save
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

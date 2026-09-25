@@ -434,7 +434,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'duplicate_docker_container',
     description:
-      'Clone a Docker container with a new name. Copies config, ports, volumes, env, and secrets. Requires docker:containers:create for the destination plus config, environment, and secrets access on the source container.',
+      'Clone a Docker container with a new name. Copies config, ports, volumes, env, and secrets. Requires docker:containers:create for the destination plus environment and secrets access on the source container.',
     parameters: {
       type: 'object',
       properties: {
@@ -448,7 +448,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     category: 'Docker',
     requiredScope: 'docker:containers:create',
-    requiredScopes: ['docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets'],
+    requiredScopes: ['docker:containers:environment', 'docker:containers:secrets'],
     invalidateStores: ['containers'],
   },
   {
@@ -519,6 +519,13 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
             'Optional saved private/custom registry UUID. Omit for public Docker Hub images; never pass an empty string.',
         },
         folderId: { type: 'string', description: 'Optional authorized destination image folder UUID.' },
+        workload: {
+          type: 'object',
+          description:
+            'Pull for a container or deployment about to be created: pass its destination container folder (folderId, or omit it for the node root). docker:containers:create there authorizes the pull instead of docker:images:pull; the pull is synchronous and the image is not placed in an image folder. Do not combine with the top-level folderId.',
+          properties: { folderId: { type: 'string', description: 'Destination container folder UUID.' } },
+          additionalProperties: false,
+        },
         wait: {
           type: 'boolean',
           description:
@@ -652,7 +659,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_volume',
     description:
-      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists volumes selectable as container mounts (docker:containers:mounts). rename (newName) and update_labels (labels) need docker:volumes:create and :delete. File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
+      'Create, inspect, resize, adopt, rename, relabel, delete, and browse files of Docker volumes on a node. create makes a Gateway-managed local volume and accepts no driver setting: storageKind "regular" (default) takes no capacity; storageKind "disk-image" makes a fixed-size volume and requires capacityBytes (at least 268435456), a compatible node, and Personal-or-higher licensing. resize grows an existing Gateway-managed disk-image volume to capacityBytes; it cannot shrink. adopt brings an eligible legacy local volume under Gateway management without copying data. inspect and metrics read the cached detail and usage; managed_options lists volumes selectable as container mounts (docker:containers:mounts). rename (newName), update_labels (labels), resize and adopt edit one volume and need docker:volumes:edit on it (a node or folder grant covers it). File operations (list_files, read_file, write_file, create_file, create_directory, delete_file, move_file, upload_init/upload_chunk/upload_complete/upload_abort) need docker:volumes:files:read or :write; binary content uses contentBase64 and upload chunks carry at most 1 MiB. Archive export uses the MCP-only download_docker_archive tool. delete removes the volume. Compose-owned volumes must be changed through their Compose project. Listing is available via list_docker_volumes.',
     parameters: {
       type: 'object',
       properties: {
@@ -874,7 +881,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_source',
     description:
-      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project, or create a new container, deployment, or Compose Project from a Git source (create). pending reads a container that exists only as a queued first source build. Also lists source repositories and manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts; while a build rollout deploys, other changes to its target are refused with 409 BUILD_ROLLOUT_IN_PROGRESS.',
+      'Inspect, attach, update, remove, resolve, or manually build the Git source bound directly to an existing Docker container, blue/green deployment, or Compose Project, or create a new container, deployment, or Compose Project from a Git source (create). pending reads a container that exists only as a queued first source build. Also lists the Git connectors a source can come from (connectors: id, name, provider) and their repositories (repositories, connectorId); both need a create or edit scope of the workload the source is for, not integration scopes. Manages source-scoped Build Secrets without exposing secret values. Builds always resolve an exact commit and deploy only approved immutable artifacts; while a build rollout deploys, other changes to its target are refused with 409 BUILD_ROLLOUT_IN_PROGRESS.',
     parameters: {
       type: 'object',
       properties: {
@@ -889,6 +896,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
             'resolve',
             'build',
             'admission',
+            'connectors',
             'repositories',
             'secret_list',
             'secret_upsert',
@@ -1276,7 +1284,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_docker_runtime',
     description:
-      'Check (preflight) or install (install) the gVisor runsc secure container runtime on a Docker node. Installing restarts the Docker daemon on that node. Requires broad admin:update.',
+      'Check (preflight) or install (install) the gVisor runsc secure container runtime on a Docker node. Installing restarts the Docker daemon on that node. Requires nodes:manage for the node (broad admin:update is still accepted).',
     parameters: {
       type: 'object',
       properties: {
@@ -1288,7 +1296,7 @@ export const DOCKER_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Docker',
-    requiredScope: 'admin:update',
+    requiredScope: 'nodes:manage',
     invalidateStores: ['nodes'],
   },
   {

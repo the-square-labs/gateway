@@ -5,7 +5,6 @@ import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   authMiddleware,
-  requireAnyScopeBase,
   requireScope,
   requireScopeBase,
   requireScopeForResource,
@@ -34,13 +33,9 @@ export const nginxTemplateRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openAp
 
 nginxTemplateRoutes.use('*', authMiddleware);
 
-function assertRawTemplateWrite(c: { get(key: 'effectiveScopes'): unknown }) {
-  const scopes = c.get('effectiveScopes');
-  if (!Array.isArray(scopes) || !hasScope(scopes, 'proxy:raw:write')) {
-    throw new AppError(403, 'FORBIDDEN', 'Nginx template content requires proxy:raw:write scope');
-  }
-}
-
+// Template content is written under proxy:templates:manage (manual approval for
+// programmatic callers). Broad manage creates templates; `manage:<id>` edits,
+// tests and deletes that template.
 // List all nginx templates
 nginxTemplateRoutes.openapi(
   { ...listNginxTemplatesRoute, middleware: requireScopeBase('proxy:templates:view') },
@@ -69,9 +64,8 @@ nginxTemplateRoutes.openapi(
 
 // Create template
 nginxTemplateRoutes.openapi(
-  { ...createNginxTemplateRoute, middleware: requireScope('proxy:templates:create') },
+  { ...createNginxTemplateRoute, middleware: requireScope('proxy:templates:manage') },
   async (c) => {
-    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -83,9 +77,8 @@ nginxTemplateRoutes.openapi(
 
 // Update template
 nginxTemplateRoutes.openapi(
-  { ...updateNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:edit', 'id') },
+  { ...updateNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:manage', 'id') },
   async (c) => {
-    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const id = c.req.param('id')!;
@@ -98,7 +91,7 @@ nginxTemplateRoutes.openapi(
 
 // Delete template
 nginxTemplateRoutes.openapi(
-  { ...deleteNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:delete', 'id') },
+  { ...deleteNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:manage', 'id') },
   async (c) => {
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
@@ -108,15 +101,17 @@ nginxTemplateRoutes.openapi(
   }
 );
 
-// Clone template
+// Clone template: reads the source, creates a new template.
 nginxTemplateRoutes.openapi(
-  { ...cloneNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:edit', 'id') },
+  { ...cloneNginxTemplateRoute, middleware: requireScopeForResource('proxy:templates:view', 'id') },
   async (c) => {
     const service = container.resolve(NginxTemplateService);
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
-    if (!hasScope(scopes, 'proxy:templates:create')) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: proxy:templates:create');
+    if (!hasScope(scopes, 'proxy:templates:manage')) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: proxy:templates:manage', {
+        requiredScope: 'proxy:templates:manage',
+      });
     }
     const id = c.req.param('id')!;
     const clone = await service.cloneTemplate(id, user.id);
@@ -156,26 +151,17 @@ nginxTemplateRoutes.openapi(
 nginxTemplateRoutes.openapi(
   {
     ...testNginxTemplateRoute,
-    middleware: requireAnyScopeBase('proxy:templates:create', 'proxy:templates:edit'),
+    middleware: requireScopeBase('proxy:templates:manage'),
   },
   async (c) => {
-    assertRawTemplateWrite(c);
     const service = container.resolve(NginxTemplateService);
     const nodeDispatch = container.resolve(NodeDispatchService);
     const body = await c.req.json();
     const input = PreviewNginxTemplateSchema.parse(body);
     const scopes = c.get('effectiveScopes') || [];
-    const canTest = input.templateId
-      ? hasScope(scopes, `proxy:templates:edit:${input.templateId}`)
-      : hasScope(scopes, 'proxy:templates:create');
-    if (!canTest) {
-      throw new AppError(
-        403,
-        'FORBIDDEN',
-        input.templateId
-          ? `Missing required scope: proxy:templates:edit:${input.templateId}`
-          : 'Missing required scope: proxy:templates:create'
-      );
+    const requiredScope = input.templateId ? `proxy:templates:manage:${input.templateId}` : 'proxy:templates:manage';
+    if (!hasScope(scopes, requiredScope)) {
+      throw new AppError(403, 'FORBIDDEN', `Missing required scope: ${requiredScope}`, { requiredScope });
     }
 
     return c.json({ data: await testTemplateContent(service, nodeDispatch, input.content) });

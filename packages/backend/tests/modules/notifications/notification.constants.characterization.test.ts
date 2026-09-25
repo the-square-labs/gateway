@@ -26,7 +26,7 @@ describe('notification constants characterization', () => {
         severityColor: SEVERITY_COLOR,
         categories: ALERT_CATEGORIES,
       })
-    ).toBe('6a5d729937b24afaac984d83e097c1bd66fcdc84a7f560a18dd0fd1103891081');
+    ).toBe('da8d7800ee2b4801818ee191eec6df9a8af2690e55548aad4ca8cbe07cfc8c44');
   });
 
   it('keeps EventBus topic, event, and stateful topology stable', () => {
@@ -46,7 +46,7 @@ describe('notification constants characterization', () => {
       ])
     );
 
-    expect(hash(topology)).toBe('7e032ee5260fbc9a45e70d0afa202eaa7e8617cfd7b38ef9f4d736ce7d5c0f63');
+    expect(hash(topology)).toBe('08a40ef71dfd3de8a246792f8b6bf6a2b52d1290e6ce67143c3c8c80180b749f');
   });
 
   it('covers the intended hosting catalog and EventBus mapping additions', () => {
@@ -231,7 +231,7 @@ describe('notification constants characterization', () => {
       ])
     );
 
-    expect(hash(behavior)).toBe('219357a1618e79557da70197a65ca0d6a563c077bdfe3f14b3ffea59c80627b6');
+    expect(hash(behavior)).toBe('7fdcbe19cb64db75f31da745c5b6ee96dc8ca63506c2af74e761794eae656613');
   });
 
   it('keeps category, metric, event, and template-variable identities unique', () => {

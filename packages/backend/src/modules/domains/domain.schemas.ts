@@ -36,6 +36,11 @@ export const ResolveCloudflareMigrationSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('update_dns'), nginxNodeId: z.string().uuid() }),
 ]);
 
+/** Optional body for issuing an ACME certificate from a domain: the SSL certificate folder to create it in. */
+export const IssueDomainCertificateSchema = z.object({
+  folderId: z.string().uuid().optional().nullable(),
+});
+
 export const DomainIngressMigrationSchema = z.object({
   targetNodeId: z.string().uuid(),
 });
@@ -53,4 +58,5 @@ export type UpdateDomainInput = z.infer<typeof UpdateDomainSchema>;
 export type DeleteDomainInput = z.infer<typeof DeleteDomainSchema>;
 export type ResolveCloudflareMigrationInput = z.infer<typeof ResolveCloudflareMigrationSchema>;
 export type DomainIngressMigrationInput = z.infer<typeof DomainIngressMigrationSchema>;
+export type IssueDomainCertificateInput = z.infer<typeof IssueDomainCertificateSchema>;
 export type DomainListQuery = z.infer<typeof DomainListQuerySchema>;

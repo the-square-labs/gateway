@@ -145,7 +145,7 @@ class ApiClient extends withPagesDomainsApi(
       cache("dashboard:health", () => this.getHealthOverview())
     );
     add(
-      licensed("internal-pki") && auth.hasAnyScope("pki:ca:view:root", "pki:ca:view:intermediate"),
+      licensed("internal-pki") && auth.hasScopedAccess("pki:ca:view"),
       "cas",
       cache(`cas:list:${showSystem ? "system" : "default"}`, () => this.listCAs({ showSystem }))
     );
@@ -264,14 +264,14 @@ class ApiClient extends withPagesDomainsApi(
       cache("settings:gitlab-connectors", () => this.listGitLabConnectors())
     );
     add(
-      auth.hasAnyScope("notifications:alerts:view", "notifications:view", "notifications:manage"),
+      auth.hasAnyScope("notifications:alerts:view", "notifications:alerts:manage"),
       "notification-alerts",
       cache("notifications:alerts", () =>
         this.listAlertRules({ limit: 100 }).then((result) => result.data ?? [])
       )
     );
     add(
-      auth.hasAnyScope("notifications:webhooks:view", "notifications:view", "notifications:manage"),
+      auth.hasAnyScope("notifications:webhooks:view", "notifications:webhooks:manage"),
       "notification-webhooks",
       cache("notifications:webhooks", () =>
         this.listWebhooks({ limit: 100 }).then((result) => result.data ?? [])

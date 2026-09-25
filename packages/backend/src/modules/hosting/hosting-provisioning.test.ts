@@ -66,7 +66,7 @@ const actor = {
     'hosting:resources:create',
     'hosting:resources:recover',
     'nodes:create',
-    'nodes:config:edit',
+    'nodes:manage',
   ],
   isBlocked: false,
   isDeleted: false,

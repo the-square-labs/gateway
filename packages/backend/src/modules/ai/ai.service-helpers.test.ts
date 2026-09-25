@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { redactArgsForTool } from './ai.service.tool-helpers.js';
-import { aiServiceTestHelpers } from './ai.service-helpers.js';
+import { aiServiceTestHelpers, directResourceIdsForScopes, hasToolExecutionScope } from './ai.service-helpers.js';
 
 const {
   agentPage,
@@ -103,6 +103,57 @@ describe('AI service helpers', () => {
         callback: 'http://localhost:1455/auth/callback?code=raw-oauth-code&state=abc',
       })
     ).toEqual({ operation: 'complete_authorization', sessionId: 'session-1', callback: '[REDACTED]' });
+  });
+
+  it('returns only concrete resource ids for list tools, never folder or node targets', () => {
+    expect(directResourceIdsForScopes(['databases:view'], 'databases:view')).toBeUndefined();
+    // Implied scopes count like on the list routes.
+    expect(directResourceIdsForScopes(['databases:edit'], 'databases:view')).toBeUndefined();
+    expect(
+      directResourceIdsForScopes(
+        [
+          'databases:view:folder/folder-1',
+          'databases:view:node/node-1',
+          'databases:view:db-1',
+          'databases:query:read:db-2',
+          'storage:view:db-3',
+        ],
+        'databases:view'
+      )
+    ).toEqual(['db-1', 'db-2']);
+    expect(directResourceIdsForScopes(['databases:view:folder/folder-1'], 'databases:view')).toEqual([]);
+  });
+
+  it('gates Docker child resources by base scope and leaves the resource check to the handler', () => {
+    const tool = { targetIdentity: { arguments: ['containerId', 'nodeId'] } };
+    const folderScopes = ['docker:containers:view:folder/folder-1', 'docker:containers:view:node-1/access-1'];
+    expect(
+      hasToolExecutionScope(folderScopes, 'get_docker_container', 'docker:containers:view', { nodeId: 'node-1' }, tool)
+    ).toBe(true);
+    expect(
+      hasToolExecutionScope(
+        ['docker:images:view:node-1/sha256:abc'],
+        'list_docker_images',
+        'docker:images:view',
+        { nodeId: 'node-2' },
+        { targetIdentity: { arguments: ['nodeId'] } }
+      )
+    ).toBe(true);
+    expect(
+      hasToolExecutionScope(['docker:containers:view'], 'start_docker_container', 'docker:containers:manage', {}, tool)
+    ).toBe(false);
+    // Other resource families still check the target resource at the gate.
+    expect(
+      hasToolExecutionScope(
+        ['proxy:view:route-1'],
+        'get_route',
+        'proxy:view',
+        { routeId: 'route-2' },
+        {
+          targetIdentity: { arguments: ['routeId'] },
+        }
+      )
+    ).toBe(false);
   });
 
   it('binds create_route authorization to the target node', () => {

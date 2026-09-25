@@ -74,7 +74,7 @@ describe("scope constants", () => {
       "admin:groups",
       "settings:gateway:edit",
       "proxy:raw:write",
-      "nodes:config:edit",
+      "nodes:manage",
       "nodes:files:read",
       "nodes:files:write",
       "docker:containers:view",
@@ -84,9 +84,11 @@ describe("scope constants", () => {
       "integrations:hosting:manage",
       "integrations:gitlab:manage",
       "integrations:github:manage",
-      "integrations:github:system",
+      "integrations:github:use",
+      "integrations:github:repo:write",
       "integrations:git:manage",
-      "integrations:git:system",
+      "integrations:git:use",
+      "integrations:git:repo:read",
       "integrations:ssh:manage",
       "integrations:cloudflare:manage",
     ]) {
@@ -126,9 +128,9 @@ describe("scope constants", () => {
 
   it("delegates connector sync and administration scopes to API and MCP tokens", () => {
     const connectorScopes = [
-      "integrations:gitlab:sync",
-      "integrations:github:sync",
-      "integrations:git:sync",
+      "integrations:gitlab:use",
+      "integrations:github:use",
+      "integrations:git:use",
       "integrations:cloudflare:sync",
       "integrations:gitlab:manage",
       "integrations:github:manage",

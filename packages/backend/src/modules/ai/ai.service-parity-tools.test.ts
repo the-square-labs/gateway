@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
 import { AlertService } from '@/modules/audit/alert.service.js';
 import { assertComposeChildMutationAllowed } from '@/modules/docker/compose/compose-child.guard.js';
 import { DockerDeploymentService } from '@/modules/docker/docker-deployment.service.js';
 import { DockerTaskService } from '@/modules/docker/docker-task.service.js';
 import { listAvailableMcpTools } from '@/modules/mcp/mcp-tools.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import { AIService } from './ai.service.js';
@@ -70,7 +71,7 @@ afterEach(() => {
 });
 
 describe('TLS repair and certificate tools', () => {
-  it('resyncs route TLS and certificate distribution only with admin:update', async () => {
+  it('still resyncs route TLS and certificate distribution with broad admin:update', async () => {
     const proxyService = { resyncTlsHost: vi.fn().mockResolvedValue({ synchronized: true }) };
     const sslService = { resyncDistribution: vi.fn().mockResolvedValue({ synchronized: 2 }) };
     const service = createService({ proxyService, sslService });
@@ -88,14 +89,65 @@ describe('TLS repair and certificate tools', () => {
     ).resolves.toEqual({ result: { synchronized: 2 }, invalidateStores: ['proxy', 'ssl'] });
     expect(sslService.resyncDistribution).toHaveBeenCalledWith(CERT_ID, 'user-1');
 
-    // Route-level edit rights do not grant the global repair action.
-    const denied = await service.executeTool(
-      userWith([`proxy:edit:${ROUTE_ID}`, `ssl:cert:issue:${CERT_ID}`]),
+    // A certificate issue grant does not repair a route, and a route edit grant does not repair a certificate.
+    const deniedRoute = await service.executeTool(userWith([`ssl:cert:issue:${CERT_ID}`]), 'resync_tls_distribution', {
+      target: 'route',
+      routeId: ROUTE_ID,
+    });
+    expect(deniedRoute.error).toContain(`proxy:edit:${ROUTE_ID}`);
+    const deniedCertificate = await service.executeTool(
+      userWith([`proxy:edit:${ROUTE_ID}`]),
       'resync_tls_distribution',
-      { target: 'route', routeId: ROUTE_ID }
+      { target: 'certificate', sslCertificateId: CERT_ID }
     );
-    expect(denied.error).toMatch(/PERMISSION_DENIED/);
+    expect(deniedCertificate.error).toContain(`ssl:cert:issue:${CERT_ID}`);
     expect(proxyService.resyncTlsHost).toHaveBeenCalledTimes(1);
+    expect(sslService.resyncDistribution).toHaveBeenCalledTimes(1);
+  });
+
+  function registerSystemFlag(isSystem: boolean) {
+    const query = { from: () => query, where: () => query, limit: async () => [{ isSystem }] };
+    container.registerInstance(TOKENS.DrizzleClient, { select: () => query } as never);
+  }
+
+  it('resyncs route TLS with proxy:edit on the route and certificates with ssl:cert:issue on the certificate', async () => {
+    registerSystemFlag(false);
+    const proxyService = { resyncTlsHost: vi.fn().mockResolvedValue({ synchronized: true }) };
+    const sslService = { resyncDistribution: vi.fn().mockResolvedValue({ synchronized: 2 }) };
+    const service = createService({ proxyService, sslService });
+
+    await expect(
+      service.executeTool(userWith([`proxy:edit:${ROUTE_ID}`]), 'resync_tls_distribution', {
+        target: 'route',
+        routeId: ROUTE_ID,
+      })
+    ).resolves.toMatchObject({ result: { synchronized: true } });
+    await expect(
+      service.executeTool(userWith([`ssl:cert:issue:${CERT_ID}`]), 'resync_tls_distribution', {
+        target: 'certificate',
+        sslCertificateId: CERT_ID,
+      })
+    ).resolves.toMatchObject({ result: { synchronized: 2 } });
+  });
+
+  it('keeps TLS resync of system routes and certificates behind admin:update', async () => {
+    registerSystemFlag(true);
+    const proxyService = { resyncTlsHost: vi.fn().mockResolvedValue({ synchronized: true }) };
+    const sslService = { resyncDistribution: vi.fn().mockResolvedValue({ synchronized: 2 }) };
+    const service = createService({ proxyService, sslService });
+
+    const denied = await service.executeTool(userWith([`proxy:edit:${ROUTE_ID}`]), 'resync_tls_distribution', {
+      target: 'route',
+      routeId: ROUTE_ID,
+    });
+    expect(denied.error).toMatch(/admin:update/);
+    expect(proxyService.resyncTlsHost).not.toHaveBeenCalled();
+    await expect(
+      service.executeTool(userWith(['admin:update']), 'resync_tls_distribution', {
+        target: 'certificate',
+        sslCertificateId: CERT_ID,
+      })
+    ).resolves.toMatchObject({ result: { synchronized: 2 } });
   });
 
   it('cancels a pending ACME issue with per-certificate ssl:cert:issue and renews with the requester email', async () => {
@@ -123,7 +175,9 @@ describe('TLS repair and certificate tools', () => {
       operation: 'renew',
       sslCertificateId: CERT_ID,
     });
-    expect(sslService.renewCert).toHaveBeenCalledWith(CERT_ID, 'user-1', 'admin@example.com');
+    expect(sslService.renewCert).toHaveBeenCalledWith(CERT_ID, 'user-1', 'admin@example.com', {
+      actorScopes: [`ssl:cert:issue:${CERT_ID}`],
+    });
   });
 });
 
@@ -154,8 +208,11 @@ describe('domain operational tools', () => {
     const domainsService = {
       getDomain: vi.fn().mockResolvedValue({ id: DOMAIN_ID, domain: 'example.com', dnsProvider: 'cloudflare' }),
     };
-    const requestACMECert = vi.fn().mockResolvedValue({ id: CERT_ID });
+    const requestACMECert = vi.fn().mockResolvedValue({ certificate: { id: CERT_ID } });
     container.registerInstance(SSLService, { requestACMECert } as never);
+    container.registerInstance(SSLCertificateFolderService, {
+      assertFolderExists: vi.fn().mockResolvedValue(undefined),
+    } as never);
     const service = createService({ domainsService });
 
     const denied = await service.executeTool(userWith([`domains:edit:${DOMAIN_ID}`]), 'manage_domain', {
@@ -170,7 +227,7 @@ describe('domain operational tools', () => {
         operation: 'issue_certificate',
         domainId: DOMAIN_ID,
       })
-    ).resolves.toMatchObject({ result: { id: CERT_ID } });
+    ).resolves.toMatchObject({ result: { certificate: { id: CERT_ID } } });
     expect(requestACMECert).toHaveBeenCalledWith(
       {
         domains: ['example.com'],
@@ -178,6 +235,7 @@ describe('domain operational tools', () => {
         provider: 'letsencrypt',
         autoRenew: true,
         dnsProvider: 'cloudflare',
+        folderId: null,
       },
       'user-1',
       'admin@example.com'

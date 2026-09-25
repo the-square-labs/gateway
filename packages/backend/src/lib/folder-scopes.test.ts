@@ -209,4 +209,66 @@ describe('folder-scoped permissions', () => {
 
     expect(scopes).toEqual(['docker:compose:view:folder/compose-folder-1', 'docker:compose:view:node-1/project-1']);
   });
+
+  it('resolves availability folder grants through the granted container or Compose folder', async () => {
+    const select = vi.fn((fields: Record<string, unknown>) => ({
+      from: vi.fn(() => {
+        if ('parentId' in fields) {
+          return Promise.resolve([
+            { id: 'container-folder', parentId: null, resourceType: 'container' },
+            { id: 'compose-folder', parentId: null, resourceType: 'compose' },
+            { id: 'network-folder', parentId: null, resourceType: 'network' },
+          ]);
+        }
+        if ('folderId' in fields) {
+          return {
+            where: vi.fn().mockResolvedValue([
+              { folderId: 'container-folder', nodeId: 'node-1', resourceType: 'container', resourceKey: 'web' },
+              { folderId: 'compose-folder', nodeId: 'node-1', resourceType: 'compose', resourceKey: 'project-1' },
+              { folderId: 'network-folder', nodeId: 'node-1', resourceType: 'network', resourceKey: 'net' },
+            ]),
+          };
+        }
+        if ('resourceKey' in fields) {
+          return { where: vi.fn().mockResolvedValue([{ id: 'access-1', nodeId: 'node-1', resourceKey: 'web' }]) };
+        }
+        if ('name' in fields) return { where: vi.fn().mockResolvedValue([]) };
+        return { where: vi.fn().mockResolvedValue([{ id: 'project-1', nodeId: 'node-1' }]) };
+      }),
+    }));
+
+    const scopes = await expandFolderScopes({ select } as any, [
+      folderScopedScope('docker:availability:manage', 'container-folder'),
+      folderScopedScope('docker:availability:manage', 'compose-folder'),
+      folderScopedScope('docker:availability:manage', 'network-folder'),
+    ]);
+
+    expect(scopes).toEqual(
+      expect.arrayContaining([
+        'docker:availability:manage:node-1/access-1',
+        'docker:availability:manage:node-1/project-1',
+      ])
+    );
+    expect(scopes.filter((scope) => scope.includes('net'))).toEqual([
+      'docker:availability:manage:folder/network-folder',
+    ]);
+  });
+
+  it('resolves logging token folder grants through logging environment folders', async () => {
+    const select = vi.fn((fields: Record<string, unknown>) => ({
+      from: vi.fn(() =>
+        'parentId' in fields
+          ? Promise.resolve([{ id: 'env-folder', parentId: null }])
+          : { where: vi.fn().mockResolvedValue([{ id: 'env-1', folderId: 'env-folder' }]) }
+      ),
+    }));
+
+    const scopes = await expandFolderScopes({ select } as never, [
+      'logs:tokens:create:folder/env-folder',
+      'logs:tokens:view:folder/env-folder',
+    ]);
+
+    expect(scopes).toEqual(expect.arrayContaining(['logs:tokens:create:env-1', 'logs:tokens:view:env-1']));
+    expect(getResourceScopedIds(scopes, 'logs:environments:view')).toEqual(['env-1']);
+  });
 });

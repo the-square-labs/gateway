@@ -87,6 +87,7 @@ describe("resource restriction mappings", () => {
       expect.arrayContaining([expect.objectContaining({ id: "f1" })])
     );
     expect(folders).toHaveBeenCalledOnce();
+    // A creation grant names a destination; it never implies viewing existing resources.
     expect(await loadScopeResourceList("databases:view", inventory)).toEqual([]);
     expect(inventory).not.toHaveBeenCalled();
     folders.mockRestore();
@@ -109,6 +110,58 @@ describe("resource restriction mappings", () => {
       folders.mockRestore();
     }
   });
+  it("maps folder-scopable logging token and availability scopes to their folder trees", () => {
+    for (const scope of ["logs:tokens:view", "logs:tokens:create", "logs:tokens:delete"]) {
+      expect(folderFamilyForScope(scope), scope).toBe("logging-environments");
+      expect(getResourceLabel(scope), scope).toContain("logging environments");
+    }
+    expect(folderFamilyForScope("docker:availability:manage")).toBe("docker");
+    const options = getResourceOptions(
+      "docker:availability:manage",
+      [],
+      [{ id: "node-1", type: "docker", hostname: "docker-1", displayName: "Docker 1" }] as never,
+      [],
+      [],
+      [],
+      [],
+      [],
+      [{ id: "c1", nodeId: "node-1", label: "web", kind: "container", folderId: null }]
+    );
+    expect(options.map((option) => option.id)).toEqual(["node-1", "node-1/c1"]);
+    expect(
+      getResourceOptions("logs:tokens:create", [], [], [], [], [], [
+        { id: "env-1", name: "Production", folderId: null },
+      ] as never).map((option) => option.id)
+    ).toEqual(["env-1"]);
+  });
+
+  it("loads Docker folders for users who only manage Docker folders", async () => {
+    useAuthStore.setState({ user: { scopes: ["docker:folders:manage"] } as never });
+    const folders = vi
+      .spyOn(api, "listDockerFolders")
+      .mockResolvedValue([{ id: "f1", name: "Team", children: [] }] as never);
+    try {
+      expect(await loadFolderFamily("docker-network")).toEqual([
+        { id: "f1", label: "Team", family: "docker-network", ancestorIds: [] },
+      ]);
+    } finally {
+      folders.mockRestore();
+    }
+  });
+
+  it("uses the single CA view scope for CA restriction lookups", () => {
+    useAuthStore.setState({ user: { scopes: ["pki:ca:view:ca-1"] } as never });
+    useSystemConfigStore.setState({
+      config: {
+        ...useSystemConfigStore.getState().config,
+        features: { ...DEFAULT_GATEWAY_FEATURES, pkiEnabled: true },
+      },
+    });
+    expect(canLoadScopeResource("pki:ca:view")).toBe(true);
+    useAuthStore.setState({ user: { scopes: ["pki:cert:view"] } as never });
+    expect(canLoadScopeResource("pki:ca:view")).toBe(false);
+  });
+
   it("keeps expected authorization/feature races quiet but reports real failures", () => {
     const error = vi.spyOn(toast, "error").mockImplementation(() => "toast");
     reportScopeLoadError("schemas", { status: 503, code: "LOGGING_DISABLED" });

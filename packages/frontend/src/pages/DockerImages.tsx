@@ -216,7 +216,7 @@ export function DockerImages({
     [images, search, filterUsage]
   );
   const truncatedListMeta = images.find((img) => img._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
   const usageColumns = useMemo<SimpleTableColumn<DockerImageUsageContainer>[]>(
     () => [
       {

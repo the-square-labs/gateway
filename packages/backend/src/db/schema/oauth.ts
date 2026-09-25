@@ -10,6 +10,12 @@ export const oauthClients = pgTable(
     logoUri: text('logo_uri'),
     redirectUris: jsonb('redirect_uris').$type<string[]>().notNull(),
     rawMetadata: jsonb('raw_metadata').$type<Record<string, unknown>>().notNull().default({}),
+    /**
+     * Last time this client was granted an authorization code or token. A
+     * client that was ever granted is never purged; only registrations that
+     * never completed authorization are removed by housekeeping.
+     */
+    lastGrantAt: timestamp('last_grant_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },

@@ -10,7 +10,7 @@ export function containerRecreateRequiredScopes(config: Record<string, unknown>)
   if (!Object.keys(config).some(present)) return [];
   const required = ['docker:containers:edit'];
   if (RECREATE_EXECUTION_FIELDS.some(present)) {
-    required.push('docker:containers:config', 'docker:containers:environment', 'docker:containers:secrets');
+    required.push('docker:containers:environment', 'docker:containers:secrets');
   }
   return required;
 }

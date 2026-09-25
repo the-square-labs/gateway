@@ -7,7 +7,10 @@ import { useDockerStore } from "@/stores/docker";
 import { makeNode, makeUser } from "@/test/fixtures";
 import { Docker } from "./Docker";
 
-vi.mock("@/lib/docker-node-access", () => ({ loadVisibleDockerNodes: vi.fn() }));
+vi.mock("@/lib/docker-node-access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/docker-node-access")>()),
+  loadVisibleDockerNodes: vi.fn(),
+}));
 function ListProbe({ tab }: { tab: string }) {
   const node = useDockerStore((s) => s.selectedNodeId);
   const location = useLocation();
@@ -30,7 +33,11 @@ vi.mock("./DockerComposeProjects", () => ({
 }));
 vi.mock("./DockerBuilds", () => ({ DockerBuilds: () => null }));
 vi.mock("./DockerTasks", () => ({ DockerTasks: () => null }));
-vi.mock("./docker/GwcaImportDialog", () => ({ GwcaImportDialog: () => null }));
+vi.mock("./docker/GwcaImportDialog", () => ({
+  GwcaImportDialog: ({ nodes }: { nodes: Array<{ id: string }> }) => (
+    <output aria-label="Archive import nodes">{nodes.map((entry) => entry.id).join(",")}</output>
+  ),
+}));
 
 const node = makeNode({ id: "node-1", type: "docker", status: "online", isConnected: true });
 it("preserves the page header and tabs while checking the next tab's node access", async () => {
@@ -148,4 +155,26 @@ it("never mounts an unscoped list for an unavailable deep-link node", async () =
   expect(useDockerStore.getState().fetchContainers).not.toHaveBeenCalled();
   await userEvent.click(screen.getByRole("button", { name: "View all nodes" }));
   await waitFor(() => expect(screen.getByText("containers list for all")).toBeInTheDocument());
+});
+
+it.each([
+  [
+    ["docker:containers:view:folder/folder-1", "docker:containers:create:folder/folder-1"],
+    "node-1",
+  ],
+  [["docker:containers:view", "docker:containers:create:node/node-1"], "node-1"],
+  [["docker:containers:view", "docker:containers:create:other-node"], ""],
+])("offers .gwca import on the nodes a creation grant %j accepts", async (scopes, expected) => {
+  useAuthStore.setState({ user: makeUser({ scopes }), isAuthenticated: true, isLoading: false });
+  render(
+    <MemoryRouter initialEntries={["/docker/containers"]}>
+      <Routes>
+        <Route path="/docker/:tab" element={<Docker />} />
+      </Routes>
+    </MemoryRouter>
+  );
+  await screen.findByText(/containers list for/);
+  await waitFor(() =>
+    expect(screen.getByLabelText("Archive import nodes").textContent).toBe(expected)
+  );
 });

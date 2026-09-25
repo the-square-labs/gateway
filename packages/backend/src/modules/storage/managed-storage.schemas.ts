@@ -29,6 +29,9 @@ export const ManagedStorageListQuerySchema = z.object({
 export const CreateManagedStorageSchema = z
   .object({
     name: managedStorageNameSchema,
+    // Folder of the canonical storage connection the cluster registers. Folder-scoped
+    // creators must name a folder they can create in (checked by the route).
+    folderId: z.string().uuid().nullable().optional(),
     // Optional and redundant with `version` today (SeaweedFS is the only
     // creatable engine); anything else — `minio` included — is refused.
     engine: z
@@ -231,3 +234,75 @@ export type CreateManagedStorageBindingInput = z.infer<typeof CreateManagedStora
 export const DeleteManagedStorageBindingSchema = z.object({
   targetEnvironment: z.record(z.string(), z.string()).optional(),
 });
+
+// ── MinIO -> SeaweedFS cutover ──────────────────────────────────────────────
+
+/** Point a workload link at another managed storage cluster, keeping its key, alias and environment. */
+export const MoveManagedStorageBindingSchema = z.object({
+  targetStorageId: z.string().uuid(),
+});
+
+export type MoveManagedStorageBindingInput = z.infer<typeof MoveManagedStorageBindingSchema>;
+
+/**
+ * Copy operator access keys from another cluster into this one with the same
+ * access key id and secret. `keyIds` limits the copy to those access key ids;
+ * omitted means every key of the source cluster.
+ */
+export const ImportManagedStorageAccessKeysSchema = z.object({
+  sourceStorageId: z.string().uuid(),
+  keyIds: z.array(z.string().trim().min(1).max(128)).min(1).max(256).optional(),
+});
+
+export type ImportManagedStorageAccessKeysInput = z.infer<typeof ImportManagedStorageAccessKeysSchema>;
+
+/** Move finished backup history of this cluster to another one after its files were copied there. */
+export const RehomeManagedStorageBackupHistorySchema = z.object({
+  targetStorageId: z.string().uuid(),
+  dryRun: z.boolean().optional(),
+});
+
+export type RehomeManagedStorageBackupHistoryInput = z.infer<typeof RehomeManagedStorageBackupHistorySchema>;
+
+/** One key summary in an import report; never carries a secret. */
+export interface ManagedStorageImportedKeySummary {
+  accessKeyId: string;
+  name: string | null;
+  access: 'read-only' | 'read-write';
+  buckets: string[];
+}
+
+export interface ManagedStorageKeyImportResult {
+  sourceStorageId: string;
+  targetStorageId: string;
+  /** Created in the target with the same access key id and secret. */
+  imported: ManagedStorageImportedKeySummary[];
+  /**
+   * Keys that cannot keep their id in the target (expiring keys, or an id or
+   * secret the target engine does not accept). Create a new key with the same
+   * access, buckets and expiry and hand it to the key holder.
+   */
+  needsNewId: Array<ManagedStorageImportedKeySummary & { expiresAt: string | null; reason: string }>;
+  skipped: Array<{ accessKeyId: string; reason: 'already_present' | 'expired' | 'not_found' }>;
+  failed: Array<{ accessKeyId: string; error: string }>;
+}
+
+/** The outcome of a write freeze or unfreeze. Keys are listed by access key id only. */
+export interface ManagedStorageWriteFreezeResult {
+  managedStorageId: string;
+  writesFrozen: boolean;
+  writesFrozenAt: string | null;
+  /** Operator keys and workload-link keys whose policy was rewritten. */
+  updated: Array<{ kind: 'access_key' | 'binding'; id: string; accessKeyId: string | null }>;
+  skipped: Array<{ kind: 'access_key' | 'binding'; id: string; accessKeyId: string | null; reason: string }>;
+  /**
+   * Keys the storage server reports that Gateway did not issue (freeze only;
+   * `null` when the server could not be listed). They are not frozen.
+   */
+  unmanagedKeys: string[] | null;
+  /**
+   * Enabled backup policies that still write to this storage (freeze only).
+   * Their runs are refused while it is frozen; move them to the new storage.
+   */
+  backupPoliciesStillUsingStorage: number;
+}

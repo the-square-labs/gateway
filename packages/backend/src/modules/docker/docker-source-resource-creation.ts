@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
@@ -127,6 +127,15 @@ export async function createDockerSourceResource(
       : false;
     if (existing) {
       throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A container with this name already exists');
+    }
+    // A deployment's folder placement is keyed by its name too: sharing it would move the deployment's placement.
+    const [deployment] = await db
+      .select({ id: dockerDeployments.id })
+      .from(dockerDeployments)
+      .where(and(eq(dockerDeployments.nodeId, nodeId), eq(dockerDeployments.name, input.resource.name)))
+      .limit(1);
+    if (deployment) {
+      throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A deployment with this name already exists');
     }
     target = { kind: 'container', nodeId, containerName: input.resource.name };
     const { kind: _kind, ...config } = input.resource;

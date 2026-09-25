@@ -1,6 +1,7 @@
 import type { MiddlewareHandler } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
+import { hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import { DockerAvailabilityService } from './availability/docker-availability.service.js';
@@ -44,6 +45,27 @@ export function assertDockerNodeScope(scopes: string[], baseScope: string, nodeI
   ) {
     deny(baseScope, nodeId);
   }
+}
+
+/**
+ * Access to a per-node Docker list. `node` when the caller holds the view scope on the node or on something on it
+ * (the rows are then filtered per resource). A caller that holds the view scope only elsewhere (a folder that is
+ * still empty, other nodes) or only the family's creation scope can see nothing on this node: `empty` lets the list
+ * answer with no rows instead of a 403, without contacting the node. Anyone else is refused.
+ */
+export function dockerNodeListAccess(
+  scopes: string[],
+  baseScope: string,
+  nodeId: string,
+  creationScope?: string
+): 'node' | 'empty' {
+  if (
+    hasDockerResourceScope(scopes, baseScope, nodeId, '') ||
+    dockerScopedNodeIds(scopes, [baseScope]).includes(nodeId)
+  )
+    return 'node';
+  if (hasScopeBase(scopes, baseScope) || (!!creationScope && hasScopeBase(scopes, creationScope))) return 'empty';
+  deny(baseScope, nodeId);
 }
 
 export async function resolveDockerContainerScopeResourceId(

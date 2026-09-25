@@ -1,19 +1,31 @@
+import { hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { MCP_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { FOLDER_TOOL_REQUIREMENT_SCOPES } from './ai.folder-tool-scopes.js';
+import { NODE_LIST_TOOL_SCOPES } from './ai.node-list-scopes.js';
+import type { AIToolDefinition } from './ai.types.js';
+import { getAIToolResourceId } from './ai-tool-policy-metadata.js';
 
 export const AI_BROAD_ONLY_TOOL_SCOPES = new Set<string>();
-export const AI_DIRECT_DATABASE_VIEW_TOOLS = new Set(['list_databases', 'get_database_connection']);
 export const AI_DIRECT_RAW_READ_TOOLS = new Set(['get_route_rendered_config']);
-export const AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS = new Set([
-  'query_postgres_read',
-  'execute_postgres_sql',
-  'browse_redis_keys',
-  'get_redis_key',
-  'set_redis_key',
-  'execute_redis_command',
-  'manage_postgres_data',
-  'manage_redis_data',
-]);
+
+/**
+ * Docker child resources are granted as `<base>:<nodeId>/<resourceId>`, and folder grants expand to that form.
+ * Tool arguments name a node plus a container name, deployment id, image id, volume name or network id, which the
+ * gate cannot map to that identity without a daemon or database lookup. The gate therefore only requires the base
+ * scope; every Docker executor resolves the resource and re-checks `<nodeId>/<resourceId>` like the Docker route
+ * middleware (node-level operations such as image prune check the node grant).
+ */
+const EXECUTOR_AUTHORIZED_DOCKER_SCOPE_PREFIXES = [
+  'docker:containers:',
+  'docker:compose:',
+  'docker:images:',
+  'docker:volumes:',
+  'docker:networks:',
+] as const;
+
+export function isExecutorAuthorizedDockerScope(requiredScope: string): boolean {
+  return EXECUTOR_AUTHORIZED_DOCKER_SCOPE_PREFIXES.some((prefix) => requiredScope.startsWith(prefix));
+}
 
 export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly string[]>> = {
   manage_database_backups: [
@@ -28,6 +40,9 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'storage:edit',
     'storage:delete',
     'storage:credentials:reveal',
+    // copy_data_* actions; StorageCopyService checks each connection.
+    'storage:objects:read',
+    'storage:objects:write',
   ],
   manage_storage_objects: ['storage:objects:read', 'storage:objects:write', 'storage:objects:admin'],
   manage_managed_storage: [
@@ -54,6 +69,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:compose:create',
     'docker:compose:manage',
     'pages:view',
+    'pages:create',
     'pages:edit',
     'pages:deploy',
   ],
@@ -74,8 +90,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'ssl:cert:view',
     'domains:view',
     'acl:view',
-    'pki:ca:view:root',
-    'pki:ca:view:intermediate',
+    'pki:ca:view',
     'pki:cert:view',
     'pki:templates:view',
     'docker:containers:view',
@@ -88,20 +103,27 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'logs:environments:view',
     'logs:schemas:view',
     'status-page:view',
-    'notifications:view',
+    'notifications:alerts:view',
+    'notifications:webhooks:view',
   ],
-  list_cas: ['pki:ca:view:root', 'pki:ca:view:intermediate', 'pki:cert:issue'],
-  get_ca: ['pki:ca:view:root', 'pki:ca:view:intermediate'],
+  // Same inventory as GET /api/nodes: node view, node folders, Docker grants and destination creators.
+  list_nodes: NODE_LIST_TOOL_SCOPES,
+  // GET /monitoring/dashboard answers every caller with the categories it may see; the assistant also
+  // answers workspace users that see none of them.
+  get_dashboard_stats: [
+    'ai:workspace:use',
+    'proxy:view',
+    'ssl:cert:view',
+    'pki:cert:view',
+    'pki:ca:view',
+    'nodes:details',
+  ],
+  list_cas: ['pki:ca:view', 'pki:cert:issue'],
   delete_ca: ['pki:ca:revoke:root', 'pki:ca:revoke:intermediate'],
-  manage_ca: ['pki:ca:create:root', 'pki:ca:create:intermediate', 'pki:ca:revoke:root', 'pki:ca:revoke:intermediate'],
+  manage_ca: ['pki:ca:edit', 'pki:ca:export', 'pki:ca:revoke:root', 'pki:ca:revoke:intermediate'],
   manage_certificate: ['pki:cert:view', 'pki:cert:issue', 'pki:cert:export'],
   manage_template: ['pki:templates:view', 'pki:templates:edit'],
-  manage_proxy_template: [
-    'proxy:templates:view',
-    'proxy:templates:create',
-    'proxy:templates:edit',
-    'proxy:templates:delete',
-  ],
+  manage_proxy_template: ['proxy:templates:view', 'proxy:templates:manage'],
   manage_ssl_certificate: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
   manage_domain: ['domains:view', 'domains:edit', 'domains:create'],
   manage_access_list: ['acl:view', 'acl:edit'],
@@ -113,6 +135,7 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   ],
   manage_docker_volume: [
     'docker:volumes:create',
+    'docker:volumes:edit',
     'docker:volumes:delete',
     'docker:volumes:view',
     'docker:volumes:files:read',
@@ -129,13 +152,10 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'integrations:ssh:view',
   ],
   sync_integration_connector: [
-    'integrations:gitlab:sync',
     'integrations:gitlab:manage',
     'integrations:cloudflare:sync',
     'integrations:cloudflare:manage',
-    'integrations:github:sync',
     'integrations:github:manage',
-    'integrations:git:sync',
     'integrations:git:manage',
     'integrations:ssh:manage',
   ],
@@ -148,13 +168,16 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'docker:containers:files:write',
     'docker:containers:secrets',
     'docker:containers:webhooks',
-    'docker:containers:config',
     'docker:containers:edit',
   ],
+  // Same list access as GET /nodes/:nodeId/containers and /deployments: a creator with nothing visible lists empty.
+  list_docker_containers: ['docker:containers:view', 'docker:containers:create'],
+  list_docker_deployments: ['docker:containers:view', 'docker:containers:create'],
   // Docker creation routes use requireScopeBase; the services check the node or folder destination.
   create_docker_container: ['docker:containers:create'],
   duplicate_docker_container: ['docker:containers:create'],
-  pull_docker_image: ['docker:images:pull'],
+  // A pull for a workload (workload.folderId) is authorized by creating that container or deployment.
+  pull_docker_image: ['docker:images:pull', 'docker:containers:create'],
   upload_docker_container_archive: ['docker:containers:create'],
   manage_docker_container: [
     'docker:containers:view',
@@ -167,6 +190,13 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   manage_docker_availability: ['docker:availability:manage', 'docker:containers:view', 'docker:compose:view'],
   // Migration routes: preflight/start are authorized by the service, reads need docker:tasks, changes :manage.
   manage_docker_migration: ['docker:containers:migrate', 'docker:tasks', 'docker:tasks:manage'],
+  // Secure runtime install is node control; the handler checks the node.
+  manage_docker_runtime: ['nodes:manage', 'admin:update'],
+  // Retrying TLS delivery is a route edit or a certificate issue; the handler checks the target.
+  resync_tls_distribution: ['proxy:edit', 'ssl:cert:issue', 'admin:update'],
+  // Same list access as GET /databases and GET /storage: a creator with nothing visible yet lists empty.
+  list_databases: ['databases:view', 'databases:create'],
+  list_storage_connections: ['storage:view', 'storage:create'],
   manage_database_connection: [
     'databases:view',
     'databases:create',
@@ -215,7 +245,6 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'logs:schemas:edit',
     'logs:schemas:delete',
     'logs:read',
-    'logs:manage',
     'housekeeping:view',
   ],
   manage_status_page: [
@@ -229,33 +258,18 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   manage_inference_provider: ['inference:providers:view', 'inference:providers:manage'],
   manage_inference_token: ['feat:ai:use'],
   manage_inference_usage: ['feat:ai:use', 'inference:usage:view'],
-  // Notification routes accept the granular notifications:* scopes as alternatives to view/manage.
-  list_alert_rules: ['notifications:alerts:view', 'notifications:view', 'notifications:manage'],
-  get_alert_rule: ['notifications:alerts:view', 'notifications:view', 'notifications:manage'],
-  create_alert_rule: ['notifications:alerts:create', 'notifications:manage'],
-  update_alert_rule: ['notifications:alerts:edit', 'notifications:manage'],
-  delete_alert_rule: ['notifications:alerts:delete', 'notifications:manage'],
-  list_webhooks: ['notifications:webhooks:view', 'notifications:view', 'notifications:manage'],
-  create_webhook: ['notifications:webhooks:create', 'notifications:manage'],
-  update_webhook: ['notifications:webhooks:edit', 'notifications:manage'],
-  delete_webhook: ['notifications:webhooks:delete', 'notifications:manage'],
-  test_webhook: ['notifications:webhooks:edit', 'notifications:manage'],
-  list_webhook_deliveries: ['notifications:deliveries:view', 'notifications:view', 'notifications:manage'],
-  get_delivery_stats: ['notifications:deliveries:view', 'notifications:view', 'notifications:manage'],
+  // Managing alert rules or webhooks implies viewing them.
+  list_alert_rules: ['notifications:alerts:view', 'notifications:alerts:manage'],
+  get_alert_rule: ['notifications:alerts:view', 'notifications:alerts:manage'],
+  list_webhooks: ['notifications:webhooks:view', 'notifications:webhooks:manage'],
+  list_webhook_deliveries: ['notifications:webhooks:view', 'notifications:webhooks:manage'],
+  get_delivery_stats: ['notifications:webhooks:view', 'notifications:webhooks:manage'],
   manage_notifications: [
-    'notifications:view',
-    'notifications:manage',
     'notifications:alerts:view',
-    'notifications:alerts:create',
-    'notifications:alerts:edit',
-    'notifications:alerts:delete',
+    'notifications:alerts:manage',
     'notifications:webhooks:view',
-    'notifications:webhooks:create',
-    'notifications:webhooks:edit',
-    'notifications:webhooks:delete',
-    'notifications:deliveries:view',
+    'notifications:webhooks:manage',
   ],
-  gitlab_sync_connector: ['integrations:gitlab:sync', 'integrations:gitlab:manage'],
   // The handler enforces the exact per-provider route scope.
   manage_integration_connector: [
     'integrations:gitlab:view',
@@ -289,10 +303,59 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
   ],
   list_resource_folders: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
   manage_resource_folder: [...FOLDER_TOOL_REQUIREMENT_SCOPES],
-  manage_node_config: ['nodes:config:view', 'nodes:config:edit'],
+  manage_node_config: ['nodes:config:view', 'nodes:manage'],
   // The handlers enforce the exact per-node or admin:system scope of each route.
-  manage_node: ['nodes:details', 'nodes:rename', 'nodes:create', 'nodes:logs', 'nodes:config:edit'],
+  manage_node: ['nodes:details', 'nodes:rename', 'nodes:create', 'nodes:logs', 'nodes:manage'],
   manage_user: ['admin:users', 'admin:system'],
   manage_relay_pool: ['settings:gateway:view', 'admin:system'],
   manage_node_file: ['nodes:files:read', 'nodes:files:write'],
 };
+
+type ScopedTool = Pick<AIToolDefinition, 'name' | 'requiredScope' | 'requiredScopes' | 'targetIdentity'>;
+
+function hasDirectScopeBase(scopes: string[], baseScope: string): boolean {
+  return scopes.includes(baseScope) || scopes.some((scope) => scope.startsWith(`${baseScope}:`));
+}
+
+function hasRequiredScopeBases(scopes: string[], tool: ScopedTool): boolean {
+  return !tool.requiredScopes || tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope));
+}
+
+/**
+ * Whether a tool may be offered to scopes without knowing its arguments (AI tool lists, MCP tools/list).
+ * Resource-scoped grants count; the call itself is checked with {@link hasAIToolCallScope}.
+ */
+export function hasAIToolVisibilityScope(scopes: string[], tool: ScopedTool): boolean {
+  if (!tool.requiredScope) return false;
+  if (!hasRequiredScopeBases(scopes, tool)) return false;
+  const anyRequirements = AI_TOOL_ANY_SCOPE_REQUIREMENTS[tool.name];
+  if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
+  if (AI_DIRECT_RAW_READ_TOOLS.has(tool.name)) return hasDirectScopeBase(scopes, tool.requiredScope);
+  return AI_BROAD_ONLY_TOOL_SCOPES.has(tool.name)
+    ? hasScope(scopes, tool.requiredScope)
+    : hasScopeBase(scopes, tool.requiredScope);
+}
+
+/**
+ * Whether scopes may call a tool with these arguments. Resource-scoped tools are checked against the target resource
+ * named by the arguments; tools whose handlers authorize each resource (any-scope tools and the Docker child resource
+ * families) only need the base scope here.
+ */
+export function hasAIToolCallScope(scopes: string[], tool: ScopedTool, args: Record<string, unknown>): boolean {
+  if (!tool.requiredScope) return false;
+  if (!hasRequiredScopeBases(scopes, tool)) return false;
+  const anyRequirements = AI_TOOL_ANY_SCOPE_REQUIREMENTS[tool.name];
+  if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
+  if (AI_BROAD_ONLY_TOOL_SCOPES.has(tool.name)) return hasScope(scopes, tool.requiredScope);
+  const resourceId = getAIToolResourceId(tool, args);
+  if (AI_DIRECT_RAW_READ_TOOLS.has(tool.name)) {
+    if (scopes.includes(tool.requiredScope)) return true;
+    return resourceId
+      ? scopes.includes(`${tool.requiredScope}:${resourceId}`)
+      : scopes.some((scope) => scope.startsWith(`${tool.requiredScope}:`));
+  }
+  if (isExecutorAuthorizedDockerScope(tool.requiredScope)) return hasScopeBase(scopes, tool.requiredScope);
+  return resourceId
+    ? hasScopeForResource(scopes, tool.requiredScope, resourceId)
+    : hasScopeBase(scopes, tool.requiredScope);
+}

@@ -10,6 +10,7 @@ import {
   toolStoreEventChannels,
 } from "@/services/tool-store-invalidation";
 import { useAppStatusStore } from "@/stores/app-status";
+import { useAuthStore } from "@/stores/auth";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedContainersStore } from "@/stores/pinned-containers";
 import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
@@ -334,6 +335,10 @@ class EventStream {
         this.dispatch(msg.channel, msg.payload);
       } else if (msg.type === "subscribed" && Array.isArray(msg.channels)) {
         for (const ch of msg.channels) this.wireSubs.add(ch);
+      } else if (msg.type === "permissions" && Array.isArray(msg.scopes)) {
+        // The server re-resolves folder and node grants before delivering events, so resources
+        // created or moved by others become usable without a reload.
+        useAuthStore.getState().applyLiveScopes(msg.scopes);
       }
     };
 

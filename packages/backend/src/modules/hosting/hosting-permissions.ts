@@ -32,18 +32,18 @@ export function assertHostingResourceAction(
   assertHostingScope(scopes, hostingActionScope(action), resourceId);
   for (const nodeId of nodeIds) {
     assertHostingScope(scopes, 'nodes:details', nodeId);
-    assertHostingScope(scopes, action === 'delete' ? 'nodes:delete' : 'nodes:config:edit', nodeId);
+    assertHostingScope(scopes, action === 'delete' ? 'nodes:delete' : 'nodes:manage', nodeId);
   }
 }
 
 export function assertHostingAdoptionAuthority(scopes: string[], settings: HostingSettings): void {
   if (!settings.adoptionEnabled) return;
   if (settings.adoptionNodeIds.length === 0) {
-    assertHostingScope(scopes, 'nodes:config:edit');
+    assertHostingScope(scopes, 'nodes:manage');
     assertHostingScope(scopes, 'nodes:details');
   } else {
     for (const nodeId of settings.adoptionNodeIds) {
-      assertHostingScope(scopes, 'nodes:config:edit', nodeId);
+      assertHostingScope(scopes, 'nodes:manage', nodeId);
       assertHostingScope(scopes, 'nodes:details', nodeId);
     }
   }

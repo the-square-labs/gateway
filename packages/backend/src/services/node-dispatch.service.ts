@@ -15,6 +15,7 @@ const NGINX_SECURE_LINK_SOCKET_ONLY_CAPABILITY = 'nginx_secure_link_socket_only_
 // version 2 and the SeaweedFS IAM path). Legacy MinIO work needs only the
 // base managed-storage capabilities.
 const MANAGED_STORAGE_SEAWEEDFS_CAPABILITY = 'managed_storage_seaweedfs_v1';
+const MANAGED_STORAGE_IAM_POLICY_CAPABILITY = 'managed_storage_iam_policy_v1';
 
 // The background collector runs every 10s. Leave scheduler/queue headroom so a
 // sample just under ten seconds old is refreshed in the current round instead
@@ -499,7 +500,7 @@ export class NodeDispatchService {
 
   async sendDockerStorageIamCommand(
     nodeId: string,
-    action: 'create_key' | 'list_keys' | 'remove_key',
+    action: 'create_key' | 'list_keys' | 'remove_key' | 'update_policy',
     managedStorageId: string,
     opts: {
       publishedPort: number;
@@ -520,10 +521,13 @@ export class NodeDispatchService {
     },
     timeoutMs?: number
   ): Promise<CommandResult> {
-    const storageAction =
-      action === 'create_key' ? 'iam_create_key' : action === 'list_keys' ? 'iam_list_keys' : 'iam_remove_key';
+    const storageAction = `iam_${action}`;
     const engine = opts.engine ?? 'minio';
     await this.assertStorageNodeCapability(nodeId, 'managed_storage_iam_v1', engine);
+    // update_policy (the migration write freeze) replaces a key's policy in
+    // place; older daemons only create, list and remove keys.
+    if (action === 'update_policy')
+      await this.assertStorageNodeCapability(nodeId, MANAGED_STORAGE_IAM_POLICY_CAPABILITY, engine);
     if (engine === 'seaweedfs' && !opts.principal) {
       throw new AppError(400, 'MANAGED_STORAGE_IAM_PRINCIPAL_REQUIRED', 'SeaweedFS access keys require a principal');
     }

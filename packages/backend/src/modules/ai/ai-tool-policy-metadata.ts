@@ -160,7 +160,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     delete: ['delete', 'revision_delete', 'secret_delete'],
   }),
   manage_docker_source: operationPolicies({
-    read: ['get', 'pending', 'admission', 'repositories', 'secret_list'],
+    read: ['get', 'pending', 'admission', 'connectors', 'repositories', 'secret_list'],
     create: ['create'],
     update: ['upsert', 'secret_upsert'],
     delete: ['remove', 'secret_delete'],
@@ -252,7 +252,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
     execute: ['execute_command'],
   }),
   manage_managed_database: operationPolicies({
-    read: ['catalog', 'list', 'get', 'list_bindings', 'logs', 'get_binding_runtime'],
+    read: ['catalog', 'list', 'get', 'list_bindings', 'logs', 'get_binding_runtime', 'certificate_status'],
     create: ['create', 'create_binding'],
     update: ['update', 'retry', 'rotate_certificate'],
     // Rotation returns the new direct-access password.
@@ -320,7 +320,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
   manage_additional_secure_link: operationPolicies({
     read: ['list'],
     create: ['create'],
-    update: ['retry'],
+    update: ['retry', 'retarget'],
     delete: ['delete'],
   }),
   manage_docker_migration: operationPolicies({
@@ -411,12 +411,14 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_storage_connection: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['health_history', 'monitoring'],
+      read: ['health_history', 'monitoring', 'copy_data_status', 'copy_data_list'],
       create: ['create'],
       update: ['update'],
       delete: ['delete'],
       external: ['test'],
       execute: ['reveal_credentials'],
+      // A copy overwrites destination keys and sync also deletes destination objects.
+      destructive: ['copy_data_start', 'copy_data_cancel'],
     }),
   },
   manage_storage_objects: {
@@ -435,10 +437,11 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_managed_storage: {
     arguments: ['action'],
     operations: operationPolicies({
-      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys', 'ca_certificate'],
-      create: ['create', 'create_binding', 'create_access_key'],
-      update: ['update', 'retry'],
-      execute: ['restart', 'reveal_credentials'],
+      read: ['catalog', 'list', 'get', 'list_bindings', 'list_access_keys', 'ca_certificate', 'certificate_status'],
+      create: ['create', 'create_binding', 'create_access_key', 'import_access_keys'],
+      update: ['update', 'retry', 'move_binding', 'rehome_backup_history', 'renew_certificate'],
+      // A write freeze and its reversal change what every client of the cluster can do.
+      execute: ['restart', 'reveal_credentials', 'freeze_writes', 'unfreeze_writes'],
       delete: ['delete', 'delete_binding', 'remove_access_key'],
     }),
   },
@@ -464,7 +467,14 @@ const COMPOSITE_OPERATION_POLICIES: Record<
   manage_status_page: {
     arguments: ['resource', 'operation'],
     operations: operationPolicies({
-      read: ['settings.get', 'proxy_templates.list', 'services.list', 'incidents.list', 'preview.preview'],
+      read: [
+        'settings.get',
+        'proxy_templates.list',
+        'sources.list',
+        'services.list',
+        'incidents.list',
+        'preview.preview',
+      ],
       create: ['services.create', 'incidents.create', 'incident_updates.create_update'],
       update: [
         'settings.update',

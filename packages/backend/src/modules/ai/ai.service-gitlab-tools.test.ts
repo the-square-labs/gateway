@@ -78,7 +78,7 @@ describe('AIService GitLab tool routing', () => {
 
     await expect(
       createService().executeTool(
-        { ...BASE_USER, scopes: ['integrations:gitlab:registry:manage'] },
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:write'] },
         'gitlab_create_deploy_token',
         {
           connectorId: 'connector-1',
@@ -126,6 +126,34 @@ describe('AIService GitLab tool routing', () => {
     });
   });
 
+  it('asks to re-authorize an expired personal token in AI Workspace and explains it over MCP', async () => {
+    const expired = () =>
+      new AppError(428, 'GIT_CREDENTIAL_EXPIRED', 'Your personal access token for this integration expired', {
+        provider: 'gitlab',
+        connectorId: 'connector-1',
+        connectorName: 'Main GitLab',
+        reason: 'expired',
+      });
+    const integrationsService = { gitLabReadFile: vi.fn().mockImplementation(async () => Promise.reject(expired())) };
+    vi.spyOn(container, 'resolve').mockImplementation((token) => {
+      if (token === IntegrationsService) return integrationsService as never;
+      throw new Error('unexpected resolver call');
+    });
+    const args = { connectorId: 'connector-1', project: 'group/app', path: 'README.md' };
+    const user = { ...BASE_USER, scopes: ['integrations:gitlab:repo:read'] };
+
+    await expect(createService().executeTool(user, 'gitlab_read_file', args)).resolves.toEqual({
+      credentialChallenge: { provider: 'gitlab', connectorId: 'connector-1' },
+      invalidateStores: [],
+    });
+    const mcp = await createService({ log: vi.fn() }).executeTool(user, 'gitlab_read_file', args, {
+      source: 'mcp',
+      scopes: ['integrations:gitlab:repo:read'],
+    });
+    expect(mcp.credentialChallenge).toBeUndefined();
+    expect(JSON.stringify(mcp)).toContain('has expired');
+  });
+
   it('turns missing personal GitLab authorization into an actionable remote MCP error', async () => {
     const integrationsService = {
       gitLabReadFile: vi.fn().mockRejectedValue(
@@ -151,9 +179,7 @@ describe('AIService GitLab tool routing', () => {
     );
 
     expect(result.credentialChallenge).toBeUndefined();
-    expect(result.error).toMatch(
-      /^GITLAB_CREDENTIAL_REQUIRED: .*Main GitLab.*integrations:gitlab:system.*AI Workspace/
-    );
+    expect(result.error).toMatch(/^GITLAB_CREDENTIAL_REQUIRED: .*Main GitLab.*integrations:gitlab:use.*AI Workspace/);
     expect(auditService.log).toHaveBeenCalledWith(
       expect.objectContaining({
         action: 'mcp.gitlab_read_file',
@@ -203,7 +229,7 @@ describe('AIService GitLab tool routing', () => {
     });
 
     await expect(
-      createService().executeTool({ ...BASE_USER, scopes: ['integrations:gitlab:sync'] }, 'gitlab_sync_connector', {
+      createService().executeTool({ ...BASE_USER, scopes: ['integrations:gitlab:manage'] }, 'gitlab_sync_connector', {
         connectorId: 'connector-1',
       })
     ).resolves.toMatchObject({ result: { status: 'success' } });
@@ -236,7 +262,7 @@ describe('AIService GitLab tool routing', () => {
 
     await expect(
       createService().executeTool(
-        { ...BASE_USER, scopes: ['integrations:gitlab:registry:manage'] },
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:write'] },
         'gitlab_update_project_settings',
         { connectorId: 'connector-1', project: 'group/app', containerRegistryAccessLevel: 'enabled' }
       )
@@ -266,7 +292,7 @@ describe('AIService GitLab tool routing', () => {
 
     await expect(
       createService().executeTool(
-        { ...BASE_USER, scopes: ['integrations:gitlab:registry:manage'] },
+        { ...BASE_USER, scopes: ['integrations:gitlab:repo:write'] },
         'gitlab_update_project_settings',
         { connectorId: 'connector-1', project: 'group/app', containerRegistryAccessLevel: 'public' }
       )
@@ -289,7 +315,7 @@ describe('AIService GitLab tool routing', () => {
     });
 
     await createService(auditService).executeTool(
-      { ...BASE_USER, scopes: ['integrations:gitlab:variables:edit'] },
+      { ...BASE_USER, scopes: ['integrations:gitlab:repo:write'] },
       'gitlab_set_project_variable',
       {
         connectorId: 'connector-1',

@@ -12,6 +12,7 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { assertTlsResyncAccess } from '@/modules/proxy/tls-resync-access.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -205,7 +206,7 @@ sslRoutes.openapi(requestAcmeCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const result = await sslService.requestACMECert(input, user.id, user.email);
-  await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id, { folderId: input.folderId });
   return c.json({ data: result }, 201);
 });
 
@@ -224,7 +225,7 @@ sslRoutes.openapi(uploadSslCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.uploadCert(input, user.id);
-  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id, { folderId: input.folderId });
   return c.json({ data: cert }, 201);
 });
 
@@ -243,7 +244,7 @@ sslRoutes.openapi(linkInternalSslCertificateRoute, async (c) => {
   }
   await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
   const cert = await sslService.linkInternalCert(input, user.id, c.get('effectiveScopes') ?? []);
-  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+  await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id, { folderId: input.folderId });
   return c.json({ data: cert }, 201);
 });
 
@@ -254,7 +255,9 @@ sslRoutes.openapi(
     const sslService = container.resolve(SSLService);
     const user = c.get('user')!;
     const id = c.req.param('id')!;
-    const cert = await sslService.renewCert(id, user.id, user.email);
+    const cert = await sslService.renewCert(id, user.id, user.email, {
+      actorScopes: c.get('effectiveScopes') ?? [],
+    });
     return c.json({ data: cert });
   }
 );
@@ -294,12 +297,15 @@ sslRoutes.openapi(
   }
 );
 
-// Repair is an operator action and deliberately uses the existing global
-// admin mutation permission rather than exposing certificate material.
-sslRoutes.openapi({ ...resyncSslCertificateDistributionRoute, middleware: requireScope('admin:update') }, async (c) => {
+// Re-delivering a certificate to its nodes is a certificate issue action on that
+// certificate; it never exposes certificate material. System certificates stay
+// admin:update only, and admin:update is still accepted for one release (rc.9).
+sslRoutes.openapi(resyncSslCertificateDistributionRoute, async (c) => {
+  const id = c.req.param('id')!;
+  await assertTlsResyncAccess(c.get('effectiveScopes') || [], 'certificate', id);
   const sslService = container.resolve(SSLService);
   const user = c.get('user')!;
-  const result = await sslService.resyncDistribution(c.req.param('id')!, user.id);
+  const result = await sslService.resyncDistribution(id, user.id);
   return c.json({ data: result });
 });
 

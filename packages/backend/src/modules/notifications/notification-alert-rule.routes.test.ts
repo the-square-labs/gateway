@@ -20,12 +20,20 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
   authMiddleware: async (c: any, next: () => Promise<void>) => {
     c.set('user', {
       id: 'user',
-      scopes: ['notifications:manage', 'integrations:hosting:view', 'hosting:billing:view'],
+      scopes: ['notifications:alerts:manage', 'integrations:hosting:view', 'hosting:billing:view'],
     });
     c.set('effectiveScopes', mocks.scopes);
     await next();
   },
-  requireAnyScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireAnyScope:
+    (...required: string[]) =>
+    async (c: any, next: () => Promise<void>) => {
+      const { hasScope } = await import('@/lib/permissions.js');
+      if (!required.some((scope) => hasScope(c.get('effectiveScopes') ?? [], scope))) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      await next();
+    },
 }));
 
 import { alertRuleRoutes } from './notification-alert-rule.routes.js';
@@ -42,7 +50,7 @@ const body = {
 };
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.scopes = ['notifications:manage'];
+  mocks.scopes = ['notifications:alerts:manage'];
   mocks.service.getById.mockResolvedValue(body);
   mocks.service.create.mockResolvedValue(body);
   mocks.service.update.mockResolvedValue(body);
@@ -58,7 +66,7 @@ it.each(['POST', 'PUT'])('checks effective hosting finance access on %s rather t
   expect((await request()).status).toBe(403);
   expect(mocks.service.create).not.toHaveBeenCalled();
   expect(mocks.service.update).not.toHaveBeenCalled();
-  mocks.scopes = ['notifications:manage', 'integrations:hosting:view:account', 'hosting:billing:view:account'];
+  mocks.scopes = ['notifications:alerts:manage', 'integrations:hosting:view:account', 'hosting:billing:view:account'];
   expect((await request()).status).toBe(method === 'POST' ? 201 : 200);
 });
 
@@ -88,4 +96,23 @@ it('resolves firing states orphaned by disabling or re-scoping a non-hosting rul
   expect(response.status).toBe(200);
   expect(mocks.service.updateHostingRule).not.toHaveBeenCalled();
   expect(mocks.service.reconcileRuleUpdate).toHaveBeenCalledWith(previous, next);
+});
+
+it.each([
+  [['notifications:alerts:view'], 403],
+  [['notifications:webhooks:manage'], 403],
+])('refuses alert rule creation with %j', async (scopes, status) => {
+  mocks.scopes = scopes;
+  const app = new Hono<AppEnv>();
+  app.onError(errorHandler);
+  app.route('/', alertRuleRoutes);
+
+  const response = await app.request('/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, category: 'proxy', type: 'event', eventPattern: 'health.offline' }),
+  });
+
+  expect(response.status).toBe(status);
+  expect(mocks.service.create).not.toHaveBeenCalled();
 });

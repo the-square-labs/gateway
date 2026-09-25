@@ -24,15 +24,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  allowedCreationFolderId,
+  creationFolderChoices,
+  flattenCreationFolders,
+} from "@/lib/creation-folders";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
-import type { ResourceFolderTreeNode } from "@/types";
 import type {
   DomainDnsConflictDetails,
   DomainNginxNodeOptions,
   DomainPreview,
 } from "@/types/domains";
+
+const NO_SCOPES: string[] = [];
 
 const PREVIEW_ANIMATION = {
   initial: { height: 0, opacity: 0, y: 8 },
@@ -71,8 +79,30 @@ export function AddDomainDialog({
   const domainFolders = useResourceFolderStore((state) => state.foldersByType.domain);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType.domain);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderList = useMemo(() => flattenFolders(domainFolders), [domainFolders]);
+  const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
+  // Same destinations the backend accepts for domains:create: broad, node or folder grants.
+  const folderChoices = useMemo(
+    () =>
+      creationFolderChoices(
+        scopes,
+        "domains:create",
+        flattenCreationFolders(domainFolders ?? []),
+        nginxNodeId
+      ),
+    [domainFolders, nginxNodeId, scopes]
+  );
+  const canCreateInSelectedFolder = canCreateInFolder(
+    scopes,
+    "domains:create",
+    folderId || null,
+    nginxNodeId || undefined
+  );
   const selectedNginxNode = nodeOptions?.eligibleNodes.find((node) => node.id === nginxNodeId);
+
+  useEffect(() => {
+    if (!open) return;
+    setFolderId((current) => allowedCreationFolderId(folderChoices, current));
+  }, [folderChoices, open]);
 
   const resetForm = () => {
     setDomain("");
@@ -302,7 +332,7 @@ export function AddDomainDialog({
               controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
             >
               <Select
-                value={folderId || "__none__"}
+                value={folderId || (folderChoices.allowRoot ? "__none__" : "")}
                 onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
                 disabled={foldersLoading}
               >
@@ -310,12 +340,14 @@ export function AddDomainDialog({
                   {foldersLoading ? (
                     <span>Loading folders...</span>
                   ) : (
-                    <SelectValue placeholder="No folder" />
+                    <SelectValue
+                      placeholder={folderChoices.allowRoot ? "No folder" : "Select a folder"}
+                    />
                   )}
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="__none__">No folder</SelectItem>
-                  {folderList.map((folder) => (
+                  {folderChoices.allowRoot && <SelectItem value="__none__">No folder</SelectItem>}
+                  {folderChoices.folders.map((folder) => (
                     <SelectItem key={folder.id} value={folder.id}>
                       {"  ".repeat(folder.depth) + folder.name}
                     </SelectItem>
@@ -491,6 +523,7 @@ export function AddDomainDialog({
               isSaving ||
               nodesLoading ||
               !nginxNodeId ||
+              !canCreateInSelectedFolder ||
               !!nodesError ||
               (dnsProvider === "external" &&
                 (isPreviewLoading ||
@@ -508,8 +541,4 @@ export function AddDomainDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

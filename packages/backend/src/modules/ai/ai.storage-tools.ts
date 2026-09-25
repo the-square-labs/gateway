@@ -57,13 +57,26 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_connection',
     description:
-      'Create, update, test or delete an external storage connection, reveal its saved credentials (storage:credentials:reveal; refused while impersonating), or read its health_history and monitoring metrics. Config is validated by the storage API; create accepts config.folderId. delete is refused while backup policies or active backup runs use the storage; finished backup history also blocks it until config.backupHistory is "forget", which removes that history (the backups can no longer be restored or deleted through Gateway; their files stay in storage). Only pass it after the user confirms.',
+      'Create, update, test or delete an external storage connection, reveal its saved credentials (storage:credentials:reveal; refused while impersonating), or read its health_history and monitoring metrics. Config is validated by the storage API; create accepts config.folderId. delete is refused while backup policies or active backup runs use the storage; finished backup history also blocks it until config.backupHistory is "forget", which removes that history (the backups can no longer be restored or deleted through Gateway; their files stay in storage). Only pass it after the user confirms. ' +
+      'Server-side data copy between two S3 connections (managed or external, e.g. a legacy MinIO cluster to SeaweedFS): copy_data_start with config {sourceStorageId, destinationStorageId, buckets: "all" or bucket names (same names on the destination), mode "copy" (default; never deletes) or "sync" (also deletes destination objects missing on the source; refused into a managed cluster whose writes are not frozen while links or writable keys use it, unless allowLiveDestination is true after the user confirms), dryRun (compare only), optional createBuckets, executorNodeId (a Storage node; chosen automatically) and limits {timeoutSeconds, cpuCores, memoryMb, transfers}} returns a job; poll copy_data_status with config.jobId until status is completed, failed or cancelled (never claim completion earlier). The finished job has report.clean plus object counts, bytes and samples of missing/differing/extra keys. copy_data_list (optional config.storageId, config.status "active") and copy_data_cancel (config.jobId). Reruns copy only changes; swapping source and destination is the rollback. Needs storage:objects:read and storage:credentials:use on the source, storage:objects:write and storage:credentials:use on the destination (creating missing buckets also storage:objects:admin) and nodes:backups:execute on the executor; credentials are never returned.',
     parameters: {
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['create', 'update', 'test', 'delete', 'reveal_credentials', 'health_history', 'monitoring'],
+          enum: [
+            'create',
+            'update',
+            'test',
+            'delete',
+            'reveal_credentials',
+            'health_history',
+            'monitoring',
+            'copy_data_start',
+            'copy_data_status',
+            'copy_data_list',
+            'copy_data_cancel',
+          ],
         },
         storageId: id,
         config: object,
@@ -114,7 +127,9 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
     name: 'manage_managed_storage',
     historyRetention: { mode: 'never_full' },
     description:
-      'Provision and manage Gateway-managed object storage, private workload links, and scoped IAM keys. New clusters run single-node SeaweedFS (S3 only, no FTP/SFTP, at least 512 MiB memory); existing MinIO clusters are legacy (engine "minio") and stay manageable but cannot be created. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating). ca_certificate returns the public Storage CA certificate (certificatePem, fingerprintSha256) that S3 clients of a TLS cluster must trust (storage:view; refused when the cluster has TLS off). delete follows the same backup-history rule as manage_storage_connection (config.backupHistory "forget" after the user confirms); backup files stored in the cluster are deleted with it.',
+      'Provision and manage Gateway-managed object storage, private workload links, and scoped IAM keys. New clusters run single-node SeaweedFS (S3 only, no FTP/SFTP, at least 512 MiB memory); existing MinIO clusters are legacy (engine "minio") and stay manageable but cannot be created. Read the catalog before create (catalog and list also work with only storage:create), poll get until ready, then create a bucket-scoped link. create takes an optional config.folderId, the folder of the storage connection of the cluster; it needs storage:create on the node or on that folder. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating). ca_certificate returns the public Storage CA certificate (certificatePem, fingerprintSha256) that S3 clients of a TLS cluster must trust (storage:view; refused when the cluster has TLS off). delete follows the same backup-history rule as manage_storage_connection (config.backupHistory "forget" after the user confirms); backup files stored in the cluster are deleted with it. ' +
+      'Gateway renews the cluster TLS certificate automatically without a restart; certificate_status (storage:view) shows its expiry, renewal state and last renewal error, and renew_certificate (storage:edit; optional config.allowRestart) renews it now: the running cluster loads the new certificate in place (SeaweedFS clusters created before rc.9 reread it within five hours unless allowRestart is set). ' +
+      'Cutover actions for migrating a legacy MinIO cluster to SeaweedFS (read internal_documentation topic storage-migration first and follow it): move_binding (managedStorageId = current cluster, bindingId, targetStorageId) points a ready workload link at another cluster keeping its key id/secret, alias and environment, so the workload is not recreated; it rolls back on failure and needs storage:iam on both clusters plus permission to change the workload. import_access_keys (config.sourceStorageId, config.targetStorageId, optional config.keyIds) copies non-expiring operator keys server-side with the same id and secret (storage:iam on both; refused while impersonating); needsNewId lists expiring or incompatible keys. freeze_writes makes every Gateway-issued key and link key of managedStorageId read-only (root keeps full access, so copy_data still works; unmanagedKeys stay writable, null means unknown) and makes Gateway refuse its own uploads, deletes, bucket changes and backups into it; it refuses while backup runs write there; unfreeze_writes restores the keys; get shows writesFrozenAt (storage:iam). move_binding needs every bucket of the link on the target. rehome_backup_history (managedStorageId = source, targetStorageId, optional config.dryRun) points finished backup history at the target after its files were copied there, verifying every artifact (storage:edit on both). targetStorageId, sourceStorageId and managedStorageId are managed storage ids, not storage connection ids.',
     parameters: {
       type: 'object',
       properties: {
@@ -137,11 +152,23 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
             'remove_access_key',
             'reveal_credentials',
             'ca_certificate',
+            'certificate_status',
+            'renew_certificate',
+            'move_binding',
+            'import_access_keys',
+            'freeze_writes',
+            'unfreeze_writes',
+            'rehome_backup_history',
           ],
         },
         managedStorageId: { type: 'string' },
         bindingId: { type: 'string' },
         accessKeyId: { type: 'string' },
+        targetStorageId: {
+          type: 'string',
+          description:
+            'Managed storage UUID to move to (move_binding, import_access_keys, rehome_backup_history); may also be passed as config.targetStorageId.',
+        },
         config: object,
       },
       required: ['action'],

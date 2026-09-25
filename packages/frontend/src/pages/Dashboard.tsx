@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -547,6 +548,8 @@ export function Dashboard() {
     setInviteUserMethods(dashboardBootstrap.inviteUserMethods);
     setMfaStatus(dashboardBootstrap.mfa);
     setShowMfaOnboardingReminder(Boolean(dashboardBootstrap.mfa?.showReminder));
+    // Row links and actions use the cached scopes: let them catch up with folder grants.
+    void refreshDynamicScopes();
     setExpiringItems(
       dashboardBootstrap.expiring.map((item) => ({
         ...item,
@@ -686,14 +689,10 @@ export function Dashboard() {
     };
   }, []);
 
-  const visibleHealthHosts = useMemo(
-    () => healthHosts.filter((host) => canViewProxyDetails(host.id)),
-    [canViewProxyDetails, healthHosts]
-  );
-  const visibleNodesForCards = useMemo(
-    () => nodesList.filter((node) => canViewNodeDetails(node.id)),
-    [canViewNodeDetails, nodesList]
-  );
+  // The bootstrap is filtered by the server with the live (folder-expanded) scopes, so resources
+  // created in a granted folder after these scopes were cached are already included.
+  const visibleHealthHosts = healthHosts;
+  const visibleNodesForCards = nodesList;
 
   const cas = dashboardBootstrap?.cas ?? [];
   const activeCAs = cas.filter((ca) => ca.status === "active").length;
@@ -976,7 +975,7 @@ export function Dashboard() {
           <QuickStatsCard
             displayStats={displayStats}
             nodesList={nodesList}
-            hasScope={hasScopedAccess}
+            hasScopedAccess={hasScopedAccess}
             pkiEnabled={pkiEnabled}
           />
 
@@ -988,7 +987,8 @@ export function Dashboard() {
           {/* Pinned Proxy Host Cards */}
           {pinnedProxyHosts
             .filter(
-              (proxy) => dashboardPinnedProxyIds.includes(proxy.id) && canViewProxyDetails(proxy.id)
+              // Server-filtered like the other bootstrap lists.
+              (proxy) => dashboardPinnedProxyIds.includes(proxy.id)
             )
             .map((proxy) => (
               <PinnedProxyCard key={proxy.id} proxy={proxy} />
@@ -1022,7 +1022,7 @@ export function Dashboard() {
 
           <CertificateExpiryCard
             expiringItems={expiringItemsForCard}
-            hasScope={hasExpiringItemScope}
+            hasScopedAccess={hasExpiringItemScope}
           />
 
           <HealthOverviewCard

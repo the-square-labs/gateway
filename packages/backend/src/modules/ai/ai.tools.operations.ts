@@ -4,7 +4,7 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_logging',
     description:
-      'Manage external logging environments, schemas, ingest tokens, metadata, facets, and search. Use canonical args like { resource: "schema", operation: "create", payload: { name, schemaMode, fieldSchema } } or { resource: "environment", operation: "list", search }. Resource slugs are assigned by the backend. Operation-specific logs:* scopes are enforced. { resource: "health", operation: "get" } returns the logging storage maintenance snapshot (housekeeping:view).',
+      'Manage external logging environments, schemas, ingest tokens, metadata, facets, and search. Use canonical args like { resource: "schema", operation: "create", payload: { name, schemaMode, fieldSchema } } or { resource: "environment", operation: "list", search }. Resource slugs are assigned by the backend. Operation-specific logs:* scopes are enforced. { resource: "health", operation: "get" } returns the logging storage maintenance snapshot (any logs view scope or housekeeping:view).',
     parameters: {
       type: 'object',
       properties: {
@@ -34,13 +34,13 @@ export const OPERATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_status_page',
     description:
-      'Manage the status page settings, service list and order, incidents, incident updates, proxy template options, and preview. services.reorder takes payload { serviceIds } in the new display order. Operation-specific status-page:* scopes are enforced.',
+      'Manage the status page settings, service list and order, incidents, incident updates, proxy template options, and preview. sources.list returns the resources the caller may expose (a service can only expose a source the caller can view). services.reorder takes payload { serviceIds } in the new display order. Operation-specific status-page:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
         resource: {
           type: 'string',
-          enum: ['settings', 'proxy_templates', 'services', 'incidents', 'incident_updates', 'preview'],
+          enum: ['settings', 'proxy_templates', 'sources', 'services', 'incidents', 'incident_updates', 'preview'],
         },
         operation: {
           type: 'string',

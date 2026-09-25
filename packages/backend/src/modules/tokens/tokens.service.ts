@@ -6,8 +6,8 @@ import type { DrizzleClient } from '@/db/client.js';
 import { apiTokens } from '@/db/schema/index.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
-import { boundScopes, hasScope as permissionHasScope } from '@/lib/permissions.js';
-import { canonicalizeScopes, isApiTokenScope } from '@/lib/scopes.js';
+import { boundScopes, hasScope as permissionHasScope, withDelegableCleanupAdditions } from '@/lib/permissions.js';
+import { canonicalizeInboundScopes, canonicalizeScopes, isApiTokenScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { getAuditRequestContext } from '@/modules/audit/audit-request-context.js';
@@ -36,6 +36,23 @@ function assertNotImpersonatedRequest(): void {
 
 function hashToken(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
+}
+
+/**
+ * Turn client-supplied token scopes into the stored set: retired names are rewritten, and a new token
+ * also receives the migration 0200 additions its owner can delegate. A list that ends up empty (only
+ * removed scopes) is rejected rather than minting a token without scopes.
+ */
+export function resolveRequestedTokenScopes(
+  requested: readonly string[],
+  ownerScopes: readonly string[],
+  purpose: 'create' | 'update'
+): string[] {
+  const canonical = canonicalizeInboundScopes(requested);
+  if (canonical.length === 0) {
+    throw new AppError(400, 'INVALID_SCOPE', 'None of the requested scopes exist any more');
+  }
+  return purpose === 'create' ? withDelegableCleanupAdditions(canonical, ownerScopes) : canonical;
 }
 
 @injectable()
@@ -180,10 +197,11 @@ export class TokensService {
     if (!user) return null;
     if (user.isBlocked) return null;
 
-    const scopes = await expandFolderScopes(
-      this.db,
-      boundScopes(token.scopes || [], user.scopes).filter(isApiTokenScope)
-    );
+    // Expand the token's own folder and node grants first, then bound them by the owner's expanded
+    // scopes: a bounded folder grant is never expanded afterwards, so a token can never reach resources
+    // its owner cannot (for example through a destination-only creation grant).
+    const tokenScopes = await expandFolderScopes(this.db, (token.scopes || []).filter(isApiTokenScope));
+    const scopes = canonicalizeScopes(boundScopes(tokenScopes, user.scopes).filter(isApiTokenScope));
     return {
       user,
       scopes,

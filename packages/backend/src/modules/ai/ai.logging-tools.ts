@@ -1,11 +1,5 @@
 import { container } from '@/container.js';
-import {
-  getResourceScopedIds,
-  hasScope,
-  hasScopeBase,
-  hasScopeForCreation,
-  hasScopeForResource,
-} from '@/lib/permissions.js';
+import { hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import {
   CreateLoggingEnvironmentSchema,
@@ -16,15 +10,23 @@ import {
   UpdateLoggingEnvironmentSchema,
   UpdateLoggingSchemaSchema,
 } from '@/modules/logging/logging.schemas.js';
+import {
+  canAttachLoggingSchema,
+  hasLoggingEnvironmentListAccess,
+  hasLoggingHealthAccess,
+  hasLoggingSchemaListAccess,
+  visibleLoggingEnvironmentIds,
+  visibleLoggingSchemaIds,
+} from '@/modules/logging/logging-permissions.js';
 import type { User } from '@/types.js';
 
 export async function manageLoggingTool(user: User, args: Record<string, unknown>) {
   const { resource, operation } = normalizeLoggingOperationArgs(args);
   const payload = (args.payload && typeof args.payload === 'object' ? args.payload : {}) as Record<string, unknown>;
   if (resource === 'health' && operation === 'get') {
-    // GET /logging/health is a housekeeping read outside the logging paywall.
-    if (!hasScope(user.scopes, 'housekeeping:view')) {
-      throw new Error('PERMISSION_DENIED: Missing required scope housekeeping:view');
+    // Same rule as GET /logging/health: any logs view scope or housekeeping:view.
+    if (!hasLoggingHealthAccess(user.scopes)) {
+      throw new Error('PERMISSION_DENIED: Missing required scope: a logs view scope or housekeeping:view');
     }
     const { LoggingMaintenanceService } = await import('@/modules/logging/logging-maintenance.service.js');
     return container.resolve(LoggingMaintenanceService).getSnapshot();
@@ -35,14 +37,13 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
     const service = container.resolve(LoggingEnvironmentService);
     const id = String(args.environmentId ?? '');
     if (operation === 'list') {
-      ensureLoggingScope(user, 'logs:environments:view');
-      const allowedIds =
-        hasScope(user.scopes, 'logs:manage') || hasScope(user.scopes, 'logs:environments:view')
-          ? undefined
-          : getResourceScopedIds(user.scopes, 'logs:environments:view');
+      // Same as GET /logging/environments: an empty granted folder or a creator lists as empty.
+      if (!hasLoggingEnvironmentListAccess(user.scopes)) {
+        throw new Error('PERMISSION_DENIED: Missing required scope logs:environments:view');
+      }
       return service.list({
         search: typeof args.search === 'string' ? args.search : undefined,
-        allowedIds,
+        allowedIds: visibleLoggingEnvironmentIds(user.scopes),
       });
     }
     if (operation === 'get') {
@@ -52,6 +53,7 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
     if (operation === 'create') {
       const input = CreateLoggingEnvironmentSchema.parse(payload);
       ensureLoggingCreationScope(user, 'logs:environments:create', input.folderId);
+      ensureSchemaAttachable(user, input.schemaId);
       const { LoggingEnvironmentFolderService } = await import(
         '@/modules/logging/logging-environment-folders.service.js'
       );
@@ -60,7 +62,9 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
     }
     if (operation === 'update') {
       ensureLoggingScope(user, 'logs:environments:edit', id);
-      return service.update(id, UpdateLoggingEnvironmentSchema.parse(payload), user.id);
+      const input = UpdateLoggingEnvironmentSchema.parse(payload);
+      if (input.schemaId) ensureSchemaAttachable(user, input.schemaId, (await service.get(id)).schemaId);
+      return service.update(id, input, user.id);
     }
     if (operation === 'delete') {
       ensureLoggingScope(user, 'logs:environments:delete', id);
@@ -73,10 +77,14 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
     const service = container.resolve(LoggingSchemaService);
     const id = String(args.schemaId ?? '');
     if (operation === 'list') {
-      ensureLoggingScope(user, 'logs:schemas:view');
+      // Same as GET /logging/schemas: an empty granted folder or a creator lists as empty.
+      if (!hasLoggingSchemaListAccess(user.scopes)) {
+        throw new Error('PERMISSION_DENIED: Missing required scope logs:schemas:view');
+      }
       const schemas = await service.list({ search: typeof args.search === 'string' ? args.search : undefined });
-      if (hasScope(user.scopes, 'logs:manage') || hasScope(user.scopes, 'logs:schemas:view')) return schemas;
-      const allowedIds = new Set(getResourceScopedIds(user.scopes, 'logs:schemas:view'));
+      const visible = visibleLoggingSchemaIds(user.scopes);
+      if (!visible) return schemas;
+      const allowedIds = new Set(visible);
       return schemas.filter((schema) => allowedIds.has(schema.id));
     }
     if (operation === 'get') {
@@ -218,15 +226,21 @@ async function requireLoggingEnabled(operation: string) {
   container.resolve(LoggingFeatureService).requireEnabled();
 }
 
-/** Same destination check as the environment and schema create routes (no logs:manage override). */
+/** Same destination check as the environment and schema create routes. */
 function ensureLoggingCreationScope(user: User, baseScope: string, folderId: string | null | undefined) {
   if (!hasScopeForCreation(user.scopes, baseScope, folderId)) {
     throw new Error(`PERMISSION_DENIED: Missing ${baseScope} permission for the selected destination`);
   }
 }
 
+/** Same as the environment routes: attaching a schema needs view access to it. */
+function ensureSchemaAttachable(user: User, schemaId: string | null | undefined, currentSchemaId?: string | null) {
+  if (!canAttachLoggingSchema(user.scopes, schemaId, currentSchemaId)) {
+    throw new Error(`PERMISSION_DENIED: Missing required scope logs:schemas:view:${schemaId}`);
+  }
+}
+
 function ensureLoggingScope(user: User, baseScope: string, resourceId?: string) {
-  if (hasScope(user.scopes, 'logs:manage')) return;
   if (resourceId ? hasScopeForResource(user.scopes, baseScope, resourceId) : hasScopeBase(user.scopes, baseScope)) {
     return;
   }

@@ -168,7 +168,7 @@ describe('AIService SSL tool routing', () => {
       certificatePem: '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----',
       privateKeyPem: '-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----',
     });
-    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(userId, 'ssl:cert', 'cert-2');
+    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(userId, 'ssl:cert', 'cert-2', { folderId: null });
 
     await service.executeTool(
       { ...user, scopes: ['ssl:cert:view', 'ssl:cert:issue:cert-1'] },

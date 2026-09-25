@@ -6,6 +6,7 @@ import type {
   StatusPageIncidentUpdateStatus,
   StatusPageProxyTemplateOption,
   StatusPageServiceItem,
+  StatusPageSourceOption,
   StatusPageSourceType,
 } from "@/types";
 import type {
@@ -548,6 +549,13 @@ export function withAIStatusApi<TBase extends ApiClientBaseConstructor>(Base: TB
     async listStatusPageProxyTemplates(): Promise<StatusPageProxyTemplateOption[]> {
       return this.unwrapData(
         this.request<{ data: StatusPageProxyTemplateOption[] }>("/status-page/proxy-templates")
+      );
+    }
+
+    /** Exposable resources the caller can view; the service picker uses only this list. */
+    async listStatusPageSources(): Promise<StatusPageSourceOption[]> {
+      return this.unwrapData(
+        this.request<{ data: StatusPageSourceOption[] }>("/status-page/sources")
       );
     }
 

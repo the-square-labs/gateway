@@ -405,7 +405,6 @@ describe('AIService Docker tool routing', () => {
       scopes: [
         'docker:containers:manage:node-1',
         'docker:containers:edit:node-1/scope-1',
-        'docker:containers:config:node-1/scope-1',
         'docker:containers:environment:node-1/scope-1',
         'docker:containers:secrets:node-1/scope-1',
         'docker:images:pull:node-1',
@@ -443,7 +442,6 @@ describe('AIService Docker tool routing', () => {
     const containerScopes = [
       'docker:containers:manage:node-1',
       'docker:containers:edit:node-1/scope-1',
-      'docker:containers:config:node-1/scope-1',
       'docker:containers:environment:node-1/scope-1',
       'docker:containers:secrets:node-1/scope-1',
     ];
@@ -579,6 +577,25 @@ describe('AIService Docker tool routing', () => {
     expect(dockerService.listContainers).toHaveBeenCalledWith('node-1');
   });
 
+  it('lists no containers or deployments on a node for an empty granted folder instead of refusing', async () => {
+    const dockerService = { listContainers: vi.fn() };
+    const listSummary = vi.fn();
+    const service = createService(dockerService);
+    const empty = { data: [], total: 0, limit: expect.any(Number), truncated: false };
+
+    for (const scopes of [['docker:containers:view:folder/folder-1'], ['docker:containers:create:folder/folder-1']]) {
+      await expect(
+        service.executeTool({ ...BASE_USER, scopes }, 'list_docker_containers', { nodeId: 'node-1' })
+      ).resolves.toMatchObject({ result: empty });
+      await expect(
+        service.executeTool({ ...BASE_USER, scopes }, 'list_docker_deployments', { nodeId: 'node-1' })
+      ).resolves.toMatchObject({ result: empty });
+    }
+    // Nothing on the node can be visible, so the node is not contacted.
+    expect(dockerService.listContainers).not.toHaveBeenCalled();
+    expect(listSummary).not.toHaveBeenCalled();
+  });
+
   it('pulls Docker images with resolved registry auth and registry host prefixing', async () => {
     const dockerService = {
       pullImage: vi.fn().mockResolvedValue({ taskId: 'task-1' }),
@@ -622,6 +639,40 @@ describe('AIService Docker tool routing', () => {
       undefined,
       ['docker:images:pull:node-1']
     );
+  });
+
+  it('pulls an image for a workload deploy with only the container creation grant of its destination', async () => {
+    const dockerService = {
+      pullImage: vi.fn(),
+      pullImageImmediate: vi.fn(),
+      pullImageForWorkload: vi.fn().mockResolvedValue({ status: 'pulled' }),
+    };
+    const registryService = {
+      resolveAuthForImagePull: vi.fn().mockResolvedValue(null),
+      rememberImageRegistry: vi.fn().mockResolvedValue(undefined),
+    };
+    vi.spyOn(container, 'resolve').mockReturnValue(registryService as never);
+    const service = createService(dockerService);
+    const folderId = '22222222-2222-4222-8222-222222222222';
+    const scopes = [`docker:containers:create:folder/${folderId}`];
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes }, 'pull_docker_image', {
+        nodeId: 'node-1',
+        imageRef: 'nginx:alpine',
+        workload: { folderId },
+      })
+    ).resolves.toMatchObject({ result: { success: true, data: { imageRef: 'nginx:alpine' } } });
+    expect(dockerService.pullImageForWorkload).toHaveBeenCalledWith(
+      'node-1',
+      'nginx:alpine',
+      undefined,
+      folderId,
+      'user-1',
+      scopes
+    );
+    expect(dockerService.pullImage).not.toHaveBeenCalled();
+    expect(dockerService.pullImageImmediate).not.toHaveBeenCalled();
   });
 
   it('pulls public Docker Hub images when the model sends an empty optional registryId', async () => {

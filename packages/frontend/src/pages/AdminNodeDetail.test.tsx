@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
+import { useCommandPalettePageActions } from "@/stores/command-palette-page-actions";
 import { makeNode, makeUser } from "@/test/fixtures";
 import type { NodeHealthReport } from "@/types";
 import { AdminNodeDetail } from "./AdminNodeDetail";
@@ -748,10 +749,58 @@ describe("AdminNodeDetail", () => {
     expect(screen.getByRole("tab", { name: "Jobs" })).toBeEnabled();
   });
 
+  it.each([
+    [["nodes:details:node-1", "nodes:create:folder/folder-1"], true],
+    [["nodes:details:node-1", "nodes:create:node-1"], true],
+    [["nodes:details:node-1", "nodes:manage:node-1"], true],
+    [["nodes:details:node-1", "nodes:create:folder/folder-2"], false],
+    [["nodes:details:node-1", "nodes:config:view:node-1"], false],
+  ])("offers a new enrollment token for a pending node the user may create or manage (%j)", async (scopes, offered) => {
+    useAuthStore.setState({
+      user: makeUser({ scopes }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({
+        id: "node-1",
+        type: "docker",
+        status: "pending",
+        isConnected: false,
+        folderId: "folder-1",
+      }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+    render(
+      <MemoryRouter initialEntries={["/nodes/node-1/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+    await screen.findByText("Node details content");
+    // Header actions are also registered as page actions; this one lives only there and in the overflow menu.
+    await waitFor(() =>
+      expect(
+        Object.values(useCommandPalettePageActions.getState().registrations).some(
+          ({ actions }) => actions.length > 0
+        )
+      ).toBe(true)
+    );
+    const labels = Object.values(useCommandPalettePageActions.getState().registrations).flatMap(
+      ({ actions }) => actions.map((action) => action.label)
+    );
+    expect(labels.includes("New enrollment token")).toBe(offered);
+  });
+
   it("edits Build Worker parallelism and timeout in the standard node settings dialog", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:config:edit:builder-node"],
+        scopes: ["nodes:details", "nodes:manage:builder-node"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -806,7 +855,7 @@ describe("AdminNodeDetail", () => {
   it("saves node appearance name and predefined color", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:rename:node-1", "docker:containers:config:node-1"],
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:manage:node-1"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -864,7 +913,7 @@ describe("AdminNodeDetail", () => {
   it("shows the public address as the automatic fallback when no local address exists", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:rename:node-1", "docker:containers:config:node-1"],
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:manage:node-1"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -901,7 +950,7 @@ describe("AdminNodeDetail", () => {
   it("offers detected addresses and accepts a custom public IP for Nginx", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:manage:node-1"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -957,10 +1006,39 @@ describe("AdminNodeDetail", () => {
     );
   });
 
+  it.each([
+    [["nodes:details", "nodes:rename:db-node"], true],
+    [["nodes:details", "nodes:rename:db-node", "nodes:manage:db-node"], false],
+  ])("gates a database node service address on node manage like the backend (%j)", async (scopes, disabled) => {
+    useAuthStore.setState({ user: makeUser({ scopes }), isAuthenticated: true, isLoading: false });
+    vi.mocked(api.getNode).mockResolvedValue({
+      ...makeNode({ id: "db-node", type: "databases", hostname: "db-1", displayName: "DB 1" }),
+      lastHealthReport: null,
+      lastStatsReport: null,
+      liveHealthReport: null,
+      liveStatsReport: null,
+    });
+    vi.mocked(api.getNodeHealthHistory).mockResolvedValue([]);
+
+    render(
+      <MemoryRouter initialEntries={["/nodes/db-node/details"]}>
+        <Routes>
+          <Route path="/nodes/:id/:tab?" element={<AdminNodeDetail />} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByRole("heading", { name: "DB 1" })).toBeInTheDocument();
+    await userEvent.setup().click(screen.getByRole("button", { name: /settings/i }));
+    const address = screen.getByRole("combobox", { name: "Service Address 1" });
+    if (disabled) expect(address).toBeDisabled();
+    else expect(address).toBeEnabled();
+  });
+
   it("adds and removes service address rows and blocks duplicate addresses", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:manage:node-1"],
       }),
       isAuthenticated: true,
       isLoading: false,
@@ -1020,7 +1098,7 @@ describe("AdminNodeDetail", () => {
   it("preserves migrated addresses and caps the list at ten rows", async () => {
     useAuthStore.setState({
       user: makeUser({
-        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:config:edit:node-1"],
+        scopes: ["nodes:details", "nodes:rename:node-1", "nodes:manage:node-1"],
       }),
       isAuthenticated: true,
       isLoading: false,

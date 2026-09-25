@@ -79,6 +79,7 @@ import {
   dockerContainerRoute,
 } from "@/lib/resource-routes";
 import { getReturnNavigationTarget } from "@/lib/return-navigation";
+import { scopeMatches } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -1377,7 +1378,10 @@ export function DockerComposeProjectDetail() {
           <TabsContent value="settings" className="pb-6">
             <AvailabilitySection
               resource={{ type: "compose", composeProjectId: project.id }}
-              canManage={canManage}
+              canManage={scopeMatches(
+                user?.scopes ?? [],
+                `docker:availability:manage:${project.nodeId}/${project.id}`
+              )}
             />
           </TabsContent>
 

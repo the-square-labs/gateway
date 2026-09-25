@@ -736,6 +736,262 @@ export class ProxySecureLinkService {
     return this.createAdditionalFromExisting(host, binding.id);
   }
 
+  /**
+   * Points an existing user-managed Additional Secure Link at another target
+   * in place. The link keeps its id and name, so `{{additionalSecureLinks.<name>}}`
+   * and configs that name its upstream keep working. An active managed storage
+   * link moving to another managed storage cluster only moves its relay route:
+   * the link stays active throughout and the previous target is restored when
+   * the new one does not answer. Every other retarget re-provisions the link
+   * with the new target, like retry.
+   *
+   * `applyRouteConfig` renders the Route config for the switched link (its
+   * upstream carries the link scheme). Its failure fails the retarget: an
+   * in-place move goes back to the previous cluster, and the config is
+   * applied again for it.
+   */
+  async retargetAdditional(
+    host: ProxyHostRow,
+    bindingId: string,
+    input: Omit<CreateProxyAdditionalSecureLinkInput, 'name'>,
+    actorScopes?: string[],
+    applyRouteConfig?: (link: ProxyAdditionalSecureLinkRow) => Promise<void>
+  ): Promise<ProxyAdditionalSecureLinkRow> {
+    const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
+    if (!isDockerUpstream(input.upstreamKind) && !isManagedStorageUpstream(input.upstreamKind)) {
+      throw new AppError(409, 'INVALID_SECURE_LINK_TARGET', 'Secure Link target is not supported');
+    }
+    if (
+      isDockerUpstream(input.upstreamKind) &&
+      (!input.dockerContainerPort || input.dockerContainerPort < 1 || input.dockerContainerPort > 65535)
+    ) {
+      throw new AppError(400, 'INVALID_DOCKER_PORT', 'Container port must be between 1 and 65535');
+    }
+    if (isDockerUpstream(input.upstreamKind) && !this.connectorImage) {
+      throw new AppError(503, 'SECURE_LINK_CONNECTOR_UNAVAILABLE', 'Secure Link connector image is not configured');
+    }
+    const next = { ...input, name: binding.name };
+    const target = await this.resolveAdditionalTarget(next, actorScopes);
+    if (
+      !(await this.nodesSupportSecureLinks(
+        isManagedStorageUpstream(input.upstreamKind) ? [host.nodeId!] : [host.nodeId!, target.nodeId],
+        host.nodeId!
+      ))
+    ) {
+      throw new AppError(
+        409,
+        'PROXY_SECURE_LINK_UPDATE_REQUIRED',
+        'Update both Nginx and Docker daemons before provisioning this binding'
+      );
+    }
+    if (
+      binding.status === 'active' &&
+      isManagedStorageUpstream(binding.upstreamKind) &&
+      isManagedStorageUpstream(input.upstreamKind)
+    ) {
+      if (binding.managedStorageId === target.managedStorageId) return binding;
+      return this.retargetManagedStorageInPlace(host, binding, next, applyRouteConfig);
+    }
+
+    await this.db
+      .update(proxyAdditionalSecureLinks)
+      .set({ status: 'cleanup_pending', updatedAt: new Date() })
+      .where(eq(proxyAdditionalSecureLinks.id, binding.id));
+    await this.deprovisionAdditionalRuntime(binding);
+    const stage = async (db: Pick<DrizzleClient, 'update'>, resolved: typeof target) =>
+      db
+        .update(proxyAdditionalSecureLinks)
+        .set({
+          generation: binding.generation + 1,
+          status: 'provisioning',
+          upstreamKind: input.upstreamKind,
+          dockerNodeId: resolved.nodeId,
+          dockerContainerName: input.upstreamKind === 'docker_container' ? resolved.container : null,
+          dockerComposeProjectId:
+            input.upstreamKind === 'docker_container' ? (input.dockerComposeProjectId ?? null) : null,
+          dockerComposeServiceName:
+            input.upstreamKind === 'docker_container' ? (input.dockerComposeServiceName ?? null) : null,
+          dockerDeploymentId: input.upstreamKind === 'docker_deployment' ? (input.dockerDeploymentId ?? null) : null,
+          managedStorageId: resolved.managedStorageId ?? null,
+          dockerContainerPort: resolved.applicationPort,
+          dockerHostPort: resolved.targetPort,
+          forwardScheme: resolved.forwardScheme,
+          targetNetwork: resolved.network,
+          targetContainer: resolved.container,
+          lastError: null,
+          updatedAt: new Date(),
+        })
+        .where(eq(proxyAdditionalSecureLinks.id, binding.id));
+    if (target.managedStorageId) {
+      await this.db.transaction(async (tx) => {
+        // Match storage deletion's row lock before it claims external teardown.
+        await tx
+          .select({ id: managedStorageClusters.id })
+          .from(managedStorageClusters)
+          .where(eq(managedStorageClusters.id, target.managedStorageId!))
+          .for('update');
+        await stage(tx, await this.resolveAdditionalTarget(next, actorScopes, true, tx));
+      });
+    } else {
+      await stage(this.db, target);
+    }
+    const provisioned = await this.createAdditionalFromExisting(host, binding.id);
+    if (applyRouteConfig && provisioned.status === 'active') {
+      try {
+        await applyRouteConfig(provisioned);
+      } catch (error) {
+        throw new AppError(
+          502,
+          'SECURE_LINK_ROUTE_CONFIG_FAILED',
+          `The Secure Link was retargeted, but the Route config could not be applied: ${
+            error instanceof Error ? error.message : String(error)
+          }. Retry the retarget.`
+        );
+      }
+    }
+    return provisioned;
+  }
+
+  private async retargetManagedStorageInPlace(
+    host: ProxyHostRow,
+    binding: ProxyAdditionalSecureLinkRow,
+    next: CreateProxyAdditionalSecureLinkInput,
+    applyRouteConfig?: (link: ProxyAdditionalSecureLinkRow) => Promise<void>
+  ): Promise<ProxyAdditionalSecureLinkRow> {
+    return this.withLinkOperation(binding.id, async () => {
+      const previous = await this.requireAdditional(host.id, binding.id);
+      if (previous.status !== 'active' || previous.generation !== binding.generation) {
+        throw new AppError(409, 'SECURE_LINK_BUSY', 'The Secure Link changed while it was being retargeted; retry');
+      }
+      const staged = await this.db.transaction(async (tx) => {
+        // Match storage deletion's row lock before it claims external teardown.
+        await tx
+          .select({ id: managedStorageClusters.id })
+          .from(managedStorageClusters)
+          .where(eq(managedStorageClusters.id, next.managedStorageId!))
+          .for('update');
+        const resolved = await this.resolveAdditionalTarget(next, undefined, false, tx);
+        const [row] = await tx
+          .update(proxyAdditionalSecureLinks)
+          .set({
+            generation: previous.generation + 1,
+            managedStorageId: resolved.managedStorageId ?? null,
+            dockerNodeId: resolved.nodeId,
+            dockerContainerPort: resolved.applicationPort,
+            dockerHostPort: resolved.targetPort,
+            forwardScheme: resolved.forwardScheme,
+            targetNetwork: resolved.network,
+            targetContainer: resolved.container,
+            lastError: null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(
+              eq(proxyAdditionalSecureLinks.id, previous.id),
+              eq(proxyAdditionalSecureLinks.generation, previous.generation),
+              eq(proxyAdditionalSecureLinks.status, 'active')
+            )
+          )
+          .returning();
+        return row;
+      });
+      if (!staged?.managedStorageId) {
+        throw new AppError(409, 'SECURE_LINK_BUSY', 'The Secure Link changed while it was being retargeted; retry');
+      }
+      try {
+        await this.relayPolicy.ensureManagedStorageProxySecureLink(
+          staged.id,
+          staged.managedStorageId,
+          staged.sourceNodeId,
+          staged.dockerNodeId
+        );
+        await this.syncSourceNode(staged.sourceNodeId);
+        await this.probeSecureLink(staged.sourceNodeId, {
+          linkId: staged.id,
+          scheme: staged.forwardScheme,
+          path: '/',
+          timeoutSeconds: 10,
+        });
+        if (applyRouteConfig) await applyRouteConfig(staged);
+        this.emitAdditionalState(host, staged, 'active');
+        return staged;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const restored = await this.restoreManagedStorageTarget(host, previous, staged, message);
+        if (restored && applyRouteConfig) {
+          await applyRouteConfig(restored).catch((applyError) =>
+            logger.warn('Route config was not reapplied after a failed Secure Link retarget', {
+              bindingId: restored.id,
+              error: applyError instanceof Error ? applyError.message : String(applyError),
+            })
+          );
+        }
+        throw new AppError(502, 'SECURE_LINK_RETARGET_FAILED', `Secure Link was not retargeted: ${message}`);
+      }
+    });
+  }
+
+  /**
+   * Puts a failed in-place retarget back on its previous managed storage
+   * cluster; returns the restored link, or null when it could not be restored
+   * (the link is then marked failed).
+   */
+  private async restoreManagedStorageTarget(
+    host: ProxyHostRow,
+    previous: ProxyAdditionalSecureLinkRow,
+    staged: ProxyAdditionalSecureLinkRow,
+    reason: string
+  ): Promise<ProxyAdditionalSecureLinkRow | null> {
+    const [restored] = await this.db
+      .update(proxyAdditionalSecureLinks)
+      .set({
+        generation: staged.generation + 1,
+        managedStorageId: previous.managedStorageId,
+        dockerNodeId: previous.dockerNodeId,
+        dockerContainerPort: previous.dockerContainerPort,
+        dockerHostPort: previous.dockerHostPort,
+        forwardScheme: previous.forwardScheme,
+        targetNetwork: previous.targetNetwork,
+        targetContainer: previous.targetContainer,
+        lastError: null,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(eq(proxyAdditionalSecureLinks.id, staged.id), eq(proxyAdditionalSecureLinks.generation, staged.generation))
+      )
+      .returning();
+    if (!restored?.managedStorageId) return null;
+    try {
+      await this.relayPolicy.ensureManagedStorageProxySecureLink(
+        restored.id,
+        restored.managedStorageId,
+        restored.sourceNodeId,
+        restored.dockerNodeId
+      );
+      await this.syncSourceNode(restored.sourceNodeId);
+      return restored;
+    } catch (error) {
+      const [failed] = await this.db
+        .update(proxyAdditionalSecureLinks)
+        .set({
+          status: 'failed',
+          lastError: `Retarget failed (${reason}) and the previous target could not be restored: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(proxyAdditionalSecureLinks.id, restored.id),
+            eq(proxyAdditionalSecureLinks.generation, restored.generation)
+          )
+        )
+        .returning();
+      if (failed) this.emitAdditionalState(host, failed, 'failed');
+      return null;
+    }
+  }
+
   async deleteAdditional(host: ProxyHostRow, bindingId: string): Promise<void> {
     const binding = await this.requireAdditional(host.id, bindingId, 'user_managed');
     const variable = `{{additionalSecureLinks.${binding.name}}}`;
@@ -1566,6 +1822,41 @@ export class ProxySecureLinkService {
     };
   }
 
+  /**
+   * The Docker access a Route upstream needs: the caller must be able to see
+   * the container or deployment a link sends the Route's traffic to (Compose
+   * targets get the same check while they are resolved). Internal
+   * reconciliation passes no scopes: it re-resolves a target a user already
+   * chose.
+   */
+  private async assertDockerTargetAccess(input: CreateProxyAdditionalSecureLinkInput, actorScopes?: string[]) {
+    if (!actorScopes) return;
+    // Broad Docker view (or node-wide, for a container) covers every target
+    // there, so it needs no per-container identity from the snapshot cache: a
+    // container the cache has not seen yet is not refused for such a caller.
+    if (hasScope(actorScopes, 'docker:containers:view')) return;
+    if (
+      input.upstreamKind === 'docker_container' &&
+      input.dockerNodeId &&
+      hasScope(actorScopes, `docker:containers:view:${input.dockerNodeId}`)
+    )
+      return;
+    if (!this.dockerUpstreams) {
+      throw new AppError(503, 'DOCKER_UPSTREAMS_UNAVAILABLE', 'Docker upstream resolution is unavailable');
+    }
+    await this.dockerUpstreams.resolve(
+      {
+        upstreamKind: input.upstreamKind,
+        dockerNodeId: input.dockerNodeId,
+        dockerContainerName: input.dockerContainerName,
+        dockerDeploymentId: input.dockerDeploymentId,
+        dockerContainerPort: input.dockerContainerPort,
+        dockerProtocol: 'tcp',
+      },
+      { actorScopes }
+    );
+  }
+
   private async resolveAdditionalTarget(
     input: CreateProxyAdditionalSecureLinkInput,
     actorScopes?: string[],
@@ -1649,6 +1940,7 @@ export class ProxySecureLinkService {
       if (!input.dockerContainerName) {
         throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker node and container are required');
       }
+      await this.assertDockerTargetAccess(input, actorScopes);
       return {
         nodeId: input.dockerNodeId,
         network: '',
@@ -1661,6 +1953,7 @@ export class ProxySecureLinkService {
     if (!input.dockerDeploymentId) {
       throw new AppError(400, 'INVALID_DOCKER_TARGET', 'Docker deployment is required');
     }
+    await this.assertDockerTargetAccess(input, actorScopes);
     const [deployment] = await this.db
       .select({
         nodeId: dockerDeployments.nodeId,

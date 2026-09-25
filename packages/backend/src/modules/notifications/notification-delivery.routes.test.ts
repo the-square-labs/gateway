@@ -30,7 +30,15 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     c.set('effectiveScopes', mocks.scopes);
     await next();
   },
-  requireAnyScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireAnyScope:
+    (...required: string[]) =>
+    async (c: any, next: () => Promise<void>) => {
+      const { hasScope } = await import('@/lib/permissions.js');
+      if (!required.some((scope) => hasScope(c.get('effectiveScopes') ?? [], scope))) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      await next();
+    },
 }));
 
 vi.mock('./notification-delivery.service.js', () => ({
@@ -54,9 +62,8 @@ describe('notification delivery secret visibility', () => {
   });
 
   it.each([
-    ['viewer', ['notifications:deliveries:view'], false],
-    ['notification viewer', ['notifications:view'], false],
-    ['manager', ['notifications:manage'], true],
+    ['viewer', ['notifications:webhooks:view'], false],
+    ['manager', ['notifications:webhooks:manage'], true],
   ])('passes %s secret visibility to detail reads', async (_role, scopes, revealSensitive) => {
     mocks.scopes = scopes;
 
@@ -64,5 +71,25 @@ describe('notification delivery secret visibility', () => {
 
     expect(response.status).toBe(200);
     expect(mocks.deliveryService.getById).toHaveBeenCalledWith(DELIVERY_ID, { revealSensitive });
+  });
+});
+
+describe('notification delivery scopes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deliveryService.getById.mockResolvedValue({ id: DELIVERY_ID });
+  });
+
+  it.each([
+    [['notifications:webhooks:view'], 200],
+    [['notifications:webhooks:manage'], 200],
+    [['notifications:alerts:view'], 403],
+    [['notifications:alerts:manage'], 403],
+  ])('reads deliveries with %j -> %i', async (scopes, status) => {
+    mocks.scopes = scopes;
+
+    const response = await createApp().request(`/${DELIVERY_ID}`);
+
+    expect(response.status).toBe(status);
   });
 });

@@ -52,7 +52,7 @@ describe("app navigation registry", () => {
           "proxy:view",
           "domains:view",
           "ssl:cert:view",
-          "pki:ca:view:root",
+          "pki:ca:view",
           "pki:cert:view",
           "pki:templates:view",
           "docker:containers:view",
@@ -111,7 +111,7 @@ describe("app navigation registry", () => {
   it("hides feature-backed destinations while their features are disabled", () => {
     const groups = visibleNavigationGroups(
       context({
-        scopes: ["pki:ca:view:root", "pki:cert:view", "logs:environments:view", "status-page:view"],
+        scopes: ["pki:ca:view", "pki:cert:view", "logs:environments:view", "status-page:view"],
         statusPageEnabled: false,
       })
     );

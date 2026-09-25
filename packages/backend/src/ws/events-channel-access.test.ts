@@ -83,3 +83,29 @@ describe('SSL certificate event channel access', () => {
     expect(hasChannelAccess(['ssl:cert:view'], 'ssl.cert.changed')).toBe(true);
   });
 });
+
+describe('perm-data event channel access', () => {
+  it('shows logging health to any logs viewer or housekeeping viewer', () => {
+    expect(hasChannelAccess(['housekeeping:view'], 'logging.health.changed')).toBe(true);
+    expect(hasChannelAccess(['logs:environments:view'], 'logging.health.changed')).toBe(true);
+    expect(hasChannelAccess(['logs:schemas:view:schema-1'], 'logging.health.changed')).toBe(true);
+    expect(hasChannelAccess(['logs:read:env-1'], 'logging.health.changed')).toBe(true);
+    expect(hasChannelAccess(['nodes:details'], 'logging.health.changed')).toBe(false);
+  });
+
+  it('gates notification channels on the alert and webhook scopes', () => {
+    expect(hasChannelAccess(['notifications:alerts:view'], 'notification.alert-rule.changed')).toBe(true);
+    expect(hasChannelAccess(['notifications:alerts:manage'], 'notification.alert-rule.changed')).toBe(true);
+    expect(hasChannelAccess(['notifications:webhooks:view'], 'notification.alert-rule.changed')).toBe(false);
+    expect(hasChannelAccess(['notifications:webhooks:view'], 'notification.webhook.changed')).toBe(true);
+    expect(hasChannelAccess(['notifications:webhooks:manage'], 'notification.webhook.changed')).toBe(true);
+    expect(hasChannelAccess(['notifications:alerts:view'], 'alert.fired')).toBe(true);
+    expect(hasChannelAccess(['notifications:webhooks:view'], 'alert.fired')).toBe(false);
+  });
+
+  it('lets folder-only and create-only pages users follow folder layout changes', () => {
+    expect(hasChannelAccess(['pages:view:folder/f1'], 'pages.folder.changed')).toBe(true);
+    expect(hasChannelAccess(['pages:create:folder/f1'], 'pages.folder.changed')).toBe(true);
+    expect(hasChannelAccess(['domains:view'], 'pages.folder.changed')).toBe(false);
+  });
+});

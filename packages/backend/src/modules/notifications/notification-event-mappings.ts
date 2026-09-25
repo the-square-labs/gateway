@@ -369,6 +369,43 @@ export const EVENT_BUS_MAPPINGS: Record<string, EventMapping[]> = {
       extractResource: (p) => ({ type: 'node', id: p.id, name: p.hostname }),
     },
   ],
+  // Published by SystemCertificateRenewalService for managed storage and
+  // managed database certificates. Fires while renewal keeps failing and
+  // resolves once a renewal succeeds, a delivery is progressing again, the
+  // certificate recovered another way, the owner is gone, or the renewal
+  // moved to a state that is not a failure (waiting for the issuing CA or for
+  // a node daemon update).
+  'system-certificate.renewal': [
+    {
+      category: 'certificate',
+      eventId: 'internal.renewal_failed',
+      match: (p) =>
+        typeof p.ownerId === 'string' &&
+        [
+          'renewal_failed',
+          'renewed',
+          'renewal_pending',
+          'renewal_recovered',
+          'renewal_cleared',
+          'renewal_ca_limited',
+          'renewal_waiting_for_daemon',
+        ].includes(p.action),
+      // Keyed by owner type so the resolving events (recovered, cleared after
+      // a delete or TLS turned off) match the state the failure opened.
+      extractResource: (p) => ({ type: p.ownerType, id: p.ownerId, name: p.name ?? p.ownerId }),
+      // Never forward the daemon error text; the UI and audit log carry it.
+      extractData: (p) => ({
+        owner_type: p.ownerType,
+        reason: p.reason ?? null,
+        attempts: p.attempts ?? 0,
+        days_until_expiry: p.daysRemaining ?? null,
+      }),
+      stateful: {
+        currentState: (p) => (p.action === 'renewal_failed' ? 'internal.renewal_failed' : 'internal.renewal_healthy'),
+        observedPatterns: ['internal.renewal_failed'],
+      },
+    },
+  ],
   'ssl.cert.changed': [
     {
       category: 'certificate',

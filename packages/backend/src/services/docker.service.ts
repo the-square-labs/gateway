@@ -629,6 +629,15 @@ export class DockerService {
     throw new Error(`Docker image tag remove failed (${res.statusCode}): ${res.body}`);
   }
 
+  /** The Docker daemon's own information (default logging driver and so on). */
+  async getDaemonInfo(): Promise<{ LoggingDriver?: string }> {
+    const res = await this.request('GET', `${API_VERSION}/info`);
+    if (res.statusCode !== 200) {
+      throw new Error(`Docker info failed (${res.statusCode}): ${res.body}`);
+    }
+    return JSON.parse(res.body) as { LoggingDriver?: string };
+  }
+
   /**
    * Inspect the container this app is running in.
    * Uses HOSTNAME env var which Docker sets to the short container ID.
@@ -988,6 +997,7 @@ export interface DockerContainerFullInspect extends DockerContainerInspect {
   };
   HostConfig?: {
     NetworkMode?: string;
+    LogConfig?: { Type?: string; Config?: Record<string, string> | null };
   };
   NetworkSettings?: {
     Networks?: Record<string, { Aliases?: string[]; IPAddress?: string }>;

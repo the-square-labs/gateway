@@ -190,15 +190,11 @@ export async function dockerFolderTreeOptions(scopes: string[], resourceType: Do
   if (
     !hasScopeBase(scopes, viewScope) &&
     !hasScopeBase(scopes, createScope) &&
-    !hasScope(scopes, 'docker:containers:folders:manage')
+    !hasScope(scopes, 'docker:folders:manage')
   ) {
-    throw new AppError(
-      403,
-      'FORBIDDEN',
-      'Docker folders require resource view access or docker:containers:folders:manage'
-    );
+    throw new AppError(403, 'FORBIDDEN', 'Docker folders require resource view access or docker:folders:manage');
   }
-  const canManageFolders = hasScope(scopes, 'docker:containers:folders:manage');
+  const canManageFolders = hasScope(scopes, 'docker:folders:manage');
   return canManageFolders ||
     hasScope(scopes, viewScope) ||
     hasScope(scopes, createScope) ||
@@ -228,11 +224,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.openapi(createDockerFolderRoute, async (c) => {
     const scopes = c.get('effectiveScopes') || [];
-    requireAnyDockerScope(
-      scopes,
-      'docker:containers:folders:manage',
-      'Creating Docker folders requires docker:containers:folders:manage'
-    );
+    requireAnyDockerScope(scopes, 'docker:folders:manage', 'Creating Docker folders requires docker:folders:manage');
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = CreateDockerFolderSchema.parse(body);
@@ -243,11 +235,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.openapi(reorderDockerFoldersRoute, async (c) => {
     const scopes = c.get('effectiveScopes') || [];
-    requireAnyDockerScope(
-      scopes,
-      'docker:containers:folders:manage',
-      'Reordering Docker folders requires docker:containers:folders:manage'
-    );
+    requireAnyDockerScope(scopes, 'docker:folders:manage', 'Reordering Docker folders requires docker:folders:manage');
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = ReorderDockerFoldersSchema.parse(body);
@@ -260,8 +248,8 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const scopes = c.get('effectiveScopes') || [];
     requireAnyDockerScope(
       scopes,
-      'docker:containers:folders:manage',
-      'Reordering Docker resources requires docker:containers:folders:manage'
+      'docker:folders:manage',
+      'Reordering Docker resources requires docker:folders:manage'
     );
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -287,8 +275,8 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const scopes = c.get('effectiveScopes') || [];
     requireAnyDockerScope(
       scopes,
-      'docker:containers:folders:manage',
-      'Reordering Docker containers requires docker:containers:folders:manage'
+      'docker:folders:manage',
+      'Reordering Docker containers requires docker:folders:manage'
     );
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -301,11 +289,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.openapi(updateDockerFolderRoute, async (c) => {
     const scopes = c.get('effectiveScopes') || [];
-    requireAnyDockerScope(
-      scopes,
-      'docker:containers:folders:manage',
-      'Updating Docker folders requires docker:containers:folders:manage'
-    );
+    requireAnyDockerScope(scopes, 'docker:folders:manage', 'Updating Docker folders requires docker:folders:manage');
     const user = c.get('user')!;
     const body = await c.req.json();
     const input = UpdateDockerFolderSchema.parse(body);
@@ -316,11 +300,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
 
   router.openapi(deleteDockerFolderRoute, async (c) => {
     const scopes = c.get('effectiveScopes') || [];
-    requireAnyDockerScope(
-      scopes,
-      'docker:containers:folders:manage',
-      'Deleting Docker folders requires docker:containers:folders:manage'
-    );
+    requireAnyDockerScope(scopes, 'docker:folders:manage', 'Deleting Docker folders requires docker:folders:manage');
     const user = c.get('user')!;
     const service = container.resolve(DockerFolderService);
     await service.deleteFolder(c.req.param('id')!, user.id);
@@ -331,8 +311,8 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const scopes = c.get('effectiveScopes') || [];
     requireAnyDockerScope(
       scopes,
-      'docker:containers:folders:manage',
-      'Moving containers between Docker folders requires docker:containers:folders:manage'
+      'docker:folders:manage',
+      'Moving containers between Docker folders requires docker:folders:manage'
     );
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -349,8 +329,8 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const scopes = c.get('effectiveScopes') || [];
     requireAnyDockerScope(
       scopes,
-      'docker:containers:folders:manage',
-      'Moving Docker resources between folders requires docker:containers:folders:manage'
+      'docker:folders:manage',
+      'Moving Docker resources between folders requires docker:folders:manage'
     );
     const user = c.get('user')!;
     const body = await c.req.json();
@@ -379,7 +359,7 @@ export function registerDockerFolderRoutes(router: OpenAPIHono<AppEnv>) {
     const body = await c.req.json();
     const input = DockerFolderPlacementsSchema.parse(body);
     const viewScope = VIEW_SCOPE_BY_RESOURCE_TYPE[input.resourceType];
-    if (!hasScopeBase(scopes, viewScope) && !hasScope(scopes, 'docker:containers:folders:manage')) {
+    if (!hasScopeBase(scopes, viewScope) && !hasScope(scopes, 'docker:folders:manage')) {
       throw new AppError(403, 'FORBIDDEN', 'Docker folder placements require resource view access');
     }
     if (input.resourceType === 'container') {

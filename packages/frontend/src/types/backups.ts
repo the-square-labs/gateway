@@ -95,6 +95,8 @@ export interface BackupRestoreInput {
   /** Database name inside a new managed target; defaults to the normalized source name. */
   targetDatabaseName?: string;
   restoreTargetConnectionId?: string;
+  /** Folder of a new managed restore target; null or omitted is the root. */
+  folderId?: string | null;
   overwrite?: false;
   limits?: Partial<BackupLimits>;
 }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { isValidBaseScope } from '@/lib/scopes.js';
+import { DelegatedScopeArraySchema, MAX_OAUTH_SCOPE_PARAMETER_LENGTH } from '@/lib/scopes-schemas.js';
 
 const UrlSchema = z.string().max(2048).url();
 const HttpUrlSchema = UrlSchema.refine((value) => {
@@ -11,11 +11,6 @@ const HttpUrlSchema = UrlSchema.refine((value) => {
   }
 }, 'URL must use http or https');
 const OptionalHttpUrlSchema = HttpUrlSchema.or(z.literal(''));
-
-const ScopeStringSchema = z
-  .string()
-  .regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(:[a-zA-Z0-9-]+)*$/, 'Invalid scope format')
-  .refine(isValidBaseScope, 'Scope is not recognized');
 
 export const OAuthClientRegistrationSchema = z.object({
   redirect_uris: z.array(UrlSchema).min(1).max(10),
@@ -42,7 +37,7 @@ export const OAuthAuthorizeQuerySchema = z.object({
   redirect_uri: z.string().url(),
   code_challenge: z.string().min(43).max(128),
   code_challenge_method: z.literal('S256'),
-  scope: z.string().optional(),
+  scope: z.string().max(MAX_OAUTH_SCOPE_PARAMETER_LENGTH).optional(),
   state: z.string().optional(),
   resource: z.string().url().optional(),
 });
@@ -68,8 +63,14 @@ export const OAuthRevocationRequestSchema = z.object({
   client_id: z.string().min(1).optional(),
 });
 
+/** Scopes selected on the consent screen; folder, node, and Docker child restrictions are allowed. */
 export const OAuthConsentDecisionSchema = z.object({
-  scopes: z.array(ScopeStringSchema).optional(),
+  scopes: DelegatedScopeArraySchema.optional(),
+});
+
+/** Narrowing an existing OAuth authorization from Settings. */
+export const OAuthAuthorizationScopesSchema = z.object({
+  scopes: DelegatedScopeArraySchema.min(1),
 });
 
 export type OAuthClientRegistrationInput = z.infer<typeof OAuthClientRegistrationSchema>;

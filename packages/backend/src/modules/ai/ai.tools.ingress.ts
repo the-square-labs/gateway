@@ -286,7 +286,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'resync_tls_distribution',
     description:
-      'Repair TLS delivery: target "route" re-applies one enabled TLS route to its nginx node; target "certificate" re-sends one SSL certificate to every node that serves it. Requires admin:update.',
+      'Repair TLS delivery: target "route" re-applies one enabled TLS route to its nginx node (needs proxy:edit on the route); target "certificate" re-sends one SSL certificate to every node that serves it (needs ssl:cert:issue on the certificate). System routes and system certificates need admin:update, which also still works for every target during this release.',
     parameters: {
       type: 'object',
       properties: {
@@ -298,7 +298,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Ingress',
-    requiredScope: 'admin:update',
+    requiredScope: 'proxy:edit',
     invalidateStores: ['proxy', 'ssl'],
   },
   {
@@ -368,7 +368,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_proxy_template',
     description:
-      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node; needs proxy:raw:write plus template edit, or create when templateId is omitted). Operation-specific proxy:templates:* scopes are enforced.',
+      'Manage custom nginx proxy templates. Operations: list, get, create, update, delete, clone, preview (render content with sample data, or with a stored route when routeId is set), test (render with sample data and run nginx -t on an nginx node). Reads need proxy:templates:view; create, update, delete, clone and test need proxy:templates:manage (broad to create or test new content, on templateId to change that template).',
     parameters: {
       type: 'object',
       properties: {
@@ -477,7 +477,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_ssl_certificate',
     description:
-      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew, verify_dns, set_auto_renew, cancel_acme (abandon a pending ACME issue), delete. Operation-specific ssl:cert:* scopes are enforced.',
+      'Manage SSL certificates beyond listing/request/link. Operations: get, upload, renew (ACME renewal, or reissue of a linked internal certificate from its CA; the internal reissue also needs pki:cert:issue on that CA), verify_dns, set_auto_renew (ACME, or automatic reissue of a linked internal certificate), cancel_acme (abandon a pending ACME issue), delete. Operation-specific ssl:cert:* scopes are enforced.',
     parameters: {
       type: 'object',
       properties: {
@@ -576,7 +576,7 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_domain',
     description:
-      'Inspect and manage domains. Operations without domainId (domains:create): list_nginx_nodes (eligible ingress nodes), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain; also needs ssl:cert:issue), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
+      'Inspect and manage domains. Operations without domainId (any domains:create grant, broad, on a folder or on a node): list_nginx_nodes (ingress nodes the caller may create domains on), preview (DNS plan for a new domain; takes domain, dnsProvider, ttl, proxied, nginxNodeId). Operations with domainId: get, update (description; proxied toggles Cloudflare proxying), check_dns, resolve_cloudflare_migration (action retry, keep_external, or update_dns with nginxNodeId), issue_certificate (ACME certificate for the domain, placed in certificateFolderId; also needs ssl:cert:issue on that SSL certificate folder, or broadly for the root), preview_ingress_migration, migrate_ingress (move the domain and its routes to targetNodeId).',
     parameters: {
       type: 'object',
       properties: {
@@ -612,6 +612,10 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         targetNodeId: {
           type: 'string',
           description: 'Nginx ingress node UUID for preview_ingress_migration and migrate_ingress.',
+        },
+        certificateFolderId: {
+          type: ['string', 'null'],
+          description: 'issue_certificate: SSL certificate folder UUID for the new certificate (root when omitted).',
         },
       },
       required: ['operation'],

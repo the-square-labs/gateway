@@ -25,6 +25,7 @@ import {
   getSecureDockerRuntimeDescription,
 } from "@/lib/docker-runtime-profile";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerDeployment,
@@ -128,6 +129,10 @@ export function DeploymentSettings({
   /** Set while the server reports a running operation that would overwrite a save. */
   busyReason?: string | null;
 }) {
+  // Same gate as the Availability routes: docker:availability:manage on this deployment (folder grants resolve to it).
+  const canManageAvailability = useAuthStore((state) =>
+    state.hasScope(`docker:availability:manage:${nodeId}/${deployment.id}`)
+  );
   const initialEntrypoint = useMemo(
     () => ((deployment.desiredConfig as any).entrypoint ?? []).join(" "),
     [deployment.desiredConfig]
@@ -741,7 +746,7 @@ export function DeploymentSettings({
 
       <AvailabilitySection
         resource={{ type: "deployment", deploymentId: deployment.id }}
-        canManage={!action}
+        canManage={!action && canManageAvailability}
         onDisableQueued={onAvailabilityDisableQueued}
       />
 

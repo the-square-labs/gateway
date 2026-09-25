@@ -28,7 +28,7 @@ describe('hosting authorization boundaries', () => {
       'hosting:resources:power:provider/proxmox',
       'hosting:resources:delete:account/do-account',
       'nodes:details:n1',
-      'nodes:config:edit:n1',
+      'nodes:manage:n1',
       'nodes:delete:n1',
     ]);
     expect(() => assertHostingResourceAction(scopes, 'pve-vm', 'reboot', ['n1'])).not.toThrow();
@@ -59,7 +59,7 @@ describe('hosting authorization boundaries', () => {
       expect(API_TOKEN_SCOPES).toContain(scope);
   });
   it('does not authorize global adoption from a single-node grant', () => {
-    const scopes = ['nodes:details:n1', 'nodes:config:edit:n1'];
+    const scopes = ['nodes:details:n1', 'nodes:manage:n1'];
     expect(() => assertHostingAdoptionAuthority(scopes, HostingSettingsSchema.parse({}))).toThrow();
     expect(() =>
       assertHostingAdoptionAuthority(
@@ -72,7 +72,7 @@ describe('hosting authorization boundaries', () => {
     ).not.toThrow();
   });
   it('requires rights for all impacted roles before power/delete', () => {
-    const scopes = ['hosting:resources:power:r1', 'nodes:details', 'nodes:config:edit:n1'];
+    const scopes = ['hosting:resources:power:r1', 'nodes:details', 'nodes:manage:n1'];
     expect(() => assertHostingResourceAction(scopes, 'r1', 'reboot', ['n1'])).not.toThrow();
     expect(() => assertHostingResourceAction(scopes, 'r1', 'reboot', ['n1', 'n2'])).toThrow();
     expect(() => assertHostingResourceAction(scopes, 'r1', 'delete', ['n1'])).toThrow();

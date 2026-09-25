@@ -6,22 +6,37 @@ import { TOKENS } from '@/container.js';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   apiTokens,
+  databaseConnections,
+  domains,
   gitLabUserCredentials,
   inferenceOAuthSessions,
   inferenceTokens,
+  loggingEnvironments,
+  loggingSchemas,
+  managedDatabaseInstances,
+  managedStorageClusters,
+  nodes,
   oauthAccessTokens,
   oauthAuthorizationCodes,
   oauthRefreshTokens,
+  objectStorageConnections,
+  pageProjects,
   permissionGroups,
+  proxyHosts,
+  sslCertificates,
   type UserAuthMethod,
   userPasswordCredentials,
   users,
 } from '@/db/schema/index.js';
-import { type CreatedResourceFamily, createdResourceScopes } from '@/lib/created-resource-scopes.js';
+import {
+  type CreatedResourceDestination,
+  type CreatedResourceFamily,
+  createdResourceScopesForCreator,
+} from '@/lib/created-resource-scopes.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { canManageUser, isScopeSubset } from '@/lib/permissions.js';
-import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
+import { canonicalizeInboundScopes, canonicalizeScopes, isValidInboundScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AISandboxService } from '@/modules/ai/ai.sandbox.service.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -196,11 +211,27 @@ export class AuthService {
   async grantCreatedResourcePermissions(
     userId: string,
     family: CreatedResourceFamily,
-    resourceId: string
+    resourceId: string,
+    destination: CreatedResourceDestination = {}
   ): Promise<void> {
     const config = await (this.generalSettingsService ?? new GeneralSettingsService(this.db)).getConfig();
     if (!config.autoAssignCreatedResourcePermissions) return;
-    const grants = createdResourceScopes(family, resourceId);
+    const creatorRow = await this.db.query.users.findFirst({
+      where: and(eq(users.id, userId), isNull(users.deletedAt)),
+    });
+    if (!creatorRow || creatorRow.isBlocked) return;
+    // The creator always keeps view of what they made; everything else only when already held for this
+    // resource (broadly, on its folder or node, or through an existing grant).
+    const creator = await this.mapDbUserToUser(creatorRow);
+    const stored =
+      destination.folderId === undefined || destination.nodeId === undefined
+        ? await this.createdResourceDestination(family, resourceId)
+        : {};
+    const grants = createdResourceScopesForCreator(family, resourceId, creator.scopes, {
+      folderId: destination.folderId ?? stored.folderId ?? null,
+      nodeId: destination.nodeId ?? stored.nodeId ?? null,
+    });
+    if (grants.length === 0) return;
     const [updated] = await this.db
       .update(users)
       .set({
@@ -214,6 +245,66 @@ export class AuthService {
     const mapped = await this.mapDbUserToUser(updated);
     this.emitUser(userId, 'updated');
     this.emitPermissions(userId, mapped.isBlocked ? [] : mapped.scopes, mapped.groupId, 'resource_created');
+  }
+
+  /**
+   * Where a created resource lives, read from its row, so creator grants do not depend on every
+   * caller passing the destination. Docker resources carry their node in the ID; their folder must be
+   * passed by the caller. Best effort: an unknown family or a failed lookup yields no destination.
+   */
+  private async createdResourceDestination(
+    family: CreatedResourceFamily,
+    resourceId: string
+  ): Promise<CreatedResourceDestination> {
+    const byId = async (table: any, withNode: boolean): Promise<CreatedResourceDestination> => {
+      const [row] = await this.db
+        .select(withNode ? { folderId: table.folderId, nodeId: table.nodeId } : { folderId: table.folderId })
+        .from(table)
+        .where(eq(table.id, resourceId))
+        .limit(1);
+      return (row as CreatedResourceDestination | undefined) ?? {};
+    };
+    const managedNode = async (table: any, column: any): Promise<string | null> => {
+      const [row] = await this.db.select({ nodeId: table.nodeId }).from(table).where(eq(column, resourceId)).limit(1);
+      return (row as { nodeId: string | null } | undefined)?.nodeId ?? null;
+    };
+    try {
+      switch (family) {
+        case 'proxy':
+          return await byId(proxyHosts, true);
+        case 'pages':
+          return await byId(pageProjects, true);
+        case 'domains':
+          return await byId(domains, false);
+        case 'ssl:cert':
+          return await byId(sslCertificates, false);
+        case 'nodes':
+          return await byId(nodes, false);
+        case 'logs:environments':
+          return await byId(loggingEnvironments, false);
+        case 'logs:schemas':
+          return await byId(loggingSchemas, false);
+        case 'admin:users':
+          return await byId(users, false);
+        case 'admin:groups':
+          return await byId(permissionGroups, false);
+        case 'databases':
+          return {
+            ...(await byId(databaseConnections, false)),
+            nodeId: await managedNode(managedDatabaseInstances, managedDatabaseInstances.databaseConnectionId),
+          };
+        case 'storage':
+          return {
+            ...(await byId(objectStorageConnections, false)),
+            nodeId: await managedNode(managedStorageClusters, managedStorageClusters.objectStorageConnectionId),
+          };
+        default:
+          return {};
+      }
+    } catch (error) {
+      logger.warn('Could not read the destination of a created resource', { family, resourceId, error });
+      return {};
+    }
   }
 
   async getAuthorizationUrl(returnTo?: string): Promise<string> {
@@ -942,12 +1033,16 @@ export class AuthService {
     }
 
     const trimmedScopes = requestedScopes.map((scope) => scope.trim());
-    const invalidScopes = trimmedScopes.filter((scope) => !isValidBaseScope(scope));
+    const invalidScopes = trimmedScopes.filter((scope) => !isValidInboundScope(scope));
     if (invalidScopes.length > 0) {
       throw new AppError(400, 'INVALID_SCOPE', `Invalid permission scopes: ${[...new Set(invalidScopes)].join(', ')}`);
     }
 
-    const additionalScopes = canonicalizeScopes(trimmedScopes);
+    // Retired scope names from older clients are rewritten to the current catalog.
+    const additionalScopes = canonicalizeInboundScopes(trimmedScopes);
+    if (trimmedScopes.length > 0 && additionalScopes.length === 0) {
+      throw new AppError(400, 'INVALID_SCOPE', 'None of the requested permission scopes exist any more');
+    }
     if (additionalScopes.includes('admin:system')) {
       throw new AppError(403, 'SCOPE_NOT_ALLOWED', 'admin:system cannot be assigned as an additional permission');
     }

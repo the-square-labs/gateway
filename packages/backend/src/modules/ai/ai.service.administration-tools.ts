@@ -1,6 +1,5 @@
 import { container } from '@/container.js';
 import { isScopeSubset } from '@/lib/permissions.js';
-import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import {
   CreateUserSchema,
@@ -42,7 +41,7 @@ import {
   EnvironmentSettingsService,
 } from '@/modules/settings/environment-settings.service.js';
 import { CreateTokenSchema, UpdateTokenSchema } from '@/modules/tokens/tokens.schemas.js';
-import { TokensService } from '@/modules/tokens/tokens.service.js';
+import { resolveRequestedTokenScopes, TokensService } from '@/modules/tokens/tokens.service.js';
 import { HousekeepingService } from '@/services/housekeeping.service.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import type { User } from '@/types.js';
@@ -223,10 +222,9 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
           case 'list':
             return tokensService.listTokens(user.id);
           case 'create': {
-            const input = CreateTokenSchema.parse({
-              name: a.name,
-              scopes: Array.isArray(a.scopes) ? canonicalizeScopes(a.scopes.map(String)) : a.scopes,
-            });
+            // Validate first (retired names are accepted), then rewrite them like the REST route.
+            const parsed = CreateTokenSchema.parse({ name: a.name, scopes: a.scopes });
+            const input = { ...parsed, scopes: resolveRequestedTokenScopes(parsed.scopes, user.scopes, 'create') };
             if (!isScopeSubset(input.scopes, user.scopes)) {
               throw new Error('Cannot create a token with scopes you do not possess');
             }
@@ -235,10 +233,13 @@ export abstract class AIServiceAdministrationTools extends AIServiceInteractionT
           case 'update': {
             const tokenId = String(a.tokenId ?? '');
             if (!tokenId) throw new Error('tokenId is required');
-            const input = UpdateTokenSchema.parse({
-              name: a.name,
-              scopes: Array.isArray(a.scopes) ? canonicalizeScopes(a.scopes.map(String)) : a.scopes,
-            });
+            const parsed = UpdateTokenSchema.parse({ name: a.name, scopes: a.scopes });
+            const input = {
+              ...parsed,
+              ...(parsed.scopes !== undefined
+                ? { scopes: resolveRequestedTokenScopes(parsed.scopes, user.scopes, 'update') }
+                : {}),
+            };
             if (input.scopes !== undefined && !isScopeSubset(input.scopes, user.scopes)) {
               throw new Error('Cannot update a token with scopes you do not possess');
             }

@@ -70,7 +70,7 @@ export class HostingFirewallService {
     if (!bound.length) fail('The VM is no longer bound to a Gateway node');
     for (const node of bound) {
       assertHostingScope(user.scopes, 'nodes:details', node.id);
-      assertHostingScope(user.scopes, edit ? 'nodes:config:edit' : 'nodes:config:view', node.id);
+      assertHostingScope(user.scopes, edit ? 'nodes:manage' : 'nodes:config:view', node.id);
       if (edit && node.status === 'pending') fail('Wait for node provisioning to finish');
     }
     const connector = await this.connectors.get(resource.connectorId, user, true);
@@ -104,7 +104,7 @@ export class HostingFirewallService {
       resource.id
     );
     const canEdit =
-      bound.every((node) => node.status !== 'pending' && hasScope(user.scopes, `nodes:config:edit:${node.id}`)) &&
+      bound.every((node) => node.status !== 'pending' && hasScope(user.scopes, `nodes:manage:${node.id}`)) &&
       hasScope(user.scopes, `integrations:hosting:manage:${connector.id}`);
     if (cached?.data.connectorRevision === connector.updatedAt.toISOString()) {
       const { connectorRevision: _, ...view } = cached.data;

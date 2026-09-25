@@ -71,7 +71,10 @@ describe('AI folder tools', () => {
       resourceType: 'routes',
     });
 
-    expect(proxyFolderService.getFolderTree).toHaveBeenCalledWith({ allowedHostIds: ['proxy-1'] });
+    expect(proxyFolderService.getFolderTree).toHaveBeenCalledWith({
+      allowedHostIds: ['proxy-1'],
+      allowedFolderIds: [],
+    });
     expect(JSON.stringify(result)).not.toContain('rawConfig');
     expect(JSON.stringify(result)).not.toContain('rawConfigEnabled');
     expect(JSON.stringify(result)).not.toContain('proxy_set_header Authorization');
@@ -376,7 +379,7 @@ describe('AI folder tools', () => {
     });
 
     await expect(
-      executeFolderTool({ ...BASE_USER, scopes: ['docker:containers:folders:manage'] }, 'manage_resource_folder', {
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:folders:manage'] }, 'manage_resource_folder', {
         resourceType: 'docker',
         dockerResourceType: 'compose',
         operation: 'create',
@@ -389,7 +392,7 @@ describe('AI folder tools', () => {
     );
 
     await expect(
-      executeFolderTool({ ...BASE_USER, scopes: ['docker:containers:folders:manage'] }, 'manage_resource_folder', {
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:folders:manage'] }, 'manage_resource_folder', {
         resourceType: 'docker',
         dockerResourceType: 'compose',
         operation: 'move_resources',
@@ -399,14 +402,14 @@ describe('AI folder tools', () => {
     ).rejects.toThrow('Missing required scope: docker:compose:manage');
     await expect(
       executeFolderTool(
-        { ...BASE_USER, scopes: ['docker:containers:folders:manage', `docker:compose:manage:${nodeId}/project-1`] },
+        { ...BASE_USER, scopes: ['docker:folders:manage', `docker:compose:manage:${nodeId}/project-1`] },
         'manage_resource_folder',
         { resourceType: 'docker', dockerResourceType: 'compose', operation: 'move_resources', folderId, items }
       )
     ).rejects.toThrow('PERMISSION_DENIED: Missing required destination scope docker:compose:manage');
     await expect(
       executeFolderTool(
-        { ...BASE_USER, scopes: ['docker:containers:folders:manage', `docker:compose:manage:${nodeId}`] },
+        { ...BASE_USER, scopes: ['docker:folders:manage', `docker:compose:manage:${nodeId}`] },
         'manage_resource_folder',
         { resourceType: 'docker', dockerResourceType: 'compose', operation: 'move_resources', folderId, items }
       )
@@ -514,17 +517,13 @@ describe('AI folder tools', () => {
       throw new Error('Unexpected service resolution');
     });
     const move = (scopes: string[]) =>
-      executeFolderTool(
-        { ...BASE_USER, scopes: ['docker:containers:folders:manage', ...scopes] },
-        'manage_resource_folder',
-        {
-          resourceType: 'docker',
-          dockerResourceType: 'network',
-          operation: 'move_resources',
-          items: [{ nodeId, resourceKey: 'backend' }],
-          folderId,
-        }
-      );
+      executeFolderTool({ ...BASE_USER, scopes: ['docker:folders:manage', ...scopes] }, 'manage_resource_folder', {
+        resourceType: 'docker',
+        dockerResourceType: 'network',
+        operation: 'move_resources',
+        items: [{ nodeId, resourceKey: 'backend' }],
+        folderId,
+      });
 
     await expect(move([])).rejects.toThrow('Missing required scope: docker:networks:edit');
     await expect(move([`docker:networks:edit:${nodeId}/net-resource-1`])).rejects.toThrow(

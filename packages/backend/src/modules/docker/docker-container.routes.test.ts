@@ -25,7 +25,6 @@ const FULL = [
   'docker:containers:manage',
   'docker:containers:view',
   'docker:containers:edit',
-  'docker:containers:config',
   'docker:containers:environment',
   'docker:containers:secrets',
   'docker:images:pull',
@@ -83,7 +82,6 @@ describe('container recreate/update scope requirements', () => {
     for (const field of ['image', 'entrypoint', 'command', 'user', 'runtimeProfile']) {
       expect(containerRecreateRequiredScopes({ [field]: field === 'image' ? 'nginx:1' : ['x'] })).toEqual([
         'docker:containers:edit',
-        'docker:containers:config',
         'docker:containers:environment',
         'docker:containers:secrets',
       ]);
@@ -135,6 +133,58 @@ describe('container recreate/update scope requirements', () => {
     const tagOnly = await post(appWithScopes(['docker:containers:edit']), '/update', { tag: '2' });
     expect(tagOnly.status).toBe(200);
     expect(docker.updateContainer).toHaveBeenCalledOnce();
+  });
+});
+
+describe('per-node container and deployment lists', () => {
+  it.each([
+    ['docker:containers:view:folder/folder-1'],
+    ['docker:containers:create:folder/folder-1'],
+  ])('answer an empty list for %s without reading the node', async (scope) => {
+    const docker = registerDocker();
+    const snapshots = { assertDockerNode: vi.fn(), getList: vi.fn() };
+    container.registerInstance(DockerSnapshotService, snapshots as never);
+    const app = appWithScopes([scope]);
+
+    const response = await app.request(`/nodes/${NODE_ID}/containers`);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ data: [], total: 0, truncated: false });
+    expect(snapshots.getList).not.toHaveBeenCalled();
+    expect(docker.inspectContainer).not.toHaveBeenCalled();
+  });
+
+  it('still refuses callers without any container view or creation grant', async () => {
+    registerDocker();
+    container.registerInstance(DockerSnapshotService, { assertDockerNode: vi.fn(), getList: vi.fn() } as never);
+
+    const response = await appWithScopes(['docker:images:view']).request(`/nodes/${NODE_ID}/containers`);
+
+    expect(response.status).toBe(403);
+  });
+});
+
+describe('container duplicate scope requirements', () => {
+  it('needs create plus the environment and secrets of the source container', async () => {
+    const docker = Object.assign(registerDocker(), {
+      duplicateContainer: vi.fn().mockResolvedValue({ id: 'copy-1' }),
+    });
+    const scopes = [
+      'docker:containers:create',
+      `docker:containers:environment:${NODE_ID}/resource-a`,
+      `docker:containers:secrets:${NODE_ID}/resource-a`,
+    ];
+
+    const denied = await post(
+      appWithScopes(scopes.filter((scope) => !scope.startsWith('docker:containers:secrets'))),
+      '/duplicate',
+      { name: 'app-b' }
+    );
+    expect(denied.status).toBe(403);
+
+    const allowed = await post(appWithScopes(scopes), '/duplicate', { name: 'app-b' });
+    expect(allowed.status).toBe(201);
+    expect(docker.duplicateContainer).toHaveBeenCalledWith(NODE_ID, CONTAINER_ID, 'app-b', 'user-1', scopes, undefined);
   });
 });
 

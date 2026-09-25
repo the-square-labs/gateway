@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { assertWorkloadBindingTargetAccess } from '@/modules/ai/ai.binding-target-access.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
@@ -25,14 +25,24 @@ import {
   CreateManagedStorageBindingSchema,
   CreateManagedStorageSchema,
   DeleteManagedStorageBindingSchema,
+  ImportManagedStorageAccessKeysSchema,
   ManagedStorageListQuerySchema,
+  MoveManagedStorageBindingSchema,
+  RehomeManagedStorageBackupHistorySchema,
   UpdateManagedStorageSchema,
 } from '@/modules/storage/managed-storage.schemas.js';
 import { ManagedStorageService } from '@/modules/storage/managed-storage.service.js';
 import { ManagedStorageBindingsService } from '@/modules/storage/managed-storage-bindings.service.js';
+import {
+  StartStorageCopyJobSchema,
+  StorageCopyJobIdSchema,
+  StorageCopyJobListQuerySchema,
+} from '@/modules/storage/storage-copy.schemas.js';
+import { StorageCopyService } from '@/modules/storage/storage-copy.service.js';
 export const storageToolRuntime = {
   container,
   hasScope,
+  hasScopeBase,
   hasScopeForCreation,
   AppError,
   hasDockerResourceScope,
@@ -60,4 +70,11 @@ export const storageToolRuntime = {
   ManagedStorageBindingsService,
   directResourceIdsForScopes,
   assertWorkloadBindingTargetAccess,
+  MoveManagedStorageBindingSchema,
+  ImportManagedStorageAccessKeysSchema,
+  RehomeManagedStorageBackupHistorySchema,
+  StorageCopyService,
+  StartStorageCopyJobSchema,
+  StorageCopyJobIdSchema,
+  StorageCopyJobListQuerySchema,
 };

@@ -4,7 +4,7 @@ import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
-import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { AppEnv } from '@/types.js';
@@ -79,6 +79,7 @@ import {
 import { DockerManagementService } from './docker.service.js';
 import {
   assertDockerNodeScope,
+  dockerNodeListAccess,
   filterDockerResourcesForScope,
   requireDockerContainerScope,
 } from './docker-access.middleware.js';
@@ -237,58 +238,70 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
   // ─── Container routes ────────────────────────────────────────────────
 
   // List containers
-  router.openapi({ ...listContainersRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
-    const service = container.resolve(DockerManagementService);
-    const snapshots = container.resolve(DockerSnapshotService);
-    const nodeId = c.req.param('nodeId')!;
-    assertDockerNodeScope(c.get('effectiveScopes') ?? [], 'docker:containers:view', nodeId);
-    await snapshots.assertDockerNode(nodeId);
-    const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
-    const data = await service.decoratePublicContainerSnapshot(
-      nodeId,
-      snapshot.data.filter((item) => !isComposeOwnedContainer(item))
-    );
-    if (!Array.isArray(data)) return c.json({ data });
-    const search = c.req.query('search')?.trim().toLowerCase();
-    const visible = filterDockerResourcesForScope(
-      data.map((item) => compactContainerListItem(item)),
-      c.get('effectiveScopes') ?? [],
-      'docker:containers:view',
-      nodeId
-    );
-    const compacted = visible
-      .filter((item) => matchesContainerSearch(item, search))
-      .map((item) => ({
-        ...item,
+  router.openapi(
+    { ...listContainersRoute, middleware: requireAnyScopeBase('docker:containers:view', 'docker:containers:create') },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const snapshots = container.resolve(DockerSnapshotService);
+      const nodeId = c.req.param('nodeId')!;
+      if (
+        dockerNodeListAccess(
+          c.get('effectiveScopes') ?? [],
+          'docker:containers:view',
+          nodeId,
+          'docker:containers:create'
+        ) === 'empty'
+      ) {
+        return c.json({ data: [], total: 0, limit: DOCKER_RESOURCE_LIST_MAX, truncated: false });
+      }
+      await snapshots.assertDockerNode(nodeId);
+      const snapshot = await snapshots.getList<any[]>(nodeId, 'containers');
+      const data = await service.decoratePublicContainerSnapshot(
         nodeId,
-        availability: snapshots.availability(nodeId, snapshot),
-      }));
-    const logicalStates = await container.resolve(DockerAvailabilityService).listContainerSurfaceStates(
-      nodeId,
-      compacted.map((item) => ({ name: String(item.name), deploymentId: item.deploymentId ?? null }))
-    );
-    const logical = compacted.map((item) => {
-      const key = item.deploymentId ? `deployment:${item.deploymentId}` : `container:${item.name}`;
-      const state = logicalStates[key];
-      return state
-        ? {
-            ...item,
-            image: state.sourceImageReference ?? item.image,
-            availabilityPolicyStatus: state.status,
-            availabilityHealthStatus: state.healthStatus,
-            availabilityServing: state.serving,
-            availabilityDesired: state.desired,
-          }
-        : item;
-    });
-    const truncated = logical.length > DOCKER_RESOURCE_LIST_MAX;
-    return c.json({
-      data: truncated ? logical.slice(0, DOCKER_RESOURCE_LIST_MAX) : logical,
-      total: logical.length,
-      limit: DOCKER_RESOURCE_LIST_MAX,
-      truncated,
-    });
-  });
+        snapshot.data.filter((item) => !isComposeOwnedContainer(item))
+      );
+      if (!Array.isArray(data)) return c.json({ data });
+      const search = c.req.query('search')?.trim().toLowerCase();
+      const visible = filterDockerResourcesForScope(
+        data.map((item) => compactContainerListItem(item)),
+        c.get('effectiveScopes') ?? [],
+        'docker:containers:view',
+        nodeId
+      );
+      const compacted = visible
+        .filter((item) => matchesContainerSearch(item, search))
+        .map((item) => ({
+          ...item,
+          nodeId,
+          availability: snapshots.availability(nodeId, snapshot),
+        }));
+      const logicalStates = await container.resolve(DockerAvailabilityService).listContainerSurfaceStates(
+        nodeId,
+        compacted.map((item) => ({ name: String(item.name), deploymentId: item.deploymentId ?? null }))
+      );
+      const logical = compacted.map((item) => {
+        const key = item.deploymentId ? `deployment:${item.deploymentId}` : `container:${item.name}`;
+        const state = logicalStates[key];
+        return state
+          ? {
+              ...item,
+              image: state.sourceImageReference ?? item.image,
+              availabilityPolicyStatus: state.status,
+              availabilityHealthStatus: state.healthStatus,
+              availabilityServing: state.serving,
+              availabilityDesired: state.desired,
+            }
+          : item;
+      });
+      const truncated = logical.length > DOCKER_RESOURCE_LIST_MAX;
+      return c.json({
+        data: truncated ? logical.slice(0, DOCKER_RESOURCE_LIST_MAX) : logical,
+        total: logical.length,
+        limit: DOCKER_RESOURCE_LIST_MAX,
+        truncated,
+      });
+    }
+  );
 
   router.openapi(
     { ...listContainerGpuUsageRoute, middleware: requireScopeBase('docker:containers:view') },
@@ -526,7 +539,6 @@ export function registerContainerRoutes(router: OpenAPIHono<AppEnv>) {
       ...duplicateContainerRoute,
       middleware: [
         requireScopeBase('docker:containers:create'),
-        requireDockerContainerScope('docker:containers:config'),
         requireDockerContainerScope('docker:containers:environment'),
         requireDockerContainerScope('docker:containers:secrets'),
       ],

@@ -43,6 +43,15 @@ export interface StatusPageConfig {
   autoResolveThresholdSeconds: number;
 }
 
+/** A resource the caller may expose (GET /status-page/sources). */
+export interface StatusPageSourceOption {
+  sourceType: StatusPageSourceType;
+  sourceId: string;
+  name: string;
+  nodeId: string | null;
+  nodeName: string | null;
+}
+
 export interface StatusPageProxyTemplateOption {
   id: string;
   name: string;
@@ -67,6 +76,8 @@ export interface StatusPageServiceItem {
   source: { label: string; status: StatusPageServiceStatus; rawStatus: string } | null;
   currentStatus: StatusPageServiceStatus;
   broken: boolean;
+  /** Whether the caller may edit this listing (the API requires view access to the source). */
+  sourceVisible?: boolean;
 }
 
 export interface StatusPageIncidentUpdate {

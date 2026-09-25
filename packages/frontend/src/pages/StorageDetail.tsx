@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { ManagedCertificateStatus } from "@/components/common/ManagedCertificateStatus";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
   Dialog,
@@ -273,6 +274,41 @@ function StorageDetailContent({
     }
   };
 
+  const managedId = storage?.managed?.id;
+  const loadManagedCertificate = useCallback(
+    () =>
+      managedId
+        ? api.getManagedObjectStorageCertificate(managedId)
+        : Promise.reject(new Error("Not managed storage")),
+    [managedId]
+  );
+
+  const renewManagedCertificate = async () => {
+    if (!managedId || !canEdit) return false;
+    const ok = await confirm({
+      title: "Renew TLS certificate",
+      description:
+        "Gateway issues a new certificate from the Storage CA and the running storage loads it without a restart. S3 clients keep trusting the same Storage CA.",
+      confirmLabel: "Renew certificate",
+      variant: "default",
+    });
+    if (!ok) return false;
+    try {
+      const { outcome } = await api.renewManagedObjectStorageCertificate(managedId);
+      toast.success(
+        outcome.status === "awaiting_reload"
+          ? "Certificate delivered; the storage loads it on its own schedule"
+          : outcome.restarted
+            ? "Certificate renewed (the storage was restarted)"
+            : "Certificate renewed without a restart"
+      );
+      return true;
+    } catch (error) {
+      toast.error(managedStorageErrorMessage(error, "Failed to renew the certificate"));
+      return true;
+    }
+  };
+
   const retryProvisioning = async () => {
     if (!storage?.managed || !canRetry) return;
     try {
@@ -354,6 +390,14 @@ function StorageDetailContent({
         <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
 
         <ManagedStorageLegacyEngineBanner storage={storage} />
+
+        {storage.managed && (
+          <ManagedCertificateStatus
+            load={loadManagedCertificate}
+            onRenew={canEdit ? renewManagedCertificate : undefined}
+            refreshKey={storage.updatedAt}
+          />
+        )}
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col">
           <TabsList className="shrink-0">

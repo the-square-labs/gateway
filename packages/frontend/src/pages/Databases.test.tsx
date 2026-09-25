@@ -2,12 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
-import type {
-  DatabaseConnection,
-  ManagedDatabaseCreateInput,
-  Node,
-  ResourceFolderTreeNode,
-} from "@/types";
+import type { DatabaseConnection, ManagedDatabaseCreateInput, Node } from "@/types";
 import {
   applyDatabaseHealthSample,
   canRenderDatabaseRowsWithNodeAppearance,
@@ -59,30 +54,14 @@ function FolderForm({
       onChange={() => {}}
       folderId={folderId}
       foldersLoading={loading}
-      folderOptions={
-        [
-          {
-            id: "parent",
-            name: "Production",
-            depth: 0,
-            children: [],
-            parentId: null,
-            sortOrder: 0,
-            createdAt: "2026-09-11T00:00:00Z",
-            updatedAt: "2026-09-11T00:00:00Z",
-          },
-          {
-            id: "child",
-            name: "Analytics",
-            depth: 1,
-            children: [],
-            parentId: "parent",
-            sortOrder: 0,
-            createdAt: "2026-09-11T00:00:00Z",
-            updatedAt: "2026-09-11T00:00:00Z",
-          },
-        ] satisfies ResourceFolderTreeNode[]
-      }
+      folderChoices={{
+        allowRoot: true,
+        defaultFolderId: "",
+        folders: [
+          { id: "parent", name: "Production", depth: 0 },
+          { id: "child", name: "Analytics", depth: 1 },
+        ],
+      }}
       onFolderChange={(id) => {
         setFolderId(id);
         onFolderChange(id);
@@ -114,6 +93,40 @@ describe("managed database folder field", () => {
     await user.click(await screen.findByRole("option", { name: "No folder" }));
     expect(change).toHaveBeenLastCalledWith("");
     expect(screen.getByRole("combobox", { name: "Folder" })).toHaveTextContent("No folder");
+  });
+
+  it("offers a folder-scoped creator only the granted folder and preselects it", async () => {
+    const user = userEvent.setup();
+    const change = vi.fn();
+    function Harness() {
+      const [folderId, setFolderId] = useState("");
+      return (
+        <ManagedDatabaseCreateForm
+          draft={managedDraft}
+          nodes={[]}
+          catalog={[]}
+          capacity={{} as ManagedDatabaseCapacity}
+          step={1}
+          onChange={() => {}}
+          folderId={folderId}
+          folderChoices={{
+            allowRoot: false,
+            defaultFolderId: "child",
+            folders: [{ id: "child", name: "Analytics", depth: 1 }],
+          }}
+          onFolderChange={(id) => {
+            setFolderId(id);
+            change(id);
+          }}
+        />
+      );
+    }
+    render(<Harness />);
+
+    expect(change).toHaveBeenCalledWith("child");
+    expect(screen.getByRole("combobox", { name: "Folder" })).toHaveTextContent("Analytics");
+    await user.click(screen.getByRole("combobox", { name: "Folder" }));
+    expect(screen.queryByRole("option", { name: "No folder" })).not.toBeInTheDocument();
   });
 
   it("disables selection while folders load", () => {

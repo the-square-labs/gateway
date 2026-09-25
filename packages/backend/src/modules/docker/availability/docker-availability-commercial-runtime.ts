@@ -57,6 +57,10 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import {
+  dockerAvailabilityWorkloadFolderId,
+  missingDockerAvailabilityCandidateScopes,
+} from '@/modules/docker/availability/docker-availability-permissions.js';
 import { DockerWorkloadResolverService } from '@/modules/docker/availability/docker-workload-resolver.service.js';
 import { encodeComposeServiceTarget } from '@/modules/docker/compose/compose-managed-bindings.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
@@ -104,4 +108,6 @@ export const dockerAvailabilityCommercialRuntime = {
   EventBusService,
   PgDialect,
   loggerDockerAvailabilityService,
+  dockerAvailabilityWorkloadFolderId,
+  missingDockerAvailabilityCandidateScopes,
 };

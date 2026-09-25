@@ -307,6 +307,34 @@ describe('UpdateService foundation migration', () => {
     );
     expect(dockerService.runDetached).not.toHaveBeenCalled();
   });
+  it('tells the foundation migrator the host Docker logging defaults', async () => {
+    const dockerService = {
+      ...makeDockerService(),
+      getDaemonInfo: vi.fn().mockResolvedValue({ LoggingDriver: 'json-file' }),
+    };
+    dockerService.inspectSelf.mockResolvedValue({
+      Config: {
+        Image: 'registry.example.com/wiolett/gateway:v2.4.2',
+        Labels: {
+          'com.docker.compose.project.working_dir': '/srv/gateway',
+          'com.docker.compose.project': 'gateway',
+        },
+      },
+      HostConfig: { LogConfig: { Type: 'json-file', Config: { 'max-size': '10m', 'max-file': '5' } } },
+    } as never);
+    const artifact = makeArtifact('registry.example.com/wiolett/gateway@sha256:new');
+
+    await makeUpdateService(dockerService).performUpdate('v2.4.3', artifact);
+
+    expect(dockerService.runOneShot).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        Cmd: expect.arrayContaining(['dist/foundation-migrator.js']),
+        Env: ['GATEWAY_DOCKER_LOG_DRIVER=json-file', 'GATEWAY_DOCKER_LOG_OPTS=set'],
+      })
+    );
+  });
+
   it('runs foundation migrations from the target image before validating and recreating compose', async () => {
     const dockerService = makeDockerService();
     const service = makeUpdateService(dockerService);

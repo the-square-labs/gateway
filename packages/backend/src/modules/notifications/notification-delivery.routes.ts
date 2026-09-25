@@ -18,19 +18,14 @@ export const deliveryRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiVali
 deliveryRoutes.use('*', authMiddleware);
 
 function canRevealDeliveryPayloads(c: { get(key: 'effectiveScopes'): string[] | undefined }): boolean {
-  return hasScope(c.get('effectiveScopes') ?? [], 'notifications:manage');
+  return hasScope(c.get('effectiveScopes') ?? [], 'notifications:webhooks:manage');
 }
 
 // GET / — list deliveries
 deliveryRoutes.openapi(
   {
     ...listNotificationDeliveriesRoute,
-    middleware: requireAnyScope(
-      'notifications:deliveries:view',
-      'notifications:deliveries:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationDeliveryService);
@@ -44,12 +39,7 @@ deliveryRoutes.openapi(
 deliveryRoutes.openapi(
   {
     ...notificationDeliveryStatsRoute,
-    middleware: requireAnyScope(
-      'notifications:deliveries:view',
-      'notifications:deliveries:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationDeliveryService);
@@ -63,12 +53,7 @@ deliveryRoutes.openapi(
 deliveryRoutes.openapi(
   {
     ...getNotificationDeliveryRoute,
-    middleware: requireAnyScope(
-      'notifications:deliveries:view',
-      'notifications:deliveries:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationDeliveryService);

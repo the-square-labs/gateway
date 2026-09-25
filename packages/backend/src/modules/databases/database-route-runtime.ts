@@ -22,6 +22,7 @@ import { decodeComposeServiceTarget } from '@/modules/docker/compose/compose-man
 import { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { assertDockerResourceScope } from '@/modules/docker/docker-access.middleware.js';
 import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
+import { RenewManagedCertificateSchema } from '@/modules/managed-workloads/certificate-renewal.docs.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -59,6 +60,7 @@ import {
   getDatabaseConnectionRoute,
   getDatabaseHealthHistoryRoute,
   getManagedDatabaseBindingRuntimeRoute,
+  getManagedDatabaseCertificateRoute,
   getManagedDatabaseRoute,
   getRedisKeyRoute,
   insertPostgresRowRoute,
@@ -184,6 +186,7 @@ export const databaseRouteRuntime = {
   getDatabaseConnectionRoute,
   getDatabaseHealthHistoryRoute,
   getManagedDatabaseBindingRuntimeRoute,
+  getManagedDatabaseCertificateRoute,
   getManagedDatabaseRoute,
   getRedisKeyRoute,
   insertPostgresRowRoute,
@@ -246,6 +249,7 @@ export const databaseRouteRuntime = {
   UpdateManagedDatabaseSchema,
   UpdatePostgresColumnTypeSchema,
   UpdateSqlRowSchema,
+  RenewManagedCertificateSchema,
   DatabaseConnectionService,
   ManagedDatabaseBindingService,
   ManagedDatabaseService,

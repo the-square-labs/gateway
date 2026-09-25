@@ -57,9 +57,28 @@ export const CreateLoggingEnvironmentSchema = z.object({
   fieldSchema: fieldSchemaArray.default([]),
 });
 
-export const UpdateLoggingEnvironmentSchema = CreateLoggingEnvironmentSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  { message: 'At least one field must be provided' }
+/**
+ * Folder placement carries folder-scoped grants, so an update must never move a resource: moves go
+ * through the move-to-folder endpoints, which check folder management and edit access on the destination.
+ * Reject the key outright instead of silently ignoring it so callers do not believe the move happened.
+ */
+function rejectFolderChange<T extends z.ZodTypeAny>(schema: T) {
+  return z.preprocess((value, ctx) => {
+    if (value && typeof value === 'object' && !Array.isArray(value) && Object.hasOwn(value, 'folderId')) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['folderId'],
+        message: 'folderId cannot be changed by an update; move the resource with the move-to-folder endpoint',
+      });
+    }
+    return value;
+  }, schema);
+}
+
+export const UpdateLoggingEnvironmentSchema = rejectFolderChange(
+  CreateLoggingEnvironmentSchema.omit({ folderId: true })
+    .partial()
+    .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' })
 );
 
 export const CreateLoggingSchemaSchema = z.object({
@@ -70,9 +89,10 @@ export const CreateLoggingSchemaSchema = z.object({
   fieldSchema: fieldSchemaArray.default([]),
 });
 
-export const UpdateLoggingSchemaSchema = CreateLoggingSchemaSchema.partial().refine(
-  (value) => Object.keys(value).length > 0,
-  { message: 'At least one field must be provided' }
+export const UpdateLoggingSchemaSchema = rejectFolderChange(
+  CreateLoggingSchemaSchema.omit({ folderId: true })
+    .partial()
+    .refine((value) => Object.keys(value).length > 0, { message: 'At least one field must be provided' })
 );
 
 export const CreateLoggingTokenSchema = z.object({

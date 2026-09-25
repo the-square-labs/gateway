@@ -384,7 +384,7 @@ describe('AIService MCP audit core behavior', () => {
         'toggle_route_raw_mode',
         { routeId: 'proxy-1', enabled: true },
         // Like PUT {rawConfigEnabled}, a raw-mode toggle also needs route edit access.
-        { source: 'mcp', scopes: ['proxy:raw:toggle:proxy-1', 'proxy:edit:proxy-1'] }
+        { source: 'mcp', scopes: ['proxy:raw:write:proxy-1', 'proxy:edit:proxy-1'] }
       ),
     ]);
 

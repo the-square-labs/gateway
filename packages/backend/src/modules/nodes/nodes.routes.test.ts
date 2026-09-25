@@ -126,9 +126,39 @@ describe('nodesRoutes list access', () => {
     expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'docker' }), undefined);
   });
 
-  it('does not treat a folder qualifier as a node ID', async () => {
+  it('does not treat a folder qualifier as a node ID and lists nothing for an empty granted Docker folder', async () => {
     mocks.scopes = ['docker:containers:view:folder/f1'];
     const response = await createApp().request('/?type=docker&limit=100');
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'docker' }), {
+      allowedIds: [],
+    });
+  });
+
+  it.each([
+    'nodes:create:folder/f1',
+    'nodes:details:folder/f1',
+    'nodes:manage:folder/f1',
+  ])('lists nothing instead of failing for an empty granted node folder (%s)', async (scope) => {
+    mocks.scopes = [scope];
+    const response = await createApp().request('/?limit=100');
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }), { allowedIds: [] });
+  });
+
+  it('lists the nodes a node folder grant resolved to', async () => {
+    // Folder expansion adds the per-node grants of the nodes in the folder next to the folder grant.
+    mocks.scopes = ['nodes:details:folder/f1', 'nodes:details:node-1'];
+    const response = await createApp().request('/?limit=100');
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ limit: 100 }), {
+      allowedIds: ['node-1'],
+    });
+  });
+
+  it('does not let a folder grant of another family list nodes', async () => {
+    mocks.scopes = ['proxy:view:folder/f1'];
+    const response = await createApp().request('/?limit=100');
     expect(response.status).toBe(403);
     expect(mocks.nodesService.list).not.toHaveBeenCalled();
   });
@@ -481,8 +511,22 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).not.toHaveBeenCalled();
   });
 
-  it('allows service address changes with node config edit access', async () => {
-    mocks.scopes = [`nodes:rename:${nodeId}`, `docker:containers:config:${nodeId}`];
+  it('requires node manage access, not a Docker container scope, for Docker service address changes', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `docker:containers:environment:${nodeId}`];
+
+    const response = await createApp().request(`/${nodeId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serviceAddress: 'docker.internal' }),
+    });
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
+  });
+
+  it('allows Docker service address changes with node manage access', async () => {
+    // Node manage alone: the service address is node configuration, not the node's identity.
+    mocks.scopes = [`nodes:manage:${nodeId}`];
 
     const response = await createApp().request(`/${nodeId}`, {
       method: 'PATCH',
@@ -494,21 +538,28 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: 'docker.internal' }, 'user-1');
   });
 
-  it('allows database node endpoint address changes with rename access', async () => {
+  it.each([
+    'databases',
+    'storage',
+  ])('requires node manage access for %s node endpoint address changes', async (type) => {
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type });
+    const patch = () =>
+      createApp().request(`/${nodeId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ serviceAddress: 'database.internal' }),
+      });
+
     mocks.scopes = [`nodes:rename:${nodeId}`];
-    mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'databases' });
+    expect((await patch()).status).toBe(403);
+    expect(mocks.nodesService.update).not.toHaveBeenCalled();
 
-    const response = await createApp().request(`/${nodeId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ serviceAddress: 'database.internal' }),
-    });
-
-    expect(response.status).toBe(200);
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:manage:${nodeId}`];
+    expect((await patch()).status).toBe(200);
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: 'database.internal' }, 'user-1');
   });
 
-  it('requires node config edit access for Nginx service address changes', async () => {
+  it('requires node manage access for Nginx service address changes', async () => {
     mocks.scopes = [`nodes:rename:${nodeId}`];
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
 
@@ -522,8 +573,8 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).not.toHaveBeenCalled();
   });
 
-  it('allows Nginx service address changes with node config edit access', async () => {
-    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+  it('allows Nginx service address changes with node manage access', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:manage:${nodeId}`];
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
 
     const response = await createApp().request(`/${nodeId}`, {
@@ -536,8 +587,8 @@ describe('nodesRoutes service address access', () => {
     expect(mocks.nodesService.update).toHaveBeenCalledWith(nodeId, { serviceAddress: '8.8.8.8' }, 'user-1');
   });
 
-  it('applies node config edit access to the canonical service address list', async () => {
-    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+  it('applies node manage access to the canonical service address list', async () => {
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:manage:${nodeId}`];
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
     const serviceAddresses = ['8.8.8.8', '1.1.1.1', '9.9.9.9'];
 
@@ -552,7 +603,7 @@ describe('nodesRoutes service address access', () => {
   });
 
   it('requires domain edit access before confirming assigned DNS target changes', async () => {
-    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:config:edit:${nodeId}`];
+    mocks.scopes = [`nodes:rename:${nodeId}`, `nodes:manage:${nodeId}`];
     mocks.nodesService.get.mockResolvedValue({ id: nodeId, type: 'nginx' });
 
     const response = await createApp().request(`/${nodeId}`, {
@@ -575,8 +626,8 @@ describe('nodesRoutes Build Worker settings access', () => {
     mocks.nodesService.update.mockResolvedValue({ id: nodeId, type: 'builder' });
   });
 
-  it('allows config-edit-only access to update Build Worker settings', async () => {
-    mocks.scopes = [`nodes:config:edit:${nodeId}`];
+  it('allows manage-only access to update Build Worker settings', async () => {
+    mocks.scopes = [`nodes:manage:${nodeId}`];
     const builderSettings = { parallelism: 2, timeoutMinutes: 45 };
 
     const response = await createApp().request(`/${nodeId}`, {
@@ -602,8 +653,8 @@ describe('nodesRoutes Build Worker settings access', () => {
     expect(mocks.nodesService.update).not.toHaveBeenCalled();
   });
 
-  it('does not let config-edit access modify the node identity', async () => {
-    mocks.scopes = [`nodes:config:edit:${nodeId}`];
+  it('does not let manage access modify the node identity', async () => {
+    mocks.scopes = [`nodes:manage:${nodeId}`];
 
     const response = await createApp().request(`/${nodeId}`, {
       method: 'PATCH',
@@ -643,5 +694,61 @@ describe('nodesRoutes enrollment tokens under impersonation', () => {
 
     expect(response.status).toBe(403);
     expect(mocks.nodesService.regenerateEnrollmentToken).not.toHaveBeenCalled();
+  });
+});
+
+describe('nodesRoutes enrollment token regeneration access', () => {
+  const nodeId = '11111111-1111-4111-8111-111111111111';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.impersonating = false;
+    mocks.nodesService.get.mockResolvedValue({ id: nodeId, folderId: 'folder-1' });
+    mocks.nodesService.regenerateEnrollmentToken.mockResolvedValue({ enrollmentToken: 'gw_enroll_new' });
+  });
+
+  const regenerate = () => createApp().request(`/${nodeId}/enrollment-token`, { method: 'POST' });
+
+  it.each([
+    ['nodes:create'],
+    [`nodes:create:${nodeId}`],
+    ['nodes:create:folder/folder-1'],
+    // A node manager (what a nodes:manage folder grant resolves to) may finish the enrollment too.
+    [`nodes:manage:${nodeId}`],
+  ])('lets a creator of the node destination or its manager (%s) regenerate the token', async (scope) => {
+    mocks.scopes = [scope];
+
+    const response = await regenerate();
+
+    expect(response.status).toBe(200);
+    expect(mocks.nodesService.regenerateEnrollmentToken).toHaveBeenCalledWith(nodeId, 'user-1');
+  });
+
+  it('refuses a creation grant on another folder', async () => {
+    mocks.scopes = ['nodes:create:folder/folder-2'];
+
+    const response = await regenerate();
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.regenerateEnrollmentToken).not.toHaveBeenCalled();
+  });
+
+  it('refuses without any creation or manage grant before looking the node up', async () => {
+    mocks.scopes = [`nodes:details:${nodeId}`, `nodes:config:view:${nodeId}`, 'nodes:manage:other-node'];
+
+    const response = await regenerate();
+
+    expect(response.status).toBe(403);
+    expect(mocks.nodesService.get).not.toHaveBeenCalled();
+    expect(mocks.nodesService.regenerateEnrollmentToken).not.toHaveBeenCalled();
+  });
+
+  it('hides a missing node from a folder-only creator', async () => {
+    mocks.scopes = ['nodes:create:folder/folder-1'];
+    mocks.nodesService.get.mockRejectedValue(new AppError(404, 'NOT_FOUND', 'Node not found'));
+
+    const response = await regenerate();
+
+    expect(response.status).toBe(403);
   });
 });

@@ -26,10 +26,7 @@ function canAccess(scopes: string[], requiredScopes: string[]): boolean {
 
 function dashboardStatsOptions(scopes: string[]) {
   return {
-    allowedCaTypes: [
-      hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-      hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-    ].filter((type): type is 'root' | 'intermediate' => !!type),
+    allowedCaTypes: (hasScope(scopes, 'pki:ca:view') ? ['root', 'intermediate'] : []) as Array<'root' | 'intermediate'>,
     allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
     allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
       ? undefined
@@ -85,23 +82,14 @@ const operationalResources: ResourceDefinition[] = [
     uri: 'gateway://overview',
     title: 'Gateway overview',
     description: 'Dashboard-level counts filtered to the token scopes.',
-    requiredScopes: [
-      'proxy:view',
-      'ssl:cert:view',
-      'pki:cert:view',
-      'pki:ca:view:root',
-      'pki:ca:view:intermediate',
-      'nodes:details',
-    ],
+    requiredScopes: ['proxy:view', 'ssl:cert:view', 'pki:cert:view', 'pki:ca:view', 'nodes:details'],
     async read(_uri, scopes) {
       const stats = await container.resolve(MonitoringService).getDashboardStats(dashboardStatsOptions(scopes));
       const filtered: Record<string, unknown> = { generatedAt: new Date().toISOString() };
       if (hasScopeBase(scopes, 'proxy:view')) filtered.proxyHosts = stats.proxyHosts;
       if (hasScopeBase(scopes, 'ssl:cert:view')) filtered.sslCertificates = stats.sslCertificates;
       if (hasScopeBase(scopes, 'pki:cert:view')) filtered.pkiCertificates = stats.pkiCertificates;
-      if (hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate')) {
-        filtered.cas = stats.cas;
-      }
+      if (hasScope(scopes, 'pki:ca:view')) filtered.cas = stats.cas;
       if (hasScopeBase(scopes, 'nodes:details')) filtered.nodes = stats.nodes;
       return filtered;
     },

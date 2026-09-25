@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeForResource } from '@/lib/permissions.js';
 import { sanitizeFilename } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
@@ -13,7 +13,7 @@ import {
 import type { CAService } from '@/modules/pki/ca.service.js';
 import { ExportService } from '@/modules/pki/export.service.js';
 import type { User } from '@/types.js';
-import { caTypeRevokeScope, caTypeViewScope } from './ai.service-helpers.js';
+import { caTypeRevokeScope, caViewScope } from './ai.service-helpers.js';
 
 export const PKI_CA_TOOL_NAMES = new Set([
   'list_cas',
@@ -41,21 +41,20 @@ export async function executePkiCaTool(
   switch (toolName) {
     case 'list_cas': {
       // Mirrors GET /cas: system CAs need admin:details:certificates, and a CA
-      // is listed for its type view scope or a per-CA issue grant.
+      // is listed for pki:ca:view (broad or on that CA) or a per-CA issue grant.
       const showSystem = a.showSystem === true;
       if (showSystem && !includeSystem) {
         throw new AppError(403, 'FORBIDDEN', 'Missing required scope: admin:details:certificates');
       }
       const issuableCaIds = new Set(getResourceScopedIds(user.scopes, 'pki:cert:issue'));
       return (await context.caService.getCATree(showSystem)).filter(
-        (ca: { id: string; type: string }) =>
-          hasScope(user.scopes, caTypeViewScope(ca.type)) || issuableCaIds.has(ca.id)
+        (ca: { id: string; type: string }) => hasScope(user.scopes, caViewScope(ca.id)) || issuableCaIds.has(ca.id)
       );
     }
     case 'get_ca': {
       const ca = await context.caService.getCA(a.caId, { includeSystem });
-      if (!hasScope(user.scopes, caTypeViewScope(ca.type))) {
-        throw new Error(`PERMISSION_DENIED: Missing required scope ${caTypeViewScope(ca.type)}`);
+      if (!hasScope(user.scopes, caViewScope(ca.id))) {
+        throw new Error(`PERMISSION_DENIED: Missing required scope ${caViewScope(ca.id)}`);
       }
       return ca;
     }
@@ -81,8 +80,8 @@ export async function executePkiCaTool(
 
 async function manageCa(context: PkiCaToolContext, user: User, a: Record<string, any>, includeSystem: boolean) {
   if (a.operation === 'update') {
-    // PUT /cas/{id} requires pki:ca:create:root for every CA type.
-    requireScope(user, 'pki:ca:create:root');
+    // PUT /cas/{id} requires pki:ca:edit (broad or on that CA) for every CA type.
+    requireCaScope(user, 'pki:ca:edit', String(a.caId ?? ''));
     return context.caService.updateCA(
       a.caId,
       UpdateCASchema.parse({
@@ -101,7 +100,7 @@ async function manageCa(context: PkiCaToolContext, user: User, a: Record<string,
   }
   if (a.operation === 'export_key') {
     // Mirrors POST /cas/{id}/export-key: PKCS#12 of the CA key and certificate, audited as ca.export_key.
-    requireScope(user, 'pki:ca:create:root');
+    requireCaScope(user, 'pki:ca:export', String(a.caId ?? ''));
     const { passphrase } = ExportCAKeySchema.parse({ passphrase: a.passphrase });
     const { ca, privateKeyPem } = await context.caService.getCASigningMaterials(a.caId);
     const p12 = await container.resolve(ExportService).exportCAKey(privateKeyPem, ca.certificatePem, passphrase);
@@ -128,6 +127,8 @@ async function requireCaRevokeScope(context: PkiCaToolContext, user: User, caId:
   }
 }
 
-function requireScope(user: User, scope: string) {
-  if (!hasScope(user.scopes, scope)) throw new Error(`PERMISSION_DENIED: Missing required scope ${scope}`);
+function requireCaScope(user: User, baseScope: string, caId: string) {
+  if (!hasScopeForResource(user.scopes, baseScope, caId)) {
+    throw new Error(`PERMISSION_DENIED: Missing required scope ${baseScope}:${caId}`);
+  }
 }

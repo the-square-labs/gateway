@@ -76,25 +76,25 @@ describe('integration connector AI/MCP tools', () => {
 
     expect(names(['integrations:cloudflare:view'])).toContain('list_integration_connectors');
     expect(names(['integrations:cloudflare:view'])).not.toContain('sync_integration_connector');
-    expect(names(['integrations:gitlab:sync'])).toContain('sync_integration_connector');
+    expect(names(['integrations:gitlab:manage'])).toContain('sync_integration_connector');
     expect(names(['integrations:cloudflare:sync'])).toContain('sync_integration_connector');
-    expect(names(['integrations:github:sync'])).toContain('sync_integration_connector');
+    expect(names(['integrations:github:manage'])).toContain('sync_integration_connector');
     expect(names(['integrations:cloudflare:manage'])).toEqual(
       expect.arrayContaining(['list_integration_connectors', 'sync_integration_connector'])
     );
     expect(names(['docker:volumes:view'])).not.toContain('list_integration_connectors');
     expect(
-      listAvailableMcpTools(['integrations:gitlab:sync']).find((tool) => tool.name === 'sync_integration_connector')
+      listAvailableMcpTools(['integrations:gitlab:manage']).find((tool) => tool.name === 'sync_integration_connector')
     ).toMatchObject({ category: 'Integrations', destructive: false });
   });
 
-  it('syncs a GitLab connector with integrations:gitlab:sync', async () => {
+  it('syncs a GitLab connector with integrations:gitlab:manage', async () => {
     const integrations = { syncGitLabConnector: vi.fn().mockResolvedValue({ status: 'success', projectCount: 3 }) };
     mockServices(integrations);
 
     await expect(
       createService().executeTool(
-        { ...BASE_USER, scopes: ['integrations:gitlab:sync'] },
+        { ...BASE_USER, scopes: ['integrations:gitlab:manage'] },
         'sync_integration_connector',
         { provider: 'gitlab', connectorId: CONNECTOR_ID }
       )
@@ -111,7 +111,7 @@ describe('integration connector AI/MCP tools', () => {
     const service = createService();
 
     const cloudflare = await service.executeTool(
-      { ...BASE_USER, scopes: ['integrations:gitlab:sync'] },
+      { ...BASE_USER, scopes: ['integrations:gitlab:manage'] },
       'sync_integration_connector',
       { provider: 'cloudflare', connectorId: CONNECTOR_ID }
     );
@@ -155,10 +155,10 @@ describe('integration connector AI/MCP tools', () => {
     mockServices(integrations);
 
     const result = await createService().executeTool(
-      { ...BASE_USER, scopes: ['integrations:cloudflare:manage', 'integrations:gitlab:sync'] },
+      { ...BASE_USER, scopes: ['integrations:cloudflare:manage', 'integrations:gitlab:manage'] },
       'sync_integration_connector',
       { provider: 'cloudflare', connectorId: CONNECTOR_ID },
-      { source: 'mcp', scopes: ['integrations:gitlab:sync'] }
+      { source: 'mcp', scopes: ['integrations:gitlab:manage'] }
     );
 
     expect(result.error).toContain('Missing required connector scope');

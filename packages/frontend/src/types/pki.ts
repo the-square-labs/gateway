@@ -168,6 +168,8 @@ export interface IssueCertificateRequest {
   sans: string[];
   keyAlgorithm: KeyAlgorithm;
   validityDays: number;
+  /** End the certificate with the CA instead of failing when it would outlive the CA. */
+  clampToCaValidity?: boolean;
   subjectDnFields?: SubjectDnFields;
 }
 
@@ -178,4 +180,41 @@ export interface IssueCertFromCSRRequest {
   csrPem: string;
   validityDays: number;
   overrideSans?: string[];
+}
+
+/**
+ * TLS certificate of a managed storage cluster or managed database and its
+ * automatic renewal (GET /managed-storage/{id}/certificate,
+ * GET /databases/managed/{id}/certificate).
+ */
+export interface ManagedCertificateStatus {
+  ownerType: "managed_storage" | "managed_database";
+  ownerId: string;
+  certificate: {
+    id: string;
+    serialNumber: string;
+    notBefore: string;
+    notAfter: string;
+    daysRemaining: number;
+    sans: string[];
+  } | null;
+  renewal: {
+    /** idle | delivering | awaiting_reload | waiting_for_daemon | ca_limited | failed */
+    state: string;
+    reason: string | null;
+    due: boolean;
+    dueReason: string | null;
+    urgent: boolean;
+    hotReloadSupported: boolean;
+    skipReason: string | null;
+    attempts: number;
+    lastAttemptAt: string | null;
+    nextAttemptAt: string | null;
+    deliveredAt: string | null;
+    lastSuccessAt: string | null;
+    lastError: string | null;
+    lastMethod: string | null;
+    lastRestarted: boolean;
+    pendingSerial: string | null;
+  };
 }

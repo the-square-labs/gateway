@@ -341,7 +341,11 @@ export class DockerManagementService {
     userId?: string
   ): Promise<void> {
     const resourceId = await this.accessResourceService?.ensureContainer(nodeId, name, runtimeId, false);
-    if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`);
+    if (resourceId)
+      await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
+        folderId: folderId ?? null,
+        nodeId,
+      });
     await placeCreatedDockerResource(this.db, nodeId, 'container', name, folderId);
     this.emitContainer(nodeId, name, runtimeId, 'created', { source: 'gwca-import' });
   }
@@ -425,8 +429,14 @@ export class DockerManagementService {
             'Pulled image identity could not be resolved'
           );
         }
-        if (existingImageIds && !existingImageIds.has(imageId))
-          await grantCreatedResourcePermissions(userId, 'docker:images', `${nodeId}/${imageId}`);
+        // Only an image this pull created belongs to the caller. Re-pulling an image that already existed must
+        // neither grant it nor move it out of the folder it sits in (that would hand it to the puller's folder).
+        const createdByPull = !!existingImageIds && !existingImageIds.has(imageId);
+        if (!createdByPull) return;
+        await grantCreatedResourcePermissions(userId, 'docker:images', `${nodeId}/${imageId}`, {
+          folderId: folderId ?? null,
+          nodeId,
+        });
         if (folderId)
           await this.folderService?.moveResourcesToFolder(
             { resourceType: 'image', folderId, items: [{ nodeId, resourceKey: imageId }] },
@@ -456,7 +466,11 @@ export class DockerManagementService {
         userId: string
       ) => {
         const resourceId = await this.networkAccessResourceService?.ensureNetwork(nodeId, networkId);
-        if (resourceId) await grantCreatedResourcePermissions(userId, 'docker:networks', `${nodeId}/${resourceId}`);
+        if (resourceId)
+          await grantCreatedResourcePermissions(userId, 'docker:networks', `${nodeId}/${resourceId}`, {
+            folderId: folderId ?? null,
+            nodeId,
+          });
         if (folderId) {
           await this.folderService?.moveResourcesToFolder(
             { resourceType: 'network', folderId, items: [{ nodeId, resourceKey: networkId }] },
@@ -474,7 +488,10 @@ export class DockerManagementService {
         folderId: string | null | undefined,
         userId: string
       ) => {
-        await grantCreatedResourcePermissions(userId, 'docker:volumes', `${nodeId}/${volumeName}`);
+        await grantCreatedResourcePermissions(userId, 'docker:volumes', `${nodeId}/${volumeName}`, {
+          folderId: folderId ?? null,
+          nodeId,
+        });
         if (!folderId) return;
         await this.folderService?.moveResourcesToFolder(
           { resourceType: 'volume', folderId, items: [{ nodeId, resourceKey: volumeName }] },
@@ -1594,6 +1611,34 @@ export class DockerManagementService {
     if (actorScopes) {
       await assertDockerCreationAccess(this.db, actorScopes, 'docker:images:pull', nodeId, folderId, 'image');
     }
+    return this.pullImageNow(nodeId, imageRef, registryAuth, folderId, userId);
+  }
+
+  /**
+   * Pull the image of a container or deployment that is about to be created at `workloadFolderId` (a container
+   * folder) or at the node root. Creating that workload pulls the image anyway, so the destination's
+   * docker:containers:create authorizes the pull; docker:images:pull is not needed. The image is not placed into
+   * any image folder: it belongs to no image folder the caller could pick.
+   */
+  async pullImageForWorkload(
+    nodeId: string,
+    imageRef: string,
+    registryAuth: string | undefined,
+    workloadFolderId: string | null | undefined,
+    userId: string,
+    actorScopes: string[]
+  ) {
+    await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, workloadFolderId);
+    return this.pullImageNow(nodeId, imageRef, registryAuth, null, userId);
+  }
+
+  private async pullImageNow(
+    nodeId: string,
+    imageRef: string,
+    registryAuth: string | undefined,
+    folderId: string | null | undefined,
+    userId: string | undefined
+  ) {
     await this.validateDockerNode(nodeId);
     const images = userId ? await this.listAllImages(nodeId) : [];
     if (!Array.isArray(images))

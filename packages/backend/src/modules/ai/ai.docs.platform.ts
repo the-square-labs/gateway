@@ -215,7 +215,7 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 
   gitlab: `# GitLab Integrations
 
-Gateway GitLab connectors are configured by admins in Settings -> Integrations. Embedded AI users authorize each connector with their own encrypted PAT unless they have the explicit integrations:gitlab:system scope. GitLab tools are not exposed through Gateway MCP; external agents should configure their own GitLab MCP connection.
+Gateway GitLab connectors are configured by admins in Settings -> Integrations. Embedded AI users authorize each connector with their own encrypted PAT unless they have the explicit integrations:gitlab:use scope (use the connector's system credential). GitLab tools are not exposed through Gateway MCP; external agents should configure their own GitLab MCP connection.
 
 ## Discovery
 - Use gitlab_list_connectors to find enabled connectors.
@@ -242,7 +242,7 @@ Gateway GitLab connectors are configured by admins in Settings -> Integrations. 
 - Use pipeline/job tools to inspect CI status and bounded job logs.
 
 ## Variables, Webhooks, and Deploy Tokens
-- gitlab_list_project_variables returns metadata only; variable values are never returned.
+- gitlab_list_project_variables returns metadata only (keys and flags, never values) and needs integrations:gitlab:repo:read. github_list_actions_variables returns values, which are secrets, so it needs integrations:github:repo:write.
 - gitlab_set_project_variable accepts a secret value but the value must not be repeated in responses or explanations.
 - gitlab_delete_project_variable always requires explicit tool approval.
 - Webhook management uses GitLab project webhook tools and must respect connector allowlist and Gateway scopes.
@@ -339,19 +339,19 @@ Available in all templates:
 - \`{{#if (gt metric.value 95)}}🔥 CRITICAL{{else}}⚠️ Warning{{/if}}: {{alert.name}}\`
 
 ## API Endpoints
-- \`GET /api/notifications/alert-rules\` — list rules (notifications:alerts:view or notifications:manage)
-- \`GET /api/notifications/alert-rules/:id\` — view rule (notifications:alerts:view or notifications:manage)
-- \`POST /api/notifications/alert-rules\` — create rule (notifications:alerts:create or notifications:manage)
-- \`PUT /api/notifications/alert-rules/:id\` — update rule (notifications:alerts:edit or notifications:manage)
-- \`DELETE /api/notifications/alert-rules/:id\` — delete rule (notifications:alerts:delete or notifications:manage)
+- \`GET /api/notifications/alert-rules\` — list rules (notifications:alerts:view; notifications:alerts:manage implies it)
+- \`GET /api/notifications/alert-rules/:id\` — view rule (notifications:alerts:view)
+- \`POST /api/notifications/alert-rules\` — create rule (notifications:alerts:manage)
+- \`PUT /api/notifications/alert-rules/:id\` — update rule (notifications:alerts:manage)
+- \`DELETE /api/notifications/alert-rules/:id\` — delete rule (notifications:alerts:manage)
 - \`GET /api/notifications/alert-rules/categories\` — list categories with metrics/events/variables
-- \`GET /api/notifications/webhooks\` — list webhooks (notifications:webhooks:view or notifications:manage)
-- \`GET /api/notifications/webhooks/:id\` — view webhook (notifications:webhooks:view or notifications:manage)
-- \`POST /api/notifications/webhooks\` — create webhook (notifications:webhooks:create or notifications:manage)
-- \`PUT /api/notifications/webhooks/:id\` — update webhook (notifications:webhooks:edit or notifications:manage)
-- \`DELETE /api/notifications/webhooks/:id\` — delete webhook (notifications:webhooks:delete or notifications:manage)
+- \`GET /api/notifications/webhooks\` — list webhooks (notifications:webhooks:view; notifications:webhooks:manage implies it and reveals URL and headers)
+- \`GET /api/notifications/webhooks/:id\` — view webhook (notifications:webhooks:view)
+- \`POST /api/notifications/webhooks\` — create webhook (notifications:webhooks:manage)
+- \`PUT /api/notifications/webhooks/:id\` — update webhook (notifications:webhooks:manage)
+- \`DELETE /api/notifications/webhooks/:id\` — delete webhook (notifications:webhooks:manage)
 - \`POST /api/notifications/webhooks/:id/test\` — send test delivery
-- \`GET /api/notifications/deliveries\` — list delivery log (notifications:deliveries:view or notifications:manage)
-- \`GET /api/notifications/deliveries/:id\` — view delivery log entry (notifications:deliveries:view or notifications:manage)
+- \`GET /api/notifications/deliveries\` — list delivery log (notifications:webhooks:view)
+- \`GET /api/notifications/deliveries/:id\` — view delivery log entry (notifications:webhooks:view; payloads need notifications:webhooks:manage)
 - \`GET /api/notifications/deliveries/stats\` — delivery statistics`,
 };

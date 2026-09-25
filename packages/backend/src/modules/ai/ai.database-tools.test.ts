@@ -12,14 +12,8 @@ import { assertToolCallAllowedUnderImpersonation, isImpersonationBlockedToolCall
 const MANAGED_ID = 'managed-1';
 const CONNECTION_ID = 'connection-1';
 const BINDING_TARGET = { targetNodeId: 'node-1', targetType: 'deployment', targetResourceId: 'deployment-1' } as const;
-const BINDING_SCOPES = [
-  'docker:containers:edit',
-  'docker:containers:manage',
-  'docker:containers:secrets',
-  'docker:networks:create',
-  'docker:networks:edit',
-  'docker:networks:delete',
-];
+// Same requirement for every target type: environment and secrets, no network scopes.
+const BINDING_SCOPES = ['docker:containers:environment', 'docker:containers:secrets'];
 
 const user = (scopes: string[]) => ({ id: 'user-1', scopes }) as User;
 
@@ -177,6 +171,21 @@ describe('managed database credential, log and runtime tools', () => {
       })
     ).resolves.toEqual([{ id: MANAGED_ID, databaseConnectionId: CONNECTION_ID }]);
   });
+
+  it('lets a creator read the catalog and an empty managed list, like the wizard routes', async () => {
+    registerManagedDatabase({
+      listCatalog: vi.fn().mockReturnValue([{ type: 'postgres' }]),
+      list: vi.fn().mockResolvedValue([{ id: MANAGED_ID, databaseConnectionId: CONNECTION_ID }]),
+    });
+    const creator = user(['databases:create:folder/folder-1']);
+
+    await expect(
+      executeResourceSetupTool(creator, 'manage_managed_database', { operation: 'catalog' })
+    ).resolves.toEqual([{ type: 'postgres' }]);
+    await expect(executeResourceSetupTool(creator, 'manage_managed_database', { operation: 'list' })).resolves.toEqual(
+      []
+    );
+  });
 });
 
 describe('database, storage and backup tool argument validation', () => {
@@ -202,6 +211,16 @@ describe('database, storage and backup tool argument validation', () => {
           databaseId: 'db-1',
           runId: 'run-1',
           config: { executorNodeId: 'node-1', newManagedDatabaseName: 'copy', targetDatabaseName: 'app' },
+        },
+      ],
+      [
+        'manage_database_backups',
+        {
+          action: 'restore',
+          databaseId: 'db-1',
+          runId: 'run-1',
+          // Restore into a folder, like the REST restore body.
+          config: { executorNodeId: 'node-1', newManagedDatabaseName: 'copy', folderId: 'folder-1' },
         },
       ],
     ] as const) {
@@ -265,6 +284,49 @@ describe('credential tool impersonation policy', () => {
       expect(() => assertToolCallAllowedUnderImpersonation('manage_managed_database', args)).toThrow(
         expect.objectContaining({ statusCode: 403, code: 'IMPERSONATION_CREDENTIAL_ISSUANCE_FORBIDDEN' })
       );
+    });
+  });
+});
+
+describe('managed database links on a deployment that rewrite its environment', () => {
+  it('needs edit and manage on the deployment, like the unbind route', async () => {
+    const { bindings } = registerManagedDatabase();
+    const remove = vi.fn().mockResolvedValue({ success: true });
+    Object.assign(bindings, { delete: remove });
+    const unlink = (scopes: string[]) =>
+      run([`databases:edit:${CONNECTION_ID}`, ...scopes], {
+        operation: 'delete_binding',
+        bindingId: 'binding-1',
+        targetEnvironment: { APP_MODE: 'prod' },
+      });
+
+    await expect(
+      unlink(['docker:containers:environment:node-1/deployment-1', 'docker:containers:secrets:node-1/deployment-1'])
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(remove).not.toHaveBeenCalled();
+
+    await expect(
+      unlink([
+        'docker:containers:environment:node-1/deployment-1',
+        'docker:containers:secrets:node-1/deployment-1',
+        'docker:containers:edit:node-1/deployment-1',
+        'docker:containers:manage:node-1/deployment-1',
+      ])
+    ).resolves.toEqual({ success: true });
+    expect(remove).toHaveBeenCalledWith(MANAGED_ID, 'binding-1', 'user-1', { targetEnvironment: { APP_MODE: 'prod' } });
+  });
+
+  it('needs manage for any deployment unlink, which rolls it out', async () => {
+    const { bindings } = registerManagedDatabase();
+    const remove = vi.fn().mockResolvedValue({ success: true });
+    Object.assign(bindings, { delete: remove });
+    const unlink = (scopes: string[]) =>
+      run([`databases:edit:${CONNECTION_ID}`, ...scopes], { operation: 'delete_binding', bindingId: 'binding-1' });
+
+    await expect(unlink(BINDING_SCOPES)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(remove).not.toHaveBeenCalled();
+    await expect(unlink([...BINDING_SCOPES, 'docker:containers:manage:node-1/deployment-1'])).resolves.toEqual({
+      success: true,
     });
   });
 });

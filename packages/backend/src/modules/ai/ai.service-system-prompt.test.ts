@@ -127,7 +127,7 @@ describe('AIService system prompt', () => {
     const prompt = await service.buildSystemPrompt(
       {
         ...BASE_USER,
-        scopes: ['pki:ca:view:root', 'pki:cert:view', 'proxy:view', 'ssl:cert:view', 'nodes:details'],
+        scopes: ['pki:ca:view:root-1', 'pki:cert:view', 'proxy:view', 'ssl:cert:view', 'nodes:details'],
       },
       {
         route: '/proxy/hosts/host-1?tab=settings',
@@ -137,7 +137,8 @@ describe('AIService system prompt', () => {
     );
 
     expect(prompt).toContain('User: Admin (admin). Date:');
-    expect(prompt).toContain('- Certificate Authorities: 2 total (2 active)');
+    // CA counts are not filtered per CA, so a CA-scoped grant lists only its CA below.
+    expect(prompt).not.toContain('- Certificate Authorities:');
     expect(prompt).toContain('- PKI Certificates: 5 total (4 active, 1 revoked, 0 expired)');
     expect(prompt).toContain('- Routes: 7 total (6 enabled, 5 online)');
     expect(prompt).toContain('- SSL Certificates: 3 total (2 active, 1 expiring soon)');

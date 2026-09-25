@@ -9,9 +9,10 @@ interface CertificateAuthoritiesCardProps {
 }
 
 export function CertificateAuthoritiesCard({ cas, hasScope }: CertificateAuthoritiesCardProps) {
-  if (!hasScope("pki:ca:view:root") && !hasScope("pki:ca:view:intermediate")) return null;
-
-  const visibleCas = (cas || []).filter((ca) => ca.status === "active").slice(0, 6);
+  // pki:ca:view is CA-scopable: show the CAs the caller may open.
+  const visibleCas = (cas || [])
+    .filter((ca) => ca.status === "active" && hasScope(`pki:ca:view:${ca.id}`))
+    .slice(0, 6);
   if (visibleCas.length === 0) return null;
 
   return (

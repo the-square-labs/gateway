@@ -42,6 +42,7 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { type AppNavigationItemId, visibleNavigationGroups } from "@/lib/app-navigation";
+import { hasCreationDestination } from "@/lib/creation-folders";
 import { setDevForcedUpdateMode } from "@/lib/dev-force-updates";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import {
@@ -470,28 +471,12 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         visible: loggingEnabled && hasScopedAccess("logs:schemas:view"),
       },
       {
-        id: "logging-settings",
-        label: "Logging settings",
-        href: "/logging/settings",
-        icon: Settings,
-        parentId: "logging",
-        visible: loggingEnabled && hasScope("logs:manage"),
-      },
-      {
         id: "notifications-alerts",
         label: "Notification alert rules",
         href: "/notifications/alerts",
         icon: Bell,
         parentId: "notifications",
-        visible:
-          hasAnyScope(
-            "notifications:view",
-            "notifications:manage",
-            "notifications:alerts:view",
-            "notifications:alerts:create",
-            "notifications:alerts:edit",
-            "notifications:alerts:delete"
-          ) || hasScopedAccess("notifications:alerts:view"),
+        visible: hasAnyScope("notifications:alerts:view", "notifications:alerts:manage"),
       },
       {
         id: "notifications-webhooks",
@@ -499,15 +484,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         href: "/notifications/webhooks",
         icon: Webhook,
         parentId: "notifications",
-        visible:
-          hasAnyScope(
-            "notifications:view",
-            "notifications:manage",
-            "notifications:webhooks:view",
-            "notifications:webhooks:create",
-            "notifications:webhooks:edit",
-            "notifications:webhooks:delete"
-          ) || hasScopedAccess("notifications:webhooks:view"),
+        visible: hasAnyScope("notifications:webhooks:view", "notifications:webhooks:manage"),
       },
       {
         id: "notifications-deliveries",
@@ -515,9 +492,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         href: "/notifications/deliveries",
         icon: ScrollText,
         parentId: "notifications",
-        visible:
-          hasAnyScope("notifications:view", "notifications:manage") ||
-          hasScopedAccess("notifications:deliveries:view"),
+        visible: hasAnyScope("notifications:webhooks:view", "notifications:webhooks:manage"),
       },
       {
         id: "status-services",
@@ -773,6 +748,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
     return actions;
   }, [activePageResource, hasScope, navigate, resolvedPageRouteKey]);
 
+  const canCreateSslCertificate = hasCreationDestination(user?.scopes ?? [], "ssl:cert:issue");
   const primaryActions = useMemo<PaletteEntry[]>(() => {
     const actions: PaletteEntry[] = [
       {
@@ -793,7 +769,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
         action: () => navigate("/proxy-hosts/new"),
       });
     }
-    if (hasScope("ssl:cert:issue")) {
+    if (canCreateSslCertificate) {
       actions.push({
         id: "action:new-ssl",
         label: "New SSL certificate",
@@ -828,7 +804,7 @@ export function CommandPalette({ open, onOpenChange }: CommandPaletteProps) {
       },
     });
     return actions;
-  }, [hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
+  }, [canCreateSslCertificate, hasScope, hasScopedAccess, navigate, pkiEnabled, toggleSidebar]);
 
   const adaptiveQuickActions = useMemo(() => {
     const candidates = [...currentPageActions, ...contextActions, ...primaryActions].filter(

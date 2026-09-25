@@ -61,16 +61,17 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       connectorId: connector.id,
       connectorName: connector.name,
       operation: 'repository.list',
-      requiredScope: 'integrations:github:view',
+      requiredScope: 'integrations:github:repo:read',
     });
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
-    if (hasScope(user.scopes, 'integrations:github:system')) {
+    if (hasScope(user.scopes, 'integrations:github:use')) {
       if (!connector.encryptedToken) {
         throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
       }
       return { connector, token: await this.resolveGitHubConnectorToken(connector) };
     }
-    this.assertPersonalGitCredentialAllowed(user, 'github', connector);
+    // Without integrations:github:use the caller acts with its owner's personal credential (set up in
+    // AI Workspace). A token may use it too: its owner's AI Workspace access is not required.
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
     if (!personal) throw this.gitUserCredentialRequired('github', connector);
     return { connector, token: personal.auth.token };
@@ -241,9 +242,10 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
   protected async withGenericGitCheckout<T>(
     user: User,
     input: { connectorId: string; repositoryUrl: string; ref?: string },
-    callback: (context: GenericGitExecutionContext) => Promise<T>
+    callback: (context: GenericGitExecutionContext) => Promise<T>,
+    access: 'read' | 'write' = 'read'
   ): Promise<T> {
-    const auth = await this.resolveGitRepository(user, 'git', input.connectorId, input.repositoryUrl);
+    const auth = await this.resolveGitRepository(user, 'git', input.connectorId, input.repositoryUrl, access);
     const temporaryRoot = await mkdtemp(join(tmpdir(), 'gateway-git-'));
     const checkoutDir = join(temporaryRoot, 'checkout');
     const askpassPath = join(temporaryRoot, 'askpass.sh');
@@ -340,11 +342,17 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     });
   }
 
+  /**
+   * Repository reads need `integrations:<provider>:repo:read`; file, secret and variable writes, and
+   * reading CI/CD variables (their values are secrets), need `integrations:<provider>:repo:write`
+   * (the same verbs as GitLab). Connector admin (`:manage`) is not involved.
+   */
   protected async resolveGitRepository(
     user: User,
     provider: 'github' | 'git',
     connectorId: string,
-    rawRepositoryUrl: string
+    rawRepositoryUrl: string,
+    access: 'read' | 'write' = 'read'
   ): Promise<{ connector: ConnectorRow; repositoryUrl: string; username: string; token: string }> {
     const connector = await this.getConnectorRow(connectorId, provider);
     assertConnectorOperationAccess({
@@ -352,8 +360,8 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       provider,
       connectorId: connector.id,
       connectorName: connector.name,
-      operation: 'repository.read',
-      requiredScope: `integrations:${provider}:view`,
+      operation: access === 'write' ? 'repository.write' : 'repository.read',
+      requiredScope: `integrations:${provider}:repo:${access}`,
     });
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
     const repositoryUrl = this.normalizeRepositoryUrl(rawRepositoryUrl);
@@ -369,7 +377,7 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     if (!allowed) {
       throw new AppError(403, 'REPOSITORY_NOT_ALLOWED', 'Repository is not included in this connector');
     }
-    if (hasScope(user.scopes, `integrations:${provider}:system`)) {
+    if (hasScope(user.scopes, `integrations:${provider}:use`)) {
       if (!connector.encryptedToken) {
         throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
       }
@@ -380,7 +388,6 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
         token: await this.resolveGitHubConnectorToken(connector),
       };
     }
-    this.assertPersonalGitCredentialAllowed(user, provider, connector);
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
     if (!personal) throw this.gitUserCredentialRequired(provider, connector);
     return {
@@ -437,26 +444,6 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       status === 404 ? 404 : status === 401 || status === 403 ? 403 : 400,
       'GITHUB_REPOSITORY_REQUEST_FAILED',
       message
-    );
-  }
-
-  /**
-   * Personal Git credentials can only be set up in AI Workspace (browser session with ai:workspace:use).
-   * A remote MCP caller (token-bounded `scopes`, live `accountScopes`) without the connector's `:system`
-   * scope may fall back to its owner's personal credential only while that owner can still use AI Workspace.
-   */
-  protected assertPersonalGitCredentialAllowed(
-    user: User,
-    provider: 'gitlab' | 'github' | 'git',
-    connector: ConnectorRow
-  ): void {
-    if (!user.accountScopes || hasScope(user.accountScopes, 'ai:workspace:use')) return;
-    const label = provider === 'gitlab' ? 'GitLab' : provider === 'github' ? 'GitHub' : 'Git';
-    throw new AppError(
-      403,
-      'PERSONAL_GIT_CREDENTIAL_NOT_ALLOWED',
-      `This token cannot use a personal ${label} credential for ${connector.name} because its owner lacks ai:workspace:use. Grant the token integrations:${provider}:system, or give the owner AI Workspace access and set up a personal ${label} credential there.`,
-      { provider, connectorId: connector.id, connectorName: connector.name }
     );
   }
 

@@ -16,6 +16,8 @@ export interface ObjectStorageManagedView {
   publishedPort: number;
   status: 'creating' | 'updating' | 'ready' | 'stopped' | 'error' | 'deleting';
   lastError: string | null;
+  /** Present while a migration write freeze keeps every issued key read-only. */
+  writesFrozenAt?: string;
 }
 
 export type ObjectStorageHealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
@@ -237,6 +239,7 @@ export function toObjectStorageConnectionView(
             publishS3: managedCluster.publishS3 ?? false,
             status: managedCluster.status,
             lastError: managedCluster.lastError,
+            ...(managedCluster.writesFrozenAt ? { writesFrozenAt: managedCluster.writesFrozenAt.toISOString() } : {}),
           },
         }
       : {}),

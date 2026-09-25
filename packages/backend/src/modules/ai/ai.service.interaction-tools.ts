@@ -9,6 +9,7 @@ import {
 } from '@/modules/proxy/nginx-template.schemas.js';
 import { renderTemplatePreviewForHost, testTemplateContent } from '@/modules/proxy/nginx-template-preview.js';
 import { redactProxyHostForScopes } from '@/modules/proxy/page-target-visibility.js';
+import { assertTlsResyncAccess } from '@/modules/proxy/tls-resync-access.js';
 import {
   LinkInternalCertSchema,
   RequestACMECertSchema,
@@ -183,12 +184,11 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           };
         }
         if (a.operation === 'test') {
-          // Mirrors POST /nginx-templates/test: raw write plus edit on the template or create.
-          this.ensureToolScope(user, 'proxy:raw:write');
+          // Mirrors POST /nginx-templates/test: proxy:templates:manage on the template, or broad to test new content.
           const input = PreviewNginxTemplateSchema.parse({ content: a.content, templateId: a.templateId });
           this.ensureToolScope(
             user,
-            input.templateId ? `proxy:templates:edit:${input.templateId}` : 'proxy:templates:create'
+            input.templateId ? `proxy:templates:manage:${input.templateId}` : 'proxy:templates:manage'
           );
           return testTemplateContent(templateService, container.resolve(NodeDispatchService), input.content);
         }
@@ -196,24 +196,24 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
           return templateService.getTemplate(a.templateId);
         }
+        // Template content writes need proxy:templates:manage: broad to create, on the template to change it.
         if (a.operation === 'create') {
-          this.ensureToolScope(user, 'proxy:templates:create');
-          this.ensureToolScope(user, 'proxy:raw:write');
+          this.ensureToolScope(user, 'proxy:templates:manage');
           return templateService.createTemplate(CreateNginxTemplateSchema.parse(args), user.id);
         }
         if (a.operation === 'update') {
-          this.ensureToolScopeForResource(user, 'proxy:templates:edit', String(a.templateId));
-          this.ensureToolScope(user, 'proxy:raw:write');
+          this.ensureToolScopeForResource(user, 'proxy:templates:manage', String(a.templateId));
           return templateService.updateTemplate(a.templateId, UpdateNginxTemplateSchema.parse(args), user.id);
         }
         if (a.operation === 'delete') {
-          this.ensureToolScopeForResource(user, 'proxy:templates:delete', String(a.templateId));
+          this.ensureToolScopeForResource(user, 'proxy:templates:manage', String(a.templateId));
           await templateService.deleteTemplate(a.templateId, user.id);
           return { success: true };
         }
         if (a.operation === 'clone') {
-          this.ensureToolScopeForResource(user, 'proxy:templates:edit', String(a.templateId));
-          this.ensureToolScope(user, 'proxy:templates:create');
+          // Reads the source and creates a new template.
+          this.ensureToolScopeForResource(user, 'proxy:templates:view', String(a.templateId));
+          this.ensureToolScope(user, 'proxy:templates:manage');
           return templateService.cloneTemplate(a.templateId, user.id);
         }
         throw new Error(`Unsupported proxy template operation: ${String(a.operation)}`);
@@ -242,7 +242,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
         const cert = await this.sslService.linkInternalCert(input, user.id, user.scopes);
-        await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+        await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id, { folderId: input.folderId ?? null });
         return cert;
       }
       case 'request_acme_cert': {
@@ -252,7 +252,9 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
         const result = await this.sslService.requestACMECert(input, user.id, user.email);
-        await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id);
+        await grantCreatedResourcePermissions(user.id, 'ssl:cert', result.certificate.id, {
+          folderId: input.folderId ?? null,
+        });
         return result;
       }
       case 'manage_ssl_certificate': {
@@ -267,12 +269,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
           }
           await container.resolve(SSLCertificateFolderService).assertFolderExists(input.folderId);
           const cert = await this.sslService.uploadCert(input, user.id);
-          await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id);
+          await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.id, { folderId: input.folderId ?? null });
           return cert;
         }
         if (a.operation === 'renew') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
-          return this.sslService.renewCert(a.sslCertificateId, user.id, user.email);
+          return this.sslService.renewCert(a.sslCertificateId, user.id, user.email, { actorScopes: user.scopes });
         }
         if (a.operation === 'cancel_acme') {
           this.ensureToolScopeForResource(user, 'ssl:cert:issue', String(a.sslCertificateId));
@@ -296,12 +298,12 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         }
         throw new Error(`Unsupported SSL certificate operation: ${String(a.operation)}`);
       }
-      // Same global admin repair permission as the TLS resync routes.
+      // Same checks as the TLS resync routes (system routes and certificates stay admin:update only).
       case 'resync_tls_distribution': {
-        this.ensureToolScope(user, 'admin:update');
         if (a.target === 'route') {
           const routeId = stringArg(a.routeId);
           if (!routeId) throw new AppError(400, 'ROUTE_ID_REQUIRED', 'routeId is required for target route');
+          await assertTlsResyncAccess(user.scopes, 'route', routeId);
           return this.proxyService.resyncTlsHost(routeId, user.id);
         }
         if (a.target === 'certificate') {
@@ -313,6 +315,7 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
               'sslCertificateId is required for target certificate'
             );
           }
+          await assertTlsResyncAccess(user.scopes, 'certificate', certificateId);
           return this.sslService.resyncDistribution(certificateId, user.id);
         }
         throw new Error(`Unsupported TLS resync target: ${String(a.target)}`);
@@ -338,8 +341,8 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         return compactProxyHostForAgent(
           redactProxyHostForScopes(
             await this.proxyService.updateProxyHost(a.routeId, rawInput as any, user.id, {
-              bypassAdvancedValidation: hasScope(user.scopes, `proxy:advanced:bypass:${a.routeId}`),
-              bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`),
+              bypassAdvancedValidation: hasScope(user.scopes, `proxy:unrestricted:${a.routeId}`),
+              bypassRawValidation: hasScope(user.scopes, `proxy:unrestricted:${a.routeId}`),
               actorScopes: user.scopes,
             }),
             user.scopes
@@ -356,8 +359,8 @@ export abstract class AIServiceInteractionTools extends AIServiceExecution {
         return compactProxyHostForAgent(
           redactProxyHostForScopes(
             await this.proxyService.updateProxyHost(a.routeId, toggleInput as any, user.id, {
-              bypassAdvancedValidation: hasScope(user.scopes, `proxy:advanced:bypass:${a.routeId}`),
-              bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${a.routeId}`),
+              bypassAdvancedValidation: hasScope(user.scopes, `proxy:unrestricted:${a.routeId}`),
+              bypassRawValidation: hasScope(user.scopes, `proxy:unrestricted:${a.routeId}`),
               actorScopes: user.scopes,
             }),
             user.scopes

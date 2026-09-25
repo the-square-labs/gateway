@@ -24,43 +24,57 @@ function requireDockerScope(scopes: string[], baseScope: string, nodeId: string,
 /**
  * Scope-based copy of the managed database/storage binding route check
  * (`assertManagedDatabaseBindingTargetAccess`). A binding writes credentials
- * into the target workload and attaches it to a network, so the caller needs
- * the workload's own scopes and network scopes on the target node, not only
- * access to the database or storage.
+ * into the target workload, so every target type has one requirement: environment
+ * and secrets on the container or deployment, or docker:compose:manage for a
+ * Compose service. No Docker network scopes: the Gateway attaches the managed
+ * network itself as part of the binding.
  */
+const BINDING_TARGET_SCOPES = ['docker:containers:environment', 'docker:containers:secrets'] as const;
+/**
+ * Every deployment binding change (link or unlink) attaches or detaches the managed network and rolls the
+ * deployment out, which the deployment routes gate on manage (deploy). With `targetEnvironment` it also
+ * replaces the deployment's desired environment, which they gate on edit (config).
+ */
+const DEPLOYMENT_ROLLOUT_SCOPES = ['docker:containers:manage'] as const;
+const DEPLOYMENT_CONFIG_SCOPES = ['docker:containers:edit'] as const;
+
 export async function assertWorkloadBindingTargetAccess(
   scopes: string[],
-  target: WorkloadBindingTarget
+  target: WorkloadBindingTarget & { targetEnvironment?: Record<string, string> },
+  /** false for reads such as a credential reveal, which change nothing. */
+  options: { rollout?: boolean } = {}
 ): Promise<void> {
   if (target.targetType === 'compose_service') {
     const composeTarget = decodeComposeServiceTarget(target.targetResourceId);
     requireDockerScope(scopes, 'docker:compose:manage', target.targetNodeId, composeTarget.projectId);
-  } else if (target.targetType === 'deployment') {
-    for (const scope of ['docker:containers:edit', 'docker:containers:manage', 'docker:containers:secrets']) {
+    return;
+  }
+  if (target.targetType === 'deployment') {
+    const required = [
+      ...BINDING_TARGET_SCOPES,
+      ...(options.rollout === false ? [] : DEPLOYMENT_ROLLOUT_SCOPES),
+      ...(target.targetEnvironment === undefined ? [] : DEPLOYMENT_CONFIG_SCOPES),
+    ];
+    for (const scope of required) {
       requireDockerScope(scopes, scope, target.targetNodeId, target.targetResourceId);
     }
-  } else {
-    const targetScopes = ['docker:containers:environment', 'docker:containers:secrets'];
-    // Node- or globally-scoped callers do not need to inspect the target, which
-    // keeps binding cleanup possible after the workload is gone.
-    const canAccessNode = targetScopes.every(
-      (scope) => hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)
-    );
-    if (!canAccessNode) {
-      const inspected = await container
-        .resolve(DockerManagementService)
-        .inspectContainer(target.targetNodeId, target.targetResourceId);
-      if (isGatewayInternalContainer(inspected)) {
-        throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-      }
-      const resourceId = String(inspected?.scopeResourceId ?? '');
-      if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
-      for (const scope of targetScopes) requireDockerScope(scopes, scope, target.targetNodeId, resourceId);
-    }
+    return;
   }
-  for (const scope of ['docker:networks:create', 'docker:networks:edit', 'docker:networks:delete']) {
-    requireDockerScope(scopes, scope, target.targetNodeId, '');
+  // Node- or globally-scoped callers do not need to inspect the target, which
+  // keeps binding cleanup possible after the workload is gone.
+  const canAccessNode = BINDING_TARGET_SCOPES.every(
+    (scope) => hasScope(scopes, scope) || hasScope(scopes, `${scope}:${target.targetNodeId}`)
+  );
+  if (canAccessNode) return;
+  const inspected = await container
+    .resolve(DockerManagementService)
+    .inspectContainer(target.targetNodeId, target.targetResourceId);
+  if (isGatewayInternalContainer(inspected)) {
+    throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
   }
+  const resourceId = String(inspected?.scopeResourceId ?? '');
+  if (!resourceId) throw new AppError(404, 'CONTAINER_NOT_FOUND', 'Binding target container not found');
+  for (const scope of BINDING_TARGET_SCOPES) requireDockerScope(scopes, scope, target.targetNodeId, resourceId);
 }
 
 /**

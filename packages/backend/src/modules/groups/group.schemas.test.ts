@@ -51,6 +51,17 @@ describe('group schemas', () => {
     expect(UpdateGroupSchema.parse({ scopes }).scopes).toEqual(scopes);
   });
 
+  it('accepts retired scope names from older clients and rejects unresolvable targets', () => {
+    expect(
+      UpdateGroupSchema.safeParse({ scopes: ['nodes:config:edit:node-1', 'notifications:manage', 'ssl:cert:revoke'] })
+        .success
+    ).toBe(true);
+    expect(
+      UpdateGroupSchema.safeParse({ scopes: ['pki:cert:view:folder/d0367778-e2ee-42d7-bbc4-9ba1bb219578'] }).success
+    ).toBe(false);
+    expect(UpdateGroupSchema.safeParse({ scopes: ['nodes:details:node/node-1'] }).success).toBe(false);
+  });
+
   it.each([
     'databases:view:folder/',
     'databases:view:folder//id',

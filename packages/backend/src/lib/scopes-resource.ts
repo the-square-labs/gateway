@@ -36,8 +36,11 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'hosting:resources:recover',
   'hosting:billing:view',
   'hosting:billing:topup',
-  // PKI
+  // PKI (CA qualifiers are CA IDs; certificate qualifiers are issuing CA IDs)
+  'pki:ca:view',
   'pki:ca:create:intermediate',
+  'pki:ca:edit',
+  'pki:ca:export',
   'pki:cert:view',
   'pki:cert:issue',
   'pki:cert:revoke',
@@ -47,15 +50,12 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'proxy:edit',
   'proxy:delete',
   'proxy:advanced',
-  'proxy:advanced:bypass',
+  'proxy:unrestricted',
   'proxy:maintenance:bypass',
   'proxy:raw:read',
   'proxy:raw:write',
-  'proxy:raw:toggle',
-  'proxy:raw:bypass',
   'proxy:templates:view',
-  'proxy:templates:edit',
-  'proxy:templates:delete',
+  'proxy:templates:manage',
   // Pages (all qualifiers are Page Project IDs)
   'pages:view',
   'pages:edit',
@@ -71,16 +71,14 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   // SSL
   'ssl:cert:view',
   'ssl:cert:delete',
-  'ssl:cert:revoke',
-  'ssl:cert:export',
   // ACL
   'acl:view',
   'acl:edit',
   'acl:delete',
   // Nodes
   'nodes:details',
+  'nodes:manage',
   'nodes:config:view',
-  'nodes:config:edit',
   'nodes:logs',
   'nodes:console',
   'nodes:files:read',
@@ -91,7 +89,6 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   // Docker containers
   'docker:containers:view',
   'docker:containers:edit',
-  'docker:containers:config',
   'docker:containers:manage',
   'docker:containers:environment',
   'docker:containers:delete',
@@ -115,6 +112,7 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   'docker:images:delete',
   // Docker volumes
   'docker:volumes:view',
+  'docker:volumes:edit',
   'docker:volumes:delete',
   'docker:volumes:export',
   'docker:volumes:files:read',
@@ -176,6 +174,7 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:networks:edit',
   'docker:networks:delete',
   'docker:volumes:view',
+  'docker:volumes:edit',
   'docker:volumes:delete',
   'docker:volumes:export',
   'docker:volumes:files:read',
@@ -184,8 +183,6 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'docker:images:delete',
   'ssl:cert:view',
   'ssl:cert:delete',
-  'ssl:cert:revoke',
-  'ssl:cert:export',
   // Domains
   'domains:view',
   'domains:edit',
@@ -195,12 +192,10 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'proxy:edit',
   'proxy:delete',
   'proxy:advanced',
-  'proxy:advanced:bypass',
+  'proxy:unrestricted',
   'proxy:maintenance:bypass',
   'proxy:raw:read',
   'proxy:raw:write',
-  'proxy:raw:toggle',
-  'proxy:raw:bypass',
   // Pages
   'pages:view',
   'pages:edit',
@@ -211,8 +206,8 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'pages:tokens:manage',
   // Nodes
   'nodes:details',
+  'nodes:manage',
   'nodes:config:view',
-  'nodes:config:edit',
   'nodes:logs',
   'nodes:console',
   'nodes:files:read',
@@ -223,7 +218,6 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   // Docker containers and deployments
   'docker:containers:view',
   'docker:containers:edit',
-  'docker:containers:config',
   'docker:containers:manage',
   'docker:containers:environment',
   'docker:containers:delete',
@@ -263,10 +257,14 @@ export const FOLDER_SCOPABLE: readonly string[] = [
   'databases:query:write',
   'databases:query:admin',
   'databases:credentials:reveal',
-  // Logging environments and schemas
+  // Logging environments and schemas. Ingest tokens and log reading are qualified by the
+  // environment ID, so their folder grants resolve through logging environment folders.
   'logs:environments:view',
   'logs:environments:edit',
   'logs:environments:delete',
+  'logs:tokens:view',
+  'logs:tokens:create',
+  'logs:tokens:delete',
   'logs:schemas:view',
   'logs:schemas:edit',
   'logs:schemas:delete',

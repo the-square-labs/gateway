@@ -36,6 +36,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import { canEditDockerVolume } from "@/lib/docker-volume-access";
 import {
   dockerComposeProjectRoute,
   dockerContainerRoute,
@@ -131,23 +132,21 @@ export function DockerVolumeDetail({
   const lastMetricCollectedAtRef = useRef<string | null>(null);
   metricsIdentityRef.current = `${nodeId ?? ""}:${decodedVolumeName}`;
 
-  const canCreateVolume =
-    hasScope("docker:volumes:create") || !!(nodeId && hasScope(`docker:volumes:create:${nodeId}`));
-  const canDeleteVolume =
-    hasScope("docker:volumes:delete") || !!(nodeId && hasScope(`docker:volumes:delete:${nodeId}`));
-  const canExportVolume =
-    hasScope("docker:volumes:export") || !!(nodeId && hasScope(`docker:volumes:export:${nodeId}`));
-  const canRenameVolume = canCreateVolume && canDeleteVolume;
+  // Volume grants are per `<nodeId>/<volume>` (node and folder grants resolve to them), like the backend routes.
+  const volumeScopeId = volume?.scopeResourceId ?? decodedVolumeName;
+  const hasVolumeScope = (base: string) =>
+    hasScope(base) || !!(nodeId && hasScope(`${base}:${nodeId}/${volumeScopeId}`));
+  // Rename, labels and resize edit this one volume: the volume edit scope, never a per-volume create scope.
+  const canEditVolume = canEditDockerVolume(hasScope, nodeId, volumeScopeId);
+  const canDeleteVolume = hasVolumeScope("docker:volumes:delete");
+  const canExportVolume = hasVolumeScope("docker:volumes:export");
+  const canRenameVolume = canEditVolume;
   const isAnonymousVolume = /^[a-f0-9]{64}$/i.test(decodedVolumeName);
   const isCleanupProtected = volume?.labels?.[VOLUME_CLEANUP_PROTECTED_LABEL] === "true";
   const composeProjectName = volume?.labels?.["com.docker.compose.project"];
   const composeManaged = !!composeProjectName;
-  const canReadVolumeFiles =
-    hasScope("docker:volumes:files:read") ||
-    !!(nodeId && hasScope(`docker:volumes:files:read:${nodeId}`));
-  const canWriteVolumeFiles =
-    hasScope("docker:volumes:files:write") ||
-    !!(nodeId && hasScope(`docker:volumes:files:write:${nodeId}`));
+  const canReadVolumeFiles = hasVolumeScope("docker:volumes:files:read");
+  const canWriteVolumeFiles = hasVolumeScope("docker:volumes:files:write");
   const unavailable = volume?.availability === "unavailable";
   const usedBy = useMemo<string[]>(() => {
     const raw = volume?.usedBy ?? (volume as any)?.UsedBy;
@@ -573,7 +572,7 @@ export function DockerVolumeDetail({
   ]);
 
   const headerActions = [
-    ...(!composeManaged && canCreateVolume && isDiskImage && volume?.managementState === "managed"
+    ...(!composeManaged && canEditVolume && isDiskImage && volume?.managementState === "managed"
       ? [
           {
             label: "Resize",
@@ -651,7 +650,7 @@ export function DockerVolumeDetail({
             </div>
             <ResponsiveHeaderActions actions={headerActions}>
               {!composeManaged &&
-                canCreateVolume &&
+                canEditVolume &&
                 isDiskImage &&
                 volume?.managementState === "managed" && (
                   <Button
@@ -674,7 +673,7 @@ export function DockerVolumeDetail({
                   Rename
                 </Button>
               )}
-              {!composeManaged && canRenameVolume && canDeleteVolume && isAnonymousVolume && (
+              {!composeManaged && canRenameVolume && isAnonymousVolume && (
                 <Button
                   variant="outline"
                   onClick={handleToggleCleanupProtection}

@@ -1,109 +1,51 @@
 import { RESOURCE_SCOPABLE_SCOPES, TOKEN_SCOPES } from "@/types";
+import { IMPLIED_SCOPES_BY_REQUIRED_SCOPE } from "@/types/scope-implications";
 
 const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE_SCOPES].sort(
   (a, b) => b.length - a.length
 );
 const ALL_SCOPE_VALUES = new Set<string>(TOKEN_SCOPES.map((scope) => scope.value));
 
+const DOCKER_CHILD_SCOPE_PREFIXES = [
+  "docker:containers:",
+  "docker:compose:",
+  "docker:networks:",
+  "docker:volumes:",
+  "docker:images:",
+  "docker:availability:",
+] as const;
+
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (
-    !baseScope.startsWith("docker:containers:") &&
-    !baseScope.startsWith("docker:compose:") &&
-    !baseScope.startsWith("docker:networks:") &&
-    !baseScope.startsWith("docker:volumes:") &&
-    !baseScope.startsWith("docker:images:")
-  )
-    return null;
+  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (!resourceId) return null;
   if (resourceId.startsWith("folder/") || resourceId.startsWith("node/")) return null;
   const separator = resourceId.indexOf("/");
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
-const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
-  "hosting:snapshots:view": [
-    "hosting:snapshots:create",
-    "hosting:snapshots:delete",
-    "hosting:snapshots:restore",
-    "hosting:snapshots:folders:manage",
-  ],
-  "domains:view": ["domains:edit"],
-  "pki:templates:view": ["pki:templates:edit"],
-  "proxy:view": ["proxy:edit"],
-  "pages:view": [
-    "pages:edit",
-    "pages:delete",
-    "pages:deploy",
-    "pages:deployments:manage",
-    "pages:tags:manage",
-    "pages:tokens:manage",
-  ],
-  "pages:settings:view": ["pages:settings:edit"],
-  "proxy:templates:view": ["proxy:templates:edit"],
-  "acl:view": ["acl:edit"],
-  "nodes:details": ["nodes:rename"],
-  "nodes:config:view": ["nodes:config:edit"],
-  "settings:gateway:view": ["settings:gateway:edit"],
-  "housekeeping:view": ["housekeeping:run", "housekeeping:configure"],
-  "license:view": ["license:manage"],
-  "docker:containers:view": [
-    "docker:containers:edit",
-    "docker:containers:config",
-    "docker:containers:manage",
-    "docker:containers:console",
-    "docker:containers:files:read",
-    "docker:containers:files:write",
-    "docker:containers:environment",
-    "docker:containers:secrets",
-    "docker:containers:webhooks",
-  ],
-  "docker:networks:view": ["docker:networks:edit"],
-  "docker:registries:view": ["docker:registries:edit"],
-  // Mirrors the backend map so storage controls match what the API accepts.
-  "storage:view": [
-    "storage:edit",
-    "storage:objects:read",
-    "storage:objects:write",
-    "storage:objects:admin",
-  ],
-  "storage:objects:read": ["storage:objects:write", "storage:objects:admin"],
-  "storage:objects:write": ["storage:objects:admin"],
-  "storage:credentials:use": ["storage:credentials:reveal"],
-  "databases:backups:view": [
-    "databases:backups:manage",
-    "databases:backups:run",
-    "databases:backups:restore",
-  ],
-  "databases:view": [
-    "databases:edit",
-    "databases:query:read",
-    "databases:query:write",
-    "databases:query:admin",
-  ],
-  "databases:query:read": ["databases:query:write", "databases:query:admin"],
-  "databases:query:write": ["databases:query:admin"],
-  "notifications:alerts:view": ["notifications:alerts:edit"],
-  "notifications:webhooks:view": ["notifications:webhooks:edit"],
-  "notifications:view": ["notifications:manage"],
-  "audit:siem:view": ["audit:siem:manage"],
-  "logs:environments:view": ["logs:environments:edit", "logs:read"],
-  "logs:tokens:view": ["logs:manage"],
-  "logs:schemas:view": ["logs:schemas:edit"],
-  "logs:read": ["logs:manage"],
-  "status-page:view": ["status-page:manage"],
-  "integrations:cloudflare:view": ["integrations:cloudflare:manage"],
-  "integrations:hosting:view": ["integrations:hosting:manage"],
-  "integrations:github:view": ["integrations:github:manage"],
-  "integrations:git:view": ["integrations:git:manage"],
-  "integrations:ssh:view": ["integrations:ssh:manage"],
-  "inference:providers:view": ["inference:providers:manage", "inference:models:manage"],
-};
 
+const RESOURCE_SCOPABLE_SET = new Set<string>(RESOURCE_SCOPABLE_SCOPES);
+/** The most `:`-separated segments any resource-scopable base has (a qualified scope has more). */
+const RESOURCE_SCOPABLE_MAX_SEGMENTS = Math.max(
+  ...RESOURCE_SCOPABLE_SCOPES.map((scope) => scope.split(":").length)
+);
+
+/** Longest resource-scopable prefix with a non-empty qualifier (mirrors the backend; a few lookups per call). */
 export function extractBaseScope(scope: string): string {
   if (ALL_SCOPE_VALUES.has(scope)) return scope;
-  const base = RESOURCE_SCOPABLE_BY_LENGTH.find(
-    (candidate) => scope.startsWith(`${candidate}:`) && scope.length > candidate.length + 1
-  );
-  return base ?? scope;
+  const separators: number[] = [];
+  for (
+    let index = 0;
+    index < scope.length && separators.length < RESOURCE_SCOPABLE_MAX_SEGMENTS;
+    index += 1
+  ) {
+    if (scope.charCodeAt(index) === 58) separators.push(index);
+  }
+  for (let candidate = separators.length - 1; candidate >= 0; candidate -= 1) {
+    const end = separators[candidate];
+    const base = scope.slice(0, end);
+    if (RESOURCE_SCOPABLE_SET.has(base) && scope.length > end + 1) return base;
+  }
+  return scope;
 }
 
 export function scopeMatches(availableScopes: readonly string[], requiredScope: string): boolean {
@@ -144,11 +86,13 @@ export function canCreateInFolder(
 
 function hasImpliedScope(availableScopes: readonly string[], requiredScope: string): boolean {
   const requiredBase = extractBaseScope(requiredScope);
-  const impliedScopes = getTransitiveImpliedScopes(requiredBase);
-  if (impliedScopes.length === 0) return false;
+  // Transitive closure generated from the backend catalog (see types/scope-implications.ts).
+  const impliedScopes = IMPLIED_SCOPES_BY_REQUIRED_SCOPE[requiredBase];
+  if (!impliedScopes) return false;
 
   const resourceId =
     requiredBase === requiredScope ? null : requiredScope.slice(requiredBase.length + 1);
+
   const parentId = parentResourceId(requiredBase, resourceId);
   return impliedScopes.some(
     (impliedScope) =>
@@ -156,18 +100,6 @@ function hasImpliedScope(availableScopes: readonly string[], requiredScope: stri
       (resourceId !== null && availableScopes.includes(`${impliedScope}:${resourceId}`)) ||
       (parentId !== null && availableScopes.includes(`${impliedScope}:${parentId}`))
   );
-}
-
-function getTransitiveImpliedScopes(requiredBase: string): string[] {
-  const result = new Set<string>();
-  const queue = [...(IMPLIED_SCOPES_BY_REQUIRED_SCOPE[requiredBase] ?? [])];
-  for (let index = 0; index < queue.length; index += 1) {
-    const scope = queue[index];
-    if (result.has(scope)) continue;
-    result.add(scope);
-    queue.push(...(IMPLIED_SCOPES_BY_REQUIRED_SCOPE[scope] ?? []));
-  }
-  return [...result];
 }
 
 export function hasSelectableScopeBase(

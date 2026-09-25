@@ -14,6 +14,7 @@ import type {
   DockerRuntimeStatus,
   DockerSourceBinding,
   DockerSourceBindingConfig,
+  DockerSourceConnector,
   DockerSourceResourceCreateRequest,
   DockerSourceResourceCreateResult,
   DockerSourceTarget,
@@ -831,6 +832,13 @@ export function withDockerResourceApi<TBase extends ApiClientBaseConstructor>(Ba
     async retryDockerBuild(buildId: string): Promise<DockerBuild> {
       return this.unwrapData(
         this.request<{ data: DockerBuild }>(`/docker/builds/${buildId}/retry`, { method: "POST" })
+      );
+    }
+
+    /** Git connectors for every source picker (Docker workloads and Pages builds); no integration scope needed. */
+    async listDockerSourceConnectors(): Promise<DockerSourceConnector[]> {
+      return this.unwrapData(
+        this.request<{ data: DockerSourceConnector[] }>("/docker/sources/connectors")
       );
     }
 

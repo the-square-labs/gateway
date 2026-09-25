@@ -30,17 +30,18 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - move_folder is supported only where the underlying resource service supports moving folders.
 
 ## Scope Rules
-- nodes: list with nodes:details or nodes:folders:manage; mutate with nodes:folders:manage.
-- databases: list with databases:view or databases:folders:manage; mutate with databases:folders:manage.
-- storage: list with storage:view or storage:folders:manage; mutate with storage:folders:manage; moving connections also checks storage:edit for each connection and the destination.
-- domains: list with domains:view; mutate with domains:folders:manage.
-- ssl_certificates: list with ssl:cert:view; mutate with ssl:cert:folders:manage.
-- logging_environments: list with logs:environments:view, logs:environments:folders:manage, or logs:manage; mutate with logs:environments:folders:manage or logs:manage.
-- logging_schemas: list with logs:schemas:view, logs:schemas:folders:manage, or logs:manage; mutate with logs:schemas:folders:manage or logs:manage.
+Listing needs the module's view scope, its create scope, or its folder-management scope. A caller without broad access sees the folders holding the resources it can view plus every folder it holds a folder grant on (\`<scope>:folder/<folderId>\`), including a granted folder that is still empty; broad create or folder management lists every folder.
+- nodes: list with nodes:details, nodes:create, or nodes:folders:manage; mutate with nodes:folders:manage.
+- databases: list with databases:view, databases:create, or databases:folders:manage; mutate with databases:folders:manage.
+- storage: list with storage:view, storage:create, or storage:folders:manage; mutate with storage:folders:manage; moving connections also checks storage:edit for each connection and the destination.
+- domains: list with domains:view or domains:create; mutate with domains:folders:manage.
+- ssl_certificates: list with ssl:cert:view or ssl:cert:issue; mutate with ssl:cert:folders:manage.
+- logging_environments: list with logs:environments:view, logs:environments:create, or logs:environments:folders:manage; mutate with logs:environments:folders:manage.
+- logging_schemas: list with logs:schemas:view, logs:schemas:create, or logs:schemas:folders:manage; mutate with logs:schemas:folders:manage.
 - admin_users: list with admin:users or admin:users:folders:manage; mutate with admin:users:folders:manage.
 - permission_groups: list with admin:groups or admin:groups:folders:manage; mutate with admin:groups:folders:manage.
-- routes: list with proxy:view or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
-- docker: list uses dockerResourceType-specific view scope: docker:containers:view, docker:compose:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:containers:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; Compose, image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
+- routes: list with proxy:view, proxy:create, or proxy:folders:manage; mutate folders with proxy:folders:manage; moving routes also checks proxy:edit for each route.
+- docker: list uses dockerResourceType-specific view or create scope: docker:containers:view, docker:compose:view, docker:images:view, docker:networks:view, or docker:volumes:view. Folder mutation uses docker:folders:manage. Moving or reordering container placements also checks docker:containers:edit for each item node; Compose, image, network, and volume placement follows the shared Docker folder route and does not require container edit scope.`,
 
   'node-files': `# Node File Management
 

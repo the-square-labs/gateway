@@ -73,11 +73,11 @@ export interface NotificationToolContext {
 
 /** Same reveal rules as the webhook and delivery routes. */
 function canRevealWebhookSecrets(user: User): boolean {
-  return hasScope(user.scopes, 'notifications:webhooks:edit') || hasScope(user.scopes, 'notifications:manage');
+  return hasScope(user.scopes, 'notifications:webhooks:manage');
 }
 
 function canRevealDeliveryPayloads(user: User): boolean {
-  return hasScope(user.scopes, 'notifications:manage');
+  return hasScope(user.scopes, 'notifications:webhooks:manage');
 }
 
 function requireAnyScope(user: User, scopes: string[]): void {
@@ -329,27 +329,13 @@ export async function executeNotificationTool(
 async function manageNotifications(context: NotificationToolContext, user: User, a: Record<string, any>) {
   switch (a.operation) {
     case 'alert_categories':
-      requireAnyScope(user, [
-        'notifications:alerts:view',
-        'notifications:alerts:create',
-        'notifications:alerts:edit',
-        'notifications:alerts:delete',
-        'notifications:view',
-        'notifications:manage',
-      ]);
+      requireAnyScope(user, ['notifications:alerts:view', 'notifications:alerts:manage']);
       return ALERT_CATEGORIES;
     case 'webhook_presets':
-      requireAnyScope(user, [
-        'notifications:webhooks:view',
-        'notifications:webhooks:create',
-        'notifications:webhooks:edit',
-        'notifications:webhooks:delete',
-        'notifications:view',
-        'notifications:manage',
-      ]);
+      requireAnyScope(user, ['notifications:webhooks:view', 'notifications:webhooks:manage']);
       return TEMPLATE_PRESETS;
     case 'webhook_get': {
-      requireAnyScope(user, ['notifications:webhooks:view', 'notifications:view', 'notifications:manage']);
+      requireAnyScope(user, ['notifications:webhooks:view', 'notifications:webhooks:manage']);
       if (!context.notifWebhookService) return { error: 'Notification service not available' };
       const reveal = canRevealWebhookSecrets(user);
       return context.notifWebhookService.getById(requiredId(a.webhookId, 'webhookId'), {
@@ -358,7 +344,7 @@ async function manageNotifications(context: NotificationToolContext, user: User,
       });
     }
     case 'webhook_preview': {
-      requireAnyScope(user, ['notifications:webhooks:create', 'notifications:webhooks:edit', 'notifications:manage']);
+      requireAnyScope(user, ['notifications:webhooks:manage']);
       if (!context.notifDispatcherService) return { error: 'Notification service not available' };
       if (typeof a.bodyTemplate !== 'string') {
         throw new AppError(400, 'BODY_TEMPLATE_REQUIRED', 'bodyTemplate is required');
@@ -367,7 +353,7 @@ async function manageNotifications(context: NotificationToolContext, user: User,
       return { rendered: renderTemplate(a.bodyTemplate, templateContext), context: templateContext };
     }
     case 'delivery_get': {
-      requireAnyScope(user, ['notifications:deliveries:view', 'notifications:view', 'notifications:manage']);
+      requireAnyScope(user, ['notifications:webhooks:view', 'notifications:webhooks:manage']);
       if (!context.notifDeliveryService) return { error: 'Notification service not available' };
       const delivery = await context.notifDeliveryService.getById(requiredId(a.deliveryId, 'deliveryId'), {
         revealSensitive: canRevealDeliveryPayloads(user),

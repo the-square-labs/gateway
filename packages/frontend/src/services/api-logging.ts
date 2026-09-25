@@ -50,10 +50,12 @@ export function withLoggingApi<TBase extends ApiClientBaseConstructor>(Base: TBa
       id: string,
       data: Partial<LoggingEnvironment>
     ): Promise<LoggingEnvironment> {
+      // Updates never move an environment (the API rejects folderId); moves use the folder endpoints.
+      const { folderId: _folderId, ...body } = data;
       return this.unwrapData(
         this.request<{ data: LoggingEnvironment }>(`/logging/environments/${id}`, {
           method: "PUT",
-          body: JSON.stringify(data),
+          body: JSON.stringify(body),
         })
       );
     }
@@ -150,10 +152,11 @@ export function withLoggingApi<TBase extends ApiClientBaseConstructor>(Base: TBa
     }
 
     async updateLoggingSchema(id: string, data: Partial<LoggingSchema>): Promise<LoggingSchema> {
+      const { folderId: _folderId, ...body } = data;
       return this.unwrapData(
         this.request<{ data: LoggingSchema }>(`/logging/schemas/${id}`, {
           method: "PUT",
-          body: JSON.stringify(data),
+          body: JSON.stringify(body),
         })
       );
     }

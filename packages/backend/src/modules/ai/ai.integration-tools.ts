@@ -55,13 +55,13 @@ const CONNECTOR_LIST_ACCESS: Record<ConnectorProvider, ConnectorRouteAccess> = {
  * session-only too, and no sync below reads or writes them.
  */
 const CONNECTOR_SYNC_ACCESS: Record<ConnectorProvider, ConnectorRouteAccess> = {
-  gitlab: { operation: 'connector.sync', requiredScope: ['integrations:gitlab:sync', 'integrations:gitlab:manage'] },
+  gitlab: { operation: 'connector.sync', requiredScope: 'integrations:gitlab:manage' },
   cloudflare: {
     operation: 'connector.sync',
     requiredScope: ['integrations:cloudflare:sync', 'integrations:cloudflare:manage'],
   },
-  github: { operation: 'connector.post', requiredScope: ['integrations:github:sync', 'integrations:github:manage'] },
-  git: { operation: 'connector.post', requiredScope: ['integrations:git:sync', 'integrations:git:manage'] },
+  github: { operation: 'connector.post', requiredScope: 'integrations:github:manage' },
+  git: { operation: 'connector.post', requiredScope: 'integrations:git:manage' },
   // The SSH "sync" route authenticates to the host with the stored credential; it has no sync scope.
   ssh: { operation: 'connector.post', requiredScope: 'integrations:ssh:manage' },
 };

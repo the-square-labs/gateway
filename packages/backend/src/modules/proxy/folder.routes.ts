@@ -90,11 +90,17 @@ folderRoutes.openapi(groupedProxyHostsRoute, async (c) => {
   const scopes = c.get('effectiveScopes') || [];
   requireFolderListAccess(scopes);
   const canManageFolders = hasScope(scopes, 'proxy:folders:manage');
+  // Folder-scoped grants keep their folders visible while they are still empty,
+  // so a folder-only user sees where they can create or move routes.
   const result = await folderService.getGroupedHosts(
     query,
     hasScope(scopes, 'proxy:view')
       ? { includeAllFolders: canManageFolders }
-      : { allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'), includeAllFolders: canManageFolders }
+      : {
+          allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'),
+          allowedFolderIds: getFolderScopedIds(scopes, ['proxy:view', 'proxy:edit', 'proxy:create']),
+          includeAllFolders: canManageFolders,
+        }
   );
   return c.json({
     data: redactGroupedPageTargets(

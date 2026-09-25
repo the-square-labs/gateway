@@ -5,7 +5,8 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
-import { makeNode } from "@/test/fixtures";
+import { useAuthStore } from "@/stores/auth";
+import { makeNode, makeUser } from "@/test/fixtures";
 import type { ManagedDatabase, ManagedDatabaseBinding } from "@/types";
 import { ManagedDatabaseLinksSection } from "./ManagedDatabaseLinksSection";
 
@@ -59,6 +60,12 @@ function renderLinks(props: Partial<ComponentProps<typeof ManagedDatabaseLinksSe
 
 describe("ManagedDatabaseLinksSection", () => {
   beforeEach(() => {
+    // Linking and unlinking need databases:edit on the database.
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["databases:edit"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
     vi.spyOn(api, "listNodes").mockResolvedValue({
       data: [
         makeNode({
@@ -191,6 +198,36 @@ describe("ManagedDatabaseLinksSection", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Save & Recreate" }));
     await waitFor(() => expect(remove).toHaveBeenCalledWith(database.id, binding.id));
+  });
+
+  it("only lets a database editor unlink, like the unbind API", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["databases:view", "databases:delete"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([binding]);
+
+    renderLinks();
+
+    expect(await screen.findByText("App Postgres")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unlink App Postgres" })).toBeDisabled();
+  });
+
+  it("allows unlinking with databases:edit on that database only", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: [`databases:edit:${database.databaseConnectionId}`] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listManagedDatabases").mockResolvedValue([database]);
+    vi.spyOn(api, "listManagedDatabaseBindings").mockResolvedValue([binding]);
+
+    renderLinks();
+
+    expect(await screen.findByText("App Postgres")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unlink App Postgres" })).toBeEnabled();
   });
 
   it("shows a failed reconciliation as an error with the backend failure detail", async () => {

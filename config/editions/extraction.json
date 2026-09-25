@@ -290,6 +290,7 @@
       "emptyMethods": [
         "setEventBus",
         "setLicensePolicyService",
+        "setCertificateRenewal",
         "setBindingsTeardown",
         "setAppCertificateFingerprint",
         "shutdown",
@@ -387,7 +388,8 @@
       "sharedMethods": [],
       "emptyMethods": [
         "setLicensePolicyService",
-        "setEventBus"
+        "setEventBus",
+        "setCertificateRenewal"
       ],
       "emptyConstructor": true,
       "typeOnlyProperties": true
@@ -426,6 +428,11 @@
       "emptyMethods": [
         "registerScheduler"
       ],
+      "emptyConstructor": true
+    },
+    {
+      "path": "modules/storage/storage-copy.service.ts",
+      "sharedMethods": [],
       "emptyConstructor": true
     },
     {

@@ -10,7 +10,9 @@ import { defaultManagedStorageDraft, ManagedObjectStorageCreateForm, Storage } f
 import { canDeployManagedStorage } from "./storage-detail/managed-storage-capacity";
 
 vi.mock("@/components/common/FolderedResourceList", () => ({
-  FolderedResourceList: () => <div data-testid="storage-list" />,
+  FolderedResourceList: ({ resources = [] }: { resources?: Array<{ name: string }> }) => (
+    <div data-testid="storage-list">{resources.map((row) => row.name).join(", ")}</div>
+  ),
 }));
 vi.mock("@/lib/managed-database-nodes", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/managed-database-nodes")>()),
@@ -146,5 +148,42 @@ describe("managed storage create dialog", () => {
     expect(version).not.toHaveTextContent("RELEASE.");
     resolveCatalog(CATALOG);
     await waitFor(() => expect(version).toHaveTextContent("SeaweedFS 4.47"));
+  });
+});
+
+describe("storage list with folder grants", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("shows a server-listed connection the cached scopes do not name yet and refreshes them", async () => {
+    const folderGrant = "storage:view:folder/11111111-1111-4111-8111-111111111111";
+    useAuthStore.setState({
+      user: makeUser({ scopes: [folderGrant] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "getCached").mockReturnValue(undefined);
+    vi.spyOn(api, "setCache").mockImplementation(() => undefined);
+    vi.spyOn(api, "listManagedObjectStorageCatalog").mockResolvedValue([]);
+    // A colleague created "team-bucket" in the granted folder after this session loaded its scopes.
+    vi.spyOn(api, "listObjectStorages").mockResolvedValue({
+      data: [{ id: "storage-new", name: "team-bucket" }],
+    } as never);
+    const getCurrentUser = vi
+      .spyOn(api, "getCurrentUser")
+      .mockResolvedValue(makeUser({ scopes: [folderGrant, "storage:view:storage-new"] }));
+
+    render(
+      <MemoryRouter>
+        <Storage />
+      </MemoryRouter>
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("storage-list")).toHaveTextContent("team-bucket")
+    );
+    await waitFor(() =>
+      expect(useAuthStore.getState().user?.scopes).toContain("storage:view:storage-new")
+    );
+    expect(getCurrentUser).toHaveBeenCalled();
   });
 });

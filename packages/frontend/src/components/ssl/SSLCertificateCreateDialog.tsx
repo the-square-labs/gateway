@@ -24,16 +24,17 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  allowedCreationFolderId,
+  creationFolderChoices,
+  flattenCreationFolders,
+} from "@/lib/creation-folders";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
-import type {
-  ACMEChallengeType,
-  DNSChallenge,
-  DomainSearchResult,
-  ResourceFolderTreeNode,
-} from "@/types";
+import type { ACMEChallengeType, DNSChallenge, DomainSearchResult } from "@/types";
 import { DNSChallengeVerification } from "./DNSChallengeVerification";
 
 interface SSLCertificateCreateDialogProps {
@@ -58,6 +59,7 @@ export interface SSLCertificateCreateDialogDevPreview {
 }
 
 const DEV_PREVIEW_CERT_ID = "__dev_ssl_preview__";
+const NO_SCOPES: string[] = [];
 const FORM_ANIMATION = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
@@ -120,10 +122,16 @@ export function SSLCertificateCreateDialog({
   const canExportAnyPkiCert = hasScopedAccess("pki:cert:export");
   const canExportPkiCert = (certId: string) => hasScope(`pki:cert:export:${certId}`);
   const canLinkSelectedPkiCert = !!selectedPkiCertId && canExportPkiCert(selectedPkiCertId);
+  const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
   const folders = useResourceFolderStore((state) => state.foldersByType["ssl-certificate"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["ssl-certificate"]);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
+  // Every creation method needs ssl:cert:issue on the destination (broad or folder).
+  const folderChoices = useMemo(
+    () => creationFolderChoices(scopes, "ssl:cert:issue", flattenCreationFolders(folders ?? [])),
+    [folders, scopes]
+  );
+  const canCreateInSelectedFolder = canCreateInFolder(scopes, "ssl:cert:issue", folderId || null);
 
   useEffect(() => {
     if (open && resetTimerRef.current !== null) {
@@ -153,6 +161,11 @@ export function SSLCertificateCreateDialog({
     };
     void loadPkiCerts();
   }, [defaultChallengeMode, defaultTab, fetchFolders, open, pkiEnabled]);
+
+  useEffect(() => {
+    if (!open) return;
+    setFolderId((current) => allowedCreationFolderId(folderChoices, current));
+  }, [folderChoices, open]);
 
   useEffect(() => {
     if (!open || !devPreview) return;
@@ -410,16 +423,24 @@ export function SSLCertificateCreateDialog({
         <div className="space-y-1.5">
           <label className="text-sm font-medium">Folder</label>
           <Select
-            value={folderId || "__none__"}
+            value={folderId || (folderChoices.allowRoot ? "__none__" : "")}
             onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
             disabled={foldersLoading || acmeFlowStarted}
           >
             <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-              <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
+              <SelectValue
+                placeholder={
+                  foldersLoading
+                    ? "Loading folders…"
+                    : folderChoices.allowRoot
+                      ? "No folder"
+                      : "Select a folder"
+                }
+              />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="__none__">No folder</SelectItem>
-              {folderOptions.map((folder) => (
+              {folderChoices.allowRoot && <SelectItem value="__none__">No folder</SelectItem>}
+              {folderChoices.folders.map((folder) => (
                 <SelectItem key={folder.id} value={folder.id}>
                   {"  ".repeat(folder.depth) + folder.name}
                 </SelectItem>
@@ -714,19 +735,25 @@ export function SSLCertificateCreateDialog({
             ) : (
               <Button
                 onClick={handleRequestACME}
-                disabled={isRequestingACME || hasUnselectedDomain}
+                disabled={isRequestingACME || hasUnselectedDomain || !canCreateInSelectedFolder}
               >
                 {isRequestingACME ? "Requesting..." : "Request Certificate"}
               </Button>
             ))}
           {activeTab === "upload" && (
-            <Button onClick={handleUpload} disabled={isUploading || !canUploadCertificate}>
+            <Button
+              onClick={handleUpload}
+              disabled={isUploading || !canUploadCertificate || !canCreateInSelectedFolder}
+            >
               <Upload className="h-4 w-4" />
               {isUploading ? "Uploading..." : "Upload Certificate"}
             </Button>
           )}
           {activeTab === "internal" && (
-            <Button onClick={handleLinkInternal} disabled={isLinking || !canLinkSelectedPkiCert}>
+            <Button
+              onClick={handleLinkInternal}
+              disabled={isLinking || !canLinkSelectedPkiCert || !canCreateInSelectedFolder}
+            >
               {isLinking ? "Linking..." : "Link Certificate"}
             </Button>
           )}
@@ -734,8 +761,4 @@ export function SSLCertificateCreateDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

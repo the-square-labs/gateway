@@ -30,6 +30,8 @@ export interface BackupRestoreInput {
    */
   targetDatabaseName?: string;
   restoreTargetConnectionId?: string;
+  /** Folder of a new managed restore target; folder-scoped creators must name one they can create in. */
+  folderId?: string | null;
   /** Restore never overwrites an existing nonempty target. */
   overwrite?: false;
   limits?: Partial<BackupLimits>;

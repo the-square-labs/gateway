@@ -264,16 +264,9 @@ export const APP_NAVIGATION_GROUPS: readonly AppNavigationGroup[] = [
 
 const NOTIFICATION_CORE_SCOPES = [
   "notifications:alerts:view",
-  "notifications:alerts:create",
-  "notifications:alerts:edit",
-  "notifications:alerts:delete",
+  "notifications:alerts:manage",
   "notifications:webhooks:view",
-  "notifications:webhooks:create",
-  "notifications:webhooks:edit",
-  "notifications:webhooks:delete",
-  "notifications:deliveries:view",
-  "notifications:view",
-  "notifications:manage",
+  "notifications:webhooks:manage",
 ] as const;
 
 const SIEM_NOTIFICATION_SCOPES = ["audit:siem:view", "audit:siem:manage"] as const;
@@ -310,8 +303,7 @@ export function hasDashboardContent(context: AppNavigationVisibility): boolean {
     hasScopeBase(scopes, "nodes:details") ||
     scopeMatches(scopes, "admin:audit") ||
     (context.pkiEnabled &&
-      (hasScopeBase(scopes, "pki:cert:view") ||
-        hasAnyScope(scopes, ["pki:ca:view:root", "pki:ca:view:intermediate"]))) ||
+      (hasScopeBase(scopes, "pki:cert:view") || hasScopeBase(scopes, "pki:ca:view"))) ||
     (context.inferenceEnabled &&
       context.hasLowInferenceUsage === true &&
       scopeMatches(scopes, "feat:ai:use"))
@@ -335,9 +327,7 @@ export function canAccessNavigationItem(
     case "ssl-certificates":
       return hasScopeBase(scopes, "ssl:cert:view");
     case "authorities":
-      return (
-        context.pkiEnabled && hasAnyScope(scopes, ["pki:ca:view:root", "pki:ca:view:intermediate"])
-      );
+      return context.pkiEnabled && hasScopeBase(scopes, "pki:ca:view");
     case "certificates":
       return context.pkiEnabled && hasScopeBase(scopes, "pki:cert:view");
     case "docker": {
@@ -347,30 +337,40 @@ export function canAccessNavigationItem(
         hasScopeBase(scopes, "docker:volumes:view") ||
         hasScopeBase(scopes, "docker:networks:view") ||
         hasScopeBase(scopes, "docker:tasks") ||
-        scopeMatches(scopes, "docker:containers:folders:manage");
+        scopeMatches(scopes, "docker:folders:manage");
       return (
         canAccess &&
-        (context.hasDockerNodes !== false ||
-          scopeMatches(scopes, "docker:containers:folders:manage"))
+        (context.hasDockerNodes !== false || scopeMatches(scopes, "docker:folders:manage"))
       );
     }
     case "pages":
       return (
         context.pagesEnabled === true &&
-        (hasScopeBase(scopes, "pages:view") || scopeMatches(scopes, "pages:folders:manage"))
+        (hasScopeBase(scopes, "pages:view") ||
+          hasScopeBase(scopes, "pages:create") ||
+          scopeMatches(scopes, "pages:folders:manage"))
       );
+    // Create-only (for example folder-scoped) grants open the page so the user can create.
     case "storage":
-      return hasScopeBase(scopes, "storage:view") || scopeMatches(scopes, "storage:folders:manage");
+      return (
+        hasScopeBase(scopes, "storage:view") ||
+        hasScopeBase(scopes, "storage:create") ||
+        scopeMatches(scopes, "storage:folders:manage")
+      );
     case "databases":
       return (
-        hasScopeBase(scopes, "databases:view") || scopeMatches(scopes, "databases:folders:manage")
+        hasScopeBase(scopes, "databases:view") ||
+        hasScopeBase(scopes, "databases:create") ||
+        scopeMatches(scopes, "databases:folders:manage")
       );
     case "logging":
       return (
         context.loggingEnabled &&
         (hasScopeBase(scopes, "logs:environments:view") ||
           hasScopeBase(scopes, "logs:schemas:view") ||
-          hasAnyScope(scopes, ["logs:schemas:create", "logs:read", "logs:manage"]))
+          hasScopeBase(scopes, "logs:read") ||
+          hasScopeBase(scopes, "logs:environments:create") ||
+          hasScopeBase(scopes, "logs:schemas:create"))
       );
     case "nodes":
       return hasScopeBase(scopes, "nodes:details") || scopeMatches(scopes, "nodes:folders:manage");

@@ -381,20 +381,26 @@ export class FolderService {
 
   async getGroupedHosts(
     query: GroupedHostsQuery,
-    options?: { allowedHostIds?: string[]; includeAllFolders?: boolean }
+    options?: { allowedHostIds?: string[]; allowedFolderIds?: string[]; includeAllFolders?: boolean }
   ): Promise<GroupedHostsResponse> {
     // 1. Fetch all folders
     const allFolders = await this.db
       .select()
       .from(proxyHostFolders)
       .orderBy(asc(proxyHostFolders.depth), asc(proxyHostFolders.sortOrder));
+    const allowedFolderIds = new Set(options?.allowedFolderIds ?? []);
 
     // 2. Fetch all hosts (with optional filters)
     const conditions = [eq(proxyHosts.isSystem, false)];
     if (options?.allowedHostIds) {
       if (options.allowedHostIds.length === 0) {
+        const emptyTree = this.buildTree(allFolders, []);
         return {
-          folders: options.includeAllFolders ? this.buildTree(allFolders, []) : [],
+          folders: options.includeAllFolders
+            ? emptyTree
+            : allowedFolderIds.size > 0
+              ? this.mapGroupedTree(this.pruneFolderTree(emptyTree, allowedFolderIds))
+              : [],
           ungroupedHosts: [],
           totalHosts: 0,
         };
@@ -442,15 +448,14 @@ export class FolderService {
     const ungroupedHosts = hostsByFolder.get(null) ?? [];
 
     // 6. Convert to plain objects with effectiveHealthStatus
-    const mapTree = (nodes: FolderTreeNode[]): any[] =>
-      nodes.map((n) => ({
-        ...n,
-        hosts: n.hosts.map(toPlainHost),
-        children: mapTree(n.children),
-      }));
+    const visibleTree = options?.includeAllFolders
+      ? tree
+      : allowedFolderIds.size > 0
+        ? this.pruneFolderTree(tree, allowedFolderIds)
+        : this.pruneEmptyBranches(tree);
 
     return {
-      folders: mapTree(options?.includeAllFolders ? tree : this.pruneEmptyBranches(tree)),
+      folders: this.mapGroupedTree(visibleTree),
       ungroupedHosts: ungroupedHosts.map(toPlainHost) as any,
       totalHosts: allHosts.length,
     };
@@ -566,6 +571,14 @@ export class FolderService {
     return nodes
       .map((node) => ({ ...node, children: this.pruneEmptyBranches(node.children) }))
       .filter((node) => node.hosts.length > 0 || node.children.length > 0);
+  }
+
+  private mapGroupedTree(nodes: FolderTreeNode[]): any[] {
+    return nodes.map((node) => ({
+      ...node,
+      hosts: node.hosts.map(toPlainHost),
+      children: this.mapGroupedTree(node.children),
+    }));
   }
 
   private pruneFolderTree(nodes: FolderTreeNode[], allowedFolderIds: Set<string>): FolderTreeNode[] {

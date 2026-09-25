@@ -845,8 +845,12 @@ export function ProxyHostDetail({
     }
   };
 
+  // Same check as POST /proxy-hosts/:id/tls/resync: system routes need admin:update,
+  // other routes proxy:edit (admin:update still accepted for one release).
+  const canRetryTlsDelivery = (target: ProxyHost) =>
+    hasScope("admin:update") || (!target.isSystem && hasScope(`proxy:edit:${target.id}`));
   const handleTlsResync = async () => {
-    if (!host || !hasScope("admin:update")) return;
+    if (!host || !canRetryTlsDelivery(host)) return;
     setIsTlsResyncing(true);
     try {
       await api.resyncProxyHostTls(host.id);
@@ -873,7 +877,7 @@ export function ProxyHostDetail({
     !!host &&
     host.sslEnabled &&
     host.enabled &&
-    hasScope("admin:update") &&
+    canRetryTlsDelivery(host) &&
     host.tlsDistribution?.status !== "ready";
 
   const handleAccessListChange = useCallback(

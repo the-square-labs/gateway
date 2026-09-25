@@ -17,7 +17,6 @@ const SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:manage',
-  'docker:containers:config',
   'docker:containers:console',
   'docker:containers:migrate',
   'docker:containers:delete',

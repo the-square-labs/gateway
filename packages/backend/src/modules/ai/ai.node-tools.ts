@@ -18,7 +18,11 @@ import {
   type RelayedLogEntry,
 } from '@/modules/monitoring/log-relay.service.js';
 import { subscribeNginxHostLogs } from '@/modules/monitoring/nginx-log-subscriptions.js';
-import { createNodeForActor, updateNodeForActor } from '@/modules/nodes/node-actions.js';
+import {
+  createNodeForActor,
+  regenerateNodeEnrollmentTokenForActor,
+  updateNodeForActor,
+} from '@/modules/nodes/node-actions.js';
 import {
   daemonLogMatcher,
   NODE_LOG_HISTORY_LIMIT,
@@ -36,7 +40,8 @@ import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { User } from '@/types.js';
 import { inspectConsoleCommand, parseConsoleCommandResult } from './ai.console-safety.js';
-import { agentPage, agentPageLimit, allowedResourceIdsForScopes } from './ai.service-helpers.js';
+import { resolveNodeListAccess } from './ai.node-list-scopes.js';
+import { agentPage, agentPageLimit } from './ai.service-helpers.js';
 
 export const NODE_TOOL_NAMES = new Set([
   'list_nodes',
@@ -72,6 +77,17 @@ export async function executeNodeTool(
 
   switch (toolName) {
     case 'list_nodes': {
+      // Same inventory rule as GET /api/nodes: creators and Docker grants discover their destination nodes.
+      const access = resolveNodeListAccess(user.scopes, a.type);
+      if (!access.allowed) {
+        throw new Error(
+          `PERMISSION_DENIED: Missing permission for the requested node inventory (one of ${access.requiredScopes.join(', ')}).${
+            a.type
+              ? ''
+              : ' Pass type (nginx, docker, databases or storage) to list the nodes your create or Docker scopes can target.'
+          }`
+        );
+      }
       const result = await context.nodesService.list(
         {
           search: a.search,
@@ -80,27 +96,42 @@ export async function executeNodeTool(
           page: agentPage(a.page),
           limit: agentPageLimit(a.limit),
         },
-        { allowedIds: allowedResourceIdsForScopes(user.scopes, 'nodes:details') }
+        access.allowedIds ? { allowedIds: access.allowedIds } : undefined
       );
       return {
         ...result,
-        data: result.data.map((node) => ({
-          id: node.id,
-          type: node.type,
-          hostname: node.hostname,
-          displayName: node.displayName,
-          appearanceColor: node.appearanceColor,
-          status: node.status,
-          isConnected: node.isConnected,
-          serviceCreationLocked: node.serviceCreationLocked,
-          daemonVersion: node.daemonVersion,
-          osInfo: node.osInfo,
-          configVersionHash: node.configVersionHash,
-          capabilities: node.capabilities,
-          lastSeenAt: node.lastSeenAt,
-          createdAt: node.createdAt,
-          updatedAt: node.updatedAt,
-        })),
+        data: result.data.map((node) =>
+          access.compact
+            ? {
+                id: node.id,
+                type: node.type,
+                hostname: node.hostname,
+                displayName: node.displayName,
+                appearanceColor: node.appearanceColor,
+                status: node.status,
+                isConnected: node.isConnected,
+                serviceCreationLocked: node.serviceCreationLocked,
+                daemonVersion: node.daemonVersion,
+                lastSeenAt: node.lastSeenAt,
+              }
+            : {
+                id: node.id,
+                type: node.type,
+                hostname: node.hostname,
+                displayName: node.displayName,
+                appearanceColor: node.appearanceColor,
+                status: node.status,
+                isConnected: node.isConnected,
+                serviceCreationLocked: node.serviceCreationLocked,
+                daemonVersion: node.daemonVersion,
+                osInfo: node.osInfo,
+                configVersionHash: node.configVersionHash,
+                capabilities: node.capabilities,
+                lastSeenAt: node.lastSeenAt,
+                createdAt: node.createdAt,
+                updatedAt: node.updatedAt,
+              }
+        ),
       };
     }
     case 'get_node':
@@ -190,7 +221,7 @@ async function executeNodeConfigTool(context: NodeToolContext, user: User, args:
       return { nodeId, content: result.detail ?? '' };
     }
     case 'update': {
-      assertNodeConfigScope(user, 'nodes:config:edit', nodeId);
+      assertNodeConfigScope(user, 'nodes:manage', nodeId);
       await assertNginxNode(context.nodesService, nodeId);
       const content = typeof args.content === 'string' ? args.content : '';
       if (!content) throw new Error('content is required');
@@ -201,7 +232,7 @@ async function executeNodeConfigTool(context: NodeToolContext, user: User, args:
       return { nodeId, valid: result.success, error: result.success ? null : result.error };
     }
     case 'test': {
-      assertNodeConfigScope(user, 'nodes:config:edit', nodeId);
+      assertNodeConfigScope(user, 'nodes:manage', nodeId);
       await assertNginxNode(context.nodesService, nodeId);
       const result = await dispatchService.testConfig(nodeId);
       return {
@@ -251,8 +282,8 @@ async function executeManageNodeTool(context: NodeToolContext, user: User, args:
       return updateNodeForActor({ id: user.id, scopes: user.scopes }, nodeId, input, context.nodesService);
     }
     case 'regenerate_enrollment_token':
-      assertNodeScope(user, 'nodes:create', nodeId);
-      return context.nodesService.regenerateEnrollmentToken(nodeId, user.id);
+      // Same check as POST /nodes/:id/enrollment-token: nodes:create where the node sits (folder grants included).
+      return regenerateNodeEnrollmentTokenForActor({ id: user.id, scopes: user.scopes }, nodeId, context.nodesService);
     case 'health_history':
       assertNodeScope(user, 'nodes:details', nodeId);
       return { nodeId, healthHistory: await context.nodesService.getHealthHistory(nodeId) };
@@ -452,7 +483,7 @@ async function executeNodeFileTool(nodesService: NodesService, user: User, args:
   }
 }
 
-function assertNodeConfigScope(user: User, scope: 'nodes:config:view' | 'nodes:config:edit', nodeId: string) {
+function assertNodeConfigScope(user: User, scope: 'nodes:config:view' | 'nodes:manage', nodeId: string) {
   if (!hasScopeForResource(user.scopes, scope, nodeId)) {
     throw new Error(`Missing required scope: ${scope}:${nodeId}`);
   }

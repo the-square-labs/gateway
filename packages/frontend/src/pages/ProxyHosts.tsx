@@ -43,6 +43,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { isGatewayPublicRoute } from "@/lib/proxy-route-protection";
 import { proxyHostRoute } from "@/lib/resource-routes";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useFolderStore } from "@/stores/folders";
@@ -90,7 +91,7 @@ export function ProxyHosts({
   initialCreateDialogOpen?: boolean;
 } = {}) {
   const navigate = useNavigate();
-  const { hasScope, hasScopedAccess } = useAuthStore();
+  const { hasScope, hasScopedAccess, user } = useAuthStore();
   const gatewayPublicUrl = useUIBootstrapStore(
     (state) => state.snapshot?.systemConfig.publicUrl ?? null
   );
@@ -415,6 +416,11 @@ export function ProxyHosts({
     hasScope("proxy:view") || hasScope(`proxy:view:${host.id}`);
   const canEditHost = (host: ProxyHost) =>
     hasScope("proxy:edit") || hasScope(`proxy:edit:${host.id}`);
+  // Same checks as POST /proxy-host-folders/move-hosts: folder management plus
+  // edit access on the route and on the destination.
+  const canMoveHost = (host: ProxyHost) => canManageFolders && canEditHost(host);
+  const canMoveHostTo = (folderId: string | null) =>
+    canCreateInFolder(user?.scopes ?? [], "proxy:edit", folderId);
 
   const columns: ResourceListColumn<ProxyHost>[] = [
     {
@@ -578,10 +584,14 @@ export function ProxyHosts({
                       >
                         {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
                       </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => setMoveDialogHostId(host.id)}>
-                        Move to folder...
-                      </DropdownMenuItem>
+                      {canMoveHost(host) && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => setMoveDialogHostId(host.id)}>
+                            Move to folder...
+                          </DropdownMenuItem>
+                        </>
+                      )}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 </div>
@@ -776,6 +786,7 @@ export function ProxyHosts({
         folders={folders}
         currentFolderId={moveDialogHostId ? findHostFolderId(moveDialogHostId) : null}
         onMove={handleMoveHost}
+        canMoveTo={canMoveHostTo}
       />
 
       <FolderCreateDialog

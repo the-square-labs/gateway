@@ -172,6 +172,13 @@ export interface DockerBuild {
   completedAt: string | null;
 }
 
+/** A Git connector offered by the source pickers: identity only, readable with the workload's create/edit scope. */
+export interface DockerSourceConnector {
+  id: string;
+  name: string;
+  provider: "gitlab" | "github" | "git";
+}
+
 export interface DockerBuildSourceRepository {
   connectorId: string;
   connectorName: string;

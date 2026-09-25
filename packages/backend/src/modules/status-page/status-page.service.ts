@@ -14,6 +14,7 @@ import type {
   UpdateStatusPageIncidentInput,
   UpdateStatusPageServiceInput,
 } from './status-page.schemas.js';
+import type { StatusPageSourceType } from './status-page-source-access.js';
 export type StatusPageServiceStatus = 'operational' | 'degraded' | 'outage' | 'unknown' | 'maintenance';
 export type StatusPageOverallStatus = 'operational' | 'degraded' | 'outage' | 'maintenance';
 export interface StatusPageConfig {
@@ -127,8 +128,10 @@ export class StatusPageService {
   > {
     return [];
   }
-  async listServices(): Promise<
+  async listServices(_actorScopes?: readonly string[]): Promise<
     {
+      /** Present when listed with the caller scopes: whether the caller may edit this listing. */
+      sourceVisible?: boolean;
       source: {
         label: string;
         status: StatusPageServiceStatus;
@@ -169,9 +172,28 @@ export class StatusPageService {
   > {
     return [];
   }
+  async listSources(_scopes: readonly string[]): Promise<
+    {
+      sourceType: StatusPageSourceType;
+      sourceId: string;
+      name: string;
+      nodeId: string | null;
+      nodeName: string | null;
+    }[]
+  > {
+    return commercialModuleUnavailable();
+  }
+  async assertSourceVisible(
+    _scopes: readonly string[],
+    _sourceType: StatusPageSourceType,
+    _sourceId: string
+  ): Promise<void> {
+    return commercialModuleUnavailable();
+  }
   async createService(
     _input: CreateStatusPageServiceInput,
-    _userId: string
+    _userId: string,
+    _actorScopes?: readonly string[]
   ): Promise<{
     id: string;
     sourceType:
@@ -203,7 +225,8 @@ export class StatusPageService {
   async updateService(
     _id: string,
     _input: UpdateStatusPageServiceInput,
-    _userId: string
+    _userId: string,
+    _actorScopes?: readonly string[]
   ): Promise<{
     id: string;
     sourceType:

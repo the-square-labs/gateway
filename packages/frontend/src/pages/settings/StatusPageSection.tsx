@@ -30,18 +30,14 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type {
-  DatabaseConnection,
-  DockerComposeProjectSummary,
-  DockerContainer,
   Node,
-  PageProject,
-  ProxyHost,
   SSLCertificate,
   StatusPageConfig,
   StatusPageIncident,
   StatusPageIncidentSeverity,
   StatusPageProxyTemplateOption,
   StatusPageServiceItem,
+  StatusPageSourceOption,
   StatusPageSourceType,
 } from "@/types";
 
@@ -419,12 +415,7 @@ export function ServiceDialog({
   onOpenChange,
   service,
   services,
-  nodes,
-  proxies,
-  databases,
-  dockerTargets = [],
-  composeProjects = [],
-  pageProjects = [],
+  sources,
   sourceOptionsLoading = false,
   onSaved,
 }: {
@@ -432,12 +423,8 @@ export function ServiceDialog({
   onOpenChange: (open: boolean) => void;
   service: StatusPageServiceItem | null;
   services: StatusPageServiceItem[];
-  nodes: Node[];
-  proxies: ProxyHost[];
-  databases: DatabaseConnection[];
-  dockerTargets?: DockerContainer[];
-  composeProjects?: DockerComposeProjectSummary[];
-  pageProjects?: PageProject[];
+  /** Exposable resources the caller can view (GET /status-page/sources). */
+  sources: StatusPageSourceOption[];
   sourceOptionsLoading?: boolean;
   onSaved: () => void;
 }) {
@@ -451,7 +438,9 @@ export function ServiceDialog({
   useEffect(() => {
     if (!open) return;
     setSourceType(
-      service?.sourceType?.startsWith("docker_") ? "docker" : (service?.sourceType ?? "proxy_host")
+      service?.sourceType?.startsWith("docker_") && service.sourceType !== "docker_compose_project"
+        ? "docker"
+        : (service?.sourceType ?? "proxy_host")
     );
     setSourceId(service?.sourceId ?? "");
     setName(service?.publicName ?? "");
@@ -464,52 +453,31 @@ export function ServiceDialog({
     const exposed = new Set(
       services.filter((item) => item.id !== service?.id).map((item) => item.sourceId)
     );
-    if (sourceType === "node") {
-      return nodes.map((node) => ({ id: node.id, label: node.displayName || node.hostname }));
-    }
-    if (sourceType === "database") {
-      return databases.map((database) => ({ id: database.id, label: database.name }));
-    }
-    if (sourceType === "docker") {
-      return dockerTargets.flatMap((item) => {
-        if (item.kind === "deployment") {
-          if (!item.deploymentId || !item.healthCheckEnabled || exposed.has(item.deploymentId)) {
-            return [];
-          }
+    const withNode = (source: StatusPageSourceOption, label: string) =>
+      source.nodeName && source.sourceType !== "node" ? `${label} (${source.nodeName})` : label;
+    return sources.flatMap((source) => {
+      if (exposed.has(source.sourceId)) return [];
+      if (sourceType === "docker") {
+        if (source.sourceType === "docker_container")
           return [
-            { id: `docker_deployment:${item.deploymentId}`, label: `Deployment: ${item.name}` },
+            {
+              id: `docker_container:${source.sourceId}`,
+              label: withNode(source, `Container: ${source.name}`),
+            },
           ];
-        }
-        if (!item.healthCheckId || !item.healthCheckEnabled || exposed.has(item.healthCheckId)) {
-          return [];
-        }
-        return [{ id: `docker_container:${item.healthCheckId}`, label: `Container: ${item.name}` }];
-      });
-    }
-    if (sourceType === "docker_compose_project") {
-      return composeProjects
-        .filter((project) => !exposed.has(project.id))
-        .map((project) => ({ id: project.id, label: project.name }));
-    }
-    if (sourceType === "pages_project") {
-      return pageProjects
-        .filter((project) => !exposed.has(project.id))
-        .map((project) => ({ id: project.id, label: project.name }));
-    }
-    return proxies
-      .filter((proxy) => proxy.healthCheckEnabled && !proxy.isSystem && !exposed.has(proxy.id))
-      .map((proxy) => ({ id: proxy.id, label: proxy.domainNames[0] || proxy.id }));
-  }, [
-    composeProjects,
-    databases,
-    dockerTargets,
-    nodes,
-    pageProjects,
-    proxies,
-    service?.id,
-    services,
-    sourceType,
-  ]);
+        if (source.sourceType === "docker_deployment")
+          return [
+            {
+              id: `docker_deployment:${source.sourceId}`,
+              label: withNode(source, `Deployment: ${source.name}`),
+            },
+          ];
+        return [];
+      }
+      if (source.sourceType !== sourceType) return [];
+      return [{ id: source.sourceId, label: withNode(source, source.name) }];
+    });
+  }, [service?.id, services, sourceType, sources]);
   const groupOptions = useMemo(
     () =>
       Array.from(

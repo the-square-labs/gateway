@@ -93,6 +93,8 @@ export interface ManagedObjectStorageCreateInput {
   ftpPort?: number;
   ftpPassivePortStart?: number;
   ftpPassivePortCount?: number;
+  /** Folder of the canonical storage connection; null or omitted is the root. */
+  folderId?: string | null;
 }
 
 /** The Storage CA that signs a TLS-enabled managed cluster's S3 certificate. */
@@ -186,6 +188,8 @@ export interface ObjectStorageConnection {
     publishedPort: number;
     status: ManagedObjectStorageStatus;
     lastError: string | null;
+    /** Set while a migration write freeze keeps every issued key read-only. */
+    writesFrozenAt?: string;
   };
   createdById: string;
   updatedById: string | null;

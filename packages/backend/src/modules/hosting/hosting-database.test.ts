@@ -427,7 +427,7 @@ describe.skipIf(!url)('hosting PostgreSQL transaction invariants', () => {
       'hosting:resources:create',
       'nodes:create',
       'nodes:details',
-      'nodes:config:edit',
+      'nodes:manage',
     ],
   } as User;
   const auth = { getUserById: vi.fn(async () => owner) };

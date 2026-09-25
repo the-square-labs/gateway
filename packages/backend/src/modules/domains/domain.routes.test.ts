@@ -26,6 +26,9 @@ const mocks = vi.hoisted(() => ({
     assertFolderExists: vi.fn(),
     moveFolder: vi.fn(),
   },
+  sslFolderService: {
+    assertFolderExists: vi.fn(),
+  },
 }));
 
 vi.mock('@/container.js', () => ({
@@ -33,6 +36,7 @@ vi.mock('@/container.js', () => ({
     resolve: vi.fn((token) => {
       if (token?.name === 'DomainsService') return mocks.domainsService;
       if (token?.name === 'DomainFolderService') return mocks.folderService;
+      if (token?.name === 'SSLCertificateFolderService') return mocks.sslFolderService;
       return mocks.sslService;
     }),
   },
@@ -81,6 +85,11 @@ vi.mock('@/modules/domains/domain-folders.service.js', () => ({
   DomainFolderService: class DomainFolderService {},
 }));
 vi.mock('@/modules/ssl/ssl.service.js', () => ({ SSLService: class SSLService {} }));
+const grantCreatedResourcePermissions = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/created-resource-permissions.js', () => ({ grantCreatedResourcePermissions }));
+vi.mock('@/modules/ssl/ssl-certificate-folders.service.js', () => ({
+  SSLCertificateFolderService: class SSLCertificateFolderService {},
+}));
 vi.mock('./domain.service.js', () => ({ DomainsService: class DomainsService {} }));
 
 import { domainRoutes } from './domain.routes.js';
@@ -119,8 +128,9 @@ describe('domain routes authorization', () => {
       dnsProvider: 'legacy',
       cloudflareMigrationStatus: 'ignored',
     });
-    mocks.sslService.requestACMECert.mockResolvedValue({ id: 'cert-1' });
+    mocks.sslService.requestACMECert.mockResolvedValue({ certificate: { id: 'cert-1' }, status: 'active' });
     mocks.folderService.assertFolderExists.mockResolvedValue(undefined);
+    mocks.sslFolderService.assertFolderExists.mockResolvedValue(undefined);
     mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
       eligibleNodes: [],
       unconfiguredNodes: [],
@@ -270,9 +280,97 @@ describe('domain routes authorization', () => {
         provider: 'letsencrypt',
         autoRenew: true,
         dnsProvider: 'cloudflare',
+        folderId: null,
       },
       'user-1',
       'operator@wlt.sh'
     );
+    // Like every other certificate creation, the issuer keeps sight of the new certificate.
+    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith('user-1', 'ssl:cert', 'cert-1', { folderId: null });
+  });
+
+  it('lets a folder-only creator load the Nginx node options and preview DNS', async () => {
+    mocks.scopes = [`domains:create:folder/${FOLDER_ID}`];
+    mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
+      eligibleNodes: [{ id: 'node-a' }, { id: 'node-b' }],
+      unconfiguredNodes: [{ id: 'node-c' }],
+      totalNginxNodes: 3,
+      unconfiguredNginxNodes: 1,
+    });
+
+    const nodes = await request('GET', '/nginx-nodes');
+    const preview = await request('POST', '/preview', { domain: 'example.com' });
+
+    expect(nodes.status).toBe(200);
+    expect(((await nodes.json()) as { data: { eligibleNodes: unknown[] } }).data.eligibleNodes).toHaveLength(2);
+    expect(preview.status).toBe(200);
+  });
+
+  it('limits the Nginx node options to the ingress nodes of node-only creation grants', async () => {
+    const NODE_A = '44444444-4444-4444-8444-444444444444';
+    mocks.scopes = [`domains:create:node/${NODE_A}`];
+    mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
+      eligibleNodes: [{ id: NODE_A }, { id: 'node-b' }],
+      unconfiguredNodes: [{ id: 'node-c' }],
+      totalNginxNodes: 3,
+      unconfiguredNginxNodes: 1,
+    });
+
+    const response = await request('GET', '/nginx-nodes');
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      data: { eligibleNodes: [{ id: NODE_A }], unconfiguredNodes: [], totalNginxNodes: 1, unconfiguredNginxNodes: 0 },
+    });
+  });
+
+  it('previews DNS for node-only creators only on a node of their grant', async () => {
+    const NODE_A = '44444444-4444-4444-8444-444444444444';
+    const NODE_B = '55555555-5555-4555-8555-555555555555';
+    mocks.scopes = [`domains:create:node/${NODE_A}`];
+
+    const own = await request('POST', '/preview', { domain: 'example.com', nginxNodeId: NODE_A });
+    const other = await request('POST', '/preview', { domain: 'example.com', nginxNodeId: NODE_B });
+    const implicit = await request('POST', '/preview', { domain: 'example.com' });
+
+    expect(own.status).toBe(200);
+    expect(other.status).toBe(403);
+    expect(implicit.status).toBe(403);
+    expect(mocks.domainsService.previewDomain).toHaveBeenCalledOnce();
+  });
+
+  it('refuses the creation helpers without any domains:create grant', async () => {
+    mocks.scopes = ['domains:view'];
+
+    expect((await request('GET', '/nginx-nodes')).status).toBe(403);
+    expect((await request('POST', '/preview', { domain: 'example.com' })).status).toBe(403);
+  });
+
+  it('issues a domain certificate into a granted SSL certificate folder', async () => {
+    mocks.scopes = [`domains:edit:${DOMAIN_ID}`, `ssl:cert:issue:folder/${FOLDER_ID}`];
+
+    const root = await request('POST', `/${DOMAIN_ID}/issue-cert`);
+    const otherFolder = await request('POST', `/${DOMAIN_ID}/issue-cert`, { folderId: OTHER_FOLDER_ID });
+    const allowed = await request('POST', `/${DOMAIN_ID}/issue-cert`, { folderId: FOLDER_ID });
+
+    expect(root.status).toBe(403);
+    expect(otherFolder.status).toBe(403);
+    expect(allowed.status).toBe(201);
+    expect(mocks.sslFolderService.assertFolderExists).toHaveBeenCalledWith(FOLDER_ID);
+    expect(mocks.sslService.requestACMECert).toHaveBeenCalledOnce();
+    expect(mocks.sslService.requestACMECert).toHaveBeenCalledWith(
+      expect.objectContaining({ domains: ['example.com'], folderId: FOLDER_ID }),
+      'user-1',
+      'operator@wlt.sh'
+    );
+  });
+
+  it('does not issue a domain certificate with only a per-certificate issue grant', async () => {
+    mocks.scopes = [`domains:edit:${DOMAIN_ID}`, 'ssl:cert:issue:55555555-5555-4555-8555-555555555555'];
+
+    const response = await request('POST', `/${DOMAIN_ID}/issue-cert`);
+
+    expect(response.status).toBe(403);
+    expect(mocks.sslService.requestACMECert).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,9 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import { makeUser } from "@/test/fixtures";
 import type { PageProject } from "@/types";
 import { Pages } from "./Pages";
@@ -128,5 +129,49 @@ describe("Pages", () => {
       expect(screen.getByText("Live project")).toBeVisible();
     });
     expect(listProjects).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers a folder-only creator just the granted folder when creating a project", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["pages:create:folder/f1"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const folder = {
+      id: "f1",
+      name: "Team sites",
+      parentId: null,
+      sortOrder: 0,
+      depth: 0,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      children: [],
+    };
+    useResourceFolderStore.setState({
+      foldersByType: {
+        ...useResourceFolderStore.getState().foldersByType,
+        "pages-project": [folder, { ...folder, id: "f2", name: "Other" }],
+      },
+      loadingByType: { ...useResourceFolderStore.getState().loadingByType, "pages-project": false },
+      fetchFolders: vi.fn().mockResolvedValue(undefined),
+    });
+    vi.spyOn(api, "getCached").mockReturnValue(undefined);
+    vi.spyOn(api, "setCache").mockImplementation(() => undefined);
+    vi.spyOn(api, "listPageProjects").mockResolvedValue({
+      data: [],
+      pagination: { page: 1, limit: 100, total: 0, totalPages: 0 },
+    });
+    vi.spyOn(api, "listPageProjectPlacementOptions").mockResolvedValue([]);
+
+    render(
+      <MemoryRouter>
+        <Pages />
+      </MemoryRouter>
+    );
+    fireEvent.click((await screen.findAllByRole("button", { name: /Create Project/i }))[0]!);
+
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Folder" })).toHaveTextContent("Team sites")
+    );
   });
 });

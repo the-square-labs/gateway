@@ -103,11 +103,7 @@ describe("StatusPage", () => {
     vi.spyOn(api, "getStatusPageSettings").mockResolvedValue(baseConfig);
     vi.spyOn(api, "listStatusPageServices").mockResolvedValue([]);
     vi.spyOn(api, "listStatusPageIncidents").mockResolvedValue([]);
-    vi.spyOn(api, "listNodes").mockResolvedValue({ data: [] } as never);
-    vi.spyOn(api, "listProxyHosts").mockResolvedValue({ data: [] } as never);
-    vi.spyOn(api, "listDatabases").mockResolvedValue({ data: [] } as never);
-    vi.spyOn(api, "listDockerComposeProjects").mockResolvedValue([]);
-    vi.spyOn(api, "listPageProjects").mockResolvedValue({ data: [] } as never);
+    vi.spyOn(api, "listStatusPageSources").mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -247,16 +243,15 @@ describe("StatusPage", () => {
   });
 
   it("uses a closed searchable combobox for the source selector", async () => {
-    vi.mocked(api.listProxyHosts).mockResolvedValue({
-      data: [
-        {
-          id: "22222222-2222-4222-8222-222222222222",
-          domainNames: ["gateway.example.com"],
-          healthCheckEnabled: true,
-          isSystem: false,
-        },
-      ],
-    } as never);
+    vi.mocked(api.listStatusPageSources).mockResolvedValue([
+      {
+        sourceType: "proxy_host",
+        sourceId: "22222222-2222-4222-8222-222222222222",
+        name: "gateway.example.com",
+        nodeId: null,
+        nodeName: null,
+      },
+    ]);
 
     renderWithRouter(<StatusPage />, {
       path: "/status-page/:tab?",
@@ -297,5 +292,57 @@ describe("StatusPage", () => {
     });
     expect(screen.queryByText("Scroll to load more incidents")).not.toBeInTheDocument();
     expect(screen.getByLabelText("Status page incidents")).not.toHaveClass("overflow-y-auto");
+  });
+
+  it("offers only the sources the status page API returns, without per-domain list calls", async () => {
+    const listNodes = vi.spyOn(api, "listNodes");
+    const listProxyHosts = vi.spyOn(api, "listProxyHosts");
+    vi.mocked(api.listStatusPageSources).mockResolvedValue([
+      {
+        sourceType: "docker_container",
+        sourceId: "33333333-3333-4333-8333-333333333333",
+        name: "api",
+        nodeId: "node-1",
+        nodeName: "Docker One",
+      },
+    ]);
+
+    renderWithRouter(<StatusPage />, {
+      path: "/status-page/:tab?",
+      route: "/status-page/services",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Expose Service" }));
+    await waitFor(() => expect(api.listStatusPageSources).toHaveBeenCalled());
+    fireEvent.click(screen.getByText("Proxy Host").closest("button")!);
+    fireEvent.click(await screen.findByText("Docker Container or Deployment"));
+    const source = screen.getByRole("combobox", { name: "Source" });
+    await waitFor(() => expect(source).not.toBeDisabled());
+    fireEvent.focus(source);
+    fireEvent.change(source, { target: { value: "api" } });
+
+    expect(
+      await screen.findByRole("button", { name: "Container: api (Docker One)" })
+    ).toBeInTheDocument();
+    expect(listNodes).not.toHaveBeenCalled();
+    expect(listProxyHosts).not.toHaveBeenCalled();
+  });
+
+  it("does not offer editing a listing whose source the caller cannot view", async () => {
+    vi.mocked(api.listStatusPageServices).mockResolvedValue([
+      { ...exposedService, sourceVisible: false },
+    ]);
+
+    renderWithRouter(<StatusPage />, {
+      path: "/status-page/:tab?",
+      route: "/status-page/services",
+    });
+
+    expect(
+      await screen.findByRole("button", { name: `Edit ${exposedService.publicName}` })
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: `Remove ${exposedService.publicName}` })
+    ).toBeEnabled();
   });
 });

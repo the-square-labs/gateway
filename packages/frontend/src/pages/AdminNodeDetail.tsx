@@ -70,6 +70,7 @@ import {
 import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { dockerNodeListRoute, nodeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
@@ -479,10 +480,9 @@ export function AdminNodeDetail({
     nodeUpdating && activeTab !== "overview" && activeTab !== "jobs" && activeTab !== "daemon-logs";
   const canUseNodeConsole = !!(id && hasScope(`nodes:console:${id}`)) || hasScope("nodes:console");
   const canViewNodeLogs = !!(id && hasScope(`nodes:logs:${id}`)) || hasScope("nodes:logs");
+  const canManageNode = !!id && hasScope(`nodes:manage:${id}`);
   const canViewNodeConfig =
-    !!(id && (hasScope(`nodes:config:view:${id}`) || hasScope(`nodes:config:edit:${id}`))) ||
-    hasScope("nodes:config:view") ||
-    hasScope("nodes:config:edit");
+    !!(id && hasScope(`nodes:config:view:${id}`)) || hasScope("nodes:config:view") || canManageNode;
   const canViewNodeDetails = !!(id && hasScope(`nodes:details:${id}`)) || hasScope("nodes:details");
   const firewallProvider =
     hosting?.provider === "digitalocean" || hosting?.provider === "proxmox"
@@ -505,17 +505,12 @@ export function AdminNodeDetail({
           hosting?.operation?.action ?? ""
         ))
   );
-  const canEditNodeServiceAddress =
-    !!id &&
-    (isManagedDatabaseCandidateNode(node)
-      ? hasScope("nodes:rename") || hasScope(`nodes:rename:${id}`)
-      : node?.type === "nginx"
-        ? hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`)
-        : hasScope("docker:containers:config") || hasScope(`docker:containers:config:${id}`));
-  const canEditBuilderSettings =
-    !!id &&
-    node?.type === "builder" &&
-    (hasScope("nodes:config:edit") || hasScope(`nodes:config:edit:${id}`));
+  // Mirrors PATCH /nodes/:id: a service address (Docker, Nginx, database and storage nodes) is node configuration,
+  // so it needs node rename and node manage.
+  const canEditNodeServiceAddress = canManageNode;
+  const canEditBuilderSettings = !!id && node?.type === "builder" && canManageNode;
+  // Secure runtime setup restarts this node's Docker daemon: node manage (admin:update still works for one release).
+  const canManageSecureRuntime = canManageNode || hasScope("admin:update");
   const canReadNodeFiles =
     !!id && (hasScope("nodes:files:read") || hasScope(`nodes:files:read:${id}`));
   const canWriteNodeFiles =
@@ -1013,7 +1008,8 @@ export function AdminNodeDetail({
                 : []),
               ...(node.status === "pending" &&
               !hosting &&
-              (hasScope("nodes:create") || hasScope(`nodes:create:${node.id}`))
+              (canManageNode ||
+                canCreateInFolder(user?.scopes ?? [], "nodes:create", node.folderId, node.id))
                 ? [
                     {
                       label: "New enrollment token",
@@ -1228,7 +1224,7 @@ export function AdminNodeDetail({
               <NodeDetailsTab
                 hosting={hosting}
                 node={node}
-                canManageSecureRuntime={hasScope("admin:update") && !nodeActionsLocked}
+                canManageSecureRuntime={canManageSecureRuntime && !nodeActionsLocked}
                 daemonUpdate={
                   nodeActionsLocked ? { available: false, latestVersion: null } : daemonUpdate
                 }

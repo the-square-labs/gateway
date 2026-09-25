@@ -5,19 +5,12 @@ import {
   type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import { container } from '@/container.js';
-import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { redactArgsForTool } from '@/modules/ai/ai.service.tool-helpers.js';
 import { AI_TOOLS, validateAIToolArguments } from '@/modules/ai/ai.tools.js';
 import type { AIToolDefinition } from '@/modules/ai/ai.types.js';
 import { getAIToolResourceId } from '@/modules/ai/ai-tool-policy-metadata.js';
-import {
-  AI_TOOL_ANY_SCOPE_REQUIREMENTS as ANY_SCOPE_TOOL_REQUIREMENTS,
-  AI_BROAD_ONLY_TOOL_SCOPES as BROAD_ONLY_TOOL_SCOPES,
-  AI_DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS as DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS,
-  AI_DIRECT_DATABASE_VIEW_TOOLS as DIRECT_DATABASE_VIEW_TOOLS,
-  AI_DIRECT_RAW_READ_TOOLS as DIRECT_RAW_READ_TOOLS,
-} from '@/modules/ai/ai-tool-scope-policy.js';
+import { hasAIToolCallScope, hasAIToolVisibilityScope } from '@/modules/ai/ai-tool-scope-policy.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import type { User } from '@/types.js';
@@ -173,7 +166,7 @@ const MCP_TOOLSET_DEFINITIONS: McpToolsetDefinition[] = [
     id: 'storage',
     title: 'Storage',
     description:
-      'External storage connections, object operations, managed SeaweedFS storage lifecycle (legacy MinIO clusters included), and private workload links.',
+      'External storage connections, object operations, server-side data copy between storages, managed SeaweedFS storage lifecycle (legacy MinIO clusters included), and private workload links.',
     toolNames: toolNamesForCategories(['Storage']),
   },
   {
@@ -295,78 +288,18 @@ function isEligibleMcpTool(tool: AIToolDefinition): boolean {
   return !!tool.requiredScope && !MCP_EXCLUDED_CATEGORIES.has(tool.category) && !MCP_EXCLUDED_TOOLS.has(tool.name);
 }
 
-function hasDirectScopeBase(scopes: string[], baseScope: string): boolean {
-  return scopes.includes(baseScope) || scopes.some((scope) => scope.startsWith(`${baseScope}:`));
-}
-
-function getDirectResourceScopedIds(scopes: string[], baseScope: string): string[] {
-  return scopes
-    .filter((scope) => scope.startsWith(`${baseScope}:`) && scope.length > baseScope.length + 1)
-    .map((scope) => scope.slice(baseScope.length + 1));
-}
-
-function hasDirectDatabaseViewForQueryTool(scopes: string[], queryScope: string): boolean {
-  if (!hasScopeBase(scopes, queryScope) || !hasDirectScopeBase(scopes, 'databases:view')) return false;
-  if (scopes.includes('databases:view') || hasScope(scopes, queryScope)) return true;
-
-  const queryIds = new Set(getResourceScopedIds(scopes, queryScope));
-  return getDirectResourceScopedIds(scopes, 'databases:view').some((databaseId) => queryIds.has(databaseId));
-}
-
-function hasDirectDatabaseViewForResource(scopes: string[], databaseId: string): boolean {
-  return scopes.includes('databases:view') || scopes.includes(`databases:view:${databaseId}`);
-}
-
+/** Tool listing: resource-scoped, folder and node grants count; the call re-checks the target resource. */
 function hasToolScope(scopes: string[], tool: AIToolDefinition): boolean {
-  if (!tool.requiredScope) return false;
-  if (tool.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
-  if (DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS.has(tool.name)) {
-    return hasDirectDatabaseViewForQueryTool(scopes, tool.requiredScope);
-  }
-  const anyRequirements = ANY_SCOPE_TOOL_REQUIREMENTS[tool.name];
-  if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
-  if (DIRECT_DATABASE_VIEW_TOOLS.has(tool.name)) {
-    return hasDirectScopeBase(scopes, tool.requiredScope);
-  }
-  if (DIRECT_RAW_READ_TOOLS.has(tool.name)) {
-    return hasDirectScopeBase(scopes, tool.requiredScope);
-  }
-  return BROAD_ONLY_TOOL_SCOPES.has(tool.name)
-    ? hasScope(scopes, tool.requiredScope)
-    : hasScopeBase(scopes, tool.requiredScope);
+  return hasAIToolVisibilityScope(scopes, tool);
 }
 
+/**
+ * Same per-call gate as the assistant (`hasToolExecutionScope`): resource-scoped tools are checked against their
+ * target resource, while any-scope tools and Docker child resources (`<nodeId>/<resourceId>` grants) are checked
+ * against the base scope and authorized per resource by their handlers.
+ */
 function hasToolScopeForArgs(scopes: string[], tool: AIToolDefinition, args: Record<string, unknown>): boolean {
-  if (!tool.requiredScope) return false;
-  if (tool.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
-  if (DIRECT_DATABASE_VIEW_AND_QUERY_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool, args);
-    return resourceId
-      ? hasDirectDatabaseViewForResource(scopes, resourceId) &&
-          hasScopeForResource(scopes, tool.requiredScope, resourceId)
-      : hasDirectDatabaseViewForQueryTool(scopes, tool.requiredScope);
-  }
-  const anyRequirements = ANY_SCOPE_TOOL_REQUIREMENTS[tool.name];
-  if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
-  if (DIRECT_DATABASE_VIEW_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool, args);
-    if (scopes.includes(tool.requiredScope)) return true;
-    return resourceId
-      ? scopes.includes(`${tool.requiredScope}:${resourceId}`)
-      : scopes.some((scope) => scope.startsWith(`${tool.requiredScope}:`));
-  }
-  if (DIRECT_RAW_READ_TOOLS.has(tool.name)) {
-    const resourceId = getToolAuthorizationResourceId(tool, args);
-    if (scopes.includes(tool.requiredScope)) return true;
-    return resourceId
-      ? scopes.includes(`${tool.requiredScope}:${resourceId}`)
-      : scopes.some((scope) => scope.startsWith(`${tool.requiredScope}:`));
-  }
-  if (BROAD_ONLY_TOOL_SCOPES.has(tool.name)) return hasScope(scopes, tool.requiredScope);
-  const resourceId = getToolAuthorizationResourceId(tool, args);
-  return resourceId
-    ? hasScopeForResource(scopes, tool.requiredScope, resourceId)
-    : hasScopeBase(scopes, tool.requiredScope);
+  return hasAIToolCallScope(scopes, tool, args);
 }
 
 function cleanupMcpDiscoveryStates(now = Date.now()): void {
@@ -450,10 +383,6 @@ function paginateTools<T>(items: T[], cursor: unknown): { items: T[]; nextCursor
     items: page,
     nextCursor: nextOffset < items.length ? String(nextOffset) : undefined,
   };
-}
-
-function getToolAuthorizationResourceId(tool: AIToolDefinition, args: Record<string, unknown>): string {
-  return getAIToolResourceId(tool, args);
 }
 
 async function auditDeniedMcpTool(

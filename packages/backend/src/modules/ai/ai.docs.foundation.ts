@@ -84,7 +84,7 @@ SSL certificates in Gateway enable HTTPS on ingress routes. Three types exist:
 ## Types
 1. **ACME** (Let's Encrypt): Automated free certificates via request_acme_cert. Requires domain verification. Auto-renewable.
 2. **Upload**: Manually uploaded PEM certificate + private key via manage_ssl_certificate({ operation: "upload", ... }). No auto-renewal — must be re-uploaded before expiry.
-3. **Internal**: Linked from PKI store via link_internal_cert(internalCertId). Uses the PKI cert's key material. Renewed by re-issuing the PKI cert and re-linking.
+3. **Internal**: Linked from PKI store via link_internal_cert(internalCertId). Uses the PKI cert's key material. When Gateway holds the key, it reissues the leaf from the same CA and template daily once two thirds of its lifetime have passed (unless the CA ends too soon for a longer replacement, or the certificate lives less than 3 days), and pushes it to every proxy host (auto-renew shows as "Reissue"; toggle with manage_ssl_certificate set_auto_renew). manage_ssl_certificate({ operation: "renew" }) reissues it now and needs pki:cert:issue on the CA. CSR-issued links (no key in Gateway) only alert: issue a new certificate and re-link it.
 
 ## ACME Certificates (Let's Encrypt)
 - request_acme_cert({ domains: ["example.com", "www.example.com"], challengeType: "http-01" })
@@ -410,8 +410,8 @@ Gateway manages public ingress through nginx daemon nodes running on remote serv
 - Useful for complex configurations that templates can't express
 - Ordinary route list/detail responses omit rawConfig and rawConfigEnabled
 - Raw content can only be read through explicit raw config read/render paths with raw-read permission
-- Requires proxy:raw:toggle and proxy:raw:write scopes
-- proxy:raw:bypass can bypass dangerous raw directive validation for the same route
+- Enabling or disabling raw mode and writing raw config both require proxy:raw:write
+- proxy:unrestricted skips the dangerous raw and advanced directive validation for the same route
 - Use get_route_rendered_config to see the current generated config before switching to raw mode
 
 ## Monitoring
@@ -484,7 +484,7 @@ The node status changes from **pending** to **online** in the Nodes list once th
 - get_node: inspect one node.
 - execute_node_console_command: run one argv-style command on a node console. Use { nodeId, command: ["sh","-lc","..."] }. This is destructive, requires nodes:console, is available to MCP only when that OAuth scope is explicitly granted, and catastrophic patterns such as rm -rf / are blocked.
 - create_node, rename_node, delete_node: manage node records.
-- manage_node_config: read/update/test nginx node config. Use { operation: "read"|"update"|"test", nodeId, content? }. read requires nodes:config:view:<nodeId>; update/test require nodes:config:edit:<nodeId>. Available to MCP tokens that hold these scopes.
+- manage_node_config: read/update/test nginx node config. Use { operation: "read"|"update"|"test", nodeId, content? }. read requires nodes:config:view:<nodeId>; update/test require nodes:manage:<nodeId>. Available to MCP tokens that hold these scopes.
 - manage_node_file: manage node filesystem paths. Requires nodes:files:read, plus nodes:files:write for changes; available to MCP tokens that hold them.
 
 ### Alternative: Manual installation
@@ -499,7 +499,7 @@ If you cannot use the setup script, you can install manually. Storage and databa
 - The gateway pushes commands to daemons: apply config, deploy certs, health check, log streaming, exec, etc.
 - The daemon sends back: health reports (every 30s), command results, log entries, exec output.
 - Daemons auto-reconnect on disconnect with exponential backoff (1s → 60s).
-- mTLS certificates auto-renew when within 7 days of expiry.
+- mTLS certificates auto-renew once a third of their lifetime remains (about four months for a one-year certificate); a failed renewal is retried with backoff up to hourly. Gateway alerts when a node certificate has less than 30 days left.
 
 ## Console (Interactive Shell)
 All node types support an interactive console — a PTY shell session on the host OS.
@@ -525,7 +525,7 @@ Daemons report hardware/OS info on registration:
 - Daemons report localIpAddresses and publicIpAddresses. Docker nodes may set serviceAddress explicitly; otherwise Gateway uses the first reported local address and then a public address for cross-node/proxy-upstream traffic.
 - **Nginx nodes** additionally report: nginx status, uptime, worker count, error rates (4xx/5xx), stub status stats.
 - **Docker nodes** additionally report: container count (running/stopped/total), per-container CPU/memory/network stats, Docker version.
-- Generic Docker nodes report Secure Runtime state, version, setup progress, and compatibility. Existing nodes expose manual Setup in Node Details to administrators with \`admin:update\`; do not attempt remote installation through a console unless the user explicitly asks for host-level repair.
+- Generic Docker nodes report Secure Runtime state, version, setup progress, and compatibility. Existing nodes expose manual Setup in Node Details to users with \`nodes:manage\` for that node (broad \`admin:update\` is still accepted for one release); do not attempt remote installation through a console unless the user explicitly asks for host-level repair.
 - **Traffic stats** (nginx only): parsed from access logs — status code distribution, response times.
 - Background polling at 10s intervals; 5s when a user is actively viewing the node detail page.
 
@@ -557,6 +557,8 @@ Automated cleanup tasks, configurable in Settings.
   - Orphaned Certs: remove unreferenced certificate files.
   - ACME Challenges: clean up old validation tokens.
   - Docker Prune: remove unused Docker images.
+  - Operation History (operationHistory, default 90 days): finished Docker container tasks after a day; finished builds with their logs, compose, availability and hosting operations and source webhook deliveries after the retention. Each resource keeps its 10 latest runs, and rows still referenced (a live build artifact, a hosted node's origin, a snapshot) stay.
+  - Expired OAuth Grants (oauthCleanup): expired OAuth codes and tokens (refresh tokens once expired), and OAuth client registrations that never completed an authorization, after 30 days. A client that was ever granted is never removed.
 - Can be triggered manually from Settings page.
 - Run history tracked (last N runs with per-category results).
 

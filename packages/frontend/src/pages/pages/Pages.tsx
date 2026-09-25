@@ -2,6 +2,11 @@ import { FolderPlus, Globe2, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -31,7 +36,7 @@ import { nodeIconClassNames } from "@/lib/node-appearance";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
-import type { PageProject, PageProjectPlacementOption, ResourceFolderTreeNode } from "@/types";
+import type { PageProject, PageProjectPlacementOption } from "@/types";
 import { formatPageBytes, formatPageDate } from "./page-format";
 
 function CreateProjectDialog({
@@ -53,7 +58,13 @@ function CreateProjectDialog({
   const folders = useResourceFolderStore((state) => state.foldersByType["pages-project"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["pages-project"]);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
+  const scopes = useAuthStore((state) => state.user?.scopes);
+  // Same rule as POST /pages/projects: broad or node grants allow any folder, folder grants only theirs.
+  const folderChoices = useMemo(
+    () => getCreateFolderChoices(scopes ?? [], "pages:create", folders, nodeId || undefined),
+    [folders, nodeId, scopes]
+  );
+  const destinationAllowed = isCreateFolderAllowed(folderChoices, folderId);
 
   useEffect(() => {
     if (open) {
@@ -77,7 +88,7 @@ function CreateProjectDialog({
   }, [fetchFolders, open]);
 
   const submit = async () => {
-    if (!name.trim() || !nodeId || saving) return;
+    if (!name.trim() || !nodeId || saving || !destinationAllowed) return;
     setSaving(true);
     try {
       const project = await api.createPageProject({
@@ -121,24 +132,13 @@ function CreateProjectDialog({
             <label htmlFor="page-project-folder" className="text-sm font-medium">
               Folder
             </label>
-            <Select
-              value={folderId || "__none__"}
-              onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-              disabled={foldersLoading}
-            >
-              <SelectTrigger id="page-project-folder">
-                <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">No folder</SelectItem>
-                {folderOptions.map((folder) => (
-                  <SelectItem key={folder.id} value={folder.id}>
-                    {"— ".repeat(folder.depth ?? 0)}
-                    {folder.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CreateFolderSelect
+              id="page-project-folder"
+              choices={folderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+            />
           </div>
           <div className="space-y-1.5">
             <label htmlFor="page-project-node" className="text-sm font-medium">
@@ -177,17 +177,16 @@ function CreateProjectDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={!name.trim() || !nodeId || saving}>
+          <Button
+            onClick={() => void submit()}
+            disabled={!name.trim() || !nodeId || saving || !destinationAllowed}
+          >
             {saving ? "Creating…" : "Create project"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }
 
 const projectColumns: ResourceListColumn<PageProject>[] = [

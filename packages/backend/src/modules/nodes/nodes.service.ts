@@ -430,8 +430,17 @@ export class NodesService {
     };
   }
 
-  async announceCreated(node: { id: string; hostname: string; type: string }, userId: string) {
-    await grantCreatedResourcePermissions(userId, 'nodes', node.id);
+  async announceCreated(
+    node: { id: string; hostname: string; type: string; folderId?: string | null },
+    userId: string
+  ) {
+    // Without a folder in hand, the destination is read from the node row.
+    await grantCreatedResourcePermissions(
+      userId,
+      'nodes',
+      node.id,
+      node.folderId === undefined ? undefined : { folderId: node.folderId }
+    );
     await this.auditService.log({
       userId,
       action: 'node.create',

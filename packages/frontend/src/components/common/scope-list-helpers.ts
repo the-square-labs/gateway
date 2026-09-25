@@ -71,13 +71,7 @@ export function canLoadScopeResource(permission: string, nodeId?: string): boole
   if (permission.startsWith("domains:") && !features.domainsEnabled) return false;
   if (permission.startsWith("pki:") && !features.pkiEnabled) return false;
   const scopes = useAuthStore.getState().user?.scopes ?? [];
-  const alternatives =
-    permission === "pki:ca:view"
-      ? ["pki:ca:view:root", "pki:ca:view:intermediate"]
-      : permission.startsWith("logs:")
-        ? [permission, "logs:manage"]
-        : [permission];
-  if (!alternatives.some((base) => hasScopeBase(scopes, base))) return false;
+  if (!hasScopeBase(scopes, permission)) return false;
   if (!nodeId || scopeMatches(scopes, permission)) return true;
   return (
     scopeMatches(scopes, `${permission}:${nodeId}`) ||
@@ -404,7 +398,9 @@ export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (scope.startsWith("pages:")) return "pages";
   if (scope.startsWith("ssl:cert:")) return "ssl";
   if (scope.startsWith("nodes:")) return "nodes";
-  if (scope.startsWith("docker:containers:")) return "docker";
+  if (scope.startsWith("docker:containers:") || scope === "docker:availability:manage") {
+    return "docker";
+  }
   if (scope.startsWith("docker:networks:")) return "docker-network";
   if (scope.startsWith("docker:volumes:")) return "docker-volume";
   if (scope.startsWith("docker:images:")) return "docker-image";
@@ -412,10 +408,25 @@ export function folderFamilyForScope(scope: string): FolderFamily | null {
   if (scope.startsWith("databases:")) return "databases";
   if (scope.startsWith("storage:")) return "storage";
   if (scope.startsWith("logs:schemas:")) return "logging-schemas";
-  if (scope.startsWith("logs:environments:") || scope === "logs:read") {
-    return "logging-environments";
-  }
+  if (isLoggingEnvironmentScope(scope)) return "logging-environments";
   return null;
+}
+
+/** Scopes qualified by a logging environment ID (environment actions, log reading, ingest tokens). */
+function isLoggingEnvironmentScope(scope: string): boolean {
+  return (
+    scope.startsWith("logs:environments:") ||
+    scope.startsWith("logs:tokens:") ||
+    scope === "logs:read"
+  );
+}
+
+/** Scopes whose restriction targets are Docker nodes, folders, containers, and deployments. */
+function isDockerWorkloadScope(scope: string): boolean {
+  return (
+    (scope.startsWith("docker:containers:") && scope !== "docker:containers:create") ||
+    scope === "docker:availability:manage"
+  );
 }
 
 export function flattenFolderTree(
@@ -439,7 +450,7 @@ export async function loadFolderFamily(family: FolderFamily): Promise<FolderOpti
     (scope) => folderFamilyForScope(scope) === family
   );
   const managePermission = family.startsWith("docker")
-    ? "docker:containers:folders:manage"
+    ? "docker:folders:manage"
     : permission?.replace(/:(view|details)$/, ":folders:manage");
   if (
     permission &&
@@ -592,7 +603,7 @@ export function getResourceOptions(
       folderId: schema.folderId,
     }));
   }
-  if (scope.startsWith("logs:environments:") || scope === "logs:read") {
+  if (isLoggingEnvironmentScope(scope)) {
     return (loggingEnvironments ?? []).map((environment) => ({
       id: environment.id,
       label: environment.name,
@@ -618,7 +629,7 @@ export function getResourceOptions(
       })),
     ];
   }
-  if (scope.startsWith("docker:containers:") && scope !== "docker:containers:create") {
+  if (isDockerWorkloadScope(scope)) {
     return (nodes ?? [])
       .filter((n) => n.type === "docker")
       .flatMap((n) => [
@@ -715,7 +726,7 @@ export function getResourceLabel(scope: string): string {
     return "Restrict to route folders or individual routes (leave unchecked for all):";
   if (scope.startsWith("logs:schemas:"))
     return "Restrict to schema folders or individual logging schemas (leave unchecked for all):";
-  if (scope.startsWith("logs:environments:") || scope === "logs:read")
+  if (isLoggingEnvironmentScope(scope))
     return "Restrict to environment folders or individual logging environments (leave unchecked for all):";
   return "Restrict to specific CAs (leave unchecked for all):";
 }

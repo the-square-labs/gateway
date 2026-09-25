@@ -44,8 +44,9 @@ import {
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
-import { createNodeForActor, updateNodeForActor } from './node-actions.js';
+import { createNodeForActor, regenerateNodeEnrollmentTokenForActor, updateNodeForActor } from './node-actions.js';
 import { NodeFolderService } from './node-folders.service.js';
+import { DOCKER_LIST_FOLDER_BASES, NODE_LIST_FOLDER_BASES } from './node-list-access.js';
 import { daemonLogMatcher, nginxLogEntryKey, nginxLogMatcher, splitLogFilterList } from './node-log-filters.js';
 import { compactMonitoringHistorySnapshot, NodeMonitoringService } from './node-monitoring.service.js';
 import {
@@ -130,7 +131,6 @@ const RESOURCE_SCOPED_DOCKER_NODE_SCOPES = [
   'docker:containers:view',
   'docker:containers:create',
   'docker:containers:manage',
-  'docker:containers:config',
   'docker:containers:console',
   'docker:containers:migrate',
   'docker:containers:delete',
@@ -237,6 +237,9 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
   const hasNodeDetails = hasScope(scopes, 'nodes:details');
   const canManageFolders = hasScope(scopes, 'nodes:folders:manage');
   const allowedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
+  const hasNodeFolderGrant = getFolderScopedIds(scopes, NODE_LIST_FOLDER_BASES).length > 0;
+  const hasDockerFolderGrant =
+    query.type === 'docker' && getFolderScopedIds(scopes, DOCKER_LIST_FOLDER_BASES).length > 0;
   const allowedDockerNodeIds =
     query.type === 'docker' ? dockerScopedNodeIds(scopes, RESOURCE_SCOPED_DOCKER_NODE_SCOPES) : [];
   const canListAllDockerNodes = query.type === 'docker' && hasBroadDockerNodeListAccess(scopes);
@@ -273,6 +276,8 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
     !hasNodeDetails &&
     !canManageFolders &&
     allowedNodeIds.length === 0 &&
+    !hasNodeFolderGrant &&
+    !hasDockerFolderGrant &&
     !canListDockerNodes &&
     !canListIngressNodes &&
     !canListBackupExecutorNodes
@@ -304,7 +309,7 @@ nodesRoutes.openapi(listNodesRoute, async (c) => {
       ? undefined
       : { allowedIds: scopedNodeIds }
   );
-  if (query.type === 'docker' && canListDockerNodes && !hasNodeDetails) {
+  if (query.type === 'docker' && (canListDockerNodes || hasDockerFolderGrant) && !hasNodeDetails) {
     return c.json({ ...result, data: result.data.map((node) => compactDockerNodeForDockerAccess(node as any)) });
   }
   if (
@@ -581,16 +586,14 @@ nodesRoutes.openapi(createNodeRoute, async (c) => {
   return c.json({ data: result }, 201);
 });
 
-nodesRoutes.openapi(
-  { ...regenerateNodeEnrollmentTokenRoute, middleware: requireScopeForResource('nodes:create', 'id') },
-  async (c) => {
-    assertNotImpersonating(c, 'Enrollment tokens cannot be regenerated while impersonating');
-    const service = container.resolve(NodesService);
-    const user = c.get('user')!;
-    const result = await service.regenerateEnrollmentToken(c.req.param('id')!, user.id);
-    return c.json({ data: result }, 200);
-  }
-);
+nodesRoutes.openapi(regenerateNodeEnrollmentTokenRoute, async (c) => {
+  assertNotImpersonating(c, 'Enrollment tokens cannot be regenerated while impersonating');
+  const result = await regenerateNodeEnrollmentTokenForActor(
+    { id: c.get('user')!.id, scopes: c.get('effectiveScopes') ?? [] },
+    c.req.param('id')!
+  );
+  return c.json({ data: result }, 200);
+});
 
 nodesRoutes.openapi(updateNodeRoute, async (c) => {
   const input = UpdateNodeSchema.parse(await c.req.json());
@@ -655,7 +658,7 @@ nodesRoutes.openapi(getNodeConfigRoute, async (c) => {
 });
 
 nodesRoutes.openapi(updateNodeConfigRoute, async (c) => {
-  const requiredScope = `nodes:config:edit:${c.req.param('id')!}`;
+  const requiredScope = `nodes:manage:${c.req.param('id')!}`;
   if (!hasScope(c.get('effectiveScopes') || [], requiredScope)) {
     return c.json({ message: `Missing required scope: ${requiredScope}` }, 403);
   }
@@ -681,7 +684,7 @@ nodesRoutes.openapi(updateNodeConfigRoute, async (c) => {
 // Do not run a backend-local nginx -t first, because node configs can contain
 // valid host-specific includes/paths that do not exist inside the Gateway container.
 nodesRoutes.openapi(testNodeConfigRoute, async (c) => {
-  const requiredScope = `nodes:config:edit:${c.req.param('id')!}`;
+  const requiredScope = `nodes:manage:${c.req.param('id')!}`;
   if (!hasScope(c.get('effectiveScopes') || [], requiredScope)) {
     return c.json({ message: `Missing required scope: ${requiredScope}` }, 403);
   }

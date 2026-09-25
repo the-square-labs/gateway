@@ -50,6 +50,8 @@ interface AuthState {
   isLoading: boolean;
 
   setUser: (user: User | null) => void;
+  /** Apply live effective scopes pushed by the events socket (`{ type: "permissions" }`). */
+  applyLiveScopes: (scopes: readonly string[]) => void;
   setLoading: (loading: boolean) => void;
   login: (user: User) => void;
   logout: () => void;
@@ -86,6 +88,26 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       user,
       isAuthenticated: !!user,
     });
+  },
+
+  applyLiveScopes: (scopes) => {
+    const currentUser = get().user;
+    if (!currentUser) return;
+    const current = new Set(currentUser.scopes);
+    const nextSet = new Set(scopes);
+    const next = [...nextSet];
+    if (next.length === current.size && next.every((scope) => current.has(scope))) return;
+    const nextUser = { ...currentUser, scopes: next };
+    const onlyAdded = [...current].every((scope) => nextSet.has(scope));
+    if (!onlyAdded) {
+      // A lost grant invalidates private data, exactly like a permission change event.
+      get().setUser(nextUser);
+      return;
+    }
+    // Folder and node grants now cover resources that were created or moved in: widen in place
+    // so they become usable without reloading or resetting session state.
+    setStoredAuthContextKey(authContextKey(nextUser));
+    set({ user: nextUser });
   },
 
   setLoading: (isLoading) => set({ isLoading }),

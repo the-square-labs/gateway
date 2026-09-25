@@ -1,7 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
-import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { requireAnyScopeBase, requireScopeBase } from '@/modules/auth/auth.middleware.js';
 import { NodeRegistryService } from '@/services/node-registry.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -32,6 +32,7 @@ import { DockerManagementService } from './docker.service.js';
 import {
   assertDockerNodeScope,
   assertDockerResourceScope,
+  dockerNodeListAccess,
   filterDockerResourcesForScope,
   requireDockerDeploymentScope,
 } from './docker-access.middleware.js';
@@ -147,29 +148,41 @@ function matchesDeploymentSearch(deployment: Record<string, any>, search: string
 }
 
 export function registerDockerDeploymentRoutes(router: OpenAPIHono<AppEnv>) {
-  router.openapi({ ...listDeploymentsRoute, middleware: requireScopeBase('docker:containers:view') }, async (c) => {
-    const service = container.resolve(DockerDeploymentService);
-    const nodeId = c.req.param('nodeId')!;
-    assertDockerNodeScope(c.get('effectiveScopes') || [], 'docker:containers:view', nodeId);
-    const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
-    const data = await service.listSummary(nodeId);
-    const search = c.req.query('search')?.trim().toLowerCase();
-    const compacted = filterDockerResourcesForScope(
-      data
-        .filter((deployment) => matchesDeploymentSearch(deployment, search))
-        .map((deployment) => ({ ...compactDeploymentListItem(deployment), availability })),
-      c.get('effectiveScopes') || [],
-      'docker:containers:view',
-      nodeId
-    );
-    const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
-    return c.json({
-      data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
-      total: compacted.length,
-      limit: DOCKER_RESOURCE_LIST_MAX,
-      truncated,
-    });
-  });
+  router.openapi(
+    { ...listDeploymentsRoute, middleware: requireAnyScopeBase('docker:containers:view', 'docker:containers:create') },
+    async (c) => {
+      const service = container.resolve(DockerDeploymentService);
+      const nodeId = c.req.param('nodeId')!;
+      if (
+        dockerNodeListAccess(
+          c.get('effectiveScopes') || [],
+          'docker:containers:view',
+          nodeId,
+          'docker:containers:create'
+        ) === 'empty'
+      ) {
+        return c.json({ data: [], total: 0, limit: DOCKER_RESOURCE_LIST_MAX, truncated: false });
+      }
+      const availability = container.resolve(NodeRegistryService).getNode(nodeId) ? 'available' : 'unavailable';
+      const data = await service.listSummary(nodeId);
+      const search = c.req.query('search')?.trim().toLowerCase();
+      const compacted = filterDockerResourcesForScope(
+        data
+          .filter((deployment) => matchesDeploymentSearch(deployment, search))
+          .map((deployment) => ({ ...compactDeploymentListItem(deployment), availability })),
+        c.get('effectiveScopes') || [],
+        'docker:containers:view',
+        nodeId
+      );
+      const truncated = compacted.length > DOCKER_RESOURCE_LIST_MAX;
+      return c.json({
+        data: truncated ? compacted.slice(0, DOCKER_RESOURCE_LIST_MAX) : compacted,
+        total: compacted.length,
+        limit: DOCKER_RESOURCE_LIST_MAX,
+        truncated,
+      });
+    }
+  );
 
   router.openapi({ ...createDeploymentRoute, middleware: requireScopeBase('docker:containers:create') }, async (c) => {
     const service = container.resolve(DockerDeploymentService);

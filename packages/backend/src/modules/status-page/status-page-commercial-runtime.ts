@@ -6,6 +6,7 @@ export type StatusPageConstructors = typeof constructors;
 import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
 import {
   databaseConnections,
+  dockerAccessResources,
   dockerComposeProjects,
   dockerDeployments,
   dockerHealthChecks,
@@ -24,6 +25,7 @@ import {
 import { createChildLogger } from '@/lib/logger.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import { canViewStatusPageSource } from './status-page-source-access.js';
 
 const loggerStatusPageService = createChildLogger('StatusPageService');
 const loggerStatusIncidentEvaluator = createChildLogger('StatusIncidentEvaluator');
@@ -55,4 +57,6 @@ export const statusPageCommercialRuntime = {
   requireConfiguredLicensePolicy,
   loggerStatusPageService,
   loggerStatusIncidentEvaluator,
+  dockerAccessResources,
+  canViewStatusPageSource,
 };

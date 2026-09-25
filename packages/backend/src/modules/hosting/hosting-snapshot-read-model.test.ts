@@ -57,7 +57,7 @@ function fixture() {
       'hosting:snapshots:delete',
       'hosting:snapshots:restore',
       'nodes:details',
-      'nodes:config:edit',
+      'nodes:manage',
     ],
   };
   const connectors = {
@@ -74,6 +74,7 @@ function fixture() {
     }),
   };
   const db = {
+    transaction: vi.fn(async (_fn: unknown): Promise<unknown> => ({ success: true })),
     select: () => ({
       from: (table: unknown) => {
         const rows =
@@ -120,6 +121,7 @@ function fixture() {
     entries,
     operationRows,
     operations,
+    db,
   };
 }
 describe('hosting snapshot read model', () => {
@@ -168,7 +170,7 @@ describe('hosting snapshot read model', () => {
     expect((await f.service.view('vm', f.user as never)).canRestore).toBe(true);
     const noRestore = { ...f.user, scopes: f.user.scopes.filter((s) => s !== 'hosting:snapshots:restore') };
     expect((await f.service.view('vm', noRestore as never)).canRestore).toBe(false);
-    const noNodeEdit = { ...f.user, scopes: f.user.scopes.filter((s) => s !== 'nodes:config:edit') };
+    const noNodeEdit = { ...f.user, scopes: f.user.scopes.filter((s) => s !== 'nodes:manage') };
     expect((await f.service.view('vm', noNodeEdit as never)).canRestore).toBe(false);
     f.resource.snapshot.powerState = 'unknown';
     expect((await f.service.view('vm', f.user as never)).canRestore).toBe(false);
@@ -277,5 +279,53 @@ describe('hosting snapshot read model', () => {
     const view = await f.service.view('vm', f.user as never);
     expect(view.canRestore).toBe(true);
     expect(view.readModel.availability).toBe('unknown');
+  });
+
+  it('lets snapshot create, delete and folder layout work without node manage, but not restore', async () => {
+    const f = fixture();
+    f.connector.provider = 'proxmox';
+    f.resource.snapshot.powerState = 'running';
+    await f.service.readModel.refresh('vm');
+    const snapshotOnly = {
+      ...f.user,
+      scopes: [...f.user.scopes.filter((s) => s !== 'nodes:manage'), 'hosting:snapshots:folders:manage'],
+    };
+
+    expect(await f.service.view('vm', snapshotOnly as never)).toMatchObject({
+      canCreate: true,
+      canDelete: true,
+      canManageFolders: true,
+      canRestore: false,
+    });
+  });
+
+  it('moves snapshots between folders with only the snapshot folder scope', async () => {
+    const f = fixture();
+    await f.service.readModel.refresh('vm');
+    const layoutId = '11111111-1111-4111-8111-111111111111';
+    const folderId = '22222222-2222-4222-8222-222222222222';
+    vi.spyOn(f.service.entities, 'list').mockResolvedValue([
+      { id: 'snap', name: 'Snapshot', fingerprint: 'a'.repeat(64), entityId: layoutId, status: 'ready' },
+    ] as never);
+    const move = { ids: [layoutId], folderId };
+    // No node scope beyond the VM visibility baseline (nodes:details).
+    const folderManager = {
+      ...f.user,
+      scopes: ['hosting:resources:view', 'hosting:snapshots:view', 'hosting:snapshots:folders:manage', 'nodes:details'],
+    };
+
+    await expect(f.service.folderAction('vm', folderManager as never, 'move-resources', move)).resolves.toEqual({
+      success: true,
+    });
+    expect(f.db.transaction).toHaveBeenCalledOnce();
+
+    const withoutFolderScope = {
+      ...f.user,
+      scopes: ['hosting:resources:view', 'hosting:snapshots:view', 'nodes:details', 'nodes:manage'],
+    };
+    await expect(
+      f.service.folderAction('vm', withoutFolderScope as never, 'move-resources', move)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(f.db.transaction).toHaveBeenCalledOnce();
   });
 });

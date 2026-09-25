@@ -92,12 +92,12 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     expect(dockerService.createVolume).not.toHaveBeenCalled();
   });
 
-  it('resizes a visible disk-image volume with the per-volume create scope', async () => {
+  it('resizes a visible disk-image volume with the per-volume edit scope a folder grant resolves to', async () => {
     const dockerService = volumeService();
 
     await expect(
       createService(dockerService).executeTool(
-        { ...BASE_USER, scopes: ['docker:volumes:create:node-1/data'] },
+        { ...BASE_USER, scopes: ['docker:volumes:edit:node-1/data'] },
         'manage_docker_volume',
         { operation: 'resize', nodeId: 'node-1', name: 'data', capacityBytes: 2 * GIB }
       )
@@ -111,12 +111,12 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     const dockerService = volumeService();
 
     const result = await createService(dockerService).executeTool(
-      { ...BASE_USER, scopes: ['docker:volumes:create:node-1/other'] },
+      { ...BASE_USER, scopes: ['docker:volumes:edit:node-1/other', 'docker:volumes:create:node-1'] },
       'manage_docker_volume',
       { operation: 'resize', nodeId: 'node-1', name: 'data', capacityBytes: 2 * GIB }
     );
 
-    expect(result.error).toBe('Missing required scope: docker:volumes:create:node-1/data');
+    expect(result.error).toBe('Missing required scope: docker:volumes:edit:node-1/data');
     expect(dockerService.assertUserVolumeVisible).not.toHaveBeenCalled();
     expect(dockerService.resizeVolume).not.toHaveBeenCalled();
   });
@@ -126,7 +126,7 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     dockerService.assertUserVolumeVisible.mockRejectedValue(new AppError(404, 'VOLUME_NOT_FOUND', 'Volume not found'));
 
     const result = await createService(dockerService).executeTool(
-      { ...BASE_USER, scopes: ['docker:volumes:create'] },
+      { ...BASE_USER, scopes: ['docker:volumes:edit'] },
       'manage_docker_volume',
       { operation: 'resize', nodeId: 'node-1', name: 'gateway-internal', capacityBytes: 2 * GIB }
     );
@@ -139,7 +139,7 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     const dockerService = volumeService();
 
     const result = await createService(dockerService).executeTool(
-      { ...BASE_USER, scopes: ['docker:volumes:create'] },
+      { ...BASE_USER, scopes: ['docker:volumes:edit'] },
       'manage_docker_volume',
       { operation: 'resize', nodeId: 'node-1', name: 'data', capacityBytes: 1024 }
     );
@@ -148,21 +148,21 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     expect(dockerService.resizeVolume).not.toHaveBeenCalled();
   });
 
-  it('adopts a legacy volume only with both create and view scopes', async () => {
+  it('adopts a legacy volume only with the volume edit and view scopes', async () => {
     const dockerService = volumeService();
     const service = createService(dockerService);
 
-    const denied = await service.executeTool(
-      { ...BASE_USER, scopes: ['docker:volumes:create:node-1'] },
+    const createOnly = await service.executeTool(
+      { ...BASE_USER, scopes: ['docker:volumes:create:node-1', 'docker:volumes:view:node-1'] },
       'manage_docker_volume',
       { operation: 'adopt', nodeId: 'node-1', name: 'legacy' }
     );
-    expect(denied.error).toBe('Missing required scope: docker:volumes:view:node-1/legacy');
+    expect(createOnly.error).toBe('Missing required scope: docker:volumes:edit:node-1/legacy');
     expect(dockerService.adoptVolume).not.toHaveBeenCalled();
 
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['docker:volumes:create:node-1', 'docker:volumes:view:node-1'] },
+        { ...BASE_USER, scopes: ['docker:volumes:edit:node-1', 'docker:volumes:view:node-1'] },
         'manage_docker_volume',
         { operation: 'adopt', nodeId: 'node-1', name: 'legacy' }
       )
@@ -178,7 +178,7 @@ describe('manage_docker_volume disk-image and adoption operations', () => {
     );
 
     const result = await createService(dockerService).executeTool(
-      { ...BASE_USER, scopes: ['docker:volumes:create'] },
+      { ...BASE_USER, scopes: ['docker:volumes:edit'] },
       'manage_docker_volume',
       { operation: 'resize', nodeId: 'node-1', name: 'db-data', capacityBytes: 2 * GIB }
     );

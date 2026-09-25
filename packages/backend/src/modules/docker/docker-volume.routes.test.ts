@@ -14,6 +14,7 @@ const BROAD_SCOPES = [
   'docker:volumes:files:read',
   'docker:volumes:files:write',
   'docker:volumes:export',
+  'docker:volumes:edit',
   'docker:volumes:delete',
 ];
 
@@ -87,5 +88,73 @@ describe('volume routes hide Gateway-internal volumes', () => {
 
     expect(response.status).toBe(404);
     expect(getDetail).not.toHaveBeenCalled();
+  });
+});
+
+describe('volume edit routes with folder-derived grants', () => {
+  function registerEditService() {
+    const service = {
+      assertUserVolumeVisible: vi.fn().mockResolvedValue(undefined),
+      renameVolume: vi.fn().mockResolvedValue(undefined),
+      updateVolumeLabels: vi.fn().mockResolvedValue(undefined),
+      resizeVolume: vi.fn().mockResolvedValue(undefined),
+      adoptVolume: vi.fn().mockResolvedValue({ name: 'app-data', managementState: 'managed' }),
+    };
+    container.registerInstance(DockerManagementService, service as never);
+    container.registerInstance(DockerSnapshotService, {
+      getList: vi.fn().mockResolvedValue({ revision: 1, refreshStatus: 'ok', data: [{ Name: 'app-data' }] }),
+    } as never);
+    return service;
+  }
+
+  async function edit(scopes: string[]) {
+    const app = appWithScopes(scopes);
+    const base = `/nodes/${NODE_ID}/volumes/app-data`;
+    const json = (method: string, body: unknown) => ({
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return Promise.all([
+      app.request(`${base}/rename`, json('POST', { name: 'app-data-2' })),
+      app.request(`${base}/labels`, json('PUT', { labels: { tier: 'db' } })),
+      app.request(`${base}/resize`, json('POST', { capacityBytes: 2 * 1024 ** 3 })),
+      app.request(`${base}/adopt`, { method: 'POST' }),
+    ]).then((responses) => responses.map((response) => response.status));
+  }
+
+  it('lets a folder grant edit the volumes in that folder without any per-volume create scope', async () => {
+    const service = registerEditService();
+    // What folder expansion produces for view + edit + create on the volume's folder.
+    const folderScopes = [
+      `docker:volumes:view:${NODE_ID}/app-data`,
+      `docker:volumes:edit:${NODE_ID}/app-data`,
+      'docker:volumes:create:folder/folder-1',
+    ];
+
+    expect(await edit(folderScopes)).toEqual([200, 200, 200, 200]);
+    expect(service.renameVolume).toHaveBeenCalledWith(NODE_ID, 'app-data', 'app-data-2', 'user-1');
+    expect(service.updateVolumeLabels).toHaveBeenCalledWith(NODE_ID, 'app-data', { tier: 'db' }, 'user-1');
+    expect(service.resizeVolume).toHaveBeenCalledWith(NODE_ID, 'app-data', 2 * 1024 ** 3, 'user-1');
+    expect(service.adoptVolume).toHaveBeenCalledWith(NODE_ID, 'app-data', 'user-1');
+  });
+
+  it('refuses volume edits without the volume mutation scope, even with create on its folder or node', async () => {
+    const service = registerEditService();
+
+    expect(
+      await edit([
+        `docker:volumes:view:${NODE_ID}/app-data`,
+        'docker:volumes:create:folder/folder-1',
+        `docker:volumes:create:${NODE_ID}`,
+        `docker:volumes:edit:${NODE_ID}/other-volume`,
+        // Deleting a volume is not editing it.
+        `docker:volumes:delete:${NODE_ID}/app-data`,
+      ])
+    ).toEqual([403, 403, 403, 403]);
+    expect(service.renameVolume).not.toHaveBeenCalled();
+    expect(service.updateVolumeLabels).not.toHaveBeenCalled();
+    expect(service.resizeVolume).not.toHaveBeenCalled();
+    expect(service.adoptVolume).not.toHaveBeenCalled();
   });
 });

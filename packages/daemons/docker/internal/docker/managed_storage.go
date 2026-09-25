@@ -187,8 +187,19 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 	if !managedStorageIDPattern.MatchString(id) {
 		return "", errors.New("managed storage id must be a UUID")
 	}
+	// Certificate reloads wait for the engine without the manager lock.
+	switch action {
+	case "reload_tls":
+		return m.handleTLSReload(ctx, id, configJSON)
+	case "probe_tls":
+		return m.handleTLSProbe(ctx, id)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	switch action {
+	case "create", "update", "start", "restart", "stop", "remove", "delete_data":
+		m.generations.bump(id)
+	}
 	switch action {
 	case "create":
 		input, err := parseManagedStorageCommand(configJSON, true)
@@ -293,7 +304,7 @@ func (m *managedStorageManager) handle(ctx context.Context, action, id, configJS
 			return "", err
 		}
 		return m.marshalManagedStorageDetail(ctx, record, m.storageStatus(ctx, record))
-	case "iam_create_key", "iam_list_keys", "iam_remove_key":
+	case "iam_create_key", "iam_list_keys", "iam_remove_key", "iam_update_policy":
 		input, err := parseManagedStorageIAMCommand(configJSON)
 		if err != nil {
 			return "", err

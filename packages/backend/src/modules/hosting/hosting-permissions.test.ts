@@ -19,7 +19,7 @@ describe('hosting permission diagnostics', () => {
   it('reports the missing hosted-node permission rather than the already-granted action', () => {
     expect(() =>
       assertHostingResourceAction(['hosting:resources:power:vm-1', 'nodes:details:node-1'], 'vm-1', 'start', ['node-1'])
-    ).toThrowError(expect.objectContaining({ details: { requiredScope: 'nodes:config:edit:node-1' } }));
+    ).toThrowError(expect.objectContaining({ details: { requiredScope: 'nodes:manage:node-1' } }));
   });
 
   it.each(['hosting:resources:power', 'hosting:resources:power:vm-1'])('preserves allowed grant %s', (scope) => {

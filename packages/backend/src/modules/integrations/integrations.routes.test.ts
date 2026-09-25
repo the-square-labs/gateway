@@ -470,7 +470,7 @@ describe('integrations routes', () => {
     const refreshGitLabAllowlistOptions = vi
       .fn()
       .mockResolvedValue([{ entryType: 'project', remoteId: '3', fullPath: 'group/new', name: 'new' }]);
-    registerServices(['integrations:gitlab:manage', 'integrations:gitlab:sync'], {
+    registerServices(['integrations:gitlab:manage'], {
       deleteGitLabConnector,
       testGitLabConnector,
       syncGitLabConnector,
@@ -668,7 +668,7 @@ describe('integrations routes', () => {
     expect(createCloudflareConnector).not.toHaveBeenCalled();
   });
 
-  it('syncs connectors through API tokens with only the provider sync scope', async () => {
+  it('syncs Cloudflare with its sync scope and Git providers with manage (which absorbed :sync)', async () => {
     const syncCloudflareConnector = vi.fn().mockResolvedValue({ status: 'success', zoneCount: 1 });
     const syncGitConnector = vi.fn().mockResolvedValue({ id: 'git-1', allowlistEntries: [] });
     const syncGitLabConnector = vi.fn().mockResolvedValue({ status: 'success', projectCount: 1 });
@@ -683,20 +683,39 @@ describe('integrations routes', () => {
     const post = (path: string) => app.request(`/api/integrations/${path}`, { method: 'POST', headers: authHeaders() });
 
     expect((await post('cloudflare/connectors/cf-1/sync')).status).toBe(200);
-    expect((await post('github/connectors/gh-1/sync')).status).toBe(200);
-    expect((await post('git/connectors/git-1/sync')).status).toBe(200);
-    expect((await post('gitlab/connectors/gl-1/sync')).status).toBe(200);
+    // The removed Git provider :sync scopes no longer grant anything on their own.
+    expect((await post('github/connectors/gh-1/sync')).status).toBe(403);
+    expect((await post('git/connectors/git-1/sync')).status).toBe(403);
+    expect((await post('gitlab/connectors/gl-1/sync')).status).toBe(403);
     expect((await post('cloudflare/connectors/cf-1/test')).status).toBe(403);
     expect(
       (await app.request('/api/integrations/git/connectors/git-1', { method: 'DELETE', headers: authHeaders() })).status
     ).toBe(403);
 
     expect(syncCloudflareConnector).toHaveBeenCalledWith('cf-1', USER.id);
+    expect(syncGitConnector).not.toHaveBeenCalled();
+    expect(syncGitLabConnector).not.toHaveBeenCalled();
+    expect(testCloudflareConnector).not.toHaveBeenCalled();
+    expect(deleteGitConnector).not.toHaveBeenCalled();
+  });
+
+  it('syncs every Git provider with its manage scope', async () => {
+    const syncGitConnector = vi.fn().mockResolvedValue({ id: 'git-1', allowlistEntries: [] });
+    const syncGitLabConnector = vi.fn().mockResolvedValue({ status: 'success', projectCount: 1 });
+    registerServices(['integrations:github:manage', 'integrations:git:manage', 'integrations:gitlab:manage'], {
+      syncGitConnector,
+      syncGitLabConnector,
+    });
+
+    const app = createApp();
+    const post = (path: string) => app.request(`/api/integrations/${path}`, { method: 'POST', headers: authHeaders() });
+
+    expect((await post('github/connectors/gh-1/sync')).status).toBe(200);
+    expect((await post('git/connectors/git-1/sync')).status).toBe(200);
+    expect((await post('gitlab/connectors/gl-1/sync')).status).toBe(200);
     expect(syncGitConnector).toHaveBeenCalledWith('github', 'gh-1', USER.id);
     expect(syncGitConnector).toHaveBeenCalledWith('git', 'git-1', USER.id);
     expect(syncGitLabConnector).toHaveBeenCalledWith('gl-1', USER.id);
-    expect(testCloudflareConnector).not.toHaveBeenCalled();
-    expect(deleteGitConnector).not.toHaveBeenCalled();
   });
 
   it('keeps accepting the provider manage scope on sync routes', async () => {

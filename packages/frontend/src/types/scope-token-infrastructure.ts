@@ -96,12 +96,6 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Docker: Containers",
   },
   {
-    value: "docker:containers:config",
-    label: "Container Config",
-    desc: "View container recreate/configuration fields",
-    group: "Docker: Containers",
-  },
-  {
     value: "docker:containers:manage",
     label: "Manage Containers",
     desc: "Start, stop, restart, kill, and recreate containers",
@@ -174,9 +168,9 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Docker: Containers",
   },
   {
-    value: "docker:containers:folders:manage",
+    value: "docker:folders:manage",
     label: "Manage Docker Folders",
-    desc: "Create, reorder, and remove Docker resource folders",
+    desc: "Organize containers, deployments, Compose projects, networks, volumes, and images into folders",
     group: "Docker: Containers",
   },
   // Docker: Compose Projects
@@ -234,6 +228,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     value: "docker:volumes:create",
     label: "Create Volumes",
     desc: "Create Docker volumes",
+    group: "Docker: Volumes",
+  },
+  {
+    value: "docker:volumes:edit",
+    label: "Edit Volumes",
+    desc: "Rename, relabel, resize, and adopt Docker volumes",
     group: "Docker: Volumes",
   },
   {
@@ -472,12 +472,6 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     value: "logs:read",
     label: "Read Logs",
     desc: "Search and inspect external logs",
-    group: "Logging",
-  },
-  {
-    value: "logs:manage",
-    label: "Manage Logging",
-    desc: "Full access to external logging",
     group: "Logging",
   },
 ] as const;

@@ -30,7 +30,8 @@ import {
 } from "@/components/ui/select";
 import { TruncateStart } from "@/components/ui/truncate-start";
 import { useRealtime } from "@/hooks/use-realtime";
-import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { canCreateDockerResourceOnNode, loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { canEditDockerVolume } from "@/lib/docker-volume-access";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerVolumeRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
@@ -167,7 +168,7 @@ export function DockerVolumes({
     );
   }, [volumes, search]);
   const truncatedListMeta = volumes.find((volume) => volume._listTruncated);
-  const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
 
   const handleRemove = useCallback(
     async (name: string, nodeId?: string) => {
@@ -241,10 +242,14 @@ export function DockerVolumes({
     [fetchVolumes, search]
   );
 
-  const createNodes =
+  // Only nodes the backend accepts a volume on, for some destination this user may pick.
+  const createNodes = (
     useDockerStore.getState().dockerNodes.length > 0
       ? useDockerStore.getState().dockerNodes
-      : dockerNodes;
+      : dockerNodes
+  ).filter((node) =>
+    canCreateDockerResourceOnNode(user?.scopes ?? [], "docker:volumes:create", node.id)
+  );
   const selectedNode = createNodes.find((n) => n.id === createNodeId);
   const selectedNodeCapabilities = selectedNode?.capabilities as
     | Record<string, unknown>
@@ -395,8 +400,7 @@ export function DockerVolumes({
                 )}
               {v.managementState === "legacy" &&
                 v.adoptable &&
-                (hasScope("docker:volumes:create") ||
-                  hasScope(`docker:volumes:create:${(v as any)._nodeId}`)) && (
+                canEditDockerVolume(hasScope, (v as any)._nodeId, v.scopeResourceId ?? v.name) && (
                   <Button
                     variant="ghost"
                     size="icon"
@@ -419,6 +423,7 @@ export function DockerVolumes({
     if (fixedNodeId && c.id === "node") return false;
     if (
       !hasScopedAccess("docker:volumes:delete") &&
+      !hasScopedAccess("docker:volumes:edit") &&
       !hasScopedAccess("docker:volumes:create") &&
       c.id === "actions"
     )

@@ -377,6 +377,16 @@ export const CreateAdditionalSecureLinkSchema = z
     }
   });
 
+/**
+ * Retarget body: the target fields of {@link CreateAdditionalSecureLinkSchema},
+ * validated by the same rules. The link keeps its name, so none is accepted.
+ */
+export function parseRetargetAdditionalSecureLink(input: unknown) {
+  const body = input && typeof input === 'object' && !Array.isArray(input) ? (input as Record<string, unknown>) : {};
+  const { name: _name, ...target } = CreateAdditionalSecureLinkSchema.parse({ ...body, name: 'retarget' });
+  return target;
+}
+
 // ---------------------------------------------------------------------------
 // List query — pagination + filters
 // ---------------------------------------------------------------------------
@@ -411,6 +421,9 @@ export const ValidateAdvancedConfigSchema = z.object({
   snippet: z.string().min(1).max(100000),
   mode: z.enum(['advanced', 'raw']).optional().default('advanced'),
   proxyHostId: z.string().optional(),
+  /** Destination of a route that is about to be created (ignored when proxyHostId is set). */
+  folderId: z.string().uuid().nullable().optional(),
+  nodeId: z.string().uuid().optional(),
 });
 
 // ---------------------------------------------------------------------------

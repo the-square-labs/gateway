@@ -1,4 +1,5 @@
 import type {
+  ManagedCertificateStatus,
   ObjectStorageBucket,
   ObjectStorageConnection,
   ObjectStorageListing,
@@ -271,6 +272,35 @@ export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Bas
         this.request<{ data: ManagedObjectStorageCaCertificate }>(
           `/managed-storage/${encodeURIComponent(id)}/ca-certificate`
         )
+      );
+    }
+
+    /** Server certificate expiry and automatic renewal state; 409 when TLS is off. */
+    async getManagedObjectStorageCertificate(id: string): Promise<ManagedCertificateStatus> {
+      return this.unwrapData(
+        this.request<{ data: ManagedCertificateStatus }>(
+          `/managed-storage/${encodeURIComponent(id)}/certificate`
+        )
+      );
+    }
+
+    async renewManagedObjectStorageCertificate(
+      id: string,
+      options: { allowRestart?: boolean } = {}
+    ): Promise<{
+      outcome: { status: string; method?: string; restarted?: boolean };
+      status: ManagedCertificateStatus;
+    }> {
+      return this.unwrapData(
+        this.request<{
+          data: {
+            outcome: { status: string; method?: string; restarted?: boolean };
+            status: ManagedCertificateStatus;
+          };
+        }>(`/managed-storage/${encodeURIComponent(id)}/certificate/renew`, {
+          method: "POST",
+          body: JSON.stringify(options),
+        })
       );
     }
 

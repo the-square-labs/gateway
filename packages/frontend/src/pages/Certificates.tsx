@@ -47,7 +47,7 @@ const typeOptions: { value: CertificateType | "all"; label: string }[] = [
 
 export function Certificates() {
   const navigate = useNavigate();
-  const { hasScope, hasScopedAccess } = useAuthStore();
+  const { hasScopedAccess } = useAuthStore();
   const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
   const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
   const showSystemCertificates = canViewSystemCertificates && showSystemCertificatePreference;
@@ -85,7 +85,7 @@ export function Certificates() {
   });
 
   useRealtime("ca.changed", () => {
-    if (hasScope("pki:ca:view:root")) {
+    if (hasScopedAccess("pki:ca:view") || hasScopedAccess("pki:cert:issue")) {
       fetchCAs();
     }
   });

@@ -458,7 +458,7 @@ export function CADetail() {
               title="Distribution Endpoints"
               description="URLs embedded into certificates issued under this CA."
               actions={
-                hasScope("pki:ca:create:root") && !ca.isSystem ? (
+                hasScope(`pki:ca:edit:${ca.id}`) && !ca.isSystem ? (
                   <Button
                     variant="ghost"
                     size="icon"

@@ -176,10 +176,7 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
   if (typeWanted('access_list') && hasScopeBase(user.scopes, 'acl:view')) {
     searchTasks.push(() => collect('access_list', 'list_access_lists', { search: query, limit }));
   }
-  if (
-    typeWanted('ca') &&
-    (hasScope(user.scopes, 'pki:ca:view:root') || hasScope(user.scopes, 'pki:ca:view:intermediate'))
-  ) {
+  if (typeWanted('ca') && hasScopeBase(user.scopes, 'pki:ca:view')) {
     searchTasks.push(async () => {
       const batch: ResourceSearchBatch = { results: [], errors: [] };
       try {
@@ -260,10 +257,9 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
         resource: 'environment',
         operation: 'list',
         search: query,
-        allowedIds:
-          hasScope(user.scopes, 'logs:manage') || hasScope(user.scopes, 'logs:environments:view')
-            ? undefined
-            : getResourceScopedIds(user.scopes, 'logs:environments:view'),
+        allowedIds: hasScope(user.scopes, 'logs:environments:view')
+          ? undefined
+          : getResourceScopedIds(user.scopes, 'logs:environments:view'),
       })
     );
   }
@@ -273,10 +269,9 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
         resource: 'schema',
         operation: 'list',
         search: query,
-        allowedIds:
-          hasScope(user.scopes, 'logs:manage') || hasScope(user.scopes, 'logs:schemas:view')
-            ? undefined
-            : getResourceScopedIds(user.scopes, 'logs:schemas:view'),
+        allowedIds: hasScope(user.scopes, 'logs:schemas:view')
+          ? undefined
+          : getResourceScopedIds(user.scopes, 'logs:schemas:view'),
       })
     );
   }
@@ -295,16 +290,10 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
       })
     );
   }
-  if (
-    typeWanted('notification_rule') &&
-    (hasScope(user.scopes, 'notifications:view') || hasScope(user.scopes, 'notifications:alerts:view'))
-  ) {
+  if (typeWanted('notification_rule') && hasScope(user.scopes, 'notifications:alerts:view')) {
     searchTasks.push(() => collect('notification_rule', 'list_alert_rules', {}));
   }
-  if (
-    typeWanted('notification_webhook') &&
-    (hasScope(user.scopes, 'notifications:view') || hasScope(user.scopes, 'notifications:webhooks:view'))
-  ) {
+  if (typeWanted('notification_webhook') && hasScope(user.scopes, 'notifications:webhooks:view')) {
     searchTasks.push(() => collect('notification_webhook', 'list_webhooks', {}));
   }
 

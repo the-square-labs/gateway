@@ -4,143 +4,93 @@
  */
 
 import { isFolderScopedScope } from './folder-scopes.js';
-import { extractBaseScope, isValidBaseScope } from './scopes.js';
+import { canonicalizeScopes, extractBaseScope, isValidBaseScope, MANUAL_APPROVAL_SCOPE_SET } from './scopes.js';
+import { scopeCleanupAdditions } from './scopes-aliases.js';
 import { PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
+import { IMPLIED_SCOPES_BY_REQUIRED_SCOPE } from './scopes-implications.js';
+
+/** Reverse of the implication closure: scope -> the required scopes it satisfies. */
+const IMPLIED_BY_SCOPE = new Map<string, string[]>();
+for (const [required, implying] of Object.entries(IMPLIED_SCOPES_BY_REQUIRED_SCOPE)) {
+  for (const scope of implying) IMPLIED_BY_SCOPE.set(scope, [...(IMPLIED_BY_SCOPE.get(scope) ?? []), required]);
+}
+
+const DOCKER_CHILD_SCOPE_PREFIXES = [
+  'docker:containers:',
+  'docker:compose:',
+  'docker:networks:',
+  'docker:volumes:',
+  'docker:images:',
+  'docker:availability:',
+] as const;
 
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (
-    !baseScope.startsWith('docker:containers:') &&
-    !baseScope.startsWith('docker:compose:') &&
-    !baseScope.startsWith('docker:networks:') &&
-    !baseScope.startsWith('docker:volumes:') &&
-    !baseScope.startsWith('docker:images:')
-  )
-    return null;
+  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (!resourceId) return null;
   if (resourceId.startsWith('folder/') || resourceId.startsWith('node/')) return null;
   const separator = resourceId.indexOf('/');
   return separator > 0 ? resourceId.slice(0, separator) : null;
 }
 
-const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
-  'hosting:snapshots:view': [
-    'hosting:snapshots:create',
-    'hosting:snapshots:delete',
-    'hosting:snapshots:restore',
-    'hosting:snapshots:folders:manage',
-  ],
-  'domains:view': ['domains:edit'],
-  'pki:templates:view': ['pki:templates:edit'],
-  'proxy:view': ['proxy:edit'],
-  'pages:view': [
-    'pages:edit',
-    'pages:delete',
-    'pages:deploy',
-    'pages:deployments:manage',
-    'pages:tags:manage',
-    'pages:tokens:manage',
-  ],
-  'pages:settings:view': ['pages:settings:edit'],
-  'proxy:templates:view': ['proxy:templates:edit'],
-  'acl:view': ['acl:edit'],
-  'nodes:details': ['nodes:rename'],
-  'nodes:config:view': ['nodes:config:edit'],
-  'settings:gateway:view': ['settings:gateway:edit'],
-  'housekeeping:view': ['housekeeping:run', 'housekeeping:configure'],
-  'license:view': ['license:manage'],
-  'docker:containers:view': [
-    'docker:containers:edit',
-    'docker:containers:config',
-    'docker:containers:manage',
-    'docker:containers:console',
-    'docker:containers:files:read',
-    'docker:containers:files:write',
-    'docker:containers:environment',
-    'docker:containers:secrets',
-    'docker:containers:webhooks',
-  ],
-  'docker:networks:view': ['docker:networks:edit'],
-  'docker:registries:view': ['docker:registries:edit'],
-  'storage:view': ['storage:edit', 'storage:objects:read', 'storage:objects:write', 'storage:objects:admin'],
-  'storage:objects:read': ['storage:objects:write', 'storage:objects:admin'],
-  'storage:objects:write': ['storage:objects:admin'],
-  // Revealing the saved credentials is broader than letting a backup use them.
-  'storage:credentials:use': ['storage:credentials:reveal'],
-  'databases:backups:view': ['databases:backups:manage', 'databases:backups:run', 'databases:backups:restore'],
-  'databases:view': ['databases:edit', 'databases:query:read', 'databases:query:write', 'databases:query:admin'],
-  'databases:query:read': ['databases:query:write', 'databases:query:admin'],
-  'databases:query:write': ['databases:query:admin'],
-  'notifications:alerts:view': ['notifications:alerts:edit'],
-  'notifications:webhooks:view': ['notifications:webhooks:edit'],
-  'notifications:view': ['notifications:manage'],
-  'audit:siem:view': ['audit:siem:manage'],
-  'logs:environments:view': ['logs:environments:edit', 'logs:read'],
-  'logs:tokens:view': ['logs:manage'],
-  'logs:schemas:view': ['logs:schemas:edit'],
-  'logs:read': ['logs:manage'],
-  'status-page:view': ['status-page:manage'],
-  'integrations:cloudflare:view': ['integrations:cloudflare:manage'],
-  'integrations:hosting:view': ['integrations:hosting:manage'],
-  'integrations:github:view': ['integrations:github:manage'],
-  'integrations:git:view': ['integrations:git:manage'],
-  'integrations:ssh:view': ['integrations:ssh:manage'],
-  'inference:providers:view': ['inference:providers:manage', 'inference:models:manage'],
-};
+type ScopeMembership = (scope: string) => boolean;
 
-function hasImpliedScope(scopes: readonly string[], requiredScope: string): boolean {
+function hasImpliedScope(holds: ScopeMembership, requiredScope: string): boolean {
   const requiredBase = extractBaseScope(requiredScope);
-  const impliedScopes = getTransitiveImpliedScopes(requiredBase);
-  if (impliedScopes.length === 0) return false;
+  // Precomputed transitive closure generated from the catalog (see scopes-implications.ts).
+  const impliedScopes = IMPLIED_SCOPES_BY_REQUIRED_SCOPE[requiredBase];
+  if (!impliedScopes) return false;
 
   const resourceId = requiredBase === requiredScope ? null : requiredScope.slice(requiredBase.length + 1);
   const parentId = parentResourceId(requiredBase, resourceId);
   for (const impliedScope of impliedScopes) {
-    if (scopes.includes(impliedScope)) return true;
-    if (resourceId && scopes.includes(`${impliedScope}:${resourceId}`)) return true;
-    if (parentId && scopes.includes(`${impliedScope}:${parentId}`)) return true;
+    if (holds(impliedScope)) return true;
+    if (resourceId && holds(`${impliedScope}:${resourceId}`)) return true;
+    if (parentId && holds(`${impliedScope}:${parentId}`)) return true;
   }
   return false;
 }
 
-function getTransitiveImpliedScopes(requiredBase: string): string[] {
-  const result = new Set<string>();
-  const queue = [...(IMPLIED_SCOPES_BY_REQUIRED_SCOPE[requiredBase] ?? [])];
-  for (let index = 0; index < queue.length; index += 1) {
-    const scope = queue[index];
-    if (result.has(scope)) continue;
-    result.add(scope);
-    queue.push(...(IMPLIED_SCOPES_BY_REQUIRED_SCOPE[scope] ?? []));
+/** hasScope over any membership test: an array scan for small lists, a Set for large ones. */
+function matchesScope(holds: ScopeMembership, requiredScope: string): boolean {
+  if (holds(requiredScope)) return true;
+
+  const baseScope = extractBaseScope(requiredScope);
+  if (baseScope !== requiredScope) {
+    if (holds(baseScope)) return true;
+    const resourceId = requiredScope.slice(baseScope.length + 1);
+    const parentId = parentResourceId(baseScope, resourceId);
+    if (parentId && holds(`${baseScope}:${parentId}`)) return true;
+    return hasImpliedScope(holds, requiredScope);
   }
-  return [...result];
+
+  if (hasImpliedScope(holds, requiredScope)) return true;
+
+  if (isValidBaseScope(requiredScope)) return false;
+
+  const parts = requiredScope.split(':');
+  for (let i = parts.length - 1; i >= 1; i--) {
+    if (holds(parts.slice(0, i).join(':'))) return true;
+  }
+
+  return false;
 }
 
 /**
  * Check if a set of scopes grants a required permission.
  * Supports hierarchical matching: 'cert:issue' grants 'cert:issue:ca-123'
  */
-export function hasScope(scopes: string[], requiredScope: string): boolean {
-  if (scopes.includes(requiredScope)) return true;
+export function hasScope(scopes: readonly string[], requiredScope: string): boolean {
+  return matchesScope((scope) => scopes.includes(scope), requiredScope);
+}
 
-  const baseScope = extractBaseScope(requiredScope);
-  if (baseScope !== requiredScope) {
-    if (scopes.includes(baseScope)) return true;
-    const resourceId = requiredScope.slice(baseScope.length + 1);
-    const parentId = parentResourceId(baseScope, resourceId);
-    if (parentId && scopes.includes(`${baseScope}:${parentId}`)) return true;
-    return hasImpliedScope(scopes, requiredScope);
-  }
-
-  if (hasImpliedScope(scopes, requiredScope)) return true;
-
-  if (isValidBaseScope(requiredScope)) return false;
-
-  const parts = requiredScope.split(':');
-  for (let i = parts.length - 1; i >= 1; i--) {
-    const prefix = parts.slice(0, i).join(':');
-    if (scopes.includes(prefix)) return true;
-  }
-
-  return false;
+/**
+ * A reusable hasScope for one large scope list (expanded folder grants can hold thousands):
+ * every check is a handful of Set lookups instead of array scans.
+ */
+export function scopeMatcher(scopes: readonly string[]): (requiredScope: string) => boolean {
+  const held = new Set(scopes);
+  const holds: ScopeMembership = (scope) => held.has(scope);
+  return (requiredScope) => matchesScope(holds, requiredScope);
 }
 
 /** Check if scopes contain a broad scope or any resource-scoped variant of it. */
@@ -209,9 +159,26 @@ export function canUseAI(scopes: string[]): boolean {
   return hasScope(scopes, 'ai:workspace:use');
 }
 
+/**
+ * Add the grants migration 0200 gave holders of these scopes (for example `integrations:github:manage`
+ * brings repository reads), keeping only additions the requester can delegate. Used where new
+ * credentials are minted, so older scripts keep the capabilities they expect. Manual-approval scopes
+ * (CA key export, repository writes, ...) are never added implicitly: they must be asked for.
+ */
+export function withDelegableCleanupAdditions(scopes: readonly string[], holderScopes: readonly string[]): string[] {
+  const holds = scopeMatcher(holderScopes);
+  const additions = scopes
+    .flatMap(scopeCleanupAdditions)
+    .filter((scope) => !MANUAL_APPROVAL_SCOPE_SET.has(extractBaseScope(scope)) && holds(scope));
+  return additions.length === 0 ? [...scopes] : canonicalizeScopes([...scopes, ...additions]);
+}
+
 /** Check if all requested scopes are a subset of the allowed scopes */
-export function isScopeSubset(requestedScopes: string[], allowedScopes: string[]): boolean {
-  return requestedScopes.every((s) => hasScope(allowedScopes, s));
+export function isScopeSubset(requestedScopes: readonly string[], allowedScopes: readonly string[]): boolean {
+  if (requestedScopes.length === 0) return true;
+  // Both lists can be expanded folder grants (user management compares whole effective scope sets).
+  const allowed = scopeMatcher(allowedScopes);
+  return requestedScopes.every((scope) => allowed(scope));
 }
 
 /**
@@ -221,32 +188,42 @@ export function isScopeSubset(requestedScopes: string[], allowedScopes: string[]
  * a broad token scope plus a resource-scoped user scope should still allow
  * that specific resource, and vice versa.
  */
-export function boundScopes(delegatedScopes: string[], principalScopes: string[]): string[] {
+export function boundScopes(delegatedScopes: readonly string[], principalScopes: readonly string[]): string[] {
+  // Near-linear: expanded token and owner scope lists can each hold thousands of entries, and this
+  // runs on every token request. Every step uses Set lookups instead of nested scans.
   const bounded = new Set<string>();
+  const principalHolds = scopeMatcher(principalScopes);
+  const delegatedSet = new Set(delegatedScopes);
 
+  // 1. Delegated scopes the principal holds (broadly, per resource, through a parent or an implication).
   for (const scope of delegatedScopes) {
-    if (hasScope(principalScopes, scope)) bounded.add(scope);
+    if (principalHolds(scope)) bounded.add(scope);
   }
 
+  // 2. Principal scopes a delegated scope of the same base covers (the same scope, its broad form, or its
+  //    Docker node parent): a broad token keeps exactly the owner's per-resource grants.
   for (const scope of principalScopes) {
     const scopeBase = extractBaseScope(scope);
-    if (
-      delegatedScopes.some(
-        (delegatedScope) => extractBaseScope(delegatedScope) === scopeBase && hasScope([delegatedScope], scope)
-      )
-    ) {
+    if (delegatedSet.has(scope)) {
+      bounded.add(scope);
+      continue;
+    }
+    if (scope === scopeBase) continue;
+    const resourceId = scope.slice(scopeBase.length + 1);
+    const parentId = parentResourceId(scopeBase, resourceId);
+    if (delegatedSet.has(scopeBase) || (parentId && delegatedSet.has(`${scopeBase}:${parentId}`))) {
       bounded.add(scope);
     }
   }
 
-  for (const delegatedScope of delegatedScopes) {
-    const delegatedBase = extractBaseScope(delegatedScope);
-    if (delegatedScope !== delegatedBase) continue;
-
-    for (const principalScope of principalScopes) {
-      const principalBase = extractBaseScope(principalScope);
-      if (principalScope === principalBase) continue;
-      const resourceId = principalScope.slice(principalBase.length + 1);
+  // 3. A broad delegated scope narrowed to the resources the principal holds it for, directly or through a
+  //    scope that implies it (`proxy:view` + owner `proxy:edit:<id>` -> `proxy:view:<id>`).
+  for (const principalScope of principalScopes) {
+    const principalBase = extractBaseScope(principalScope);
+    if (principalScope === principalBase) continue;
+    const resourceId = principalScope.slice(principalBase.length + 1);
+    for (const delegatedBase of [principalBase, ...(IMPLIED_BY_SCOPE.get(principalBase) ?? [])]) {
+      if (!delegatedSet.has(delegatedBase)) continue;
       const narrowedDelegatedScope = `${delegatedBase}:${resourceId}`;
       if (hasScope([principalScope], narrowedDelegatedScope)) bounded.add(narrowedDelegatedScope);
     }

@@ -109,3 +109,38 @@ describe("auth store session reset callback", () => {
     expect(useAuthStore.getState().user?.id).toBe(USER.id);
   });
 });
+
+describe("live scope updates", () => {
+  it("widens scopes in place and remembers the new auth context", () => {
+    const reset = vi.fn();
+    registerAuthContextReset(reset);
+    useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
+
+    useAuthStore.getState().applyLiveScopes(["proxy:view", "docker:containers:view:node-1/c1"]);
+
+    expect(reset).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().user?.scopes).toEqual([
+      "proxy:view",
+      "docker:containers:view:node-1/c1",
+    ]);
+    expect(window.localStorage.getItem(AUTH_CONTEXT_STORAGE_KEY)).toBe(
+      "user-1:docker:containers:view:node-1/c1,proxy:view:active"
+    );
+  });
+
+  it("resets private state when a live update removes a scope", () => {
+    const reset = vi.fn();
+    registerAuthContextReset(reset);
+    useAuthStore.setState({ user: USER, isAuthenticated: true, isLoading: false });
+
+    useAuthStore.getState().applyLiveScopes(["proxy:view:host-1"]);
+
+    expect(reset).toHaveBeenCalledWith({ preserveShell: true });
+    expect(useAuthStore.getState().user?.scopes).toEqual(["proxy:view:host-1"]);
+  });
+
+  it("ignores live updates without a signed-in user", () => {
+    useAuthStore.getState().applyLiveScopes(["proxy:view"]);
+    expect(useAuthStore.getState().user).toBeNull();
+  });
+});

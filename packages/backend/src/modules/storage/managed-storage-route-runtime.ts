@@ -1,25 +1,34 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeForCreation } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, rejectImpersonation, requireScopeBase } from '@/modules/auth/auth.middleware.js';
+import { RenewManagedCertificateSchema } from '@/modules/managed-workloads/certificate-renewal.docs.js';
+import { ObjectStorageFolderService } from '@/modules/object-storage/object-storage-folders.service.js';
 import {
   createManagedStorageAccessKeyRoute,
   createManagedStorageBindingRoute,
   createManagedStorageRoute,
   deleteManagedStorageBindingRoute,
   deleteManagedStorageRoute,
+  freezeManagedStorageWritesRoute,
   getManagedStorageCaCertificateRoute,
+  getManagedStorageCertificateRoute,
   getManagedStorageRoute,
+  importManagedStorageAccessKeysRoute,
   listManagedStorageAccessKeysRoute,
   listManagedStorageBindingsRoute,
   listManagedStorageCatalogRoute,
   listManagedStorageRoute,
+  moveManagedStorageBindingRoute,
+  rehomeManagedStorageBackupHistoryRoute,
   removeManagedStorageAccessKeyRoute,
+  renewManagedStorageCertificateRoute,
   restartManagedStorageRoute,
   retryManagedStorageProvisioningRoute,
   revealManagedStorageCredentialsRoute,
+  unfreezeManagedStorageWritesRoute,
   updateManagedStorageRoute,
 } from './managed-storage.docs.js';
 import {
@@ -27,6 +36,9 @@ import {
   CreateManagedStorageBindingSchema,
   CreateManagedStorageSchema,
   DeleteManagedStorageBindingSchema,
+  ImportManagedStorageAccessKeysSchema,
+  MoveManagedStorageBindingSchema,
+  RehomeManagedStorageBackupHistorySchema,
   UpdateManagedStorageSchema,
 } from './managed-storage.schemas.js';
 import { ManagedStorageService } from './managed-storage.service.js';
@@ -37,6 +49,7 @@ export const managedStorageRouteRuntime = {
   openApiValidationHook,
   getResourceScopedIds,
   hasScope,
+  hasScopeBase,
   hasScopeForCreation,
   AppError,
   authMiddleware,
@@ -48,6 +61,7 @@ export const managedStorageRouteRuntime = {
   deleteManagedStorageBindingRoute,
   deleteManagedStorageRoute,
   getManagedStorageCaCertificateRoute,
+  getManagedStorageCertificateRoute,
   getManagedStorageRoute,
   listManagedStorageAccessKeysRoute,
   listManagedStorageBindingsRoute,
@@ -56,6 +70,7 @@ export const managedStorageRouteRuntime = {
   removeManagedStorageAccessKeyRoute,
   restartManagedStorageRoute,
   retryManagedStorageProvisioningRoute,
+  renewManagedStorageCertificateRoute,
   revealManagedStorageCredentialsRoute,
   updateManagedStorageRoute,
   CreateManagedStorageAccessKeySchema,
@@ -63,6 +78,16 @@ export const managedStorageRouteRuntime = {
   CreateManagedStorageSchema,
   DeleteManagedStorageBindingSchema,
   UpdateManagedStorageSchema,
+  RenewManagedCertificateSchema,
   ManagedStorageService,
   ManagedStorageBindingsService,
+  ObjectStorageFolderService,
+  moveManagedStorageBindingRoute,
+  importManagedStorageAccessKeysRoute,
+  freezeManagedStorageWritesRoute,
+  unfreezeManagedStorageWritesRoute,
+  rehomeManagedStorageBackupHistoryRoute,
+  MoveManagedStorageBindingSchema,
+  ImportManagedStorageAccessKeysSchema,
+  RehomeManagedStorageBackupHistorySchema,
 };

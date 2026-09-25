@@ -23,6 +23,7 @@ import { DockerHealthCheckService } from '@/modules/docker/docker-health-check.s
 import { DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
 import { InferenceUsageService } from '@/modules/inference/accounting/inference-usage.service.js';
 import { LoggingMaintenanceService } from '@/modules/logging/logging-maintenance.service.js';
+import { hasLoggingHealthAccess } from '@/modules/logging/logging-permissions.js';
 import { NodesService } from '@/modules/nodes/nodes.service.js';
 import { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
 import { FinalizeSetupService, isFinalizeSetupComplete } from '@/modules/onboarding/finalize-setup.service.js';
@@ -59,6 +60,14 @@ export const monitoringRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiVa
 
 monitoringRoutes.use('*', authMiddleware);
 
+/**
+ * CA counts are aggregated by type, so only the broad pki:ca:view grant sees them;
+ * CA-scoped view grants still see their own CAs in the dashboard CA list.
+ */
+function caStatsTypes(scopes: string[]): Array<'root' | 'intermediate'> {
+  return hasScope(scopes, 'pki:ca:view') ? ['root', 'intermediate'] : [];
+}
+
 async function scopedDashboardStatsFromReadModels(
   scopes: string[],
   showSystem: boolean,
@@ -67,7 +76,7 @@ async function scopedDashboardStatsFromReadModels(
   const canViewProxy = hasScopeBase(scopes, 'proxy:view');
   const canViewSsl = hasScopeBase(scopes, 'ssl:cert:view');
   const canViewPki = hasScopeBase(scopes, 'pki:cert:view');
-  const canViewCa = hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+  const canViewCa = hasScope(scopes, 'pki:ca:view');
   const canViewNodes = hasScopeBase(scopes, 'nodes:details');
   const readModels = container.resolve(DashboardReadModelService);
   const [proxies, ssl, pki, cas, nodes] = await Promise.all([
@@ -96,10 +105,7 @@ async function scopedDashboardStatsFromReadModels(
     },
     {
       showSystem,
-      allowedCaTypes: [
-        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedCaTypes: caStatsTypes(scopes),
       allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
       allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
         ? undefined
@@ -121,16 +127,13 @@ monitoringRoutes.openapi(dashboardStatsRoute, async (c) => {
   const canViewProxyStats = hasScopeBase(scopes, 'proxy:view');
   const canViewSslStats = hasScopeBase(scopes, 'ssl:cert:view');
   const canViewPkiCertStats = hasScopeBase(scopes, 'pki:cert:view');
-  const canViewCaStats = hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+  const canViewCaStats = hasScope(scopes, 'pki:ca:view');
   const canViewNodeStats = hasScopeBase(scopes, 'nodes:details');
   const canViewSystemStats = showSystem && hasScope(scopes, 'admin:details:certificates');
   const directStats = () =>
     monitoringService.getDashboardStats({
       showSystem: canViewSystemStats,
-      allowedCaTypes: [
-        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedCaTypes: caStatsTypes(scopes),
       allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
       allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
         ? undefined
@@ -148,7 +151,7 @@ monitoringRoutes.openapi(dashboardStatsRoute, async (c) => {
     (!canViewSslStats || hasScope(scopes, 'ssl:cert:view')) &&
     (!canViewPkiCertStats || hasScope(scopes, 'pki:cert:view')) &&
     (!canViewNodeStats || hasScope(scopes, 'nodes:details')) &&
-    (!canViewCaStats || (hasScope(scopes, 'pki:ca:view:root') && hasScope(scopes, 'pki:ca:view:intermediate')));
+    (!canViewCaStats || hasScope(scopes, 'pki:ca:view'));
   const snapshot = canUseGlobalSnapshot
     ? await dashboardReadModels.get<any>(canViewSystemStats ? 'stats-system' : 'stats-user')
     : null;
@@ -251,24 +254,21 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
   const canViewProxy = hasScopeBase(scopes, 'proxy:view');
   const canViewSsl = hasScopeBase(scopes, 'ssl:cert:view');
   const canViewPki = hasScopeBase(scopes, 'pki:cert:view');
-  const canViewCa = hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+  const canViewCa = hasScopeBase(scopes, 'pki:ca:view');
   const canViewNodes = hasScopeBase(scopes, 'nodes:details');
   const canViewDatabases = hasScopeBase(scopes, 'databases:view');
   const canViewAudit = hasScope(scopes, 'admin:audit');
   const monitoringService = container.resolve(MonitoringService);
   const dashboardReadModels = container.resolve(DashboardReadModelService);
   const user = c.get('user')!;
-  const canViewLogging = hasScope(scopes, 'housekeeping:view');
+  const canViewLogging = hasLoggingHealthAccess(scopes);
   const canViewInference = hasScope(scopes, 'feat:ai:use');
   const scopedNodeIds = getResourceScopedIds(scopes, 'nodes:details');
   const nodeOptions = hasScope(scopes, 'nodes:details') ? undefined : { allowedIds: scopedNodeIds };
   const directStats = () =>
     monitoringService.getDashboardStats({
       showSystem,
-      allowedCaTypes: [
-        hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-        hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-      ].filter((type): type is 'root' | 'intermediate' => !!type),
+      allowedCaTypes: caStatsTypes(scopes),
       allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
       allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
         ? undefined
@@ -283,7 +283,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     (!canViewSsl || hasScope(scopes, 'ssl:cert:view')) &&
     (!canViewPki || hasScope(scopes, 'pki:cert:view')) &&
     (!canViewNodes || hasScope(scopes, 'nodes:details')) &&
-    (!canViewCa || (hasScope(scopes, 'pki:ca:view:root') && hasScope(scopes, 'pki:ca:view:intermediate')));
+    (!canViewCa || hasScope(scopes, 'pki:ca:view'));
   const statsPromise = hasBroadStatsAccess
     ? dashboardReadModels
         .get<any>(showSystem ? 'stats-system' : 'stats-user')
@@ -459,11 +459,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     ? dashboardReadModels.get<any[]>('cas').then(async (snapshot) => {
         const rows =
           snapshot && snapshot.revision > 0 ? snapshot.data : await container.resolve(CAService).getCATree(true);
-        return rows
-          .filter((ca) => showSystem || !ca.isSystem)
-          .filter((ca) =>
-            ca.type === 'root' ? hasScope(scopes, 'pki:ca:view:root') : hasScope(scopes, 'pki:ca:view:intermediate')
-          );
+        return rows.filter((ca) => showSystem || !ca.isSystem).filter((ca) => hasScope(scopes, `pki:ca:view:${ca.id}`));
       })
     : Promise.resolve([]);
   const activityPromise = canViewAudit

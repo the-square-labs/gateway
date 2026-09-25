@@ -35,6 +35,7 @@ function createService(options?: {
   pendingConsent?: any;
   oauthExtendedCallbackCompatibility?: boolean;
   client?: any;
+  select?: (fields: Record<string, unknown>) => unknown;
 }) {
   const cacheSet = vi.fn().mockResolvedValue(undefined);
   const cacheGet = vi.fn().mockResolvedValue(options?.pendingConsent ?? null);
@@ -96,6 +97,7 @@ function createService(options?: {
       },
     },
     transaction: vi.fn(async (callback) => callback(db)),
+    ...(options?.select ? { select: vi.fn(options.select) } : {}),
     insert: vi.fn((table) => ({
       values: vi.fn((values) => {
         insertCalls.push({ table, values });
@@ -333,6 +335,63 @@ describe('OAuthService.createConsentRequest', () => {
     expect(pending.manualApprovalScopes).toEqual(['integrations:gitlab:repo:write', 'integrations:ssh:use']);
   });
 
+  it('rewrites retired scope names from older clients before computing the grant', async () => {
+    const { service } = createService();
+
+    const pending = await service.createConsentRequest(
+      {
+        ...USER,
+        scopes: [...USER.scopes, 'nodes:manage', 'notifications:alerts:view', 'notifications:webhooks:view'],
+      },
+      {
+        response_type: 'code',
+        client_id: 'goc_client',
+        redirect_uri: 'http://127.0.0.1:8765/callback',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        scope: 'nodes:config:edit:node-1 notifications:view ssl:cert:revoke',
+      }
+    );
+
+    expect(pending.requestedScopes).toEqual([
+      'nodes:manage:node-1',
+      'notifications:alerts:view',
+      'notifications:webhooks:view',
+    ]);
+    expect(pending.grantableScopes).toEqual(pending.requestedScopes);
+    expect(pending.manualApprovalScopes).toEqual(['nodes:manage:node-1']);
+  });
+
+  it('rejects requests whose scopes were all removed from the catalog', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createConsentRequest(USER, {
+        response_type: 'code',
+        client_id: 'goc_client',
+        redirect_uri: 'http://127.0.0.1:8765/callback',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        scope: 'ssl:cert:revoke ssl:cert:export',
+      })
+    ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_SCOPE' });
+  });
+
+  it('rejects restrictions a scope cannot resolve', async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createConsentRequest(USER, {
+        response_type: 'code',
+        client_id: 'goc_client',
+        redirect_uri: 'http://127.0.0.1:8765/callback',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        scope: 'nodes:details:folder/not-a-uuid',
+      })
+    ).rejects.toMatchObject({ statusCode: 400, code: 'INVALID_SCOPE' });
+  });
+
   it('rejects MCP OAuth requests when the user cannot use MCP', async () => {
     const { service } = createService();
 
@@ -512,6 +571,36 @@ describe('OAuthService.approveConsent', () => {
       service.approveConsent('request-1', { ...USER, scopes: [...USER.scopes, 'docker:containers:secrets'] }, [])
     ).rejects.toThrow('At least one scope must be selected');
 
+    expect(db.insert).not.toHaveBeenCalled();
+  });
+
+  it('accepts a folder-restricted selection of a broad grantable scope', async () => {
+    const folderScope = 'docker:containers:manage:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+    const { service, insertCalls } = createService({
+      pendingConsent: pendingConsent({
+        requestedScopes: ['docker:containers:manage', 'nodes:details'],
+        grantableScopes: ['docker:containers:manage', 'nodes:details'],
+        manualApprovalScopes: [],
+      }),
+    });
+
+    await service.approveConsent('request-1', { ...USER, scopes: [...USER.scopes, 'docker:containers:manage'] }, [
+      folderScope,
+      'nodes:details:node-1',
+    ]);
+
+    const authorizationCodeInsert = insertCalls.find((call) => call.table === oauthAuthorizationCodes);
+    expect(authorizationCodeInsert?.values.scopes).toEqual([folderScope, 'nodes:details:node-1']);
+  });
+
+  it('rejects a folder restriction of a scope the user cannot grant', async () => {
+    const { service, db } = createService({ pendingConsent: pendingConsent() });
+
+    await expect(
+      service.approveConsent('request-1', USER, [
+        'docker:containers:manage:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e',
+      ])
+    ).rejects.toMatchObject({ statusCode: 403, code: 'SCOPE_NOT_ALLOWED' });
     expect(db.insert).not.toHaveBeenCalled();
   });
 
@@ -831,6 +920,72 @@ describe('OAuthService.validateAccessToken', () => {
       tokenId: 'access-setup',
       scopes: ['inference:setup'],
     });
+  });
+
+  it('expands a folder-restricted grant to the resources currently in the folder', async () => {
+    const folderId = '0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+    const { service } = createService({
+      groupScopes: ['proxy:view'],
+      accessToken: {
+        id: 'access-folder',
+        tokenHash: 'hash',
+        tokenPrefix: 'gwo_folder1',
+        clientId: 'goc_client',
+        userId: USER.id,
+        scopes: [`proxy:view:folder/${folderId}`],
+        resource: 'https://gateway.example.com/api',
+        refreshTokenId: null,
+        expiresAt: new Date(Date.now() + 60_000),
+        revokedAt: null,
+      },
+      select: (fields) => ({
+        from: () =>
+          'parentId' in fields
+            ? Promise.resolve([{ id: folderId, parentId: null }])
+            : { where: async () => [{ id: 'host-1', folderId }] },
+      }),
+    });
+
+    const validated = await service.validateAccessToken('gwo_folder', { resource: 'https://gateway.example.com/api' });
+
+    expect(validated?.scopes).toEqual([`proxy:view:folder/${folderId}`, 'proxy:view:host-1']);
+    expect(validated?.scopes).not.toContain('proxy:view');
+  });
+
+  it('never lets a destination-only creation grant reach existing resources through OAuth', async () => {
+    // Reviewer repro: the owner can only create containers on n1.
+    const { service } = createService({
+      groupScopes: ['mcp:use', 'docker:containers:create:node/n1'],
+      accessToken: {
+        id: 'access-creator',
+        tokenHash: 'hash',
+        tokenPrefix: 'gwo_create1',
+        clientId: 'goc_client',
+        userId: USER.id,
+        scopes: ['docker:containers:view', 'docker:containers:view:node/n1'],
+        resource: 'https://gateway.example.com/api/mcp',
+        refreshTokenId: null,
+        expiresAt: null,
+        revokedAt: null,
+      },
+    });
+
+    await expect(
+      service.validateAccessToken('gwo_creator', { resource: 'https://gateway.example.com/api/mcp' })
+    ).resolves.toBeNull();
+
+    const pending = await service.createConsentRequest(
+      { ...USER, scopes: ['mcp:use', 'docker:containers:create:node/n1'] },
+      {
+        response_type: 'code',
+        client_id: 'goc_client',
+        redirect_uri: 'http://127.0.0.1:8765/callback',
+        code_challenge: 'challenge',
+        code_challenge_method: 'S256',
+        scope: 'mcp:use docker:containers:view',
+      }
+    );
+    expect(pending.grantableScopes).toEqual([]);
   });
 
   it('accepts long-lived MCP access-only tokens without refresh metadata', async () => {

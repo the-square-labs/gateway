@@ -12,13 +12,30 @@ export const DOCKER_VIEW_NODE_SCOPES = [
 ] as const;
 
 export type DockerViewNodeScope = (typeof DOCKER_VIEW_NODE_SCOPES)[number];
-type DockerNodeScope =
-  | DockerViewNodeScope
+export type DockerCreationNodeScope =
   | "docker:containers:create"
   | "docker:compose:create"
   | "docker:networks:create"
   | "docker:volumes:create"
   | "docker:images:pull";
+export type DockerNodeScope = DockerViewNodeScope | DockerCreationNodeScope;
+
+/**
+ * Mirrors the backend creation check for a node picker: broad, node or legacy node grants for that node, or any
+ * folder grant (a folder creation grant works on every Docker node; the folder is chosen separately).
+ */
+export function canCreateDockerResourceOnNode(
+  scopes: readonly string[],
+  base: DockerCreationNodeScope,
+  nodeId: string
+): boolean {
+  return (
+    scopeMatches(scopes, base) ||
+    scopeMatches(scopes, `${base}:${nodeId}`) ||
+    scopeMatches(scopes, `${base}:node/${nodeId}`) ||
+    scopes.some((scope) => scope.startsWith(`${base}:folder/`))
+  );
+}
 
 function hasScopedDockerNodes(
   scopes: readonly string[],

@@ -74,7 +74,7 @@ import {
   UpdateAdditionalRouteSchema,
 } from '@/modules/proxy/additional-route.validation.js';
 import { redactAdditionalRouteForScopes } from '@/modules/proxy/page-target-visibility.js';
-import { CreateAdditionalSecureLinkSchema } from '@/modules/proxy/proxy.schemas.js';
+import { CreateAdditionalSecureLinkSchema, parseRetargetAdditionalSecureLink } from '@/modules/proxy/proxy.schemas.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import type { User } from '@/types.js';
 import { assertWorkloadBindingTargetAccess } from './ai.binding-target-access.js';
@@ -510,6 +510,26 @@ async function manageAdditionalSecureLink(user: User, args: Record<string, unkno
   }
   const bindingId = requiredString(args.bindingId);
   if (operation === 'retry') return service.retryAdditionalSecureLink(routeId, bindingId, user.id, user.scopes);
+  if (operation === 'retarget') {
+    // POST /proxy-hosts/{id}/additional-secure-links/{bindingId}/retarget
+    return service.retargetAdditionalSecureLink(
+      routeId,
+      bindingId,
+      parseRetargetAdditionalSecureLink({
+        upstreamKind: args.upstreamKind,
+        managedStorageId: args.managedStorageId,
+        forwardScheme: args.forwardScheme,
+        dockerNodeId: args.dockerNodeId,
+        dockerContainerName: args.dockerContainerName,
+        dockerComposeProjectId: args.dockerComposeProjectId,
+        dockerComposeServiceName: args.dockerComposeServiceName,
+        dockerDeploymentId: args.dockerDeploymentId,
+        dockerContainerPort: args.dockerContainerPort,
+      }),
+      user.id,
+      user.scopes
+    );
+  }
   if (operation === 'delete') {
     await service.deleteAdditionalSecureLink(routeId, bindingId, user.id);
     return { success: true };
@@ -540,12 +560,14 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
   const bindings = container.resolve(ManagedDatabaseBindingService);
 
   if (operation === 'catalog') {
-    ensureAnyScopeBase(user, ['databases:view']);
+    // Same as GET /databases/managed/catalog: creators read it before create.
+    ensureAnyScopeBase(user, ['databases:view', 'databases:create']);
     return service.listCatalog();
   }
   if (operation === 'list') {
-    // Same visibility as GET /databases/managed: scoped grants name the canonical connection.
-    ensureAnyScopeBase(user, ['databases:view']);
+    // Same visibility as GET /databases/managed: scoped grants name the canonical connection;
+    // an empty granted folder or a creator with nothing visible yet lists as empty.
+    ensureAnyScopeBase(user, ['databases:view', 'databases:create']);
     const rows = await service.list(ManagedDatabaseListQuerySchema.parse({ nodeId: args.nodeId, type: args.type }));
     if (hasScope(user.scopes, 'databases:view')) return rows;
     const allowedIds = new Set(getResourceScopedIds(user.scopes, 'databases:view'));
@@ -586,8 +608,14 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     return service.unpause(databaseId, user.id);
   }
   if (operation === 'rotate_certificate') {
+    // Same as POST /databases/managed/{id}/rotate-certificate: reloaded in place unless allowRestart.
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
-    return service.rotateCertificate(databaseId, user.id);
+    return service.rotateCertificate(databaseId, user.id, { allowRestart: args.allowRestart === true });
+  }
+  if (operation === 'certificate_status') {
+    // Same as GET /databases/managed/{id}/certificate.
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:view');
+    return service.getCertificateStatus(databaseId);
   }
   if (operation === 'delete') {
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:delete');
@@ -604,10 +632,15 @@ async function manageManagedDatabase(user: User, args: Record<string, unknown>) 
     return bindings.create(databaseId, input, user.id);
   }
   if (operation === 'delete_binding') {
-    await ensureManagedDatabaseScopes(user, databaseId, 'databases:delete');
+    // Same as DELETE /databases/managed/{id}/bindings/{bindingId}: unbinding needs edit, not delete.
+    await ensureManagedDatabaseScopes(user, databaseId, 'databases:edit');
     const bindingId = requiredString(args.bindingId);
-    await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
-    return bindings.delete(databaseId, bindingId, user.id, DeleteManagedDatabaseBindingSchema.parse(args));
+    const options = DeleteManagedDatabaseBindingSchema.parse(args);
+    await assertWorkloadBindingTargetAccess(user.scopes, {
+      ...(await bindings.getTarget(databaseId, bindingId)),
+      targetEnvironment: options.targetEnvironment,
+    });
+    return bindings.delete(databaseId, bindingId, user.id, options);
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported managed database operation: ${operation}`);
 }

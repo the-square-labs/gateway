@@ -1,5 +1,6 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
+import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
@@ -11,6 +12,7 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
+import { canPickDomainNginxNode, domainNginxNodeOptionsForScopes } from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import {
   CreateResourceFolderSchema,
@@ -21,6 +23,7 @@ import {
   UpdateResourceFolderSchema,
 } from '@/modules/resource-folders/resource-folder.schemas.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { AppEnv } from '@/types.js';
 import {
   checkDomainDnsRoute,
@@ -50,6 +53,7 @@ import {
   DeleteDomainSchema,
   DomainIngressMigrationSchema,
   DomainListQuerySchema,
+  IssueDomainCertificateSchema,
   PreviewDomainSchema,
   ResolveCloudflareMigrationSchema,
   UpdateDomainSchema,
@@ -176,15 +180,25 @@ domainRoutes.openapi({ ...searchDomainsRoute, middleware: requireScopeBase('doma
   return c.json({ data: results });
 });
 
-domainRoutes.openapi({ ...listDomainNginxNodesRoute, middleware: requireScope('domains:create') }, async (c) => {
+// Creation helpers accept every domains:create grant form (broad, folder, node);
+// the create call itself checks the chosen destination.
+domainRoutes.openapi({ ...listDomainNginxNodesRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const domainsService = container.resolve(DomainsService);
-  return c.json({ data: await domainsService.getNginxNodeOptions() });
+  const options = await domainsService.getNginxNodeOptions();
+  return c.json({ data: domainNginxNodeOptionsForScopes(options, c.get('effectiveScopes') || []) });
 });
 
 // Preview domain DNS (must be before /:id)
-domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScope('domains:create') }, async (c) => {
+domainRoutes.openapi({ ...previewDomainRoute, middleware: requireScopeBase('domains:create') }, async (c) => {
   const body = await c.req.json();
   const input = PreviewDomainSchema.parse(body);
+  // The preview returns the node's hostname and addresses: node-only creators may
+  // preview only on a node of their grant (and must name it).
+  if (!canPickDomainNginxNode(c.get('effectiveScopes') || [], input.nginxNodeId)) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected Nginx node', {
+      requiredScope: input.nginxNodeId ? `domains:create:node/${input.nginxNodeId}` : 'domains:create',
+    });
+  }
   const domainsService = container.resolve(DomainsService);
   try {
     const preview = await domainsService.previewDomain(input);
@@ -359,9 +373,21 @@ domainRoutes.openapi(
     const user = c.get('user')!;
     const domainsService = container.resolve(DomainsService);
     const sslService = container.resolve(SSLService);
-    if (!hasScope(c.get('effectiveScopes') || [], 'ssl:cert:issue')) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: ssl:cert:issue');
+    let folderId: string | null | undefined;
+    try {
+      const rawBody = await c.req.text();
+      folderId = rawBody ? IssueDomainCertificateSchema.parse(JSON.parse(rawBody)).folderId : undefined;
+    } catch {
+      return c.json({ code: 'BAD_REQUEST', message: 'Invalid request body' }, 400);
     }
+    // The certificate is a new SSL resource: the caller needs ssl:cert:issue on
+    // the SSL certificate folder it lands in (or broadly for the root).
+    if (!hasScopeForCreation(c.get('effectiveScopes') || [], 'ssl:cert:issue', folderId)) {
+      throw new AppError(403, 'FORBIDDEN', 'Missing ssl:cert:issue permission for the selected certificate folder', {
+        requiredScope: folderId ? `ssl:cert:issue:folder/${folderId}` : 'ssl:cert:issue',
+      });
+    }
+    await container.resolve(SSLCertificateFolderService).assertFolderExists(folderId);
 
     let domainRow: Awaited<ReturnType<DomainsService['getDomain']>> | undefined;
     try {
@@ -378,10 +404,13 @@ domainRoutes.openapi(
           provider: 'letsencrypt',
           autoRenew: true,
           ...(domainRow.dnsProvider === 'cloudflare' ? { dnsProvider: 'cloudflare' as const } : {}),
+          folderId: folderId ?? null,
         },
         user.id,
         user.email
       );
+      // Like every other certificate creation: the issuer keeps sight of the new certificate.
+      await grantCreatedResourcePermissions(user.id, 'ssl:cert', cert.certificate.id, { folderId: folderId ?? null });
       return c.json({ data: cert }, 201);
     } catch (err) {
       return c.json({ code: 'CERT_ERROR', message: err instanceof Error ? err.message : 'Failed to issue cert' }, 400);

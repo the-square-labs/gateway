@@ -47,6 +47,23 @@ export const PROXY_TOOL_NAMES = new Set([
   'manage_route',
 ]);
 
+/**
+ * Mirrors the route REST handlers: a grant for a route that does not exist yet (or is being moved) may be broad,
+ * on the destination folder, or on the destination ingress node.
+ */
+function hasProxyDestinationScope(
+  scopes: string[],
+  baseScope: string,
+  folderId: string | null | undefined,
+  nodeId: string | null | undefined
+): boolean {
+  return (
+    hasScope(scopes, baseScope) ||
+    (!!folderId && !folderId.includes('/') && hasScope(scopes, `${baseScope}:folder/${folderId}`)) ||
+    (!!nodeId && !nodeId.includes('/') && hasScope(scopes, `${baseScope}:node/${nodeId}`))
+  );
+}
+
 /** update_route accepts the shared field list plus the Compose service target that create_route accepts. */
 const ROUTE_UPDATE_FIELDS = [...PROXY_HOST_UPDATE_FIELDS, 'dockerComposeProjectId', 'dockerComposeServiceName'];
 
@@ -138,18 +155,31 @@ export async function executeProxyTool(
         throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
       }
       await context.folderService.assertFolderExists(input.folderId);
-      if (input.advancedConfig && !hasScope(user.scopes, 'proxy:advanced')) {
-        throw new AppError(403, 'FORBIDDEN', 'Advanced config requires proxy:advanced scope');
+      // Advanced, raw and unrestricted grants apply to the new route's destination folder or node.
+      if (
+        input.advancedConfig &&
+        !hasProxyDestinationScope(user.scopes, 'proxy:advanced', input.folderId, input.nodeId)
+      ) {
+        throw new AppError(
+          403,
+          'FORBIDDEN',
+          'Advanced config requires proxy:advanced scope for the selected destination'
+        );
       }
       if (input.upstreamKind === 'pages') requirePageProjectAccess(user, input.pageProjectId);
-      if (togglesRawMode(input) && !hasScope(user.scopes, 'proxy:raw:toggle')) {
-        throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:toggle scope');
+      if (
+        togglesRawMode(input) &&
+        !hasProxyDestinationScope(user.scopes, 'proxy:raw:write', input.folderId, input.nodeId)
+      ) {
+        throw new AppError(403, 'FORBIDDEN', 'Enabling raw mode requires proxy:raw:write scope');
       }
       await context.proxyService.assertReferenceAccess(user.scopes, input);
+      const unrestricted = hasProxyDestinationScope(user.scopes, 'proxy:unrestricted', input.folderId, input.nodeId);
       return compact(
         await context.proxyService.createProxyHost(input, user.id, {
           actorScopes: user.scopes,
-          bypassAdvancedValidation: hasScope(user.scopes, 'proxy:advanced:bypass'),
+          bypassAdvancedValidation: unrestricted,
+          bypassRawValidation: unrestricted,
         })
       );
     }
@@ -225,18 +255,23 @@ export async function executeProxyTool(
       // stored type/flag does not need the raw scopes.
       const rawToggle = togglesRawMode({ type: updateFields.type, rawConfigEnabled }, existing as RawModeState);
       if (rawToggle) {
-        if (!hasScope(user.scopes, `proxy:raw:toggle:${routeId}`)) {
-          throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:toggle scope');
+        if (!hasScope(user.scopes, `proxy:raw:write:${routeId}`)) {
+          throw new AppError(403, 'FORBIDDEN', 'Toggling raw mode requires proxy:raw:write scope');
         }
         if (rawConfigEnabled !== undefined) updateFields.rawConfigEnabled = rawConfigEnabled;
       }
+      // Moving a route to another ingress node is creating it there: any destination grant form is accepted.
+      const destinationFolderId =
+        updateFields.folderId !== undefined
+          ? ((updateFields.folderId as string | null) ?? null)
+          : ((existing as { folderId?: string | null }).folderId ?? null);
       if (
         typeof updateFields.nodeId === 'string' &&
         updateFields.nodeId &&
         updateFields.nodeId !== existing.nodeId &&
-        !hasScopeForResource(user.scopes, 'proxy:create', updateFields.nodeId)
+        !hasScopeForCreation(user.scopes, 'proxy:create', destinationFolderId, updateFields.nodeId)
       ) {
-        throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${updateFields.nodeId}`);
+        throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:node/${updateFields.nodeId}`);
       }
       if (updateFields.templateVariables !== undefined) {
         updateFields.templateVariables = dropReservedTemplateVariables(updateFields.templateVariables);
@@ -244,13 +279,13 @@ export async function executeProxyTool(
       // The update route does not accept `enabled`; enabling or disabling goes
       // through the toggle lifecycle, which protects system and public routes.
       await context.proxyService.assertReferenceAccess(user.scopes, updateFields, existing);
-      const bypassAdvancedValidation = hasScope(user.scopes, `proxy:advanced:bypass:${routeId}`);
+      const unrestricted = hasScope(user.scopes, `proxy:unrestricted:${routeId}`);
       let updated: Record<string, any> = existing;
       if (Object.keys(updateFields).length > 0 || enabledArg === undefined) {
         updated = await context.proxyService.updateProxyHost(routeId, updateFields, user.id, {
           actorScopes: user.scopes,
-          bypassAdvancedValidation,
-          ...(rawToggle ? { bypassRawValidation: hasScope(user.scopes, `proxy:raw:bypass:${routeId}`) } : {}),
+          bypassAdvancedValidation: unrestricted,
+          ...(rawToggle ? { bypassRawValidation: unrestricted } : {}),
         });
       }
       if (enabledArg !== undefined && enabledArg !== updated.enabled) {
@@ -293,20 +328,19 @@ export async function executeProxyTool(
 async function manageRoute(context: ProxyToolContext, user: User, a: Record<string, any>): Promise<unknown> {
   if (a.operation === 'validate_config') {
     // Mirrors POST /proxy-hosts/validate-config.
-    const { snippet, mode, proxyHostId } = ValidateAdvancedConfigSchema.parse({
+    const { snippet, mode, proxyHostId, folderId, nodeId } = ValidateAdvancedConfigSchema.parse({
       snippet: a.snippet,
       mode: a.mode,
       proxyHostId: a.routeId,
+      folderId: a.folderId,
+      nodeId: a.nodeId,
     });
-    const requiredScope =
-      mode === 'raw'
-        ? proxyHostId
-          ? `proxy:raw:write:${proxyHostId}`
-          : 'proxy:raw:write'
-        : proxyHostId
-          ? `proxy:advanced:${proxyHostId}`
-          : 'proxy:advanced';
-    if (!hasScope(user.scopes, requiredScope)) {
+    // An existing route is checked on its own grants; a route about to be created on its destination.
+    const holds = (baseScope: string) =>
+      proxyHostId
+        ? hasScope(user.scopes, `${baseScope}:${proxyHostId}`)
+        : hasProxyDestinationScope(user.scopes, baseScope, folderId, nodeId);
+    if (!holds(mode === 'raw' ? 'proxy:raw:write' : 'proxy:advanced')) {
       throw new AppError(
         403,
         'FORBIDDEN',
@@ -315,17 +349,10 @@ async function manageRoute(context: ProxyToolContext, user: User, a: Record<stri
           : 'Advanced config requires proxy:advanced scope'
       );
     }
-    const bypassAdvancedScope = proxyHostId ? `proxy:advanced:bypass:${proxyHostId}` : 'proxy:advanced:bypass';
-    const bypassRawScope = proxyHostId ? `proxy:raw:bypass:${proxyHostId}` : 'proxy:raw:bypass';
+    const unrestricted = holds('proxy:unrestricted');
     return mode === 'advanced'
-      ? context.proxyService.validateAdvancedConfig(
-          snippet,
-          false,
-          hasScope(user.scopes, bypassAdvancedScope),
-          false,
-          proxyHostId
-        )
-      : context.proxyService.validateAdvancedConfig(snippet, true, false, hasScope(user.scopes, bypassRawScope));
+      ? context.proxyService.validateAdvancedConfig(snippet, false, unrestricted, false, proxyHostId)
+      : context.proxyService.validateAdvancedConfig(snippet, true, false, unrestricted);
   }
   if (a.operation === 'get_by_slug') {
     const slug = typeof a.slug === 'string' ? a.slug : '';

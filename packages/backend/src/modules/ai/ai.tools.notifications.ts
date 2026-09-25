@@ -38,7 +38,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:alerts:view',
     invalidateStores: [],
   },
   {
@@ -53,7 +53,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:alerts:view',
     invalidateStores: [],
   },
   {
@@ -130,7 +130,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:alerts:manage',
     invalidateStores: [],
   },
   {
@@ -161,7 +161,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:alerts:manage',
     invalidateStores: [],
   },
   {
@@ -176,13 +176,13 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:alerts:manage',
     invalidateStores: [],
   },
   {
     name: 'list_webhooks',
     description:
-      'List notification webhooks. Returns id, name, url, method, enabled, templatePreset, headers. URL and headers are revealed only with notifications:webhooks:edit or notifications:manage.',
+      'List notification webhooks. Returns id, name, url, method, enabled, templatePreset, headers. URL and headers are revealed only with notifications:webhooks:manage.',
     parameters: {
       type: 'object',
       properties: {
@@ -194,7 +194,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:webhooks:view',
     invalidateStores: [],
   },
   {
@@ -226,7 +226,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:webhooks:manage',
     invalidateStores: [],
   },
   {
@@ -254,7 +254,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:webhooks:manage',
     invalidateStores: [],
   },
   {
@@ -269,7 +269,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:webhooks:manage',
     invalidateStores: [],
   },
   {
@@ -285,7 +285,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:manage',
+    requiredScope: 'notifications:webhooks:manage',
     invalidateStores: [],
   },
   {
@@ -308,7 +308,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:webhooks:view',
     invalidateStores: [],
   },
   {
@@ -322,13 +322,13 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:webhooks:view',
     invalidateStores: [],
   },
   {
     name: 'manage_notifications',
     description:
-      'Read notification catalogs and details. Operations: alert_categories (metrics, events, and template variables per alert category), webhook_get (one webhook; URL and headers need notifications:webhooks:edit or notifications:manage), webhook_presets (built-in body templates), webhook_preview (render bodyTemplate with a sample event; needs notifications:webhooks:create or :edit), delivery_get (one delivery attempt; payloads need notifications:manage).',
+      'Read notification catalogs and details. Operations: alert_categories (metrics, events, and template variables per alert category), webhook_get (one webhook; URL and headers need notifications:webhooks:manage), webhook_presets (built-in body templates), webhook_preview (render bodyTemplate with a sample event; needs notifications:webhooks:manage), delivery_get (one delivery attempt; payloads need notifications:webhooks:manage).',
     parameters: {
       type: 'object',
       properties: {
@@ -345,7 +345,7 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Notifications',
-    requiredScope: 'notifications:view',
+    requiredScope: 'notifications:alerts:view',
     invalidateStores: [],
   },
   {

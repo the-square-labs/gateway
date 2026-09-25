@@ -12,7 +12,7 @@ const balance = {
 };
 describe('hosting alert admission', () => {
   it('requires account visibility and billing access for monetary alerts', () => {
-    expect(() => assertHostingAlertAccess(['notifications:manage'], balance)).toThrow();
+    expect(() => assertHostingAlertAccess(['notifications:alerts:manage'], balance)).toThrow();
     expect(() => assertHostingAlertAccess(['integrations:hosting:view'], balance)).toThrow();
     expect(() =>
       assertHostingAlertAccess(['integrations:hosting:view:account-1', 'hosting:billing:view:account-1'], balance)

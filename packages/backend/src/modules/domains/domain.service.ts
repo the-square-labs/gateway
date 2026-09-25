@@ -19,12 +19,9 @@ import type {
 } from './domain.schemas.js';
 import { DomainsServiceRuntime } from './domain.service.runtime.js';
 import { type DomainUsage, logger } from './domain.service.shared.js';
+import { assertDomainIngressMoveAccess } from './domain-creation-access.js';
 
 export * from './domain.service.shared.js';
-
-function hasIngressResourceScope(scopes: string[], baseScope: string, resourceId: string): boolean {
-  return scopes.includes(baseScope) || scopes.includes(`${baseScope}:${resourceId}`);
-}
 
 export class DomainsService extends DomainsServiceRuntime {
   async listDomains(params: DomainListQuery, options?: { allowedIds?: string[] }) {
@@ -117,15 +114,7 @@ export class DomainsService extends DomainsServiceRuntime {
     }
 
     const impact = await this.buildIngressMigrationImpact(id, input.targetNodeId);
-    if (!hasIngressResourceScope(actorScopes, 'proxy:create', impact.targetNode.id)) {
-      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${impact.targetNode.id}`);
-    }
-    const unauthorizedHost = impact.proxyHosts.find(
-      (host) => !hasIngressResourceScope(actorScopes, 'proxy:edit', host.id)
-    );
-    if (unauthorizedHost) {
-      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:edit:${unauthorizedHost.id}`);
-    }
+    assertDomainIngressMoveAccess(actorScopes, impact.targetNode.id, impact.proxyHosts);
     if (!actorScopes.includes('admin:system') && impact.proxyHosts.length > 0) {
       const [systemHost] = await this.db
         .select({ id: proxyHosts.id })
@@ -400,7 +389,10 @@ export class DomainsService extends DomainsServiceRuntime {
       },
     });
 
-    await grantCreatedResourcePermissions(userId, 'domains', row.id);
+    await grantCreatedResourcePermissions(userId, 'domains', row.id, {
+      folderId: row.folderId ?? null,
+      nodeId: row.nginxNodeId ?? null,
+    });
     this.emitDomain(row.id, 'created', row.domain);
 
     return row;
@@ -509,7 +501,10 @@ export class DomainsService extends DomainsServiceRuntime {
         nginxNodeId: plan.nginxNode.id,
       },
     });
-    await grantCreatedResourcePermissions(userId, 'domains', row.id);
+    await grantCreatedResourcePermissions(userId, 'domains', row.id, {
+      folderId: row.folderId ?? null,
+      nodeId: row.nginxNodeId ?? null,
+    });
     this.emitDomain(row.id, 'created', row.domain);
     return row;
   }
@@ -736,6 +731,7 @@ export class DomainsService extends DomainsServiceRuntime {
           domainNames: proxyHosts.domainNames,
           enabled: proxyHosts.enabled,
           nodeId: proxyHosts.nodeId,
+          folderId: proxyHosts.folderId,
         })
         .from(proxyHosts)
         .where(
@@ -798,6 +794,7 @@ export class DomainsService extends DomainsServiceRuntime {
               domainNames: proxyHosts.domainNames,
               enabled: proxyHosts.enabled,
               nodeId: proxyHosts.nodeId,
+              folderId: proxyHosts.folderId,
               upstreamKind: proxyHosts.upstreamKind,
             })
             .from(proxyHosts)
@@ -838,6 +835,7 @@ export class DomainsService extends DomainsServiceRuntime {
           domainNames: proxyHosts.domainNames,
           enabled: proxyHosts.enabled,
           nodeId: proxyHosts.nodeId,
+          folderId: proxyHosts.folderId,
           upstreamKind: proxyHosts.upstreamKind,
         })
         .from(proxyHosts),

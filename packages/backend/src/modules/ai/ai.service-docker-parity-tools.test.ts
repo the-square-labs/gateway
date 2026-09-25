@@ -132,7 +132,6 @@ describe('manage_docker_container', () => {
   const recreateScopes = [
     'docker:containers:manage:node-1/scope-1',
     'docker:containers:edit:node-1/scope-1',
-    'docker:containers:config:node-1/scope-1',
     'docker:containers:environment:node-1/scope-1',
     'docker:containers:secrets:node-1/scope-1',
     'docker:images:pull:node-1',
@@ -186,7 +185,7 @@ describe('manage_docker_container', () => {
     expect(assertComposeChildMutationAllowed).toHaveBeenCalledWith('node-1', 'api');
   });
 
-  it('keeps a plain recreate on manage and edit but requires config, environment, secrets and pull for a new image', async () => {
+  it('keeps a plain recreate on manage and edit but requires environment, secrets and pull for a new image', async () => {
     const dockerService = {
       inspectContainer: inspectedContainer(),
       recreateWithConfig: vi.fn().mockResolvedValue({ accepted: true }),
@@ -210,7 +209,7 @@ describe('manage_docker_container', () => {
         containerId: 'api',
         image: 'nginx:2',
       })
-    ).resolves.toMatchObject({ error: expect.stringContaining('docker:containers:config') });
+    ).resolves.toMatchObject({ error: expect.stringContaining('docker:containers:environment') });
 
     await expect(
       service.executeTool(
@@ -392,24 +391,31 @@ describe('manage_docker_container', () => {
 });
 
 describe('Docker runtime, registry, and task parity', () => {
-  it('installs runsc only with broad admin:update', async () => {
+  it('installs runsc with nodes:manage on the node or broad admin:update', async () => {
     const dockerService = { manageRunsc: vi.fn().mockResolvedValue({ state: 'installing' }) };
     const service = createService(dockerService);
 
     await expect(
-      service.executeTool(userWith([`admin:update:${NODE_ID}`]), 'manage_docker_runtime', {
+      service.executeTool(userWith([`nodes:manage:${OTHER_NODE_ID}`]), 'manage_docker_runtime', {
         operation: 'install',
         nodeId: NODE_ID,
       })
-    ).resolves.toMatchObject({ error: expect.stringContaining('admin:update') });
+    ).resolves.toMatchObject({ error: expect.stringContaining(`nodes:manage:${NODE_ID}`) });
     await expect(
-      service.executeTool(userWith(['admin:update']), 'manage_docker_runtime', {
+      service.executeTool(userWith([`nodes:manage:${NODE_ID}`]), 'manage_docker_runtime', {
         operation: 'install',
         nodeId: NODE_ID,
       })
     ).resolves.toMatchObject({ result: { state: 'installing' } });
-    expect(dockerService.manageRunsc).toHaveBeenCalledTimes(1);
+    await expect(
+      service.executeTool(userWith(['admin:update']), 'manage_docker_runtime', {
+        operation: 'preflight',
+        nodeId: NODE_ID,
+      })
+    ).resolves.toMatchObject({ result: { state: 'installing' } });
+    expect(dockerService.manageRunsc).toHaveBeenCalledTimes(2);
     expect(dockerService.manageRunsc).toHaveBeenCalledWith(NODE_ID, 'install');
+    expect(dockerService.manageRunsc).toHaveBeenCalledWith(NODE_ID, 'preflight');
   });
 
   it('runs internal registry garbage collection with the housekeeping retention', async () => {
@@ -470,24 +476,25 @@ describe('Docker runtime, registry, and task parity', () => {
 });
 
 describe('manage_docker_volume file and metadata operations', () => {
-  it('renames only with create and delete on a visible volume', async () => {
+  it('renames only with the volume edit scope on a visible volume', async () => {
     const dockerService = { assertUserVolumeVisible: vi.fn(), renameVolume: vi.fn() };
     const service = createService(dockerService);
 
     await expect(
-      service.executeTool(userWith(['docker:volumes:create:node-1/data']), 'manage_docker_volume', {
+      service.executeTool(userWith(['docker:volumes:create:node-1']), 'manage_docker_volume', {
         operation: 'rename',
         nodeId: 'node-1',
         name: 'data',
         newName: 'data-2',
       })
-    ).resolves.toMatchObject({ error: 'Missing required scope: docker:volumes:delete:node-1/data' });
+    ).resolves.toMatchObject({ error: 'Missing required scope: docker:volumes:edit:node-1/data' });
     await expect(
-      service.executeTool(
-        userWith(['docker:volumes:create:node-1/data', 'docker:volumes:delete:node-1/data']),
-        'manage_docker_volume',
-        { operation: 'rename', nodeId: 'node-1', name: 'data', newName: 'data-2' }
-      )
+      service.executeTool(userWith(['docker:volumes:edit:node-1/data']), 'manage_docker_volume', {
+        operation: 'rename',
+        nodeId: 'node-1',
+        name: 'data',
+        newName: 'data-2',
+      })
     ).resolves.toMatchObject({ result: { success: true } });
     expect(dockerService.renameVolume).toHaveBeenCalledTimes(1);
     expect(dockerService.renameVolume).toHaveBeenCalledWith('node-1', 'data', 'data-2', 'user-1');

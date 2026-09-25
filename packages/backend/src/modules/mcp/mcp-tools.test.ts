@@ -18,11 +18,18 @@ describe('MCP tool scope filtering', () => {
     expect(tool?.parameters.properties).not.toHaveProperty('token');
     expect(toolNames(['storage:objects:read:storage-1'])).not.toContain('upload_storage_object');
   });
-  it('requires direct database view before advertising database query tools', () => {
-    expect(toolNames(['databases:query:read:db-1'])).not.toContain('query_postgres_read');
-    expect(toolNames(['databases:query:read:db-1'])).not.toContain('manage_postgres_data');
-    expect(toolNames(['databases:query:read:db-1'])).not.toContain('manage_redis_data');
-    expect(toolNames(['databases:view:db-1', 'databases:query:read:db-2'])).not.toContain('query_postgres_read');
+  it('advertises database tools for the same implied scopes as the database routes', () => {
+    // A query grant implies viewing its database, like GET /databases and the query routes.
+    expect(toolNames(['databases:query:read:db-1'])).toEqual(
+      expect.arrayContaining([
+        'list_databases',
+        'get_database_connection',
+        'query_postgres_read',
+        'manage_postgres_data',
+        'manage_redis_data',
+      ])
+    );
+    expect(toolNames(['databases:view:db-1'])).not.toContain('query_postgres_read');
     expect(toolNames(['databases:view:db-1', 'databases:query:read:db-1'])).toContain('query_postgres_read');
     expect(toolNames(['databases:view:db-1', 'databases:query:read:db-1'])).toContain('execute_postgres_sql');
     expect(toolNames(['databases:view:db-1', 'databases:query:write:db-1'])).toContain('execute_postgres_sql');
@@ -47,7 +54,7 @@ describe('MCP tool scope filtering', () => {
   it('advertises aggregated MCP tools through any matching delegated scope', () => {
     expect(toolNames(['pki:cert:export:cert-1'])).toContain('manage_certificate');
     expect(toolNames(['pki:templates:edit'])).toContain('manage_template');
-    expect(toolNames(['proxy:templates:delete:template-1'])).toContain('manage_proxy_template');
+    expect(toolNames(['proxy:templates:manage:template-1'])).toContain('manage_proxy_template');
     expect(toolNames(['ssl:cert:delete:cert-1'])).toContain('manage_ssl_certificate');
     expect(toolNames(['domains:edit'])).toContain('manage_domain');
     expect(toolNames(['acl:edit:acl-1'])).toContain('manage_access_list');
@@ -110,11 +117,8 @@ describe('MCP tool scope filtering', () => {
     const names = toolNames([
       'integrations:gitlab:view',
       'integrations:gitlab:manage',
-      'integrations:gitlab:projects:view',
       'integrations:gitlab:repo:read',
       'integrations:gitlab:repo:write',
-      'integrations:gitlab:ci:view',
-      'integrations:gitlab:variables:edit',
       'integrations:gitlab:sandbox:clone',
       'ai:sandbox:use',
     ]);
@@ -138,8 +142,12 @@ describe('MCP tool scope filtering', () => {
       'ai:workspace:use',
       'integrations:github:view',
       'integrations:github:manage',
+      'integrations:github:repo:read',
+      'integrations:github:repo:write',
       'integrations:git:view',
       'integrations:git:manage',
+      'integrations:git:repo:read',
+      'integrations:git:repo:write',
       'integrations:cloudflare:manage',
       'integrations:ssh:view',
       'integrations:ssh:use',
@@ -172,6 +180,19 @@ describe('MCP tool scope filtering', () => {
     );
     expect(names).not.toContain('open_connector_setup');
     expect(names).not.toContain('open_node_enrollment');
+    // Repository content follows the repo verbs, not connector administration.
+    const connectorAdmin = toolNames(['integrations:github:manage', 'integrations:git:manage']);
+    expect(connectorAdmin).toContain('create_github_token_connector');
+    expect(connectorAdmin).not.toContain('github_upsert_repository_file');
+    expect(connectorAdmin).not.toContain('git_upsert_repository_file');
+    const readers = toolNames(['integrations:github:repo:read', 'integrations:git:repo:read']);
+    expect(readers).toEqual(expect.arrayContaining(['github_read_repository_file', 'git_read_repository_file']));
+    expect(readers).not.toContain('github_upsert_repository_file');
+    // CI/CD variable values are secrets: reading them is part of the write tier.
+    expect(readers).not.toContain('github_list_actions_variables');
+    // GitLab variable listing returns keys and flags only, never values.
+    expect(toolNames(['integrations:gitlab:repo:read'])).toContain('gitlab_list_project_variables');
+    expect(toolNames(['integrations:github:repo:write'])).toContain('github_list_actions_variables');
   });
 
   it('exposes node config and filesystem tools through their node scopes', () => {

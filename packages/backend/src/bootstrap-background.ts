@@ -55,6 +55,7 @@ import { AdditionalRouteService } from '@/modules/proxy/additional-route.service
 import { NginxTemplateService } from '@/modules/proxy/nginx-template.service.js';
 import { ProxyService } from '@/modules/proxy/proxy.service.js';
 import { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
+import { InternalCertificateRenewalService } from '@/modules/ssl/internal-cert-renewal.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { CacheService } from '@/services/cache.service.js';
 import { DaemonUpdateService } from '@/services/daemon-update.service.js';
@@ -73,6 +74,10 @@ import { RelayPoolService } from '@/services/relay-pool.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SchedulerService } from '@/services/scheduler.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
+import {
+  SYSTEM_CERTIFICATE_RENEWAL_CHECK_INTERVAL_MS,
+  SystemCertificateRenewalService,
+} from '@/services/system-certificate-renewal.service.js';
 import { UpdateService } from '@/services/update.service.js';
 
 export async function initializeBackgroundServices(): Promise<void> {
@@ -172,6 +177,24 @@ export async function initializeBackgroundServices(): Promise<void> {
   scheduler.registerInterval('gateway-identity-renewal', GATEWAY_IDENTITY_RENEWAL_CHECK_INTERVAL_MS, async () => {
     await container.resolve(GatewayIdentityRenewalService).renewDue();
   });
+  // Managed storage and database TLS certificates (hot reload, restart only as the last resort).
+  scheduler.registerInterval('system-certificate-renewal', SYSTEM_CERTIFICATE_RENEWAL_CHECK_INTERVAL_MS, async () => {
+    if (container.isRegistered(SystemCertificateRenewalService)) {
+      await container.resolve(SystemCertificateRenewalService).renewDue();
+    }
+  });
+  // First pass shortly after start, once node daemons have reconnected, so a
+  // certificate that must be repaired (missing loopback names) does not wait an hour.
+  setTimeout(
+    () => {
+      if (!container.isRegistered(SystemCertificateRenewalService)) return;
+      container
+        .resolve(SystemCertificateRenewalService)
+        .renewDue()
+        .catch((error) => logger.warn('Initial system certificate renewal pass failed', { error }));
+    },
+    2 * 60 * 1000
+  ).unref?.();
   if (relayPolicyService) {
     scheduler.registerInterval('relay-policy-sync', 30_000, () =>
       relayPolicyService!.reconcileAndSync().then(() => undefined)
@@ -203,11 +226,18 @@ export async function initializeBackgroundServices(): Promise<void> {
   healthCheckJob.setEvaluator(notifEvaluatorService);
   const expiryAlertJob = new ExpiryAlertJob(db, alertService);
   expiryAlertJob.setEventBus(eventBus);
+  // Rotate GitLab tokens that can rotate themselves before alerting on the rest.
+  expiryAlertJob.setGitTokenMaintenance(() => integrationsService.maintainGitTokens());
 
   const dnsCheckJob = new DnsCheckJob(domainsService);
   scheduler.registerInterval('dns-check', env.DNS_CHECK_INTERVAL_SECONDS * 1000, () => dnsCheckJob.run());
 
   scheduler.register('acme-renewal', env.ACME_RENEWAL_CRON, () => acmeRenewalJob.run());
+  // Linked internal PKI leaves are reissued from their CA on the same daily cadence.
+  const internalCertificateRenewal = container.resolve(InternalCertificateRenewalService);
+  scheduler.register('internal-certificate-renewal', env.ACME_RENEWAL_CRON, async () => {
+    await internalCertificateRenewal.runDue();
+  });
   // Scan at the minimum supported per-host cadence; the job itself evaluates
   // each host's configured interval and skips hosts that are not due.
   scheduler.registerInterval('health-check', Math.min(Math.max(env.HEALTH_CHECK_INTERVAL_SECONDS, 1), 5) * 1000, () =>

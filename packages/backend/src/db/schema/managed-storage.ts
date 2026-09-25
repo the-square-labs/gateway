@@ -165,6 +165,12 @@ export const managedStorageClusters = pgTable(
     ftpPassivePortCount: integer('ftp_passive_port_count'),
     pendingOperation: jsonb('pending_operation').$type<ManagedStoragePendingOperation>(),
     lastError: text('last_error'),
+    // Migration write freeze (`freeze_writes`): while set, every access key and
+    // workload-link key Gateway issued on this cluster is read-only, including
+    // keys issued during the freeze. The root identity keeps writing, so a
+    // server-side copy still works. Cleared by `unfreeze_writes`.
+    writesFrozenAt: timestamp('writes_frozen_at', { withTimezone: true }),
+    writesFrozenById: uuid('writes_frozen_by_id').references(() => users.id, { onDelete: 'set null' }),
     createdById: uuid('created_by_id')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),

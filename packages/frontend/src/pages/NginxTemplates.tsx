@@ -141,7 +141,7 @@ export function NginxTemplates({
             </div>
             <ResponsiveHeaderActions
               actions={
-                hasScope("proxy:templates:create")
+                hasScope("proxy:templates:manage")
                   ? [
                       {
                         label: "Create Template",
@@ -152,7 +152,7 @@ export function NginxTemplates({
                   : []
               }
             >
-              {hasScope("proxy:templates:create") && (
+              {hasScope("proxy:templates:manage") && (
                 <Button onClick={() => navigate("/nginx-templates/new")}>
                   <Plus className="h-4 w-4" />
                   Create Template
@@ -167,19 +167,14 @@ export function NginxTemplates({
         ) : templates.length > 0 ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {templates.map((t) => {
-              const canEditTemplate =
-                (hasScope("proxy:templates:edit") || hasScope(`proxy:templates:edit:${t.id}`)) &&
-                !t.isBuiltin;
-              const canCloneTemplate =
-                hasScope("proxy:templates:create") &&
-                (hasScope("proxy:templates:edit") || hasScope(`proxy:templates:edit:${t.id}`));
-              const canDeleteTemplate =
-                (hasScope("proxy:templates:delete") ||
-                  hasScope(`proxy:templates:delete:${t.id}`)) &&
-                !t.isBuiltin;
+              // Mirrors the template routes: manage:<id> edits and deletes, clone reads
+              // the source and creates a new template (broad manage).
+              const canManageTemplate = hasScope(`proxy:templates:manage:${t.id}`);
+              const canViewTemplate = hasScope(`proxy:templates:view:${t.id}`);
+              const canEditTemplate = canManageTemplate && !t.isBuiltin;
+              const canCloneTemplate = hasScope("proxy:templates:manage") && canViewTemplate;
+              const canDeleteTemplate = canManageTemplate && !t.isBuiltin;
               const hasActions = canEditTemplate || canCloneTemplate || canDeleteTemplate;
-              const canViewTemplate =
-                hasScope("proxy:templates:view") || hasScope(`proxy:templates:view:${t.id}`);
               const canOpenTemplate = canEditTemplate || canViewTemplate;
 
               return (
@@ -252,8 +247,8 @@ export function NginxTemplates({
         ) : (
           <EmptyState
             message="No config templates."
-            actionLabel={hasScope("proxy:templates:create") ? "Create one" : undefined}
-            actionHref={hasScope("proxy:templates:create") ? "/nginx-templates/new" : undefined}
+            actionLabel={hasScope("proxy:templates:manage") ? "Create one" : undefined}
+            actionHref={hasScope("proxy:templates:manage") ? "/nginx-templates/new" : undefined}
           />
         )}
       </div>

@@ -1,5 +1,6 @@
 import type {
   DatabaseConnection,
+  ManagedCertificateStatus,
   ManagedDatabase,
   ManagedDatabaseBinding,
   ManagedDatabaseBindingCreateInput,
@@ -200,11 +201,32 @@ export function withDatabaseApi<TBase extends ApiClientBaseConstructor>(Base: TB
       );
     }
 
-    async rotateManagedDatabaseCertificate(id: string): Promise<ManagedDatabase> {
+    /** Reloads a renewed certificate in place; `allowRestart` permits a restart when the engine does not load it. */
+    async rotateManagedDatabaseCertificate(
+      id: string,
+      options: { allowRestart?: boolean } = {}
+    ): Promise<
+      ManagedDatabase & {
+        certificateRenewal?: { status: string; method?: string; restarted?: boolean };
+      }
+    > {
       return this.unwrapData(
-        this.request<{ data: ManagedDatabase }>(
-          `/databases/managed/${encodeURIComponent(id)}/rotate-certificate`,
-          { method: "POST" }
+        this.request<{
+          data: ManagedDatabase & {
+            certificateRenewal?: { status: string; method?: string; restarted?: boolean };
+          };
+        }>(`/databases/managed/${encodeURIComponent(id)}/rotate-certificate`, {
+          method: "POST",
+          body: JSON.stringify(options),
+        })
+      );
+    }
+
+    /** Server certificate expiry and automatic renewal state. */
+    async getManagedDatabaseCertificate(id: string): Promise<ManagedCertificateStatus> {
+      return this.unwrapData(
+        this.request<{ data: ManagedCertificateStatus }>(
+          `/databases/managed/${encodeURIComponent(id)}/certificate`
         )
       );
     }

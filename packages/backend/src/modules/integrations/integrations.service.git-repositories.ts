@@ -200,7 +200,8 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
   }
 
   async githubListActionsVariables(user: User, input: { connectorId: string; repositoryUrl: string }) {
-    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    // Variable values are returned, and CI/CD variables are secrets: reading them needs repo:write.
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl, 'write');
     const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
     const response = await this.githubConnectorRequest(
       context.connector,
@@ -253,16 +254,17 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       content: string;
     }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
-        requiredScope: 'integrations:github:manage',
+    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
+        requiredScope: 'integrations:github:repo:write',
       });
     }
     const { connector, repositoryUrl, token } = await this.resolveGitRepository(
       user,
       'github',
       input.connectorId,
-      input.repositoryUrl
+      input.repositoryUrl,
+      'write'
     );
     const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
     const path = input.path.trim().replace(/^\/+/, '');
@@ -312,12 +314,12 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     user: User,
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
-        requiredScope: 'integrations:github:manage',
+    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
+        requiredScope: 'integrations:github:repo:write',
       });
     }
-    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl, 'write');
     const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
     const name = this.githubActionsName(input.name);
     const basePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/variables`;
@@ -345,12 +347,12 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     user: User,
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub connector manage scope is required', {
-        requiredScope: 'integrations:github:manage',
+    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
+        requiredScope: 'integrations:github:repo:write',
       });
     }
-    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl);
+    const context = await this.resolveGitRepository(user, 'github', input.connectorId, input.repositoryUrl, 'write');
     const { owner, repository } = this.githubRepositoryIdentity(context.repositoryUrl);
     const name = this.githubActionsName(input.name);
     const basePath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}/actions/secrets`;
@@ -465,32 +467,37 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       content: string;
     }
   ) {
-    if (!hasScope(user.scopes, 'integrations:git:manage')) {
-      throw new AppError(403, 'PERMISSION_DENIED', 'Git connector manage scope is required', {
-        requiredScope: 'integrations:git:manage',
+    if (!hasScope(user.scopes, 'integrations:git:repo:write')) {
+      throw new AppError(403, 'PERMISSION_DENIED', 'Git repository write scope is required', {
+        requiredScope: 'integrations:git:repo:write',
       });
     }
     if (Buffer.byteLength(input.content, 'utf8') > GIT_FILE_WRITE_LIMIT_BYTES) {
       throw new AppError(413, 'GIT_FILE_TOO_LARGE', 'Repository file exceeds the 512 KiB write limit');
     }
     const branch = this.gitRefName(input.branch);
-    return this.withGenericGitCheckout(user, { ...input, ref: branch }, async (context) => {
-      const relativePath = this.repositoryRelativePath(input.path, false);
-      await this.assertNoRepositorySymlink(context.checkoutDir, relativePath);
-      const filePath = resolve(context.checkoutDir, relativePath);
-      await mkdir(dirname(filePath), { recursive: true });
-      const existing = await readFile(filePath, 'utf8').catch(() => null);
-      if (existing === input.content) {
-        return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: false, commitSha: null };
-      }
-      await writeFile(filePath, input.content, { mode: 0o600 });
-      await this.runGit(['config', 'user.name', 'Gateway AI'], context);
-      await this.runGit(['config', 'user.email', 'gateway-ai@localhost'], context);
-      await this.runGit(['add', '--', relativePath], context);
-      await this.runGit(['commit', '-m', input.message.trim()], context);
-      await this.runGit(['push', 'origin', `HEAD:${branch}`], context);
-      const commitSha = (await this.runGit(['rev-parse', 'HEAD'], context)).stdout.trim();
-      return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: true, commitSha };
-    });
+    return this.withGenericGitCheckout(
+      user,
+      { ...input, ref: branch },
+      async (context) => {
+        const relativePath = this.repositoryRelativePath(input.path, false);
+        await this.assertNoRepositorySymlink(context.checkoutDir, relativePath);
+        const filePath = resolve(context.checkoutDir, relativePath);
+        await mkdir(dirname(filePath), { recursive: true });
+        const existing = await readFile(filePath, 'utf8').catch(() => null);
+        if (existing === input.content) {
+          return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: false, commitSha: null };
+        }
+        await writeFile(filePath, input.content, { mode: 0o600 });
+        await this.runGit(['config', 'user.name', 'Gateway AI'], context);
+        await this.runGit(['config', 'user.email', 'gateway-ai@localhost'], context);
+        await this.runGit(['add', '--', relativePath], context);
+        await this.runGit(['commit', '-m', input.message.trim()], context);
+        await this.runGit(['push', 'origin', `HEAD:${branch}`], context);
+        const commitSha = (await this.runGit(['rev-parse', 'HEAD'], context)).stdout.trim();
+        return { repositoryUrl: context.repositoryUrl, path: relativePath, branch, changed: true, commitSha };
+      },
+      'write'
+    );
   }
 }

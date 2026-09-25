@@ -1,13 +1,8 @@
-import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope } from '@/lib/permissions.js';
 import { stripRawProxyConfigForProgrammatic } from '@/modules/proxy/raw-visibility.js';
 import type { AIToolDefinition } from './ai.types.js';
 import { getAIToolResourceId } from './ai-tool-policy-metadata.js';
-import {
-  AI_TOOL_ANY_SCOPE_REQUIREMENTS as ANY_SCOPE_TOOL_REQUIREMENTS,
-  AI_BROAD_ONLY_TOOL_SCOPES as BROAD_ONLY_TOOL_SCOPES,
-  AI_DIRECT_DATABASE_VIEW_TOOLS as DIRECT_DATABASE_VIEW_TOOLS,
-  AI_DIRECT_RAW_READ_TOOLS as DIRECT_RAW_READ_TOOLS,
-} from './ai-tool-scope-policy.js';
+import { hasAIToolCallScope } from './ai-tool-scope-policy.js';
 
 const PROXY_HOST_UPDATE_FIELDS = [
   'type',
@@ -55,8 +50,9 @@ const PROXY_HOST_UPDATE_FIELDS = [
   'enabled',
 ] as const;
 
-function caTypeViewScope(type: string): 'pki:ca:view:root' | 'pki:ca:view:intermediate' {
-  return type === 'root' ? 'pki:ca:view:root' : 'pki:ca:view:intermediate';
+/** CA view is one CA-scopable scope for root and intermediate CAs. */
+function caViewScope(caId?: string): string {
+  return caId ? `pki:ca:view:${caId}` : 'pki:ca:view';
 }
 
 function caTypeRevokeScope(type: string): 'pki:ca:revoke:root' | 'pki:ca:revoke:intermediate' {
@@ -65,10 +61,7 @@ function caTypeRevokeScope(type: string): 'pki:ca:revoke:root' | 'pki:ca:revoke:
 
 function dashboardStatsOptionsForScopes(scopes: string[]) {
   return {
-    allowedCaTypes: [
-      hasScope(scopes, 'pki:ca:view:root') ? 'root' : null,
-      hasScope(scopes, 'pki:ca:view:intermediate') ? 'intermediate' : null,
-    ].filter((type): type is 'root' | 'intermediate' => !!type),
+    allowedCaTypes: (hasScope(scopes, 'pki:ca:view') ? ['root', 'intermediate'] : []) as Array<'root' | 'intermediate'>,
     allowedProxyHostIds: hasScope(scopes, 'proxy:view') ? undefined : getResourceScopedIds(scopes, 'proxy:view'),
     allowedSslCertificateIds: hasScope(scopes, 'ssl:cert:view')
       ? undefined
@@ -84,11 +77,14 @@ function allowedResourceIdsForScopes(scopes: string[], baseScope: string): strin
   return hasScope(scopes, baseScope) ? undefined : getResourceScopedIds(scopes, baseScope);
 }
 
+/**
+ * Resource ids a list tool returns, like the REST list routes: undefined for broad access (implied scopes
+ * included), otherwise the concrete ids of resource-scoped grants. Folder and node targets never reach an id
+ * column: the authentication layer already expanded them to the resources they currently contain.
+ */
 function directResourceIdsForScopes(scopes: string[], baseScope: string): string[] | undefined {
-  if (scopes.includes(baseScope)) return undefined;
-  const prefix = `${baseScope}:`;
-  const ids = scopes.filter((scope) => scope.startsWith(prefix)).map((scope) => scope.slice(prefix.length));
-  return [...new Set(ids)];
+  if (hasScope(scopes, baseScope)) return undefined;
+  return getResourceScopedIds(scopes, baseScope).filter((id) => !id.includes('/'));
 }
 
 const SENSITIVE_TOOL_ARG_RE =
@@ -154,6 +150,7 @@ function isMutatingTool(toolDef: { destructive: boolean; invalidateStores: strin
   return toolDef.destructive || toolDef.invalidateStores.length > 0;
 }
 
+/** Per-call scope gate shared with the MCP server (see hasAIToolCallScope). */
 function hasToolExecutionScope(
   scopes: string[],
   toolName: string,
@@ -162,29 +159,11 @@ function hasToolExecutionScope(
   tool?: Pick<AIToolDefinition, 'targetIdentity' | 'requiredScopes'>
 ): boolean {
   if (!requiredScope) return false;
-  if (tool?.requiredScopes && !tool.requiredScopes.every((scope) => hasScopeBase(scopes, scope))) return false;
-  if (
-    requiredScope.startsWith('docker:containers:') &&
-    requiredScope !== 'docker:containers:create' &&
-    hasScopeBase(scopes, requiredScope)
-  ) {
-    return true;
-  }
-  const anyRequirements = ANY_SCOPE_TOOL_REQUIREMENTS[toolName];
-  if (anyRequirements) return anyRequirements.some((scope) => hasScopeBase(scopes, scope));
-  if (BROAD_ONLY_TOOL_SCOPES.has(toolName)) return hasScope(scopes, requiredScope);
-  if (DIRECT_DATABASE_VIEW_TOOLS.has(toolName)) {
-    return scopes.includes(requiredScope) || scopes.some((scope) => scope.startsWith(`${requiredScope}:`));
-  }
-  if (DIRECT_RAW_READ_TOOLS.has(toolName)) {
-    const resourceId = getToolAuthorizationResourceId(tool, args);
-    if (scopes.includes(requiredScope)) return true;
-    return resourceId
-      ? scopes.includes(`${requiredScope}:${resourceId}`)
-      : scopes.some((scope) => scope.startsWith(`${requiredScope}:`));
-  }
-  const resourceId = getToolAuthorizationResourceId(tool, args);
-  return resourceId ? hasScopeForResource(scopes, requiredScope, resourceId) : hasScopeBase(scopes, requiredScope);
+  return hasAIToolCallScope(
+    scopes,
+    { name: toolName, requiredScope, requiredScopes: tool?.requiredScopes, targetIdentity: tool?.targetIdentity },
+    args
+  );
 }
 
 function estimateTokens(text: string): number {
@@ -519,7 +498,7 @@ export {
   agentPageLimit,
   allowedResourceIdsForScopes,
   caTypeRevokeScope,
-  caTypeViewScope,
+  caViewScope,
   compactAgentList,
   compactDockerContainerForAgent,
   compactDockerDeploymentForAgent,

@@ -26,7 +26,7 @@ const TABS = [
     label: "Nginx Config",
     icon: FileCode,
     scope: "proxy:templates:view",
-    createScope: "proxy:templates:create",
+    createScope: "proxy:templates:manage",
   },
 ] as const;
 
@@ -96,7 +96,7 @@ export function TemplatesPage() {
             },
           },
         ]
-      : activeTab === "nginx" && hasScope("proxy:templates:create")
+      : activeTab === "nginx" && hasScope("proxy:templates:manage")
         ? [
             {
               label: "Create Template",

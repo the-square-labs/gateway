@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
+import { SSLService } from '@/modules/ssl/ssl.service.js';
+import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { AIService } from './ai.service.js';
 
 const BASE_USER = {
@@ -224,6 +226,66 @@ describe('AIService domain tool routing', () => {
       { action: 'update_dns', nginxNodeId: NODE_ID },
       'user-1',
       ['domains:edit:domain-1']
+    );
+  });
+
+  it('lets node- and folder-scoped domain creators list only the ingress nodes they may create on', async () => {
+    const NODE_A = '11111111-1111-4111-8111-11111111111a';
+    const NODE_B = '11111111-1111-4111-8111-11111111111b';
+    const options = {
+      eligibleNodes: [{ id: NODE_A }, { id: NODE_B }],
+      unconfiguredNodes: [],
+      totalNginxNodes: 2,
+      unconfiguredNginxNodes: 0,
+    };
+    const domainsService = { getNginxNodeOptions: vi.fn().mockResolvedValue(options) };
+    const service = createService(domainsService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`domains:create:node/${NODE_A}`] }, 'manage_domain', {
+        operation: 'list_nginx_nodes',
+      })
+    ).resolves.toMatchObject({ result: { eligibleNodes: [{ id: NODE_A }], totalNginxNodes: 1 } });
+    await expect(
+      service.executeTool(
+        { ...BASE_USER, scopes: ['domains:create:folder/22222222-2222-4222-8222-222222222222'] },
+        'manage_domain',
+        { operation: 'list_nginx_nodes' }
+      )
+    ).resolves.toMatchObject({ result: { eligibleNodes: [{ id: NODE_A }, { id: NODE_B }] } });
+  });
+
+  it('issues a domain certificate into an SSL certificate folder the caller may issue in', async () => {
+    const CERT_FOLDER = '33333333-3333-4333-8333-333333333333';
+    const requestACMECert = vi.fn().mockResolvedValue({ certificate: { id: 'cert-1' } });
+    const assertFolderExists = vi.fn().mockResolvedValue(undefined);
+    container.registerInstance(SSLService, { requestACMECert } as never);
+    container.registerInstance(SSLCertificateFolderService, { assertFolderExists } as never);
+    const domainsService = {
+      getDomain: vi.fn().mockResolvedValue({ id: 'domain-1', domain: 'app.example.com', dnsProvider: 'external' }),
+    };
+    const service = createService(domainsService);
+    const scopes = ['domains:edit:domain-1', `ssl:cert:issue:folder/${CERT_FOLDER}`];
+
+    const root = await service.executeTool({ ...BASE_USER, scopes }, 'manage_domain', {
+      operation: 'issue_certificate',
+      domainId: 'domain-1',
+    });
+    expect(root.error).toContain('ssl:cert:issue');
+    expect(requestACMECert).not.toHaveBeenCalled();
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes }, 'manage_domain', {
+        operation: 'issue_certificate',
+        domainId: 'domain-1',
+        certificateFolderId: CERT_FOLDER,
+      })
+    ).resolves.toMatchObject({ result: { certificate: { id: 'cert-1' } } });
+    expect(assertFolderExists).toHaveBeenCalledWith(CERT_FOLDER);
+    expect(requestACMECert).toHaveBeenCalledWith(
+      expect.objectContaining({ domains: ['app.example.com'], challengeType: 'http-01', folderId: CERT_FOLDER }),
+      'user-1',
+      'admin@example.com'
     );
   });
 

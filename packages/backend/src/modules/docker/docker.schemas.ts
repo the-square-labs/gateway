@@ -290,11 +290,23 @@ export const ContainerArchiveImportQuerySchema = z.object({
 });
 
 // Image pull
-export const ImagePullSchema = z.object({
-  imageRef: z.string().min(1),
-  registryId: z.string().uuid().optional(),
-  folderId: z.string().uuid().nullable().optional(),
-});
+export const ImagePullSchema = z
+  .object({
+    imageRef: z.string().min(1),
+    registryId: z.string().uuid().optional(),
+    /** Destination image folder for a standalone pull (docker:images:pull). */
+    folderId: z.string().uuid().nullable().optional(),
+    /**
+     * Pull for a container or deployment about to be created at this destination (container folder or the node).
+     * Authorized by docker:containers:create there instead of docker:images:pull; the image is not placed into an
+     * image folder.
+     */
+    workload: z.object({ folderId: z.string().uuid().nullable().optional() }).strict().optional(),
+  })
+  .refine((input) => !(input.workload && input.folderId), {
+    message: 'A pull for a workload has no image folder; pass folderId inside workload',
+    path: ['folderId'],
+  });
 
 // Volume create
 // Docker's own rule for a named volume. A host path is the usual mistake: it is rejected here

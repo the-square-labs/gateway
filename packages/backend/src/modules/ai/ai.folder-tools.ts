@@ -48,9 +48,11 @@ import {
 import type { FolderedResourceService } from '@/modules/resource-folders/resource-folder.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import type { User } from '@/types.js';
-import { allowedResourceIdsForScopes } from './ai.service-helpers.js';
 
 export const FOLDER_TOOL_NAMES = new Set(['list_resource_folders', 'manage_resource_folder']);
+
+/** Folder-scoped grants of these scopes reveal their route folders, like GET /api/proxy-host-folders. */
+const PROXY_FOLDER_GRANT_SCOPES = ['proxy:view', 'proxy:edit', 'proxy:delete', 'proxy:create'] as const;
 
 type ResourceType =
   | 'nodes'
@@ -204,6 +206,8 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         manageScope: 'storage:folders:manage',
         moveEditScope: 'storage:edit',
         resourceMoveScope: 'storage:edit',
+        createScope: 'storage:create',
+        folderGrantScopes: ['storage:view', 'storage:edit', 'storage:delete', 'storage:create'],
       };
     case 'domains':
       return {
@@ -284,16 +288,10 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
 }
 
 /** Mirrors each module's GET .../folders route: who may list, and which folders a scoped caller sees. */
-function genericListOptions(
-  user: User,
-  resourceType: Exclude<ResourceType, 'routes' | 'docker'>,
-  config: GenericFolderConfig
-) {
+function genericListOptions(user: User, config: GenericFolderConfig) {
   const scopes = user.scopes;
-  const logsManage =
-    (resourceType === 'logging_environments' || resourceType === 'logging_schemas') && hasScope(scopes, 'logs:manage');
-  const canManageFolders = hasScope(scopes, config.manageScope) || logsManage;
-  const hasGlobalView = hasScope(scopes, config.viewScope) || logsManage;
+  const canManageFolders = hasScope(scopes, config.manageScope);
+  const hasGlobalView = hasScope(scopes, config.viewScope);
   const hasGlobalCreate = !!config.createScope && hasScope(scopes, config.createScope);
   const listScopes = [config.viewScope, config.manageScope, ...(config.createScope ? [config.createScope] : [])];
   if (!canManageFolders && !listScopes.some((scope) => hasScopeBase(scopes, scope))) {
@@ -330,14 +328,10 @@ async function executeGenericFolderTool(
     else await policy.requireFeature(feature);
   }
   const config = genericConfig(resourceType);
-  if (operation === 'list') return config.service.getFolderTree(genericListOptions(user, resourceType, config));
+  if (operation === 'list') return config.service.getFolderTree(genericListOptions(user, config));
   if (resourceType === 'pages') await container.resolve(PageProfileService).requireEnabled();
 
-  if (config.manageScope.startsWith('logs:') && hasScope(user.scopes, 'logs:manage')) {
-    // logs:manage is an intentional broad override for logging folder administration.
-  } else {
-    ensureScope(user, config.manageScope);
-  }
+  ensureScope(user, config.manageScope);
 
   switch (operation) {
     case 'create':
@@ -383,15 +377,29 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
     // Same host redaction as GET /api/proxy-host-folders: advanced config and Page targets follow their own scopes.
     const present = (tree: unknown[]) =>
       redactFolderTreeProxyHostsForScopes(stripFolderTreeRawProxyConfigForProgrammaticResponse(tree), user.scopes);
-    if (hasScope(user.scopes, 'proxy:folders:manage')) {
-      return present(await service.getFolderTree({ includeAllFolders: true }));
+    // Same access rule as the folder tree route: route viewers, route creators and folder managers. A caller
+    // without broad access sees the folders holding its routes plus every folder it holds a route grant on,
+    // including a granted folder that is still empty.
+    const scopes = user.scopes;
+    if (
+      !hasScopeBase(scopes, 'proxy:view') &&
+      !hasScopeBase(scopes, 'proxy:create') &&
+      !hasScope(scopes, 'proxy:folders:manage')
+    ) {
+      throw new Error(
+        'PERMISSION_DENIED: Missing one of required scopes: proxy:view, proxy:create, proxy:folders:manage'
+      );
     }
-    if (!hasScopeBase(user.scopes, 'proxy:view')) {
-      throw new Error('PERMISSION_DENIED: Missing required scope proxy:view');
-    }
-    const tree = hasScope(user.scopes, 'proxy:view')
-      ? await service.getFolderTree()
-      : await service.getFolderTree({ allowedHostIds: allowedResourceIdsForScopes(user.scopes, 'proxy:view') });
+    const includeAllFolders =
+      hasScope(scopes, 'proxy:folders:manage') || hasScope(scopes, 'proxy:view') || hasScope(scopes, 'proxy:create');
+    const tree = await service.getFolderTree(
+      includeAllFolders
+        ? { includeAllFolders: true }
+        : {
+            allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'),
+            allowedFolderIds: getFolderScopedIds(scopes, PROXY_FOLDER_GRANT_SCOPES),
+          }
+    );
     return present(tree);
   }
 
@@ -439,7 +447,7 @@ async function executeDockerFolderTool(user: User, args: Record<string, unknown>
     return service.getFolderTree(await dockerFolderTreeOptions(user.scopes, resourceType));
   }
 
-  ensureScope(user, 'docker:containers:folders:manage');
+  ensureScope(user, 'docker:folders:manage');
   const items = (Array.isArray(args.items) ? args.items : []).filter(
     (item): item is { nodeId: string; resourceKey: string } =>
       !!item &&

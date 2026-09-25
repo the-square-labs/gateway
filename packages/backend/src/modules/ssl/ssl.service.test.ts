@@ -809,3 +809,117 @@ describe('SSLService internal certificate linking', () => {
     ).rejects.toMatchObject({ code: 'PKI_CERT_NOT_SERVER' });
   });
 });
+
+describe('SSLService linked internal certificate renewal', () => {
+  function internalHarness(cert: Record<string, unknown>) {
+    const returning = vi.fn().mockResolvedValue([{ ...cert, autoRenew: false }]);
+    const where = vi.fn(() => Object.assign(Promise.resolve(undefined), { returning }));
+    const set = vi.fn(() => ({ where }));
+    const db = {
+      query: { sslCertificates: { findFirst: vi.fn().mockResolvedValue(cert) } },
+      update: vi.fn(() => ({ set })),
+      select: selectChain([]),
+    } as any;
+    const audit = { log: vi.fn() };
+    const service = new SSLService(db, {} as any, {} as any, audit as any, { upsertGatewayAsset: vi.fn() } as any);
+    return { service, db, set, audit };
+  }
+
+  const linked = {
+    id: 'ssl-1',
+    name: 'api.example.com',
+    type: 'internal',
+    status: 'active',
+    internalCertId: 'pki-1',
+    privateKeyPem: 'enc',
+    autoRenew: true,
+    renewalError: null,
+    notAfter: new Date(Date.now() + 20 * DAY_MS),
+  };
+
+  it('routes a renew of a linked internal certificate to the CA reissue with the caller scopes', async () => {
+    const { service } = internalHarness(linked);
+    const renewer = { renewSslCertificate: vi.fn().mockResolvedValue({}) };
+    service.setInternalCertificateRenewal(renewer);
+
+    await service.renewCert('ssl-1', 'user-1', 'ops@example.com', { actorScopes: ['ssl:cert:issue'] });
+
+    expect(renewer.renewSslCertificate).toHaveBeenCalledWith('ssl-1', 'user-1', { actorScopes: ['ssl:cert:issue'] });
+  });
+
+  it('still refuses to renew an uploaded certificate', async () => {
+    const { service } = internalHarness({ ...linked, type: 'upload' });
+    service.setInternalCertificateRenewal({ renewSslCertificate: vi.fn() });
+
+    await expect(service.renewCert('ssl-1', 'user-1')).rejects.toMatchObject({ code: 'NOT_ACME' });
+  });
+
+  it('toggles automatic reissue for a linked certificate Gateway holds the key for', async () => {
+    const { service, set, audit } = internalHarness(linked);
+
+    await service.setAutoRenew('ssl-1', { enabled: false }, 'user-1');
+
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ autoRenew: false }));
+    expect(audit.log).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'ssl.auto_renew', details: { enabled: false, type: 'internal' } })
+    );
+  });
+
+  it('refuses automatic reissue for a CSR-issued link without a key', async () => {
+    const { service, set } = internalHarness({ ...linked, privateKeyPem: null, autoRenew: false });
+
+    await expect(service.setAutoRenew('ssl-1', { enabled: true }, 'user-1')).rejects.toMatchObject({
+      code: 'INTERNAL_CERT_NOT_RENEWABLE',
+    });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('links a certificate with automatic reissue on when Gateway holds its key', async () => {
+    const certId = '11111111-1111-4111-8111-111111111111';
+    const values = vi.fn((row: Record<string, unknown>) => ({
+      returning: vi.fn().mockResolvedValue([{ id: 'ssl-new', ...row }]),
+    }));
+    const db = {
+      query: {
+        certificates: {
+          findFirst: vi.fn().mockResolvedValue({
+            id: certId,
+            caId: 'ca-1',
+            type: 'tls-server',
+            status: 'active',
+            commonName: 'api.example.com',
+            certificatePem: 'not-a-pem',
+            notBefore: new Date(),
+            notAfter: new Date(Date.now() + 30 * DAY_MS),
+            encryptedPrivateKey: 'enc',
+            encryptedDek: 'dek',
+            dekIv: 'iv',
+          }),
+        },
+      },
+      select: selectChain([[{ isSystem: false }]]),
+      insert: vi.fn(() => ({ values })),
+      update: vi.fn(() => ({ set: vi.fn(() => ({ where: vi.fn().mockResolvedValue(undefined) })) })),
+    } as any;
+    const cryptoService = {
+      decryptPrivateKey: vi.fn().mockReturnValue('KEY'),
+      encryptPrivateKey: vi.fn().mockReturnValue({ encryptedPrivateKey: 'e', encryptedDek: 'd', dekIv: 'i' }),
+    } as any;
+    const service = new SSLService(
+      db,
+      {} as any,
+      cryptoService,
+      { log: vi.fn() } as any,
+      {
+        upsertGatewayAsset: vi.fn(),
+      } as any
+    );
+
+    await service.linkInternalCert({ internalCertId: certId }, 'user-1', [
+      'ssl:cert:issue',
+      `pki:cert:export:${certId}`,
+    ]);
+
+    expect(values).toHaveBeenCalledWith(expect.objectContaining({ type: 'internal', autoRenew: true }));
+  });
+});

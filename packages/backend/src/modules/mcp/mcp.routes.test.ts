@@ -289,7 +289,6 @@ describe('MCP tools', () => {
   it('discovers and calls GitLab tools through delegated GitLab scopes but never the sandbox clone', async () => {
     registerToken([
       'integrations:gitlab:view',
-      'integrations:gitlab:projects:view',
       'integrations:gitlab:repo:read',
       'integrations:gitlab:repo:write',
       'integrations:gitlab:sandbox:clone',
@@ -335,8 +334,8 @@ describe('MCP tools', () => {
       'settings:gateway:view',
       'inference:providers:view',
       'integrations:ssh:use',
-      'integrations:github:view',
-      'integrations:git:view',
+      'integrations:github:repo:read',
+      'integrations:git:repo:read',
       'integrations:cloudflare:manage',
       'integrations:hosting:view',
       'admin:details:certificates',
@@ -789,8 +788,9 @@ describe('MCP tools', () => {
       'domains:view',
       'logs:environments:view',
       'nodes:details',
-      'notifications:view',
-      'pki:ca:view:root',
+      'notifications:alerts:view',
+      'notifications:webhooks:view',
+      'pki:ca:view',
       'pki:cert:view',
       'pki:templates:view',
       'proxy:view',
@@ -971,8 +971,8 @@ describe('MCP resources and prompts', () => {
     expect(data.proxyHosts).toBeUndefined();
   });
 
-  it('filters MCP overview CA stats by delegated CA view type', async () => {
-    registerToken(['pki:ca:view:intermediate']);
+  it('shows MCP overview CA stats only for broad CA view', async () => {
+    registerToken(['pki:ca:view']);
     const getDashboardStats = vi.fn().mockResolvedValue({
       proxyHosts: { total: 3 },
       sslCertificates: { total: 4 },
@@ -990,7 +990,9 @@ describe('MCP resources and prompts', () => {
       uri: 'gateway://overview',
     });
 
-    expect(getDashboardStats).toHaveBeenCalledWith(expect.objectContaining({ allowedCaTypes: ['intermediate'] }));
+    expect(getDashboardStats).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedCaTypes: ['root', 'intermediate'] })
+    );
     const data = JSON.parse(body.result.contents[0].text);
     expect(data.cas).toEqual({ total: 1, root: 0, intermediate: 1 });
     expect(data.nodes).toBeUndefined();

@@ -48,7 +48,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
         config: {
           type: 'object',
           description:
-            'Partial housekeeping config for update_config, validated like PUT /housekeeping/config (retention periods, cronExpression, enabled categories).',
+            'Partial housekeeping config for update_config, validated like PUT /housekeeping/config (retention periods, cronExpression, enabled categories; operationHistory {enabled, retentionDays} prunes finished Docker tasks, builds, compose, availability and hosting operations; oauthCleanup {enabled} purges expired OAuth grants and client registrations that never completed an authorization).',
         },
       },
       required: ['operation'],
@@ -461,7 +461,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
           },
           required: ['parallelism', 'timeoutMinutes'],
           additionalProperties: false,
-          description: 'update: Build Worker settings (builder nodes, nodes:config:edit).',
+          description: 'update: Build Worker settings (builder nodes, nodes:manage).',
         },
         levels: {
           type: 'array',
@@ -632,7 +632,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'internal_documentation',
     description:
-      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, pages, domains, access-lists, templates, acme, users, audit, siem, nginx, nodes, housekeeping, permissions, docker, databases, storage, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
+      'Get detailed internal documentation about a specific topic in this system. Use this whenever you need deeper knowledge about how something works, what fields mean, or what the correct workflow is. Topics: discovery, pki, ssl, proxy, pages, domains, access-lists, templates, acme, users, audit, siem, nginx, nodes, housekeeping, permissions, docker, databases, storage, storage-migration, postgres, redis, logging, folders, node-files, sandbox, conversations, ai-settings, status-page, api, gateway-settings, licensing-updates, inference, gitlab, notifications, overview, installation, authentication, cloudflare, docker-registries, clickhouse, troubleshooting.',
     parameters: {
       type: 'object',
       properties: {

@@ -2,13 +2,12 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { isScopeSubset } from '@/lib/permissions.js';
-import { canonicalizeScopes } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, sessionOnly } from '@/modules/auth/auth.middleware.js';
 import type { AppEnv } from '@/types.js';
 import { createTokenRoute, listTokensRoute, renameTokenRoute, revokeTokenRoute } from './tokens.docs.js';
 import { CreateTokenSchema, UpdateTokenSchema } from './tokens.schemas.js';
-import { TokensService } from './tokens.service.js';
+import { resolveRequestedTokenScopes, TokensService } from './tokens.service.js';
 
 export const tokensRoutes = new OpenAPIHono<AppEnv>({ defaultHook: openApiValidationHook });
 
@@ -41,7 +40,7 @@ tokensRoutes.openapi(createTokenRoute, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json();
   const parsedInput = CreateTokenSchema.parse(body);
-  const input = { ...parsedInput, scopes: canonicalizeScopes(parsedInput.scopes) };
+  const input = { ...parsedInput, scopes: resolveRequestedTokenScopes(parsedInput.scopes, user.scopes, 'create') };
 
   // Token scopes must be a subset of the user's group scopes
   const userScopes = user.scopes;
@@ -65,7 +64,9 @@ tokensRoutes.openapi(renameTokenRoute, async (c) => {
   const input = {
     ...parsedInput,
     ...(parsedInput.name !== undefined ? { name: parsedInput.name.trim() } : {}),
-    ...(parsedInput.scopes !== undefined ? { scopes: canonicalizeScopes(parsedInput.scopes) } : {}),
+    ...(parsedInput.scopes !== undefined
+      ? { scopes: resolveRequestedTokenScopes(parsedInput.scopes, user.scopes, 'update') }
+      : {}),
   };
 
   if (input.scopes !== undefined && !isScopeSubset(input.scopes, user.scopes)) {

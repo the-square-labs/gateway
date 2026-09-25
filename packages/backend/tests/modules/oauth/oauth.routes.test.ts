@@ -99,6 +99,7 @@ function registerOAuthService(overrides: Partial<OAuthService> = {}) {
 function registerSession(user: User = USER) {
   container.registerInstance(SessionService, {
     getSession: vi.fn().mockResolvedValue({ ...SESSION, user, userId: user.id }),
+    validateCsrfToken: vi.fn().mockResolvedValue(true),
     updateSession: vi.fn().mockResolvedValue(undefined),
     refreshSession: vi.fn().mockResolvedValue(false),
   } as unknown as SessionService);
@@ -504,6 +505,48 @@ describe('OAuth consent routes', () => {
       uri: 'https://client.example.com/callback',
       isExternal: true,
     });
+  });
+
+  it('approves a folder-restricted scope selection', async () => {
+    registerSession({ ...USER, scopes: [...USER.scopes, 'docker:containers:manage'] });
+    const approveConsent = vi.fn().mockResolvedValue('http://127.0.0.1:8765/callback?code=abc');
+    registerOAuthService({ approveConsent });
+    const folderScope = 'docker:containers:manage:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+
+    const response = await createApp().request('/api/oauth/consent/request-1/approve', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=session-1',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body: JSON.stringify({ scopes: [folderScope, 'docker:containers:view:node-1/container-1'] }),
+    });
+
+    expect(response.status).toBe(200);
+    expect(approveConsent).toHaveBeenCalledWith('request-1', expect.objectContaining({ id: USER.id }), [
+      folderScope,
+      'docker:containers:view:node-1/container-1',
+    ]);
+  });
+
+  it('rejects a folder restriction on a scope that cannot target folders', async () => {
+    registerSession();
+    const approveConsent = vi.fn();
+    registerOAuthService({ approveConsent });
+
+    const response = await createApp().request('/api/oauth/consent/request-1/approve', {
+      method: 'POST',
+      headers: {
+        Cookie: 'session_id=session-1',
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': 'csrf-token',
+      },
+      body: JSON.stringify({ scopes: ['pki:cert:view:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e'] }),
+    });
+
+    expect(response.status).toBe(400);
+    expect(approveConsent).not.toHaveBeenCalled();
   });
 
   it('does not approve consent from an impersonation session', async () => {

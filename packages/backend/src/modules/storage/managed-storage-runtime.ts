@@ -17,6 +17,7 @@ import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy
 import {
   assertStorageHasNoBackupReferences,
   forgetStorageBackupHistory,
+  rehomeStorageBackupHistory,
 } from '@/modules/object-storage/storage-backup-references.js';
 
 const loggerManagedStorage = createChildLogger('ManagedStorage');
@@ -35,6 +36,7 @@ import { StorageClusterMemberStore } from './storage-cluster-member-store.js';
 import { StorageWorkloadDispatch } from './storage-workload-dispatch.js';
 import { StorageWorkloadProvider } from './storage-workload-provider.js';
 import { StorageWorkloadStore } from './storage-workload-store.js';
+import { backupWritesTo } from './storage-write-freeze.js';
 export const managedStorageConstructors = {
   ManagedStorageMetricsProvider,
   ManagedStorageService,
@@ -74,4 +76,6 @@ export const managedStorageRuntime = {
   grantCreatedResourcePermissions,
   isNotNull,
   inArray,
+  rehomeStorageBackupHistory,
+  backupWritesTo,
 };

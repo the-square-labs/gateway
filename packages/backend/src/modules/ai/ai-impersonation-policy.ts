@@ -29,7 +29,9 @@ const CREDENTIAL_TOOL_CALLS: Readonly<Record<string, (args: ToolArgs) => boolean
   manage_relay_pool: (args) => args.operation === 'reenroll_instance',
   manage_pages: (args) => args.operation === 'token_create',
   manage_logging: (args) => args.resource === 'token' && args.operation === 'create',
-  manage_managed_storage: (args) => args.action === 'create_access_key' || args.action === 'reveal_credentials',
+  // Imported keys outlive the session like created ones.
+  manage_managed_storage: (args) =>
+    args.action === 'create_access_key' || args.action === 'import_access_keys' || args.action === 'reveal_credentials',
   // Mirrors the storage reveal route, which also refuses impersonation.
   manage_storage_connection: (args) => args.action === 'reveal_credentials',
   manage_database_connection: (args) => args.operation === 'reveal_credentials',

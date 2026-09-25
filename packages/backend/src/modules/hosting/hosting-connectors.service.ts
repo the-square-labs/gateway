@@ -228,7 +228,7 @@ export class HostingConnectorsService {
       assertHostingScope(actor.scopes, 'integrations:hosting:manage', connectorId);
       for (const nodeId of nodeIds) {
         assertHostingScope(actor.scopes, 'nodes:details', nodeId);
-        assertHostingScope(actor.scopes, 'nodes:config:edit', nodeId);
+        assertHostingScope(actor.scopes, 'nodes:manage', nodeId);
       }
     }
   }

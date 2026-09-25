@@ -1,6 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { container } from '@/container.js';
+import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -70,6 +71,7 @@ export const storageRouteRuntime = {
   container,
   openApiValidationHook,
   getResourceScopedIds,
+  getFolderScopedIds,
   hasScope,
   hasScopeBase,
   hasScopeForCreation,

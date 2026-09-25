@@ -1,15 +1,9 @@
 export const CORE_TOKEN_SCOPES = [
   // PKI: Certificate Authorities
   {
-    value: "pki:ca:view:root",
-    label: "View Root CAs",
-    desc: "View root certificate authorities",
-    group: "PKI: Certificate Authorities",
-  },
-  {
-    value: "pki:ca:view:intermediate",
-    label: "View Intermediate CAs",
-    desc: "View intermediate certificate authorities",
+    value: "pki:ca:view",
+    label: "View Certificate Authorities",
+    desc: "View root and intermediate certificate authorities",
     group: "PKI: Certificate Authorities",
   },
   {
@@ -22,6 +16,18 @@ export const CORE_TOKEN_SCOPES = [
     value: "pki:ca:create:intermediate",
     label: "Create Intermediate CAs",
     desc: "Create intermediate CAs under a root",
+    group: "PKI: Certificate Authorities",
+  },
+  {
+    value: "pki:ca:edit",
+    label: "Edit Certificate Authorities",
+    desc: "Edit CA URLs, maximum validity, and the OCSP responder",
+    group: "PKI: Certificate Authorities",
+  },
+  {
+    value: "pki:ca:export",
+    label: "Export CA Private Keys",
+    desc: "Export a certificate authority with its private key",
     group: "PKI: Certificate Authorities",
   },
   {
@@ -139,9 +145,9 @@ export const CORE_TOKEN_SCOPES = [
     group: "Routes",
   },
   {
-    value: "proxy:advanced:bypass",
-    label: "Bypass Advanced Config Restrictions",
-    desc: "Save unrestricted advanced nginx snippets",
+    value: "proxy:unrestricted",
+    label: "Unrestricted Nginx Config",
+    desc: "Save advanced snippets and raw nginx config without dangerous directive restrictions",
     group: "Routes",
   },
   {
@@ -159,19 +165,7 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "proxy:raw:write",
     label: "Write Raw Config",
-    desc: "Edit raw nginx configuration",
-    group: "Routes",
-  },
-  {
-    value: "proxy:raw:toggle",
-    label: "Toggle Raw Config",
-    desc: "Switch between managed and raw config mode",
-    group: "Routes",
-  },
-  {
-    value: "proxy:raw:bypass",
-    label: "Bypass Raw Config Restrictions",
-    desc: "Save raw nginx config without dangerous directive restrictions",
+    desc: "Edit raw nginx configuration and switch routes between managed and raw mode",
     group: "Routes",
   },
   {
@@ -255,21 +249,9 @@ export const CORE_TOKEN_SCOPES = [
     group: "Proxy Templates",
   },
   {
-    value: "proxy:templates:create",
-    label: "Create Nginx Templates",
-    desc: "Create nginx templates",
-    group: "Proxy Templates",
-  },
-  {
-    value: "proxy:templates:edit",
-    label: "Edit Nginx Templates",
-    desc: "Edit nginx templates",
-    group: "Proxy Templates",
-  },
-  {
-    value: "proxy:templates:delete",
-    label: "Delete Nginx Templates",
-    desc: "Delete nginx templates",
+    value: "proxy:templates:manage",
+    label: "Manage Nginx Templates",
+    desc: "Create, edit, and delete nginx templates, including template content",
     group: "Proxy Templates",
   },
   // SSL Certificates
@@ -295,18 +277,6 @@ export const CORE_TOKEN_SCOPES = [
     value: "ssl:cert:delete",
     label: "Delete SSL Certificates",
     desc: "Delete SSL certificates",
-    group: "SSL Certificates",
-  },
-  {
-    value: "ssl:cert:revoke",
-    label: "Revoke SSL Certificates",
-    desc: "Revoke SSL certificates",
-    group: "SSL Certificates",
-  },
-  {
-    value: "ssl:cert:export",
-    label: "Export SSL Certificates",
-    desc: "Export SSL certificates",
     group: "SSL Certificates",
   },
   // Access Control Lists
@@ -352,9 +322,9 @@ export const CORE_TOKEN_SCOPES = [
     group: "Nodes",
   },
   {
-    value: "nodes:config:edit",
-    label: "Edit Node Config",
-    desc: "Edit node nginx configuration",
+    value: "nodes:manage",
+    label: "Manage Nodes",
+    desc: "Edit node nginx config, install the Docker secure runtime, change service addresses, and control hosted VMs",
     group: "Nodes",
   },
   {
@@ -477,85 +447,31 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "integrations:gitlab:view",
     label: "View GitLab Integrations",
-    desc: "View configured GitLab connectors and sync status",
+    desc: "View configured GitLab connectors, sync status, and synced projects",
     group: "Integrations: GitLab",
   },
   {
     value: "integrations:gitlab:manage",
     label: "Manage GitLab Integrations",
-    desc: "Create, edit, rotate, and delete GitLab connectors",
+    desc: "Create, edit, rotate, sync, and delete GitLab connectors",
     group: "Integrations: GitLab",
   },
   {
-    value: "integrations:gitlab:sync",
-    label: "Sync GitLab Integrations",
-    desc: "Refresh projects and registries using the connector credential",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:system",
-    label: "Use System GitLab Credential",
+    value: "integrations:gitlab:use",
+    label: "Use GitLab System Credential",
     desc: "Use the connector credential for otherwise permitted GitLab operations",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:projects:view",
-    label: "View GitLab Projects",
-    desc: "Discover allowed GitLab groups and projects",
     group: "Integrations: GitLab",
   },
   {
     value: "integrations:gitlab:repo:read",
     label: "Read GitLab Repositories",
-    desc: "Read repository trees and files through GitLab connectors",
+    desc: "Read repository files, CI pipelines and job logs, and CI/CD variable keys (never values) through GitLab connectors",
     group: "Integrations: GitLab",
   },
   {
     value: "integrations:gitlab:repo:write",
     label: "Write GitLab Repositories",
-    desc: "Commit file changes through GitLab connectors",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:ci:view",
-    label: "View GitLab CI",
-    desc: "View GitLab CI pipelines and configuration",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:ci:edit",
-    label: "Edit GitLab CI",
-    desc: "Lint and update GitLab CI configuration",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:variables:view",
-    label: "View GitLab Variables",
-    desc: "View GitLab variable metadata without secret values",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:variables:edit",
-    label: "Edit GitLab Variables",
-    desc: "Create and update GitLab project variables",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:variables:delete",
-    label: "Delete GitLab Variables",
-    desc: "Delete GitLab project variables",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:webhooks:manage",
-    label: "Manage GitLab Webhooks",
-    desc: "Create, update, and delete GitLab project webhooks",
-    group: "Integrations: GitLab",
-  },
-  {
-    value: "integrations:gitlab:registry:manage",
-    label: "Manage GitLab Registries",
-    desc: "Manage GitLab registry integration records and deploy credentials",
+    desc: "Change repository files, CI configuration, CI/CD variables, webhooks, and registry records through GitLab connectors",
     group: "Integrations: GitLab",
   },
   {
@@ -574,19 +490,25 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "integrations:github:manage",
     label: "Manage GitHub Integrations",
-    desc: "Create, edit, rotate, and delete GitHub token connectors",
+    desc: "Create, edit, rotate, sync, and delete GitHub token connectors",
     group: "Integrations: GitHub",
   },
   {
-    value: "integrations:github:sync",
-    label: "Sync GitHub Integrations",
-    desc: "Re-validate GitHub connectors and their repository allowlist using the connector credential",
-    group: "Integrations: GitHub",
-  },
-  {
-    value: "integrations:github:system",
+    value: "integrations:github:use",
     label: "Use GitHub System Credential",
     desc: "Use the connector credential instead of a personal GitHub authorization",
+    group: "Integrations: GitHub",
+  },
+  {
+    value: "integrations:github:repo:read",
+    label: "Read GitHub Repositories",
+    desc: "List repositories and read files through GitHub connectors (no Actions variable values)",
+    group: "Integrations: GitHub",
+  },
+  {
+    value: "integrations:github:repo:write",
+    label: "Write GitHub Repositories",
+    desc: "Change repository files and secrets, and read or change Actions variables, through GitHub connectors",
     group: "Integrations: GitHub",
   },
   // Integrations: Generic Git
@@ -599,19 +521,25 @@ export const CORE_TOKEN_SCOPES = [
   {
     value: "integrations:git:manage",
     label: "Manage Git Integrations",
-    desc: "Create, edit, rotate, and delete generic Git connectors",
+    desc: "Create, edit, rotate, sync, and delete generic Git connectors",
     group: "Integrations: Git",
   },
   {
-    value: "integrations:git:sync",
-    label: "Sync Git Integrations",
-    desc: "Re-validate generic Git connectors and their repository allowlist using the connector credential",
-    group: "Integrations: Git",
-  },
-  {
-    value: "integrations:git:system",
+    value: "integrations:git:use",
     label: "Use Git System Credential",
     desc: "Use the connector credential instead of a personal Git authorization",
+    group: "Integrations: Git",
+  },
+  {
+    value: "integrations:git:repo:read",
+    label: "Read Git Repositories",
+    desc: "List repositories and read files through generic Git connectors",
+    group: "Integrations: Git",
+  },
+  {
+    value: "integrations:git:repo:write",
+    label: "Write Git Repositories",
+    desc: "Change repository files through generic Git connectors",
     group: "Integrations: Git",
   },
   // Integrations: External SSH

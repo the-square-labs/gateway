@@ -21,7 +21,11 @@ import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { type DockerViewNodeScope, loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import {
+  canCreateDockerResourceOnNode,
+  type DockerNodeScope,
+  loadVisibleDockerNodes,
+} from "@/lib/docker-node-access";
 import { authContextKey, useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
@@ -45,14 +49,16 @@ const TABS = [
   { value: "builds", label: "Builds", icon: Hammer, scope: "docker:containers:view" },
 ] as const;
 
+// Creation scopes list nodes too, so a folder-only creator (whose folder may still be empty) gets the same node
+// pickers the backend accepts instead of a "no Docker nodes" page.
 const DOCKER_NODE_SCOPES_BY_TAB: Partial<
-  Record<(typeof TABS)[number]["value"], DockerViewNodeScope[]>
+  Record<(typeof TABS)[number]["value"], DockerNodeScope[]>
 > = {
-  containers: ["docker:containers:view"],
-  images: ["docker:images:view"],
-  volumes: ["docker:volumes:view"],
-  networks: ["docker:networks:view"],
-  compose: ["docker:compose:view"],
+  containers: ["docker:containers:view", "docker:containers:create"],
+  images: ["docker:images:view", "docker:images:pull"],
+  volumes: ["docker:volumes:view", "docker:volumes:create"],
+  networks: ["docker:networks:view", "docker:networks:create"],
+  compose: ["docker:compose:view", "docker:compose:create"],
 };
 
 export function Docker() {
@@ -74,9 +80,10 @@ export function Docker() {
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
   const [importOpen, setImportOpen] = useState(false);
   const [importDevPreview, setImportDevPreview] = useState(false);
-  const archiveImportNodes = dockerNodes.filter(
-    (node) =>
-      hasScope("docker:containers:create") || hasScope(`docker:containers:create:${node.id}`)
+  // Nodes the import route accepts for some destination: broad, node or folder creation grants (a folder grant
+  // works on every Docker node; the dialog then offers only the folders the user may create in).
+  const archiveImportNodes = dockerNodes.filter((node) =>
+    canCreateDockerResourceOnNode(user?.scopes ?? [], "docker:containers:create", node.id)
   );
   const imageActionNodeId =
     selectedNodeId ?? (dockerNodes.length === 1 ? dockerNodes[0]?.id : null);
@@ -102,7 +109,7 @@ export function Docker() {
   const refreshNetworksRef = useRef<(() => void) | null>(null);
   const refreshComposeRef = useRef<(() => void) | null>(null);
 
-  const canManageContainerFolders = hasScope("docker:containers:folders:manage");
+  const canManageContainerFolders = hasScope("docker:folders:manage");
   const visibleTabs = TABS.filter(
     (t) => hasScopedAccess(t.scope) || (t.value === "containers" && canManageContainerFolders)
   );

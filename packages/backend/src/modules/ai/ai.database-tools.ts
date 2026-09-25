@@ -120,7 +120,10 @@ export async function manageManagedDatabaseAccess(
   if (operation === 'reveal_binding_credentials') {
     // POST /databases/managed/{id}/bindings/{bindingId}/reveal-credentials
     await ensureManagedDatabaseScopes(user, databaseId, 'databases:credentials:reveal');
-    await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId));
+    // Revealing changes nothing on the workload: no rollout scope, like the route.
+    await assertWorkloadBindingTargetAccess(user.scopes, await bindings.getTarget(databaseId, bindingId), {
+      rollout: false,
+    });
     return bindings.revealCredentials(databaseId, bindingId);
   }
   throw new AppError(400, 'INVALID_AI_TOOL_OPERATION', `Unsupported managed database operation: ${operation}`);

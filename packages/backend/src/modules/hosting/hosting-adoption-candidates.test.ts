@@ -8,12 +8,7 @@ function fixture() {
   const settings = HostingSettingsSchema.parse({ resourceIds: ['100', '101', '102', '103'] });
   const user = {
     id: 'actor',
-    scopes: [
-      'integrations:hosting:manage',
-      'integrations:hosting:view',
-      'nodes:details:node',
-      'nodes:config:edit:node',
-    ],
+    scopes: ['integrations:hosting:manage', 'integrations:hosting:view', 'nodes:details:node', 'nodes:manage:node'],
   } as User;
   const connector = { id: 'connector', enabled: true, settings };
   const make = (id: string, remoteId: string, extra = {}) => ({

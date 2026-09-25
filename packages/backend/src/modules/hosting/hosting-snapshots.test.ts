@@ -103,7 +103,7 @@ function runner() {
   };
   const user: any = {
     id: 'actor',
-    scopes: ['hosting:resources:view', 'hosting:snapshots:restore', 'nodes:details', 'nodes:config:edit'],
+    scopes: ['hosting:resources:view', 'hosting:snapshots:restore', 'nodes:details', 'nodes:manage'],
   };
   const resource: any = {
     id: 'resource',

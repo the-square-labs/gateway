@@ -136,7 +136,28 @@ describe('AIService status page tool routing', () => {
       result: { id: 'service-1' },
       invalidateStores: [],
     });
-    expect(statusPageService.createService).toHaveBeenCalledWith(payload, 'user-1');
+    // The caller scopes go along so the service refuses a source the caller cannot view.
+    expect(statusPageService.createService).toHaveBeenCalledWith(payload, 'user-1', ['status-page:manage']);
+  });
+
+  it('lists exposable sources with the caller scopes like GET /status-page/sources', async () => {
+    const statusPageService = { listSources: vi.fn().mockResolvedValue([{ sourceType: 'node', sourceId: 'n1' }]) };
+    vi.spyOn(container, 'resolve').mockReturnValue(statusPageService as never);
+    const service = createService();
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['status-page:view'] }, 'manage_status_page', {
+        resource: 'sources',
+        operation: 'list',
+      })
+    ).resolves.toMatchObject({ error: 'PERMISSION_DENIED: Missing required scope status-page:manage' });
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['status-page:manage', 'nodes:details'] }, 'manage_status_page', {
+        resource: 'sources',
+        operation: 'list',
+      })
+    ).resolves.toMatchObject({ result: [{ sourceType: 'node', sourceId: 'n1' }] });
+    expect(statusPageService.listSources).toHaveBeenCalledWith(['status-page:manage', 'nodes:details']);
   });
 
   it('lists and updates incidents with the expected operation-specific methods', async () => {

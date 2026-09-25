@@ -29,11 +29,18 @@ const mocks = vi.hoisted(() => ({
   },
   pageProfile: { requireEnabled: vi.fn() },
   folderService: { assertFolderExists: vi.fn() },
+  systemRows: [] as Array<{ isSystem: boolean }>,
 }));
 
 vi.mock('@/container.js', () => ({
+  TOKENS: { DrizzleClient: Symbol('DrizzleClient') },
   container: {
     resolve: vi.fn((token) => {
+      // TOKENS.DrizzleClient: the TLS resync check reads the route's isSystem flag.
+      if (typeof token === 'symbol') {
+        const limit = async () => mocks.systemRows;
+        return { select: () => ({ from: () => ({ where: () => ({ limit }) }) }) };
+      }
       if (token?.name === 'LicensePolicyService') return mocks.licensePolicy;
       if (token?.name === 'PageProfileService') return mocks.pageProfile;
       if (token?.name === 'FolderService') return mocks.folderService;
@@ -397,7 +404,7 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(updateResponse.status).toBe(403);
     expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
 
-    mocks.scopes = [...mocks.scopes, 'proxy:raw:toggle', 'proxy:raw:write', 'proxy:raw:read'];
+    mocks.scopes = [...mocks.scopes, 'proxy:raw:write', 'proxy:raw:read'];
     const allowedCreate = await jsonRequest('POST', '/', rawCreate);
     const allowedCreateBody = (await allowedCreate.json()) as { data: Record<string, unknown> };
 
@@ -491,9 +498,9 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.validateAdvancedConfig).toHaveBeenCalledWith('server {}', true, false, false);
   });
 
-  it('passes raw bypass only when browser session has proxy raw bypass scope', async () => {
+  it('passes the raw validation bypass only when the session holds proxy:unrestricted for the route', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:raw:write:host-1', 'proxy:raw:bypass:host-1'];
+    mocks.scopes = ['proxy:raw:write:host-1', 'proxy:unrestricted:host-1'];
 
     const response = await createApp().request('/validate-config', {
       method: 'POST',
@@ -517,9 +524,9 @@ describe('proxy routes programmatic raw config handling', () => {
     );
   });
 
-  it('does not let proxy advanced bypass bypass raw validation', async () => {
+  it('does not let proxy:unrestricted for another route bypass raw validation', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:raw:write:host-1', 'proxy:advanced:bypass:host-1'];
+    mocks.scopes = ['proxy:raw:write:host-1', 'proxy:unrestricted:host-2'];
 
     const response = await createApp().request('/validate-config', {
       method: 'POST',
@@ -543,9 +550,9 @@ describe('proxy routes programmatic raw config handling', () => {
     );
   });
 
-  it('does not let raw bypass alone grant raw validation access', async () => {
+  it('does not let proxy:unrestricted alone grant raw validation access', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:raw:bypass:host-1'];
+    mocks.scopes = ['proxy:unrestricted:host-1'];
 
     const response = await createApp().request('/validate-config', {
       method: 'POST',
@@ -564,9 +571,9 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.validateAdvancedConfig).not.toHaveBeenCalled();
   });
 
-  it('passes raw bypass to service when creating a host with raw config', async () => {
+  it('passes the validation bypass to the service when creating a host with proxy:unrestricted', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:create', 'proxy:raw:write', 'proxy:raw:bypass'];
+    mocks.scopes = ['proxy:create', 'proxy:raw:write', 'proxy:unrestricted'];
 
     const response = await createApp().request('/', {
       method: 'POST',
@@ -588,7 +595,7 @@ describe('proxy routes programmatic raw config handling', () => {
       expect.objectContaining({ rawConfig: 'include /etc/nginx/conf.d/private.conf;' }),
       'user-1',
       expect.objectContaining({
-        bypassAdvancedValidation: false,
+        bypassAdvancedValidation: true,
         bypassRawValidation: true,
       })
     );
@@ -755,9 +762,9 @@ describe('proxy routes programmatic raw config handling', () => {
     }
   });
 
-  it('passes resource-scoped raw bypass to service when updating raw config', async () => {
+  it('passes the resource-scoped proxy:unrestricted bypass to the service when updating raw config', async () => {
     mocks.authType = 'session';
-    mocks.scopes = ['proxy:edit:host-1', 'proxy:raw:write:host-1', 'proxy:raw:bypass:host-1'];
+    mocks.scopes = ['proxy:edit:host-1', 'proxy:raw:write:host-1', 'proxy:unrestricted:host-1'];
 
     const response = await createApp().request('/host-1', {
       method: 'PUT',
@@ -776,7 +783,7 @@ describe('proxy routes programmatic raw config handling', () => {
       expect.objectContaining({ rawConfig: 'include /etc/nginx/conf.d/private.conf;' }),
       'user-1',
       expect.objectContaining({
-        bypassAdvancedValidation: false,
+        bypassAdvancedValidation: true,
         bypassRawValidation: true,
       })
     );
@@ -882,7 +889,7 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
   });
 
-  it('requires raw toggle scope when a browser session creates a raw-typed host', async () => {
+  it('requires raw write scope when a browser session creates a raw-typed host', async () => {
     mocks.authType = 'session';
 
     const response = await createApp().request('/', {
@@ -910,7 +917,7 @@ describe('proxy routes programmatic raw config handling', () => {
     });
   }
 
-  it('does not require raw toggle scope when an edit echoes the unchanged raw mode', async () => {
+  it('does not require raw write scope when an edit echoes the unchanged raw mode', async () => {
     mocks.authType = 'session';
     mocks.scopes = ['proxy:view', 'proxy:edit:host-1'];
     mocks.proxyService.getProxyHost.mockResolvedValue({
@@ -1039,5 +1046,184 @@ describe('proxy routes programmatic raw config handling', () => {
       existing
     );
     expect(mocks.proxyService.updateProxyHost).not.toHaveBeenCalled();
+  });
+
+  describe('destination-scoped grants', () => {
+    const NODE_ID = '11111111-1111-4111-8111-111111111111';
+    const OTHER_NODE_ID = '55555555-5555-4555-8555-555555555555';
+    const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+    const OTHER_FOLDER_ID = '33333333-3333-4333-8333-333333333333';
+    const baseCreate = {
+      nodeId: NODE_ID,
+      domainNames: ['app.example.com'],
+      forwardHost: 'upstream',
+      forwardPort: 8080,
+    };
+
+    function appJson(method: string, path: string, body: unknown) {
+      return createApp().request(path, {
+        method,
+        headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    }
+
+    beforeEach(() => {
+      mocks.authType = 'session';
+    });
+
+    it('creates a route in a granted folder and refuses the root or another folder', async () => {
+      mocks.scopes = [`proxy:create:folder/${FOLDER_ID}`];
+
+      const root = await appJson('POST', '/', baseCreate);
+      const other = await appJson('POST', '/', { ...baseCreate, folderId: OTHER_FOLDER_ID });
+      const allowed = await appJson('POST', '/', { ...baseCreate, folderId: FOLDER_ID });
+
+      expect(root.status).toBe(403);
+      expect(other.status).toBe(403);
+      expect(allowed.status).toBe(201);
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledOnce();
+    });
+
+    it('honours a folder grant for advanced config on a new route in that folder', async () => {
+      mocks.scopes = [`proxy:create:folder/${FOLDER_ID}`, `proxy:advanced:folder/${FOLDER_ID}`];
+      const input = { ...baseCreate, advancedConfig: 'add_header X-Test 1;' };
+
+      const allowed = await appJson('POST', '/', { ...input, folderId: FOLDER_ID });
+      expect(allowed.status).toBe(201);
+
+      mocks.scopes = [
+        `proxy:create:folder/${FOLDER_ID}`,
+        `proxy:create:folder/${OTHER_FOLDER_ID}`,
+        `proxy:advanced:folder/${FOLDER_ID}`,
+      ];
+      const otherFolder = await appJson('POST', '/', { ...input, folderId: OTHER_FOLDER_ID });
+      expect(otherFolder.status).toBe(403);
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledOnce();
+    });
+
+    it('honours node grants for raw config and proxy:unrestricted on a new route', async () => {
+      mocks.scopes = [
+        `proxy:create:node/${NODE_ID}`,
+        `proxy:raw:write:node/${NODE_ID}`,
+        `proxy:unrestricted:node/${NODE_ID}`,
+      ];
+
+      const response = await appJson('POST', '/', { ...baseCreate, type: 'raw', rawConfig: 'server {}' });
+
+      expect(response.status).toBe(201);
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+        expect.objectContaining({ rawConfig: 'server {}' }),
+        'user-1',
+        expect.objectContaining({ bypassAdvancedValidation: true, bypassRawValidation: true })
+      );
+    });
+
+    it('does not pass the validation bypass for a destination outside the proxy:unrestricted grant', async () => {
+      mocks.scopes = ['proxy:create', 'proxy:advanced', `proxy:unrestricted:folder/${OTHER_FOLDER_ID}`];
+
+      const response = await appJson('POST', '/', {
+        ...baseCreate,
+        folderId: FOLDER_ID,
+        advancedConfig: 'add_header X-Test 1;',
+      });
+
+      expect(response.status).toBe(201);
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+        expect.any(Object),
+        'user-1',
+        expect.objectContaining({ bypassAdvancedValidation: false, bypassRawValidation: false })
+      );
+    });
+
+    it('accepts folder and node grant forms when moving a route to another ingress node', async () => {
+      mocks.proxyService.getProxyHost.mockResolvedValue({
+        id: 'host-1',
+        type: 'proxy',
+        nodeId: NODE_ID,
+        folderId: FOLDER_ID,
+      });
+
+      mocks.scopes = ['proxy:edit:host-1'];
+      const denied = await sessionPut({ nodeId: OTHER_NODE_ID });
+      expect(denied.status).toBe(403);
+
+      mocks.scopes = ['proxy:edit:host-1', `proxy:create:folder/${FOLDER_ID}`];
+      const viaFolder = await sessionPut({ nodeId: OTHER_NODE_ID });
+      expect(viaFolder.status).toBe(200);
+
+      mocks.scopes = ['proxy:edit:host-1', `proxy:create:node/${OTHER_NODE_ID}`];
+      const viaNode = await sessionPut({ nodeId: OTHER_NODE_ID });
+      expect(viaNode.status).toBe(200);
+      expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledTimes(2);
+    });
+
+    it('toggles raw mode on an existing route with proxy:raw:write for that route', async () => {
+      mocks.proxyService.getProxyHost.mockResolvedValue({ id: 'host-1', type: 'proxy', rawConfigEnabled: false });
+
+      mocks.scopes = ['proxy:edit:host-1'];
+      expect((await sessionPut({ rawConfigEnabled: true })).status).toBe(403);
+
+      mocks.scopes = ['proxy:edit:host-1', 'proxy:raw:write:host-1'];
+      expect((await sessionPut({ rawConfigEnabled: true })).status).toBe(200);
+    });
+
+    it('validates advanced config for a new route against its destination folder', async () => {
+      mocks.scopes = [`proxy:advanced:folder/${FOLDER_ID}`, `proxy:unrestricted:folder/${FOLDER_ID}`];
+
+      const denied = await appJson('POST', '/validate-config', { snippet: 'add_header X 1;' });
+      const allowed = await appJson('POST', '/validate-config', { snippet: 'add_header X 1;', folderId: FOLDER_ID });
+
+      expect(denied.status).toBe(403);
+      expect(allowed.status).toBe(200);
+      expect(mocks.proxyService.validateAdvancedConfig).toHaveBeenCalledWith(
+        'add_header X 1;',
+        false,
+        true,
+        false,
+        undefined
+      );
+    });
+  });
+
+  describe('TLS resync', () => {
+    function resync(id: string) {
+      return createApp().request(`/${id}/tls/resync`, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer gw_token' },
+      });
+    }
+
+    beforeEach(() => {
+      (mocks.proxyService as Record<string, any>).resyncTlsHost = vi.fn().mockResolvedValue({ queued: 1 });
+      mocks.systemRows = [{ isSystem: false }];
+    });
+
+    it('requires route edit access for that route', async () => {
+      mocks.scopes = ['proxy:edit:host-1'];
+
+      expect((await resync('host-1')).status).toBe(200);
+      expect((await resync('host-2')).status).toBe(403);
+      expect((mocks.proxyService as Record<string, any>).resyncTlsHost).toHaveBeenCalledOnce();
+    });
+
+    it('still accepts admin:update for one release and refuses view-only access', async () => {
+      mocks.scopes = ['admin:update'];
+      expect((await resync('host-1')).status).toBe(200);
+
+      mocks.scopes = ['proxy:view'];
+      expect((await resync('host-1')).status).toBe(403);
+    });
+
+    it('keeps system routes on admin:update', async () => {
+      mocks.systemRows = [{ isSystem: true }];
+
+      mocks.scopes = ['proxy:edit'];
+      expect((await resync('host-1')).status).toBe(403);
+      expect((mocks.proxyService as Record<string, any>).resyncTlsHost).not.toHaveBeenCalled();
+
+      mocks.scopes = ['admin:update'];
+      expect((await resync('host-1')).status).toBe(200);
+    });
   });
 });

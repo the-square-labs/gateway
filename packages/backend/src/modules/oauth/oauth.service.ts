@@ -5,16 +5,17 @@ import { getEnv } from '@/config/env.js';
 import { TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import { oauthAuthorizationCodes, oauthClients } from '@/db/schema/index.js';
-import { boundScopes, hasScope, isScopeSubset } from '@/lib/permissions.js';
+import { boundScopes, hasScope, isScopeSubset, withDelegableCleanupAdditions } from '@/lib/permissions.js';
 import {
+  canonicalizeInboundScopes,
   canonicalizeScopes,
   extractBaseScope,
   isApiTokenScope,
   isMcpTokenScope,
-  isValidBaseScope,
   MANUAL_APPROVAL_SCOPE_SET,
   withoutManualApprovalScopes,
 } from '@/lib/scopes.js';
+import { delegatedScopeIssue } from '@/lib/scopes-schemas.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { AuthSettingsService } from '@/modules/auth/auth.settings.service.js';
@@ -25,7 +26,7 @@ import type { CacheService } from '@/services/cache.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { User } from '@/types.js';
 import type { OAuthAuthorizeQuery, OAuthClientRegistrationInput, OAuthTokenRequest } from './oauth.schemas.js';
-import { hashSecret, OAuthTokenLifecycle, randomSecret } from './oauth-token-lifecycle.js';
+import { hashSecret, markOAuthClientGranted, OAuthTokenLifecycle, randomSecret } from './oauth-token-lifecycle.js';
 
 const CONSENT_PREFIX = 'oauth:consent:';
 const CONSENT_TTL_SECONDS = 600;
@@ -260,12 +261,18 @@ export class OAuthService {
       throw new AppError(400, 'INVALID_SCOPE', 'At least one OAuth scope is required');
     }
 
-    const invalidScopes = delegableRequestedScopes.filter((scope) => !isValidBaseScope(scope));
+    const invalidScopes = delegableRequestedScopes.filter((scope) => delegatedScopeIssue(scope) !== null);
     if (invalidScopes.length > 0) {
       throw new AppError(400, 'INVALID_SCOPE', `Scopes are not recognized: ${invalidScopes.join(', ')}`);
     }
 
-    const requestedScopes = canonicalizeScopes(delegableRequestedScopes);
+    // Clients keep sending retired scope names for a while; rewrite them to the current catalog. The
+    // migration 0200 additions the user can delegate are offered too (the consent screen can untick them).
+    const rewrittenScopes = canonicalizeInboundScopes(delegableRequestedScopes);
+    if (rewrittenScopes.length === 0) {
+      throw new AppError(400, 'INVALID_SCOPE', 'None of the requested OAuth scopes exist any more');
+    }
+    const requestedScopes = withDelegableCleanupAdditions(rewrittenScopes, user.scopes);
     const resource = query.resource ?? (requestedMcpAccess ? this.getMcpResourceUrl() : this.getApiResourceUrl());
     if (!this.isSupportedResource(resource)) {
       throw new AppError(400, 'INVALID_TARGET', 'OAuth authorization is not available for this resource');
@@ -325,9 +332,10 @@ export class OAuthService {
 
   async approveConsent(requestId: string, user: User, selectedScopes?: string[]): Promise<string> {
     const pending = await this.getConsentRequest(requestId, user);
-    const scopes = canonicalizeScopes(
-      selectedScopes === undefined ? withoutManualApprovalScopes(pending.grantableScopes) : selectedScopes
-    );
+    const scopes =
+      selectedScopes === undefined
+        ? canonicalizeScopes(withoutManualApprovalScopes(pending.grantableScopes))
+        : canonicalizeInboundScopes(selectedScopes);
     assertGrantableScopes(scopes, pending.resource === this.getInferenceSetupResourceUrl());
     if (!isScopeSubset(scopes, pending.grantableScopes)) {
       throw new AppError(403, 'SCOPE_NOT_ALLOWED', 'Selected scopes exceed the current user permissions');
@@ -353,6 +361,7 @@ export class OAuthService {
         expiresAt: new Date(Date.now() + AUTH_CODE_TTL_SECONDS * 1000),
       })
       .returning();
+    await markOAuthClientGranted(this.db, pending.clientId);
     await this.auditService.log({
       userId: user.id,
       action: 'oauth.authorize',

@@ -376,7 +376,7 @@ export class HostingProvisioningService {
         'Only a failed installation on a known existing VM can be retried'
       );
     assertHostingScope(user.scopes, 'hosting:resources:recover', original.resourceId);
-    assertHostingScope(user.scopes, 'nodes:config:edit', original.nodeId);
+    assertHostingScope(user.scopes, 'nodes:manage', original.nodeId);
     const previous = acceptedProvisionInput(original.request);
     const request: HostingProvisionInput = {
       ...previous,
@@ -508,7 +508,7 @@ export class HostingProvisioningService {
   private async authorizeBootstrap(row: HostingOperationRow, connector: HostingConnectorRow, actor: User) {
     if (row.action === 'install' && row.result?.retryOf && row.resourceId && row.nodeId) {
       assertHostingScope(actor.scopes, 'hosting:resources:recover', row.resourceId);
-      assertHostingScope(actor.scopes, 'nodes:config:edit', row.nodeId);
+      assertHostingScope(actor.scopes, 'nodes:manage', row.nodeId);
     } else {
       assertHostingScope(actor.scopes, 'hosting:resources:create', connector.id);
       const requestedFolder = typeof row.request?.folderId === 'string' ? row.request.folderId : null;

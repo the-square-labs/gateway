@@ -13,6 +13,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -44,6 +49,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import { refreshDynamicScopes } from "@/lib/live-scopes";
 import {
   isManagedStorageCandidateNode,
   listManagedDatabaseCandidateNodes,
@@ -54,6 +60,7 @@ import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type {
   ManagedObjectStorage,
   ManagedObjectStorageCatalogEntry,
@@ -546,6 +553,11 @@ function StorageContent() {
   const [draft, setDraft] = useState<StorageConnectionDraft>(draftFromConnection(null));
   const [saving, setSaving] = useState(false);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
+  const [folderId, setFolderId] = useState("");
+  const storageFolders = useResourceFolderStore((state) => state.foldersByType.storage);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType.storage);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  const userScopes = useAuthStore((state) => state.user?.scopes);
   const [managedCreateOpen, setManagedCreateOpen] = useState(false);
   const [managedCreateStep, setManagedCreateStep] = useState<1 | 2 | 3>(1);
   const [managedCreateSession, setManagedCreateSession] = useState(0);
@@ -566,13 +578,20 @@ function StorageContent() {
     managedProvisioningError !== null
   );
 
+  useEffect(() => {
+    if (createOpen || managedCreateOpen) void fetchFolders("storage");
+  }, [createOpen, fetchFolders, managedCreateOpen]);
+
   const openConnectionCreate = () => {
-    if (requireLicenseFeature("storage-connections", "Storage connections")) setCreateOpen(true);
+    if (!requireLicenseFeature("storage-connections", "Storage connections")) return;
+    setFolderId("");
+    setCreateOpen(true);
   };
 
   const openManagedCreate = useCallback(() => {
     if (!requireLicenseFeature("managed-storage", "Managed storage")) return;
     setManagedDraft(defaultManagedStorageDraft(managedCatalog));
+    setFolderId("");
     setManagedCreateStep(1);
     setManagedCreateSession((session) => session + 1);
     setManagedProvisioning(null);
@@ -603,6 +622,8 @@ function StorageContent() {
       setRows([]);
       setLoading(true);
     }
+    // Rows are server-filtered; this lets row actions catch up with folder grants too.
+    void refreshDynamicScopes();
     try {
       const result = await api.listObjectStorages({
         limit: 200,
@@ -636,15 +657,9 @@ function StorageContent() {
   const canCreate = hasScopedAccess("storage:create");
   const canManageFolders = hasScope("storage:folders:manage");
 
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          hasScopedAccess("storage:view") &&
-          (hasScope("storage:view") || hasScope(`storage:view:${row.id}`))
-      ),
-    [hasScope, hasScopedAccess, rows]
-  );
+  // The server already filters the list by view grants, including folder grants that cover
+  // resources created after the cached scopes were loaded; row actions keep their own checks.
+  const filtered = rows;
 
   const managedVersions = useMemo(() => catalogStorageVersions(managedCatalog), [managedCatalog]);
   // The catalog can arrive after the wizard opened; keep the draft on a catalog version.
@@ -671,6 +686,22 @@ function StorageContent() {
     () => managedStorageClusterCapacity({ nodeId: managedDraft.nodeId }, deployableStorageNodes),
     [managedDraft.nodeId, deployableStorageNodes]
   );
+  // Same destination rules as the create routes: folder-scoped creators only get their
+  // folders; node-scoped creators any folder on that node (managed storage).
+  const connectionFolderChoices = useMemo(
+    () => getCreateFolderChoices(userScopes ?? [], "storage:create", storageFolders),
+    [storageFolders, userScopes]
+  );
+  const managedFolderChoices = useMemo(
+    () =>
+      getCreateFolderChoices(
+        userScopes ?? [],
+        "storage:create",
+        storageFolders,
+        managedDraft.nodeId || undefined
+      ),
+    [managedDraft.nodeId, storageFolders, userScopes]
+  );
   const canDeployManaged = useMemo(
     () =>
       !!selectedDeployableStorageNode &&
@@ -683,6 +714,7 @@ function StorageContent() {
   const canContinueManagedCreate =
     managedCreateStep === 1
       ? managedDraft.name.trim().length > 0 &&
+        isCreateFolderAllowed(managedFolderChoices, folderId) &&
         deployableStorageNodes.some((node) => node.id === managedDraft.nodeId) &&
         managedVersions.includes(managedDraft.version)
       : canDeployManagedStorage(
@@ -694,7 +726,10 @@ function StorageContent() {
   const save = async () => {
     setSaving(true);
     try {
-      const created = await api.createObjectStorage(buildStoragePayload(draft));
+      const created = await api.createObjectStorage({
+        ...buildStoragePayload(draft),
+        folderId: folderId || null,
+      });
       toast.success("Storage connection created");
       setCreateOpen(false);
       setDraft(draftFromConnection(null));
@@ -715,7 +750,10 @@ function StorageContent() {
     setManagedProvisioning({ phase: "waiting" });
     let created: ManagedObjectStorage | null = null;
     try {
-      created = await api.createManagedObjectStorage(managedDraft);
+      created = await api.createManagedObjectStorage({
+        ...managedDraft,
+        folderId: folderId || null,
+      });
       const provisioned = await waitForManagedObjectStorageReady(created.id);
       if (provisioned.status !== "ready" || !provisioned.objectStorageConnectionId) {
         showManagedProvisioningError({
@@ -992,12 +1030,23 @@ function StorageContent() {
               Connect an existing S3-compatible, FTP, FTPS, or SFTP endpoint.
             </DialogDescription>
           </DialogHeader>
+          <SettingsControlRow title="Folder" description="Organization folder">
+            <CreateFolderSelect
+              choices={connectionFolderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+            />
+          </SettingsControlRow>
           <StorageConnectionForm draft={draft} onChange={setDraft} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void save()} disabled={saving}>
+            <Button
+              onClick={() => void save()}
+              disabled={saving || !isCreateFolderAllowed(connectionFolderChoices, folderId)}
+            >
               {saving ? "Creating..." : "Create"}
             </Button>
           </DialogFooter>
@@ -1027,6 +1076,20 @@ function StorageContent() {
             </DialogDescription>
           </DialogHeader>
           <AnimatedHeight>
+            {managedCreateStep === 1 && (
+              <div className="mb-4 space-y-1.5">
+                <label className="text-sm font-medium" htmlFor="managed-storage-folder">
+                  Folder
+                </label>
+                <CreateFolderSelect
+                  id="managed-storage-folder"
+                  choices={managedFolderChoices}
+                  value={folderId}
+                  onChange={setFolderId}
+                  loading={foldersLoading}
+                />
+              </div>
+            )}
             <ManagedObjectStorageCreateForm
               key={managedCreateSession}
               draft={managedDraft}

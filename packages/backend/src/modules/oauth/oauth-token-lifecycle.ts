@@ -3,7 +3,7 @@ import { and, eq, gt, inArray, isNull, or } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import { oauthAccessTokens, oauthClients, oauthRefreshTokens } from '@/db/schema/index.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
-import { canonicalizeScopes, isValidBaseScope } from '@/lib/scopes.js';
+import { canonicalizeInboundScopes, canonicalizeScopes, isValidInboundScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
@@ -43,6 +43,18 @@ type OAuthTokenLifecycleDeps = {
   assertResourceAllowed: (user: User, resource: string) => void;
   grantScopes: (user: User, resource: string, requestedScopes: string[]) => string[];
 };
+
+/**
+ * Record that a client was granted a code or token. Housekeeping never purges a
+ * registration that was ever granted; a failure here must not fail the grant.
+ */
+export async function markOAuthClientGranted(db: Pick<DrizzleClient, 'update'>, clientId: string): Promise<void> {
+  try {
+    await db.update(oauthClients).set({ lastGrantAt: new Date() }).where(eq(oauthClients.clientId, clientId));
+  } catch {
+    // Best effort: the grant itself already succeeded.
+  }
+}
 
 export function hashSecret(raw: string): string {
   return createHash('sha256').update(raw).digest('hex');
@@ -166,6 +178,7 @@ export class OAuthTokenLifecycle {
         resource: input.resource,
         expiresAt: null,
       });
+      await markOAuthClientGranted(this.deps.db, input.clientId);
 
       return {
         refreshTokenId: null,
@@ -200,6 +213,7 @@ export class OAuthTokenLifecycle {
       resource: input.resource,
       expiresAt: new Date(now + ACCESS_TOKEN_TTL_SECONDS * 1000),
     });
+    await markOAuthClientGranted(this.deps.db, input.clientId);
 
     return {
       refreshTokenId: refresh.id,
@@ -224,9 +238,10 @@ export class OAuthTokenLifecycle {
     if (!user || user.isBlocked) return null;
     const resource = token.resource ?? this.deps.getApiResourceUrl();
     this.deps.assertResourceAllowed(user, resource);
-    const grantedScopes = this.deps.grantScopes(user, resource, token.scopes);
-    if (grantedScopes.length === 0) return null;
-    const scopes = await expandFolderScopes(this.deps.db, grantedScopes);
+    // Expand the grant's own folder and node targets before bounding by the owner's expanded scopes, and
+    // never expand afterwards: a grant can never reach resources its owner cannot.
+    const scopes = this.deps.grantScopes(user, resource, await expandFolderScopes(this.deps.db, token.scopes));
+    if (scopes.length === 0) return null;
 
     this.deps.db
       .update(oauthAccessTokens)
@@ -419,12 +434,13 @@ export class OAuthTokenLifecycle {
       throw new AppError(400, 'INVALID_TARGET', 'OAuth authorization is not available for this resource');
     }
 
-    const canonicalRequestedScopes = canonicalizeScopes(stripNonDelegableMcpScope(requestedScopes));
+    // Retired scope names from older clients are rewritten to the current catalog.
+    const canonicalRequestedScopes = canonicalizeInboundScopes(stripNonDelegableMcpScope(requestedScopes));
     if (canonicalRequestedScopes.length === 0) {
       throw new AppError(400, 'INVALID_SCOPE', 'At least one scope is required');
     }
 
-    const invalidScopes = requestedScopes.filter((scope) => !isValidBaseScope(scope));
+    const invalidScopes = requestedScopes.filter((scope) => !isValidInboundScope(scope));
     if (invalidScopes.length > 0) {
       throw new AppError(400, 'INVALID_SCOPE', `Scopes are not recognized: ${invalidScopes.join(', ')}`);
     }

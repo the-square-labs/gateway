@@ -1,13 +1,14 @@
 import { z } from 'zod';
-import { API_TOKEN_SCOPES, isApiTokenScope, isValidBaseScope } from '@/lib/scopes.js';
+import { API_TOKEN_SCOPES, isApiTokenScope } from '@/lib/scopes.js';
+import { DelegatedScopeArraySchema, everyReplacementScope } from '@/lib/scopes-schemas.js';
 
 export const AVAILABLE_SCOPES = API_TOKEN_SCOPES;
 
-const TokenScopeArraySchema = z
-  .array(z.string().regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(:[a-zA-Z0-9-]+)*$/, 'Invalid scope format'))
-  .min(1, 'At least one scope is required')
-  .refine((scopes) => scopes.every(isValidBaseScope), 'One or more scopes have an unrecognized base scope')
-  .refine((scopes) => scopes.every(isApiTokenScope), 'One or more scopes cannot be granted to API tokens');
+/** Folder, node, and Docker child restrictions are accepted like on the consent screen. */
+const TokenScopeArraySchema = DelegatedScopeArraySchema.min(1, 'At least one scope is required').refine(
+  (scopes) => scopes.every((scope) => everyReplacementScope(scope, isApiTokenScope)),
+  'One or more scopes cannot be granted to API tokens'
+);
 
 export const CreateTokenSchema = z.object({
   name: z.string().trim().min(1).max(255),

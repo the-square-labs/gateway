@@ -8,6 +8,11 @@ import (
 
 // handleBackupCommand is wired by the parent-owned plugin command switch once DockerBackupCommand is generated.
 func (p *DockerPlugin) handleBackupCommand(cmd *pb.DockerBackupCommand, result *pb.CommandResult) {
+	// Storage copy jobs share the backup transport and runner image, not the backup runtime.
+	if isStorageCopyAction(cmd.GetAction()) {
+		p.handleStorageCopyCommand(cmd, result)
+		return
+	}
 	runtime, err := backupRuntimeFor(p)
 	if err != nil {
 		result.Success = false

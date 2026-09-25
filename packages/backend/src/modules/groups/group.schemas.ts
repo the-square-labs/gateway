@@ -1,15 +1,14 @@
 import { z } from 'zod';
-import { BUILTIN_GROUP_NAMES, extractBaseScope, isValidBaseScope } from '@/lib/scopes.js';
+import { BUILTIN_GROUP_NAMES, extractBaseScope } from '@/lib/scopes.js';
+import { DelegatedScopeStringSchema, MAX_DELEGATED_SCOPES } from '@/lib/scopes-schemas.js';
 
-const scopeString = z
-  .string()
-  .regex(/^[a-z][a-z0-9-]*:[a-z][a-z0-9-]*(?::[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)*)*$/, 'Invalid scope format')
-  .refine(isValidBaseScope, 'Unrecognized base scope')
-  .refine((scope) => extractBaseScope(scope) !== 'admin:system', 'admin:system cannot be assigned to custom groups')
-  .refine(
-    (scope) => extractBaseScope(scope) !== 'inference:setup',
-    'inference:setup is an OAuth-only scope and cannot be assigned to custom groups'
-  );
+const scopeString = DelegatedScopeStringSchema.refine(
+  (scope) => extractBaseScope(scope) !== 'admin:system',
+  'admin:system cannot be assigned to custom groups'
+).refine(
+  (scope) => extractBaseScope(scope) !== 'inference:setup',
+  'inference:setup is an OAuth-only scope and cannot be assigned to custom groups'
+);
 
 export const CreateGroupSchema = z.object({
   name: z
@@ -19,7 +18,7 @@ export const CreateGroupSchema = z.object({
     .regex(/^[a-z0-9][a-z0-9-]*$/, 'Name must be lowercase alphanumeric with hyphens')
     .refine((name) => !BUILTIN_GROUP_NAMES.includes(name), 'Cannot use a built-in group name'),
   description: z.string().max(500).optional(),
-  scopes: z.array(scopeString),
+  scopes: z.array(scopeString).max(MAX_DELEGATED_SCOPES),
   parentId: z.string().uuid().nullable().optional(),
   folderId: z.string().uuid().nullable().optional(),
   requireGateway2fa: z.boolean().optional(),
@@ -34,7 +33,7 @@ export const UpdateGroupSchema = z.object({
     .refine((name) => !BUILTIN_GROUP_NAMES.includes(name), 'Cannot use a built-in group name')
     .optional(),
   description: z.string().max(500).nullable().optional(),
-  scopes: z.array(scopeString).optional(),
+  scopes: z.array(scopeString).max(MAX_DELEGATED_SCOPES).optional(),
   parentId: z.string().uuid().nullable().optional(),
   requireGateway2fa: z.boolean().optional(),
 });

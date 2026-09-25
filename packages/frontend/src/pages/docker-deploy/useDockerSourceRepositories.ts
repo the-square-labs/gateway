@@ -14,36 +14,21 @@ export function useDockerSourceRepositories(
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    void Promise.all([
-      api.listGitLabConnectors({ enabled: true }),
-      api.listGitConnectors("github"),
-      api.listGitConnectors("git"),
-    ])
-      .then(([gitlab, github, git]) => {
+    // One picker list authorized by the workload's create/edit scope, so a missing integration scope for one
+    // provider can no longer blank the whole list.
+    void api
+      .listDockerSourceConnectors()
+      .then((connectors) => {
         if (cancelled) return;
-        setConnectorOptions([
-          ...gitlab.map((connector) => ({
+        setConnectorOptions(
+          connectors.map((connector) => ({
             value: connector.id,
             label: connector.name,
-            keywords: `gitlab ${connector.baseUrl}`,
-          })),
-          ...github
-            .filter((connector) => connector.enabled)
-            .map((connector) => ({
-              value: connector.id,
-              label: connector.name,
-              keywords: `github ${connector.baseUrl}`,
-            })),
-          ...git
-            .filter((connector) => connector.enabled)
-            .map((connector) => ({
-              value: connector.id,
-              label: connector.name,
-              keywords: `git ${connector.baseUrl}`,
-            })),
-        ]);
+            keywords: connector.provider,
+          }))
+        );
       })
-      .catch(() => setConnectorOptions([]));
+      .catch(() => !cancelled && setConnectorOptions([]));
     return () => {
       cancelled = true;
     };

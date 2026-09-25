@@ -3,6 +3,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -26,19 +31,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { loggingEnvironmentRoute, loggingSchemaRoute } from "@/lib/resource-routes";
-import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
+import { scopeMatches } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import { useResourceFolderStore } from "@/stores/resource-folders";
 import { useSystemConfigStore } from "@/stores/system-config";
-import type {
-  LoggingEnvironment,
-  LoggingSchema,
-  LoggingSchemaMode,
-  ResourceFolderTreeNode,
-} from "@/types";
+import type { LoggingEnvironment, LoggingSchema, LoggingSchemaMode } from "@/types";
 import { LoggingEnvironmentDetail, LoggingSchemaDetail } from "./logging/LoggingDetails";
 import { LoggingEnvironmentDialog } from "./logging/LoggingEnvironmentDialog";
 import { LoggingEnvironmentsTab, LoggingSchemasTab } from "./logging/LoggingTabs";
@@ -75,22 +75,20 @@ export function Logging({
   const { user, hasAnyScope, hasScopedAccess } = useAuthStore();
   const isEnvironmentDetail = section === "environments" && !!id;
   const isSchemaDetail = section === "schemas" && !!id;
+  // Same rules as the list routes: any view, read or create grant (resource, folder or broad)
+  // opens the list; a granted but empty folder lists as empty instead of failing.
   const canAccessEnvironments =
     hasScopedAccess("logs:environments:view") ||
-    hasAnyScope("logs:environments:view", "logs:read", "logs:manage");
+    hasScopedAccess("logs:read") ||
+    hasScopedAccess("logs:environments:create");
   const userScopes = user?.scopes ?? [];
-  const hasResourceScopedSchemaView =
-    (deriveAllowedResourceIdsByScope(userScopes)["logs:schemas:view"]?.length ?? 0) > 0;
   const canListSchemas =
-    hasAnyScope("logs:schemas:view", "logs:manage") || hasResourceScopedSchemaView;
-  const canAccessSchemas = canListSchemas || hasAnyScope("logs:schemas:create");
-  const canViewSchemaDetails = hasAnyScope("logs:schemas:view", "logs:schemas:view", "logs:manage");
+    hasScopedAccess("logs:schemas:view") || hasScopedAccess("logs:schemas:create");
+  const canAccessSchemas = canListSchemas;
+  const canViewSchemaDetails = hasAnyScope("logs:schemas:view");
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const canViewSelectedSchema =
-    isSchemaDetail &&
-    !!id &&
-    (hasAnyScope("logs:schemas:view", "logs:manage") ||
-      scopeMatches(userScopes, `logs:schemas:view:${id}`));
+    isSchemaDetail && !!id && scopeMatches(userScopes, `logs:schemas:view:${id}`);
   const [environments, setEnvironments] = useState<LoggingEnvironment[]>(() =>
     canAccessEnvironments ? (api.getCached<LoggingEnvironment[]>("logging:environments") ?? []) : []
   );
@@ -151,47 +149,23 @@ export function Logging({
     visibleEnvironments.find((environment) => environment.id === id) ?? null;
   const selectedSchema = visibleSchemas.find((schema) => schema.id === id) ?? null;
 
-  const canCreateEnvironment = hasAnyScope("logs:environments:create", "logs:manage");
-  const canManageEnvironmentFolders = hasAnyScope(
-    "logs:environments:folders:manage",
-    "logs:manage"
-  );
-  const canCreateSchema = hasAnyScope("logs:schemas:create", "logs:manage");
-  const canManageSchemaFolders = hasAnyScope("logs:schemas:folders:manage", "logs:manage");
+  // Creation may be granted on a folder only; the dialog then offers just those folders.
+  const canCreateEnvironment = hasScopedAccess("logs:environments:create");
+  const canManageEnvironmentFolders = hasAnyScope("logs:environments:folders:manage");
+  const canCreateSchema = hasScopedAccess("logs:schemas:create");
+  const canManageSchemaFolders = hasAnyScope("logs:schemas:folders:manage");
   const canEditEnvironment =
-    !!selectedEnvironment &&
-    hasAnyScope(
-      "logs:environments:edit",
-      `logs:environments:edit:${selectedEnvironment.id}`,
-      "logs:manage"
-    );
+    !!selectedEnvironment && hasAnyScope(`logs:environments:edit:${selectedEnvironment.id}`);
   const canDeleteEnvironment =
-    !!selectedEnvironment &&
-    hasAnyScope(
-      "logs:environments:delete",
-      `logs:environments:delete:${selectedEnvironment.id}`,
-      "logs:manage"
-    );
+    !!selectedEnvironment && hasAnyScope(`logs:environments:delete:${selectedEnvironment.id}`);
+  // Token grants may come from an environment folder; they arrive resolved per environment.
   const canCreateToken =
-    !!selectedEnvironment &&
-    hasAnyScope(
-      "logs:tokens:create",
-      `logs:tokens:create:${selectedEnvironment.id}`,
-      "logs:manage"
-    );
+    !!selectedEnvironment && hasAnyScope(`logs:tokens:create:${selectedEnvironment.id}`);
   const canDeleteToken =
-    !!selectedEnvironment &&
-    hasAnyScope(
-      "logs:tokens:delete",
-      `logs:tokens:delete:${selectedEnvironment.id}`,
-      "logs:manage"
-    );
-  const canEditSchema =
-    !!selectedSchema &&
-    hasAnyScope("logs:schemas:edit", `logs:schemas:edit:${selectedSchema.id}`, "logs:manage");
+    !!selectedEnvironment && hasAnyScope(`logs:tokens:delete:${selectedEnvironment.id}`);
+  const canEditSchema = !!selectedSchema && hasAnyScope(`logs:schemas:edit:${selectedSchema.id}`);
   const canDeleteSchema =
-    !!selectedSchema &&
-    hasAnyScope("logs:schemas:delete", `logs:schemas:delete:${selectedSchema.id}`, "logs:manage");
+    !!selectedSchema && hasAnyScope(`logs:schemas:delete:${selectedSchema.id}`);
 
   const load = useCallback(async () => {
     const cachedEnvironments = api.getCached<LoggingEnvironment[]>("logging:environments");
@@ -304,7 +278,7 @@ export function Logging({
       return next;
     });
     toast.success("Logging schema created");
-    if (hasAnyScope("logs:schemas:view", `logs:schemas:view:${created.id}`, "logs:manage")) {
+    if (hasAnyScope(`logs:schemas:view:${created.id}`)) {
       navigate(loggingSchemaRoute(created.slug));
     } else {
       navigate("/logging/schemas");
@@ -502,16 +476,8 @@ export function Logging({
               loading={schemasLoading}
               canCreate={canCreateSchema}
               canManageFolders={canManageSchemaFolders}
-              canEdit={(schema) =>
-                hasAnyScope("logs:schemas:edit", `logs:schemas:edit:${schema.id}`, "logs:manage")
-              }
-              canDelete={(schema) =>
-                hasAnyScope(
-                  "logs:schemas:delete",
-                  `logs:schemas:delete:${schema.id}`,
-                  "logs:manage"
-                )
-              }
+              canEdit={(schema) => hasAnyScope(`logs:schemas:edit:${schema.id}`)}
+              canDelete={(schema) => hasAnyScope(`logs:schemas:delete:${schema.id}`)}
               canOpen={(schema) =>
                 canViewSchemaDetails || hasAnyScope(`logs:schemas:view:${schema.id}`)
               }
@@ -559,7 +525,11 @@ function LoggingSchemaDialog({
   const folders = useResourceFolderStore((state) => state.foldersByType["logging-schema"]);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType["logging-schema"]);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderOptions = useMemo(() => flattenFolders(folders), [folders]);
+  const scopes = useAuthStore((state) => state.user?.scopes);
+  const folderChoices = useMemo(
+    () => getCreateFolderChoices(scopes ?? [], "logs:schemas:create", folders),
+    [folders, scopes]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -608,23 +578,12 @@ function LoggingSchemaDialog({
           </label>
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Folder</span>
-            <Select
-              value={folderId || "__none__"}
-              onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-              disabled={foldersLoading}
-            >
-              <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">No folder</SelectItem>
-                {folderOptions.map((folder) => (
-                  <SelectItem key={folder.id} value={folder.id}>
-                    {"  ".repeat(folder.depth) + folder.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CreateFolderSelect
+              choices={folderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+            />
           </label>
           <label className="block space-y-1.5">
             <span className="text-sm font-medium">Description</span>
@@ -655,15 +614,14 @@ function LoggingSchemaDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button disabled={!name.trim() || saving} onClick={() => void save()}>
+          <Button
+            disabled={!name.trim() || saving || !isCreateFolderAllowed(folderChoices, folderId)}
+            onClick={() => void save()}
+          >
             Save
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }

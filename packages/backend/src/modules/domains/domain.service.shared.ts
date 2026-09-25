@@ -4,7 +4,14 @@ import type { CloudflareClient, CloudflareDnsRecordInput } from '@/modules/integ
 export const logger = createChildLogger('DomainsService');
 
 export interface DomainUsage {
-  proxyHosts: Array<{ id: string; slug: string; domainNames: string[]; enabled: boolean; nodeId: string | null }>;
+  proxyHosts: Array<{
+    id: string;
+    slug: string;
+    domainNames: string[];
+    enabled: boolean;
+    nodeId: string | null;
+    folderId?: string | null;
+  }>;
   sslCertificates: Array<{ id: string; domainNames: string[]; status: string; notAfter: Date | null }>;
 }
 

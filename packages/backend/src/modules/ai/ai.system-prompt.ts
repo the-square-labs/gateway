@@ -5,7 +5,7 @@ import type { CAService } from '@/modules/pki/ca.service.js';
 import type { User } from '@/types.js';
 import { DOC_TOPIC_SCOPES, INTERNAL_DOCS } from './ai.docs.js';
 import { getPlanningSystemInstructions } from './ai.service.runtime-helpers.js';
-import { caTypeViewScope, dashboardStatsOptionsForScopes } from './ai.service-helpers.js';
+import { caViewScope, dashboardStatsOptionsForScopes } from './ai.service-helpers.js';
 import type { AISettingsService } from './ai.settings.service.js';
 import { AISkillService } from './ai.skills.js';
 import type { PageContext } from './ai.types.js';
@@ -235,7 +235,7 @@ ${skillCatalog || '- none'}
   try {
     const stats = await context.monitoringService.getDashboardStats(dashboardStatsOptionsForScopes(user.scopes));
     const inv: string[] = [];
-    if (hasScope(user.scopes, 'pki:ca:view:root') || hasScope(user.scopes, 'pki:ca:view:intermediate')) {
+    if (hasScope(user.scopes, 'pki:ca:view')) {
       inv.push(`- Certificate Authorities: ${stats.cas.total} total (${stats.cas.active} active)`);
     }
     if (hasScopeBase(user.scopes, 'pki:cert:view')) {
@@ -264,11 +264,11 @@ ${skillCatalog || '- none'}
   }
 
   try {
-    if (!hasScope(user.scopes, 'pki:ca:view:root') && !hasScope(user.scopes, 'pki:ca:view:intermediate')) {
+    if (!hasScopeBase(user.scopes, 'pki:ca:view')) {
       throw new Error('skip');
     }
-    const cas = (await context.caService.getCATree()).filter((ca: { type: string }) =>
-      hasScope(user.scopes, caTypeViewScope(ca.type))
+    const cas = (await context.caService.getCATree()).filter((ca: { id: string }) =>
+      hasScope(user.scopes, caViewScope(ca.id))
     );
     if (cas.length > 0) {
       const caList = cas

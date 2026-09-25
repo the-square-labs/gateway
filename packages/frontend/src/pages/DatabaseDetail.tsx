@@ -4,6 +4,7 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { ManagedCertificateStatus } from "@/components/common/ManagedCertificateStatus";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
@@ -143,15 +144,9 @@ function DatabaseDetailContent({
         if (!current) return;
         setBackupDestinations(
           storage.data
-            // Same storage checks as the backup API: write objects and let the
-            // runner use the saved credentials (storage:credentials:reveal implies it).
-            .filter(
-              (item) =>
-                (hasScope("storage:objects:write") ||
-                  hasScope(`storage:objects:write:${item.id}`)) &&
-                (hasScope("storage:credentials:use") ||
-                  hasScope(`storage:credentials:use:${item.id}`))
-            )
+            // Same storage check as the backup API: the runner uses the saved credentials
+            // (storage:credentials:reveal implies it); no object browser access is needed.
+            .filter((item) => hasScope(`storage:credentials:use:${item.id}`))
             .map((item) => ({ id: item.id, label: item.name, provider: item.provider }))
         );
         setBackupExecutors(
@@ -508,18 +503,31 @@ function DatabaseDetailContent({
     }
   };
 
+  const managedDatabaseId = database?.managed?.id;
+  const loadManagedCertificate = useCallback(
+    () =>
+      managedDatabaseId
+        ? api.getManagedDatabaseCertificate(managedDatabaseId)
+        : Promise.reject(new Error("Not a managed database")),
+    [managedDatabaseId]
+  );
+
   const rotateCertificate = async () => {
     if (!database?.managed || !canManageSettings || database.managed.publishedPort == null) return;
     const ok = await confirm({
       title: "Rotate TLS Certificate",
       description:
-        "Gateway will issue a replacement certificate for this database node's current IP addresses and briefly recreate the database. Direct clients must continue trusting the same Gateway Database CA.",
+        "Gateway will issue a replacement certificate for this database node's current IP addresses. The running database reloads it without a restart (older node daemons recreate the database). Direct clients must continue trusting the same Gateway Database CA.",
       confirmLabel: "Rotate certificate",
     });
     if (!ok) return;
     try {
-      await api.rotateManagedDatabaseCertificate(database.managed.id);
-      toast.success("TLS certificate rotated — database recreated");
+      const result = await api.rotateManagedDatabaseCertificate(database.managed.id);
+      toast.success(
+        result.certificateRenewal && !result.certificateRenewal.restarted
+          ? "TLS certificate rotated without a restart"
+          : "TLS certificate rotated"
+      );
       await load();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to rotate TLS certificate");
@@ -650,6 +658,13 @@ function DatabaseDetailContent({
                 void load();
               }}
             />
+
+            {database.managed?.tlsEnabled && (
+              <ManagedCertificateStatus
+                load={loadManagedCertificate}
+                refreshKey={`${database.updatedAt}:${database.managed.status}`}
+              />
+            )}
 
             {!isManagedPaused && (
               <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />

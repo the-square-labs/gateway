@@ -119,7 +119,7 @@ export function DockerComposeProjects({
   >({});
   const createFolderRef = useRef<(() => void) | null>(null);
   const visibleNodeId = fixedNodeId ?? selectedNodeId;
-  const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
   const canCreate = hasScopedAccess("docker:compose:create");
 
   const openCreate = useCallback(() => {

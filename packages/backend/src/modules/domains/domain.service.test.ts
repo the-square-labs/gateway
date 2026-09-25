@@ -4,6 +4,12 @@ vi.mock('@/lib/created-resource-permissions.js', () => ({
   grantCreatedResourcePermissions: vi.fn().mockResolvedValue(undefined),
 }));
 
+// The scope helpers load folder-scopes, which pulls in the full schema; these tests stub the
+// schema tables, so only the folder-grant parser is provided here.
+vi.mock('@/lib/folder-scopes.js', () => ({
+  isFolderScopedScope: (scope: string) => /:folder\/[^/]+$/.test(scope),
+}));
+
 import type { AppError } from '@/middleware/error-handler.js';
 import { probeDnsRecords } from './dns.utils.js';
 import { DomainsService, selectBackfillNginxNode } from './domain.service.js';
@@ -17,6 +23,7 @@ vi.mock('@/db/schema/proxy-hosts.js', () => ({
     nodeId: 'proxyHosts.nodeId',
     upstreamKind: 'proxyHosts.upstreamKind',
     isSystem: 'proxyHosts.isSystem',
+    folderId: 'proxyHosts.folderId',
   },
 }));
 
@@ -1458,6 +1465,30 @@ describe('DomainsService Cloudflare update_dns authorization', () => {
       service.resolveCloudflareMigration('domain-1', input, 'user-1', ['domains:edit'])
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Missing required scope: proxy:create:node-2' });
     expect(resolveCloudflareDnsContext).not.toHaveBeenCalled();
+  });
+
+  it('accepts folder and node grant forms like moving a route to another node', async () => {
+    const { service, resolveCloudflareDnsContext } = updateDnsHarness();
+    resolveCloudflareDnsContext.mockRejectedValue(new Error('past authorization'));
+    vi.spyOn(service, 'getUsage').mockResolvedValue({
+      proxyHosts: [{ id: 'host-1', folderId: 'folder-1' }],
+      sslCertificates: [],
+    } as never);
+
+    await expect(
+      service.resolveCloudflareMigration('domain-1', input, 'user-1', [
+        'domains:edit',
+        'proxy:create:folder/folder-1',
+        'proxy:edit:host-1',
+      ])
+    ).rejects.toThrow('past authorization');
+    await expect(
+      service.resolveCloudflareMigration('domain-1', input, 'user-1', ['proxy:create:node/node-2', 'proxy:edit'])
+    ).rejects.toThrow('past authorization');
+    await expect(
+      service.resolveCloudflareMigration('domain-1', input, 'user-1', ['proxy:create:folder/folder-2', 'proxy:edit'])
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Missing required scope: proxy:create:node-2' });
+    expect(resolveCloudflareDnsContext).toHaveBeenCalledTimes(2);
   });
 
   it('requires proxy:edit on every covered proxy host', async () => {

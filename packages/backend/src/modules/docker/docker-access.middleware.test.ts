@@ -7,6 +7,7 @@ import type { AppEnv } from '@/types.js';
 import {
   assertDockerNodeScope,
   assertDockerResourceScope,
+  dockerNodeListAccess,
   requireDockerNetworkScope,
   resolveDockerContainerScopeResourceId,
 } from './docker-access.middleware.js';
@@ -38,6 +39,37 @@ describe('Docker permission diagnostics', () => {
     expect(() =>
       assertDockerNodeScope(['docker:containers:view:node-1/resource-1'], 'docker:containers:view', 'node-1')
     ).not.toThrow();
+  });
+});
+
+describe('per-node Docker list access', () => {
+  it('lists the node for node and child grants', () => {
+    expect(dockerNodeListAccess(['docker:containers:view:node-1'], 'docker:containers:view', 'node-1')).toBe('node');
+    expect(dockerNodeListAccess(['docker:containers:view:node-1/resource-1'], 'docker:containers:view', 'node-1')).toBe(
+      'node'
+    );
+  });
+
+  it('answers an empty list for an empty granted folder, a create-only grant or grants on other nodes', () => {
+    for (const scopes of [
+      ['docker:containers:view:folder/folder-1'],
+      ['docker:containers:create:folder/folder-1'],
+      ['docker:containers:view:node-2/resource-1'],
+    ]) {
+      expect(dockerNodeListAccess(scopes, 'docker:containers:view', 'node-1', 'docker:containers:create')).toBe(
+        'empty'
+      );
+    }
+  });
+
+  it('refuses callers without the view or creation scope anywhere', () => {
+    expect(() =>
+      dockerNodeListAccess(['docker:images:view'], 'docker:containers:view', 'node-1', 'docker:containers:create')
+    ).toThrow('Missing required scope: docker:containers:view:node-1');
+    // Without a creation scope to fall back on, a create-only grant does not open the list.
+    expect(() =>
+      dockerNodeListAccess(['docker:containers:create:folder/folder-1'], 'docker:containers:view', 'node-1')
+    ).toThrow('Missing required scope: docker:containers:view:node-1');
   });
 });
 

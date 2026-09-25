@@ -27,7 +27,7 @@ describe.skipIf(!url)('firewall PostgreSQL fences', () => {
     hostId = randomUUID();
   const user = {
     id: actorId,
-    scopes: ['nodes:details', 'nodes:config:edit', 'integrations:hosting:view', 'integrations:hosting:manage'],
+    scopes: ['nodes:details', 'nodes:manage', 'integrations:hosting:view', 'integrations:hosting:manage'],
   } as User;
   const snapshot = {
     remoteId: '123',

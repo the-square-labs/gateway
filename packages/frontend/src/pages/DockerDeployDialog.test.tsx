@@ -35,8 +35,11 @@ describe("DockerDeployDialog runtime section", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.spyOn(api, "listDockerImages").mockResolvedValue([]);
-    vi.spyOn(api, "listGitLabConnectors").mockResolvedValue([]);
-    vi.spyOn(api, "listGitConnectors").mockResolvedValue([]);
+    vi.spyOn(api, "listDockerSourceConnectors").mockResolvedValue([]);
+    vi.spyOn(api, "listGitLabConnectors").mockRejectedValue(
+      new Error("integration scope required")
+    );
+    vi.spyOn(api, "listGitConnectors").mockRejectedValue(new Error("integration scope required"));
     vi.spyOn(api, "getDockerBuildAdmission").mockResolvedValue({
       ready: true,
       code: null,
@@ -261,19 +264,10 @@ describe("DockerDeployDialog runtime section", () => {
         license: { plan: "community", entitlements: { features: [] } },
       } as never,
     });
-    vi.mocked(api.listGitConnectors).mockImplementation(async (provider) =>
-      provider === "github"
-        ? ([
-            {
-              id: "github-1",
-              provider: "github",
-              name: "GitHub production",
-              baseUrl: "https://github.com",
-              enabled: true,
-            },
-          ] as never)
-        : []
-    );
+    // Only the workload create scope is held: the picker must not depend on the integration list endpoints.
+    vi.mocked(api.listDockerSourceConnectors).mockResolvedValue([
+      { id: "github-1", provider: "github", name: "GitHub production" },
+    ]);
     vi.spyOn(api, "listDockerBuildRepositories").mockResolvedValue([
       {
         connectorId: "github-1",

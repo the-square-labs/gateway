@@ -154,7 +154,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_route',
     description:
-      'Route inspection, maintenance access, and config validation. Operations: get_config (full Route settings; Page targets and advanced config follow the caller scopes, stored raw config needs proxy:raw:read), get_by_slug, health_history, secure_link_status, access_logs (newest nginx access and error log lines, up to tail 200), maintenance_access_code (5-minute code that lets a browser view the Route during maintenance; needs proxy:maintenance:bypass), validate_config (check an advanced snippet or, with mode raw, a raw nginx config; needs proxy:advanced or proxy:raw:write, scoped to routeId when given). Change Routes with update_route, set_route_maintenance, update_route_raw_config, and toggle_route_raw_mode.',
+      'Route inspection, maintenance access, and config validation. Operations: get_config (full Route settings; Page targets and advanced config follow the caller scopes, stored raw config needs proxy:raw:read), get_by_slug, health_history, secure_link_status, access_logs (newest nginx access and error log lines, up to tail 200), maintenance_access_code (5-minute code that lets a browser view the Route during maintenance; needs proxy:maintenance:bypass), validate_config (check an advanced snippet or, with mode raw, a raw nginx config; needs proxy:advanced or proxy:raw:write on routeId, or on the folderId/nodeId destination of a Route about to be created; proxy:unrestricted skips the directive restrictions). Change Routes with update_route, set_route_maintenance, update_route_raw_config, and toggle_route_raw_mode.',
     parameters: {
       type: 'object',
       properties: {
@@ -172,6 +172,15 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         },
         tail: { type: 'number', description: 'Number of log lines for access_logs (default 100, max 200)' },
         routeId: { type: 'string', description: 'Route UUID; optional for validate_config' },
+        folderId: {
+          type: ['string', 'null'],
+          description: 'validate_config without routeId: destination folder UUID of the Route about to be created',
+        },
+        nodeId: {
+          type: 'string',
+          description:
+            'validate_config without routeId: destination ingress node UUID of the Route about to be created',
+        },
         slug: { type: 'string', description: 'Route slug for get_by_slug' },
         snippet: { type: 'string', description: 'Advanced snippet or raw nginx config for validate_config' },
         mode: { type: 'string', enum: ['advanced', 'raw'], description: 'validate_config mode (default: advanced)' },
@@ -228,11 +237,11 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_additional_secure_link',
     description:
-      'List, create, retry, or delete Additional Secure Links from a Route to Docker workloads or managed S3 storage. For managed_storage pass managedStorageId; the private relay needs no shared network or published S3 port, and S3 authentication remains required. Route-owned bindings are managed only through manage_additional_route.',
+      'List, create, retry, retarget, or delete Additional Secure Links from a Route to Docker workloads or managed S3 storage. For managed_storage pass managedStorageId; the private relay needs no shared network or published S3 port, and S3 authentication remains required. retarget (bindingId plus the new target fields: upstreamKind and managedStorageId, or the Docker fields) points an existing link at a new target in place, keeping its id and name so the Route config keeps working; moving a managed storage link to another managed storage cluster keeps it active and restores the old cluster if the new one does not answer. Route-owned bindings are managed only through manage_additional_route.',
     parameters: {
       type: 'object',
       properties: {
-        operation: { type: 'string', enum: ['list', 'create', 'retry', 'delete'] },
+        operation: { type: 'string', enum: ['list', 'create', 'retry', 'retarget', 'delete'] },
         routeId: { type: 'string', description: 'Parent Route UUID' },
         bindingId: { type: 'string' },
         name: { type: 'string' },
@@ -257,7 +266,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_managed_database',
     description:
-      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. reveal_credentials and rotate_credentials return the direct-access credentials of a published instance (databases:credentials:reveal; rotation also needs databases:edit); reveal_binding_credentials returns the credentials of one binding and also needs the target workload binding scopes. logs returns recent container log lines; get_binding_runtime reports the link runtime of one binding. Credential operations are refused while impersonating.',
+      'Provision and manage Gateway-managed Postgres, Redis, or ClickHouse instances and their workload bindings. Read the catalog before create, poll get until ready, and create a binding only after the database is ready. reveal_credentials and rotate_credentials return the direct-access credentials of a published instance (databases:credentials:reveal; rotation also needs databases:edit); reveal_binding_credentials returns the credentials of one binding and also needs the target workload binding scopes. logs returns recent container log lines; get_binding_runtime reports the link runtime of one binding. Credential operations are refused while impersonating. Gateway renews the TLS certificate automatically before it expires; certificate_status (databases:view) shows its expiry, renewal state and last renewal error, and rotate_certificate (databases:edit) renews it now with an in-place engine reload (allowRestart permits a restart when the engine does not load it).',
     parameters: {
       type: 'object',
       properties: {
@@ -274,6 +283,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'pause',
             'unpause',
             'rotate_certificate',
+            'certificate_status',
             'delete',
             'list_bindings',
             'create_binding',
@@ -307,6 +317,10 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         publishedPort: { type: 'number' },
         publishedNativePort: { type: 'number' },
         tlsEnabled: { type: 'boolean' },
+        allowRestart: {
+          type: 'boolean',
+          description: 'rotate_certificate only: allow a restart when the engine does not reload the certificate.',
+        },
         clickhouseConfigXml: { type: 'string' },
         redisConfig: { type: 'object' },
         databaseName: { type: 'string' },

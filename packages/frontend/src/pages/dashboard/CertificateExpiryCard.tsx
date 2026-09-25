@@ -12,8 +12,10 @@ export interface ExpiringItem {
 }
 
 interface CertificateExpiryCardProps {
+  /** Already scoped by the server to certificates the caller can see. */
   expiringItems: ExpiringItem[];
-  hasScope: (scope: string) => boolean;
+  /** Any grant of the scope base (broad, resource, folder or node). */
+  hasScopedAccess: (scopeBase: string) => boolean;
 }
 
 function filterByScope(items: ExpiringItem[], hasScope: (scope: string) => boolean) {
@@ -22,12 +24,15 @@ function filterByScope(items: ExpiringItem[], hasScope: (scope: string) => boole
       ? hasScope("ssl:cert:view")
       : i.type === "pki"
         ? hasScope("pki:cert:view")
-        : hasScope("pki:ca:view:root") || hasScope("pki:ca:view:intermediate")
+        : hasScope("pki:ca:view")
   );
 }
 
-export function CertificateExpiryCard({ expiringItems, hasScope }: CertificateExpiryCardProps) {
-  const visible = filterByScope(expiringItems, hasScope);
+export function CertificateExpiryCard({
+  expiringItems,
+  hasScopedAccess,
+}: CertificateExpiryCardProps) {
+  const visible = filterByScope(expiringItems, hasScopedAccess);
   if (visible.length === 0) return null;
 
   return (

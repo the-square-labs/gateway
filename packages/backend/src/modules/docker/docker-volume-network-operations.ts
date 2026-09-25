@@ -10,7 +10,7 @@ import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import { isGatewayInternalContainer } from './docker-internal-containers.js';
-import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
+import { isGatewayManagedDockerNetwork, isReservedGatewayNetworkName } from './docker-internal-networks.js';
 import {
   assertDockerFileReadWithinLimit,
   DOCKER_FILE_READ_REQUEST_BYTES,
@@ -754,6 +754,13 @@ export async function createNetwork(
   config: { name: string; driver: string; subnet?: string; gateway?: string; folderId?: string | null },
   userId: string
 ) {
+  if (isReservedGatewayNetworkName(config.name.trim())) {
+    throw new AppError(
+      409,
+      'RESERVED_NETWORK_NAME',
+      'Network names "gateway-secure-links", "gateway-db-*" and "gateway-storage-*" are reserved for Gateway'
+    );
+  }
   const result = await context.nodeDispatch.sendDockerNetworkCommand(nodeId, 'create', {
     networkId: config.name,
     driver: config.driver,

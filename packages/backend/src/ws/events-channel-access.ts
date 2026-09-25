@@ -6,6 +6,7 @@ import { hasAnyDockerNodeRouteAccess } from '@/modules/docker/docker-route-resol
 import { canViewHostingFinance } from '@/modules/hosting/hosting-permissions.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
 import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
+import { hasLoggingHealthAccess } from '@/modules/logging/logging-permissions.js';
 
 export const DATABASE_CHANNEL_SCOPE_BASES = [
   'databases:view',
@@ -29,7 +30,7 @@ export function requiredScopeFor(channel: string): string | null {
     return 'hosting:snapshots:view';
   if (channel === 'domain.changed') return 'domains:view';
   if (channel === 'logging.logs.ingested') return 'logs:read';
-  if (channel === 'logging.health.changed') return 'housekeeping:view';
+  if (channel === 'logging.health.changed') return 'logs:environments:view';
   if (channel === 'logging.environment.changed') return 'logs:environments:view';
   if (channel === 'logging.schema.changed') return 'logs:schemas:view';
   if (channel === 'logging.token.changed') return 'logs:tokens:view';
@@ -67,7 +68,7 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel.startsWith('proxy.host')) return 'proxy:view';
   if (channel.startsWith('ssl.cert')) return 'ssl:cert:view';
   if (channel === 'cert.changed') return 'pki:cert:view';
-  if (channel === 'ca.changed') return 'pki:ca:view:root';
+  if (channel === 'ca.changed') return 'pki:ca:view';
   if (channel === 'access-list.changed') return 'acl:view';
   if (channel === 'node.slug.changed') return 'nodes:details';
   if (channel === 'node.changed' || channel === 'node.folder.changed') return 'nodes:details';
@@ -75,12 +76,12 @@ export function requiredScopeFor(channel: string): string | null {
   if (channel === 'audit.changed') return 'admin:audit';
   if (channel === 'siem.destination.changed' || channel === 'siem.delivery.changed') return 'audit:siem:view';
   if (channel === 'group.changed') return 'admin:groups';
-  if (channel === 'notification.alert-rule.changed') return 'notifications:view';
-  if (channel === 'notification.webhook.changed') return 'notifications:view';
+  if (channel === 'notification.alert-rule.changed') return 'notifications:alerts:view';
+  if (channel === 'notification.webhook.changed') return 'notifications:webhooks:view';
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) return 'feat:ai:use';
   if (channel === 'integration.connector.changed') return 'integrations:gitlab:view';
   if (channel === INFERENCE_USAGE_CHANGED_CHANNEL) return 'feat:ai:use';
-  if (channel.startsWith('alert.')) return 'notifications:view';
+  if (channel.startsWith('alert.')) return 'notifications:alerts:view';
   // permissions.changed.<userId> is filtered separately (own user only)
   return null;
 }
@@ -133,7 +134,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScopeBase(scopes, 'docker:volumes:view') ||
       hasScopeBase(scopes, 'docker:networks:view') ||
       hasScopeBase(scopes, 'docker:compose:view') ||
-      hasScope(scopes, 'docker:containers:folders:manage')
+      hasScope(scopes, 'docker:folders:manage')
     );
   }
   if (channel === 'docker.snapshot.changed') {
@@ -183,7 +184,11 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScope(scopes, 'pages:settings:view');
   }
   if (channel === 'pages.folder.changed') {
-    return hasScopeBase(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
+    return (
+      hasScopeBase(scopes, 'pages:view') ||
+      hasScopeBase(scopes, 'pages:create') ||
+      hasScope(scopes, 'pages:folders:manage')
+    );
   }
   if (channel.startsWith('pages.')) {
     return hasScopeBase(scopes, 'pages:view');
@@ -213,18 +218,13 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'nodes:details') || hasAnyDockerNodeRouteAccess(scopes);
   }
   if (channel === 'notification.alert-rule.changed') {
-    return (
-      hasScope(scopes, 'notifications:alerts:view') ||
-      hasScope(scopes, 'notifications:view') ||
-      hasScope(scopes, 'notifications:manage')
-    );
+    return hasScope(scopes, 'notifications:alerts:view') || hasScope(scopes, 'notifications:alerts:manage');
   }
   if (channel === 'notification.webhook.changed') {
-    return (
-      hasScope(scopes, 'notifications:webhooks:view') ||
-      hasScope(scopes, 'notifications:view') ||
-      hasScope(scopes, 'notifications:manage')
-    );
+    return hasScope(scopes, 'notifications:webhooks:view') || hasScope(scopes, 'notifications:webhooks:manage');
+  }
+  if (channel.startsWith('alert.')) {
+    return hasScope(scopes, 'notifications:alerts:view') || hasScope(scopes, 'notifications:alerts:manage');
   }
   if (channel === INFERENCE_SETUP_EVENT_CHANNEL) {
     return (
@@ -243,6 +243,9 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
       hasScope(scopes, 'inference:usage:view') ||
       hasScope(scopes, 'inference:limits:manage')
     );
+  }
+  if (channel === 'logging.health.changed') {
+    return hasLoggingHealthAccess(scopes);
   }
   if (channel === 'logging.logs.ingested') {
     return hasScopeBase(scopes, 'logs:read');
@@ -263,7 +266,7 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
     return hasScopeBase(scopes, 'admin:groups') || hasScope(scopes, 'admin:groups:folders:manage');
   }
   if (channel === 'ca.changed') {
-    return hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+    return hasScopeBase(scopes, 'pki:ca:view');
   }
 
   return hasScopeBase(scopes, required);

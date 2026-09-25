@@ -37,6 +37,8 @@ interface ConnState {
   sessionToken?: string;
   deliveryQueue?: Promise<void>;
   queuedDeliveries?: number;
+  /** Until when the cached effective scopes are trusted for folder/node grant users (epoch ms). */
+  scopesFreshUntil?: number;
   user: User | null;
   scopes: string[];
   authenticated: boolean;
@@ -173,7 +175,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
       hasScope(scopes, 'docker:volumes:view') ||
       hasScope(scopes, 'docker:networks:view') ||
       hasScope(scopes, 'docker:compose:view') ||
-      hasScope(scopes, 'docker:containers:folders:manage')
+      hasScope(scopes, 'docker:folders:manage')
     ) {
       return true;
     }
@@ -295,7 +297,13 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'pages:settings:view');
   }
   if (channel === 'pages.folder.changed') {
-    return hasScope(scopes, 'pages:view') || hasScope(scopes, 'pages:folders:manage');
+    // Folder layout events carry only an action and a folder id, never project data, and the client
+    // refetches the folder tree (filtered server-side). Folder-only and create-only users need them too.
+    return (
+      hasScope(scopes, 'pages:folders:manage') ||
+      hasScopeBase(scopes, 'pages:view') ||
+      hasScopeBase(scopes, 'pages:create')
+    );
   }
   if (channel.startsWith('pages.')) {
     const event = payload as { scopeResourceId?: string; projectId?: string } | undefined;
@@ -349,10 +357,8 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
     return hasScope(scopes, 'pki:cert:view') || !!(certId && hasScope(scopes, `pki:cert:view:${certId}`));
   }
   if (channel === 'ca.changed') {
-    const caType = (payload as { type?: string } | undefined)?.type;
-    if (caType === 'root') return hasScope(scopes, 'pki:ca:view:root');
-    if (caType === 'intermediate') return hasScope(scopes, 'pki:ca:view:intermediate');
-    return hasScope(scopes, 'pki:ca:view:root') || hasScope(scopes, 'pki:ca:view:intermediate');
+    const caId = (payload as { id?: string } | undefined)?.id;
+    return hasScope(scopes, 'pki:ca:view') || !!(caId && hasScope(scopes, `pki:ca:view:${caId}`));
   }
   if (channel === 'access-list.changed') {
     const aclId = (payload as { id?: string } | undefined)?.id;
@@ -468,6 +474,7 @@ function subscribePerUser(ws: WSContext, state: ConnState) {
       if (fresh) {
         state.user = fresh.user;
         state.scopes = fresh.scopes;
+        markScopesResolved(state);
       }
     } catch {
       closeUnauthenticated(ws, state);
@@ -485,8 +492,27 @@ function subscribePerUser(ws: WSContext, state: ConnState) {
   });
 }
 
+/**
+ * How long a connection with folder, node, provider, or account grants trusts its expanded scopes
+ * before re-resolving them. Re-resolving costs 2 + E queries (E per expanded grant family), so doing
+ * it for every event let a busy Gateway saturate the delivery queue.
+ */
+const DYNAMIC_SCOPES_TTL_MS = 5_000;
+
+/** Events that can change which resources a folder or node grant covers: creations, moves, and folder edits. */
+function changesGrantMembership(channel: string, payload: unknown): boolean {
+  if (channel.includes('folder')) return true;
+  const action = (payload as { action?: unknown } | null | undefined)?.action;
+  return typeof action === 'string' && /creat|move|restor|import|adopt|migrat|folder/i.test(action);
+}
+
+function markScopesResolved(state: ConnState) {
+  state.scopesFreshUntil = Date.now() + DYNAMIC_SCOPES_TTL_MS;
+}
+
 /** Re-evaluate dynamic membership before delivery: moves and new resources do not
- * change the stored grant, but do change the concrete IDs it authorizes. */
+ * change the stored grant, but do change the concrete IDs it authorizes. Expanded scopes are
+ * cached for a few seconds and refreshed early whenever an event can change membership. */
 function deliverEvent(ws: WSContext, state: ConnState, channel: string, payload: unknown) {
   const deliver = () => {
     if (
@@ -506,6 +532,12 @@ function deliverEvent(ws: WSContext, state: ConnState, channel: string, payload:
     deliver();
     return;
   }
+  if (changesGrantMembership(channel, payload)) state.scopesFreshUntil = 0;
+  // Cached scopes are still fresh and nothing is waiting ahead of this event: deliver in order now.
+  if (!state.queuedDeliveries && Date.now() < (state.scopesFreshUntil ?? 0)) {
+    deliver();
+    return;
+  }
   if ((state.queuedDeliveries ?? 0) >= MAX_PENDING_MESSAGES) {
     closePolicyViolation(ws, state, 'event authorization queue overflow');
     return;
@@ -514,15 +546,19 @@ function deliverEvent(ws: WSContext, state: ConnState, channel: string, payload:
   state.deliveryQueue = (state.deliveryQueue ?? Promise.resolve())
     .then(async () => {
       if (!state.authenticated || !state.subs.has(channel)) return;
-      const fresh = state.sessionToken ? await authenticate(state.sessionToken) : null;
-      if (!fresh) {
-        closeUnauthenticated(ws, state);
-        return;
+      // Queued events share one refresh: only the first re-resolves until the cache expires again.
+      if (Date.now() >= (state.scopesFreshUntil ?? 0)) {
+        const fresh = state.sessionToken ? await authenticate(state.sessionToken) : null;
+        if (!fresh) {
+          closeUnauthenticated(ws, state);
+          return;
+        }
+        const changed = JSON.stringify(state.scopes) !== JSON.stringify(fresh.scopes);
+        state.user = fresh.user;
+        state.scopes = fresh.scopes;
+        markScopesResolved(state);
+        if (changed) send(ws, { type: 'permissions', scopes: state.scopes });
       }
-      const changed = JSON.stringify(state.scopes) !== JSON.stringify(fresh.scopes);
-      state.user = fresh.user;
-      state.scopes = fresh.scopes;
-      if (changed) send(ws, { type: 'permissions', scopes: state.scopes });
       deliver();
     })
     .catch(() => closeUnauthenticated(ws, state))
@@ -703,6 +739,7 @@ export async function authenticateEventsConnection(ws: WSContext, token: string)
   state.user = authResult.user;
   state.sessionToken = token;
   state.scopes = authResult.scopes;
+  markScopesResolved(state);
   state.authenticated = true;
   subscribePerUser(ws, state);
   send(ws, { type: 'permissions', scopes: state.scopes });

@@ -2,6 +2,11 @@ import { DatabaseBackup, History, Loader2, Pause, Play, RotateCcw, Trash2, X } f
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
+import {
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -31,6 +36,8 @@ import {
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
+import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import type {
   BackupPolicy,
   BackupPolicyInput,
@@ -735,12 +742,29 @@ export function RestoreDialog({
   onRestore: (
     input: Pick<
       BackupRestoreInput,
-      "executorNodeId" | "newManagedDatabaseName" | "targetDatabaseName"
+      "executorNodeId" | "newManagedDatabaseName" | "targetDatabaseName" | "folderId"
     >
   ) => Promise<void>;
 }) {
   const [executorNodeId, setExecutorNodeId] = useState("");
   const [newManagedDatabaseName, setNewManagedDatabaseName] = useState("");
+  const [folderId, setFolderId] = useState("");
+  const scopes = useAuthStore((state) => state.user?.scopes);
+  const databaseFolders = useResourceFolderStore((state) => state.foldersByType.database);
+  const foldersLoading = useResourceFolderStore((state) => state.loadingByType.database);
+  const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
+  // Same rule as the restore route: databases:create on the Storage node or the chosen folder.
+  const folderChoices = useMemo(
+    () =>
+      getCreateFolderChoices(
+        scopes ?? [],
+        "databases:create",
+        databaseFolders,
+        executorNodeId || undefined
+      ),
+    [databaseFolders, executorNodeId, scopes]
+  );
+  const destinationAllowed = isCreateFolderAllowed(folderChoices, folderId);
   const [targetDatabaseName, setTargetDatabaseName] = useState("");
   const [restoring, setRestoring] = useState(false);
   const runId = run?.id;
@@ -760,19 +784,22 @@ export function RestoreDialog({
     if (!runId) return;
     setExecutorNodeId("");
     setNewManagedDatabaseName("");
+    setFolderId("");
     setTargetDatabaseName(defaultTargetDatabaseName);
-  }, [defaultTargetDatabaseName, runId]);
+    void fetchFolders("database");
+  }, [defaultTargetDatabaseName, fetchFolders, runId]);
   const restore = async () => {
     if (!executorNodeId || !newManagedDatabaseName.trim()) {
       toast.error("Choose the Storage node and a name for the new database");
       return;
     }
-    if (targetDatabaseNameError) return;
+    if (targetDatabaseNameError || !destinationAllowed) return;
     setRestoring(true);
     try {
       await onRestore({
         executorNodeId,
         newManagedDatabaseName: newManagedDatabaseName.trim(),
+        ...(folderId ? { folderId } : {}),
         ...(hasDatabaseName && trimmedTargetDatabaseName
           ? { targetDatabaseName: trimmedTargetDatabaseName }
           : {}),
@@ -801,6 +828,19 @@ export function RestoreDialog({
               value={executorNodeId}
               onValueChange={setExecutorNodeId}
               options={executors}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium" htmlFor="backup-restore-folder">
+              Folder
+            </label>
+            <CreateFolderSelect
+              id="backup-restore-folder"
+              choices={folderChoices}
+              value={folderId}
+              onChange={setFolderId}
+              loading={foldersLoading}
+              disabled={restoring}
             />
           </div>
           <div className="space-y-1.5">
@@ -856,7 +896,7 @@ export function RestoreDialog({
           </Button>
           <Button
             type="button"
-            disabled={restoring || Boolean(targetDatabaseNameError)}
+            disabled={restoring || Boolean(targetDatabaseNameError) || !destinationAllowed}
             onClick={() => void restore()}
           >
             {restoring && <Loader2 className="animate-spin" />}

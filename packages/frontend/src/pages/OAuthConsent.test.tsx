@@ -370,6 +370,9 @@ describe("OAuthConsent", () => {
     });
 
     expect(await screen.findByText("View Containers")).toBeInTheDocument();
+    // Restrictions stay collapsed behind a summary until opened.
+    expect(await screen.findByText("Docker 1")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Restrict View Containers/i }));
     expect(screen.getByRole("checkbox", { name: /Docker 1/i })).toBeChecked();
 
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
@@ -401,5 +404,102 @@ describe("OAuthConsent", () => {
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
     expect(approve).toHaveBeenCalledWith("request-1", ["nodes:details"]);
+  });
+
+  describe("folder and resource restrictions", () => {
+    const folderId = "0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e";
+    const folderScope = `docker:containers:manage:folder/${folderId}`;
+
+    function mockDockerInventory() {
+      vi.mocked(api.listNodes).mockResolvedValue({
+        data: [{ id: "node-1", type: "docker", hostname: "docker-1", displayName: "Docker 1" }],
+      } as never);
+      vi.spyOn(api, "listDockerFolders").mockResolvedValue([
+        { id: folderId, name: "MyProject", children: [] },
+      ] as never);
+      vi.spyOn(api, "listDockerContainers").mockResolvedValue([
+        { scopeResourceId: "c1", name: "web", folderId, kind: "container" },
+      ] as never);
+      vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
+        ...preview,
+        requestedScopes: ["docker:containers:manage", "nodes:details"],
+        grantableScopes: ["docker:containers:manage", "nodes:details"],
+        unavailableScopes: [],
+      });
+    }
+
+    it("loads the signed-in account on the consent page so folders and containers can be offered", async () => {
+      useAuthStore.setState({ user: null });
+      const getCurrentUser = vi.spyOn(api, "getCurrentUser").mockResolvedValue({
+        id: "user-1",
+        scopes: ["nodes:details", "docker:containers:manage"],
+      } as never);
+      mockDockerInventory();
+
+      renderWithRouter(<OAuthConsent />, {
+        path: "/oauth/consent",
+        route: "/oauth/consent?request=request-1",
+      });
+
+      expect(await screen.findByText("Manage Containers")).toBeInTheDocument();
+      expect(getCurrentUser).toHaveBeenCalledTimes(1);
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Restrict Manage Containers/i })
+      );
+      expect(await screen.findByRole("checkbox", { name: /MyProject/ })).toBeInTheDocument();
+      expect(await screen.findByRole("checkbox", { name: /web/ })).toBeInTheDocument();
+      expect(screen.getByText("2 scopes will be granted")).toBeInTheDocument();
+    });
+
+    it("approves a scope restricted to a selected folder", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["nodes:details", "docker:containers:manage"] } as never,
+      });
+      mockDockerInventory();
+      const approve = vi
+        .spyOn(api, "approveOAuthConsent")
+        .mockRejectedValue(new Error("stop before navigation"));
+
+      renderWithRouter(<OAuthConsent />, {
+        path: "/oauth/consent",
+        route: "/oauth/consent?request=request-1",
+      });
+
+      expect(await screen.findAllByText("All resources")).not.toHaveLength(0);
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Restrict Manage Containers/i })
+      );
+      await userEvent.click(await screen.findByRole("checkbox", { name: /MyProject/ }));
+      await userEvent.click(
+        screen.getByRole("button", { name: /Done restricting Manage Containers/i })
+      );
+      expect(screen.getByText("MyProject (folder)")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
+
+      expect(approve).toHaveBeenCalledWith("request-1", [folderScope, "nodes:details"]);
+    });
+
+    it("limits every selected scope of a folder family from the header action", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["nodes:details", "docker:containers:manage"] } as never,
+      });
+      mockDockerInventory();
+      const approve = vi
+        .spyOn(api, "approveOAuthConsent")
+        .mockRejectedValue(new Error("stop before navigation"));
+
+      renderWithRouter(<OAuthConsent />, {
+        path: "/oauth/consent",
+        route: "/oauth/consent?request=request-1",
+      });
+
+      await userEvent.click(
+        await screen.findByRole("button", { name: /Limit selected scopes to folder/i })
+      );
+      await userEvent.click(await screen.findByRole("menuitem", { name: "MyProject" }));
+      await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
+
+      expect(approve).toHaveBeenCalledWith("request-1", [folderScope, "nodes:details"]);
+    });
   });
 });

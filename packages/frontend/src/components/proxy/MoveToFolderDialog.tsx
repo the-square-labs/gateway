@@ -19,28 +19,36 @@ interface MoveToFolderDialogProps {
   folders: FolderTreeNode[];
   currentFolderId: string | null;
   onMove: (folderId: string | null) => void;
+  /** Destinations the caller may move routes into (defaults to every folder and the root). */
+  canMoveTo?: (folderId: string | null) => boolean;
 }
+
+const allowEveryDestination = () => true;
 
 function FolderOption({
   folder,
   depth,
   selected,
   onSelect,
+  canMoveTo,
 }: {
   folder: FolderTreeNode;
   depth: number;
   selected: string | null;
   onSelect: (id: string | null) => void;
+  canMoveTo: (folderId: string | null) => boolean;
 }) {
+  const allowed = canMoveTo(folder.id);
   return (
     <>
       <button
         type="button"
         className={cn(
-          "w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors",
+          "w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors disabled:pointer-events-none disabled:opacity-50",
           selected === folder.id && "bg-accent"
         )}
         style={{ paddingLeft: `${depth * 20 + 12}px` }}
+        disabled={!allowed}
         onClick={() => onSelect(folder.id)}
       >
         {folder.children.length > 0 && <ChevronRight className="h-3 w-3 text-muted-foreground" />}
@@ -55,6 +63,7 @@ function FolderOption({
           depth={depth + 1}
           selected={selected}
           onSelect={onSelect}
+          canMoveTo={canMoveTo}
         />
       ))}
     </>
@@ -67,6 +76,7 @@ export function MoveToFolderDialog({
   folders,
   currentFolderId,
   onMove,
+  canMoveTo = allowEveryDestination,
 }: MoveToFolderDialogProps) {
   const [selected, setSelected] = useState<string | null>(currentFolderId);
   const displayedCurrentFolderId = useRetainedDialogValue(currentFolderId, open);
@@ -94,8 +104,10 @@ export function MoveToFolderDialog({
             type="button"
             className={cn(
               "w-full flex items-center gap-2 px-3 py-2 text-sm text-left hover:bg-accent transition-colors",
-              selected === null && "bg-accent"
+              selected === null && "bg-accent",
+              "disabled:pointer-events-none disabled:opacity-50"
             )}
+            disabled={!canMoveTo(null)}
             onClick={() => setSelected(null)}
           >
             <span className="font-medium">Root (ungrouped)</span>
@@ -107,6 +119,7 @@ export function MoveToFolderDialog({
               depth={0}
               selected={selected}
               onSelect={setSelected}
+              canMoveTo={canMoveTo}
             />
           ))}
         </div>
@@ -114,7 +127,10 @@ export function MoveToFolderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleMove} disabled={selected === displayedCurrentFolderId}>
+          <Button
+            onClick={handleMove}
+            disabled={selected === displayedCurrentFolderId || !canMoveTo(selected)}
+          >
             Move
           </Button>
         </DialogFooter>

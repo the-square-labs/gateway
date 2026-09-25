@@ -85,3 +85,19 @@ export function createService({
 afterEach(() => {
   container.reset();
 });
+
+/**
+ * A read-only stand-in for the Drizzle client that `expandFolderScopes` queries: every
+ * `select().from(table)` resolves to the rows given for that table (the folder expansion filters
+ * them itself), with or without `.where(...)`. Rows use the selected column names.
+ */
+export function createFolderScopeTestDb(rowsByTable: Map<unknown, Array<Record<string, unknown>>>) {
+  return {
+    select: () => ({
+      from: (table: unknown) => {
+        const rows = () => Promise.resolve([...(rowsByTable.get(table) ?? [])]);
+        return Object.assign(rows(), { where: () => rows() });
+      },
+    }),
+  };
+}

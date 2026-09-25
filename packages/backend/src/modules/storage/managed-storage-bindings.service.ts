@@ -23,9 +23,13 @@ export class ManagedStorageBindingsService {
     _dockerSecrets: DockerSecretService,
     _connectorImage: string,
     _relayPolicy?:
-      | Pick<RelayPolicyService, 'ensureStorageBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner'>
+      | Pick<RelayPolicyService, 'ensureStorageBindingRoute' | 'getNodeGrantBundle' | 'revokeOwner' | 'syncNodeGrants'>
       | undefined,
-    _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined
+    _storageCA?: import('@/services/storage-ca.service.js').StorageCAService | undefined,
+    _objectStorage?: Pick<
+      import('@/modules/object-storage/object-storage.service.js').ObjectStorageService,
+      'listBuckets'
+    >
   ) {}
   setEventBus(_bus: EventBusService): void {}
   setLicensePolicyService(_service: LicensePolicyService): void {}
@@ -90,6 +94,33 @@ export class ManagedStorageBindingsService {
     return commercialModuleUnavailable();
   }
   async deleteAllForCluster(_cluster: ManagedStorageClusterRow, _userId: string): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async move(
+    _clusterId: string,
+    _bindingId: string,
+    _targetClusterId: string,
+    _userId: string
+  ): Promise<{
+    binding: {
+      id: string;
+      clusterId: string;
+      targetNodeId: string;
+      targetType: 'container' | 'deployment';
+      targetResourceId: string;
+      connectorAlias: string;
+      environment: StorageBindingEnvironment;
+      buckets: string[];
+      accessKeyId: string | null;
+      status: 'error' | 'ready' | 'creating' | 'deleting';
+      lastError: string | null;
+      createdAt: string;
+      updatedAt: string;
+    };
+    fromClusterId: string;
+    sourceKeyRevoked: boolean;
+    warnings: string[];
+  }> {
     return commercialModuleUnavailable();
   }
 }

@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
-import { hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
+import { hasScope, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
@@ -14,6 +14,7 @@ import type {
 import { DockerManagementService } from './docker.service.js';
 import { hasDockerResourceScope } from './docker-access-resource.service.js';
 import { dockerArchiveCommercialRuntime } from './docker-archive-commercial-runtime.js';
+import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { envListToMap } from './docker-env-operations.js';
 import { DockerEnvironmentService } from './docker-environment.service.js';
 import { dockerGpuAttachmentFromInspect } from './docker-gpu-attachment.js';
@@ -75,6 +76,22 @@ function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string)
     canViewVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:view', nodeId),
     canCreateVolumes: hasScopeForResource([...actorScopes], 'docker:volumes:create', nodeId),
   };
+}
+
+/**
+ * Environment and secrets of an imported container: granted on the target node (or broadly), or on the destination
+ * folder the new container is placed in.
+ */
+export function canImportArchiveContent(
+  actorScopes: readonly string[],
+  scope: 'docker:containers:environment' | 'docker:containers:secrets',
+  nodeId: string,
+  folderId: string | undefined
+): boolean {
+  return (
+    hasDockerResourceScope([...actorScopes], scope, nodeId, '') ||
+    (!!folderId && hasScope([...actorScopes], `${scope}:folder/${folderId}`))
+  );
 }
 
 function canPlanArchiveImport(actorScopes: readonly string[], nodeId: string) {
@@ -212,6 +229,14 @@ export async function importDockerContainerArchive(args: {
 }): Promise<{ containerId: string; containerName: string; imageId: string }> {
   const { nodeId, resolution, userId } = args;
   const actorScopes = [...args.actorScopes];
+  // The routes check this before streaming; repeat it here so no caller can import into an unauthorized folder.
+  await assertDockerCreationAccess(
+    container.resolve<DrizzleClient>(TOKENS.DrizzleClient),
+    actorScopes,
+    'docker:containers:create',
+    nodeId,
+    args.folderId
+  );
   const dispatch = container.resolve(DockerMigrationDispatchAdapter);
   const registryService = container.resolve(DockerRegistryService);
   const data = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(
@@ -236,13 +261,13 @@ export async function importDockerContainerArchive(args: {
         });
         if (
           Object.keys(archiveContainer.environment ?? {}).length > 0 &&
-          !hasDockerResourceScope(actorScopes, 'docker:containers:environment', nodeId, '')
+          !canImportArchiveContent(actorScopes, 'docker:containers:environment', nodeId, args.folderId)
         ) {
           throw new AppError(403, 'FORBIDDEN', 'Importing archive environment is not permitted on the target node');
         }
         if (
           Object.keys(archiveContainer.secrets ?? {}).length > 0 &&
-          !hasDockerResourceScope(actorScopes, 'docker:containers:secrets', nodeId, '')
+          !canImportArchiveContent(actorScopes, 'docker:containers:secrets', nodeId, args.folderId)
         ) {
           throw new AppError(403, 'FORBIDDEN', 'Importing archive secrets is not permitted on the target node');
         }

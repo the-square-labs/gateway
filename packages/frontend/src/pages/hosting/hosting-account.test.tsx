@@ -1079,7 +1079,7 @@ it("denies VM actions with a scope for a different VM", () => {
 });
 
 it("retries installation from its VM menu and returns to the resource status", async () => {
-  login(["hosting:resources:recover", "nodes:config:edit"]);
+  login(["hosting:resources:recover", "nodes:manage"]);
   const original = {
     ...operation,
     action: "create" as const,

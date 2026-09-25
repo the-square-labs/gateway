@@ -1,5 +1,5 @@
 import { container } from '@/container.js';
-import { hasScope, hasScopeForCreation } from '@/lib/permissions.js';
+import { hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
@@ -27,6 +27,7 @@ import { ManagedDatabaseService } from '@/modules/databases/managed-databases.se
 export const databaseToolRuntime = {
   container,
   hasScope,
+  hasScopeBase,
   hasScopeForCreation,
   AppError,
   AddPostgresColumnSchema,

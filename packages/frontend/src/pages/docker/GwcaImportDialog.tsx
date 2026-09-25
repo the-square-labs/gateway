@@ -27,6 +27,7 @@ import {
   normalizeGwcaPortMappings,
   readGwcaImportMetadata,
 } from "@/lib/gwca";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn, formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -47,6 +48,7 @@ const BRIDGE_NETWORK: DockerNetwork = {
 };
 
 const DEV_PREVIEW_NODE_ID = "gwca-dev-preview-node";
+const EMPTY_SCOPES: string[] = [];
 const CREATE_NEW_VALUE = "__gwca_create_new__";
 const REMAP_BLOCK_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -111,6 +113,18 @@ function hasNodeScope(hasScope: (scope: string) => boolean, scope: string, nodeI
   return hasScope(scope) || hasScope(`${scope}:${nodeId}`);
 }
 
+/** The imported container lands in the chosen folder, so a grant on that folder covers its secrets too. */
+function hasDestinationScope(
+  hasScope: (scope: string) => boolean,
+  scope: string,
+  nodeId: string,
+  folderId: string
+) {
+  return (
+    hasNodeScope(hasScope, scope, nodeId) || (!!folderId && hasScope(`${scope}:folder/${folderId}`))
+  );
+}
+
 function flattenFolders(folders: DockerFolderTreeNode[]): DockerFolderTreeNode[] {
   return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }
@@ -123,6 +137,7 @@ export function GwcaImportDialog({
   devPreview = false,
 }: GwcaImportDialogProps) {
   const hasScope = useAuthStore((state) => state.hasScope);
+  const scopes = useAuthStore((state) => state.user?.scopes ?? EMPTY_SCOPES);
   const dockerFolders = useDockerFolderStore((state) => state.foldersByType.container);
   const foldersLoading = useDockerFolderStore((state) => state.loadingByType.container);
   const fetchFolders = useDockerFolderStore((state) => state.fetchFolders);
@@ -141,7 +156,23 @@ export function GwcaImportDialog({
   const [planning, setPlanning] = useState(false);
   const [importing, setImporting] = useState(false);
   const defaultNodeId = nodes[0]?.id ?? (devPreview ? DEV_PREVIEW_NODE_ID : "");
-  const folderOptions = useMemo(() => flattenFolders(dockerFolders), [dockerFolders]);
+  // Same destination rule as the import route: root needs create on the node (or broadly), a folder needs create on
+  // that folder. System folders never accept new containers.
+  const canImportAtRoot =
+    devPreview || canCreateInFolder(scopes, "docker:containers:create", null, nodeId || undefined);
+  const folderOptions = useMemo(
+    () =>
+      flattenFolders(dockerFolders).filter(
+        (folder) =>
+          !folder.isSystem &&
+          (devPreview ||
+            canCreateInFolder(scopes, "docker:containers:create", folder.id, nodeId || undefined))
+      ),
+    [devPreview, dockerFolders, nodeId, scopes]
+  );
+  const canImportHere =
+    devPreview ||
+    canCreateInFolder(scopes, "docker:containers:create", folderId || null, nodeId || undefined);
 
   const resetImportState = useCallback(() => {
     setFile(null);
@@ -165,7 +196,8 @@ export function GwcaImportDialog({
   const canCreateVolumes =
     devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:volumes:create", nodeId));
   const canImportSecrets =
-    devPreview || (!!nodeId && hasNodeScope(hasScope, "docker:containers:secrets", nodeId));
+    devPreview ||
+    (!!nodeId && hasDestinationScope(hasScope, "docker:containers:secrets", nodeId, folderId));
 
   useEffect(() => {
     if (!open) return;
@@ -257,6 +289,13 @@ export function GwcaImportDialog({
     };
   }, [canImportSecrets, devPreview, file, nodeId, open]);
 
+  useEffect(() => {
+    // A folder-only importer usually has exactly one valid destination: preselect it.
+    if (open && !folderId && !canImportAtRoot && folderOptions.length === 1) {
+      setFolderId(folderOptions[0].id);
+    }
+  }, [canImportAtRoot, folderId, folderOptions, open]);
+
   const unresolvedVolumes = useMemo(
     () => Object.values(volumeMappings).filter((value) => !value).length,
     [volumeMappings]
@@ -275,6 +314,7 @@ export function GwcaImportDialog({
       !file ||
       !nodeId ||
       !name.trim() ||
+      !canImportHere ||
       planning ||
       planError ||
       unresolvedVolumes > 0 ||
@@ -467,16 +507,18 @@ export function GwcaImportDialog({
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Destination folder</label>
                 <Select
-                  value={folderId || "__root__"}
+                  value={folderId || (canImportAtRoot ? "__root__" : "")}
                   onValueChange={(value) => setFolderId(value === "__root__" ? "" : value)}
                 >
-                  <SelectTrigger>
-                    <SelectValue placeholder={foldersLoading ? "Loading folders..." : "Root"} />
+                  <SelectTrigger aria-label="Destination folder">
+                    <SelectValue
+                      placeholder={foldersLoading ? "Loading folders..." : "Select a folder"}
+                    />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="__root__">Root</SelectItem>
+                    {canImportAtRoot && <SelectItem value="__root__">Root</SelectItem>}
                     {folderOptions.map((folder) => (
-                      <SelectItem key={folder.id} value={folder.id} disabled={folder.isSystem}>
+                      <SelectItem key={folder.id} value={folder.id}>
                         {`${"— ".repeat(folder.depth ?? 0)}${folder.name}`}
                       </SelectItem>
                     ))}
@@ -686,7 +728,8 @@ export function GwcaImportDialog({
               !resolvedPortMappings ||
               !file ||
               !nodeId ||
-              !name.trim()
+              !name.trim() ||
+              !canImportHere
             }
           >
             {importing ? "Importing..." : "Import container"}

@@ -476,4 +476,51 @@ describe("eventStream", () => {
 
     expect(useAppStatusStore.getState().gatewayRestartingActive).toBe(true);
   });
+
+  it("applies live permission updates so newly granted resources become usable", async () => {
+    const { eventStream } = await import("@/services/event-stream");
+    const { registerAuthContextReset, useAuthStore } = await import("@/stores/auth");
+    const reset = vi.fn();
+    registerAuthContextReset(reset);
+    useAuthStore.setState({
+      user: { id: "user-1", scopes: ["proxy:view:folder/f1", "proxy:view:host-1"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    eventStream.start();
+    vi.runAllTimers();
+    const socket = MockWebSocket.instances[0];
+    socket?.open();
+
+    // A route created by someone else in the granted folder: widened in place, no session reset.
+    socket?.emit({
+      type: "permissions",
+      scopes: ["proxy:view:folder/f1", "proxy:view:host-1", "proxy:view:host-2"],
+    });
+    expect(useAuthStore.getState().user?.scopes).toEqual([
+      "proxy:view:folder/f1",
+      "proxy:view:host-1",
+      "proxy:view:host-2",
+    ]);
+    expect(useAuthStore.getState().hasScope("proxy:view:host-2")).toBe(true);
+    expect(reset).not.toHaveBeenCalled();
+
+    // The same set again is a no-op.
+    const before = useAuthStore.getState().user;
+    socket?.emit({
+      type: "permissions",
+      scopes: ["proxy:view:host-2", "proxy:view:folder/f1", "proxy:view:host-1"],
+    });
+    expect(useAuthStore.getState().user).toBe(before);
+
+    // A lost grant invalidates private data like any permission change.
+    socket?.emit({ type: "permissions", scopes: ["proxy:view:folder/f1", "proxy:view:host-2"] });
+    expect(useAuthStore.getState().user?.scopes).toEqual([
+      "proxy:view:folder/f1",
+      "proxy:view:host-2",
+    ]);
+    expect(reset).toHaveBeenCalledTimes(1);
+    registerAuthContextReset(() => {});
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+  });
 });

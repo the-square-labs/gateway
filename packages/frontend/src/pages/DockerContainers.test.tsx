@@ -1,6 +1,8 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
@@ -17,11 +19,18 @@ vi.mock("@/components/common/ResourceListForm", () => ({
     loading,
     loadingLabel,
     hasContent,
+    afterSearch,
   }: {
     loading: boolean;
     loadingLabel: string;
     hasContent: boolean;
-  }) => <div>{loading ? loadingLabel : hasContent ? "Container content" : "Empty"}</div>,
+    afterSearch?: ReactNode;
+  }) => (
+    <div>
+      {afterSearch}
+      {loading ? loadingLabel : hasContent ? "Container content" : "Empty"}
+    </div>
+  ),
 }));
 
 vi.mock("@/components/common/FolderCreateDialog", () => ({
@@ -111,5 +120,36 @@ describe("DockerContainers", () => {
 
     await act(async () => foldersRequest.resolve());
     await waitFor(() => expect(screen.getByText("Container content")).toBeInTheDocument());
+  });
+
+  it.each([
+    [
+      ["docker:containers:view:folder/folder-1"],
+      "No containers are shared with you yet. Containers placed in the folders you can access will appear here.",
+    ],
+    [
+      ["docker:containers:view"],
+      "No Docker nodes registered. Add a Docker node from the Nodes page to get started.",
+    ],
+  ])("explains an empty node list for %j", async (scopes, message) => {
+    useAuthStore.setState({ user: makeUser({ scopes }), isAuthenticated: true, isLoading: false });
+    useDockerStore.setState({ dockerNodes: [], containers: [], containersByScope: {} });
+    const listNodes = vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [],
+      total: 0,
+      page: 1,
+      limit: 100,
+      totalPages: 0,
+    } as never);
+
+    render(
+      <MemoryRouter>
+        <DockerContainers />
+      </MemoryRouter>
+    );
+
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(listNodes).toHaveBeenCalledWith({ type: "docker", limit: 100 });
+    listNodes.mockRestore();
   });
 });

@@ -3,7 +3,11 @@ import type { Env } from '@/config/env.js';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
 import { nodes, relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import { settings } from '@/db/schema/settings.js';
-import { DEFAULT_SANDBOX_WORKSPACE_DIR } from '@/foundation/foundation-migrator.js';
+import {
+  DEFAULT_SANDBOX_WORKSPACE_DIR,
+  dockerLogDefaultsEnv,
+  hostDockerLogDefaults,
+} from '@/foundation/foundation-migrator.js';
 import { createChildLogger } from '@/lib/logger.js';
 import {
   type ReleaseFileSource,
@@ -999,9 +1003,12 @@ export class UpdateService {
         ? ['--secure-link-connector-image', artifact.secureLinkConnectorImage]
         : []),
     ];
+    // Bounded Compose logging is added only when the host keeps Docker's json-file default.
+    const dockerLogEnv = await this.foundationDockerLogEnv(selfInfo);
     const migrationResult = await this.dockerService.runOneShot({
       Image: artifact.imageRef,
       Cmd: foundationCommand,
+      ...(dockerLogEnv.length > 0 ? { Env: dockerLogEnv } : {}),
       HostConfig: {
         Binds: [`${composeDir}:/host`, `${DEFAULT_SANDBOX_WORKSPACE_DIR}:${DEFAULT_SANDBOX_WORKSPACE_DIR}`],
       },
@@ -1181,6 +1188,21 @@ exit 1`,
     logger.info('Update sidecar launched — container will be replaced shortly');
     // Lets a failure report point at the sidecar logs; the attempt is already recorded.
     await this.upsertSetting(GATEWAY_UPDATE_ATTEMPT_KEY, { ...attempt, sidecarId }).catch(() => undefined);
+  }
+
+  /** Host Docker logging defaults for the foundation migrator; empty when they cannot be read. */
+  private async foundationDockerLogEnv(selfInfo: {
+    HostConfig?: { LogConfig?: { Type?: string; Config?: Record<string, string> | null } };
+  }): Promise<string[]> {
+    try {
+      const info = await this.dockerService.getDaemonInfo();
+      return dockerLogDefaultsEnv(hostDockerLogDefaults(info.LoggingDriver, selfInfo.HostConfig?.LogConfig));
+    } catch (error) {
+      logger.warn('Docker logging defaults unknown; the update leaves Compose logging as it is', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return [];
+    }
   }
 
   /** Copies .env and docker-compose.yml into a new backup directory; returns it as seen under /host. */

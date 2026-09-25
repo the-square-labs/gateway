@@ -34,8 +34,15 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import {
+  allowedCreationFolderId,
+  type CreationFolderOption,
+  creationFolderChoices,
+  flattenCreationFolders,
+} from "@/lib/creation-folders";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import { supportsPagesRouteTemplate } from "@/lib/proxy-template-capabilities";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -86,6 +93,9 @@ function getCachedNodeOptions(): NodeOption[] {
   return mapNodeOptions(cached?.data ?? []);
 }
 
+const NO_SCOPES: string[] = [];
+const ROOT_FOLDER_VALUE = "__root__";
+
 const STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
   animate: { opacity: 1, y: 0 },
@@ -113,9 +123,10 @@ export function CreateProxyHostDialog({
   onSuccess,
 }: CreateProxyHostDialogProps) {
   const isEditing = !!existingHost;
-  const hasScopedAccess = useAuthStore((state) => state.hasScopedAccess);
   const hasScope = useAuthStore((state) => state.hasScope);
-  const canToggleRawConfig = !!existingHost && hasScope(`proxy:raw:toggle:${existingHost.id}`);
+  const scopes = useAuthStore((state) => state.user?.scopes ?? NO_SCOPES);
+  // Raw mode is toggled under proxy:raw:write (it seeds and then serves the raw config).
+  const canToggleRawConfig = !!existingHost && hasScope(`proxy:raw:write:${existingHost.id}`);
   const maintenanceLocked = !!existingHost?.maintenanceEnabled;
 
   // Step navigation
@@ -125,6 +136,10 @@ export function CreateProxyHostDialog({
   const [type, setType] = useState<ProxyHostType>("proxy");
   const [nodeId, setNodeId] = useState<string>("");
   const [domainNames, setDomainNames] = useState<string[]>([""]);
+  // Create only: destination folder ("" = root). Moving an existing route uses the move dialog.
+  const [folderId, setFolderId] = useState<string>("");
+  const [folderOptions, setFolderOptions] = useState<CreationFolderOption[]>([]);
+  const [foldersLoading, setFoldersLoading] = useState(false);
 
   // Step 2 — Configuration: Proxy
   const [upstream, setUpstream] = useState<ProxyUpstreamSelection>(DEFAULT_PROXY_UPSTREAM);
@@ -167,6 +182,7 @@ export function CreateProxyHostDialog({
 
     setType("proxy");
     setNodeId("");
+    setFolderId("");
     setDomainNames([""]);
     setUpstream(DEFAULT_PROXY_UPSTREAM);
     upstreamTouchedRef.current = false;
@@ -257,6 +273,26 @@ export function CreateProxyHostDialog({
   }, [open]);
 
   useEffect(() => {
+    if (!open || isEditing) return;
+    let cancelled = false;
+    setFoldersLoading(true);
+    void api
+      .listFolders()
+      .then((tree) => {
+        if (!cancelled) setFolderOptions(flattenCreationFolders(tree ?? []));
+      })
+      .catch(() => {
+        if (!cancelled) setFolderOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFoldersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditing, open]);
+
+  useEffect(() => {
     if (!open || isEditing || type !== "proxy" || upstreamTouchedRef.current) return;
     setUpstream(defaultProxyUpstreamForDockerTargets(dockerContainers));
   }, [dockerContainers, isEditing, open, type]);
@@ -279,10 +315,33 @@ export function CreateProxyHostDialog({
     if (!selected || !supportsPagesRouteTemplate(selected.content)) setNginxTemplateId("");
   }, [nginxTemplateId, nginxTemplateList, upstream.kind]);
 
-  const visibleNodes = useMemo(
-    () => (isEditing ? nodes : hasScopedAccess("proxy:create") ? nodes : []),
-    [hasScopedAccess, isEditing, nodes]
+  // A folder grant allows creating on any ingress node; node grants only on their nodes.
+  const hasFolderCreationGrant = useMemo(
+    () => scopes.some((scope) => scope.startsWith("proxy:create:folder/")),
+    [scopes]
   );
+  const visibleNodes = useMemo(
+    () =>
+      isEditing
+        ? nodes
+        : nodes.filter(
+            (node) =>
+              hasFolderCreationGrant || canCreateInFolder(scopes, "proxy:create", null, node.id)
+          ),
+    [hasFolderCreationGrant, isEditing, nodes, scopes]
+  );
+  const folderChoices = useMemo(
+    () => creationFolderChoices(scopes, "proxy:create", folderOptions, nodeId),
+    [folderOptions, nodeId, scopes]
+  );
+  useEffect(() => {
+    if (!open || isEditing) return;
+    setFolderId((current) => allowedCreationFolderId(folderChoices, current));
+  }, [folderChoices, isEditing, open]);
+  const canCreateInSelectedFolder =
+    isEditing || canCreateInFolder(scopes, "proxy:create", folderId || null, nodeId || undefined);
+  const showFolderPicker =
+    !isEditing && (folderChoices.folders.length > 0 || !folderChoices.allowRoot);
   const selectedNode = useMemo(
     () => visibleNodes.find((node) => node.id === nodeId) ?? null,
     [nodeId, visibleNodes]
@@ -293,7 +352,10 @@ export function CreateProxyHostDialog({
 
   // Validation
   const isStep1Valid =
-    nodeId !== "" && !selectedLockedForCreation && domainNames.some((d) => d.trim() !== "");
+    nodeId !== "" &&
+    !selectedLockedForCreation &&
+    canCreateInSelectedFolder &&
+    domainNames.some((d) => d.trim() !== "");
 
   const isStep2Valid = (() => {
     if (type === "proxy" && !isProxyUpstreamValid(upstream)) return false;
@@ -340,6 +402,7 @@ export function CreateProxyHostDialog({
       type,
       nodeId,
       domainNames: domains,
+      folderId: folderId || undefined,
       websocketSupport: upstream.kind === "pages" ? false : websocketSupport,
       sslEnabled,
       sslForced,
@@ -523,6 +586,35 @@ export function CreateProxyHostDialog({
                     </SelectContent>
                   </Select>
                 </div>
+
+                {showFolderPicker && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Folder</label>
+                    <Select
+                      value={folderId || (folderChoices.allowRoot ? ROOT_FOLDER_VALUE : "")}
+                      onValueChange={(value) =>
+                        setFolderId(value === ROOT_FOLDER_VALUE ? "" : value)
+                      }
+                      disabled={foldersLoading}
+                    >
+                      <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
+                        <SelectValue
+                          placeholder={foldersLoading ? "Loading folders..." : "Select a folder..."}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {folderChoices.allowRoot && (
+                          <SelectItem value={ROOT_FOLDER_VALUE}>No folder</SelectItem>
+                        )}
+                        {folderChoices.folders.map((folder) => (
+                          <SelectItem key={folder.id} value={folder.id}>
+                            {"  ".repeat(folder.depth) + folder.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
 
                 {/* Domain Names */}
                 <div className="space-y-1.5">

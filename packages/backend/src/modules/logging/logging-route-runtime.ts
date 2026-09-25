@@ -2,7 +2,7 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { hasScopeForCreation } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScopeBase, hasScopeForCreation, hasScopeForResource } from '@/lib/permissions.js';
 import { extractBaseScope } from '@/lib/scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, rejectImpersonation, requireScope } from '@/modules/auth/auth.middleware.js';
@@ -72,6 +72,16 @@ import { LoggingIngestService } from './logging-ingest.service.js';
 import { loggingIngestAuthMiddleware } from './logging-ingest-auth.middleware.js';
 import { LoggingMaintenanceService } from './logging-maintenance.service.js';
 import { LoggingMetadataService } from './logging-metadata.service.js';
+import {
+  canAttachLoggingSchema,
+  hasLoggingEnvironmentListAccess,
+  hasLoggingHealthAccess,
+  hasLoggingSchemaListAccess,
+  LOGGING_ENVIRONMENT_FOLDER_SCOPE_BASES,
+  LOGGING_SCHEMA_FOLDER_SCOPE_BASES,
+  visibleLoggingEnvironmentIds,
+  visibleLoggingSchemaIds,
+} from './logging-permissions.js';
 import { LoggingRateLimitService } from './logging-rate-limit.service.js';
 import { LoggingSchemaService } from './logging-schema.service.js';
 import { LoggingSchemaFolderService } from './logging-schema-folders.service.js';
@@ -83,6 +93,17 @@ export const loggingRouteRuntime = {
   getFolderScopedIds,
   openApiValidationHook,
   hasScopeForCreation,
+  getResourceScopedIds,
+  hasScopeBase,
+  hasScopeForResource,
+  hasLoggingHealthAccess,
+  hasLoggingEnvironmentListAccess,
+  hasLoggingSchemaListAccess,
+  visibleLoggingEnvironmentIds,
+  visibleLoggingSchemaIds,
+  canAttachLoggingSchema,
+  LOGGING_ENVIRONMENT_FOLDER_SCOPE_BASES,
+  LOGGING_SCHEMA_FOLDER_SCOPE_BASES,
   extractBaseScope,
   AppError,
   authMiddleware,

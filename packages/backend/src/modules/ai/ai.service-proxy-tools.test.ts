@@ -117,7 +117,9 @@ describe('AIService proxy tool routing', () => {
     });
 
     await expect(
-      service.executeTool({ ...BASE_USER, scopes: ['proxy:create'] }, 'list_routes', { nodeId: COMPACT_HOST.nodeId })
+      service.executeTool({ ...BASE_USER, scopes: ['proxy:folders:manage'] }, 'list_routes', {
+        nodeId: COMPACT_HOST.nodeId,
+      })
     ).resolves.toMatchObject({ error: expect.stringContaining('PERMISSION_DENIED') });
     expect(proxyService.listProxyHosts).toHaveBeenCalledTimes(1);
   });
@@ -194,7 +196,7 @@ describe('AIService proxy tool routing', () => {
         healthCheckExpectedBody: undefined,
       }),
       'user-1',
-      { actorScopes: ['proxy:create'], bypassAdvancedValidation: false }
+      { actorScopes: ['proxy:create'], bypassAdvancedValidation: false, bypassRawValidation: false }
     );
 
     await expect(
@@ -212,7 +214,11 @@ describe('AIService proxy tool routing', () => {
     expect(proxyService.createProxyHost).toHaveBeenLastCalledWith(
       expect.objectContaining({ nodeId: '11111111-1111-4111-8111-111111111111', domainNames: ['scoped.example.com'] }),
       'user-1',
-      { actorScopes: ['proxy:create:11111111-1111-4111-8111-111111111111'], bypassAdvancedValidation: false }
+      {
+        actorScopes: ['proxy:create:11111111-1111-4111-8111-111111111111'],
+        bypassAdvancedValidation: false,
+        bypassRawValidation: false,
+      }
     );
 
     await expect(
@@ -239,7 +245,7 @@ describe('AIService proxy tool routing', () => {
           scopes: [
             `proxy:edit:${COMPACT_HOST.id}`,
             `proxy:advanced:${COMPACT_HOST.id}`,
-            `proxy:advanced:bypass:${COMPACT_HOST.id}`,
+            `proxy:unrestricted:${COMPACT_HOST.id}`,
             'proxy:create:11111111-1111-4111-8111-111111111112',
           ],
         },
@@ -318,7 +324,7 @@ describe('AIService proxy tool routing', () => {
         actorScopes: [
           `proxy:edit:${COMPACT_HOST.id}`,
           `proxy:advanced:${COMPACT_HOST.id}`,
-          `proxy:advanced:bypass:${COMPACT_HOST.id}`,
+          `proxy:unrestricted:${COMPACT_HOST.id}`,
           'proxy:create:11111111-1111-4111-8111-111111111112',
         ],
         bypassAdvancedValidation: true,
@@ -349,7 +355,7 @@ describe('AIService proxy tool routing', () => {
       assertReferenceAccess: vi.fn().mockResolvedValue(undefined),
     };
     const service = createService(proxyService);
-    const toggleScopes = [`proxy:raw:toggle:${COMPACT_HOST.id}`, `proxy:raw:bypass:${COMPACT_HOST.id}`];
+    const toggleScopes = [`proxy:raw:write:${COMPACT_HOST.id}`, `proxy:unrestricted:${COMPACT_HOST.id}`];
 
     // PUT {rawConfigEnabled} is not a raw-only update, so it also needs proxy:edit on the route.
     await expect(
@@ -371,8 +377,9 @@ describe('AIService proxy tool routing', () => {
       })
     ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });
 
+    // proxy:unrestricted skips both the advanced and the raw directive restrictions, like PUT /proxy-hosts/{id}.
     expect(proxyService.updateProxyHost).toHaveBeenCalledWith(COMPACT_HOST.id, { rawConfigEnabled: true }, 'user-1', {
-      bypassAdvancedValidation: false,
+      bypassAdvancedValidation: true,
       bypassRawValidation: true,
       actorScopes: scopes,
     });
@@ -450,6 +457,7 @@ describe('AIService proxy tool routing', () => {
       {
         actorScopes: ['proxy:create', 'docker:containers:view:44444444-4444-4444-8444-444444444441'],
         bypassAdvancedValidation: false,
+        bypassRawValidation: false,
       }
     );
 
@@ -486,6 +494,7 @@ describe('AIService proxy tool routing', () => {
       {
         actorScopes: ['proxy:create', 'pages:view:33333333-3333-4333-8333-333333333331'],
         bypassAdvancedValidation: false,
+        bypassRawValidation: false,
       }
     );
   });
@@ -718,7 +727,7 @@ describe('AIService proxy tool routing', () => {
         domainNames: ['app.example.com'],
         type: 'raw',
       })
-    ).resolves.toEqual({ error: 'Enabling raw mode requires proxy:raw:toggle scope', invalidateStores: [] });
+    ).resolves.toEqual({ error: 'Enabling raw mode requires proxy:raw:write scope', invalidateStores: [] });
     expect(proxyService.createProxyHost).toHaveBeenCalledTimes(2);
   });
 
@@ -778,12 +787,12 @@ describe('AIService proxy tool routing', () => {
       expect.anything()
     );
 
-    // Changing the stored raw mode needs proxy:raw:toggle.
+    // Changing the stored raw mode needs proxy:raw:write.
     await expect(run([editScope], { rawConfigEnabled: true })).resolves.toEqual({
-      error: 'Toggling raw mode requires proxy:raw:toggle scope',
+      error: 'Toggling raw mode requires proxy:raw:write scope',
       invalidateStores: [],
     });
-    await expect(run([editScope, `proxy:raw:toggle:${COMPACT_HOST.id}`], { rawConfigEnabled: true })).resolves.toEqual({
+    await expect(run([editScope, `proxy:raw:write:${COMPACT_HOST.id}`], { rawConfigEnabled: true })).resolves.toEqual({
       result: COMPACT_HOST,
       invalidateStores: ['proxy'],
     });
@@ -792,7 +801,7 @@ describe('AIService proxy tool routing', () => {
       { rawConfigEnabled: true },
       'user-1',
       {
-        actorScopes: [editScope, `proxy:raw:toggle:${COMPACT_HOST.id}`],
+        actorScopes: [editScope, `proxy:raw:write:${COMPACT_HOST.id}`],
         bypassAdvancedValidation: false,
         bypassRawValidation: false,
       }
@@ -821,7 +830,7 @@ describe('AIService proxy tool routing', () => {
 
     // Node moves need proxy:create on the new node; reserved template variables are dropped.
     await expect(run([editScope], { nodeId: '11111111-1111-4111-8111-111111111119' })).resolves.toEqual({
-      error: 'Missing required scope: proxy:create:11111111-1111-4111-8111-111111111119',
+      error: 'Missing required scope: proxy:create:node/11111111-1111-4111-8111-111111111119',
       invalidateStores: [],
     });
     await expect(
@@ -958,7 +967,7 @@ describe('AIService proxy tool routing', () => {
       service.executeTool(
         {
           ...BASE_USER,
-          scopes: [`proxy:raw:write:${COMPACT_HOST.id}`, `proxy:raw:bypass:${COMPACT_HOST.id}`],
+          scopes: [`proxy:raw:write:${COMPACT_HOST.id}`, `proxy:unrestricted:${COMPACT_HOST.id}`],
         },
         'manage_route',
         { operation: 'validate_config', routeId: COMPACT_HOST.id, snippet: 'server {}', mode: 'raw' }
@@ -1009,20 +1018,20 @@ describe('AIService proxy tool routing', () => {
       expect.objectContaining({ id: COMPACT_HOST.id, advancedConfig: null })
     );
 
-    // Testing needs proxy:raw:write plus edit on the template (or create for new content).
+    // Testing needs proxy:templates:manage on the template (or broad for new content); raw write is not needed.
     await expect(
       service.executeTool(
-        { ...BASE_USER, scopes: ['proxy:templates:edit', 'proxy:raw:write'] },
+        { ...BASE_USER, scopes: [`proxy:templates:manage:${templateId}`, 'proxy:raw:write'] },
         'manage_proxy_template',
         { operation: 'test', content: 'server {}' }
       )
-    ).resolves.toMatchObject({ error: expect.stringContaining('proxy:templates:create') });
+    ).resolves.toMatchObject({ error: expect.stringContaining('proxy:templates:manage') });
     await expect(
-      service.executeTool(
-        { ...BASE_USER, scopes: [`proxy:templates:edit:${templateId}`, 'proxy:raw:write'] },
-        'manage_proxy_template',
-        { operation: 'test', content: 'server {}', templateId }
-      )
+      service.executeTool({ ...BASE_USER, scopes: [`proxy:templates:manage:${templateId}`] }, 'manage_proxy_template', {
+        operation: 'test',
+        content: 'server {}',
+        templateId,
+      })
     ).resolves.toEqual({
       result: { rendered: 'rendered-sample', valid: false, errors: ['nginx: [emerg] unknown directive'] },
       invalidateStores: ['proxy'],

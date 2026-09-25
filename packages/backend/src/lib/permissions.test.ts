@@ -60,14 +60,20 @@ describe('Scope-based permissions', () => {
     });
 
     it('does not let an exact scope grant a different exact scope with the same prefix', () => {
-      expect(hasScope(['proxy:advanced'], 'proxy:advanced:bypass')).toBe(false);
-      expect(hasScope(['proxy:advanced:bypass'], 'proxy:advanced:bypass:host-1')).toBe(true);
-      expect(hasScope(['proxy:raw:bypass'], 'proxy:raw:bypass:host-1')).toBe(true);
-      expect(hasScope(['proxy:raw:bypass:host-1'], 'proxy:raw:bypass:host-1')).toBe(true);
-      expect(hasScope(['proxy:raw:bypass:host-1'], 'proxy:raw:bypass:host-2')).toBe(false);
-      expect(hasScope(['proxy:raw:bypass:host-1'], 'proxy:raw:write:host-1')).toBe(false);
-      expect(hasScope(['proxy:raw:write:host-1'], 'proxy:raw:bypass:host-1')).toBe(false);
-      expect(hasScope(['proxy:advanced:bypass:host-1'], 'proxy:raw:bypass:host-1')).toBe(false);
+      expect(hasScope(['proxy:templates:view'], 'proxy:templates:manage')).toBe(false);
+      expect(hasScope(['proxy:unrestricted'], 'proxy:unrestricted:host-1')).toBe(true);
+      expect(hasScope(['proxy:unrestricted:host-1'], 'proxy:unrestricted:host-1')).toBe(true);
+      expect(hasScope(['proxy:unrestricted:host-1'], 'proxy:unrestricted:host-2')).toBe(false);
+      expect(hasScope(['proxy:unrestricted:host-1'], 'proxy:raw:write:host-1')).toBe(false);
+      expect(hasScope(['proxy:raw:write:host-1'], 'proxy:unrestricted:host-1')).toBe(false);
+      expect(hasScope(['proxy:advanced'], 'proxy:unrestricted')).toBe(false);
+    });
+
+    it('never treats a retired scope name as a grant', () => {
+      // Retired names are rewritten at input boundaries; permission checks see only the catalog.
+      expect(hasScope(['proxy:advanced:bypass'], 'proxy:unrestricted')).toBe(false);
+      expect(hasScope(['nodes:config:edit'], 'nodes:manage')).toBe(false);
+      expect(hasScope(['nodes:config:edit:node-1'], 'nodes:manage:node-1')).toBe(false);
     });
 
     it('lets write scopes satisfy matching read scopes', () => {
@@ -79,16 +85,36 @@ describe('Scope-based permissions', () => {
       expect(hasScope(['inference:models:manage'], 'inference:providers:view')).toBe(true);
     });
 
-    it('does not let create-only or destructive action scopes satisfy read scopes', () => {
+    it('lets every action scope in a family satisfy the family view scope', () => {
+      expect(hasScope(['proxy:delete'], 'proxy:view')).toBe(true);
+      expect(hasScope(['notifications:webhooks:manage'], 'notifications:webhooks:view')).toBe(true);
+      expect(hasScope(['databases:credentials:reveal'], 'databases:view')).toBe(true);
+      expect(hasScope(['databases:credentials:reveal:db-1'], 'databases:view:db-1')).toBe(true);
+      expect(hasScope(['logs:schemas:delete'], 'logs:schemas:view')).toBe(true);
+      expect(hasScope(['docker:compose:manage:node-1/project-1'], 'docker:compose:view:node-1/project-1')).toBe(true);
+      expect(hasScope(['docker:tasks:manage'], 'docker:tasks')).toBe(true);
+      expect(hasScope(['nodes:console:node-1'], 'nodes:details:node-1')).toBe(true);
+      expect(hasScope(['pki:cert:revoke:ca-1'], 'pki:cert:view:ca-1')).toBe(true);
+      expect(hasScope(['integrations:gitlab:manage'], 'integrations:gitlab:view')).toBe(true);
+      expect(hasScope(['status-page:incidents:update'], 'status-page:view')).toBe(true);
+    });
+
+    it('never lets creation reveal existing resources', () => {
       expect(hasScope(['proxy:create'], 'proxy:view')).toBe(false);
-      expect(hasScope(['proxy:delete'], 'proxy:view')).toBe(false);
+      expect(hasScope(['databases:create'], 'databases:view')).toBe(false);
+      expect(hasScope(['status-page:incidents:create'], 'status-page:view')).toBe(false);
+      expect(hasScope(['acl:create'], 'acl:view')).toBe(false);
+      expect(hasScope(['docker:containers:create:node-1'], 'docker:containers:view:node-1/c1')).toBe(false);
+    });
+
+    it('keeps actions from satisfying sibling actions, other families, or folder item visibility', () => {
       expect(hasScope(['proxy:raw:write'], 'proxy:raw:read')).toBe(false);
       expect(hasScope(['proxy:raw:write:host-1'], 'proxy:raw:read:host-1')).toBe(false);
-      expect(hasScope(['notifications:webhooks:create'], 'notifications:webhooks:view')).toBe(false);
-      expect(hasScope(['databases:create'], 'databases:view')).toBe(false);
-      expect(hasScope(['databases:credentials:reveal'], 'databases:view')).toBe(false);
-      expect(hasScope(['databases:credentials:reveal:db-1'], 'databases:view:db-1')).toBe(false);
-      expect(hasScope(['logs:schemas:delete'], 'logs:schemas:view')).toBe(false);
+      expect(hasScope(['proxy:templates:view'], 'proxy:view')).toBe(false);
+      expect(hasScope(['pages:settings:edit'], 'pages:view')).toBe(false);
+      expect(hasScope(['proxy:folders:manage'], 'proxy:view')).toBe(false);
+      expect(hasScope(['docker:folders:manage'], 'docker:containers:view')).toBe(false);
+      expect(hasScope(['nodes:backups:execute'], 'nodes:details')).toBe(false);
     });
 
     it('keeps write-to-read implications inside the same resource boundary', () => {
@@ -121,7 +147,7 @@ describe('Scope-based permissions', () => {
       expect(hasScopeBase(['proxy:edit:host-1'], 'proxy:edit')).toBe(true);
       expect(hasScopeBase(['proxy:edit:host-1'], 'proxy:view')).toBe(true);
       expect(hasScopeBase(['proxy:raw:write:host-1'], 'proxy:raw:read')).toBe(false);
-      expect(hasScopeBase(['proxy:advanced:bypass:host-1'], 'proxy:advanced')).toBe(false);
+      expect(hasScopeBase(['proxy:unrestricted:host-1'], 'proxy:advanced')).toBe(false);
     });
   });
 
@@ -202,7 +228,27 @@ describe('Scope-based permissions', () => {
     });
 
     it('does not bound a denied exact child scope from a grantable exact parent scope', () => {
-      expect(boundScopes(['proxy:advanced'], ['proxy:advanced:bypass'])).toEqual([]);
+      expect(boundScopes(['proxy:templates:manage'], ['proxy:templates:view'])).toEqual([]);
+    });
+
+    it('never lets a creation grant be delegated as a view grant', () => {
+      const folder = 'folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+      expect(boundScopes(['docker:containers:view'], ['docker:containers:create:node/n1'])).toEqual([]);
+      expect(boundScopes(['proxy:view'], [`proxy:create:${folder}`])).toEqual([]);
+      // Delegation checks (tokens, consent, groups, additional permissions) use the same rule.
+      expect(isScopeSubset([`proxy:view:${folder}`], [`proxy:create:${folder}`])).toBe(false);
+      expect(isScopeSubset(['docker:containers:view:node/n1'], ['docker:containers:create:node/n1'])).toBe(false);
+      expect(isScopeSubset(['hosting:resources:view:account/a1'], ['hosting:resources:create:account/a1'])).toBe(false);
+      expect(isScopeSubset([`ssl:cert:view:${folder}`], [`ssl:cert:issue:${folder}`])).toBe(false);
+    });
+
+    it('keeps a folder-restricted delegation inside the owner folder grant', () => {
+      const folder = 'docker:containers:manage:folder/0b3d7f0e-1111-4c1a-9d2e-3f4a5b6c7d8e';
+      expect(boundScopes([folder], ['docker:containers:manage'])).toEqual([folder]);
+      expect(boundScopes(['docker:containers:manage'], [folder])).toEqual([folder]);
+      expect(isScopeSubset(['docker:containers:manage'], privilegeBoundaryScopes([folder], [folder], 'grant'))).toBe(
+        false
+      );
     });
 
     it('removes delegated scopes no longer granted by the current user', () => {

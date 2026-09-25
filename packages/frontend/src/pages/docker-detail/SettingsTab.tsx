@@ -1169,7 +1169,7 @@ export function SettingsTab({
 
       <AvailabilitySection
         resource={{ type: "container", nodeId, containerName }}
-        canManage={canEdit}
+        canManage={!readOnly && hasScope(`docker:availability:manage:${scopeSuffix}`)}
         onDisableQueued={onAvailabilityDisableQueued}
       />
 

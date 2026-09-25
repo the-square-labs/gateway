@@ -73,5 +73,7 @@ export * from './siem.js';
 export * from './ssl-certificate-folders.js';
 export * from './ssl-certificates.js';
 export * from './status-page.js';
+export * from './storage-copy.js';
+export * from './system-certificate-renewals.js';
 export * from './user-auth.js';
 export * from './users.js';

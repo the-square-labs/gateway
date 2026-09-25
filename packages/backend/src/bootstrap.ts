@@ -218,6 +218,7 @@ import { SetupTokenPolicyService } from '@/modules/setup/setup-token-policy.js';
 import { SetupWizardService } from '@/modules/setup/setup-wizard.service.js';
 import { ACMEService } from '@/modules/ssl/acme.service.js';
 import { resolveHttp01Ingress } from '@/modules/ssl/http01-ingress.js';
+import { InternalCertificateRenewalService } from '@/modules/ssl/internal-cert-renewal.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
 import { StatusPageService } from '@/modules/status-page/status-page.service.js';
@@ -266,6 +267,7 @@ import { SessionService } from '@/services/session.service.js';
 import { StorageCAService } from '@/services/storage-ca.service.js';
 import { SystemCAService } from '@/services/system-ca.service.js';
 import { SystemCertificateLifecycleService } from '@/services/system-certificate-lifecycle.service.js';
+import { SystemCertificateRenewalService } from '@/services/system-certificate-renewal.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import { WebIdentityService } from '@/services/web-identity.service.js';
 import { WebTransportSettingsService } from '@/services/web-transport-settings.service.js';
@@ -1272,6 +1274,7 @@ export async function initializeContainer(): Promise<void> {
       getEnv().SECURE_LINK_CONNECTOR_IMAGE,
       relayPolicyService,
       storageCAService,
+      objectStorageService,
     ],
     managedStorageRuntime
   );
@@ -1286,6 +1289,12 @@ export async function initializeContainer(): Promise<void> {
   managedStorageService.setEventBus(eventBus);
   managedStorageService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(ManagedStorageService, managedStorageService);
+  // Renews managed storage and database TLS certificates while they run
+  // (hot reload through the node daemon); scheduled in bootstrap-background.
+  const systemCertificateRenewal = new SystemCertificateRenewalService(db, { audit: auditService, eventBus });
+  managedStorageService.setCertificateRenewal(systemCertificateRenewal);
+  managedDatabaseService.setCertificateRenewal(systemCertificateRenewal);
+  container.registerInstance(SystemCertificateRenewalService, systemCertificateRenewal);
 
   const proxyDockerUpstreamService = new ProxyDockerUpstreamService(
     db,
@@ -1533,6 +1542,17 @@ export async function initializeContainer(): Promise<void> {
   sslService.setProxyService(proxyService);
   integrationsService.setSSLService(sslService);
   container.registerInstance(SSLService, sslService);
+  const internalCertificateRenewal = new InternalCertificateRenewalService(
+    db,
+    certService,
+    sslService,
+    nginxCertificateDistribution,
+    auditService,
+    alertService
+  );
+  internalCertificateRenewal.setProxyService(proxyService);
+  sslService.setInternalCertificateRenewal(internalCertificateRenewal);
+  container.registerInstance(InternalCertificateRenewalService, internalCertificateRenewal);
   const sslCertificateFolderService = new SSLCertificateFolderService(db, auditService);
   sslCertificateFolderService.setEventBus(eventBus);
   container.registerInstance(SSLCertificateFolderService, sslCertificateFolderService);
@@ -2021,6 +2041,7 @@ export async function initializeContainer(): Promise<void> {
   housekeepingService.setSystemCertificateLifecycleService(systemCertificateLifecycleService);
   housekeepingService.setPagesMaintenanceService(pageMaintenanceService);
   housekeepingService.setInternalRegistryMaintenanceService(dockerInternalRegistryService);
+  housekeepingService.setDockerTaskService(dockerTaskService);
   container.registerInstance(HousekeepingService, housekeepingService);
 
   // Group service (injectable — resolve from container)

@@ -103,7 +103,7 @@ export class HostingInventoryService {
             (!settings.adoptionNodeIds.length || settings.adoptionNodeIds.includes(n.id)) &&
             [user, owner].every(
               (actor) =>
-                hasScope(actor.scopes, `nodes:details:${n.id}`) && hasScope(actor.scopes, `nodes:config:edit:${n.id}`)
+                hasScope(actor.scopes, `nodes:details:${n.id}`) && hasScope(actor.scopes, `nodes:manage:${n.id}`)
             )
         )
         .map((n) => ({ id: n.id, hostname: n.hostname, displayName: n.displayName, type: n.type, status: n.status })),
@@ -776,10 +776,7 @@ export class HostingInventoryService {
     const evidence: HostingNodeEvidence[] = [];
     for (const node of candidates) {
       if (settings.adoptionNodeIds.length && !settings.adoptionNodeIds.includes(node.id)) continue;
-      if (
-        !hasScope(owner.scopes, `nodes:config:edit:${node.id}`) ||
-        !hasScope(owner.scopes, `nodes:details:${node.id}`)
-      )
+      if (!hasScope(owner.scopes, `nodes:manage:${node.id}`) || !hasScope(owner.scopes, `nodes:details:${node.id}`))
         continue;
       const connected = this.dispatch.isNodeConnected(node.id);
       let hostIdentityId = node.hostIdentityId;
@@ -909,12 +906,12 @@ export class HostingInventoryService {
           assertHostingScope(selected.user.scopes, 'integrations:hosting:view', connector.id);
           for (const nodeId of targetNodeIds) {
             assertHostingScope(selected.user.scopes, 'nodes:details', nodeId);
-            assertHostingScope(selected.user.scopes, 'nodes:config:edit', nodeId);
+            assertHostingScope(selected.user.scopes, 'nodes:manage', nodeId);
           }
         }
         if (
           decision.nodeIds.some(
-            (id) => !hasScope(owner.scopes, `nodes:config:edit:${id}`) || !hasScope(owner.scopes, `nodes:details:${id}`)
+            (id) => !hasScope(owner.scopes, `nodes:manage:${id}`) || !hasScope(owner.scopes, `nodes:details:${id}`)
           )
         )
           return;

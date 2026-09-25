@@ -16,7 +16,7 @@ function fixture(resourceIds: string[] = []) {
     settings: HostingSettingsSchema.parse({ resourceIds }),
   };
   let currentConnector: typeof connector | null = structuredClone(connector);
-  const actor = { scopes: ['nodes:config:edit', 'nodes:details'] };
+  const actor = { scopes: ['nodes:manage', 'nodes:details'] };
   const node = {
     id: 'node',
     hostIdentityId: 'host' as string | null,
@@ -191,7 +191,7 @@ describe('adoption admission and commit guards', () => {
 
 const explicitActor = {
   id: 'caller',
-  scopes: ['integrations:hosting:manage', 'integrations:hosting:view', 'nodes:details', 'nodes:config:edit'],
+  scopes: ['integrations:hosting:manage', 'integrations:hosting:view', 'nodes:details', 'nodes:manage'],
 } as User;
 const selected = { resourceId: 'resource', nodeId: 'node', user: explicitActor };
 describe('explicit verified adoption and legacy LXC', () => {

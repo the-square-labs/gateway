@@ -55,17 +55,26 @@ const GIT_CREDENTIAL_REQUIRED_CODES = new Set([
   'GITLAB_CREDENTIAL_REQUIRED',
   'GITHUB_CREDENTIAL_REQUIRED',
   'GIT_CREDENTIAL_REQUIRED',
+  // A stored personal token that expired needs the same re-authorization.
+  'GIT_CREDENTIAL_EXPIRED',
 ]);
 
 /** Remote MCP has no credential sign-in prompt, so the 428 challenge becomes an actionable tool error. */
 function mcpGitCredentialRequiredMessage(err: AppError): string {
   const details = isRecord(err.details) ? err.details : {};
   const provider =
-    err.code === 'GITLAB_CREDENTIAL_REQUIRED' ? 'gitlab' : err.code === 'GITHUB_CREDENTIAL_REQUIRED' ? 'github' : 'git';
+    details.provider === 'gitlab' || details.provider === 'github' || details.provider === 'git'
+      ? details.provider
+      : err.code === 'GITLAB_CREDENTIAL_REQUIRED'
+        ? 'gitlab'
+        : err.code === 'GITHUB_CREDENTIAL_REQUIRED'
+          ? 'github'
+          : 'git';
   const label = provider === 'gitlab' ? 'GitLab' : provider === 'github' ? 'GitHub' : 'Git';
   const connector = typeof details.connectorName === 'string' ? details.connectorName : 'this connector';
-  const state = details.reason === 'invalid' ? 'was rejected' : 'is not set up';
-  return `${err.code}: The personal ${label} credential for ${connector} ${state}, and remote MCP cannot start that sign-in. Grant this token integrations:${provider}:system, or set up the personal ${label} credential in AI Workspace, then retry.`;
+  const state =
+    details.reason === 'invalid' ? 'was rejected' : details.reason === 'expired' ? 'has expired' : 'is not set up';
+  return `${err.code}: The personal ${label} credential for ${connector} ${state}, and remote MCP cannot start that sign-in. Grant this token integrations:${provider}:use, or set up the personal ${label} credential in AI Workspace, then retry.`;
 }
 
 /** Enterprise tools that read, revoke, export, or delete existing SIEM and PKI resources. */

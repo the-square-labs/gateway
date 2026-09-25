@@ -6,16 +6,24 @@ import {
   IdParamSchema,
   jsonBody,
   okJson,
+  optionalJsonBody,
   pathParamSchema,
   UnknownDataResponseSchema,
   UnknownListResponseSchema,
 } from '@/lib/openapi.js';
+import {
+  ManagedCertificateStatusSchema,
+  RenewManagedCertificateSchema,
+} from '@/modules/managed-workloads/certificate-renewal.docs.js';
 import { DeleteStorageQuerySchema } from '@/modules/object-storage/object-storage.schemas.js';
 import {
   CreateManagedStorageAccessKeySchema,
   CreateManagedStorageBindingSchema,
   CreateManagedStorageSchema,
   DeleteManagedStorageBindingSchema,
+  ImportManagedStorageAccessKeysSchema,
+  MoveManagedStorageBindingSchema,
+  RehomeManagedStorageBackupHistorySchema,
   UpdateManagedStorageSchema,
 } from './managed-storage.schemas.js';
 
@@ -115,6 +123,28 @@ export const getManagedStorageCaCertificateRoute = appRoute({
   responses: okJson(dataResponseSchema(ManagedStorageCaCertificateSchema)),
 });
 
+export const getManagedStorageCertificateRoute = appRoute({
+  method: 'get',
+  path: '/{id}/certificate',
+  tags: [TAG],
+  summary: 'Get the TLS certificate of a managed object storage cluster and its automatic renewal status',
+  description:
+    'Gateway renews the certificate while the cluster runs (two thirds into its lifetime or 30 days before expiry) and delivers it without a restart. Shows expiry, the renewal state and the last renewal error. Requires the same view permission as reading the cluster.',
+  request: { params: IdParamSchema },
+  responses: okJson(dataResponseSchema(ManagedCertificateStatusSchema)),
+});
+
+export const renewManagedStorageCertificateRoute = appRoute({
+  method: 'post',
+  path: '/{id}/certificate/renew',
+  tags: [TAG],
+  summary: 'Renew the TLS certificate of a managed object storage cluster now',
+  description:
+    'Issues a new certificate from the Storage CA and has the running cluster load it without a restart; it becomes current once the cluster serves it. SeaweedFS clusters created before rc.9 reread their certificate within five hours (state awaiting_reload) unless allowRestart is set.',
+  request: { params: IdParamSchema, ...optionalJsonBody(RenewManagedCertificateSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const revealManagedStorageCredentialsRoute = appRoute({
   method: 'get',
   path: '/{id}/reveal-credentials',
@@ -181,4 +211,59 @@ export const removeManagedStorageAccessKeyRoute = appRoute({
   summary: 'Revoke a managed object storage IAM access key',
   request: { params: accessKeyParams },
   responses: okJson(z.object({ success: z.boolean() })),
+});
+
+// ── MinIO -> SeaweedFS cutover ────────────────────────────────────────────
+
+export const moveManagedStorageBindingRoute = appRoute({
+  method: 'post',
+  path: '/{id}/bindings/{bindingId}/move',
+  tags: [TAG],
+  summary: 'Move a workload link to another managed object storage cluster',
+  description:
+    'Points the link at targetStorageId without recreating the workload: the link keeps its alias, network and environment, and its key keeps the same access key id and secret, recreated on the target. Only the relay route moves (the connector is recreated when the clusters differ in TLS). Needs storage:iam on both clusters and permission to change the linked workload. A failure rolls the route, connector and target key back; the source key is revoked afterwards, best effort.',
+  request: { params: bindingParams, ...jsonBody(MoveManagedStorageBindingSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const importManagedStorageAccessKeysRoute = appRoute({
+  method: 'post',
+  path: '/{id}/iam-keys/import',
+  tags: [TAG],
+  summary: 'Copy access keys from another managed object storage cluster into this one',
+  description:
+    'Creates the non-expiring access keys of sourceStorageId (or only keyIds) in this cluster with the same access key id and secret, server-side; secrets are never returned. Expiring keys and keys the target engine cannot accept are reported in needsNewId. Needs storage:iam on both clusters; refused while impersonating.',
+  request: { params: IdParamSchema, ...jsonBody(ImportManagedStorageAccessKeysSchema) },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const freezeManagedStorageWritesRoute = appRoute({
+  method: 'post',
+  path: '/{id}/freeze-writes',
+  tags: [TAG],
+  summary: 'Make every issued key of a managed object storage cluster read-only',
+  description:
+    'Migration write freeze: rewrites the policy of every access key and workload-link key Gateway issued on this cluster to read-only, including keys issued later, until unfreeze. The root credentials keep full access. Keys Gateway did not issue are reported in unmanagedKeys and stay writable. Idempotent; a partial failure returns 502 MANAGED_STORAGE_FREEZE_INCOMPLETE and a retry re-applies every key.',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const unfreezeManagedStorageWritesRoute = appRoute({
+  method: 'post',
+  path: '/{id}/unfreeze-writes',
+  tags: [TAG],
+  summary: 'Restore every issued key of a managed object storage cluster to its own access',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const rehomeManagedStorageBackupHistoryRoute = appRoute({
+  method: 'post',
+  path: '/{id}/backup-history/rehome',
+  tags: [TAG],
+  summary: 'Move finished backup history of this cluster to another managed object storage cluster',
+  description:
+    'After the backup files were copied to targetStorageId (same buckets and keys), points finished backup runs at it so this cluster can be deleted without forgetting the history. A run moves only when every artifact exists in the target with its manifest size; blocked runs are reported and stay. Active runs refuse the move; backup policies are not changed. dryRun only reports. Needs storage:edit on both clusters.',
+  request: { params: IdParamSchema, ...jsonBody(RehomeManagedStorageBackupHistorySchema) },
+  responses: okJson(UnknownDataResponseSchema),
 });

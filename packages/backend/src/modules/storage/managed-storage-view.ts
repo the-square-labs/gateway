@@ -22,6 +22,7 @@ export declare function safeManagedStorageView(row: ManagedStorageClusterRow): {
   status: 'stopped' | 'error' | 'ready' | 'creating' | 'updating' | 'deleting';
   pendingOperation: import('@/db/schema/managed-storage.js').ManagedStoragePendingOperation | null;
   lastError: string | null;
+  writesFrozenAt: Date | null;
   objectStorageConnectionId: string | null;
   createdAt: Date;
   updatedAt: Date;

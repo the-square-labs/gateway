@@ -131,15 +131,20 @@ export function withDockerWebhookApi<TBase extends ApiClientBaseConstructor>(Bas
       );
     }
 
+    /**
+     * Pull an image now. With `workload`, the pull is for a container or deployment about to be created at that
+     * destination (container folder, or null for the node root): its create scope authorizes the pull.
+     */
     async pullImageSync(
       nodeId: string,
       imageRef: string,
-      registryId?: string
+      registryId?: string,
+      workload?: { folderId: string | null }
     ): Promise<{ success: boolean; imageRef: string }> {
       return this.unwrapData(
         this.request<{ data: { success: boolean; imageRef: string } }>(
           `/docker/nodes/${nodeId}/images/pull-sync`,
-          { method: "POST", body: JSON.stringify({ imageRef, registryId }) }
+          { method: "POST", body: JSON.stringify({ imageRef, registryId, workload }) }
         )
       );
     }

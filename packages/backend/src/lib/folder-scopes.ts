@@ -139,13 +139,22 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
       resourceType: dockerContainerFolders.resourceType,
     })
     .from(dockerContainerFolders);
+  // Availability policies act on containers, deployments, and Compose projects, so their folder grants
+  // follow the granted folder's own type; every other Docker scope names its folder type.
+  const folderTypeByGrant = new Map(
+    grants.map((grant) => {
+      if (grant.baseScope !== 'docker:availability:manage') return [grant.scope, dockerFolderType(grant.baseScope)];
+      const type = folderRows.find((row) => row.id === grant.folderId)?.resourceType;
+      return [grant.scope, type === 'container' || type === 'compose' ? type : null];
+    })
+  );
   const descendantsByGrant = new Map(
     grants.map((grant) => {
-      const type = dockerFolderType(grant.baseScope);
+      const type = folderTypeByGrant.get(grant.scope);
       const typedRows = folderRows.filter((row) => row.resourceType === type);
       return [
         grant.scope,
-        typedRows.some((row) => row.id === grant.folderId)
+        type && typedRows.some((row) => row.id === grant.folderId)
           ? folderDescendants(typedRows, grant.folderId)
           : new Set<string>(),
       ];
@@ -237,7 +246,7 @@ async function expandDockerFamily(db: DrizzleClient, grants: FolderScopedGrant[]
       ...assignments.flatMap((assignment) => {
         if (CREATION_SCOPES.has(grant.baseScope)) return [];
         if (!assignment.folderId || !folderIds.has(assignment.folderId)) return [];
-        const expectedType = dockerFolderType(grant.baseScope);
+        const expectedType = folderTypeByGrant.get(grant.scope);
         if (assignment.resourceType !== expectedType) return [];
         const ref = `${assignment.nodeId}\u0000${assignment.resourceKey}`;
         const resourceId =
@@ -271,6 +280,7 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope.startsWith('ssl:cert:')) return 'ssl';
   if (baseScope.startsWith('nodes:')) return 'nodes';
   if (baseScope.startsWith('docker:containers:')) return 'docker';
+  if (baseScope === 'docker:availability:manage') return 'docker';
   if (baseScope.startsWith('docker:compose:')) return 'docker';
   if (
     baseScope.startsWith('docker:networks:') ||
@@ -281,7 +291,9 @@ function familyForBaseScope(baseScope: string) {
   if (baseScope.startsWith('storage:')) return 'storage';
   if (baseScope.startsWith('databases:')) return 'databases';
   if (baseScope.startsWith('logs:schemas:')) return 'logging-schemas';
-  if (baseScope.startsWith('logs:environments:') || baseScope === 'logs:read') return 'logging-environments';
+  // Ingest tokens and log reading are qualified by the logging environment ID.
+  if (baseScope.startsWith('logs:environments:') || baseScope.startsWith('logs:tokens:') || baseScope === 'logs:read')
+    return 'logging-environments';
   return null;
 }
 

@@ -46,6 +46,7 @@ import {
 import { DockerManagementService } from './docker.service.js';
 import { assertDockerResourceScope, filterDockerResourcesForScope } from './docker-access.middleware.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
+import { DOCKER_VOLUME_EDIT_SCOPE } from './docker-volume-access.js';
 import {
   assertSnapshotVolumeVisible,
   getDockerVolumeMetricsSnapshot,
@@ -374,29 +375,30 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
   });
 
   // Rename volume
-  router.openapi({ ...renameVolumeRoute, middleware: requireDockerVolumeScope('docker:volumes:create') }, async (c) => {
-    const service = container.resolve(DockerManagementService);
-    const nodeId = c.req.param('nodeId')!;
-    const name = c.req.param('name')!;
-    const user = c.get('user')!;
-    await assertComposeVolumeMutationAllowed(nodeId, name);
-    assertDockerResourceScope(c.get('effectiveScopes') ?? [], 'docker:volumes:delete', nodeId, name);
-    const body = await c.req.json();
-    const { name: newName } = VolumeRenameSchema.parse(body);
-    await service.renameVolume(nodeId, name, newName, user.id);
-    return c.json({ success: true });
-  });
-
-  // Update volume labels
   router.openapi(
-    { ...updateVolumeLabelsRoute, middleware: requireDockerVolumeScope('docker:volumes:create') },
+    { ...renameVolumeRoute, middleware: requireDockerVolumeScope(DOCKER_VOLUME_EDIT_SCOPE) },
     async (c) => {
       const service = container.resolve(DockerManagementService);
       const nodeId = c.req.param('nodeId')!;
       const name = c.req.param('name')!;
       const user = c.get('user')!;
       await assertComposeVolumeMutationAllowed(nodeId, name);
-      assertDockerResourceScope(c.get('effectiveScopes') ?? [], 'docker:volumes:delete', nodeId, name);
+      const body = await c.req.json();
+      const { name: newName } = VolumeRenameSchema.parse(body);
+      await service.renameVolume(nodeId, name, newName, user.id);
+      return c.json({ success: true });
+    }
+  );
+
+  // Update volume labels
+  router.openapi(
+    { ...updateVolumeLabelsRoute, middleware: requireDockerVolumeScope(DOCKER_VOLUME_EDIT_SCOPE) },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const name = c.req.param('name')!;
+      const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
       const body = await c.req.json();
       const { labels } = VolumeLabelsUpdateSchema.parse(body);
       await service.updateVolumeLabels(nodeId, name, labels, user.id);
@@ -423,19 +425,22 @@ export function registerVolumeRoutes(router: OpenAPIHono<AppEnv>) {
     }
   );
 
-  router.openapi({ ...resizeVolumeRoute, middleware: requireDockerVolumeScope('docker:volumes:create') }, async (c) => {
-    const service = container.resolve(DockerManagementService);
-    const nodeId = c.req.param('nodeId')!;
-    const name = c.req.param('name')!;
-    const user = c.get('user')!;
-    await assertComposeVolumeMutationAllowed(nodeId, name);
-    const { capacityBytes } = VolumeResizeSchema.parse(await c.req.json());
-    await service.resizeVolume(nodeId, name, capacityBytes, user.id);
-    return c.json({ success: true });
-  });
+  router.openapi(
+    { ...resizeVolumeRoute, middleware: requireDockerVolumeScope(DOCKER_VOLUME_EDIT_SCOPE) },
+    async (c) => {
+      const service = container.resolve(DockerManagementService);
+      const nodeId = c.req.param('nodeId')!;
+      const name = c.req.param('name')!;
+      const user = c.get('user')!;
+      await assertComposeVolumeMutationAllowed(nodeId, name);
+      const { capacityBytes } = VolumeResizeSchema.parse(await c.req.json());
+      await service.resizeVolume(nodeId, name, capacityBytes, user.id);
+      return c.json({ success: true });
+    }
+  );
 
-  // Remove volume
-  router.openapi({ ...adoptVolumeRoute, middleware: requireDockerVolumeScope('docker:volumes:create') }, async (c) => {
+  // Adopt volume
+  router.openapi({ ...adoptVolumeRoute, middleware: requireDockerVolumeScope(DOCKER_VOLUME_EDIT_SCOPE) }, async (c) => {
     const service = container.resolve(DockerManagementService);
     const nodeId = c.req.param('nodeId')!;
     const name = c.req.param('name')!;

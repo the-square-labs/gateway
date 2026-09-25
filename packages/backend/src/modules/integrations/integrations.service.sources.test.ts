@@ -50,7 +50,10 @@ describe('PaaS repository discovery credentials', () => {
       code: 'CONNECTOR_SCOPE_DENIED',
     });
     await expect(
-      service.githubListRepositories({ ...user, scopes: ['integrations:github:view'] }, { connectorId: 'connector-1' })
+      service.githubListRepositories(
+        { ...user, scopes: ['integrations:github:repo:read'] },
+        { connectorId: 'connector-1' }
+      )
     ).rejects.toThrow(/personal|Personal/);
     expect(personal).toHaveBeenCalledOnce();
   });

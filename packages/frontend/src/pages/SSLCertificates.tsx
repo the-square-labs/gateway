@@ -41,6 +41,7 @@ import {
 } from "@/components/ui/select";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
+import { hasCreationDestination } from "@/lib/creation-folders";
 import { cn, daysUntil, formatDate, formatDateTime, hoursUntil } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -129,7 +130,13 @@ export function SSLCertificates() {
     useState<SSLCertificateCreateDialogDevPreview | null>(null);
   const [cloudflareReady, setCloudflareReady] = useState<boolean | null>(null);
   const isCheckingDomainsRef = useRef(false);
-  const { hasScope } = useAuthStore();
+  const { hasScope, hasScopedAccess, user } = useAuthStore();
+  // Creating needs ssl:cert:issue on some destination (broad or a folder); the dialog
+  // offers only those folders. Per-certificate grants only cover renewal actions.
+  const canCreateCertificate = hasCreationDestination(user?.scopes ?? [], "ssl:cert:issue");
+  // Let's Encrypt picks registered domains, which needs domains:view; without it only
+  // upload and internal CA linking are offered and no domain lookup is made.
+  const canViewDomains = hasScopedAccess("domains:view");
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const hasCloudflareIntegration = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.hasCloudflareIntegration ?? false
@@ -149,7 +156,7 @@ export function SSLCertificates() {
     setIsCheckingDomains(true);
     try {
       const [result, connectors] = await Promise.all([
-        api.listDomains({ page: 1, limit: 1 }),
+        canViewDomains ? api.listDomains({ page: 1, limit: 1 }) : Promise.resolve(null),
         canInspectCloudflare
           ? api.listCloudflareConnectors({ enabled: true }).catch(() => null)
           : Promise.resolve(null),
@@ -163,6 +170,12 @@ export function SSLCertificates() {
               (connector.zones?.length ?? 0) > 0
           )
         );
+      }
+      if (!result) {
+        setHasDomains(false);
+        setCreateInitialTab("upload");
+        setCreateDialogOpen(true);
+        return;
       }
       const domainsAvailable = result.pagination.total > 0;
       setHasDomains(domainsAvailable);
@@ -178,7 +191,7 @@ export function SSLCertificates() {
       isCheckingDomainsRef.current = false;
       setIsCheckingDomains(false);
     }
-  }, [canInspectCloudflare]);
+  }, [canInspectCloudflare, canViewDomains]);
 
   const continueWithManualCertificate = () => {
     setDomainRequiredOpen(false);
@@ -389,6 +402,15 @@ export function SSLCertificates() {
     }
   };
 
+  const handleEnableInternalAutoRenew = async (cert: SSLCertificate) => {
+    try {
+      await setAutoRenew(cert.id, { enabled: true });
+      toast.success("Automatic reissue enabled");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update auto-renew");
+    }
+  };
+
   const handleContinueDNSRenewal = (cert: {
     id: string;
     name: string;
@@ -569,6 +591,13 @@ export function SSLCertificates() {
       label: "Auto-Renew",
       width: "150px",
       renderCell: (cert) => {
+        if (cert.type === "internal") {
+          return cert.autoRenew ? (
+            <Badge variant="success">Reissue</Badge>
+          ) : (
+            <Badge variant="secondary">No</Badge>
+          );
+        }
         if (cert.type !== "acme") return <Badge variant="secondary">No</Badge>;
         if (cert.autoRenew && cert.autoRenewProvider === "cloudflare") {
           return <Badge variant="success">Cloudflare</Badge>;
@@ -595,30 +624,38 @@ export function SSLCertificates() {
         const hasPendingDNSVerification =
           (cert.acmePendingOperation === "issue" || cert.acmePendingOperation === "renewal") &&
           (cert.acmePendingChallenges?.length ?? 0) > 0;
-        const canContinueDNSVerification = hasScope("ssl:cert:issue") && hasPendingDNSVerification;
+        // Row actions use the per-certificate grant, like /ssl-certificates/:id/* on the backend.
+        const canIssueForCert = hasScope(`ssl:cert:issue:${cert.id}`);
+        const canContinueDNSVerification = canIssueForCert && hasPendingDNSVerification;
         const canRenewCert =
-          hasScope("ssl:cert:issue") &&
-          cert.type === "acme" &&
+          canIssueForCert &&
+          (cert.type === "acme" || (cert.type === "internal" && cert.autoRenew)) &&
           Boolean(cert.notAfter) &&
           (cert.status === "active" || cert.status === "error") &&
           !hasPendingDNSVerification;
         const canEnableCloudflareAutoRenew =
-          hasScope("ssl:cert:issue") &&
+          canIssueForCert &&
           cert.type === "acme" &&
           cert.acmeChallengeType === "dns-01" &&
           cert.status === "active" &&
           !(cert.autoRenew && cert.autoRenewProvider === "cloudflare") &&
           !hasPendingDNSVerification;
         const canDisableCloudflareAutoRenew =
-          hasScope("ssl:cert:issue") &&
-          cert.type === "acme" &&
-          cert.acmeChallengeType === "dns-01" &&
-          cert.autoRenew &&
-          cert.autoRenewProvider === "cloudflare";
+          canIssueForCert &&
+          ((cert.type === "acme" &&
+            cert.acmeChallengeType === "dns-01" &&
+            cert.autoRenew &&
+            cert.autoRenewProvider === "cloudflare") ||
+            (cert.type === "internal" && cert.autoRenew));
+        const canEnableInternalAutoRenew =
+          canIssueForCert && cert.type === "internal" && !cert.autoRenew;
         const canDeleteCert =
           !cert.isSystem && (hasScope("ssl:cert:delete") || hasScope(`ssl:cert:delete:${cert.id}`));
         const canRetryDeployments =
-          hasScope("admin:update") &&
+          // System certificates stay operator-only (admin:update), like the backend.
+          (cert.isSystem
+            ? hasScope("admin:update")
+            : canIssueForCert || hasScope("admin:update")) &&
           cert.distribution !== undefined &&
           cert.distribution.status !== "ready" &&
           cert.distribution.status !== "not_deployed";
@@ -627,6 +664,7 @@ export function SSLCertificates() {
           canRenewCert ||
           canEnableCloudflareAutoRenew ||
           canDisableCloudflareAutoRenew ||
+          canEnableInternalAutoRenew ||
           canRetryDeployments ||
           canDeleteCert;
         if (!hasActions) return null;
@@ -661,6 +699,12 @@ export function SSLCertificates() {
                   <DropdownMenuItem onClick={() => handleSetCloudflareAutoRenew(cert, false)}>
                     <Cloud className="h-4 w-4" />
                     Disable Auto-Renew
+                  </DropdownMenuItem>
+                )}
+                {canEnableInternalAutoRenew && (
+                  <DropdownMenuItem onClick={() => handleEnableInternalAutoRenew(cert)}>
+                    <RefreshCw className="h-4 w-4" />
+                    Enable Automatic Reissue
                   </DropdownMenuItem>
                 )}
                 {canRetryDeployments && (
@@ -717,7 +761,7 @@ export function SSLCertificates() {
                     },
                   ]
                 : []),
-              ...(hasScope("ssl:cert:issue")
+              ...(canCreateCertificate
                 ? [
                     {
                       label: "Add Certificate",
@@ -735,7 +779,7 @@ export function SSLCertificates() {
                 Add Folder
               </Button>
             )}
-            {hasScope("ssl:cert:issue") && (
+            {canCreateCertificate && (
               <Button onClick={() => void openCreateCertificate()} disabled={isCheckingDomains}>
                 <Plus className="h-4 w-4" />
                 Add Certificate
@@ -803,7 +847,7 @@ export function SSLCertificates() {
           emptyState={
             <EmptyState
               message="No SSL certificates."
-              {...(hasScope("ssl:cert:issue")
+              {...(canCreateCertificate
                 ? { actionLabel: "Add one", onAction: () => void openCreateCertificate() }
                 : {})}
               hasActiveFilters={hasActiveFilters}

@@ -5,14 +5,15 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   // ── Nodes ──
   {
     name: 'list_nodes',
-    description: 'List all daemon nodes with their type, status, and connection info.',
+    description:
+      'List daemon nodes with their type, status, and connection info. Without nodes:details, pass type to discover destination nodes: type nginx for route or Pages creators, docker for Docker grants, databases or storage for database and storage creators; those results carry only the node summary.',
     parameters: {
       type: 'object',
       properties: {
         search: { type: 'string', description: 'Search by hostname' },
         type: {
           type: 'string',
-          enum: ['nginx', 'monitoring', 'docker', 'builder', 'databases', 'relay', 'bastion'],
+          enum: ['nginx', 'monitoring', 'docker', 'builder', 'databases', 'storage', 'relay', 'bastion'],
           description: 'Filter by node type',
         },
         status: { type: 'string', enum: ['pending', 'online', 'offline'], description: 'Filter by status' },
@@ -151,7 +152,7 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_node_config',
     description:
-      'Read, update, or test the global nginx configuration on a node. Operations: read, update, test. read requires nodes:config:view:<nodeId>; update/test require nodes:config:edit:<nodeId>.',
+      'Read, update, or test the global nginx configuration on a node. Operations: read, update, test. read requires nodes:config:view:<nodeId>; update/test require nodes:manage:<nodeId>.',
     parameters: {
       type: 'object',
       properties: {
@@ -219,7 +220,7 @@ export const PLATFORM_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'Ingress',
-    requiredScope: 'proxy:raw:toggle',
+    requiredScope: 'proxy:raw:write',
     invalidateStores: ['proxy'],
   },
 

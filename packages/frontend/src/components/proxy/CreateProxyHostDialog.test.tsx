@@ -63,6 +63,7 @@ describe("CreateProxyHostDialog", () => {
         navigation: { pagesEnabled: true },
       } as never,
     });
+    vi.spyOn(api, "listFolders").mockResolvedValue([]);
   });
 
   it("shows a cached nginx node while the refresh is still pending", async () => {
@@ -327,6 +328,119 @@ describe("CreateProxyHostDialog", () => {
     expect(createProxyHost).not.toHaveBeenCalled();
   });
 
+  describe("folder destination", () => {
+    const edgeNode = {
+      id: "node-1",
+      hostname: "edge-one",
+      displayName: "Edge One",
+      type: "nginx",
+      status: "online",
+      serviceCreationLocked: false,
+      capabilities: {},
+    };
+    const folderTree = [
+      {
+        id: "folder-granted",
+        name: "Team A",
+        parentId: null,
+        sortOrder: 0,
+        depth: 0,
+        hosts: [],
+        children: [],
+      },
+      {
+        id: "folder-other",
+        name: "Team B",
+        parentId: null,
+        sortOrder: 1,
+        depth: 0,
+        hosts: [],
+        children: [],
+      },
+    ];
+
+    beforeEach(() => {
+      api.invalidateCache("nodes:list:default");
+      vi.spyOn(api, "listNodes").mockResolvedValue({ data: [edgeNode] } as never);
+      vi.spyOn(api, "listSSLCertificates").mockResolvedValue({ data: [] } as never);
+      vi.spyOn(api, "listNginxTemplates").mockResolvedValue([]);
+      vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+      vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+      vi.spyOn(api, "listFolders").mockResolvedValue(folderTree as never);
+    });
+
+    it("offers only the granted folder, hides the root and preselects it for a folder-only creator", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["proxy:create:folder/folder-granted"] } as never,
+      });
+      const createProxyHost = vi
+        .spyOn(api, "createProxyHost")
+        .mockResolvedValue({ id: "route-1" } as never);
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+
+      const folderTrigger = await screen.findByRole("combobox", { name: "Folder" });
+      await waitFor(() => expect(folderTrigger).toHaveTextContent("Team A"));
+      await user.click(folderTrigger);
+      expect(screen.queryByRole("option", { name: "No folder" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Team B/ })).not.toBeInTheDocument();
+      await user.click(screen.getByRole("option", { name: /Team A/ }));
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled()
+      );
+      await user.click(screen.getByRole("combobox", { name: "Ingress node" }));
+      await user.click(screen.getByRole("option", { name: /Edge One/i }));
+      await user.type(screen.getByPlaceholderText("example.com"), "app.example.com");
+      await user.click(screen.getByRole("button", { name: /next/i }));
+      await user.type(await screen.findByPlaceholderText("192.168.1.100"), "10.0.0.2");
+      await user.click(screen.getByRole("button", { name: /create/i }));
+
+      await waitFor(() => expect(createProxyHost).toHaveBeenCalledOnce());
+      expect(createProxyHost.mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({ folderId: "folder-granted", nodeId: "node-1" })
+      );
+    });
+
+    it("keeps the root selected and hides the picker without folders for a broad creator", async () => {
+      vi.spyOn(api, "listFolders").mockResolvedValue([]);
+      useAuthStore.setState({ user: { id: "user-1", scopes: ["proxy:create"] } as never });
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled()
+      );
+      expect(screen.queryByRole("combobox", { name: "Folder" })).not.toBeInTheDocument();
+    });
+
+    it("requires a folder choice when several folders are allowed and the root is not", async () => {
+      useAuthStore.setState({
+        user: {
+          id: "user-1",
+          scopes: ["proxy:create:folder/folder-granted", "proxy:create:folder/folder-other"],
+        } as never,
+      });
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+
+      const folderTrigger = await screen.findByRole("combobox", { name: "Folder" });
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled()
+      );
+      await user.click(screen.getByRole("combobox", { name: "Ingress node" }));
+      await user.click(screen.getByRole("option", { name: /Edge One/i }));
+      await user.type(screen.getByPlaceholderText("example.com"), "app.example.com");
+      expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
+
+      await user.click(folderTrigger);
+      await user.click(screen.getByRole("option", { name: /Team B/ }));
+      expect(screen.getByRole("button", { name: /next/i })).not.toBeDisabled();
+    });
+  });
+
   describe("editing an existing route", () => {
     const existingHost = {
       id: "host-1",
@@ -414,9 +528,9 @@ describe("CreateProxyHostDialog", () => {
       });
     });
 
-    it("shows the raw switch with the raw toggle scope and sends it only when changed", async () => {
+    it("shows the raw switch with the raw write scope and sends it only when changed", async () => {
       useAuthStore.setState({
-        user: { id: "user-1", scopes: ["proxy:edit:host-1", "proxy:raw:toggle:host-1"] } as never,
+        user: { id: "user-1", scopes: ["proxy:edit:host-1", "proxy:raw:write:host-1"] } as never,
       });
       const updateProxyHost = vi
         .spyOn(api, "updateProxyHost")

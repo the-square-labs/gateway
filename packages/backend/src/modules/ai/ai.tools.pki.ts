@@ -17,7 +17,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_cas',
     description:
-      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId. CAs are listed for their type view scope or a per-CA pki:cert:issue grant.',
+      'List all Certificate Authorities with their status, type, and hierarchy. Returns id, commonName, type (root/intermediate), status, notBefore, notAfter, parentId. CAs are listed for pki:ca:view (broad or on that CA) or a per-CA pki:cert:issue grant.',
     parameters: {
       type: 'object',
       properties: {
@@ -26,7 +26,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'PKI - Certificate Authorities',
-    requiredScope: 'pki:ca:view:root',
+    requiredScope: 'pki:ca:view',
     invalidateStores: [],
   },
   {
@@ -41,7 +41,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'PKI - Certificate Authorities',
-    requiredScope: 'pki:ca:view:root',
+    requiredScope: 'pki:ca:view',
     invalidateStores: [],
   },
   {
@@ -117,7 +117,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_ca',
     description:
-      'Manage Certificate Authorities beyond create/delete. Operations: update (CRL distribution URL, CA issuers URL, max issued validity; needs pki:ca:create:root), revoke (revokes the CA and its subordinate CAs; needs pki:ca:revoke:<type>), export_key (PKCS#12 of the CA private key and certificate protected by passphrase, returned base64; needs pki:ca:create:root and is audited).',
+      'Manage Certificate Authorities beyond create/delete. Operations: update (CRL distribution URL, CA issuers URL, max issued validity; needs pki:ca:edit on the CA), revoke (revokes the CA and its subordinate CAs; needs pki:ca:revoke:<type>), export_key (PKCS#12 of the CA private key and certificate protected by passphrase, returned base64; needs pki:ca:export on the CA and is audited).',
     parameters: {
       type: 'object',
       properties: {
@@ -133,7 +133,7 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: true,
     category: 'PKI - Certificate Authorities',
-    requiredScope: 'pki:ca:create:root',
+    requiredScope: 'pki:ca:edit',
     invalidateStores: ['ca'],
     historyRetention: { mode: 'never_full' },
   },
@@ -193,6 +193,11 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
           description: 'Key algorithm',
         },
         validityDays: { type: 'number', description: 'Validity in days' },
+        clampToCaValidity: {
+          type: 'boolean',
+          description:
+            'When the requested validity would outlive the issuing CA, end the certificate with the CA instead of failing with VALIDITY_EXCEEDS_CA.',
+        },
         type: {
           type: 'string',
           enum: ['tls-server', 'tls-client', 'code-signing', 'email'],
@@ -267,6 +272,11 @@ export const PKI_AI_TOOLS: AIToolDefinition[] = [
         csrPem: { type: 'string' },
         validityDays: { type: 'number' },
         overrideSans: { type: 'array', items: { type: 'string' } },
+        clampToCaValidity: {
+          type: 'boolean',
+          description:
+            'issue_from_csr: end the certificate with the CA instead of failing when it would outlive the CA.',
+        },
         format: {
           type: 'string',
           enum: ['pem', 'der', 'chain', 'fullchain', 'private-key', 'pem-bundle', 'pkcs12', 'jks'],

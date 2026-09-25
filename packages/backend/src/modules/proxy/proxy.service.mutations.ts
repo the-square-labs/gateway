@@ -232,7 +232,10 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     });
 
     logger.info('Created proxy host', { hostId: host.id, domains: host.domainNames });
-    await grantCreatedResourcePermissions(userId, 'proxy', host.id);
+    await grantCreatedResourcePermissions(userId, 'proxy', host.id, {
+      folderId: host.folderId ?? null,
+      nodeId: host.nodeId ?? null,
+    });
     this.emitHost(host.id, 'created', host.domainNames?.[0]);
 
     // 6. Fire-and-forget immediate health check

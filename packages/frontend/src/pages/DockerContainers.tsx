@@ -49,7 +49,7 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useRealtime } from "@/hooks/use-realtime";
 import { matchesDockerContainerStatus } from "@/lib/docker-container-filters";
 import { formatDisplayImageRef } from "@/lib/docker-image-ref";
-import { loadVisibleDockerNodes } from "@/lib/docker-node-access";
+import { canCreateDockerResourceOnNode, loadVisibleDockerNodes } from "@/lib/docker-node-access";
 import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-routes";
@@ -247,7 +247,7 @@ export function DockerContainers({
     try {
       const compatible = await loadVisibleDockerNodes(
         user?.scopes ?? [],
-        ["docker:containers:view"],
+        ["docker:containers:view", "docker:containers:create"],
         hasScopedAccess("nodes:details")
       );
       setDockerNodes(compatible);
@@ -413,10 +413,15 @@ export function DockerContainers({
   const hasActiveFilters = filters.search !== "" || filters.status !== "all";
   const hasActiveNodeFilter = !fixedNodeId && !!selectedNodeId;
   const isSearchFiltering = filters.search.trim() !== "";
-  const canManageFolders = !fixedNodeId && hasScope("docker:containers:folders:manage");
+  const canManageFolders = !fixedNodeId && hasScope("docker:folders:manage");
   const canCreateOnVisibleNode =
     !!visibleNodeId &&
-    (hasScope("docker:containers:create") || hasScope(`docker:containers:create:${visibleNodeId}`));
+    canCreateDockerResourceOnNode(user?.scopes ?? [], "docker:containers:create", visibleNodeId);
+  // Without broad node visibility an empty node list means nothing is shared yet, not that no node exists.
+  const seesEveryDockerNode =
+    hasScope("nodes:details") ||
+    hasScope("docker:containers:view") ||
+    hasScopedAccess("docker:containers:create");
   const canDragFolders = canManageFolders && !isMobile && !isSearchFiltering;
   const canManageRuntime = hasScopedAccess("docker:containers:manage");
   const showActionsColumn = canManageFolders || canManageRuntime;
@@ -1060,7 +1065,13 @@ export function DockerContainers({
               !embedded &&
               dockerNodes.length === 0 &&
               useDockerStore.getState().dockerNodes.length === 0 && (
-                <EmptyState message="No Docker nodes registered. Add a Docker node from the Nodes page to get started." />
+                <EmptyState
+                  message={
+                    seesEveryDockerNode
+                      ? "No Docker nodes registered. Add a Docker node from the Nodes page to get started."
+                      : "No containers are shared with you yet. Containers placed in the folders you can access will appear here."
+                  }
+                />
               )}
           </>
         }

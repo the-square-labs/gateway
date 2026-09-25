@@ -147,7 +147,10 @@ export async function executeDockerDeploy({
   let imageRef = deployImage.trim();
   if (!deployLocalImages.includes(imageRef)) {
     toast.info(`Pulling "${imageRef}"...`);
-    const pullResult = await api.pullImageSync(deployNodeId, imageRef, credentialRegistryId);
+    // The deploy destination authorizes this pull, so a folder-only creator needs no image pull scope.
+    const pullResult = await api.pullImageSync(deployNodeId, imageRef, credentialRegistryId, {
+      folderId: deployFolderId ?? null,
+    });
     imageRef = pullResult.imageRef;
   }
 

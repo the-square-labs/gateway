@@ -41,6 +41,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { api } from "@/services/api";
+import { useAuthStore } from "@/stores/auth";
 import type {
   DatabaseType,
   ManagedDatabase,
@@ -205,6 +206,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
   ref
 ) {
   const navigate = useNavigate();
+  const hasScope = useAuthStore((state) => state.hasScope);
   const [databases, setDatabases] = useState<ManagedDatabase[]>([]);
   const [databaseNodes, setDatabaseNodes] = useState<Node[]>([]);
   const [bindings, setBindings] = useState<ManagedDatabaseBinding[]>([]);
@@ -358,6 +360,13 @@ export const ManagedDatabaseLinksSection = forwardRef<
     },
     [databaseNodeById]
   );
+  // Linking and unlinking change the database's consumers: the API requires databases:edit on
+  // the database (the target requirement, environment and secrets, is checked by the caller).
+  const canEditDatabase = useCallback(
+    (database: ManagedDatabase | undefined) =>
+      !!database && hasScope(`databases:edit:${database.databaseConnectionId}`),
+    [hasScope]
+  );
   const selectedTargetResourceId =
     targetType === "compose_service"
       ? selectedComposeServiceName
@@ -369,10 +378,11 @@ export const ManagedDatabaseLinksSection = forwardRef<
       databases.filter(
         (database) =>
           databaseIsAvailable(database) &&
+          canEditDatabase(database) &&
           !!selectedTargetResourceId &&
           !linkedTargets.has(`${database.id}:${selectedTargetResourceId}`)
       ),
-    [databaseIsAvailable, databases, linkedTargets, selectedTargetResourceId]
+    [canEditDatabase, databaseIsAvailable, databases, linkedTargets, selectedTargetResourceId]
   );
   const selected = available.find((database) => database.id === selectedDatabaseId) ?? available[0];
   const hasChanges = changes.additions.length > 0 || changes.removals.length > 0;
@@ -720,7 +730,9 @@ export const ManagedDatabaseLinksSection = forwardRef<
         const serviceTarget = composeServiceTarget(targetResourceId, service.name);
         return databases.some(
           (database) =>
-            databaseIsAvailable(database) && !linkedTargets.has(`${database.id}:${serviceTarget}`)
+            databaseIsAvailable(database) &&
+            canEditDatabase(database) &&
+            !linkedTargets.has(`${database.id}:${serviceTarget}`)
         );
       });
       if (!firstAvailableService) {
@@ -794,6 +806,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
         ) : (
           displayBindings.map((entry) => {
             const database = databaseForBinding(entry.binding);
+            // A staged addition came from the editable list; existing links need databases:edit.
+            const canChangeLink = entry.pending === "add" || canEditDatabase(database);
             const databaseNode = database ? databaseNodeById.get(database.nodeId) : undefined;
             const unavailable = !!database && !!databaseNode && !databaseIsAvailable(database);
             const reconciling =
@@ -841,7 +855,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
                     <Select
                       value={composeServiceName(targetResourceId, entry.binding.targetResourceId)}
                       onValueChange={(serviceName) => stageServiceChange(entry, serviceName)}
-                      disabled={disabled || saving || entry.pending === "remove"}
+                      disabled={disabled || saving || entry.pending === "remove" || !canChangeLink}
                     >
                       <SelectTrigger
                         className="w-44"
@@ -885,7 +899,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
                     variant="ghost"
                     size="icon"
                     className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
-                    disabled={disabled || saving}
+                    disabled={disabled || saving || !canChangeLink}
                     onClick={() => void stageUnlink(entry)}
                     aria-label={
                       entry.pending === "remove"

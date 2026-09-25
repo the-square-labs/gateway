@@ -2,7 +2,8 @@ import type { OpenAPIHono as OpenAPIHonoType } from '@hono/zod-openapi';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { MiddlewareHandler } from 'hono';
 import { z } from 'zod';
-import { container } from '@/container.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { requireScopeBase } from '@/modules/auth/auth.middleware.js';
@@ -24,6 +25,12 @@ import {
 } from './docker-build.schemas.js';
 import { DockerBuildService } from './docker-build.service.js';
 import { DockerSourceService } from './docker-source.service.js';
+import {
+  canListSourceConnectors,
+  canPickDockerSource,
+  listSourceConnectors,
+  SOURCE_CONNECTOR_PICKER_SCOPES,
+} from './docker-source-connectors.js';
 import {
   assertDockerSourceTargetOnNode,
   ComposeSourceProjectCreateSchema,
@@ -91,8 +98,27 @@ function requireDeploymentSourceScope(scope: string): MiddlewareHandler<AppEnv> 
   };
 }
 
+/** Picking a source needs the create or edit scope of the workload it is for, never the integration's scopes. */
+function requireSourcePicker(allowed: (scopes: string[]) => boolean): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    if (!allowed(c.get('effectiveScopes') ?? [])) {
+      throw new AppError(403, 'FORBIDDEN', 'Picking a Git source requires create or edit access to its workload', {
+        requiredScopes: [...SOURCE_CONNECTOR_PICKER_SCOPES],
+        scopeMatch: 'any',
+      });
+    }
+    await next();
+  };
+}
+
 export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
-  router.get('/sources/connectors/:connectorId/repositories', requireScopeBase('docker:containers:view'), async (c) => {
+  // One connector list for every source picker (containers, deployments, Compose Projects and Pages builds).
+  router.get('/sources/connectors', requireSourcePicker(canListSourceConnectors), async (c) => {
+    const data = await listSourceConnectors(container.resolve(TOKENS.DrizzleClient) as DrizzleClient);
+    return c.json({ data });
+  });
+
+  router.get('/sources/connectors/:connectorId/repositories', requireSourcePicker(canPickDockerSource), async (c) => {
     const data = await container
       .resolve(IntegrationsService)
       .listDockerBuildSourceRepositories(actorFor(c), c.req.param('connectorId'));

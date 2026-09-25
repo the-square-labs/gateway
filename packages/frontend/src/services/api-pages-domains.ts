@@ -891,9 +891,13 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       );
     }
 
-    async issueDomainCert(id: string): Promise<SSLCertificate> {
+    /** `folderId` is the SSL certificate folder for the new certificate (root when omitted). */
+    async issueDomainCert(id: string, folderId?: string | null): Promise<SSLCertificate> {
       return this.unwrapData(
-        this.request<{ data: SSLCertificate }>(`/domains/${id}/issue-cert`, { method: "POST" })
+        this.request<{ data: SSLCertificate }>(`/domains/${id}/issue-cert`, {
+          method: "POST",
+          body: JSON.stringify(folderId ? { folderId } : {}),
+        })
       );
     }
 

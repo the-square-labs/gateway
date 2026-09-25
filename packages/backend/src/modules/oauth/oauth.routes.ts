@@ -13,6 +13,7 @@ import { getPublicAuthMethods } from '@/modules/auth/public-auth-methods.js';
 import { isDemoMode } from '@/modules/demo/demo-mode.js';
 import type { AppEnv } from '@/types.js';
 import {
+  OAuthAuthorizationScopesSchema,
   OAuthAuthorizeQuerySchema,
   OAuthClientRegistrationSchema,
   OAuthConsentDecisionSchema,
@@ -309,7 +310,7 @@ oauthRoutes.delete('/authorizations/:clientId', async (c) => {
 oauthRoutes.patch('/authorizations/:clientId', async (c) => {
   const clientId = z.string().min(1).parse(c.req.param('clientId'));
   const resource = z.string().url().parse(c.req.query('resource'));
-  const body = z.object({ scopes: z.array(z.string().min(1)).min(1) }).parse(await c.req.json());
+  const body = OAuthAuthorizationScopesSchema.parse(await c.req.json());
   const authorization = await oauthService().updateUserAuthorizationScopes(
     c.get('user')!,
     clientId,

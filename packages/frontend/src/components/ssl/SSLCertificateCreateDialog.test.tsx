@@ -7,6 +7,7 @@ import { useConfirmDialog } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import { SSLCertificateCreateDialog } from "./SSLCertificateCreateDialog";
 
 function renderDialog(props: Partial<ComponentProps<typeof SSLCertificateCreateDialog>> = {}) {
@@ -26,12 +27,18 @@ function renderDialog(props: Partial<ComponentProps<typeof SSLCertificateCreateD
 
 describe("SSLCertificateCreateDialog domain selection", () => {
   beforeEach(() => {
+    useAuthStore.setState({
+      user: { id: "user-1", scopes: ["ssl:cert:issue"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
     vi.spyOn(api, "listCertificates").mockResolvedValue({ data: [] } as any);
     vi.spyOn(api, "searchDomains").mockResolvedValue([]);
   });
 
   afterEach(() => {
     act(() => useConfirmDialog.getState().close());
+    useAuthStore.setState({ user: null, isAuthenticated: false });
     vi.restoreAllMocks();
   });
 
@@ -364,5 +371,81 @@ describe("SSLCertificateCreateDialog internal PKI linking", () => {
         folderId: null,
       })
     );
+  });
+});
+
+describe("SSLCertificateCreateDialog folder destination", () => {
+  const folders = [
+    { id: "folder-granted", name: "Team A", parentId: null, sortOrder: 0, depth: 0, children: [] },
+    { id: "folder-other", name: "Team B", parentId: null, sortOrder: 1, depth: 0, children: [] },
+  ];
+
+  beforeEach(() => {
+    vi.spyOn(api, "listCertificates").mockResolvedValue({ data: [] } as any);
+    vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+    vi.spyOn(useResourceFolderStore.getState(), "fetchFolders").mockResolvedValue(undefined);
+    useResourceFolderStore.setState((state) => ({
+      foldersByType: { ...state.foldersByType, "ssl-certificate": folders as never },
+      loadingByType: { ...state.loadingByType, "ssl-certificate": false },
+    }));
+  });
+
+  afterEach(() => {
+    useAuthStore.setState({ user: null, isAuthenticated: false });
+    useResourceFolderStore.setState((state) => ({
+      foldersByType: { ...state.foldersByType, "ssl-certificate": [] },
+    }));
+    vi.restoreAllMocks();
+  });
+
+  it("preselects the only granted folder and hides the root for a folder-only creator", async () => {
+    useAuthStore.setState({
+      user: { id: "user-1", scopes: ["ssl:cert:issue:folder/folder-granted"] } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const upload = vi.spyOn(api, "uploadCert").mockResolvedValue({ id: "ssl-1" } as any);
+    const user = userEvent.setup();
+
+    renderDialog({ hasDomains: false, pkiEnabled: false, initialTab: "upload" });
+
+    const folderTrigger = screen.getByRole("combobox", { name: "Folder" });
+    await waitFor(() => expect(folderTrigger).toHaveTextContent("Team A"));
+    await user.click(folderTrigger);
+    expect(screen.queryByRole("option", { name: "No folder" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Team B/ })).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
+
+    await user.type(screen.getByPlaceholderText("My Certificate"), "My Certificate");
+    await user.type(screen.getAllByPlaceholderText(/BEGIN CERTIFICATE/)[0]!, "certificate");
+    await user.type(screen.getByPlaceholderText(/BEGIN PRIVATE KEY/), "private key");
+    await user.click(screen.getByRole("button", { name: /Upload Certificate/ }));
+
+    await waitFor(() => expect(upload).toHaveBeenCalledOnce());
+    expect(upload.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ folderId: "folder-granted" })
+    );
+  });
+
+  it("keeps creation disabled until an allowed folder is chosen", async () => {
+    useAuthStore.setState({
+      user: {
+        id: "user-1",
+        scopes: ["ssl:cert:issue:folder/folder-granted", "ssl:cert:issue:folder/folder-other"],
+      } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const user = userEvent.setup();
+
+    renderDialog({ hasDomains: false, pkiEnabled: false, initialTab: "upload" });
+    await user.type(screen.getByPlaceholderText("My Certificate"), "My Certificate");
+    await user.type(screen.getAllByPlaceholderText(/BEGIN CERTIFICATE/)[0]!, "certificate");
+    await user.type(screen.getByPlaceholderText(/BEGIN PRIVATE KEY/), "private key");
+    expect(screen.getByRole("button", { name: /Upload Certificate/ })).toBeDisabled();
+
+    await user.click(screen.getByRole("combobox", { name: "Folder" }));
+    await user.click(screen.getByRole("option", { name: /Team B/ }));
+    expect(screen.getByRole("button", { name: /Upload Certificate/ })).toBeEnabled();
   });
 });

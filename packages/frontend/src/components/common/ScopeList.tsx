@@ -55,6 +55,13 @@ interface ScopeListProps {
   readOnly?: boolean;
   viewportClassName?: string;
   selectionFilter?: ScopeSelectionFilter;
+  /**
+   * Keep each restriction tree behind a one-line summary ("All resources · Restrict…") until the
+   * user opens it. Used where many scopes start selected, such as OAuth consent.
+   */
+  collapsedRestrictions?: boolean;
+  /** Receives the folders loaded for the selected scopes' folder families. */
+  onFolderOptionsChange?: (options: FolderOption[]) => void;
 }
 
 export function ScopeList({
@@ -76,8 +83,18 @@ export function ScopeList({
   readOnly,
   viewportClassName,
   selectionFilter = "all",
+  collapsedRestrictions = false,
+  onFolderOptionsChange,
 }: ScopeListProps) {
   const actorScopes = useAuthStore((state) => state.user?.scopes);
+  const [expandedScopes, setExpandedScopes] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleExpanded = (scope: string) =>
+    setExpandedScopes((current) => {
+      const next = new Set(current);
+      if (next.has(scope)) next.delete(scope);
+      else next.add(scope);
+      return next;
+    });
   const features = useSystemConfigStore((state) => state.config.features);
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
   const [resourceCatalog, setResourceCatalog] = useState<ScopeResourceCatalog>({});
@@ -130,11 +147,14 @@ export function ScopeList({
       .filter((family): family is FolderFamily => family.length > 0);
     if (families.length === 0) {
       setFolderOptions([]);
+      onFolderOptionsChange?.([]);
       return;
     }
     let cancelled = false;
     void Promise.all(families.map(loadFolderFamily)).then((options) => {
-      if (!cancelled) setFolderOptions(options.flat());
+      if (cancelled) return;
+      setFolderOptions(options.flat());
+      onFolderOptionsChange?.(options.flat());
     });
     if (families.includes("domains") && canLoadScopeResource("domains:view")) {
       void allResourcePages((page) => api.listDomains({ page, limit: 100 }))
@@ -180,8 +200,9 @@ export function ScopeList({
     );
     const needsDockerResources = scopes.some(
       (scope) =>
-        scope.value.startsWith("docker:containers:") &&
-        scope.value !== "docker:containers:create" &&
+        ((scope.value.startsWith("docker:containers:") &&
+          scope.value !== "docker:containers:create") ||
+          scope.value === "docker:availability:manage") &&
         restrictableScopes?.includes(scope.value)
     );
     if (!needsDockerResources || dockerNodes.length === 0) {
@@ -291,6 +312,9 @@ export function ScopeList({
                 restrictableScopes={restrictableScopes}
                 allowedResourceIds={allowedResourceIds}
                 inheritedFromName={inheritedFromName}
+                collapsible={collapsedRestrictions}
+                expanded={expandedScopes.has(scope.value)}
+                onToggleExpanded={() => toggleExpanded(scope.value)}
               />
             ))}
           </div>
@@ -325,6 +349,9 @@ function ScopeRow({
   restrictableScopes,
   allowedResourceIds,
   inheritedFromName,
+  collapsible = false,
+  expanded = false,
+  onToggleExpanded,
 }: {
   scope: ScopeItem;
   isSelected: boolean;
@@ -350,6 +377,9 @@ function ScopeRow({
   restrictableScopes?: readonly string[];
   allowedResourceIds?: Record<string, string[]>;
   inheritedFromName?: string;
+  collapsible?: boolean;
+  expanded?: boolean;
+  onToggleExpanded?: () => void;
 }) {
   const isRestrictable = restrictableScopes?.includes(scope.value) ?? false;
   const selectedIds = resources?.[scope.value] || [];
@@ -467,6 +497,24 @@ function ScopeRow({
     (resourceOptions.length > 0 || visibleFolderOptions.length > 0) &&
     (isSelected || combinedSelectedIds.length > 0) &&
     (!disabled || combinedSelectedIds.length > 0);
+  const collapsed = collapsible && !expanded;
+  const restrictionLabel = (id: string) => {
+    if (isFolderTarget(id)) {
+      const folder = availableFolderOptions.find((option) => folderTarget(option.id) === id);
+      return `${folder?.label ?? id.slice("folder/".length)} (folder)`;
+    }
+    return resourceOptions.find((option) => option.id === id)?.label ?? id;
+  };
+  // Without a broad grant the scope must name resources; "All resources" is not an option then.
+  const restrictionSummary =
+    combinedSelectedIds.length === 0
+      ? allowedIds
+        ? "No resources selected"
+        : "All resources"
+      : [
+          ...combinedSelectedIds.slice(0, 3).map(restrictionLabel),
+          ...(combinedSelectedIds.length > 3 ? [`+${combinedSelectedIds.length - 3} more`] : []),
+        ].join(", ");
   const baseLocked = (!!inheritedExactBase || inheritedSelectedIds.length > 0) && !isOwnSelected;
   const rowDisabled = disabled || baseLocked;
   const showTechnicalValue = !scope.hideValue && scope.value !== scope.label;
@@ -504,9 +552,36 @@ function ScopeRow({
         </div>
         {scope.meta && <span className="text-xs text-muted-foreground">{scope.meta}</span>}
       </label>
-      {showRestrictions && (
+      {showRestrictions && collapsed && (
+        <div className="flex flex-wrap items-center gap-x-1.5 px-3 pb-2 pl-10 text-xs text-muted-foreground">
+          <span>{restrictionSummary}</span>
+          <span aria-hidden="true">·</span>
+          <button
+            type="button"
+            onClick={onToggleExpanded}
+            disabled={disabled}
+            aria-label={`Restrict ${scope.label}`}
+            className="font-medium text-foreground underline-offset-2 hover:underline disabled:cursor-default disabled:opacity-60 disabled:hover:no-underline"
+          >
+            {combinedSelectedIds.length === 0 ? "Restrict…" : "Change…"}
+          </button>
+        </div>
+      )}
+      {showRestrictions && !collapsed && (
         <div className="px-3 pb-2 pl-10">
-          <p className="text-xs text-muted-foreground mb-1">{getResourceLabel(scope.value)}</p>
+          <div className="mb-1 flex items-start justify-between gap-2">
+            <p className="text-xs text-muted-foreground">{getResourceLabel(scope.value)}</p>
+            {collapsible && (
+              <button
+                type="button"
+                onClick={onToggleExpanded}
+                aria-label={`Done restricting ${scope.label}`}
+                className="shrink-0 text-xs font-medium text-foreground underline-offset-2 hover:underline"
+              >
+                Done
+              </button>
+            )}
+          </div>
           {restrictionRows.map((row) => {
             if (row.type === "resource") {
               const opt = row.resource;

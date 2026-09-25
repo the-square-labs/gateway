@@ -26,22 +26,14 @@ webhookRoutes.use('*', authMiddleware);
 
 function canRevealWebhookHeaders(c: { get(key: 'effectiveScopes'): string[] | undefined }): boolean {
   const scopes = c.get('effectiveScopes') ?? [];
-  return hasScope(scopes, 'notifications:webhooks:edit') || hasScope(scopes, 'notifications:manage');
+  return hasScope(scopes, 'notifications:webhooks:manage');
 }
 
 // GET /presets — list template presets
 webhookRoutes.openapi(
   {
     ...listNotificationWebhookPresetsRoute,
-    middleware: requireAnyScope(
-      'notifications:webhooks:view',
-      'notifications:webhooks:view',
-      'notifications:webhooks:create',
-      'notifications:webhooks:edit',
-      'notifications:webhooks:delete',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     return c.json({ data: TEMPLATE_PRESETS });
@@ -52,12 +44,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...listNotificationWebhooksRoute,
-    middleware: requireAnyScope(
-      'notifications:webhooks:view',
-      'notifications:webhooks:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
@@ -72,12 +59,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...getNotificationWebhookRoute,
-    middleware: requireAnyScope(
-      'notifications:webhooks:view',
-      'notifications:webhooks:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:webhooks:view', 'notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
@@ -94,7 +76,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...previewNotificationWebhookRoute,
-    middleware: requireAnyScope('notifications:webhooks:create', 'notifications:webhooks:edit', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:webhooks:manage'),
   },
   async (c) => {
     const { bodyTemplate } = await c.req.json();
@@ -113,7 +95,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...createNotificationWebhookRoute,
-    middleware: requireAnyScope('notifications:webhooks:create', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
@@ -128,7 +110,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...updateNotificationWebhookRoute,
-    middleware: requireAnyScope('notifications:webhooks:edit', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
@@ -143,7 +125,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...deleteNotificationWebhookRoute,
-    middleware: requireAnyScope('notifications:webhooks:delete', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:webhooks:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationWebhookService);
@@ -157,7 +139,7 @@ webhookRoutes.openapi(
 webhookRoutes.openapi(
   {
     ...testNotificationWebhookRoute,
-    middleware: requireAnyScope('notifications:webhooks:edit', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:webhooks:manage'),
   },
   async (c) => {
     const dispatcher = container.resolve(NotificationDispatcherService);

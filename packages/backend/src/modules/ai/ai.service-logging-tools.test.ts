@@ -262,7 +262,7 @@ describe('AIService logging tool routing', () => {
         operation: 'get',
       })
     ).resolves.toMatchObject({ result: { status: 'healthy' } });
-    const denied = await service.executeTool({ ...BASE_USER, scopes: ['logs:manage'] }, 'manage_logging', {
+    const denied = await service.executeTool({ ...BASE_USER, scopes: ['databases:view'] }, 'manage_logging', {
       resource: 'health',
       operation: 'get',
     });
@@ -270,5 +270,76 @@ describe('AIService logging tool routing', () => {
     expect(maintenance.getSnapshot).toHaveBeenCalledTimes(1);
     expect(licensePolicyService.requireFeature).not.toHaveBeenCalled();
     expect(licensePolicyService.requireFeatureForExistingRuntime).not.toHaveBeenCalled();
+  });
+});
+
+describe('AIService logging tool list and schema rules', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('lists environments and schemas as empty for a creator, like the REST lists', async () => {
+    const loggingEnvironmentService = { list: vi.fn().mockResolvedValue([]) };
+    const loggingSchemaService = { list: vi.fn().mockResolvedValue([{ id: 'schema-1' }]) };
+    mockContainerResolve({
+      LoggingEnvironmentService: loggingEnvironmentService,
+      LoggingSchemaService: loggingSchemaService,
+    });
+    const service = createService();
+    const creator = {
+      ...BASE_USER,
+      scopes: ['logs:environments:create:folder/folder-1', 'logs:schemas:create:folder/folder-1'],
+    };
+
+    await expect(
+      service.executeTool(creator, 'manage_logging', { resource: 'environment', operation: 'list' })
+    ).resolves.toMatchObject({ result: [] });
+    expect(loggingEnvironmentService.list).toHaveBeenCalledWith({ search: undefined, allowedIds: [] });
+    await expect(
+      service.executeTool(creator, 'manage_logging', { resource: 'schema', operation: 'list' })
+    ).resolves.toMatchObject({ result: [] });
+  });
+
+  it('refuses to attach a schema the caller cannot view', async () => {
+    const schemaId = '22222222-2222-4222-8222-222222222222';
+    const loggingEnvironmentService = {
+      create: vi.fn().mockResolvedValue({ id: 'env-1' }),
+      get: vi.fn().mockResolvedValue({ id: 'env-1', schemaId: null }),
+      update: vi.fn().mockResolvedValue({ id: 'env-1' }),
+    };
+    mockContainerResolve({
+      LoggingEnvironmentService: loggingEnvironmentService,
+      LoggingEnvironmentFolderService: { assertFolderExists: vi.fn() },
+    });
+    const service = createService();
+    const editor = { ...BASE_USER, scopes: ['logs:environments:create', 'logs:environments:edit'] };
+
+    const created = await service.executeTool(editor, 'manage_logging', {
+      resource: 'environment',
+      operation: 'create',
+      payload: { name: 'Production', schemaId },
+    });
+    expect(created).toMatchObject({ error: expect.stringContaining(`logs:schemas:view:${schemaId}`) });
+    const updated = await service.executeTool(editor, 'manage_logging', {
+      resource: 'environment',
+      operation: 'update',
+      environmentId: 'env-1',
+      payload: { schemaId },
+    });
+    expect(updated).toMatchObject({ error: expect.stringContaining(`logs:schemas:view:${schemaId}`) });
+    expect(loggingEnvironmentService.create).not.toHaveBeenCalled();
+    expect(loggingEnvironmentService.update).not.toHaveBeenCalled();
+
+    await expect(
+      service.executeTool(
+        { ...editor, scopes: [...editor.scopes, `logs:schemas:view:${schemaId}`] },
+        'manage_logging',
+        {
+          resource: 'environment',
+          operation: 'create',
+          payload: { name: 'Production', schemaId },
+        }
+      )
+    ).resolves.toMatchObject({ result: { id: 'env-1' } });
   });
 });

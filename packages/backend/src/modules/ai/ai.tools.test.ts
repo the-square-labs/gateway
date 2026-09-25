@@ -374,7 +374,7 @@ describe('AI tool scope filtering', () => {
   });
 
   it('keeps PKI, proxy, SSL, and administration scope filtering stable', () => {
-    expect(toolNames(['pki:ca:view:root'])).toEqual(expect.arrayContaining(['list_cas', 'get_ca']));
+    expect(toolNames(['pki:ca:view'])).toEqual(expect.arrayContaining(['list_cas', 'get_ca']));
     expect(toolNames(['pki:cert:view'])).toEqual(
       expect.arrayContaining(['list_certificates', 'get_certificate', 'manage_certificate'])
     );
@@ -431,13 +431,25 @@ describe('AI tool scope filtering', () => {
     expect(toolNames(['integrations:cloudflare:view'])).not.toContain('manage_domain');
   });
 
-  it('requires direct database view before advertising database query tools', () => {
-    expect(toolNames(['databases:query:read:db-1'])).not.toContain('query_postgres_read');
-    expect(toolNames(['databases:view:db-1', 'databases:query:read:db-2'])).not.toContain('query_postgres_read');
-    expect(toolNames(['databases:view:db-1', 'databases:query:read:db-1'])).toContain('query_postgres_read');
-    expect(toolNames(['databases:view:db-1', 'databases:query:read:db-1'])).toContain('execute_postgres_sql');
-    expect(toolNames(['databases:view:db-1', 'databases:query:write:db-1'])).toContain('execute_postgres_sql');
-    expect(toolNames(['databases:view:db-1', 'databases:query:admin:db-1'])).toContain('execute_postgres_sql');
+  it('advertises database tools for the same implied scopes as the database routes', () => {
+    // Query scopes imply viewing their database, like GET /databases and the query routes.
+    expect(toolNames(['databases:query:read:db-1'])).toEqual(
+      expect.arrayContaining([
+        'list_databases',
+        'get_database_connection',
+        'query_postgres_read',
+        'execute_postgres_sql',
+      ])
+    );
+    expect(toolNames(['databases:query:write:db-1'])).toContain('query_postgres_read');
+    expect(toolNames(['databases:query:admin:db-1'])).toContain('execute_redis_command');
+    expect(toolNames(['databases:query:read:db-1'])).not.toContain('execute_redis_command');
+    expect(toolNames(['databases:view:db-1'])).not.toContain('query_postgres_read');
+    expect(toolNames(['databases:view:folder/folder-1'])).toContain('list_databases');
+    // Creators list what they can see (possibly nothing), like GET /databases and GET /storage.
+    expect(toolNames(['databases:create:folder/folder-1'])).toContain('list_databases');
+    expect(toolNames(['storage:create:folder/folder-1'])).toContain('list_storage_connections');
+    expect(toolNames(['proxy:view'])).not.toContain('list_storage_connections');
   });
 
   it('keeps notification and web-search tool registry contracts stable', () => {
@@ -467,22 +479,27 @@ describe('AI tool scope filtering', () => {
       'get_siem_delivery',
       'requeue_siem_delivery',
     ]);
-    expect(notificationToolNamesForScopes(['notifications:view'])).toEqual([
+    expect(notificationToolNamesForScopes(['notifications:alerts:view'])).toEqual([
       'list_alert_rules',
       'get_alert_rule',
+      'manage_notifications',
+    ]);
+    expect(notificationToolNamesForScopes(['notifications:webhooks:view'])).toEqual([
       'list_webhooks',
       'list_webhook_deliveries',
       'get_delivery_stats',
       'manage_notifications',
     ]);
-    // The granular notification scopes open the same tools as their routes.
-    expect(notificationToolNamesForScopes(['notifications:webhooks:edit'])).toEqual([
-      'list_webhooks',
-      'update_webhook',
-      'test_webhook',
+    // Managing implies viewing, like the notification routes.
+    expect(notificationToolNamesForScopes(['notifications:alerts:manage'])).toEqual([
+      'list_alert_rules',
+      'get_alert_rule',
+      'create_alert_rule',
+      'update_alert_rule',
+      'delete_alert_rule',
       'manage_notifications',
     ]);
-    expect(notificationToolNamesForScopes(['notifications:manage'])).toEqual([
+    expect(notificationToolNamesForScopes(['notifications:alerts:manage', 'notifications:webhooks:manage'])).toEqual([
       'list_alert_rules',
       'get_alert_rule',
       'create_alert_rule',

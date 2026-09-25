@@ -166,10 +166,10 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       ...user,
       scopes: [
         'integrations:gitlab:repo:read',
-        'integrations:github:view',
-        'integrations:github:system',
-        'integrations:git:view',
-        'integrations:git:system',
+        'integrations:github:repo:read',
+        'integrations:github:use',
+        'integrations:git:repo:read',
+        'integrations:git:use',
       ],
     };
 
@@ -247,7 +247,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       connectorId: connector.id,
       connectorName: connector.name,
       operation: 'repository.read',
-      requiredScope: 'integrations:git:view',
+      requiredScope: 'integrations:git:repo:read',
     });
     const entries = (await this.listAllowlistRows(connector.id)).filter((entry) => entry.entryType === 'project');
     await this.upsertProjectRows(

@@ -32,15 +32,7 @@ alertRuleRoutes.use('*', authMiddleware);
 alertRuleRoutes.openapi(
   {
     ...listNotificationCategoriesRoute,
-    middleware: requireAnyScope(
-      'notifications:alerts:view',
-      'notifications:alerts:view',
-      'notifications:alerts:create',
-      'notifications:alerts:edit',
-      'notifications:alerts:delete',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:alerts:view', 'notifications:alerts:manage'),
   },
   async (c) => {
     return c.json({ data: ALERT_CATEGORIES });
@@ -51,12 +43,7 @@ alertRuleRoutes.openapi(
 alertRuleRoutes.openapi(
   {
     ...listNotificationAlertRulesRoute,
-    middleware: requireAnyScope(
-      'notifications:alerts:view',
-      'notifications:alerts:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:alerts:view', 'notifications:alerts:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);
@@ -70,12 +57,7 @@ alertRuleRoutes.openapi(
 alertRuleRoutes.openapi(
   {
     ...getNotificationAlertRuleRoute,
-    middleware: requireAnyScope(
-      'notifications:alerts:view',
-      'notifications:alerts:view',
-      'notifications:view',
-      'notifications:manage'
-    ),
+    middleware: requireAnyScope('notifications:alerts:view', 'notifications:alerts:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);
@@ -88,7 +70,7 @@ alertRuleRoutes.openapi(
 alertRuleRoutes.openapi(
   {
     ...createNotificationAlertRuleRoute,
-    middleware: requireAnyScope('notifications:alerts:create', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:alerts:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);
@@ -103,7 +85,7 @@ alertRuleRoutes.openapi(
 alertRuleRoutes.openapi(
   {
     ...updateNotificationAlertRuleRoute,
-    middleware: requireAnyScope('notifications:alerts:edit', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:alerts:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);
@@ -124,7 +106,7 @@ alertRuleRoutes.openapi(
 alertRuleRoutes.openapi(
   {
     ...deleteNotificationAlertRuleRoute,
-    middleware: requireAnyScope('notifications:alerts:delete', 'notifications:manage'),
+    middleware: requireAnyScope('notifications:alerts:manage'),
   },
   async (c) => {
     const service = container.resolve(NotificationAlertRuleService);

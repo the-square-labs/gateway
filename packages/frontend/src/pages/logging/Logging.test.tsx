@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { Logging } from "@/pages/Logging";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { useResourceFolderStore } from "@/stores/resource-folders";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
@@ -260,5 +261,65 @@ describe("Logging UI", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Create Schema" })[0]!);
     expect(screen.getByPlaceholderText("Audit Events")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Optional description")).toBeInTheDocument();
+  });
+
+  it("lets a folder-only creator create an environment in the granted folder only", async () => {
+    const onSave = vi.fn().mockResolvedValue(undefined);
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["logs:environments:create:folder/folder-1"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    const folder = {
+      id: "folder-1",
+      name: "Team logs",
+      parentId: null,
+      sortOrder: 0,
+      depth: 0,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      updatedAt: "2026-09-01T00:00:00.000Z",
+      children: [],
+    };
+    useResourceFolderStore.setState({
+      foldersByType: {
+        ...useResourceFolderStore.getState().foldersByType,
+        "logging-environment": [folder, { ...folder, id: "folder-2", name: "Other" }],
+      },
+      loadingByType: {
+        ...useResourceFolderStore.getState().loadingByType,
+        "logging-environment": false,
+      },
+      fetchFolders: vi.fn().mockResolvedValue(undefined),
+    });
+
+    renderWithRouter(
+      <LoggingEnvironmentDialog open environment={null} onOpenChange={vi.fn()} onSave={onSave} />
+    );
+
+    // The only allowed folder is preselected and the root is not offered.
+    await waitFor(() =>
+      expect(screen.getByRole("combobox", { name: "Folder" })).toHaveTextContent("Team logs")
+    );
+    fireEvent.change(screen.getByPlaceholderText("Production"), { target: { value: "Team" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(onSave).toHaveBeenCalledWith(expect.objectContaining({ folderId: "folder-1" }))
+    );
+  });
+
+  it("shows the create button to a folder-only creator", async () => {
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["logs:environments:create:folder/folder-1"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+
+    renderWithRouter(<Logging />, { path: "/logging/:section?", route: "/logging/environments" });
+
+    expect(
+      (await screen.findAllByRole("button", { name: "Create Environment" })).length
+    ).toBeGreaterThan(0);
+    expect(api.listLoggingEnvironments).toHaveBeenCalled();
   });
 });

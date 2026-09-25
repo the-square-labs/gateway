@@ -25,6 +25,7 @@ import {
   type NginxNodeOptions,
   selectBackfillNginxNode,
 } from './domain.service.shared.js';
+import { assertDomainIngressMoveAccess } from './domain-creation-access.js';
 
 export abstract class DomainsServiceRuntime {
   protected eventBus?: EventBusService;
@@ -280,17 +281,7 @@ export abstract class DomainsServiceRuntime {
     const nginxNode = await this.resolveRequestedNginxNode(input.nginxNodeId);
     // Re-pointing DNS and the domain's ingress node moves traffic for every
     // covered proxy host, so this needs the same grants as migrateIngress.
-    const hasIngressScope = (baseScope: string, resourceId: string) =>
-      actorScopes.includes(baseScope) || actorScopes.includes(`${baseScope}:${resourceId}`);
-    if (!hasIngressScope('proxy:create', nginxNode.id)) {
-      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:create:${nginxNode.id}`);
-    }
-    const unauthorizedHost = (await this.getUsage(row.domain)).proxyHosts.find(
-      (host) => !hasIngressScope('proxy:edit', host.id)
-    );
-    if (unauthorizedHost) {
-      throw new AppError(403, 'FORBIDDEN', `Missing required scope: proxy:edit:${unauthorizedHost.id}`);
-    }
+    assertDomainIngressMoveAccess(actorScopes, nginxNode.id, (await this.getUsage(row.domain)).proxyHosts);
     const context = await this.integrationsService.resolveCloudflareDnsContext(row.domain);
     const providerRecords = (await context.client.listDnsRecords(context.zone.remoteId, row.domain)).filter(
       (record) => record.name.toLowerCase() === row.domain.toLowerCase()

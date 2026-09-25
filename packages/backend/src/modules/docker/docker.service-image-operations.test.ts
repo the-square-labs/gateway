@@ -51,8 +51,96 @@ describe('DockerManagementService image operations', () => {
     const { service } = createService(dispatch);
     await service.pullImageImmediate('node-1', 'acme/api:latest', undefined, undefined, 'creator');
     if (exists) expect(grantCreatedResourcePermissions).not.toHaveBeenCalled();
-    else expect(grantCreatedResourcePermissions).toHaveBeenCalledWith('creator', 'docker:images', 'node-1/sha256:app');
+    else
+      expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(
+        'creator',
+        'docker:images',
+        'node-1/sha256:app',
+        expect.objectContaining({ nodeId: 'node-1' })
+      );
   });
+
+  it.each([
+    true,
+    false,
+  ])('only places a pulled image into the requested folder when the pull created it (already exists: %s)', async (exists) => {
+    vi.mocked(grantCreatedResourcePermissions).mockClear();
+    const image = { Id: 'sha256:app', RepoTags: ['acme/api:latest'] };
+    let pulled = false;
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId, action) => {
+        if (action === 'pull') pulled = true;
+        return {
+          success: true,
+          detail: JSON.stringify(action === 'list' ? (exists || pulled ? [image] : []) : { status: 'pulled' }),
+        };
+      }),
+    };
+    const { service } = createService(dispatch);
+    const moveResourcesToFolder = vi.fn().mockResolvedValue(undefined);
+    service.setFolderService({ moveResourcesToFolder } as never);
+
+    await service.pullImageImmediate('node-1', 'acme/api:latest', undefined, 'folder-b', 'creator');
+
+    if (exists) {
+      // An image that already existed (possibly in another folder) must not be taken over by the puller.
+      expect(moveResourcesToFolder).not.toHaveBeenCalled();
+      expect(grantCreatedResourcePermissions).not.toHaveBeenCalled();
+    } else {
+      expect(moveResourcesToFolder).toHaveBeenCalledWith(
+        { resourceType: 'image', folderId: 'folder-b', items: [{ nodeId: 'node-1', resourceKey: 'sha256:app' }] },
+        'creator'
+      );
+    }
+  });
+  it('lets a container creation grant at the destination pull the image for that deploy', async () => {
+    vi.mocked(grantCreatedResourcePermissions).mockClear();
+    const image = { Id: 'sha256:app', RepoTags: ['acme/api:latest'] };
+    let pulled = false;
+    const dispatch = {
+      sendDockerImageCommand: vi.fn(async (_nodeId, action) => {
+        if (action === 'pull') pulled = true;
+        return {
+          success: true,
+          detail: JSON.stringify(action === 'list' ? (pulled ? [image] : []) : { status: 'pulled' }),
+        };
+      }),
+    };
+    const { service } = createService(dispatch);
+    const moveResourcesToFolder = vi.fn().mockResolvedValue(undefined);
+    service.setFolderService({ moveResourcesToFolder } as never);
+    const folderOnly = ['docker:containers:create:folder/folder-1'];
+
+    // A standalone pull still needs docker:images:pull for the node or an image folder.
+    await expect(
+      service.pullImageImmediate('node-1', 'acme/api:latest', undefined, undefined, 'creator', folderOnly)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(pulled).toBe(false);
+    // The workload destination must be one the caller may create in.
+    await expect(
+      service.pullImageForWorkload('node-1', 'acme/api:latest', undefined, 'folder-2', 'creator', folderOnly)
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(pulled).toBe(false);
+
+    await expect(
+      service.pullImageForWorkload('node-1', 'acme/api:latest', undefined, 'folder-1', 'creator', folderOnly)
+    ).resolves.toEqual({ status: 'pulled' });
+    expect(dispatch.sendDockerImageCommand).toHaveBeenCalledWith(
+      'node-1',
+      'pull',
+      { imageRef: 'acme/api:latest', registryAuthJson: undefined },
+      600000
+    );
+    // The container folder is not an image folder: the pulled image is not placed anywhere.
+    expect(moveResourcesToFolder).not.toHaveBeenCalled();
+    expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(
+      'creator',
+      'docker:images',
+      'node-1/sha256:app',
+      expect.objectContaining({ folderId: null, nodeId: 'node-1' })
+    );
+  });
+
   it('keeps raw internal inventory available while filtering public image lists', async () => {
     const images = [
       { Id: 'user', RepoTags: ['acme/api:latest'] },

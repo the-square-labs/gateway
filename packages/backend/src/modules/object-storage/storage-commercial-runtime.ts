@@ -14,6 +14,7 @@ import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissi
 import { compactHealthHistory } from '@/lib/health-history.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
+import { storageWritesFrozenError } from '@/modules/storage/storage-write-freeze.js';
 import { isFileProtocolConfig, toObjectStorageConnectionView } from './object-storage-connection-view.js';
 import { isStorageWarmupError, mapObjectStorageError } from './object-storage-error-mapping.js';
 import { isFileProtocolProvider, resolveFileProtocolPort } from './object-storage-protocol.js';
@@ -50,4 +51,5 @@ export const storageCommercialRuntime = {
   assertStorageHasNoBackupReferences,
   assertStorageBucketHasNoBackupReferences,
   forgetStorageBackupHistory,
+  storageWritesFrozenError,
 };

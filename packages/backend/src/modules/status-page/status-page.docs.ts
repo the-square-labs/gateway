@@ -24,6 +24,15 @@ export const listStatusPageProxyTemplatesRoute = appRoute({
   summary: 'List status page proxy templates',
   responses: okJson(UnknownDataResponseSchema),
 });
+export const listStatusPageSourcesRoute = appRoute({
+  method: 'get',
+  path: '/sources',
+  tags: ['Status Page'],
+  summary: 'List resources the caller may expose on the status page',
+  description:
+    'Nodes, proxy hosts with health checks, databases, Docker containers and deployments with health checks, Compose projects and Pages projects that the caller can view. Creating or editing an exposed service requires view access to its source.',
+  responses: okJson(UnknownDataResponseSchema),
+});
 export const updateStatusPageSettingsRoute = appRoute({
   method: 'put',
   path: '/settings',

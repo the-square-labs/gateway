@@ -23,6 +23,19 @@ export interface VcsUserTokenIdentity {
   expiresAt: Date | null;
 }
 
+/** Metadata of the access token a connector or user credential authenticates with. */
+export interface VcsTokenDescription {
+  scopes: string[];
+  expiresAt: Date | null;
+  createdAt: Date | null;
+}
+
+export interface VcsRotatedToken {
+  token: string;
+  scopes: string[];
+  expiresAt: Date | null;
+}
+
 export interface VcsProjectAccess {
   project: VcsProjectRef;
   accessLevel: number | null;
@@ -264,6 +277,12 @@ export interface ConnectorProvider {
 
 export interface VcsConnectorProvider extends ConnectorProvider {
   validateUserToken(auth: VcsConnectorAuth): Promise<VcsUserTokenIdentity>;
+  /** Scopes and expiry of the authenticating token, or null when the provider does not report them. */
+  describeToken?(auth: VcsConnectorAuth): Promise<VcsTokenDescription | null>;
+  /** Replace the authenticating token with a new one (the old one is revoked by the provider). */
+  rotateToken?(auth: VcsConnectorAuth, expiresAt: Date): Promise<VcsRotatedToken>;
+  /** Revoke the authenticating token. */
+  revokeToken?(auth: VcsConnectorAuth): Promise<void>;
   getProjectAccess(auth: VcsConnectorAuth, project: VcsProjectRef): Promise<VcsProjectAccess>;
   getBranchAccess(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string): Promise<VcsBranchAccess>;
   createBranch(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string, ref: string): Promise<void>;

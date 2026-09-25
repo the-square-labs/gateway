@@ -13,6 +13,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import {
+  type CreateFolderChoices,
+  CreateFolderSelect,
+  getCreateFolderChoices,
+  isCreateFolderAllowed,
+} from "@/components/common/CreateFolderSelect";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -38,7 +44,6 @@ import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -46,6 +51,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
+import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { databaseRoute } from "@/lib/resource-routes";
@@ -61,7 +67,6 @@ import type {
   ManagedDatabaseCatalogEntry,
   ManagedDatabaseCreateInput,
   Node,
-  ResourceFolderTreeNode,
 } from "@/types";
 import {
   buildDatabasePayload,
@@ -345,7 +350,7 @@ export function ManagedDatabaseCreateForm({
   step,
   onChange,
   folderId = "",
-  folderOptions = [],
+  folderChoices = { allowRoot: true, folders: [], defaultFolderId: "" },
   foldersLoading = false,
   onFolderChange,
 }: {
@@ -356,7 +361,8 @@ export function ManagedDatabaseCreateForm({
   step: 1 | 2 | 3;
   onChange: (draft: ManagedDatabaseCreateInput) => void;
   folderId?: string;
-  folderOptions?: ResourceFolderTreeNode[];
+  /** Destinations the caller may create in (see `getCreateFolderChoices`). */
+  folderChoices?: CreateFolderChoices;
   foldersLoading?: boolean;
   onFolderChange?: (folderId: string) => void;
 }) {
@@ -394,25 +400,13 @@ export function ManagedDatabaseCreateForm({
                 <label className="text-sm font-medium" htmlFor="managed-db-folder">
                   Folder
                 </label>
-                <Select
-                  value={folderId || "__none__"}
-                  onValueChange={(value) => onFolderChange(value === "__none__" ? "" : value)}
-                  disabled={foldersLoading}
-                >
-                  <SelectTrigger id="managed-db-folder" aria-busy={foldersLoading}>
-                    <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value="__none__">No folder</SelectItem>
-                      {folderOptions.map((folder) => (
-                        <SelectItem key={folder.id} value={folder.id}>
-                          {"  ".repeat(folder.depth) + folder.name}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                <CreateFolderSelect
+                  id="managed-db-folder"
+                  choices={folderChoices}
+                  value={folderId}
+                  onChange={onFolderChange}
+                  loading={foldersLoading}
+                />
               </div>
             )}
             <div className="space-y-1.5">
@@ -669,6 +663,7 @@ function DatabasesContent({
   const navigate = useNavigate();
   const location = useLocation();
   const { hasScope, hasScopedAccess, isLoading: authLoading } = useAuthStore();
+  const userScopes = useAuthStore((state) => state.user?.scopes);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<"all" | "postgres" | "clickhouse" | "redis">("all");
   const [healthFilter, setHealthFilter] = useState<
@@ -731,7 +726,12 @@ function DatabasesContent({
   const databaseFolders = useResourceFolderStore((state) => state.foldersByType.database);
   const foldersLoading = useResourceFolderStore((state) => state.loadingByType.database);
   const fetchFolders = useResourceFolderStore((state) => state.fetchFolders);
-  const folderOptions = useMemo(() => flattenFolders(databaseFolders), [databaseFolders]);
+  // Same destination rule as the create routes: folder-scoped creators only get their folders,
+  // node-scoped creators any folder on that node (managed databases).
+  const connectionFolderChoices = useMemo(
+    () => getCreateFolderChoices(userScopes ?? [], "databases:create", databaseFolders),
+    [databaseFolders, userScopes]
+  );
 
   useEffect(() => {
     if (createOpen || managedCreateOpen) void fetchFolders("database");
@@ -825,6 +825,8 @@ function DatabasesContent({
       }
 
       const nodesRequest = listManagedDatabaseCandidateNodes().catch(() => null);
+      // Rows are server-filtered; this lets row actions catch up with folder grants too.
+      void refreshDynamicScopes();
       if (!embedded) {
         void api
           .listManagedDatabaseCatalog()
@@ -917,15 +919,9 @@ function DatabasesContent({
   const canCreate = !embedded && hasScopedAccess("databases:create");
   const canManageFolders = !embedded && hasScope("databases:folders:manage");
 
-  const filtered = useMemo(
-    () =>
-      rows.filter(
-        (row) =>
-          hasScopedAccess("databases:view") &&
-          (hasScope("databases:view") || hasScope(`databases:view:${row.id}`))
-      ),
-    [hasScope, hasScopedAccess, rows]
-  );
+  // The server already filters the list by view grants, including folder grants that cover
+  // resources created after the cached scopes were loaded; row actions keep their own checks.
+  const filtered = rows;
 
   const managedVersions = useMemo(
     () => catalogVersions(managedCatalog, managedDraft.type),
@@ -947,6 +943,16 @@ function DatabasesContent({
     () => managedDatabaseCapacity(selectedDeployableDatabaseNode),
     [selectedDeployableDatabaseNode]
   );
+  const managedFolderChoices = useMemo(
+    () =>
+      getCreateFolderChoices(
+        userScopes ?? [],
+        "databases:create",
+        databaseFolders,
+        managedDraft.nodeId || undefined
+      ),
+    [databaseFolders, managedDraft.nodeId, userScopes]
+  );
   const canDeployManaged = useMemo(
     () =>
       !!selectedDeployableDatabaseNode &&
@@ -963,6 +969,7 @@ function DatabasesContent({
   const canContinueManagedCreate =
     managedCreateStep === 1
       ? managedDraft.name.trim().length > 0 &&
+        isCreateFolderAllowed(managedFolderChoices, folderId) &&
         deployableDatabaseNodes.some((node) => node.id === managedDraft.nodeId) &&
         managedVersions.includes(managedDraft.version)
       : canDeployManaged;
@@ -1259,23 +1266,12 @@ function DatabasesContent({
             </DialogHeader>
             <AnimatedHeight>
               <SettingsControlRow title="Folder" description="Optional organization folder">
-                <Select
-                  value={folderId || "__none__"}
-                  onValueChange={(value) => setFolderId(value === "__none__" ? "" : value)}
-                  disabled={foldersLoading}
-                >
-                  <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                    <SelectValue placeholder={foldersLoading ? "Loading folders…" : "No folder"} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__">No folder</SelectItem>
-                    {folderOptions.map((folder) => (
-                      <SelectItem key={folder.id} value={folder.id}>
-                        {"  ".repeat(folder.depth) + folder.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <CreateFolderSelect
+                  choices={connectionFolderChoices}
+                  value={folderId}
+                  onChange={setFolderId}
+                  loading={foldersLoading}
+                />
               </SettingsControlRow>
               <DatabaseConnectionForm draft={draft} onChange={setDraft} />
             </AnimatedHeight>
@@ -1283,7 +1279,14 @@ function DatabasesContent({
               <Button variant="outline" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={() => void save()} disabled={saving || !canCreateDatabase(draft)}>
+              <Button
+                onClick={() => void save()}
+                disabled={
+                  saving ||
+                  !canCreateDatabase(draft) ||
+                  !isCreateFolderAllowed(connectionFolderChoices, folderId)
+                }
+              >
                 {saving ? "Creating..." : "Create"}
               </Button>
             </DialogFooter>
@@ -1324,7 +1327,7 @@ function DatabasesContent({
                 step={managedCreateStep}
                 onChange={setManagedDraft}
                 folderId={folderId}
-                folderOptions={folderOptions}
+                folderChoices={managedFolderChoices}
                 foldersLoading={foldersLoading}
                 onFolderChange={setFolderId}
               />
@@ -1432,10 +1435,6 @@ function DatabasesContent({
       )}
     </PageTransition>
   );
-}
-
-function flattenFolders(folders: ResourceFolderTreeNode[]): ResourceFolderTreeNode[] {
-  return folders.flatMap((folder) => [folder, ...flattenFolders(folder.children)]);
 }
 
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

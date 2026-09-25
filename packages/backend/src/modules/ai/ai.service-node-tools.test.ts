@@ -181,7 +181,7 @@ describe('AIService node tool routing', () => {
       expect(dispatchService.readGlobalConfig).toHaveBeenCalledWith('node-1');
 
       await expect(
-        service.executeTool({ ...BASE_USER, scopes: ['nodes:config:edit:node-1'] }, 'manage_node_config', {
+        service.executeTool({ ...BASE_USER, scopes: ['nodes:manage:node-1'] }, 'manage_node_config', {
           operation: 'update',
           nodeId: 'node-1',
           content: 'events { worker_connections 1024; }',
@@ -194,7 +194,7 @@ describe('AIService node tool routing', () => {
       );
 
       await expect(
-        service.executeTool({ ...BASE_USER, scopes: ['nodes:config:edit:node-1'] }, 'manage_node_config', {
+        service.executeTool({ ...BASE_USER, scopes: ['nodes:manage:node-1'] }, 'manage_node_config', {
           operation: 'test',
           nodeId: 'node-1',
         })
@@ -277,7 +277,7 @@ describe('AIService node parity tools', () => {
         nodeId: NODE_ID,
         displayName: 'Edge',
       })
-    ).resolves.toMatchObject({ error: 'Editing node identity or service addresses requires node rename access' });
+    ).resolves.toMatchObject({ error: 'Editing node identity requires node rename access' });
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: [`nodes:rename:${NODE_ID}`] }, 'manage_node', {
@@ -285,7 +285,7 @@ describe('AIService node parity tools', () => {
         nodeId: NODE_ID,
         serviceAddresses: ['198.51.100.7'],
       })
-    ).resolves.toMatchObject({ error: 'Editing the Nginx service address requires node config edit access' });
+    ).resolves.toMatchObject({ error: 'Editing the node service address requires node manage access' });
     expect(nodesService.update).not.toHaveBeenCalled();
 
     await expect(
@@ -322,24 +322,31 @@ describe('AIService node parity tools', () => {
     expect(nodesService.update).not.toHaveBeenCalled();
   });
 
-  it('regenerates an enrollment token only with nodes:create on the node and never while impersonating', async () => {
+  it('regenerates an enrollment token only with nodes:create where the node sits and never while impersonating', async () => {
     const nodesService = {
+      get: vi.fn().mockResolvedValue({ id: NODE_ID, folderId: 'folder-1' }),
       regenerateEnrollmentToken: vi.fn().mockResolvedValue({ enrollmentToken: 'gw_enroll_new' }),
     };
     const service = createService(nodesService);
 
-    await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`nodes:details:${NODE_ID}`] }, 'manage_node', {
-        operation: 'regenerate_enrollment_token',
-        nodeId: NODE_ID,
-      })
-    ).resolves.toMatchObject({ error: `PERMISSION_DENIED: Missing required scope nodes:create:${NODE_ID}` });
-    await expect(
-      service.executeTool({ ...BASE_USER, scopes: [`nodes:create:${NODE_ID}`] }, 'manage_node', {
-        operation: 'regenerate_enrollment_token',
-        nodeId: NODE_ID,
-      })
-    ).resolves.toEqual({ result: { enrollmentToken: 'gw_enroll_new' }, invalidateStores: ['nodes'] });
+    for (const scopes of [[`nodes:details:${NODE_ID}`], ['nodes:create:folder/folder-2']]) {
+      await expect(
+        service.executeTool({ ...BASE_USER, scopes }, 'manage_node', {
+          operation: 'regenerate_enrollment_token',
+          nodeId: NODE_ID,
+        })
+      ).resolves.toMatchObject({ error: `Missing required scope: nodes:create:${NODE_ID}` });
+    }
+    expect(nodesService.regenerateEnrollmentToken).not.toHaveBeenCalled();
+    // The legacy per-node grant and a creation grant on the node's folder both work.
+    for (const scopes of [[`nodes:create:${NODE_ID}`], ['nodes:create:folder/folder-1']]) {
+      await expect(
+        service.executeTool({ ...BASE_USER, scopes }, 'manage_node', {
+          operation: 'regenerate_enrollment_token',
+          nodeId: NODE_ID,
+        })
+      ).resolves.toEqual({ result: { enrollmentToken: 'gw_enroll_new' }, invalidateStores: ['nodes'] });
+    }
     expect(nodesService.regenerateEnrollmentToken).toHaveBeenCalledWith(NODE_ID, 'user-1');
     expect(
       isImpersonationBlockedToolCall('manage_node', { operation: 'regenerate_enrollment_token', nodeId: NODE_ID })

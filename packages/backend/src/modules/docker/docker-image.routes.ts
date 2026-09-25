@@ -128,7 +128,10 @@ export function registerImageRoutes(router: OpenAPIHono<AppEnv>) {
     const nodeId = c.req.param('nodeId')!;
     const user = c.get('user')!;
     const body = await c.req.json();
-    const { imageRef, registryId, folderId } = ImagePullSchema.parse(body);
+    const { imageRef, registryId, folderId, workload } = ImagePullSchema.parse(body);
+    if (workload) {
+      throw new AppError(400, 'WORKLOAD_PULL_SYNC_ONLY', 'Pull an image for a workload with POST .../images/pull-sync');
+    }
 
     // Resolve registry credentials and prefix image ref if using private registry
     let finalImageRef = imageRef;
@@ -162,7 +165,7 @@ export function registerImageRoutes(router: OpenAPIHono<AppEnv>) {
     const nodeId = c.req.param('nodeId')!;
     const body = await c.req.json();
     const user = c.get('user')!;
-    const { imageRef, registryId, folderId } = ImagePullSchema.parse(body);
+    const { imageRef, registryId, folderId, workload } = ImagePullSchema.parse(body);
 
     let finalImageRef = imageRef;
     let registryAuth: string | undefined;
@@ -177,15 +180,14 @@ export function registerImageRoutes(router: OpenAPIHono<AppEnv>) {
     }
 
     const service = container.resolve(DockerManagementService);
+    const scopes = c.get('effectiveScopes') ?? [];
     try {
-      await service.pullImageImmediate(
-        nodeId,
-        finalImageRef,
-        registryAuth,
-        folderId,
-        user.id,
-        c.get('effectiveScopes') ?? []
-      );
+      // A deploy pulls for the container or deployment it creates: that destination authorizes the pull.
+      if (workload) {
+        await service.pullImageForWorkload(nodeId, finalImageRef, registryAuth, workload.folderId, user.id, scopes);
+      } else {
+        await service.pullImageImmediate(nodeId, finalImageRef, registryAuth, folderId, user.id, scopes);
+      }
     } catch (error) {
       if (error instanceof AppError) throw error;
       throw new AppError(

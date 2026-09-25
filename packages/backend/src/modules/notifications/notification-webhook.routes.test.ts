@@ -32,7 +32,15 @@ vi.mock('@/modules/auth/auth.middleware.js', () => ({
     c.set('effectiveScopes', mocks.scopes);
     await next();
   },
-  requireAnyScope: () => async (_c: any, next: () => Promise<void>) => next(),
+  requireAnyScope:
+    (...required: string[]) =>
+    async (c: any, next: () => Promise<void>) => {
+      const { hasScope } = await import('@/lib/permissions.js');
+      if (!required.some((scope) => hasScope(c.get('effectiveScopes') ?? [], scope))) {
+        return c.json({ error: 'forbidden' }, 403);
+      }
+      await next();
+    },
 }));
 
 vi.mock('./notification-webhook.service.js', () => ({ NotificationWebhookService: mocks.NotificationWebhookService }));
@@ -77,8 +85,7 @@ describe('notification webhook secret visibility', () => {
 
   it.each([
     ['viewer', ['notifications:webhooks:view'], false],
-    ['editor', ['notifications:webhooks:edit'], true],
-    ['manager', ['notifications:manage'], true],
+    ['manager', ['notifications:webhooks:manage'], true],
   ])('passes %s secret visibility to list and detail reads', async (_role, scopes, revealSensitive) => {
     mocks.scopes = scopes;
     const app = createApp();
@@ -102,5 +109,19 @@ describe('notification webhook secret visibility', () => {
     expect(detailBody).toContain(revealSensitive ? 'Bearer secret' : '********');
     expect(listBody).toContain(revealSensitive ? 'secret-token' : '/********');
     expect(detailBody).toContain(revealSensitive ? 'secret-token' : '/********');
+  });
+});
+
+describe('notification webhook scopes', () => {
+  it.each([
+    ['DELETE', `/${WEBHOOK_ID}`, ['notifications:webhooks:view'], 403],
+    ['DELETE', `/${WEBHOOK_ID}`, ['notifications:alerts:manage'], 403],
+    ['GET', '/', ['notifications:alerts:view'], 403],
+  ])('%s %s with %j -> %i', async (method, path, scopes, status) => {
+    mocks.scopes = scopes;
+
+    const response = await createApp().request(path, { method });
+
+    expect(response.status).toBe(status);
   });
 });
