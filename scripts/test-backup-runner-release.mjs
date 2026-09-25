@@ -40,9 +40,10 @@ const pg = `${prefix}-pg`, s3 = `${prefix}-s3`;
 const configVolume = `${prefix}-config`, workVolume = `${prefix}-work`;
 const fixture = mkdtempSync(join(tmpdir(), 'gateway-backup-smoke-'));
 const postgresImage = readFileSync(new URL('../packages/daemons/backup-runner/Dockerfile', import.meta.url), 'utf8').match(/^FROM (\S+)/m)?.[1];
-// The disposable S3 fixture must not depend on the private managed-storage catalog.
-const minioImage = 'quay.io/minio/minio@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e';
-assert.ok(postgresImage && minioImage, 'use the repository-pinned fixture images');
+// The disposable S3 fixture must not depend on the private managed-storage catalog. MinIO withdrew its public
+// images, so the fixture is SeaweedFS 4.47 pinned by digest.
+const s3Image = 'chrislusf/seaweedfs@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882';
+assert.ok(postgresImage && s3Image, 'use the repository-pinned fixture images');
 const password = randomUUID();
 const resources = { containers: [], volumes: [], network: false };
 const mount = (name, target, readonly = false) => ['--mount', `type=volume,src=${name},dst=${target}${readonly ? ',readonly' : ''}`];
@@ -84,7 +85,10 @@ try {
   }
   docker('run', '-d', '--name', pg, '--network', prefix, '-e', 'POSTGRES_HOST_AUTH_METHOD=trust', postgresImage);
   resources.containers.push(pg);
-  docker('run', '-d', '--name', s3, '--network', prefix, '-e', 'MINIO_ROOT_USER=smoke', '-e', `MINIO_ROOT_PASSWORD=${password}`, minioImage, 'server', '/data');
+  // One S3 identity "smoke" with the random password; the secret stays in the environment, not the command line.
+  const s3Config = `{"identities":[{"name":"smoke","credentials":[{"accessKey":"smoke","secretKey":"'"$S3_SECRET"'"}],"actions":["Admin","Read","Write","List","Tagging"]}]}`;
+  docker('run', '-d', '--name', s3, '--network', prefix, '-e', `S3_SECRET=${password}`, '--entrypoint', 'sh', s3Image, '-c',
+    `printf '%s' '${s3Config}' > /tmp/s3.json && exec weed server -dir=/data -s3 -s3.port=9000 -s3.config=/tmp/s3.json`);
   resources.containers.push(s3);
   await ready(() => sql('postgres', 'SELECT 1'));
   await ready(() => docker('run', '--rm', '--network', prefix, ...storageEnv, '--entrypoint', 'rclone', runner, 'mkdir', 'target:backups'));
