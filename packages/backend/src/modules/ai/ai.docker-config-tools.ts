@@ -92,7 +92,12 @@ export async function manageDockerContainerConfigTool(
     const resolvedId = String(inspectedContainer?.Id ?? inspectedContainer?.id ?? '');
     const resolvedName = String(inspectedContainer?.Name ?? inspectedContainer?.name ?? '').replace(/^\//, '');
     if (!resolvedId || !resolvedName) throw new Error('Docker container identity could not be resolved');
-    if (containerId && !refreshedStaleId && containerId !== resolvedId && !resolvedId.startsWith(containerId)) {
+    // containerId accepts the stable container name (the documented, preferred form) as well as a runtime ID.
+    const containerIdMatches =
+      containerId === resolvedId ||
+      resolvedId.startsWith(containerId) ||
+      containerId.replace(/^\//, '') === resolvedName;
+    if (containerId && !refreshedStaleId && !containerIdMatches) {
       throw new Error('containerId and resolved Docker identity do not match');
     }
     if (containerName && containerName.replace(/^\//, '') !== resolvedName) {

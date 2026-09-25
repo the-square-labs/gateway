@@ -87,6 +87,36 @@ describe('AIService Docker container config tool routing', () => {
     );
   });
 
+  it('accepts the stable container name as containerId, as the tool description recommends', async () => {
+    const dockerService = {
+      inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
+      getContainerEnv: vi.fn().mockResolvedValue({ FOO: 'bar' }),
+    };
+    const service = createService(dockerService);
+    const user = { ...BASE_USER, scopes: ['docker:containers:environment:node-1'] };
+
+    await expect(
+      service.executeTool(user, 'manage_docker_container_config', {
+        operation: 'get_env',
+        nodeId: 'node-1',
+        containerId: 'api',
+      })
+    ).resolves.toMatchObject({ result: { FOO: 'bar' } });
+    expect(dockerService.getContainerEnv).toHaveBeenCalledWith('node-1', 'container-1');
+
+    // A different container is still refused.
+    dockerService.inspectContainer.mockResolvedValue({ Id: 'container-2', Name: '/worker' });
+    await expect(
+      service.executeTool(user, 'manage_docker_container_config', {
+        operation: 'get_env',
+        nodeId: 'node-1',
+        containerId: 'api',
+      })
+    ).resolves.toMatchObject({
+      error: expect.stringContaining('containerId and resolved Docker identity do not match'),
+    });
+  });
+
   it('routes file writes with parsed path/content and returns a success envelope', async () => {
     const dockerService = {
       inspectContainer: vi.fn().mockResolvedValue({ Id: 'container-1', Name: '/api' }),
