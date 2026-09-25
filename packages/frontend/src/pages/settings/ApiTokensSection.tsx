@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
@@ -20,7 +21,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   buildFinalScopes,
@@ -42,6 +42,14 @@ interface ApiTokensSectionProps {
   proxyHostsList: ProxyHost[];
   databasesList: DatabaseConnection[];
   loggingSchemasList: LoggingSchema[];
+  /** The resource lists above are still loading; the token dialog waits for them. */
+  resourceListsLoading?: boolean;
+}
+
+/** Reports a load to the enclosing dialog while rendered inside its content. */
+function ReportLoading({ loading }: { loading: boolean }) {
+  useContentLoading(loading);
+  return null;
 }
 
 export function ApiTokensSection({
@@ -50,6 +58,7 @@ export function ApiTokensSection({
   proxyHostsList,
   databasesList,
   loggingSchemasList,
+  resourceListsLoading = false,
 }: ApiTokensSectionProps) {
   const { cas } = useCAStore();
   const cachedTokens = api.getCached<ApiToken[]>("settings:api-tokens");
@@ -62,6 +71,8 @@ export function ApiTokensSection({
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
   const [createdSecretDialogOpen, setCreatedSecretDialogOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
   const [tokenScopeSearch, setTokenScopeSearch] = useState("");
   const [tokenScopeFilter, setTokenScopeFilter] = useState<ScopeSelectionFilter>("all");
   const [editingToken, setEditingToken] = useState<ApiToken | null>(null);
@@ -141,6 +152,7 @@ export function ApiTokensSection({
   const handleTokenUpdate = async () => {
     if (!editingToken || !newTokenName.trim()) return;
     if (!validateScopeSelection()) return;
+    setIsUpdating(true);
     try {
       await api.updateToken(editingToken.id, {
         ...(newTokenName.trim() !== editingToken.name ? { name: newTokenName.trim() } : {}),
@@ -151,6 +163,8 @@ export function ApiTokensSection({
       loadTokens();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update token");
+    } finally {
+      setIsUpdating(false);
     }
   };
 
@@ -212,14 +226,19 @@ export function ApiTokensSection({
       confirmLabel: "Revoke",
     });
     if (!ok) return;
+    setRevokingId(token.id);
     try {
       await api.revokeToken(token.id);
       toast.success("Token revoked");
       loadTokens();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to revoke token");
+    } finally {
+      setRevokingId(null);
     }
   };
+
+  useContentLoading(loading);
 
   return (
     <>
@@ -235,9 +254,7 @@ export function ApiTokensSection({
         }
       >
         <div>
-          {loading ? (
-            <TokenRowsSkeleton />
-          ) : tokens.length > 0 ? (
+          {loading ? null : tokens.length > 0 ? (
             <div className="divide-y divide-border">
               {tokens.map((token) => (
                 <div
@@ -265,13 +282,14 @@ export function ApiTokensSection({
                   <Button
                     variant="outline"
                     size="icon"
-                    className="shrink-0"
+                    aria-label={`Revoke ${token.name}`}
+                    pending={revokingId === token.id}
                     onClick={(e) => {
                       e.stopPropagation();
                       handleRevokeToken(token);
                     }}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {revokingId === token.id ? null : <Trash2 className="h-4 w-4" />}
                   </Button>
                 </div>
               ))}
@@ -305,6 +323,7 @@ export function ApiTokensSection({
           </DialogHeader>
 
           <div className="space-y-4">
+            <ReportLoading loading={resourceListsLoading} />
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -360,13 +379,14 @@ export function ApiTokensSection({
               </div>
             </div>
           </div>
-          <DialogFooter className="mt-4">
+          <DialogFooter>
             <Button variant="outline" onClick={() => setCreateDialogOpen(false)}>
               {editingToken ? "Close" : "Cancel"}
             </Button>
             {editingToken ? (
               <Button
                 onClick={handleTokenUpdate}
+                pending={isUpdating}
                 disabled={!newTokenName.trim() || !tokenChanged || finalTokenScopes.length === 0}
               >
                 Save
@@ -374,9 +394,10 @@ export function ApiTokensSection({
             ) : (
               <Button
                 onClick={handleCreateToken}
-                disabled={isCreating || finalTokenScopes.length === 0}
+                pending={isCreating}
+                disabled={finalTokenScopes.length === 0}
               >
-                {isCreating ? "Creating..." : "Create Token"}
+                Create Token
               </Button>
             )}
           </DialogFooter>
@@ -392,24 +413,5 @@ export function ApiTokensSection({
         onClosed={() => setCreatedSecret(null)}
       />
     </>
-  );
-}
-
-function TokenRowsSkeleton() {
-  return (
-    <div className="divide-y divide-border" aria-label="Loading API tokens">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Skeleton className="h-10 w-10 shrink-0" />
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-32" />
-              <Skeleton className="h-3 w-64 max-w-[60vw]" />
-            </div>
-          </div>
-          <Skeleton className="h-9 w-9 shrink-0" />
-        </div>
-      ))}
-    </div>
   );
 }

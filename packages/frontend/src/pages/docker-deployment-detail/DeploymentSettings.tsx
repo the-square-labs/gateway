@@ -2,6 +2,7 @@ import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { AvailabilitySection } from "@/components/docker/availability/AvailabilitySection";
 import { DockerHealthCheckSection } from "@/components/docker/DockerHealthCheckSection";
@@ -278,15 +279,22 @@ export function DeploymentSettings({
   const [runtimeCapacity, setRuntimeCapacity] = useState<DockerRuntimeCapacity>(
     UNKNOWN_DOCKER_RUNTIME_CAPACITY
   );
+  const [runtimeCapacityLoaded, setRuntimeCapacityLoaded] = useState(false);
+  // The GPU panel only exists on nodes that report GPUs; wait for the inventory and limits.
+  useContentLoading(!gpuInventoryLoaded || !runtimeCapacityLoaded);
   const previousDeploymentBaselineRef = useRef(deploymentBaseline);
   const inputCell =
     "h-9 text-xs font-mono border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
 
   useEffect(() => {
     let cancelled = false;
-    void loadDockerRuntimeCapacity(nodeId).then((capacity) => {
-      if (!cancelled) setRuntimeCapacity(capacity);
-    });
+    void loadDockerRuntimeCapacity(nodeId)
+      .then((capacity) => {
+        if (!cancelled) setRuntimeCapacity(capacity);
+      })
+      .finally(() => {
+        if (!cancelled) setRuntimeCapacityLoaded(true);
+      });
 
     return () => {
       cancelled = true;
@@ -567,7 +575,8 @@ export function DeploymentSettings({
           runtimeValidationError={runtimeValidationError}
           runtimeFieldErrors={runtimeFieldErrors}
           hasRuntimeChanges={runtimeChanged}
-          liveLoading={!!action || !!busyReason}
+          liveLoading={action === "update-runtime"}
+          applyDisabled={!!action || !!busyReason}
           onApply={() =>
             runAction("update-runtime", async () => {
               await api.updateDockerDeployment(nodeId, deployment.id, {
@@ -588,7 +597,8 @@ export function DeploymentSettings({
           bodyClassName="divide-y divide-border"
           actions={
             <Button
-              className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
+              variant="warning"
+              pending={action === "update-execution"}
               disabled={!!action || !!busyReason || !settingsChanged || !nextImage.trim()}
               title={busyReason ?? undefined}
               onClick={() => {
@@ -636,7 +646,7 @@ export function DeploymentSettings({
                 });
               }}
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              {action !== "update-execution" && <RotateCcw className="h-3.5 w-3.5" />}
               Save
             </Button>
           }

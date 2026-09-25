@@ -1,4 +1,4 @@
-import { RefreshCw, Save, ShieldCheck } from "lucide-react";
+import { Save, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -439,16 +439,18 @@ export function AvailabilitySection({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
-              disabled={checking || saving}
+              pending={checking && !saving}
+              disabled={saving}
               onClick={() => void preflight()}
             >
-              {checking && <RefreshCw className="animate-spin" />} Check eligibility
+              Check eligibility
             </Button>
             <Button
-              disabled={!canManage || checking || saving || !dirty}
+              pending={saving}
+              disabled={!canManage || checking || !dirty}
               onClick={() => void save()}
             >
-              <Save />
+              {!saving && <Save />}
               Save
             </Button>
           </div>
@@ -721,7 +723,8 @@ export function AvailabilitySection({
             </Button>
             <Button
               variant="destructive"
-              disabled={!policy || !survivorId || confirmation !== policy.displayName || saving}
+              pending={saving}
+              disabled={!policy || !survivorId || confirmation !== policy.displayName}
               onClick={async () => {
                 if (!policy) return;
                 setSaving(true);

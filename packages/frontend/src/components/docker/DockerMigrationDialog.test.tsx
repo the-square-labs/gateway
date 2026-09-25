@@ -135,7 +135,7 @@ describe("DockerMigrationDialog", () => {
     const blocker = await screen.findByText("Container name already exists");
     expect(screen.getByRole("heading", { name: "Verification" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Blockers" })).not.toBeInTheDocument();
-    expect(blocker.closest("li")).toHaveStyle({ borderColor: "var(--color-red-500)" });
+    expect(blocker.closest("li")).toHaveStyle({ borderColor: "var(--color-destructive)" });
     expect(screen.getByRole("button", { name: "Start migration" })).toBeDisabled();
     expect(api.startDockerMigration).not.toHaveBeenCalled();
   });

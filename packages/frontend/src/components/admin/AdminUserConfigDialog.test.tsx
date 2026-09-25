@@ -4,6 +4,7 @@ import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog"
 import { confirm } from "@/components/common/ConfirmDialog";
 import { api } from "@/services/api";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { User } from "@/types";
 
 vi.mock("@/components/common/ConfirmDialog", () => ({ confirm: vi.fn() }));
@@ -40,6 +41,7 @@ describe("AdminUserConfigDialog", () => {
       />
     );
 
+    await waitForReveal();
     expect(screen.getByRole("heading", { name: "Configure user" })).toBeInTheDocument();
     expect(screen.getByText("Password email")).toBeInTheDocument();
     expect(screen.getByText("Active sessions")).toBeInTheDocument();
@@ -74,10 +76,39 @@ describe("AdminUserConfigDialog", () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "1 active session" }));
+    await waitForReveal();
+    fireEvent.click(screen.getByRole("button", { name: "1 active session" }));
 
     expect(await screen.findByText("Test Browser")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Revoke" })).toBeInTheDocument();
+  });
+
+  it("opens once the session count is known, without a loading placeholder", async () => {
+    let resolveSessions!: (sessions: []) => void;
+    vi.spyOn(api, "listAdminUserSessions").mockReturnValue(
+      new Promise((resolve) => {
+        resolveSessions = resolve;
+      })
+    );
+
+    renderWithRouter(
+      <AdminUserConfigDialog
+        open
+        user={passwordUser}
+        canResetMfa
+        onOpenChange={vi.fn()}
+        onUserUpdated={vi.fn()}
+        onUserDeleted={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.queryByText(/Loading sessions/)).not.toBeInTheDocument();
+    expect(screen.queryByText("No active sessions")).not.toBeInTheDocument();
+
+    resolveSessions([]);
+    await waitForReveal();
+    expect(screen.getByText("No active sessions")).toBeInTheDocument();
   });
 
   it("lets an administrator reset the current avatar", async () => {
@@ -101,6 +132,7 @@ describe("AdminUserConfigDialog", () => {
       />
     );
 
+    await waitForReveal();
     fireEvent.click(screen.getByRole("button", { name: "Reset avatar" }));
 
     await vi.waitFor(() => expect(resetAvatar).toHaveBeenCalledWith(userWithAvatar.id));

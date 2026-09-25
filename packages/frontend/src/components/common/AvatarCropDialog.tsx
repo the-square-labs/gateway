@@ -394,8 +394,13 @@ export function AvatarCropDialog({
           >
             Cancel
           </Button>
-          <Button type="button" disabled={busy || !image.width} onClick={() => void upload()}>
-            {busy ? "Uploading..." : "Upload"}
+          <Button
+            type="button"
+            pending={busy}
+            disabled={!image.width}
+            onClick={() => void upload()}
+          >
+            Upload
           </Button>
         </DialogFooter>
       </DialogContent>

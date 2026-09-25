@@ -46,7 +46,10 @@ interface RuntimeSectionProps {
   runtimeValidationError: string | null;
   runtimeFieldErrors: RuntimeFieldErrors;
   hasRuntimeChanges: boolean;
+  /** The Apply request is running. */
   liveLoading: boolean;
+  /** Another change owns the workload, so Apply waits. */
+  applyDisabled?: boolean;
   onApply: () => void;
 }
 
@@ -78,6 +81,7 @@ export function RuntimeSection({
   runtimeFieldErrors,
   hasRuntimeChanges,
   liveLoading,
+  applyDisabled = false,
   onApply,
 }: RuntimeSectionProps) {
   const activeFieldErrors = hasRuntimeChanges ? runtimeFieldErrors : {};
@@ -97,9 +101,10 @@ export function RuntimeSection({
         canEdit ? (
           <Button
             onClick={onApply}
-            disabled={liveLoading || !hasRuntimeChanges || !!runtimeValidationError}
+            pending={liveLoading}
+            disabled={applyDisabled || !hasRuntimeChanges || !!runtimeValidationError}
           >
-            <Save className="h-3.5 w-3.5" />
+            {!liveLoading && <Save className="h-3.5 w-3.5" />}
             {appliesLive ? "Apply" : "Save"}
           </Button>
         ) : null

@@ -5,10 +5,12 @@ import { toast } from "sonner";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -32,6 +34,8 @@ import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useUIStore } from "@/stores/ui";
 import type { Certificate } from "@/types";
+
+const INSTALL_COMMAND_CLASS = "min-h-0 whitespace-pre-wrap break-all font-mono text-xs";
 
 export function CADetail() {
   const { id } = useParams<{ id: string }>();
@@ -68,8 +72,12 @@ export function CADetail() {
     const load = async () => {
       setIsLoading(true);
       try {
-        await selectCA(id);
-        await reloadCerts();
+        // Child CAs come from the CA list, which a direct visit has not loaded yet.
+        await Promise.all([
+          selectCA(id),
+          reloadCerts(),
+          useCAStore.getState().cas.length === 0 ? fetchCAs() : undefined,
+        ]);
       } catch {
         toast.error("Failed to load CA details");
       } finally {
@@ -77,7 +85,7 @@ export function CADetail() {
       }
     };
     void load();
-  }, [id, reloadCerts, selectCA]);
+  }, [fetchCAs, id, reloadCerts, selectCA]);
 
   useRealtime("ca.changed", (payload) => {
     if (!id) return;
@@ -240,137 +248,134 @@ export function CADetail() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/cas")} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{ca.commonName}</h1>
-                <StatusBadge status={ca.status} size="inline" />
-                {ca.isSystem && (
-                  <Badge variant="outline" size="inline">
-                    System
-                  </Badge>
-                )}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {ca.type === "root" ? "Root CA" : "Intermediate CA"}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canCreateIntermediate && ca.status === "active" && !ca.isSystem
-                ? [
-                    {
-                      id: "ca:create-intermediate",
-                      label: "Create intermediate CA",
-                      icon: <Shield className="h-4 w-4" />,
-                      onClick: () => setCreateIntermediateOpen(true),
-                    },
-                  ]
-                : []),
-              ...(canIssueCertificate && ca.status === "active" && !ca.isSystem
-                ? [
-                    {
-                      id: "ca:issue-certificate",
-                      label: "Issue certificate",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => setIssueDialogOpen(true),
-                    },
-                  ]
-                : []),
-              {
-                id: "ca:download-pem",
-                label: "Download CA as PEM",
-                icon: <Download className="h-4 w-4" />,
-                onClick: downloadPem,
-              },
-              {
-                id: "ca:download-crt",
-                label: "Download CA as CRT",
-                icon: <Download className="h-4 w-4" />,
-                onClick: downloadCrt,
-              },
-              ...(ca.type === "root"
-                ? [
-                    {
-                      id: "ca:install-guide",
-                      label: "Open CA install guide",
-                      icon: <Shield className="h-4 w-4" />,
-                      onClick: () => setInstallGuideOpen(true),
-                    },
-                  ]
-                : []),
-              {
-                id: "ca:copy-pem",
-                label: "Copy CA PEM",
-                icon: <Copy className="h-4 w-4" />,
-                onClick: copyPem,
-              },
-              {
-                id: "ca:copy-serial",
-                label: "Copy CA serial",
-                icon: <Copy className="h-4 w-4" />,
-                onClick: copySerial,
-              },
-              ...(canRevokeCA && ca.status === "active" && !ca.isSystem
-                ? [
-                    {
-                      id: "ca:revoke",
-                      label: "Revoke CA",
-                      icon: <ShieldOff className="h-4 w-4" />,
-                      onClick: handleRevoke,
-                      destructive: true,
-                      separatorBefore: true,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canCreateIntermediate && ca.status === "active" && !ca.isSystem && (
-              <Button variant="outline" onClick={() => setCreateIntermediateOpen(true)}>
-                <Shield className="h-4 w-4" />
-                Create Intermediate
+        <PageHeader
+          leading={<PageBackButton onClick={() => navigate("/cas")} />}
+          title={ca.commonName}
+          badges={
+            <>
+              <StatusBadge status={ca.status} size="inline" />
+              {ca.isSystem && (
+                <Badge variant="outline" size="inline">
+                  System
+                </Badge>
+              )}
+            </>
+          }
+          description={ca.type === "root" ? "Root CA" : "Intermediate CA"}
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canCreateIntermediate && ca.status === "active" && !ca.isSystem
+                  ? [
+                      {
+                        id: "ca:create-intermediate",
+                        label: "Create intermediate CA",
+                        icon: <Shield className="h-4 w-4" />,
+                        onClick: () => setCreateIntermediateOpen(true),
+                      },
+                    ]
+                  : []),
+                ...(canIssueCertificate && ca.status === "active" && !ca.isSystem
+                  ? [
+                      {
+                        id: "ca:issue-certificate",
+                        label: "Issue certificate",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => setIssueDialogOpen(true),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "ca:download-pem",
+                  label: "Download CA as PEM",
+                  icon: <Download className="h-4 w-4" />,
+                  onClick: downloadPem,
+                },
+                {
+                  id: "ca:download-crt",
+                  label: "Download CA as CRT",
+                  icon: <Download className="h-4 w-4" />,
+                  onClick: downloadCrt,
+                },
+                ...(ca.type === "root"
+                  ? [
+                      {
+                        id: "ca:install-guide",
+                        label: "Open CA install guide",
+                        icon: <Shield className="h-4 w-4" />,
+                        onClick: () => setInstallGuideOpen(true),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "ca:copy-pem",
+                  label: "Copy CA PEM",
+                  icon: <Copy className="h-4 w-4" />,
+                  onClick: copyPem,
+                },
+                {
+                  id: "ca:copy-serial",
+                  label: "Copy CA serial",
+                  icon: <Copy className="h-4 w-4" />,
+                  onClick: copySerial,
+                },
+                ...(canRevokeCA && ca.status === "active" && !ca.isSystem
+                  ? [
+                      {
+                        id: "ca:revoke",
+                        label: "Revoke CA",
+                        icon: <ShieldOff className="h-4 w-4" />,
+                        onClick: handleRevoke,
+                        destructive: true,
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canCreateIntermediate && ca.status === "active" && !ca.isSystem && (
+                <Button variant="outline" onClick={() => setCreateIntermediateOpen(true)}>
+                  <Shield className="h-4 w-4" />
+                  Create Intermediate
+                </Button>
+              )}
+              {canIssueCertificate && ca.status === "active" && !ca.isSystem && (
+                <Button onClick={() => setIssueDialogOpen(true)}>
+                  <Plus className="h-4 w-4" />
+                  Issue Certificate
+                </Button>
+              )}
+              <Button variant="outline" onClick={downloadPem}>
+                <Download className="h-4 w-4" />
+                Download PEM
               </Button>
-            )}
-            {canIssueCertificate && ca.status === "active" && !ca.isSystem && (
-              <Button onClick={() => setIssueDialogOpen(true)}>
-                <Plus className="h-4 w-4" />
-                Issue Certificate
+              <Button variant="outline" onClick={downloadCrt}>
+                <Download className="h-4 w-4" />
+                Download CRT
               </Button>
-            )}
-            <Button variant="outline" onClick={downloadPem}>
-              <Download className="h-4 w-4" />
-              Download PEM
-            </Button>
-            <Button variant="outline" onClick={downloadCrt}>
-              <Download className="h-4 w-4" />
-              Download CRT
-            </Button>
-            {ca.type === "root" && (
-              <Button variant="outline" onClick={() => setInstallGuideOpen(true)}>
-                <Shield className="h-4 w-4" />
-                Install Guide
+              {ca.type === "root" && (
+                <Button variant="outline" onClick={() => setInstallGuideOpen(true)}>
+                  <Shield className="h-4 w-4" />
+                  Install Guide
+                </Button>
+              )}
+              <Button variant="outline" onClick={copyPem}>
+                <Copy className="h-4 w-4" />
+                Copy PEM
               </Button>
-            )}
-            <Button variant="outline" onClick={copyPem}>
-              <Copy className="h-4 w-4" />
-              Copy PEM
-            </Button>
-            <Button variant="outline" onClick={copySerial}>
-              <Copy className="h-4 w-4" />
-              Copy Serial
-            </Button>
-            {canRevokeCA && ca.status === "active" && !ca.isSystem && (
-              <Button variant="destructive" onClick={handleRevoke}>
-                <ShieldOff className="h-4 w-4" />
-                Revoke CA
+              <Button variant="outline" onClick={copySerial}>
+                <Copy className="h-4 w-4" />
+                Copy Serial
               </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {canRevokeCA && ca.status === "active" && !ca.isSystem && (
+                <Button variant="destructive" onClick={handleRevoke}>
+                  <ShieldOff className="h-4 w-4" />
+                  Revoke CA
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-3">
           {/* Left: Details + Certs */}
@@ -461,8 +466,8 @@ export function CADetail() {
                 hasScope(`pki:ca:edit:${ca.id}`) && !ca.isSystem ? (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
+                    size="icon-sm"
+                    aria-label="Edit distribution endpoints"
                     onClick={openEndpointsDialog}
                   >
                     <Pencil className="h-4 w-4" />
@@ -522,37 +527,36 @@ export function CADetail() {
             <DialogHeader>
               <DialogTitle>Install Root CA — {ca.commonName}</DialogTitle>
             </DialogHeader>
-            <div className="space-y-4 text-sm">
-              <div>
-                <p className="font-medium mb-1">macOS</p>
-                <code className="block bg-muted p-2 text-xs font-mono whitespace-pre-wrap">
-                  sudo security add-trusted-cert -d -r trustRoot -k
-                  /Library/Keychains/System.keychain {ca.commonName}.pem
-                </code>
-              </div>
-              <div>
-                <p className="font-medium mb-1">Windows</p>
-                <code className="block bg-muted p-2 text-xs font-mono whitespace-pre-wrap">
-                  certutil -addstore -f "ROOT" {ca.commonName}.crt
-                </code>
-              </div>
-              <div>
-                <p className="font-medium mb-1">Ubuntu / Debian</p>
-                <code className="block bg-muted p-2 text-xs font-mono whitespace-pre-wrap">{`sudo cp ${ca.commonName}.crt /usr/local/share/ca-certificates/\nsudo update-ca-certificates`}</code>
-              </div>
-              <div>
-                <p className="font-medium mb-1">RHEL / Fedora</p>
-                <code className="block bg-muted p-2 text-xs font-mono whitespace-pre-wrap">{`sudo cp ${ca.commonName}.pem /etc/pki/ca-trust/source/anchors/\nsudo update-ca-trust`}</code>
-              </div>
-              <div>
-                <p className="font-medium mb-1">Firefox</p>
-                <p className="text-muted-foreground text-xs">
+            <div className="space-y-4">
+              <CopyCodeBlock
+                label="macOS"
+                value={`sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain ${ca.commonName}.pem`}
+                codeClassName={INSTALL_COMMAND_CLASS}
+              />
+              <CopyCodeBlock
+                label="Windows"
+                value={`certutil -addstore -f "ROOT" ${ca.commonName}.crt`}
+                codeClassName={INSTALL_COMMAND_CLASS}
+              />
+              <CopyCodeBlock
+                label="Ubuntu / Debian"
+                value={`sudo cp ${ca.commonName}.crt /usr/local/share/ca-certificates/\nsudo update-ca-certificates`}
+                codeClassName={INSTALL_COMMAND_CLASS}
+              />
+              <CopyCodeBlock
+                label="RHEL / Fedora"
+                value={`sudo cp ${ca.commonName}.pem /etc/pki/ca-trust/source/anchors/\nsudo update-ca-trust`}
+                codeClassName={INSTALL_COMMAND_CLASS}
+              />
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">Firefox</p>
+                <p className="text-sm">
                   Settings → Privacy & Security → Certificates → View Certificates → Import
                 </p>
               </div>
-              <div>
-                <p className="font-medium mb-1">Chrome / Edge</p>
-                <p className="text-muted-foreground text-xs">
+              <div className="space-y-1.5">
+                <p className="text-xs text-muted-foreground">Chrome / Edge</p>
+                <p className="text-sm">
                   Settings → Privacy and Security → Security → Manage certificates → Import
                 </p>
               </div>
@@ -592,8 +596,8 @@ export function CADetail() {
               <Button variant="outline" onClick={() => setEndpointsDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveEndpoints} disabled={isSavingEndpoints}>
-                {isSavingEndpoints ? "Saving..." : "Save"}
+              <Button onClick={handleSaveEndpoints} pending={isSavingEndpoints}>
+                Save
               </Button>
             </DialogFooter>
           </DialogContent>

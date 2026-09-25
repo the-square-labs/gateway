@@ -2,6 +2,7 @@ import { AlertTriangle, Plus, Send, ShieldCheck, Webhook } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
@@ -109,11 +110,11 @@ export function Notifications() {
   const headerAction =
     activeTab === "alerts" && canManageAlerts ? (
       <Button onClick={() => setOpenCreateAlertToken((v) => v + 1)}>
-        <Plus className="h-4 w-4" /> New Alert
+        <Plus /> New Alert
       </Button>
     ) : activeTab === "webhooks" && canManageWebhooks ? (
       <Button onClick={() => setOpenCreateWebhookToken((v) => v + 1)}>
-        <Plus className="h-4 w-4" /> New Webhook
+        <Plus /> New Webhook
       </Button>
     ) : activeTab === "deliveries" && canViewDeliveries ? (
       <Button variant="outline" onClick={() => setRefreshDeliveriesToken((v) => v + 1)}>
@@ -126,7 +127,7 @@ export function Notifications() {
           setOpenCreateSiemToken((v) => v + 1);
         }}
       >
-        <Plus className="h-4 w-4" /> New SIEM Destination
+        <Plus /> New SIEM Destination
       </Button>
     ) : activeTab === "siem-deliveries" && canViewSiem ? (
       <Button variant="outline" onClick={() => setRefreshSiemDeliveriesToken((v) => v + 1)}>
@@ -195,23 +196,22 @@ export function Notifications() {
             : "h-full overflow-y-auto p-6 space-y-6"
         }
       >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <LiteModeBackButton />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-semibold">Notifications</h1>
-                {activeTab.startsWith("siem") ? <LicensePlanBadge feature="siem-export" /> : null}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {siemEnabled
-                  ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"
-                  : "Manage alert rules, webhooks, and delivery activity"}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>{headerAction}</ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="Notifications"
+          badges={activeTab.startsWith("siem") ? <LicensePlanBadge feature="siem-export" /> : null}
+          description={
+            siemEnabled
+              ? "Manage alert rules, webhooks, SIEM audit export, and delivery activity"
+              : "Manage alert rules, webhooks, and delivery activity"
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerAction}
+            </ResponsiveHeaderActions>
+          }
+        />
         <Tabs
           value={activeTab}
           onValueChange={(v) => navigate(`/notifications/${v}`, { replace: true })}

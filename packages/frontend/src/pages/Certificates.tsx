@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -180,39 +181,35 @@ export function Certificates() {
   return (
     <PageTransition>
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
-        {/* Header */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">Certificates</h1>
-                <LicensePlanBadge feature="internal-pki" />
-              </div>
-              <p className="text-sm text-muted-foreground">{total} certificates total</p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={
-              hasScopedAccess("pki:cert:issue")
-                ? [
-                    {
-                      label: "Issue Certificate",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: openIssueDialog,
-                    },
-                  ]
-                : []
-            }
-          >
-            {hasScopedAccess("pki:cert:issue") && (
-              <Button onClick={openIssueDialog}>
-                <Plus className="h-4 w-4" />
-                Issue Certificate
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="Certificates"
+          badges={<LicensePlanBadge feature="internal-pki" />}
+          description={`${total} certificates total`}
+          actions={
+            <ResponsiveHeaderActions
+              actions={
+                hasScopedAccess("pki:cert:issue")
+                  ? [
+                      {
+                        label: "Issue Certificate",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openIssueDialog,
+                      },
+                    ]
+                  : []
+              }
+            >
+              {hasScopedAccess("pki:cert:issue") && (
+                <Button onClick={openIssueDialog}>
+                  <Plus className="h-4 w-4" />
+                  Issue Certificate
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {/* Search and filters */}
         <SearchFilterBar

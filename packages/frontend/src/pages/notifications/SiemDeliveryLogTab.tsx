@@ -1,7 +1,9 @@
-import { CheckCircle2, Clock, RotateCcw, XCircle } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -27,28 +29,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import type { SiemDelivery, SiemDeliveryStatus, SiemDestination } from "@/types";
+import { DeliveryStatusIcon, httpStatusVariant, siemDeliveryVariant } from "./notification-status";
 
 export const SIEM_DELIVERY_PAGE_SIZE = 100;
-
-const STATUS_BADGE: Record<
-  SiemDeliveryStatus,
-  "success" | "destructive" | "warning" | "secondary"
-> = {
-  queued: "secondary",
-  delivering: "warning",
-  retrying: "warning",
-  delivered: "success",
-  failed: "destructive",
-  paused: "secondary",
-  discarded: "secondary",
-};
 
 const DELIVERY_COLUMNS: ResourceListColumn<SiemDelivery>[] = [
   { id: "status", label: "", width: "56px" },
@@ -86,6 +75,12 @@ export function SiemDeliveryLogTab({
   const [destinations, setDestinations] = useState<SiemDestination[]>(
     () => api.getCached<SiemDestination[]>("audit:siem:destinations") ?? []
   );
+  // A destination filter from the URL shows the destination's name once the list arrives.
+  const [destinationsLoading, setDestinationsLoading] = useState(
+    () =>
+      Boolean(initialDestinationId) &&
+      api.getCached<SiemDestination[]>("audit:siem:destinations") === undefined
+  );
   const [destinationFilter, setDestinationFilter] = useState(() => initialDestinationId ?? "all");
   const {
     open: detailOpen,
@@ -108,6 +103,8 @@ export function SiemDeliveryLogTab({
       setDestinations(data);
     } catch {
       // The delivery log remains useful even if the optional filter labels cannot load.
+    } finally {
+      setDestinationsLoading(false);
     }
   }, []);
 
@@ -319,8 +316,14 @@ export function SiemDeliveryLogTab({
           </div>
         }
       />
-      {initialLoading && deliveries.length === 0 ? (
-        <SiemDeliveryRowsSkeleton />
+      <ContentLoading loading={destinationsLoading} />
+      {isLoading && deliveries.length === 0 ? (
+        // The first load holds the tab; a filter without cached results loads in place.
+        initialLoading ? (
+          <ContentLoading loading />
+        ) : (
+          <LoadingSpinner label="Loading SIEM deliveries" />
+        )
       ) : deliveries.length === 0 ? (
         <EmptyState message="No SIEM deliveries yet. Audit activity will appear here after a destination is enabled." />
       ) : (
@@ -344,7 +347,9 @@ export function SiemDeliveryLogTab({
                     interactive
                     onClick={() => void openDetail(delivery)}
                   >
-                    <ResourceListCell>{statusIcon(delivery.status)}</ResourceListCell>
+                    <ResourceListCell>
+                      <DeliveryStatusIcon state={deliveryIconState(delivery.status)} />
+                    </ResourceListCell>
                     <ResourceListCell>
                       <span className="text-sm font-medium">
                         {delivery.destinationName ?? delivery.destinationId.slice(0, 8)}
@@ -357,7 +362,7 @@ export function SiemDeliveryLogTab({
                     </ResourceListCell>
                     <ResourceListCell>
                       {delivery.responseStatus ? (
-                        <Badge variant={delivery.responseStatus < 300 ? "success" : "destructive"}>
+                        <Badge variant={httpStatusVariant(delivery.responseStatus)}>
                           {delivery.responseStatus}
                         </Badge>
                       ) : (
@@ -418,9 +423,11 @@ export function SiemDeliveryLogTab({
               <DialogTitle>SIEM Delivery Details</DialogTitle>
             </DialogHeader>
             <div className="min-w-0 space-y-4 pr-1">
+              {/* The dialog opens once the complete event details arrive. */}
+              <ContentLoading loading={detailLoading} />
               <div className="grid gap-3 text-sm sm:grid-cols-6">
                 <DeliveryDetail className="sm:col-span-2" label="Status">
-                  <Badge variant={STATUS_BADGE[detail.status]} size="inline">
+                  <Badge variant={siemDeliveryVariant(detail.status)} size="inline">
                     {detail.status}
                   </Badge>
                 </DeliveryDetail>
@@ -432,10 +439,7 @@ export function SiemDeliveryLogTab({
                 </DeliveryDetail>
                 <DeliveryDetail className="sm:col-span-2" label="HTTP">
                   {detail.responseStatus ? (
-                    <Badge
-                      variant={detail.responseStatus < 300 ? "success" : "destructive"}
-                      size="inline"
-                    >
+                    <Badge variant={httpStatusVariant(detail.responseStatus)} size="inline">
                       {detail.responseStatus}
                     </Badge>
                   ) : (
@@ -465,11 +469,6 @@ export function SiemDeliveryLogTab({
                   </pre>
                 </div>
               )}
-              {detailLoading && (
-                <p className="text-xs text-muted-foreground">
-                  Loading complete safe event details...
-                </p>
-              )}
               {detail.error && (
                 <div className="border border-border bg-card">
                   <div className="border-b border-border px-4 py-3">
@@ -487,9 +486,9 @@ export function SiemDeliveryLogTab({
             </div>
             {canManage && detail.status === "failed" && (
               <DialogFooter>
-                <Button variant="outline" onClick={() => void requeue()} disabled={requeueing}>
-                  <RotateCcw className="h-4 w-4" />{" "}
-                  {requeueing ? "Requeueing..." : "Requeue delivery"}
+                <Button variant="outline" onClick={() => void requeue()} pending={requeueing}>
+                  {requeueing ? null : <RotateCcw />}
+                  Requeue delivery
                 </Button>
               </DialogFooter>
             )}
@@ -521,55 +520,8 @@ function DeliveryDetail({
   );
 }
 
-function statusIcon(status: SiemDeliveryStatus) {
-  const icon =
-    status === "delivered" ? (
-      <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-    ) : status === "failed" ? (
-      <XCircle className="h-4 w-4 text-red-500" />
-    ) : (
-      <Clock className="h-4 w-4 text-warning" />
-    );
-  return (
-    <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">{icon}</span>
-  );
-}
-
-function SiemDeliveryRowsSkeleton() {
-  return (
-    <ResourceListFrame
-      minWidth={860}
-      innerClassName="flex flex-col"
-      aria-label="Loading SIEM delivery log"
-    >
-      <ResourceListHeaderTable columns={DELIVERY_COLUMNS} />
-      <ResourceListTable columns={DELIVERY_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
-        {Array.from({ length: 6 }, (_, index) => (
-          <ResourceListRow key={index} className="opacity-100">
-            <ResourceListCell>
-              <Skeleton className="h-8 w-8" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-28" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-36" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-5 w-12" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-12" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-10" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-32" />
-            </ResourceListCell>
-          </ResourceListRow>
-        ))}
-      </ResourceListTable>
-    </ResourceListFrame>
-  );
+function deliveryIconState(status: SiemDeliveryStatus) {
+  if (status === "delivered") return "delivered" as const;
+  if (status === "failed") return "failed" as const;
+  return "in-progress" as const;
 }

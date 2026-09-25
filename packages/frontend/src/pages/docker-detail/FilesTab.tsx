@@ -35,6 +35,7 @@ import {
   ResourceListHeaderTable,
   ResourceListTable,
 } from "@/components/common/ResourceListLayout";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -377,7 +378,9 @@ export function FilesTab({
     fileOperations.deletePath
   );
   const [roots, setRoots] = useState<TreeNode[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(canBrowseFiles);
+  // The first root listing holds the tab; a later reload shows the in-table loading row.
+  useContentLoading(isLoading);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [isContextMenuVisible, setIsContextMenuVisible] = useState(false);
@@ -671,6 +674,7 @@ export function FilesTab({
   );
 
   const handleCreateEntry = useCallback(async () => {
+    if (isCreatingEntry) return;
     if (!createDialog || !fileOperations?.createFile || !fileOperations.createDirectory) return;
     const name = newEntryName.trim();
     if (!name || name.includes("/")) {
@@ -699,7 +703,14 @@ export function FilesTab({
     } finally {
       setIsCreatingEntry(false);
     }
-  }, [createDialog, fileOperations, newEntryName, reloadDirectory, setCreateDialog]);
+  }, [
+    createDialog,
+    fileOperations,
+    isCreatingEntry,
+    newEntryName,
+    reloadDirectory,
+    setCreateDialog,
+  ]);
 
   const handleUploadClick = useCallback(
     (directory: string) => {
@@ -1102,8 +1113,11 @@ export function FilesTab({
             <Button variant="outline" onClick={() => setCreateDialog(null)}>
               Cancel
             </Button>
-            <Button onClick={handleCreateEntry} disabled={isCreatingEntry || !newEntryName.trim()}>
-              {isCreatingEntry && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            <Button
+              onClick={handleCreateEntry}
+              pending={isCreatingEntry}
+              disabled={!newEntryName.trim()}
+            >
               Create
             </Button>
           </DialogFooter>

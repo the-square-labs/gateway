@@ -1,9 +1,12 @@
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { ToggleField } from "@/components/common/ToggleField";
 import { Input } from "@/components/ui/input";
 import type { DockerBuildSourceRepository } from "@/types";
 
 interface RepositorySourceFieldsProps {
+  /** The Git integration options are still loading; the enclosing dialog waits for them. */
+  loading?: boolean;
   connectorId: string;
   connectorOptions: ComboboxOption[];
   repositories: DockerBuildSourceRepository[];
@@ -27,6 +30,7 @@ interface RepositorySourceFieldsProps {
 }
 
 export function RepositorySourceFields({
+  loading = false,
   connectorId,
   connectorOptions,
   repositories,
@@ -48,6 +52,7 @@ export function RepositorySourceFields({
   onAutoBuildChange,
   onAutoDeployChange,
 }: RepositorySourceFieldsProps) {
+  useContentLoading(loading);
   return (
     <div className="space-y-4">
       <div className="space-y-1.5">

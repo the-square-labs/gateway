@@ -93,7 +93,7 @@ export function HousekeepingCard({
           </p>
           {lastResult &&
             (lastResult.success ? (
-              <Check className="h-3 w-3 text-emerald-500 shrink-0" />
+              <Check className="h-3 w-3 text-success shrink-0" />
             ) : (
               <X className="h-3 w-3 text-destructive shrink-0" />
             ))}

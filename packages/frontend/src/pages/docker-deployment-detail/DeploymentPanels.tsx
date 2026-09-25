@@ -93,6 +93,7 @@ export function DeploymentOverview({
           <DetailRow
             label="Deployment ID"
             value={
+              // Inline copy control inside the value text; a Button would change the row height.
               <button
                 type="button"
                 className="flex items-center gap-1.5 font-mono hover:text-primary cursor-pointer"
@@ -266,6 +267,7 @@ export function DeploymentSlots({
               actions={
                 canManage && slot.slot !== activeSlot ? (
                   <Button
+                    pending={action === `switch-${slot.slot}`}
                     disabled={!!action || serviceBusy || !containerId}
                     onClick={() =>
                       runAction(`switch-${slot.slot}`, async () => {
@@ -404,8 +406,7 @@ export function DeploymentConfig({
       actions={
         <Button
           variant="ghost"
-          size="icon"
-          className="h-8 w-8"
+          size="icon-sm"
           onClick={() => copyToClipboard(jsonText)}
           title="Copy JSON"
         >

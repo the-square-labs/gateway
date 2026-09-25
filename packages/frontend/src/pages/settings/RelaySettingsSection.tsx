@@ -19,6 +19,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { NodeEnrollmentDialog } from "@/components/nodes/NodeEnrollmentDialog";
@@ -40,7 +41,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
@@ -161,14 +161,22 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     const cachedStatus = api.getCached<CachedRelayStatusResponse>(
       RELAY_STATUS_CACHE_KEY,
       Number.POSITIVE_INFINITY
-    )?.data;
-    return { settings: cachedSettings ?? null, status: cachedStatus ?? null };
+    );
+    return {
+      settings: cachedSettings ?? null,
+      status: cachedStatus?.data ?? null,
+      statusCached: cachedStatus !== undefined,
+    };
   });
   const initialRelay = initialSnapshot.settings?.generalSettings.relay;
   const [settings, setSettings] = useState<AuthProvisioningSettings | null>(
     initialSnapshot.settings
   );
-  const [initialLoadComplete, setInitialLoadComplete] = useState(settings !== null);
+  // Both requests feed the first render: cached settings alone would show the
+  // pool as unavailable until the status arrives.
+  const [initialLoadComplete, setInitialLoadComplete] = useState(
+    settings !== null && initialSnapshot.statusCached
+  );
   const [status, setStatus] = useState<DashboardRelaySnapshot | null>(initialSnapshot.status);
   const [history, setHistory] = useState<DashboardRelaySnapshot[]>(() =>
     initialSnapshot.status ? [initialSnapshot.status] : []
@@ -200,7 +208,9 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     initialRelay?.hardPressurePercent ?? 95
   );
   const [saving, setSaving] = useState(false);
-  const [poolAction, setPoolAction] = useState(false);
+  // The pool action in flight (for example "rebalance" or "drain:<id>"); every
+  // pool action stays disabled while one runs, the started one shows progress.
+  const [poolAction, setPoolAction] = useState<string | null>(null);
   const [enrollOpen, setEnrollOpen] = useState(false);
   const [abandoningUpdate, setAbandoningUpdate] = useState(false);
   const [reenrollment, setReenrollment] = useState<RelayReenrollment | null>(null);
@@ -324,7 +334,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       }))
     )
       return;
-    setPoolAction(true);
+    setPoolAction("rebalance");
     try {
       const outcomes = await api.rebalanceRelayPool();
       const failed = outcomes.filter(({ state }) => state === "failed");
@@ -356,7 +366,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay rebalance failed");
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
@@ -372,14 +382,14 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       }))
     )
       return;
-    setPoolAction(true);
+    setPoolAction(`drain:${instance.id}`);
     try {
       recordStatus(await api.setRelayInstanceDrain(instance.id, enabled));
       toast.success(enabled ? "Relay is draining" : "Relay resumed");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay action failed");
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
@@ -394,26 +404,26 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       }))
     )
       return;
-    setPoolAction(true);
+    setPoolAction(`disconnect:${instance.id}`);
     try {
       recordStatus(await api.forceDisconnectRelayInstance(instance.id));
       toast.success("Active relay streams disconnected");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay action failed");
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
   const renewCertificate = async (instance: DashboardRelayInstance) => {
-    setPoolAction(true);
+    setPoolAction(`renew:${instance.id}`);
     try {
       recordStatus(await api.renewRelayInstanceCertificate(instance.id));
       toast.success("Relay certificate renewed");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay certificate renewal failed");
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
@@ -427,7 +437,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       }))
     )
       return;
-    setPoolAction(true);
+    setPoolAction(`reenroll:${instance.id}`);
     try {
       setReenrollment(await api.reenrollRelayInstance(instance.id));
     } catch (error) {
@@ -435,7 +445,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         error instanceof Error ? error.message : "Failed to create a re-enrollment token"
       );
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
@@ -453,7 +463,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
       }))
     )
       return;
-    setPoolAction(true);
+    setPoolAction(`remove:${instance.id}`);
     try {
       await api.deleteNode(instance.nodeId);
       await load();
@@ -461,11 +471,12 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Relay removal failed");
     } finally {
-      setPoolAction(false);
+      setPoolAction(null);
     }
   };
 
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   if (!settings) return null;
 
@@ -626,7 +637,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {row.state === "draining" && metric(row.health?.activeTunnels) > 0 && (
               <Button
                 variant="destructive"
-                disabled={!canEdit || poolAction}
+                pending={poolAction === `disconnect:${row.id}`}
+                disabled={!canEdit || poolAction !== null}
                 onClick={() => void forceDisconnect(row)}
               >
                 Force disconnect
@@ -635,7 +647,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {canRenewCertificate(row) && (
               <Button
                 variant="outline"
-                disabled={!canEdit || poolAction}
+                pending={poolAction === `renew:${row.id}`}
+                disabled={!canEdit || poolAction !== null}
                 onClick={() => void renewCertificate(row)}
               >
                 Renew certificate
@@ -644,7 +657,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             {canReenroll(row) && (
               <Button
                 variant={row.policyTrust?.state === "reenrollment_required" ? "default" : "outline"}
-                disabled={!canEdit || poolAction}
+                pending={poolAction === `reenroll:${row.id}`}
+                disabled={!canEdit || poolAction !== null}
                 onClick={() => void reenroll(row)}
               >
                 Re-enroll
@@ -652,7 +666,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             )}
             <Button
               variant="outline"
-              disabled={!canEdit || poolAction}
+              pending={poolAction === `drain:${row.id}`}
+              disabled={!canEdit || poolAction !== null}
               onClick={() => void setDrain(row, row.state !== "draining")}
             >
               {row.state === "draining" ? "Resume" : "Drain"}
@@ -663,7 +678,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                   (row.retainedAssignments ?? row.activeAssignments) === 0)) && (
                 <Button
                   variant="destructive"
-                  disabled={!canEdit || poolAction}
+                  pending={poolAction === `remove:${row.id}`}
+                  disabled={!canEdit || poolAction !== null}
                   onClick={() => void removeRelay(row)}
                 >
                   Remove
@@ -717,21 +733,22 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
             <Button
               variant="outline"
               onClick={() => setEnrollOpen(true)}
-              disabled={!canEdit || poolAction}
+              disabled={!canEdit || poolAction !== null}
             >
               <Plus className="h-4 w-4" />
               Add relay node
             </Button>
             <Button
               onClick={() => void rebalance()}
+              pending={poolAction === "rebalance"}
               disabled={
                 !canEdit ||
-                poolAction ||
+                poolAction !== null ||
                 !status?.rebalanceAvailable ||
                 Boolean(status?.blockers?.length)
               }
             >
-              <RefreshCw className="h-4 w-4" />
+              {poolAction === "rebalance" ? null : <RefreshCw className="h-4 w-4" />}
               Rebalance
             </Button>
           </>
@@ -785,10 +802,10 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 variant="outline"
                 size="sm"
                 onClick={() => void handleAbandonUpdate()}
-                disabled={abandoningUpdate}
+                pending={abandoningUpdate}
               >
-                <Ban className="h-4 w-4" />
-                {abandoningUpdate ? "Abandoning..." : "Abandon update"}
+                {abandoningUpdate ? null : <Ban className="h-4 w-4" />}
+                Abandon update
               </Button>
             )}
           </div>
@@ -985,8 +1002,8 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         title="Relay runtime"
         description="Persisted Gateway settings distributed to the relay data plane"
         actions={
-          <Button onClick={save} disabled={!canEdit || saving || !hasChanges}>
-            <Save className="h-4 w-4" />
+          <Button onClick={save} pending={saving} disabled={!canEdit || !hasChanges}>
+            {saving ? null : <Save className="h-4 w-4" />}
             Save
           </Button>
         }

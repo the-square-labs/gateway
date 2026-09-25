@@ -1,5 +1,6 @@
 import { Globe } from "lucide-react";
 import { Link } from "react-router-dom";
+import { proxyHealthTone } from "@/components/common/resource-status";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { proxyHostRoute } from "@/lib/resource-routes";
@@ -10,15 +11,7 @@ interface PinnedProxyCardProps {
 }
 
 export function PinnedProxyCard({ proxy }: PinnedProxyCardProps) {
-  const eff = (proxy as any).effectiveHealthStatus ?? proxy.healthStatus;
-  const statusColor =
-    eff === "online"
-      ? "success"
-      : eff === "recovering"
-        ? "warning"
-        : eff === "offline" || eff === "degraded"
-          ? "destructive"
-          : "secondary";
+  const eff = proxy.effectiveHealthStatus ?? proxy.healthStatus;
   const statusLabel = eff === "online" ? "healthy" : eff;
 
   return (
@@ -42,10 +35,10 @@ export function PinnedProxyCard({ proxy }: PinnedProxyCardProps) {
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <Badge variant="secondary" size="inline" className="uppercase">
+        <Badge variant="secondary" size="inline">
           {proxy.type}
         </Badge>
-        <Badge variant={statusColor} size="inline" className="uppercase">
+        <Badge variant={proxyHealthTone(eff)} size="inline">
           {statusLabel}
         </Badge>
       </div>

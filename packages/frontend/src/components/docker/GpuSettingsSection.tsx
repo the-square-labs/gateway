@@ -2,6 +2,7 @@ import { Minus, Plus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -63,6 +64,8 @@ export function GpuSettingsSection({
   const [gpuUsageLoaded, setGpuUsageLoaded] = useState(false);
   const [gpuUsageUnavailable, setGpuUsageUnavailable] = useState(false);
   const [gpuAddOpen, setGpuAddOpen] = useState(false);
+  // Without GPUs the section is omitted, so the tab waits for the inventory and usage first.
+  useContentLoading(!gpuInventoryLoaded || !gpuUsageLoaded);
   const [gpuCandidateId, setGpuCandidateId] = useState("");
 
   useEffect(() => {
@@ -174,9 +177,7 @@ export function GpuSettingsSection({
           <p className="px-4 py-3 text-sm text-muted-foreground">
             {attachment.reason || "This GPU mapping cannot be safely changed by Gateway."}
           </p>
-        ) : !gpuInventoryLoaded ? (
-          <EmptyState message="Loading GPUs..." embedded />
-        ) : deviceIds.length > 0 ? (
+        ) : !gpuInventoryLoaded ? null : deviceIds.length > 0 ? (
           <>
             <div
               className={`grid ${tableGridColumns} border-b border-border bg-muted text-xs font-medium text-muted-foreground uppercase tracking-wider`}
@@ -228,7 +229,7 @@ export function GpuSettingsSection({
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                        className="shrink-0 rounded-none border-l border-border"
                         onClick={() => onDeviceIdsChange(deviceIds.filter((id) => id !== deviceId))}
                         aria-label={`Remove ${device ? gpuDeviceLabel(device) : deviceId}`}
                         title="Remove GPU"

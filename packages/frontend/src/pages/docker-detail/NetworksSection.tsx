@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,7 +80,9 @@ export function NetworksSection({
   canListNetworks: boolean;
 }) {
   const [allNetworks, setAllNetworks] = useState<DockerNetwork[]>([]);
-  const [networksLoading, setNetworksLoading] = useState(false);
+  // The network picker the section opens with; realtime reloads refresh it in place.
+  const [networksLoading, setNetworksLoading] = useState(canListNetworks);
+  useContentLoading(networksLoading);
 
   const selectedNetworkIds = useMemo(
     () => new Set(networks.map((network) => network.networkId).filter(Boolean)),
@@ -247,7 +250,7 @@ export function NetworksSection({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                      className="shrink-0 rounded-none border-l border-border"
                       disabled={!canRemoveNetwork}
                       onClick={() => removeNetwork(index)}
                     >

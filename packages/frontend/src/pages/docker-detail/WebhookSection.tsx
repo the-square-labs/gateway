@@ -220,47 +220,8 @@ export function WebhookSection(props: WebhookSectionProps) {
 
   if (!allowWebhook && !allowCleanup) return null;
 
-  if (loading) {
-    return (
-      <>
-        {allowWebhook && (
-          <PanelShell
-            title={
-              <SettingsHelpTitle
-                label="Webhook"
-                help={`Creates a secret URL that CI can call to trigger a managed ${isDeployment ? "deployment" : "container"} image update. Treat the URL as a credential.`}
-              />
-            }
-            description={`Trigger ${isDeployment ? "deployment" : "container"} updates from CI pipelines`}
-          >
-            <div className="space-y-3 px-4 py-3" aria-busy="true" aria-label="Loading webhook">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-16 w-full" />
-            </div>
-          </PanelShell>
-        )}
-        {allowCleanup && (
-          <PanelShell
-            title={
-              <SettingsHelpTitle
-                label="Image Cleanup"
-                help="Removes older image versions after successful managed updates while retaining the configured number of previous versions for rollback and inspection."
-              />
-            }
-            description="Remove old image versions after manual or webhook updates"
-          >
-            <div className="flex items-center justify-between gap-4 px-4 py-3" aria-busy="true">
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-36" />
-                <Skeleton className="h-3 w-52" />
-              </div>
-              <Skeleton className="h-9 w-20 shrink-0" />
-            </div>
-          </PanelShell>
-        )}
-      </>
-    );
-  }
+  // The enclosing tab waits for the first answer; there is no separate placeholder.
+  if (loading) return <Skeleton />;
 
   const handleToggle = async (enabled: boolean) => {
     if (enabled) {
@@ -296,7 +257,7 @@ export function WebhookSection(props: WebhookSectionProps) {
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                       onClick={handleRegenerate}
                       title="Regenerate URL"
                     >

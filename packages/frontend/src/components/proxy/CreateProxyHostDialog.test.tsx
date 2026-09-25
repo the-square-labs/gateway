@@ -1,10 +1,11 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
-import type { DockerContainer } from "@/types";
+import { waitForReveal } from "@/test/reveal";
+import type { DockerContainer, NginxTemplate } from "@/types";
 import {
   CreateProxyHostDialog,
   defaultProxyUpstreamForDockerTargets,
@@ -94,6 +95,45 @@ describe("CreateProxyHostDialog", () => {
     const nodeTrigger = screen.getByRole("combobox", { name: "Ingress node" });
     expect(nodeTrigger).not.toBeDisabled();
     expect(nodeTrigger).toHaveAttribute("aria-busy", "false");
+  });
+
+  it("opens at full size only after every option list has loaded", async () => {
+    api.invalidateCache("nodes:list:default");
+    vi.spyOn(api, "listNodes").mockResolvedValue({
+      data: [
+        {
+          id: "node-1",
+          hostname: "edge-one",
+          displayName: "Edge One",
+          type: "nginx",
+          status: "online",
+          serviceCreationLocked: false,
+          capabilities: {},
+        },
+      ],
+    } as never);
+    vi.spyOn(api, "listSSLCertificates").mockResolvedValue({ data: [] } as never);
+    let resolveTemplates!: (templates: NginxTemplate[]) => void;
+    vi.spyOn(api, "listNginxTemplates").mockReturnValue(
+      new Promise((resolve) => {
+        resolveTemplates = resolve;
+      })
+    );
+    vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+    vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+
+    const dialog = render(<CreateProxyHostDialog open={false} onOpenChange={vi.fn()} />);
+    dialog.rerender(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+    const panel = () => document.querySelector("[data-reveal-phase]");
+
+    await waitFor(() => expect(api.listFolders).toHaveBeenCalled());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(panel()).not.toHaveAttribute("data-reveal-phase", "revealed");
+
+    await act(async () => resolveTemplates([]));
+    await waitForReveal();
+    expect(panel()).toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled();
   });
 
   it("restores the node loading state when an empty selector is reopened", async () => {

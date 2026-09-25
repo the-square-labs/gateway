@@ -286,9 +286,10 @@ describe("AdminNodeDetail", () => {
         </Routes>
       </MemoryRouter>
     );
-    await screen.findByRole("heading", { level: 1 });
+    // The node is loaded, but the page stays hidden until its hosting projection arrives.
+    await screen.findByRole("heading", { level: 1, hidden: true });
+    expect(screen.queryByRole("heading", { level: 1 })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Current route")).toHaveTextContent(`/nodes/node-1/${tab}`);
-    expect(screen.getByText("Loading hosting information…")).toBeInTheDocument();
     await act(async () =>
       resolveHosting({
         kind: "vm",

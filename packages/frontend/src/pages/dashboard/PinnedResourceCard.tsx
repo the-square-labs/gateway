@@ -1,5 +1,6 @@
 import { Box, Boxes, Database, Hammer } from "lucide-react";
 import { Link } from "react-router-dom";
+import { databaseHealthTone, dockerStateTone } from "@/components/common/resource-status";
 import { Badge } from "@/components/ui/badge";
 import {
   databaseRoute,
@@ -11,16 +12,6 @@ import type { DashboardBootstrapPinnedResources } from "@/types/dashboard";
 
 type DatabaseResource = DashboardBootstrapPinnedResources["databases"][number];
 type DockerResource = DashboardBootstrapPinnedResources["dockerResources"][number];
-
-function healthVariant(status?: string | null) {
-  return status === "online"
-    ? "success"
-    : status === "degraded"
-      ? "warning"
-      : status === "offline"
-        ? "destructive"
-        : "secondary";
-}
 
 export function PinnedDatabaseCard({ database }: { database: DatabaseResource }) {
   return (
@@ -35,7 +26,7 @@ export function PinnedDatabaseCard({ database }: { database: DatabaseResource })
           <p className="text-xs text-muted-foreground">{database.type}</p>
         </div>
       </div>
-      <Badge variant={healthVariant(database.healthStatus)} size="inline" className="uppercase">
+      <Badge variant={databaseHealthTone(database.healthStatus)} size="inline">
         {database.healthStatus ?? "unknown"}
       </Badge>
     </Link>
@@ -52,24 +43,6 @@ export function PinnedDockerResourceCard({ resource }: { resource: DockerResourc
           ? `/docker/builds?build=${encodeURIComponent(resource.id)}`
           : dockerContainerRoute(resource.nodeSlug, resource.name);
   const Icon = resource.kind === "build" ? Hammer : resource.kind === "compose" ? Boxes : Box;
-  const status = resource.state?.toLowerCase();
-  const statusVariant =
-    status === "running" || status === "healthy" || status === "succeeded"
-      ? "success"
-      : status === "failed" || status === "dead" || status === "exited"
-        ? "destructive"
-        : status === "degraded" ||
-            status === "queued" ||
-            status === "claimed" ||
-            status === "checking_out" ||
-            status === "building" ||
-            status === "scanning" ||
-            status === "pushing" ||
-            status === "deploying" ||
-            status === "applying" ||
-            status === "validating"
-          ? "warning"
-          : "secondary";
   return (
     <Link
       to={route}
@@ -82,7 +55,7 @@ export function PinnedDockerResourceCard({ resource }: { resource: DockerResourc
           <p className="text-xs text-muted-foreground">{resource.kind}</p>
         </div>
       </div>
-      <Badge variant={statusVariant} size="inline" className="uppercase">
+      <Badge variant={dockerStateTone(resource.state)} size="inline">
         {resource.state ?? "unknown"}
       </Badge>
     </Link>

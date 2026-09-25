@@ -32,7 +32,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { ResizeHandle } from "@/components/ui/resize-handle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { type AIApprovalMode, formatAIApprovalModeLabel } from "@/lib/ai-approval-mode";
 import { selectedModelSupportsImages } from "@/lib/ai-model-capabilities";
 import { isQuestionAwaitingAnswer } from "@/lib/ai-question-state";
@@ -46,6 +45,7 @@ import {
   AI_PANEL_MIN_WIDTH,
   getDefaultAIPanelWidth,
 } from "@/lib/responsive-panels";
+import { cn } from "@/lib/utils";
 import { NodeSetupWizard } from "@/pages/dashboard/finalize-setup/NodeSetupWizard";
 import { api } from "@/services/api";
 import { getConversationBlock, useAIStore } from "@/stores/ai";
@@ -209,7 +209,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     isConnecting,
     connectionError,
     recentConversations,
-    isLoadingRecentConversations,
     retryAfter,
     savedName,
     activeConversationId,
@@ -253,7 +252,14 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
     refreshProviderStatus,
     fetchRecentConversations,
   } = useAIStore();
-  const initialRecentConversationsLoading = useInitialLoading(isLoadingRecentConversations);
+  // The empty state is centred, so a recent list arriving late would push it
+  // up. Without a cached list it waits for the first fetch, then fades in.
+  const [recentConversationsCached] = useState(
+    () => useAIStore.getState().recentConversations.length > 0
+  );
+  const [recentConversationsSettled, setRecentConversationsSettled] =
+    useState(recentConversationsCached);
+  const emptyStateWaitsForRecent = !recentConversationsSettled && recentConversations.length === 0;
   const assistantConnectorSetup = useMemo(
     () =>
       pendingSetupInteraction?.kind === "connector_setup"
@@ -368,7 +374,9 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
   useEffect(() => {
     if (!active || !isNewConversationDraft) return;
-    void fetchRecentConversations();
+    void Promise.resolve(fetchRecentConversations())
+      .catch(() => undefined)
+      .finally(() => setRecentConversationsSettled(true));
   }, [active, fetchRecentConversations, isNewConversationDraft]);
 
   useEffect(() => {
@@ -653,7 +661,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9"
               onClick={onEnterLiteMode}
               title="Open in AI Workspace"
               aria-label="Open in AI Workspace"
@@ -664,7 +671,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
             onClick={clearMessages}
             disabled={!activeConversationId && messages.length === 0}
             title="New Work Session"
@@ -677,7 +683,6 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9"
                 title="Work Session actions"
                 aria-label="Work Session actions"
               >
@@ -715,7 +720,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             <Button
               variant="ghost"
               size="icon"
-              className="-mr-1 h-9 w-9"
+              className="-mr-1"
               onClick={onClose}
               title="Close AI Workspace"
               aria-label="Close AI Workspace"
@@ -752,7 +757,8 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
             </Button>
             <Button
               onClick={() => void submitRename()}
-              disabled={isRenaming || !renameDraft.trim()}
+              pending={isRenaming}
+              disabled={!renameDraft.trim()}
             >
               Save
             </Button>
@@ -762,57 +768,61 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
 
       {/* Messages */}
       {messages.length === 0 ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-3">
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-3",
+            emptyStateWaitsForRecent
+              ? "invisible"
+              : !recentConversationsCached && "ai-chat-content-fade-in"
+          )}
+          aria-busy={emptyStateWaitsForRecent || undefined}
+        >
           <Sparkles className="h-8 w-8 text-muted-foreground" />
           <p className="max-w-sm text-center text-sm text-foreground/70">
             Ask questions, investigate issues, and manage your infrastructure with permission-aware
             guidance.
           </p>
           <QuickActionChips onSelect={handleQuickAction} context={context} />
-          {(initialRecentConversationsLoading || recentConversations.length > 0) && (
+          {recentConversations.length > 0 && (
             <div className="mt-4 w-full max-w-[340px] border border-border">
-              <div className="border-b border-border px-3 py-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+              <div className="border-b border-border px-3 py-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">
                 Recent
               </div>
-              {initialRecentConversationsLoading && recentConversations.length === 0 ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
-              ) : (
-                normalRecentConversations.map((conversation) => (
-                  <div
-                    key={conversation.id}
-                    className="group flex items-center border-b border-border last:border-b-0 hover:bg-muted/50 focus-within:bg-muted/50"
+              {normalRecentConversations.map((conversation) => (
+                <div
+                  key={conversation.id}
+                  className="group flex items-center border-b border-border last:border-b-0 hover:bg-muted/50 focus-within:bg-muted/50"
+                >
+                  <button
+                    type="button"
+                    className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
+                    onClick={() => void loadConversation(conversation.id)}
                   >
-                    <button
-                      type="button"
-                      className="flex min-w-0 flex-1 items-center gap-2 px-3 py-2 text-left"
-                      onClick={() => void loadConversation(conversation.id)}
-                    >
-                      <AIConversationStatusIndicator conversation={conversation} />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-xs text-foreground">
-                          {conversation.title}
-                        </span>
-                        <span className="block truncate text-[11px] text-muted-foreground">
-                          {conversation.messageCount} messages
-                        </span>
+                    <AIConversationStatusIndicator conversation={conversation} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-xs text-foreground">
+                        {conversation.title}
                       </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {formatConversationDate(
-                          conversation.lastUserMessageAt ?? conversation.createdAt
-                        )}
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {conversation.messageCount} messages
                       </span>
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Delete ${conversation.title}`}
-                      className="mr-0 flex h-6 w-0 shrink-0 translate-x-1 items-center justify-center overflow-hidden text-muted-foreground opacity-0 transition-[width,margin,opacity,transform,color] duration-150 hover:text-destructive group-hover:mr-2 group-hover:w-6 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:mr-2 group-focus-within:w-6 group-focus-within:translate-x-0 group-focus-within:opacity-100"
-                      onClick={() => void deleteConversation(conversation.id)}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ))
-              )}
+                    </span>
+                    <span className="shrink-0 text-xs text-muted-foreground">
+                      {formatConversationDate(
+                        conversation.lastUserMessageAt ?? conversation.createdAt
+                      )}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete ${conversation.title}`}
+                    className="mr-0 flex h-6 w-0 shrink-0 translate-x-1 items-center justify-center overflow-hidden text-muted-foreground opacity-0 transition-[width,margin,opacity,transform,color] duration-150 hover:text-destructive group-hover:mr-2 group-hover:w-6 group-hover:translate-x-0 group-hover:opacity-100 group-focus-within:mr-2 group-focus-within:w-6 group-focus-within:translate-x-0 group-focus-within:opacity-100"
+                    onClick={() => void deleteConversation(conversation.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -864,7 +874,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
         {activeQuestion ? (
           <div className="border-t border-border">
             {questionsTotal > 1 && (
-              <div className="px-3 py-1 text-[11px] text-muted-foreground bg-muted/50 border-b border-border">
+              <div className="border-b border-border bg-muted/50 px-3 py-1 text-xs text-muted-foreground">
                 Question {questionIndex} of {questionsTotal}
               </div>
             )}
@@ -898,14 +908,13 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
                 />
               )}
             {context.resourceId && !excludeResourceContextOnce && (
-              <div className="flex w-full items-center justify-between gap-2 border border-x-0 border-b-0 border-border bg-muted/40 px-2.5 py-1 text-xs text-muted-foreground">
+              <div className="flex w-full items-center justify-between gap-2 border border-x-0 border-b-0 border-border bg-muted/40 px-2.5 text-xs text-muted-foreground">
                 <span className="min-w-0 truncate">
                   Viewing {context.label ?? context.resourceType ?? "current resource"}
                 </span>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-5 w-5 shrink-0"
+                  size="icon-xs"
                   onClick={() => setExcludedResourceContextKey(resourceContextKey)}
                   title="Exclude this resource from the next request"
                   aria-label="Exclude this resource from the next request"

@@ -321,12 +321,12 @@ it("shows loading on the test action and reuses success until credentials change
   fireEvent.click(testButton);
   expect(testButton).toHaveAttribute("aria-busy", "true");
   expect(testButton.querySelector(".animate-spin")).not.toBeNull();
-  expect(screen.getByRole("button", { name: "Continue" })).toHaveAttribute("aria-busy", "false");
+  expect(screen.getByRole("button", { name: "Continue" })).not.toHaveAttribute("aria-busy");
   expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
   expect(screen.queryByText("Please wait…")).not.toBeInTheDocument();
   await act(async () => finishTest({ name: "Cloud", capabilities: {} }));
-  expect(testButton).toHaveAttribute("aria-busy", "false");
+  expect(testButton).not.toHaveAttribute("aria-busy");
   expect(testButton.querySelector(".lucide-check")).not.toBeNull();
   await nextConnectorStep();
   expect(api.previewHostingConnector).toHaveBeenCalledOnce();
@@ -350,10 +350,7 @@ it("shows actionable provider errors in sonner and resets the test action", asyn
   fireEvent.change(screen.getByLabelText(/^API (?:key|token)$/), { target: { value: "token" } });
   fireEvent.click(screen.getByRole("button", { name: "Test Connection" }));
   await waitFor(() => expect(toast.error).toHaveBeenCalledWith(message));
-  expect(screen.getByRole("button", { name: "Test Connection" })).toHaveAttribute(
-    "aria-busy",
-    "false"
-  );
+  expect(screen.getByRole("button", { name: "Test Connection" })).not.toHaveAttribute("aria-busy");
   expect(screen.getByText("Step 1 of 2 — Connection")).toBeInTheDocument();
   expect(screen.queryByText(message)).not.toBeInTheDocument();
 });

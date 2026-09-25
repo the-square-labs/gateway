@@ -21,7 +21,6 @@ import {
   ChevronRight,
   CornerDownRight,
   Folder,
-  Loader2,
   Network,
   Plus,
   RefreshCw,
@@ -41,6 +40,7 @@ import {
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import {
   SimpleTable,
   type SimpleTableColumn,
@@ -48,7 +48,6 @@ import {
 } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn, formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -168,6 +167,7 @@ export function InferenceProvidersPanel({
   const [dragOverlayColumnWidths, setDragOverlayColumnWidths] = useState<number[]>([]);
   const [collapsedProviderIds, setCollapsedProviderIds] = useState<Set<string>>(() => new Set());
   const initializedRef = useRef(hasCachedData);
+  useContentLoading(loading);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const providers = useMemo(
     () => new Map(catalog.map((provider) => [provider.id, provider])),
@@ -427,15 +427,11 @@ export function InferenceProvidersPanel({
               variant="outline"
               size="icon"
               onClick={() => void syncConnection(row.connection)}
-              disabled={syncingId === row.connection.id}
+              pending={syncingId === row.connection.id}
               aria-label={`Sync ${row.connection.name}`}
               title={`Sync ${row.connection.name}`}
             >
-              {syncingId === row.connection.id ? (
-                <Loader2 className="animate-spin" />
-              ) : (
-                <RefreshCw />
-              )}
+              {syncingId === row.connection.id ? null : <RefreshCw />}
             </Button>
           </div>
         ) : null,
@@ -444,7 +440,6 @@ export function InferenceProvidersPanel({
 
   return (
     <>
-      {loading && <Skeleton />}
       <PanelShell
         icon={<Network className="h-4 w-4" />}
         title="Providers"

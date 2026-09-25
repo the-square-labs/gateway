@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -102,9 +101,9 @@ export function ClickHouseConfigDialog({
           <Button
             type="button"
             onClick={() => void save()}
-            disabled={!changed || saving || confirming}
+            pending={saving}
+            disabled={!changed || confirming}
           >
-            {saving && <Loader2 className="animate-spin" />}
             {saving ? "Recreating database..." : "Save & Recreate"}
           </Button>
         </DialogFooter>

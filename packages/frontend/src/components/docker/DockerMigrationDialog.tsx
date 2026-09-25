@@ -61,7 +61,8 @@ export function DockerMigrationDialog({
   const [keepSource, setKeepSource] = useState(false);
   const [preflight, setPreflight] = useState<DockerMigrationPreflight | null>(null);
   const [migration, setMigration] = useState<DockerMigration | null>(null);
-  const [loadingTargets, setLoadingTargets] = useState(false);
+  // Target nodes load on every opening; the setup dialog waits for them.
+  const [targetsLoaded, setTargetsLoaded] = useState(false);
   const [loadingAction, setLoadingAction] = useState(false);
   const transitionTimer = useRef<number | null>(null);
   const routedMigration = useRef<string | null>(null);
@@ -103,11 +104,15 @@ export function DockerMigrationDialog({
   useEffect(() => () => clearTransitionTimer(), [clearTransitionTimer]);
 
   useEffect(() => {
-    if (!open || initialMigration) return;
-    setLoadingTargets(true);
+    if (!open || initialMigration) {
+      setTargetsLoaded(false);
+      return;
+    }
+    let cancelled = false;
     api
       .listNodes({ type: "docker", limit: 100 })
-      .then((response) =>
+      .then((response) => {
+        if (cancelled) return;
         setNodes(
           response.data.filter(
             (node) =>
@@ -117,13 +122,20 @@ export function DockerMigrationDialog({
               !isNodeUpdating(node) &&
               !isNodeIncompatible(node)
           )
-        )
-      )
-      .catch((error) =>
-        toast.error(error instanceof Error ? error.message : "Failed to load Docker nodes")
-      )
-      .finally(() => setLoadingTargets(false));
+        );
+      })
+      .catch((error) => {
+        if (!cancelled)
+          toast.error(error instanceof Error ? error.message : "Failed to load Docker nodes");
+      })
+      .finally(() => {
+        if (!cancelled) setTargetsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [initialMigration, open, resource.nodeId]);
+  const loadingTargets = open && !initialMigration && !targetsLoaded;
 
   const loadMigration = useCallback(async (id: string) => {
     try {

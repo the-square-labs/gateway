@@ -1,14 +1,14 @@
-import { ArrowRight, Cpu, Download, ExternalLink, Loader2, RefreshCw, Wrench } from "lucide-react";
+import { ArrowRight, Cpu, Download, ExternalLink, RefreshCw, Wrench } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ProgressBar } from "@/components/ui/progress-bar";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { InferenceCoreOperationPhase, InferenceCoreStatus } from "@/types/inference-core";
@@ -229,18 +229,14 @@ export function InferenceCoreSetupFooterAction({
     }
   };
 
-  if (loading && !status) {
-    return (
-      <Button disabled>
-        <Loader2 className="animate-spin" /> Loading core status
-      </Button>
-    );
-  }
+  // The status request runs in place here: the setup dialog is already open
+  // when Inference is enabled from it.
+  if (loading && !status) return <Button pending>Loading core status</Button>;
 
   if (!status) {
     return canManage ? (
-      <Button onClick={() => void run(async () => {})} disabled={acting}>
-        {acting ? <Loader2 className="animate-spin" /> : <RefreshCw />} Retry status
+      <Button onClick={() => void run(async () => {})} pending={acting}>
+        {acting ? null : <RefreshCw />} Retry status
       </Button>
     ) : null;
   }
@@ -251,13 +247,7 @@ export function InferenceCoreSetupFooterAction({
       ? (status.operation?.progress?.stage ??
         (status.operation ? PHASE_LABELS[status.operation.phase] : undefined))
       : undefined) ?? ACTIVE_STATE_LABELS[status.state];
-  if (operationActive || activeLabel) {
-    return (
-      <Button disabled>
-        <Loader2 className="animate-spin" /> {activeLabel ?? "Working"}
-      </Button>
-    );
-  }
+  if (operationActive || activeLabel) return <Button pending>{activeLabel ?? "Working"}</Button>;
 
   if (isInferenceCoreReady(status) && onContinue) {
     return (
@@ -271,8 +261,8 @@ export function InferenceCoreSetupFooterAction({
 
   if (status.state === "not_installed") {
     return (
-      <Button onClick={() => void run(() => api.installInferenceCore())} disabled={acting}>
-        {acting ? <Loader2 className="animate-spin" /> : <Download />} Install inference core
+      <Button onClick={() => void run(() => api.installInferenceCore())} pending={acting}>
+        {acting ? null : <Download />} Install inference core
       </Button>
     );
   }
@@ -284,9 +274,9 @@ export function InferenceCoreSetupFooterAction({
         onClick={() =>
           void run(() => (installed ? api.repairInferenceCore() : api.installInferenceCore()))
         }
-        disabled={acting}
+        pending={acting}
       >
-        {acting ? <Loader2 className="animate-spin" /> : <Wrench />}
+        {acting ? null : <Wrench />}
         {installed ? "Repair" : "Retry install"}
       </Button>
     );
@@ -303,9 +293,9 @@ export function InferenceCoreSetupFooterAction({
             return api.updateInferenceCore(target);
           })
         }
-        disabled={acting}
+        pending={acting}
       >
-        {acting ? <Loader2 className="animate-spin" /> : <Download />} Update inference core
+        {acting ? null : <Download />} Update inference core
       </Button>
     );
   }
@@ -330,18 +320,20 @@ export function InferenceCoreLifecyclePanel({
 }) {
   const [acting, setActing] = useState<string | null>(null);
   const [releaseNotesOpen, setReleaseNotesOpen] = useState(false);
+  const initialLoading = loading && !status;
+  useContentLoading(initialLoading);
 
-  if (loading && !status) {
-    return (
-      <div className="space-y-4" aria-busy="true" aria-label="Loading inference core status">
-        <Skeleton className="h-5 w-48" />
-        <Skeleton className="h-4 w-full" />
-        <Skeleton className="h-4 w-4/5" />
-      </div>
-    );
-  }
+  if (initialLoading) return null;
 
   if (!status) {
+    const retry = async () => {
+      setActing("retry");
+      try {
+        await onRefresh();
+      } finally {
+        setActing(null);
+      }
+    };
     return (
       <PanelShell
         icon={<Cpu className="h-4 w-4" />}
@@ -349,8 +341,8 @@ export function InferenceCoreLifecyclePanel({
         description="The inference core status could not be loaded."
         actions={
           mode === "settings" ? (
-            <Button variant="outline" onClick={() => void onRefresh()}>
-              <RefreshCw /> Retry
+            <Button variant="outline" onClick={() => void retry()} pending={acting === "retry"}>
+              {acting === "retry" ? null : <RefreshCw />} Retry
             </Button>
           ) : undefined
         }
@@ -431,14 +423,18 @@ export function InferenceCoreLifecyclePanel({
     }
   };
 
-  const actionIcon = (key: string, icon: ReactNode) =>
-    acting === key ? <Loader2 className="animate-spin" /> : icon;
+  // A button whose action runs shows the spinner from `pending` instead of its icon.
+  const actionIcon = (key: string, icon: ReactNode) => (acting === key ? null : icon);
 
   const actions =
     mode === "settings" && canManage ? (
       <>
         {status.state === "not_installed" && (
-          <Button onClick={() => void install()} disabled={operationActive || acting !== null}>
+          <Button
+            onClick={() => void install()}
+            disabled={operationActive || acting !== null}
+            pending={acting === "install"}
+          >
             {actionIcon("install", <Download />)} Install inference core
           </Button>
         )}
@@ -449,8 +445,12 @@ export function InferenceCoreLifecyclePanel({
                 <ExternalLink /> Release notes
               </Button>
             )}
-            <Button onClick={() => void update()} disabled={operationActive || acting !== null}>
-              {actionIcon("update", <Download />)}
+            <Button
+              onClick={() => void update()}
+              disabled={operationActive || acting !== null}
+              pending={acting === "update" || acting === "check"}
+            >
+              {acting === "update" || acting === "check" ? null : <Download />}
               {status.latest ? ` Update to ${status.latest.version}` : " Update inference core"}
             </Button>
           </>
@@ -459,8 +459,10 @@ export function InferenceCoreLifecyclePanel({
           <Button
             onClick={() => void (status.installed ? repair() : install())}
             disabled={acting !== null}
+            pending={acting === "repair" || acting === "install"}
           >
-            {actionIcon("repair", <Wrench />)} {status.installed ? "Repair" : "Retry install"}
+            {acting === "repair" || acting === "install" ? null : <Wrench />}{" "}
+            {status.installed ? "Repair" : "Retry install"}
           </Button>
         )}
         {status.state === "ready" && !incompatible && (
@@ -468,6 +470,7 @@ export function InferenceCoreLifecyclePanel({
             variant="outline"
             onClick={() => void checkUpdates()}
             disabled={operationActive || acting !== null}
+            pending={acting === "check"}
           >
             {actionIcon("check", <RefreshCw />)} Check for updates
           </Button>
@@ -482,7 +485,7 @@ export function InferenceCoreLifecyclePanel({
         aria-label="Inference core status"
         className={
           status.state === "updating"
-            ? "border-blue-500"
+            ? "border-link"
             : updateAvailable
               ? "border-warning"
               : undefined

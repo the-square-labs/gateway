@@ -18,6 +18,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import {
   SimpleTable,
   type SimpleTableColumn,
@@ -25,7 +26,6 @@ import {
 } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -91,7 +91,9 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<InferenceModel | null>(null);
   const [reordering, setReordering] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const initializedRef = useRef(hasCachedData);
+  useContentLoading(loading);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const providerLabels = new Map(catalog.map((provider) => [provider.id, provider.label]));
 
@@ -136,11 +138,14 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
       confirmLabel: "Delete",
     });
     if (!accepted) return;
+    setDeletingId(model.id);
     try {
       await api.deleteInferenceModel(model.id);
       await load({ showLoading: false });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete model");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -257,12 +262,13 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
               variant="outline"
               size="icon"
               aria-label={`Delete ${model.displayName}`}
+              pending={deletingId === model.id}
               onClick={(event) => {
                 event.stopPropagation();
                 void remove(model);
               }}
             >
-              <Trash2 className="h-4 w-4" />
+              {deletingId === model.id ? null : <Trash2 />}
             </Button>
           </div>
         ) : null,
@@ -271,7 +277,6 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
 
   return (
     <>
-      {loading && <Skeleton />}
       <PanelShell
         icon={<Boxes className="h-4 w-4" />}
         title="Models"
@@ -285,7 +290,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
               }}
               disabled={!connections.length}
             >
-              <Plus className="h-4 w-4" />
+              <Plus />
               Add model
             </Button>
           ) : null
@@ -425,8 +430,8 @@ function ModelDragHandle({ model, disabled }: { model: InferenceModel; disabled:
     <Button
       ref={sortable.setActivatorNodeRef}
       variant="ghost"
-      size="icon"
-      className="h-8 w-8 cursor-grab text-muted-foreground active:cursor-grabbing"
+      size="icon-sm"
+      className="cursor-grab text-muted-foreground active:cursor-grabbing"
       disabled={disabled}
       aria-label={`Reorder ${model.displayName}`}
       title={`Reorder ${model.displayName}`}

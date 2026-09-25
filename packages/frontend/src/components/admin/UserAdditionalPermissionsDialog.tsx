@@ -1,4 +1,4 @@
-import { Loader2, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { ScopeList } from "@/components/common/ScopeList";
@@ -20,6 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import {
@@ -45,7 +46,7 @@ interface UserAdditionalPermissionsDialogProps {
 
 function TabCount({ children }: { children: number }) {
   return (
-    <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-sm bg-current/15 px-1 text-[10px] font-medium leading-none tabular-nums opacity-80">
+    <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-sm bg-current/15 px-1 text-xs font-medium leading-none tabular-nums opacity-80">
       {children}
     </span>
   );
@@ -87,6 +88,13 @@ export function UserAdditionalPermissionsDialog({
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
   const [databases, setDatabases] = useState<DatabaseConnection[]>([]);
   const [loggingSchemas, setLoggingSchemas] = useState<LoggingSchema[]>([]);
+  // The resource pickers' options; the dialog opens once they are loaded.
+  const [resourceListsReady, setResourceListsReady] = useState(false);
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setResourceListsReady(false);
+  }
 
   const actorScopes = currentUser?.scopes ?? [];
   const groupScopes = displayedUser?.groupScopes ?? [];
@@ -112,37 +120,45 @@ export function UserAdditionalPermissionsDialog({
 
   useEffect(() => {
     if (!open) return;
-    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
-    void loadScopeResourceList("nodes:details", () =>
-      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
-    )
-      .then(setNodes)
-      .catch((error) => {
-        setNodes([]);
-        reportScopeLoadError("nodes", error);
-      });
-    void loadScopeResourceList("proxy:view", () =>
-      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
-    )
-      .then(setProxyHosts)
-      .catch((error) => {
-        setProxyHosts([]);
-        reportScopeLoadError("routes", error);
-      });
-    void loadScopeResourceList("databases:view", () =>
-      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
-    )
-      .then(setDatabases)
-      .catch((error) => {
-        setDatabases([]);
-        reportScopeLoadError("databases", error);
-      });
-    void loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
-      .then((items) => setLoggingSchemas(items ?? []))
-      .catch((error) => {
-        setLoggingSchemas([]);
-        reportScopeLoadError("logging schemas", error);
-      });
+    let active = true;
+    void Promise.allSettled([
+      canLoadScopeResource("pki:ca:view") ? fetchCAs() : undefined,
+      loadScopeResourceList("nodes:details", () =>
+        allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      )
+        .then(setNodes)
+        .catch((error) => {
+          setNodes([]);
+          reportScopeLoadError("nodes", error);
+        }),
+      loadScopeResourceList("proxy:view", () =>
+        allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      )
+        .then(setProxyHosts)
+        .catch((error) => {
+          setProxyHosts([]);
+          reportScopeLoadError("routes", error);
+        }),
+      loadScopeResourceList("databases:view", () =>
+        allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      )
+        .then(setDatabases)
+        .catch((error) => {
+          setDatabases([]);
+          reportScopeLoadError("databases", error);
+        }),
+      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
+        .then((items) => setLoggingSchemas(items ?? []))
+        .catch((error) => {
+          setLoggingSchemas([]);
+          reportScopeLoadError("logging schemas", error);
+        }),
+    ]).then(() => {
+      if (active) setResourceListsReady(true);
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchCAs, open]);
 
   const additionalScopes = useMemo(
@@ -232,6 +248,7 @@ export function UserAdditionalPermissionsDialog({
         </DialogHeader>
 
         <Tabs defaultValue="additional">
+          {!resourceListsReady && <Skeleton />}
           <TabsList>
             <TabsTrigger value="additional">
               Additional <TabCount>{additionalScopes.length}</TabCount>
@@ -324,8 +341,7 @@ export function UserAdditionalPermissionsDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={saving}>
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          <Button onClick={handleSave} pending={saving}>
             Save permissions
           </Button>
         </DialogFooter>

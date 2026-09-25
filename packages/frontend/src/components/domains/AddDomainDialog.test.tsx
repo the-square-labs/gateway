@@ -7,7 +7,7 @@ import { useResourceFolderStore } from "@/stores/resource-folders";
 import { AddDomainDialog } from "./AddDomainDialog";
 
 describe("AddDomainDialog", () => {
-  it("renders a stable disabled folder row while folders load", () => {
+  it("keeps the form hidden with a stable disabled folder row while folders load", () => {
     useResourceFolderStore.setState((state) => ({
       foldersByType: { ...state.foldersByType, domain: [] },
       loadingByType: { ...state.loadingByType, domain: true },
@@ -25,7 +25,7 @@ describe("AddDomainDialog", () => {
     const trigger = screen.getByRole("combobox", { name: "Folder" });
     expect(trigger).toBeDisabled();
     expect(trigger).toHaveAttribute("aria-busy", "true");
-    expect(screen.getByText("Loading folders...")).toBeInTheDocument();
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("data-reveal-phase", "revealed");
   });
 
   it("does not render node availability notices inside the form", async () => {

@@ -1,14 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Check,
-  KeyRound,
-  Loader2,
-  Network,
-  RefreshCw,
-  Server,
-  Settings2,
-} from "lucide-react";
+import { ArrowLeft, Check, KeyRound, Network, RefreshCw, Server, Settings2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
@@ -146,6 +137,16 @@ export function HostingConnectorDialog({
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [configurationLoaded, setConfigurationLoaded] = useState(false);
+  // An existing connector's configuration loads when the dialog opens. Set the flags in the
+  // render that opens it, so the dialog waits for the request from its first frame.
+  const [openedFor, setOpenedFor] = useState<boolean>(false);
+  if (open !== openedFor) {
+    setOpenedFor(open);
+    if (open) {
+      setLoading(!!connector?.id);
+      setConfigurationLoaded(!connector?.id);
+    }
+  }
   const [pendingAction, setPendingAction] = useState<"test" | "continue" | "save" | null>(null);
   const [connectionTested, setConnectionTested] = useState(false);
   const busy = pendingAction !== null;
@@ -450,7 +451,7 @@ export function HostingConnectorDialog({
           </DialogDescription>
         </DialogHeader>
         {loading ? (
-          <Skeleton className="h-48 w-full" />
+          <Skeleton />
         ) : (
           <AnimatedHeight>
             <AnimatePresence initial={false} mode="wait">
@@ -1215,26 +1216,20 @@ export function HostingConnectorDialog({
           {step === connectionStep && (
             <Button
               variant="outline"
+              pending={pendingAction === "test"}
               disabled={locked || stepInvalid}
-              aria-busy={pendingAction === "test"}
               onClick={() => void advance(true)}
             >
-              {pendingAction === "test" ? (
-                <Loader2 className="animate-spin" />
-              ) : connectionTested ? (
-                <Check />
-              ) : null}
+              {pendingAction !== "test" && connectionTested ? <Check /> : null}
               Test Connection
             </Button>
           )}
           <Button
+            pending={pendingAction === "continue" || pendingAction === "save"}
             disabled={locked || stepInvalid || hostRequired}
-            aria-busy={pendingAction === "continue" || pendingAction === "save"}
             onClick={() => void advance()}
           >
-            {pendingAction === "continue" || pendingAction === "save" ? (
-              <Loader2 className="animate-spin" />
-            ) : last && !connector ? (
+            {pendingAction !== "continue" && pendingAction !== "save" && last && !connector ? (
               <KeyRound />
             ) : null}
             {last

@@ -34,6 +34,7 @@ function FolderOption({
 }) {
   return (
     <>
+      {/* A selectable tree row, not an action button. */}
       <button
         type="button"
         className={cn(

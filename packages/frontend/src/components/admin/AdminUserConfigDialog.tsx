@@ -1,18 +1,9 @@
-import {
-  Check,
-  Loader2,
-  Lock,
-  Mail,
-  RotateCcw,
-  Save,
-  ShieldAlert,
-  Trash2,
-  Unlock,
-} from "lucide-react";
+import { Check, Lock, Mail, RotateCcw, Save, ShieldAlert, Trash2, Unlock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -31,6 +22,26 @@ import type { BrowserSession, User } from "@/types";
 
 type LocalAuthMethod = "password" | "email_otp" | "oidc";
 
+/** The session count; the dialog opens once it is known. */
+function ActiveSessionsSummary({
+  loading,
+  count,
+  onOpen,
+}: {
+  loading: boolean;
+  count: number;
+  onOpen: () => void;
+}) {
+  useContentLoading(loading);
+  if (loading) return null;
+  if (count === 0) return <span className="text-sm text-muted-foreground">No active sessions</span>;
+  return (
+    <Button variant="link" className="h-auto p-0" onClick={onOpen}>
+      {count} active session{count === 1 ? "" : "s"}
+    </Button>
+  );
+}
+
 export function AdminUserConfigDialog({
   open,
   user,
@@ -48,9 +59,12 @@ export function AdminUserConfigDialog({
 }) {
   const [name, setName] = useState("");
   const [sessions, setSessions] = useState<BrowserSession[]>([]);
-  const [sessionsLoading, setSessionsLoading] = useState(false);
+  // The user whose sessions this opening has loaded. Later reloads update in place.
+  const [sessionsLoadedFor, setSessionsLoadedFor] = useState<string | null>(null);
   const [sessionsDialogOpen, setSessionsDialogOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
+  // The action whose request runs; every action is disabled meanwhile.
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const saving = busyAction !== null;
   const [nameSaved, setNameSaved] = useState(false);
   const [passwordLinkCoolingDown, setPasswordLinkCoolingDown] = useState(false);
   const nameSavedTimer = useRef<number | null>(null);
@@ -65,13 +79,21 @@ export function AdminUserConfigDialog({
     []
   );
 
+  // Reset while rendering the opening, so its first frame already waits for the sessions.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setSessions([]);
+      setSessionsLoadedFor(null);
+    }
+  }
+
   useEffect(() => {
     if (!open || !user) return;
     setName(user.name ?? user.email);
-    setSessions([]);
     setSessionsDialogOpen(false);
     let active = true;
-    setSessionsLoading(true);
     void api
       .listAdminUserSessions(user.id)
       .then((result) => {
@@ -82,7 +104,7 @@ export function AdminUserConfigDialog({
           toast.error(error instanceof Error ? error.message : "Failed to load active sessions");
       })
       .finally(() => {
-        if (active) setSessionsLoading(false);
+        if (active) setSessionsLoadedFor(user.id);
       });
     return () => {
       active = false;
@@ -91,22 +113,25 @@ export function AdminUserConfigDialog({
 
   if (!user) return null;
 
+  const sessionsLoading = sessionsLoadedFor !== user.id;
+  const isBusy = (action: string) => busyAction === action;
+
   const authMethod = (user.authMethod ?? "oidc") as LocalAuthMethod;
   const isOidc = authMethod === "oidc";
 
-  const run = async (task: () => Promise<void>) => {
-    setSaving(true);
+  const run = async (action: string, task: () => Promise<void>) => {
+    setBusyAction(action);
     try {
       await task();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to update user");
     } finally {
-      setSaving(false);
+      setBusyAction(null);
     }
   };
 
   const saveName = () =>
-    run(async () => {
+    run("name", async () => {
       const updated = await api.updateUserName(user.id, name.trim());
       onUserUpdated(updated);
       setNameSaved(true);
@@ -119,7 +144,7 @@ export function AdminUserConfigDialog({
     });
 
   const toggleBlock = () =>
-    run(async () => {
+    run("block", async () => {
       const blocked = !user.isBlocked;
       await api.blockUser(user.id, blocked);
       onUserUpdated({ ...user, isBlocked: blocked });
@@ -137,7 +162,7 @@ export function AdminUserConfigDialog({
       confirmLabel: "Change method",
     });
     if (!accepted) return;
-    await run(async () => {
+    await run("auth-method", async () => {
       const updated = await api.updateUserAuthMethod(user.id, nextMethod);
       onUserUpdated(updated);
       setSessions([]);
@@ -146,7 +171,7 @@ export function AdminUserConfigDialog({
   };
 
   const sendPasswordLink = () =>
-    run(async () => {
+    run("password-link", async () => {
       const result = await api.sendUserPasswordLink(user.id);
       toast.success(
         result.purpose === "password_setup"
@@ -163,14 +188,14 @@ export function AdminUserConfigDialog({
     });
 
   const revokeSession = (sessionId: string) =>
-    run(async () => {
+    run(`session:${sessionId}`, async () => {
       await api.revokeAdminUserSession(user.id, sessionId);
       setSessions((current) => current.filter((session) => session.id !== sessionId));
       toast.success("Session revoked");
     });
 
   const revokeAllSessions = () =>
-    run(async () => {
+    run("sessions", async () => {
       await api.revokeAllAdminUserSessions(user.id);
       setSessions([]);
       toast.success("All browser sessions revoked");
@@ -185,7 +210,7 @@ export function AdminUserConfigDialog({
       variant: "destructive",
     });
     if (!accepted) return;
-    await run(async () => {
+    await run("mfa", async () => {
       await api.resetAdminUserMfa(user.id);
       setSessions([]);
       toast.success("MFA reset");
@@ -200,7 +225,7 @@ export function AdminUserConfigDialog({
       variant: "destructive",
     });
     if (!accepted) return;
-    await run(async () => {
+    await run("delete", async () => {
       await api.deleteUser(user.id);
       setSessionsDialogOpen(false);
       onOpenChange(false);
@@ -217,7 +242,7 @@ export function AdminUserConfigDialog({
       variant: "destructive",
     });
     if (!accepted) return;
-    await run(async () => {
+    await run("avatar", async () => {
       const updated = await api.resetUserAvatar(user.id);
       onUserUpdated(updated);
       toast.success("Avatar reset");
@@ -273,9 +298,10 @@ export function AdminUserConfigDialog({
                   type="button"
                   variant="outline"
                   onClick={() => void resetAvatar()}
+                  pending={isBusy("avatar")}
                   disabled={saving || !user.avatarUrl}
                 >
-                  <RotateCcw className="h-4 w-4" />
+                  {isBusy("avatar") ? null : <RotateCcw className="h-4 w-4" />}
                   Reset avatar
                 </Button>
               </section>
@@ -350,9 +376,10 @@ export function AdminUserConfigDialog({
                   <Button
                     variant="outline"
                     onClick={sendPasswordLink}
+                    pending={isBusy("password-link")}
                     disabled={saving || passwordLinkCoolingDown}
                   >
-                    <Mail /> Send link
+                    {isBusy("password-link") ? null : <Mail />} Send link
                   </Button>
                 </section>
               )}
@@ -365,19 +392,11 @@ export function AdminUserConfigDialog({
                   </p>
                 </div>
                 <div className="shrink-0">
-                  {sessionsLoading ? (
-                    <span className="text-sm text-muted-foreground">Loading sessions…</span>
-                  ) : sessions.length === 0 ? (
-                    <span className="text-sm text-muted-foreground">No active sessions</span>
-                  ) : (
-                    <Button
-                      variant="link"
-                      className="h-auto p-0"
-                      onClick={() => setSessionsDialogOpen(true)}
-                    >
-                      {sessions.length} active session{sessions.length === 1 ? "" : "s"}
-                    </Button>
-                  )}
+                  <ActiveSessionsSummary
+                    loading={sessionsLoading}
+                    count={sessions.length}
+                    onOpen={() => setSessionsDialogOpen(true)}
+                  />
                 </div>
               </section>
 
@@ -389,8 +408,13 @@ export function AdminUserConfigDialog({
                       Removes Gateway MFA factors and signs the user out everywhere.
                     </p>
                   </div>
-                  <Button variant="outline" onClick={() => void resetMfa()} disabled={saving}>
-                    <ShieldAlert /> Reset MFA
+                  <Button
+                    variant="outline"
+                    onClick={() => void resetMfa()}
+                    pending={isBusy("mfa")}
+                    disabled={saving}
+                  >
+                    {isBusy("mfa") ? null : <ShieldAlert />} Reset MFA
                   </Button>
                 </section>
               )}
@@ -411,9 +435,10 @@ export function AdminUserConfigDialog({
                 <Button
                   variant={user.isBlocked ? "outline" : "destructive"}
                   onClick={toggleBlock}
+                  pending={isBusy("block")}
                   disabled={saving}
                 >
-                  {user.isBlocked ? <Unlock /> : <Lock />}
+                  {isBusy("block") ? null : user.isBlocked ? <Unlock /> : <Lock />}
                   {user.isBlocked ? "Unblock user" : "Block user"}
                 </Button>
               </section>
@@ -424,8 +449,13 @@ export function AdminUserConfigDialog({
                     Revokes access and keeps a restorable audit record.
                   </p>
                 </div>
-                <Button variant="destructive" onClick={() => void deleteUser()} disabled={saving}>
-                  {saving ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                <Button
+                  variant="destructive"
+                  onClick={() => void deleteUser()}
+                  pending={isBusy("delete")}
+                  disabled={saving}
+                >
+                  {isBusy("delete") ? null : <Trash2 />}
                   Delete user
                 </Button>
               </section>
@@ -460,8 +490,8 @@ export function AdminUserConfigDialog({
                   </div>
                   <Button
                     variant="outline"
-                    size="sm"
                     onClick={() => revokeSession(session.id)}
+                    pending={isBusy(`session:${session.id}`)}
                     disabled={saving}
                   >
                     Revoke
@@ -474,6 +504,7 @@ export function AdminUserConfigDialog({
             <Button
               variant="outline"
               onClick={revokeAllSessions}
+              pending={isBusy("sessions")}
               disabled={saving || sessions.length === 0}
             >
               Revoke all

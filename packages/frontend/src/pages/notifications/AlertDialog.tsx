@@ -2,12 +2,13 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
   type ScopeSelectionFilter,
 } from "@/components/common/ScopeSearchFilter";
+import { ToggleField } from "@/components/common/ToggleField";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,7 +26,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import {
   type AlertCategoryDef,
@@ -103,9 +103,12 @@ export function AlertDialog({
   const [step, setStep] = useState(1);
   const [saving, setSaving] = useState(false);
   const [categories, setCategories] = useState<AlertCategoryDef[]>([]);
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
   const [webhooks, setWebhooks] = useState<NotificationWebhook[]>([]);
   const [webhooksLoading, setWebhooksLoading] = useState(false);
   const [availableResources, setAvailableResources] = useState<AlertResourceOption[]>([]);
+  /** The category whose resources are listed; another value means they are loading. */
+  const [resourcesCategory, setResourcesCategory] = useState<string | null>(null);
   const [resourceSearch, setResourceSearch] = useState("");
   const [webhookSearch, setWebhookSearch] = useState("");
   const [resourceFilter, setResourceFilter] = useState<ScopeSelectionFilter>("all");
@@ -133,9 +136,22 @@ export function AlertDialog({
   const [selectedWebhookIds, setSelectedWebhookIds] = useState<string[]>([]);
   const [cooldownSeconds, setCooldownSeconds] = useState("900");
 
+  // Categories, webhooks and resources load as the dialog opens. Mark them
+  // loading in that very render, so the dialog waits for them and opens with
+  // its final fields instead of filling them in afterwards.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setCategories([]);
+      setCategoriesLoading(true);
+      setWebhooksLoading(true);
+      setResourcesCategory(null);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
-    setCategories([]);
     catInitRef.current = false;
     setStep(1);
     setName(rule?.name ?? "");
@@ -165,8 +181,8 @@ export function AlertDialog({
     api
       .getAlertCategories()
       .then(setCategories)
-      .catch(() => {});
-    setWebhooksLoading(true);
+      .catch(() => {})
+      .finally(() => setCategoriesLoading(false));
     api
       .listWebhooks({ limit: 100 })
       .then((r) => setWebhooks(r.data))
@@ -357,6 +373,8 @@ export function AlertDialog({
       }
     } catch {
       /* ignore */
+    } finally {
+      if (resourceLoadTokenRef.current === loadToken) setResourcesCategory(category);
     }
   }, [category]);
 
@@ -364,6 +382,7 @@ export function AlertDialog({
     if (!open) return;
     void loadAvailableResources();
   }, [loadAvailableResources, open]);
+  const resourcesLoading = open && resourcesCategory !== category;
 
   const cat = categories.find((c) => c.id === category);
   const firstMetric = cat?.metrics[0];
@@ -636,6 +655,7 @@ export function AlertDialog({
         </DialogHeader>
 
         <AnimatedHeight>
+          <ContentLoading loading={categoriesLoading || webhooksLoading || resourcesLoading} />
           <AnimatePresence initial={false} mode="wait">
             {/* ── Step 1: Configuration ── */}
             {step === 1 && (
@@ -988,26 +1008,20 @@ export function AlertDialog({
               <motion.div key="step-2" {...STEP_ANIMATION} className="space-y-5">
                 {/* Scope */}
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-                    <div>
-                      <p className="text-sm font-medium">
-                        Limit to specific {cat?.label?.toLowerCase() ?? category}s
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {scopeEnabled
-                          ? "Only selected resources will trigger this alert."
-                          : `Alert applies to all ${cat?.label?.toLowerCase() ?? category}s.`}
-                      </p>
-                    </div>
-                    <Switch
-                      checked={scopeEnabled}
-                      ariaLabel={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
-                      onChange={(v) => {
-                        setScopeEnabled(v);
-                        if (!v) setResourceIds([]);
-                      }}
-                    />
-                  </div>
+                  <ToggleField
+                    title={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
+                    description={
+                      scopeEnabled
+                        ? "Only selected resources will trigger this alert."
+                        : `Alert applies to all ${cat?.label?.toLowerCase() ?? category}s.`
+                    }
+                    checked={scopeEnabled}
+                    ariaLabel={`Limit to specific ${cat?.label?.toLowerCase() ?? category}s`}
+                    onChange={(v) => {
+                      setScopeEnabled(v);
+                      if (!v) setResourceIds([]);
+                    }}
+                  />
                   <div
                     className={`border border-border transition-opacity ${scopeEnabled ? "" : "opacity-40 pointer-events-none"}`}
                   >
@@ -1021,7 +1035,9 @@ export function AlertDialog({
                     />
                     <div>
                       {availableResources.length === 0 ? (
-                        <p className="p-3 text-sm text-muted-foreground">No resources found.</p>
+                        <p className="p-3 text-sm text-muted-foreground">
+                          {resourcesLoading ? "Loading resources…" : "No resources found."}
+                        </p>
                       ) : (
                         <ScopeList
                           scopes={resourceScopeItems}
@@ -1101,12 +1117,7 @@ export function AlertDialog({
                 {/* Webhooks */}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Send to Webhooks</label>
-                  {webhooksLoading ? (
-                    <div className="flex items-center gap-2 py-4">
-                      <LoadingSpinner className="h-4 w-4" />{" "}
-                      <span className="text-sm text-muted-foreground">Loading webhooks...</span>
-                    </div>
-                  ) : webhooks.length === 0 ? (
+                  {webhooks.length === 0 ? (
                     <p className="text-sm text-muted-foreground">
                       No webhooks configured. Create a webhook first.
                     </p>
@@ -1172,27 +1183,27 @@ export function AlertDialog({
                 Cancel
               </Button>
               <Button onClick={() => setStep(2)} disabled={!canProceedFromStep1()}>
-                Next <ArrowRight className="h-4 w-4 ml-1" />
+                Next <ArrowRight />
               </Button>
             </>
           )}
           {step === 2 && (
             <div className="flex w-full justify-between">
               <Button variant="outline" onClick={() => setStep(1)}>
-                <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                <ArrowLeft /> Back
               </Button>
               <Button onClick={() => setStep(3)} disabled={selectedWebhookIds.length === 0}>
-                Next <ArrowRight className="h-4 w-4 ml-1" />
+                Next <ArrowRight />
               </Button>
             </div>
           )}
           {step === 3 && (
             <div className="flex w-full justify-between">
               <Button variant="outline" onClick={() => setStep(2)}>
-                <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                <ArrowLeft /> Back
               </Button>
-              <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Saving..." : isEdit ? "Update" : "Create"}
+              <Button onClick={handleSave} pending={saving}>
+                {isEdit ? "Update" : "Create"}
               </Button>
             </div>
           )}

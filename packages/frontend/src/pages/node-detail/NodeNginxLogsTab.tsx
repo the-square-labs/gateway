@@ -16,6 +16,7 @@ import {
   ResourceListRow,
   ResourceListTable,
 } from "@/components/common/ResourceListLayout";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -176,6 +177,9 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
   const mountedRef = useRef(true);
   const prependAnchor = useRef<{ key: string; offsetTop: number } | null>(null);
   const hasLogs = logs.length > 0;
+  // The first message carries the recent entries; the tab reveals with them.
+  const [initialPending, setInitialPending] = useState(nodeStatus === "online");
+  useContentLoading(nodeStatus === "online" && initialPending);
 
   const visibleLogs = useMemo(
     () =>
@@ -308,6 +312,7 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
           message?: string;
         };
         if (msg.type === "initial") {
+          setInitialPending(false);
           const initialEntries = msg.entries ?? [];
           setLogs(initialEntries);
           setHasMore((msg.hasMore ?? false) || initialEntries.length >= 200);
@@ -329,6 +334,7 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
         } else if (msg.type === "new") {
           setLogs((prev) => mergeLogEntries(prev, msg.entries ?? [], "append"));
         } else if (msg.type === "error" || msg.type === "auth_error") {
+          setInitialPending(false);
           setStreamError(msg.message || "Log stream is not available");
           setLoadingMore(false);
           loadingMoreRef.current = false;
@@ -339,6 +345,7 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
     ws.onclose = () => {
       wsRef.current = null;
       if (!mountedRef.current) return;
+      setInitialPending(false);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       reconnectTimer.current = setTimeout(() => {
         if (mountedRef.current) connectWs();
@@ -347,6 +354,7 @@ export function NodeNginxLogsTab({ nodeId, nodeStatus }: NodeNginxLogsTabProps) 
 
     ws.onerror = () => {
       if (!mountedRef.current) return;
+      setInitialPending(false);
       setStreamError("Log stream is not available");
     };
   }, [capturePrependAnchor, nodeId, nodeStatus]);

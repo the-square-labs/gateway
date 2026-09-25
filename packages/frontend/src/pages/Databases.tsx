@@ -5,7 +5,6 @@ import {
   Database as DatabaseIcon,
   DatabaseZap,
   FolderPlus,
-  Loader2,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -23,10 +22,12 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { ToggleField } from "@/components/common/ToggleField";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +49,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -81,6 +83,12 @@ import {
   managedDatabaseCapacity,
   minimumManagedDatabaseMemoryMb,
 } from "./database-detail/managed-database-capacity";
+import {
+  estimateMoreTagsWidth,
+  estimateResourceTagWidth,
+  parseResourceTag,
+  resourceTagBadgeProps,
+} from "./database-detail/resource-tags";
 
 const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destructive"> = {
   online: "success",
@@ -201,46 +209,6 @@ function parseTags(value: string) {
   );
 }
 
-const DATABASE_TAG_COLORS = {
-  blue: "bg-blue-500/15 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400",
-  red: "bg-red-500/15 text-red-600 dark:bg-red-500/15 dark:text-red-400",
-  green: "bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
-  yellow: "bg-warning/15 text-warning-foreground",
-  purple: "bg-violet-500/15 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
-  pink: "bg-pink-500/15 text-pink-600 dark:bg-pink-500/15 dark:text-pink-400",
-  orange: "bg-orange-500/15 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
-  gray: "bg-zinc-500/15 text-zinc-600 dark:bg-zinc-500/15 dark:text-zinc-300",
-} as const;
-
-type DatabaseTagColor = keyof typeof DATABASE_TAG_COLORS;
-
-interface ParsedDatabaseTag {
-  raw: string;
-  label: string;
-  color: DatabaseTagColor;
-}
-
-function parseDatabaseTag(raw: string): ParsedDatabaseTag {
-  const trimmed = raw.trim();
-  const colonIndex = trimmed.indexOf(":");
-  if (colonIndex > 0) {
-    const color = trimmed.slice(0, colonIndex).toLowerCase();
-    const label = trimmed.slice(colonIndex + 1).trim();
-    if (color in DATABASE_TAG_COLORS && label) {
-      return { raw, label, color: color as DatabaseTagColor };
-    }
-  }
-  return { raw, label: trimmed, color: "blue" };
-}
-
-function estimateTagWidth(tag: ParsedDatabaseTag): number {
-  return Math.min(180, Math.max(44, tag.label.length * 7 + 24));
-}
-
-function estimateMoreWidth(count: number): number {
-  return 44 + String(count).length * 7;
-}
-
 function formatLastCheck(dateStr: string | null): string {
   if (!dateStr) return "Never";
   const date = new Date(dateStr);
@@ -260,7 +228,7 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
   const typeRef = useRef<HTMLSpanElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [typeWidth, setTypeWidth] = useState<number | null>(null);
-  const parsedTags = useMemo(() => tags.map(parseDatabaseTag), [tags]);
+  const parsedTags = useMemo(() => tags.map(parseResourceTag), [tags]);
   const visibleCount = useMemo(() => {
     if (parsedTags.length <= 2 && containerWidth === null) return parsedTags.length;
     if (containerWidth === null || containerWidth <= 0) return Math.min(2, parsedTags.length);
@@ -272,8 +240,8 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
 
     for (let index = 0; index < parsedTags.length; index += 1) {
       const remaining = parsedTags.length - index - 1;
-      const tagWidth = estimateTagWidth(parsedTags[index]!);
-      const moreWidth = remaining > 0 ? estimateMoreWidth(remaining) + gapWidth : 0;
+      const tagWidth = estimateResourceTagWidth(parsedTags[index]!);
+      const moreWidth = remaining > 0 ? estimateMoreTagsWidth(remaining) + gapWidth : 0;
       const nextWidth = usedWidth + (count > 0 ? gapWidth : 0) + tagWidth;
       if (nextWidth + moreWidth > availableWidth) break;
       usedWidth = nextWidth;
@@ -301,16 +269,19 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
 
   return (
     <div ref={containerRef} className="flex min-w-0 flex-1 items-center justify-end gap-2">
-      {visibleTags.map((tag, index) => (
-        <Badge
-          key={`${tag.raw}:${index}`}
-          variant="secondary"
-          className={cn("max-w-[180px]", DATABASE_TAG_COLORS[tag.color])}
-          title={tag.raw}
-        >
-          {tag.label}
-        </Badge>
-      ))}
+      {visibleTags.map((tag, index) => {
+        const badge = resourceTagBadgeProps(tag.color);
+        return (
+          <Badge
+            key={`${tag.raw}:${index}`}
+            variant={badge.variant}
+            className={cn("max-w-[180px]", badge.className)}
+            title={tag.raw}
+          >
+            {tag.label}
+          </Badge>
+        );
+      })}
       {hiddenTags.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -320,15 +291,18 @@ function DatabaseTagSummary({ tags, type }: { tags: string[]; type: DatabaseConn
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
             <div className="flex flex-wrap gap-1.5">
-              {hiddenTags.map((tag, index) => (
-                <Badge
-                  key={`${tag.raw}:${visibleCount + index}`}
-                  variant="secondary"
-                  className={cn("max-w-[180px]", DATABASE_TAG_COLORS[tag.color])}
-                >
-                  {tag.label}
-                </Badge>
-              ))}
+              {hiddenTags.map((tag, index) => {
+                const badge = resourceTagBadgeProps(tag.color);
+                return (
+                  <Badge
+                    key={`${tag.raw}:${visibleCount + index}`}
+                    variant={badge.variant}
+                    className={cn("max-w-[180px]", badge.className)}
+                  >
+                    {tag.label}
+                  </Badge>
+                );
+              })}
             </div>
           </TooltipContent>
         </Tooltip>
@@ -385,6 +359,8 @@ export function ManagedDatabaseCreateForm({
     set(key, value === "" ? 0 : Number(value));
   };
   const versions = catalogVersions(catalog, draft.type);
+  // The folder list loads when the create dialog opens.
+  useContentLoading(Boolean(onFolderChange) && foldersLoading);
 
   return (
     <AnimatePresence mode="popLayout" initial={false}>
@@ -1115,70 +1091,74 @@ function DatabasesContent({
     <PageTransition>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
         {!embedded && (
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <LiteModeBackButton />
-              <div>
-                <h1 className="text-2xl font-bold">Databases</h1>
-                <p className="text-sm text-muted-foreground">Manage and deploy databases</p>
-              </div>
-            </div>
-            <ResponsiveHeaderActions
-              reservedContentWidth={160}
-              actions={[
-                {
-                  label: "Refresh",
-                  icon: <RefreshCw className="h-4 w-4" />,
-                  onClick: () => void load(),
-                },
-                ...(canManageFolders && createFolderAction
-                  ? [
-                      {
-                        label: "Add Folder",
-                        icon: <FolderPlus className="h-4 w-4" />,
-                        onClick: createFolderAction,
-                      },
-                    ]
-                  : []),
-                ...(canCreate
-                  ? [
-                      {
-                        label: "Deploy managed database",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: openManagedCreate,
-                      },
-                      {
-                        label: "Connect existing database",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: openConnectionCreate,
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              <Button variant="outline" size="icon" onClick={() => void load()} title="Refresh">
-                <RefreshCw className="h-4 w-4" />
-              </Button>
-              {canManageFolders && (
-                <Button variant="outline" onClick={() => createFolderAction?.()}>
-                  <FolderPlus className="h-4 w-4" />
-                  Add Folder
+          <PageHeader
+            leading={<LiteModeBackButton />}
+            title="Databases"
+            description="Manage and deploy databases"
+            actions={
+              <ResponsiveHeaderActions
+                reservedContentWidth={160}
+                actions={[
+                  {
+                    label: "Refresh",
+                    icon: <RefreshCw className="h-4 w-4" />,
+                    onClick: () => void load(),
+                  },
+                  ...(canManageFolders && createFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createFolderAction,
+                        },
+                      ]
+                    : []),
+                  ...(canCreate
+                    ? [
+                        {
+                          label: "Deploy managed database",
+                          icon: <Plus className="h-4 w-4" />,
+                          onClick: openManagedCreate,
+                        },
+                        {
+                          label: "Connect existing database",
+                          icon: <Plus className="h-4 w-4" />,
+                          onClick: openConnectionCreate,
+                        },
+                      ]
+                    : []),
+                ]}
+              >
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => void load()}
+                  title="Refresh"
+                  aria-label="Refresh databases"
+                >
+                  <RefreshCw className="h-4 w-4" />
                 </Button>
-              )}
-              {canCreate && (
-                <Button variant="outline" onClick={openConnectionCreate}>
-                  <Plus className="h-4 w-4" />
-                  Connect existing
-                </Button>
-              )}
-              {canCreate && (
-                <Button onClick={openManagedCreate}>
-                  <Plus className="h-4 w-4" />
-                  Deploy database
-                </Button>
-              )}
-            </ResponsiveHeaderActions>
-          </div>
+                {canManageFolders && (
+                  <Button variant="outline" onClick={() => createFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                {canCreate && (
+                  <Button variant="outline" onClick={openConnectionCreate}>
+                    <Plus className="h-4 w-4" />
+                    Connect existing
+                  </Button>
+                )}
+                {canCreate && (
+                  <Button onClick={openManagedCreate}>
+                    <Plus className="h-4 w-4" />
+                    Deploy database
+                  </Button>
+                )}
+              </ResponsiveHeaderActions>
+            }
+          />
         )}
 
         <FolderedResourceList<DatabaseConnection>
@@ -1265,6 +1245,7 @@ function DatabasesContent({
               <DialogTitle>Add Database</DialogTitle>
             </DialogHeader>
             <AnimatedHeight>
+              {foldersLoading && <Skeleton />}
               <SettingsControlRow title="Folder" description="Optional organization folder">
                 <CreateFolderSelect
                   choices={connectionFolderChoices}
@@ -1281,13 +1262,13 @@ function DatabasesContent({
               </Button>
               <Button
                 onClick={() => void save()}
+                pending={saving}
                 disabled={
-                  saving ||
                   !canCreateDatabase(draft) ||
                   !isCreateFolderAllowed(connectionFolderChoices, folderId)
                 }
               >
-                {saving ? "Creating..." : "Create"}
+                Create
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -1364,10 +1345,10 @@ function DatabasesContent({
                   ) : (
                     <Button
                       onClick={() => void saveManaged()}
-                      disabled={managedSaving || !canDeployManaged}
+                      pending={managedSaving}
+                      disabled={!canDeployManaged}
                     >
-                      {managedSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                      {managedSaving ? "Deploying..." : "Deploy database"}
+                      Deploy database
                     </Button>
                   )}
                 </div>

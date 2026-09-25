@@ -130,7 +130,7 @@ describe("Profile", () => {
     expect(usage.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("explains security-sensitive preferences with shared help tooltips", () => {
+  it("explains security-sensitive preferences with shared help tooltips", async () => {
     useAuthStore.setState({
       user: makeUser({
         scopes: ["ai:workspace:use", "admin:details:certificates"],
@@ -140,6 +140,7 @@ describe("Profile", () => {
     });
 
     renderProfile("/profile");
+    await waitForReveal();
 
     expect(screen.getByRole("button", { name: "About AI approval mode" })).toBeInTheDocument();
     expect(
@@ -203,6 +204,7 @@ describe("Profile", () => {
     const updateAvatar = vi.spyOn(api, "updateCurrentUserAvatar").mockResolvedValue(updatedUser);
 
     renderProfile("/profile");
+    await waitForReveal();
 
     expect(screen.queryByRole("button", { name: "Change avatar" })).not.toBeInTheDocument();
     expect(screen.queryByText("Remove")).not.toBeInTheDocument();

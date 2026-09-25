@@ -190,7 +190,7 @@ describe("Compose UI contract", () => {
     expect(detail).toContain("open={activityDetailsOpen}");
     expect(detail).toContain("onAnimationEnd={(event) =>");
     expect(detail).toContain('event.currentTarget.dataset.state === "closed"');
-    expect(detail).toContain('operation.error ? "text-red-600 dark:text-red-400"');
+    expect(detail).toContain('operation.error ? "text-destructive"');
   });
 
   it("uses one explicit column sizing contract for Compose process headers and rows", () => {

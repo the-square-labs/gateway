@@ -7,6 +7,7 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { DockerDeployment } from "@/types";
 import type { MountEntry } from "./docker-detail/VolumeMountsSection";
 
@@ -432,6 +433,7 @@ describe("DockerDeploymentDetail", () => {
     });
 
     expect(await screen.findByText("Execution")).toBeInTheDocument();
+    await waitForReveal();
 
     fireEvent.change(screen.getByDisplayValue("c4ce71c1"), { target: { value: "next" } });
     fireEvent.change(screen.getByLabelText("Drain Seconds"), { target: { value: "45" } });
@@ -480,6 +482,7 @@ describe("DockerDeploymentDetail", () => {
     });
 
     expect(await screen.findByText("Execution")).toBeInTheDocument();
+    await waitForReveal();
     fireEvent.change(screen.getByDisplayValue("server.js"), {
       target: { value: "node worker.js" },
     });
@@ -506,6 +509,7 @@ describe("DockerDeploymentDetail", () => {
     });
 
     expect(await screen.findByText("Execution")).toBeInTheDocument();
+    await waitForReveal();
     fireEvent.change(screen.getByDisplayValue("server.js"), {
       target: { value: "node worker.js" },
     });
@@ -650,6 +654,7 @@ describe("DockerDeploymentDetail", () => {
     });
 
     expect(await screen.findByText("Availability controls")).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("data-state", "active");
   });
 
@@ -675,8 +680,10 @@ describe("DockerDeploymentDetail", () => {
       extraRoutes: <Route path="/docker" element={<div>Docker list</div>} />,
     });
 
-    await screen.findByRole("tab", { name: "Logs" });
-    expect(screen.getByRole("tab", { name: "Logs" })).toHaveAttribute("data-state", "active");
+    // The page stays hidden while Availability loads (role queries skip it); the tab must not
+    // move meanwhile.
+    const logsTab = await screen.findByText("Logs", { selector: '[role="tab"]' });
+    expect(logsTab).toHaveAttribute("data-state", "active");
     expect(inspectContainer).not.toHaveBeenCalled();
 
     await act(async () => {

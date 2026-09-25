@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -215,7 +215,8 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
     }
   };
 
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   return (
     <PanelShell
@@ -228,8 +229,12 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
       }
       description="Enable the public status page and configure its custom domain"
       actions={
-        <Button onClick={saveConfig} disabled={!canManage || savingSettings || !hasSettingsChanges}>
-          <Save className="h-4 w-4" />
+        <Button
+          onClick={saveConfig}
+          pending={savingSettings}
+          disabled={!canManage || !hasSettingsChanges}
+        >
+          {savingSettings ? null : <Save className="h-4 w-4" />}
           Save
         </Button>
       }
@@ -410,6 +415,12 @@ export function Field({
   );
 }
 
+/** Reports a load to the enclosing dialog while rendered inside its content. */
+function ReportLoading({ loading }: { loading: boolean }) {
+  useContentLoading(loading);
+  return null;
+}
+
 export function ServiceDialog({
   open,
   onOpenChange,
@@ -434,6 +445,10 @@ export function ServiceDialog({
   const [description, setDescription] = useState("");
   const [group, setGroup] = useState("");
   const [enabled, setEnabled] = useState(true);
+  const [saving, setSaving] = useState(false);
+  // Only the first load of the picker holds the dialog; later refreshes keep
+  // the known sources usable.
+  const sourcesPending = sourceOptionsLoading && sources.length === 0;
 
   useEffect(() => {
     if (!open) return;
@@ -493,6 +508,7 @@ export function ServiceDialog({
   );
 
   const save = async () => {
+    setSaving(true);
     try {
       const payload = {
         publicName: name.trim(),
@@ -517,6 +533,8 @@ export function ServiceDialog({
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save service");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -527,6 +545,7 @@ export function ServiceDialog({
           <DialogTitle>{service ? "Edit Exposed Service" : "Expose Service"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-3">
+          <ReportLoading loading={!service && sourcesPending} />
           {!service && (
             <div className="grid grid-cols-2 gap-3">
               <Field label="Source type">
@@ -558,10 +577,10 @@ export function ServiceDialog({
                     value: option.id,
                     label: option.label,
                   }))}
-                  disabled={sourceOptionsLoading}
+                  disabled={sourcesPending}
                   showAllOptionsOnFocus
                   ariaLabel="Source"
-                  placeholder={sourceOptionsLoading ? "Loading sources..." : "Select source"}
+                  placeholder="Select source"
                   searchPlaceholder="Search sources..."
                   emptyMessage="No available sources found."
                 />
@@ -609,7 +628,11 @@ export function ServiceDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={!name.trim() || (!service && !sourceId)}>
+          <Button
+            onClick={save}
+            pending={saving}
+            disabled={!name.trim() || (!service && !sourceId)}
+          >
             Save
           </Button>
         </DialogFooter>
@@ -635,6 +658,7 @@ export function IncidentDialog({
   const [message, setMessage] = useState("");
   const [severity, setSeverity] = useState<StatusPageIncidentSeverity>("warning");
   const [affectedServiceIds, setAffectedServiceIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -645,6 +669,7 @@ export function IncidentDialog({
   }, [incident, open]);
 
   const save = async () => {
+    setSaving(true);
     try {
       const payload = {
         title: title.trim(),
@@ -663,6 +688,8 @@ export function IncidentDialog({
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save incident");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -718,7 +745,7 @@ export function IncidentDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={!title.trim() || !message.trim()}>
+          <Button onClick={save} pending={saving} disabled={!title.trim() || !message.trim()}>
             Save
           </Button>
         </DialogFooter>

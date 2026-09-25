@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Loader2 } from "lucide-react";
+import { Check } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -15,6 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { createClientUuid } from "@/lib/client-id";
 import { formatHostingAmount } from "@/lib/hosting-money";
 import { nodeTypeLabel } from "@/lib/node-appearance";
@@ -106,6 +107,18 @@ export function HostingNodeWizard({
   const [folderId, setFolderId] = useState<string | null>(null);
   const [folders, setFolders] = useState<FolderOption[]>([]);
   const canCreateNode = canCreateInFolder(user?.scopes ?? [], "nodes:create", folderId);
+  // Options the first step renders. Each flag turns true when its request settles and resets
+  // when the wizard closes, so every opening waits for fresh options.
+  const [optionsLoaded, setOptionsLoaded] = useState({
+    folders: false,
+    connectors: false,
+    ssh: false,
+    catalogFor: null as string | null,
+  });
+  useEffect(() => {
+    if (!open)
+      setOptionsLoaded({ folders: false, connectors: false, ssh: false, catalogFor: null });
+  }, [open]);
   useEffect(() => {
     if (!open || !actorId) return;
     let cancelled = false;
@@ -116,7 +129,10 @@ export function HostingNodeWizard({
       .then((tree) => {
         if (!cancelled) setFolders(flattenFolderTree(tree, "nodes"));
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setOptionsLoaded((current) => ({ ...current, folders: true }));
+      });
     return () => {
       cancelled = true;
     };
@@ -195,6 +211,9 @@ export function HostingNodeWizard({
       })
       .catch((cause) => {
         if (!cancelled) setError(cause.message);
+      })
+      .finally(() => {
+        if (!cancelled) setOptionsLoaded((current) => ({ ...current, connectors: true }));
       });
     if (existingId && hasScope("integrations:ssh:use")) {
       void api
@@ -205,6 +224,9 @@ export function HostingNodeWizard({
         })
         .catch(() => {
           if (!cancelled) setSshOptions([]);
+        })
+        .finally(() => {
+          if (!cancelled) setOptionsLoaded((current) => ({ ...current, ssh: true }));
         });
     }
     return () => {
@@ -247,7 +269,11 @@ export function HostingNodeWizard({
         if (!cancelled) setError(cause.message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (cancelled) return;
+        setLoading(false);
+        setOptionsLoaded((current) =>
+          current.catalogFor === selected ? current : { ...current, catalogFor: selected }
+        );
       });
     return () => {
       cancelled = true;
@@ -375,6 +401,13 @@ export function HostingNodeWizard({
           Number(disk) >= (roleImages.find((item) => item.id === image)?.diskGb ?? 1))) &&
       (!existingResource || existingResource.capabilities.bootstrap.available || ssh)
   );
+  const optionsLoading =
+    open &&
+    !!actorId &&
+    (!optionsLoaded.folders ||
+      !optionsLoaded.connectors ||
+      (!!existingId && hasScope("integrations:ssh:use") && !optionsLoaded.ssh) ||
+      (!!connectorId && optionsLoaded.catalogFor !== connectorId));
   const goBack =
     step !== "role" && !draft.current
       ? () => setStep(step === "resources" ? "role" : "resources")
@@ -382,6 +415,7 @@ export function HostingNodeWizard({
   const body = (
     <AnimatePresence initial={false} mode="wait">
       <motion.div key={step} {...STEP_ANIMATION} className="space-y-4">
+        {optionsLoading && <Skeleton />}
         {step === "role" && (
           <div className="space-y-4">
             {(folders.length > 0 ||
@@ -841,8 +875,8 @@ export function HostingNodeWizard({
         </Button>
       )}
       <Button
+        pending={busy}
         disabled={
-          busy ||
           loading ||
           (!existingResource && !connector?.capabilities?.create) ||
           (step === "role" && !roleReady) ||
@@ -852,7 +886,6 @@ export function HostingNodeWizard({
           step === "review" ? void submit() : setStep(step === "role" ? "resources" : "review")
         }
       >
-        {busy && <Loader2 className="h-4 w-4 animate-spin" />}
         {busy
           ? "Submitting…"
           : step === "review"

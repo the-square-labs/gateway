@@ -290,9 +290,12 @@ describe("proxy detail SettingsTab", () => {
       />
     );
 
-    const saveButton = screen.getByRole("button", { name: "Saving..." });
+    const saveButton = screen
+      .getAllByRole("button", { name: "Save" })
+      .find((button) => button.getAttribute("aria-busy") === "true");
+    expect(saveButton).toBeDefined();
     expect(saveButton).toBeDisabled();
-    expect(saveButton.querySelector(".animate-spin")).not.toBeNull();
+    expect(saveButton?.querySelector(".animate-spin")).not.toBeNull();
   });
 
   it("renders redirect settings as standard rows with supported status codes", async () => {

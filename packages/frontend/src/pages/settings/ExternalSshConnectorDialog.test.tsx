@@ -1,6 +1,8 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { waitForReveal } from "@/test/reveal";
+import type { ExternalSshConnector } from "@/types/integrations";
 import { ExternalSshConnectorDialog } from "./ExternalSshConnectorDialog";
 
 Object.defineProperties(window.HTMLElement.prototype, {
@@ -34,9 +36,45 @@ describe("ExternalSshConnectorDialog", () => {
     });
   });
 
+  it("opens once the existing jump servers are loaded", async () => {
+    const user = userEvent.setup();
+    let resolveList!: (connectors: ExternalSshConnector[]) => void;
+    mocks.listExternalSshConnectors.mockReturnValue(
+      new Promise<ExternalSshConnector[]>((resolve) => {
+        resolveList = resolve;
+      })
+    );
+    render(<ExternalSshConnectorDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("data-reveal-phase", "revealed");
+    await act(async () =>
+      resolveList([
+        {
+          id: "jump-1",
+          name: "Bastion",
+          host: "jump.example.com",
+          port: 22,
+          username: "deploy",
+          authMethod: "password",
+          hostFingerprint: "SHA256:jump",
+          jumpConnectorId: null,
+          enabled: true,
+          testStatus: "success",
+          testLastError: null,
+          testedAt: null,
+        },
+      ])
+    );
+    await waitForReveal();
+
+    await user.click(screen.getByRole("combobox"));
+    expect(screen.getByRole("option", { name: "Bastion" })).toBeInTheDocument();
+  });
+
   it("collects the target before showing authentication", async () => {
     const user = userEvent.setup();
     render(<ExternalSshConnectorDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await waitForReveal();
 
     expect(
       screen.getByText("Define the target server and how Gateway should reach it.")
@@ -67,6 +105,7 @@ describe("ExternalSshConnectorDialog", () => {
   it("adds jump-server steps inside the same dialog", async () => {
     const user = userEvent.setup();
     render(<ExternalSshConnectorDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await waitForReveal();
 
     await user.type(screen.getByPlaceholderText("Production server"), "Production API");
     await user.type(screen.getByPlaceholderText("server.example.com"), "api.example.com");
@@ -92,6 +131,7 @@ describe("ExternalSshConnectorDialog", () => {
   it("offers the generated jump key for target authentication without saving on Continue", async () => {
     const user = userEvent.setup();
     render(<ExternalSshConnectorDialog open onOpenChange={vi.fn()} onCreated={vi.fn()} />);
+    await waitForReveal();
 
     await user.type(screen.getByPlaceholderText("Production server"), "Production API");
     await user.type(screen.getByPlaceholderText("server.example.com"), "api.example.com");
@@ -121,6 +161,7 @@ describe("ExternalSshConnectorDialog", () => {
     });
     const onOpenChange = vi.fn();
     render(<ExternalSshConnectorDialog open onOpenChange={onOpenChange} onCreated={vi.fn()} />);
+    await waitForReveal();
 
     await user.type(screen.getByPlaceholderText("Production server"), "Production API");
     await user.type(screen.getByPlaceholderText("server.example.com"), "api.example.com");

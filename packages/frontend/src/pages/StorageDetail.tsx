@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { ManagedCertificateStatus } from "@/components/common/ManagedCertificateStatus";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -69,7 +70,8 @@ function StorageDetailContent({
   const [liveHealthStatus, setLiveHealthStatus] =
     useState<ObjectStorageConnection["healthStatus"]>("unknown");
   const [monitoringHistory, setMonitoringHistory] = useState<ObjectStorageMetricSnapshot[]>([]);
-  const [monitoringLoading, setMonitoringLoading] = useState(true);
+  // The storage whose monitoring stream has delivered its history (or failed).
+  const [monitoringSettledFor, setMonitoringSettledFor] = useState<string | null>(null);
   const [pinOpen, setPinOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [managedCredentialsOpen, setManagedCredentialsOpen] = useState(false);
@@ -103,6 +105,8 @@ function StorageDetailContent({
   );
   const canViewMonitoring = !!(id && (hasScope("storage:view") || hasScope(`storage:view:${id}`)));
   const canManageIam = !!(id && (hasScope("storage:iam") || hasScope(`storage:iam:${id}`)));
+  const monitoringLoading =
+    canViewMonitoring && !!loadedStorageId && monitoringSettledFor !== loadedStorageId;
 
   const [activeTab, setActiveTab] = useUrlTab(
     ["overview", "browser", "iam-keys"],
@@ -110,16 +114,19 @@ function StorageDetailContent({
     (tab) => storageRoute(routeSlug, tab)
   );
 
+  const loadedRouteIdRef = useRef<string | null>(null);
   const load = useCallback(async () => {
     if (!id) return;
     const generation = ++loadGeneration.current;
-    setLoading(true);
+    // Refreshing the storage already on screen keeps the page and its active tab.
+    if (loadedRouteIdRef.current !== id) setLoading(true);
     try {
       const [storage, healthHistory] = await Promise.all([
         api.getObjectStorage(id),
         api.getObjectStorageHealthHistory(id),
       ]);
       if (generation !== loadGeneration.current) return;
+      loadedRouteIdRef.current = id;
       setStorage(storage);
       setLiveHealthHistory(healthHistory);
       setLiveHealthStatus(storage.healthStatus);
@@ -147,14 +154,7 @@ function StorageDetailContent({
 
   useEffect(() => {
     setMonitoringHistory([]);
-    setMonitoringLoading(canViewMonitoring && !!loadedStorageId);
-  }, [canViewMonitoring, loadedStorageId]);
-
-  useEffect(() => {
-    if (!loadedStorageId || !canViewMonitoring) {
-      setMonitoringLoading(false);
-      return;
-    }
+    if (!loadedStorageId || !canViewMonitoring) return;
     let current = true;
     const es = api.createObjectStorageMonitoringStream(loadedStorageId);
     es.addEventListener("connected", (event: MessageEvent) => {
@@ -167,17 +167,17 @@ function StorageDetailContent({
       if (!current) return;
       const message = JSON.parse(event.data);
       setMonitoringHistory(message.history ?? []);
-      setMonitoringLoading(false);
+      setMonitoringSettledFor(loadedStorageId);
     });
     es.addEventListener("snapshot", (event: MessageEvent) => {
       if (!current) return;
       const snapshot = JSON.parse(event.data) as ObjectStorageMetricSnapshot;
       setMonitoringHistory((prev) => [...prev, snapshot].slice(-60));
       setLiveHealthStatus(snapshot.status);
-      setMonitoringLoading(false);
+      setMonitoringSettledFor(loadedStorageId);
     });
     es.onerror = () => {
-      if (current) setMonitoringLoading(false);
+      if (current) setMonitoringSettledFor(loadedStorageId);
     };
     return () => {
       current = false;
@@ -355,13 +355,7 @@ function StorageDetailContent({
     }
   };
 
-  if (loading || !storage) {
-    return (
-      <div className="flex items-center justify-center py-16">
-        <LoadingSpinner className="" />
-      </div>
-    );
-  }
+  if (loading || !storage) return <DetailPageSkeleton label="Loading storage" />;
 
   const browserDisabled = liveHealthStatus === "offline";
   const engine = managedStorageEngine(storage);
@@ -467,7 +461,7 @@ function StorageDetailContent({
           </DialogHeader>
           <div className="border border-border bg-card overflow-hidden">
             {loadingCredentials ? (
-              <div className="p-6 text-sm text-muted-foreground">Revealing credentials...</div>
+              <Skeleton />
             ) : (
               <pre className="overflow-x-auto p-4 text-sm whitespace-pre-wrap">
                 {revealedCredentials

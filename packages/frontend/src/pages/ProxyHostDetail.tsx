@@ -19,6 +19,7 @@ import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { CreateProxyHostDialog } from "@/components/proxy/CreateProxyHostDialog";
@@ -332,25 +333,38 @@ export function ProxyHostDetail({
   });
 
   // ── Load access lists ─────────────────────────────────────────
+  // The Settings tab waits for these option lists on its first reveal.
+  const [accessListsLoading, setAccessListsLoading] = useState(true);
+  const [sslCertsLoading, setSslCertsLoading] = useState(true);
+  const [nginxTemplatesLoading, setNginxTemplatesLoading] = useState(true);
   const loadAccessLists = useCallback(async () => {
     try {
       const res = await api.listAccessLists({ limit: 100 });
       setAccessLists(res.data || []);
-    } catch {}
+    } catch {
+    } finally {
+      setAccessListsLoading(false);
+    }
   }, []);
 
   const loadSSLCerts = useCallback(async () => {
     try {
       const res = await api.listSSLCertificates({ limit: 100 });
       setSslCerts(res.data || []);
-    } catch {}
+    } catch {
+    } finally {
+      setSslCertsLoading(false);
+    }
   }, []);
 
   const loadNginxTemplates = useCallback(async () => {
     try {
       const data = await api.listNginxTemplates();
       setNginxTemplates(data || []);
-    } catch {}
+    } catch {
+    } finally {
+      setNginxTemplatesLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -970,6 +984,8 @@ export function ProxyHostDetail({
       </div>
     );
 
+  const hostHealth = effectiveHealthStatus(host);
+
   return (
     <PageTransition>
       <div
@@ -981,167 +997,168 @@ export function ProxyHostDetail({
         )}
       >
         {/* ── Header ─────────────────────────────────────────── */}
-        <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/proxy-hosts")} />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="min-w-0 basis-full break-all text-2xl font-bold sm:basis-auto">
-                  {host.domainNames[0] || "Route"}
-                </h1>
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate("/proxy-hosts")} />}
+          title={host.domainNames[0] || "Route"}
+          badges={
+            <>
+              <Badge
+                className="shrink-0"
+                variant={TYPE_BADGE[host.type] ?? "secondary"}
+                size="inline"
+              >
+                {host.type}
+              </Badge>
+              {host.maintenanceEnabled ? (
+                <Badge className="shrink-0" variant="warning" size="inline">
+                  Maintenance
+                </Badge>
+              ) : (
                 <Badge
                   className="shrink-0"
-                  variant={TYPE_BADGE[host.type] ?? "default"}
+                  variant={HEALTH_BADGE[hostHealth] ?? "secondary"}
                   size="inline"
                 >
-                  {host.type}
+                  {HEALTH_LABEL[hostHealth] ?? hostHealth}
                 </Badge>
-                {host.maintenanceEnabled ? (
-                  <Badge className="shrink-0" variant="warning" size="inline">
-                    Maintenance
-                  </Badge>
-                ) : (
-                  (() => {
-                    const eff = effectiveHealthStatus(host);
-                    return (
-                      <Badge
-                        className="shrink-0"
-                        variant={HEALTH_BADGE[eff] ?? "secondary"}
-                        size="inline"
-                      >
-                        {HEALTH_LABEL[eff] ?? eff}
-                      </Badge>
-                    );
-                  })()
-                )}
-              </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                {host.domainNames.length > 1 ? (
-                  <span>
-                    +{host.domainNames.length - 1} more domain
-                    {host.domainNames.length > 2 ? "s" : ""}
-                  </span>
-                ) : null}
-                {host.type === "proxy" ? <ProxyUpstreamTarget host={host} size="inline" /> : null}
-                {host.type === "proxy" && host.secureLinkActive ? (
-                  <Badge
-                    variant={host.healthStatus === "offline" ? "destructive" : "success"}
-                    size="inline"
-                  >
-                    {host.healthStatus === "offline" ? "Secure Link Offline" : "Secure Link"}
-                  </Badge>
-                ) : null}
-                {host.type === "redirect" && host.redirectUrl
-                  ? ` \u2192 ${host.redirectUrl}`
-                  : null}
-              </div>
-            </div>
-          </div>
-
-          <ResponsiveHeaderActions
-            actions={[
-              {
-                label: "Pin",
-                icon: <Pin className="h-4 w-4" />,
-                onClick: () => setPinOpen(true),
-              },
-              ...(canEditProxyHost
-                ? [
-                    {
-                      label: "Edit",
-                      icon: <Pencil className="h-4 w-4" />,
-                      onClick: () => setEditOpen(true),
-                    },
-                  ]
-                : []),
-              ...(canEditProxyHost
-                ? [
-                    {
-                      label: host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance",
-                      icon: <Wrench className="h-4 w-4" />,
-                      onClick: handleMaintenance,
-                      disabled: isMaintenanceToggling || !maintenanceActionAvailable,
-                    },
-                  ]
-                : []),
-              ...(canIssueMaintenanceAccessCode
-                ? [
-                    {
-                      label: "Create Maintenance Access Code",
-                      icon: <KeyRound className="h-4 w-4" />,
-                      onClick: handleCreateMaintenanceAccessCode,
-                      disabled: isCreatingMaintenanceAccessCode,
-                    },
-                  ]
-                : []),
-              ...(canResyncTls
-                ? [
-                    {
-                      label: "Retry TLS Sync",
-                      icon: (
-                        <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
-                      ),
-                      onClick: handleTlsResync,
-                      disabled: isTlsResyncing,
-                    },
-                  ]
-                : []),
-              ...(!isSystemHost && canDeleteProxyHost
-                ? [
-                    {
-                      label: "Delete",
-                      icon: <Trash2 className="h-4 w-4" />,
-                      onClick: handleDelete,
-                      destructive: true,
-                      separatorBefore: true,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <Button variant="outline" size="icon" onClick={() => setPinOpen(true)}>
-              <Pin className="h-4 w-4" />
-            </Button>
-            {canEditProxyHost && (
-              <Button variant="outline" onClick={() => setEditOpen(true)}>
-                <Pencil className="h-4 w-4" />
-                Edit
-              </Button>
-            )}
-            {canEditProxyHost && (
+              )}
+            </>
+          }
+          description={
+            <span className="flex items-center gap-2">
+              {host.domainNames.length > 1 ? (
+                <span>
+                  +{host.domainNames.length - 1} more domain
+                  {host.domainNames.length > 2 ? "s" : ""}
+                </span>
+              ) : null}
+              {host.type === "proxy" ? <ProxyUpstreamTarget host={host} size="inline" /> : null}
+              {host.type === "proxy" && host.secureLinkActive ? (
+                <Badge
+                  variant={host.healthStatus === "offline" ? "destructive" : "success"}
+                  size="inline"
+                >
+                  {host.healthStatus === "offline" ? "Secure Link Offline" : "Secure Link"}
+                </Badge>
+              ) : null}
+              {host.type === "redirect" && host.redirectUrl ? ` \u2192 ${host.redirectUrl}` : null}
+            </span>
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                {
+                  label: "Pin",
+                  icon: <Pin className="h-4 w-4" />,
+                  onClick: () => setPinOpen(true),
+                },
+                ...(canEditProxyHost
+                  ? [
+                      {
+                        label: "Edit",
+                        icon: <Pencil className="h-4 w-4" />,
+                        onClick: () => setEditOpen(true),
+                      },
+                    ]
+                  : []),
+                ...(canEditProxyHost
+                  ? [
+                      {
+                        label: host.maintenanceEnabled
+                          ? "Disable Maintenance"
+                          : "Enable Maintenance",
+                        icon: <Wrench className="h-4 w-4" />,
+                        onClick: handleMaintenance,
+                        disabled: isMaintenanceToggling || !maintenanceActionAvailable,
+                      },
+                    ]
+                  : []),
+                ...(canIssueMaintenanceAccessCode
+                  ? [
+                      {
+                        label: "Create Maintenance Access Code",
+                        icon: <KeyRound className="h-4 w-4" />,
+                        onClick: handleCreateMaintenanceAccessCode,
+                        disabled: isCreatingMaintenanceAccessCode,
+                      },
+                    ]
+                  : []),
+                ...(canResyncTls
+                  ? [
+                      {
+                        label: "Retry TLS Sync",
+                        icon: (
+                          <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                        ),
+                        onClick: handleTlsResync,
+                        disabled: isTlsResyncing,
+                      },
+                    ]
+                  : []),
+                ...(!isSystemHost && canDeleteProxyHost
+                  ? [
+                      {
+                        label: "Delete",
+                        icon: <Trash2 className="h-4 w-4" />,
+                        onClick: handleDelete,
+                        destructive: true,
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
               <Button
                 variant="outline"
-                onClick={handleMaintenance}
-                disabled={isMaintenanceToggling || !maintenanceActionAvailable}
+                size="icon"
+                aria-label="Pin"
+                onClick={() => setPinOpen(true)}
               >
-                <Wrench className="h-4 w-4" />
-                {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+                <Pin className="h-4 w-4" />
               </Button>
-            )}
-            {canIssueMaintenanceAccessCode && (
-              <Button
-                variant="outline"
-                onClick={handleCreateMaintenanceAccessCode}
-                disabled={isCreatingMaintenanceAccessCode}
-              >
-                <KeyRound className="h-4 w-4" />
-                Create Maintenance Access Code
-              </Button>
-            )}
-            {canResyncTls && (
-              <Button variant="outline" onClick={handleTlsResync} disabled={isTlsResyncing}>
-                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
-                Retry TLS Sync
-              </Button>
-            )}
-            {!isSystemHost && canDeleteProxyHost && (
-              <Button variant="destructive" onClick={handleDelete}>
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {canEditProxyHost && (
+                <Button variant="outline" onClick={() => setEditOpen(true)}>
+                  <Pencil className="h-4 w-4" />
+                  Edit
+                </Button>
+              )}
+              {canEditProxyHost && (
+                <Button
+                  variant="outline"
+                  onClick={handleMaintenance}
+                  disabled={!maintenanceActionAvailable}
+                  pending={isMaintenanceToggling}
+                >
+                  {isMaintenanceToggling ? null : <Wrench className="h-4 w-4" />}
+                  {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
+                </Button>
+              )}
+              {canIssueMaintenanceAccessCode && (
+                <Button
+                  variant="outline"
+                  onClick={handleCreateMaintenanceAccessCode}
+                  pending={isCreatingMaintenanceAccessCode}
+                >
+                  {isCreatingMaintenanceAccessCode ? null : <KeyRound className="h-4 w-4" />}
+                  Create Maintenance Access Code
+                </Button>
+              )}
+              {canResyncTls && (
+                <Button variant="outline" onClick={handleTlsResync} pending={isTlsResyncing}>
+                  {isTlsResyncing ? null : <RefreshCw className="h-4 w-4" />}
+                  Retry TLS Sync
+                </Button>
+              )}
+              {!isSystemHost && canDeleteProxyHost && (
+                <Button variant="destructive" onClick={handleDelete}>
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {/* ── Health bars (only when healthCheckEnabled) ──────── */}
         {host.healthCheckEnabled && (
@@ -1278,6 +1295,7 @@ export function ProxyHostDetail({
                 canResyncTls={canResyncTls}
                 isTlsResyncing={isTlsResyncing}
                 onTlsResync={handleTlsResync}
+                optionsLoading={accessListsLoading || sslCertsLoading || nginxTemplatesLoading}
               />
             </TabsContent>
           )}

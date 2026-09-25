@@ -418,13 +418,8 @@ export function SetupWizardPage() {
       setAIWorkspaceWizardOpen(true);
     });
 
-  if (loadingSession) {
-    return (
-      <AuthShell>
-        <Loader2 className="mx-auto h-6 w-6 animate-spin text-muted-foreground" />
-      </AuthShell>
-    );
-  }
+  // The session decides which screen shows, so nothing appears before it is known.
+  if (loadingSession) return <AuthShell loading />;
 
   if (setupInProgress && !unlocked) {
     return (

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import {
   SettingsControlRow,
   SettingsHelpTitle,
@@ -248,6 +249,9 @@ export function SettingsTab({
   const [bindAddressOptions, setBindAddressOptions] = useState(
     DEFAULT_DOCKER_PORT_BIND_ADDRESS_OPTIONS
   );
+  // Node capacity, Secure Runtime and bind addresses shape the form the tab opens with.
+  const [nodeInfoLoaded, setNodeInfoLoaded] = useState(false);
+  useContentLoading(!nodeInfoLoaded);
 
   // Baseline snapshot — updated after successful live apply
   const baselineRef = useRef<RuntimeFormValues>(runtimeServerBaseline);
@@ -532,6 +536,7 @@ export function SettingsTab({
           )?.state === "healthy" || savedRuntimeProfile === "secure"
         );
         setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
+        setNodeInfoLoaded(true);
       })
       .catch(async () => {
         let node = null;
@@ -551,6 +556,7 @@ export function SettingsTab({
           )?.state === "healthy" || savedRuntimeProfile === "secure"
         );
         setBindAddressOptions(deriveDockerPortBindAddressOptions(node));
+        setNodeInfoLoaded(true);
       });
 
     return () => {
@@ -996,17 +1002,17 @@ export function SettingsTab({
           actions={
             canEdit ? (
               <Button
-                className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
+                variant="warning"
                 onClick={handleRecreate}
+                pending={recreateLoading}
                 disabled={
-                  recreateLoading ||
                   !hasRecreateChanges ||
                   (!!networkValidationError && networksChanged) ||
                   !!executionValidationError ||
                   (hasRuntimeChanges && !!runtimeValidationError)
                 }
               >
-                <RotateCcw className="h-3.5 w-3.5" />
+                {!recreateLoading && <RotateCcw className="h-3.5 w-3.5" />}
                 {saveRequiresRecreate ? "Save & Recreate" : "Save"}
               </Button>
             ) : null

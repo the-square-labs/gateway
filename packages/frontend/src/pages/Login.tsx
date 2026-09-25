@@ -8,7 +8,6 @@ import {
   EyeOff,
   Fingerprint,
   KeyRound,
-  Loader2,
   LogIn,
   Mail,
   Save,
@@ -130,6 +129,7 @@ export function LoginPage({
   const [resetProfile, setResetProfile] = useState<PasswordResetProfile | null>(null);
   const [passwordResetConfirmOpen, setPasswordResetConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [preparingTotp, setPreparingTotp] = useState(false);
   const gatewayNavigationPending = useRef(false);
   const prefersReducedMotion = useReducedMotion();
   const resetToken = new URLSearchParams(location.search).get("token");
@@ -146,8 +146,9 @@ export function LoginPage({
         ? "mfa"
         : loginStep;
 
+  const [retryingMethods, setRetryingMethods] = useState(false);
+
   const loadMethods = useCallback(async () => {
-    setMethodsState("loading");
     try {
       setMethods(await loadAuthMethods());
       setMethodsState("ready");
@@ -155,6 +156,13 @@ export function LoginPage({
       setMethodsState("error");
     }
   }, []);
+
+  // A retry keeps the error view until the methods arrive, then replaces it once.
+  const retryMethods = async () => {
+    setRetryingMethods(true);
+    await loadMethods();
+    setRetryingMethods(false);
+  };
 
   useEffect(() => {
     if (initialMethods || initialMethodsFailed) return;
@@ -352,11 +360,13 @@ export function LoginPage({
       }
     );
 
-  const chooseTotpEnrollment = () => {
+  // The QR step opens once its secret is ready; the choice stays until then.
+  const chooseTotpEnrollment = async () => {
     if (!pendingEnrollment) return;
-    setPendingEnrollment({ ...pendingEnrollment, method: "totp" });
     setCode("");
-    void startEnrollment();
+    setPreparingTotp(true);
+    await startEnrollment();
+    setPreparingTotp(false);
   };
 
   const startPasskeyEnrollment = () =>
@@ -401,11 +411,11 @@ export function LoginPage({
 
   if (resetToken) {
     return (
-      <AuthShell>
+      <AuthShell loading={!resetProfile} loadingLabel="Checking password link…">
         <AnimatedHeight>
           <section className="space-y-3">
             <h2 className="text-center text-lg font-semibold">Set a new password</h2>
-            {resetProfile ? (
+            {resetProfile && (
               <div className="flex items-center gap-4 border border-border p-4 text-left">
                 <Avatar className="h-10 w-10 shrink-0">
                   <AvatarImage src={resetProfile.avatarUrl ?? undefined} />
@@ -421,8 +431,6 @@ export function LoginPage({
                   {resetProfile.groupName}
                 </Badge>
               </div>
-            ) : (
-              <p className="text-sm text-muted-foreground">Checking password link…</p>
             )}
             {resetProfile && (
               <form
@@ -464,9 +472,10 @@ export function LoginPage({
                   <Button
                     type="submit"
                     className="w-max flex-none"
-                    disabled={busy || resetPassword.length < 8}
+                    pending={busy}
+                    disabled={resetPassword.length < 8}
                   >
-                    <Save className="h-4 w-4" />
+                    {busy ? null : <Save className="h-4 w-4" />}
                     Save new password
                   </Button>
                 </div>
@@ -479,7 +488,7 @@ export function LoginPage({
   }
 
   return (
-    <AuthShell>
+    <AuthShell loading={methodsState === "loading"}>
       <AnimatedHeight>
         <AnimatePresence mode="popLayout" initial={false}>
           <motion.div
@@ -608,10 +617,11 @@ export function LoginPage({
                 <div className="flex flex-col items-center gap-2">
                   <Button
                     className="w-max flex-none"
-                    onClick={chooseTotpEnrollment}
+                    onClick={() => void chooseTotpEnrollment()}
+                    pending={preparingTotp}
                     disabled={busy}
                   >
-                    <ShieldCheck className="h-4 w-4" />
+                    {preparingTotp ? null : <ShieldCheck className="h-4 w-4" />}
                     Set up authenticator app
                   </Button>
                   <Button
@@ -633,11 +643,7 @@ export function LoginPage({
                   <ShieldCheck className="h-5 w-5" />
                   Set up authenticator app
                 </h2>
-                {!pendingEnrollment.secret || !pendingEnrollment.uri ? (
-                  <div className="flex justify-center py-8 text-sm text-muted-foreground">
-                    <Loader2 className="mr-2 animate-spin" /> Preparing secure setup…
-                  </div>
-                ) : (
+                {pendingEnrollment.secret && pendingEnrollment.uri && (
                   <form
                     className="space-y-3"
                     onSubmit={(event) => {
@@ -672,9 +678,10 @@ export function LoginPage({
                       <Button
                         type="submit"
                         className="shrink-0"
-                        disabled={busy || code.length !== 6}
+                        pending={busy}
+                        disabled={code.length !== 6}
                       >
-                        {busy ? <Loader2 className="animate-spin" /> : <Check />}
+                        {busy ? null : <Check />}
                         Activate TOTP
                       </Button>
                     </div>
@@ -701,17 +708,15 @@ export function LoginPage({
               </section>
             )}
 
-            {activeLoginStep === "methods" && methodsState === "loading" && (
-              <div className="flex flex-col items-center gap-2 py-4 text-sm text-muted-foreground">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                Loading sign-in methods…
-              </div>
-            )}
-
             {activeLoginStep === "methods" && methodsState === "error" && (
               <div className="flex flex-col items-center gap-3 py-4 text-center">
                 <p className="text-sm text-muted-foreground">Unable to load sign-in methods.</p>
-                <Button variant="outline" onClick={() => void loadMethods()} disabled={busy}>
+                <Button
+                  variant="outline"
+                  onClick={() => void retryMethods()}
+                  pending={retryingMethods}
+                  disabled={busy}
+                >
                   Retry
                 </Button>
               </div>
@@ -784,9 +789,9 @@ export function LoginPage({
                     autoFocus
                     onChange={(event) => setEmail(event.target.value)}
                   />
-                  <Button type="submit" className="shrink-0" disabled={busy || !validEmail}>
+                  <Button type="submit" className="shrink-0" pending={busy} disabled={!validEmail}>
                     Continue
-                    <ArrowRight className="h-4 w-4" />
+                    {busy ? null : <ArrowRight className="h-4 w-4" />}
                   </Button>
                 </div>
                 <div className="flex justify-center">
@@ -824,8 +829,8 @@ export function LoginPage({
                     autoFocus
                     onChange={(event) => setPassword(event.target.value)}
                   />
-                  <Button type="submit" className="shrink-0" disabled={busy || !password}>
-                    {busy ? <Loader2 className="animate-spin" /> : <KeyRound className="h-4 w-4" />}
+                  <Button type="submit" className="shrink-0" pending={busy} disabled={!password}>
+                    {busy ? null : <KeyRound className="h-4 w-4" />}
                     Sign in
                   </Button>
                 </div>
@@ -866,7 +871,12 @@ export function LoginPage({
                     autoFocus
                     onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                   />
-                  <Button type="submit" className="shrink-0" disabled={busy || code.length !== 6}>
+                  <Button
+                    type="submit"
+                    className="shrink-0"
+                    pending={busy}
+                    disabled={code.length !== 6}
+                  >
                     Verify email code
                   </Button>
                 </div>
@@ -929,7 +939,7 @@ export function LoginPage({
             >
               Cancel
             </Button>
-            <Button onClick={requestPasswordReset} disabled={busy}>
+            <Button onClick={requestPasswordReset} pending={busy}>
               Send reset link
             </Button>
           </DialogFooter>

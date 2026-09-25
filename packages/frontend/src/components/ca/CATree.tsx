@@ -51,14 +51,16 @@ function CATreeNodeComponent({
 
   const statusColor =
     ca.status === "active"
-      ? "text-green-600 dark:text-green-400"
+      ? "text-success"
       : ca.status === "revoked"
         ? "text-destructive"
         : "text-muted-foreground";
 
   return (
     <div>
+      {/* Tree row: selects the CA; the chevron inside toggles its children. */}
       <button
+        type="button"
         className={cn(
           "flex w-full items-center gap-1.5 py-1.5 text-sm hover:bg-accent/50 transition-colors text-left",
           isSelected && "bg-accent font-medium"
@@ -86,17 +88,10 @@ function CATreeNodeComponent({
         <Shield className={cn("h-3 w-3 shrink-0", statusColor)} />
         <span className="truncate flex-1">{ca.commonName}</span>
         {ca.certCount > 0 && (
-          <span className="text-[10px] text-muted-foreground tabular-nums">{ca.certCount}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">{ca.certCount}</span>
         )}
         {ca.status !== "active" && (
-          <Badge
-            variant="secondary"
-            size="inline"
-            className={cn(
-              "text-[10px] py-0 leading-tight",
-              ca.status === "revoked" && "text-destructive"
-            )}
-          >
+          <Badge variant={ca.status === "revoked" ? "destructive" : "secondary"} size="inline">
             {ca.status}
           </Badge>
         )}

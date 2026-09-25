@@ -2,6 +2,7 @@ import { GitBranch, Pin, RefreshCw, RotateCcw, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { Badge } from "@/components/ui/badge";
@@ -77,6 +78,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [pinBuild, setPinBuild] = useState<DockerBuild | null>(null);
   const [pinOpen, setPinOpen] = useState(false);
+  const [actingBuildId, setActingBuildId] = useState<string | null>(null);
   const displayedPinBuild = useRetainedDialogValue(pinBuild, pinOpen);
   const requestId = useRef(0);
   const pollRequestId = useRef(0);
@@ -254,12 +256,15 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
 
   const act = useCallback(
     async (build: DockerBuild, action: "cancel" | "retry") => {
+      setActingBuildId(build.id);
       try {
         if (action === "cancel") await api.cancelDockerBuild(build.id);
         else await api.retryDockerBuild(build.id);
         await loadPage(undefined, true);
       } catch (error) {
         toast.error(error instanceof Error ? error.message : `Failed to ${action} build`);
+      } finally {
+        setActingBuildId((current) => (current === build.id ? null : current));
       }
     },
     [loadPage]
@@ -392,9 +397,10 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                 size="icon"
                 variant="ghost"
                 aria-label="Cancel build"
+                pending={actingBuildId === build.id}
                 onClick={() => void act(build, "cancel")}
               >
-                <Square className="h-4 w-4" />
+                {actingBuildId !== build.id && <Square className="h-4 w-4" />}
               </Button>
             )}
             {["failed", "cancelled", "superseded"].includes(build.status) && (
@@ -402,19 +408,20 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
                 size="icon"
                 variant="ghost"
                 aria-label="Retry build"
+                pending={actingBuildId === build.id}
                 onClick={() => void act(build, "retry")}
               >
-                <RotateCcw className="h-4 w-4" />
+                {actingBuildId !== build.id && <RotateCcw className="h-4 w-4" />}
               </Button>
             )}
           </span>
         ),
       },
     ],
-    [act, now]
+    [act, actingBuildId, now]
   );
 
-  return (
+  const content = (
     <div className={embedded ? "flex min-h-0 flex-1 flex-col gap-3" : "space-y-3"}>
       <div className="flex items-center justify-between gap-3">
         <span />
@@ -646,5 +653,13 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
         </DialogContent>
       </Dialog>
     </div>
+  );
+
+  if (embedded) return content;
+
+  return (
+    <PageTransition>
+      <div className="h-full overflow-y-auto p-6">{content}</div>
+    </PageTransition>
   );
 }

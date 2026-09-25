@@ -2,8 +2,8 @@ import { Activity } from "lucide-react";
 import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
 import { hasUnverifiedTls } from "./DatabaseTlsVerificationNotice";
@@ -109,6 +109,8 @@ export function DatabaseOverviewTab({
   const latest = history.at(-1);
   const showMonitoring =
     canViewMonitoring && healthStatus !== "offline" && database.managed?.status !== "paused";
+  // The metric cards wait for the stream's saved history.
+  useContentLoading(showMonitoring && monitoringLoading && !latest);
   const connectionTLSEnabled = database.managed?.tlsEnabled ?? database.tlsEnabled;
   const connectionTLSUnverified = hasUnverifiedTls(database);
   const overviewMetrics = useMemo<OverviewMetric[]>(() => {
@@ -380,20 +382,7 @@ export function DatabaseOverviewTab({
   return (
     <div className="space-y-4">
       {showMonitoring &&
-        (monitoringLoading && !latest ? (
-          <div
-            className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
-            aria-label="Loading database monitoring"
-          >
-            {Array.from({ length: 4 }, (_, index) => (
-              <div key={index} className="space-y-3 border border-border bg-card p-4">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-7 w-16" />
-                <Skeleton className="h-2 w-full" />
-              </div>
-            ))}
-          </div>
-        ) : latest ? (
+        (monitoringLoading && !latest ? null : latest ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {overviewMetrics.map((metric) => (
               <StatCard

@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, KeyRound, Loader2, Plus, Server, ShieldCheck } from "lucide-react";
+import { ArrowLeft, KeyRound, Plus, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { ExternalSshConnector, ExternalSshConnectorRequest } from "@/types/integrations";
 
@@ -73,6 +74,9 @@ export function ExternalSshConnectorDialog({
   onCreated: (connector: ExternalSshConnector) => void;
 }) {
   const [connectors, setConnectors] = useState<ExternalSshConnector[]>([]);
+  // The jump server options load on every open; the dialog waits for them.
+  const [connectorsLoaded, setConnectorsLoaded] = useState(false);
+  const connectorsLoading = open && !connectorsLoaded;
   const [form, setForm] = useState<ExternalSshConnectorRequest>(() => initialForm(initialHost));
   const [jumpForm, setJumpForm] = useState<ExternalSshConnectorRequest>(() => initialForm());
   const [jumpSelection, setJumpSelection] = useState("direct");
@@ -112,6 +116,7 @@ export function ExternalSshConnectorDialog({
       operationController.current = null;
       setSaving(null);
       setCheckingHostKey(null);
+      setConnectorsLoaded(false);
       return;
     }
     setForm(initialForm(initialHost));
@@ -126,11 +131,14 @@ export function ExternalSshConnectorDialog({
     const controller = new AbortController();
     void api
       .listExternalSshConnectors(controller.signal)
-      .then(setConnectors)
+      .then((next) => {
+        setConnectors(next);
+        setConnectorsLoaded(true);
+      })
       .catch((error) => {
-        if (!isCancelled(error)) {
-          toast.error(error instanceof Error ? error.message : "Failed to load SSH connectors");
-        }
+        if (isCancelled(error)) return;
+        toast.error(error instanceof Error ? error.message : "Failed to load SSH connectors");
+        setConnectorsLoaded(true);
       });
     return () => controller.abort();
   }, [initialHost, open]);
@@ -538,9 +546,9 @@ export function ExternalSshConnectorDialog({
             onClick={() =>
               void discoverHostKey(purpose, purpose === "target" ? createdJumpConnector?.id : null)
             }
-            disabled={checking}
+            pending={checking}
           >
-            {checking ? <Loader2 className="animate-spin" /> : <KeyRound />}
+            {checking ? null : <KeyRound />}
             Check host key
           </Button>
         )}
@@ -629,6 +637,7 @@ export function ExternalSshConnectorDialog({
         </DialogHeader>
 
         <AnimatedHeight>
+          {connectorsLoading ? <Skeleton /> : null}
           <AnimatePresence initial={false} mode="popLayout">
             <motion.div key={generatedPublicKey ? "generated-key" : step} {...STEP_ANIMATION}>
               {generatedPublicKey ? (
@@ -740,17 +749,19 @@ export function ExternalSshConnectorDialog({
               {jumpSelection === "new" && !createdJumpConnector ? (
                 <Button
                   onClick={() => void createJumpConnector()}
-                  disabled={saving === "jump" || !jumpForm.hostFingerprint.trim()}
+                  disabled={!jumpForm.hostFingerprint.trim()}
+                  pending={saving === "jump"}
                 >
-                  {saving === "jump" ? <Loader2 className="animate-spin" /> : <KeyRound />}
+                  {saving === "jump" ? null : <KeyRound />}
                   Create jump and verify target
                 </Button>
               ) : (
                 <Button
                   onClick={() => void createTargetConnector()}
-                  disabled={saving === "target" || !form.hostFingerprint.trim()}
+                  disabled={!form.hostFingerprint.trim()}
+                  pending={saving === "target"}
                 >
-                  {saving === "target" ? <Loader2 className="animate-spin" /> : <KeyRound />}
+                  {saving === "target" ? null : <KeyRound />}
                   Create connector
                 </Button>
               )}

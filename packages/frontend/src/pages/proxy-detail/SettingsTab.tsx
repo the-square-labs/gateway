@@ -2,7 +2,6 @@ import {
   FileCode,
   HeartPulse,
   ListPlus,
-  Loader2,
   Lock,
   Minus,
   Network,
@@ -14,7 +13,9 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { Combobox } from "@/components/common/Combobox";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { ProxyUpstreamPanel } from "@/components/proxy/ProxyUpstreamEditor";
 import { Badge } from "@/components/ui/badge";
@@ -105,6 +106,8 @@ export interface SettingsTabProps {
   canResyncTls: boolean;
   isTlsResyncing: boolean;
   onTlsResync: () => void;
+  /** Access lists, certificates or templates for the selects are still loading. */
+  optionsLoading?: boolean;
 }
 
 export function SettingsTab({
@@ -167,7 +170,9 @@ export function SettingsTab({
   canResyncTls,
   isTlsResyncing,
   onTlsResync,
+  optionsLoading = false,
 }: SettingsTabProps) {
+  useContentLoading(optionsLoading);
   const accessListOptions = [
     { value: "", label: "None" },
     ...accessLists.map((accessList) => ({ value: accessList.id, label: accessList.name })),
@@ -308,10 +313,10 @@ export function SettingsTab({
               <Button
                 variant="outline"
                 onClick={onTlsResync}
-                disabled={isTlsResyncing}
+                pending={isTlsResyncing}
                 aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}
               >
-                <RefreshCw className={cn("h-4 w-4", isTlsResyncing && "animate-spin")} />
+                {isTlsResyncing ? null : <RefreshCw />}
                 Retry TLS Sync
               </Button>
             ) : null
@@ -394,14 +399,11 @@ export function SettingsTab({
           canManage ? (
             <Button
               onClick={onSaveTemplateSettings}
-              disabled={!hasTemplateSettingsChanged || isSavingTemplate}
+              disabled={!hasTemplateSettingsChanged}
+              pending={isSavingTemplate}
             >
-              {isSavingTemplate ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              {isSavingTemplate ? "Saving..." : "Save"}
+              {isSavingTemplate ? null : <Save />}
+              Save
             </Button>
           ) : null
         }
@@ -509,13 +511,9 @@ export function SettingsTab({
         dirty={hasSslSettingsChanged}
         actions={
           canManage ? (
-            <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged || isSavingSsl}>
-              {isSavingSsl ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Save className="h-3.5 w-3.5" />
-              )}
-              {isSavingSsl ? "Saving..." : "Save"}
+            <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged} pending={isSavingSsl}>
+              {isSavingSsl ? null : <Save />}
+              Save
             </Button>
           ) : null
         }
@@ -588,14 +586,11 @@ export function SettingsTab({
             canManage ? (
               <Button
                 onClick={onSaveHealthCheck}
-                disabled={!hasHealthCheckSettingsChanged || isSavingHealthCheck}
+                disabled={!hasHealthCheckSettingsChanged}
+                pending={isSavingHealthCheck}
               >
-                {isSavingHealthCheck ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Save className="h-3.5 w-3.5" />
-                )}
-                {isSavingHealthCheck ? "Saving..." : "Save"}
+                {isSavingHealthCheck ? null : <Save />}
+                Save
               </Button>
             ) : null
           }
@@ -704,21 +699,20 @@ export function SettingsTab({
               <div className="flex shrink-0 items-center gap-2">
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   aria-label="Add custom header"
                   title="Add custom header"
                   onClick={() => setCustomHeaders([...customHeaders, { name: "", value: "" }])}
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
-                <Button onClick={onSaveHeaders} disabled={!hasHeadersChanged || isSavingCustom}>
-                  {isSavingCustom ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Save className="h-3.5 w-3.5" />
-                  )}
-                  {isSavingCustom ? "Saving..." : "Save"}
+                <Button
+                  onClick={onSaveHeaders}
+                  disabled={!hasHeadersChanged}
+                  pending={isSavingCustom}
+                >
+                  {isSavingCustom ? null : <Save />}
+                  Save
                 </Button>
               </div>
             ) : null
@@ -763,7 +757,7 @@ export function SettingsTab({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 rounded-none border-l border-border"
+                      className="rounded-none border-l border-border"
                       aria-label={`Remove custom header ${index + 1}`}
                       onClick={() => setCustomHeaders(customHeaders.filter((_, i) => i !== index))}
                       disabled={!canManage}
@@ -775,9 +769,7 @@ export function SettingsTab({
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-              No custom headers
-            </div>
+            <EmptyState message="No custom headers" embedded />
           )}
         </PanelShell>
       )}
@@ -793,8 +785,7 @@ export function SettingsTab({
               <div className="flex shrink-0 items-center gap-2">
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   aria-label="Add URL rewrite"
                   title="Add URL rewrite"
                   onClick={() =>
@@ -806,13 +797,13 @@ export function SettingsTab({
                 >
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
-                <Button onClick={onSaveRewrites} disabled={!hasRewritesChanged || isSavingCustom}>
-                  {isSavingCustom ? (
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  ) : (
-                    <Save className="h-3.5 w-3.5" />
-                  )}
-                  {isSavingCustom ? "Saving..." : "Save"}
+                <Button
+                  onClick={onSaveRewrites}
+                  disabled={!hasRewritesChanged}
+                  pending={isSavingCustom}
+                >
+                  {isSavingCustom ? null : <Save />}
+                  Save
                 </Button>
               </div>
             ) : null
@@ -883,7 +874,7 @@ export function SettingsTab({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 rounded-none border-l border-border"
+                      className="rounded-none border-l border-border"
                       aria-label={`Remove URL rewrite ${index + 1}`}
                       onClick={() =>
                         setCustomRewrites(customRewrites.filter((_, i) => i !== index))
@@ -897,9 +888,7 @@ export function SettingsTab({
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-center py-8 text-sm text-muted-foreground">
-              No URL rewrites
-            </div>
+            <EmptyState message="No URL rewrites" embedded />
           )}
         </PanelShell>
       )}

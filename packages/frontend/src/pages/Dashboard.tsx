@@ -1,7 +1,8 @@
-import { AlertTriangle, ArrowRight, Info, RotateCw } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
 import {
@@ -38,6 +39,7 @@ import type {
 import type { InferenceSelfUsage } from "@/types/inference";
 import { CertificateAuthoritiesCard } from "./dashboard/CertificateAuthoritiesCard";
 import { CertificateExpiryCard, type ExpiringItem } from "./dashboard/CertificateExpiryCard";
+import { DashboardNotice, DashboardNoticeAction } from "./dashboard/DashboardNotice";
 import { FinalizeSetupDialog, type FinalizeSetupRootStep } from "./dashboard/FinalizeSetupDialog";
 import { ConfigureAIWorkspaceWizard } from "./dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { IntegrationsSetupWizard } from "./dashboard/finalize-setup/IntegrationsSetupWizard";
@@ -184,39 +186,22 @@ export function RelayHealthNotice({
         ]
       : []),
   ];
+  const tone = critical ? "destructive" : "warning";
   return (
     <>
-      <div
+      <DashboardNotice
+        tone={tone}
         role={critical ? "alert" : "status"}
         aria-live="polite"
-        className={
-          critical ? "border border-destructive/60 bg-card" : "border border-warning/60 bg-card"
+        title={copy.title}
+        actions={
+          <DashboardNoticeAction tone={tone} onClick={() => setDetailsOpen(true)}>
+            View details
+          </DashboardNoticeAction>
         }
       >
-        <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <AlertTriangle
-              className={`h-4 w-4 shrink-0 ${critical ? "text-destructive" : "text-warning"}`}
-            />
-            <div className="min-w-0">
-              <p
-                className={`text-sm font-semibold ${critical ? "text-destructive" : "text-warning"}`}
-              >
-                {copy.title}
-              </p>
-              <p className="text-sm text-muted-foreground">{copy.summary}</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            className={`flex shrink-0 items-center gap-1 text-sm font-medium hover:underline ${critical ? "text-destructive" : "text-warning"}`}
-            onClick={() => setDetailsOpen(true)}
-          >
-            View details
-            <ArrowRight className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      </div>
+        <p className="text-sm text-muted-foreground">{copy.summary}</p>
+      </DashboardNotice>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent className={isAdmin ? "sm:max-w-lg" : "sm:max-w-md"}>
@@ -264,10 +249,11 @@ export function RelayHealthNotice({
             <DialogFooter>
               <Button
                 variant="destructive"
-                disabled={retryPending || relay.canRetry !== true}
+                pending={retryPending}
+                disabled={relay.canRetry !== true}
                 onClick={onRetry}
               >
-                <RotateCw className={retryPending ? "animate-spin" : undefined} />
+                {retryPending ? null : <RotateCw />}
                 {retryPending ? "Retrying recovery" : "Retry recovery"}
               </Button>
             </DialogFooter>
@@ -323,43 +309,38 @@ export function LicenseGraceNotice({
   const absolute = new Date(deadline).toLocaleString();
 
   return (
-    <div className="border border-destructive/60 bg-card" role="alert" aria-live="polite">
-      <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 items-center gap-3">
-          <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
-          <div className="min-w-0">
-            <p className="text-sm font-semibold text-destructive">Gateway license has expired</p>
-            <p className="text-sm text-muted-foreground">
-              Paid features remain available until {absolute} (
-              <span aria-live="off">{formatGraceRemaining(deadline, now)} remaining</span>).
-            </p>
-            {!canManage ? (
-              <p className="text-sm text-muted-foreground">
-                Contact your administrator before the grace period ends.
-              </p>
-            ) : null}
-          </div>
-        </div>
-        {canManage ? (
-          <Link
+    <DashboardNotice
+      tone="destructive"
+      role="alert"
+      aria-live="polite"
+      title="Gateway license has expired"
+      actions={
+        canManage ? (
+          <DashboardNoticeAction
+            tone="destructive"
             to="/settings/general"
             state={{ scrollTarget: "gateway-license" }}
-            className="flex shrink-0 items-center gap-1 text-sm font-medium text-destructive hover:underline"
           >
             Update license key
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
-        ) : null}
-      </div>
-    </div>
+          </DashboardNoticeAction>
+        ) : null
+      }
+    >
+      <p className="text-sm text-muted-foreground">
+        Paid features remain available until {absolute} (
+        <span aria-live="off">{formatGraceRemaining(deadline, now)} remaining</span>).
+      </p>
+      {!canManage ? (
+        <p className="text-sm text-muted-foreground">
+          Contact your administrator before the grace period ends.
+        </p>
+      ) : null}
+    </DashboardNotice>
   );
 }
 
-function DashboardSkeleton(_props: {
-  hasScope: (scope: string) => boolean;
-  pkiEnabled: boolean;
-  pinnedCards: number;
-}) {
+/** Holds the page gate until the first dashboard snapshot arrives. */
+function DashboardSkeleton() {
   return (
     <PageTransition>
       <div className="h-full" aria-busy="true" aria-label="Loading dashboard">
@@ -480,9 +461,6 @@ export function Dashboard() {
   const [activity, setActivity] = useState<AuditLogEntry[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [healthHosts, setHealthHosts] = useState<ProxyHost[]>([]);
-  const [activityLoading, setActivityLoading] = useState(false);
-  const [nodesLoading, setNodesLoading] = useState(false);
-  const [healthLoading, setHealthLoading] = useState(false);
   const [expiringItems, setExpiringItems] = useState<ExpiringItem[]>([]);
   const [forcedExpiringItems, setForcedExpiringItems] = useState<ExpiringItem[] | null>(null);
   const [nodesList, setNodesList] = useState<Node[]>([]);
@@ -513,24 +491,7 @@ export function Dashboard() {
   // Keep the page and sidebar on the same bootstrap generation. The session-wide
   // realtime bridge invalidates this snapshot on node changes, so a recovered node
   // cannot turn the page green before the sidebar attention state is refreshed.
-  const canViewNodeDetails = useCallback(
-    (nodeId: string) => hasScope("nodes:details") || hasScope(`nodes:details:${nodeId}`),
-    [hasScope]
-  );
-  const canViewProxyDetails = useCallback(
-    (hostId: string) => hasScope("proxy:view") || hasScope(`proxy:view:${hostId}`),
-    [hasScope]
-  );
   const canViewInferenceUsage = inferenceEnabled && hasScope("feat:ai:use");
-  const pinnedSkeletonCards = Math.min(
-    8,
-    dashboardPinnedIds.filter(canViewNodeDetails).length +
-      dashboardPinnedProxyIds.filter(canViewProxyDetails).length +
-      dashboardPinnedDatabaseIds.filter(
-        (id) => hasScope("databases:view") || hasScope(`databases:view:${id}`)
-      ).length +
-      (hasScopedAccess("docker:containers:view") ? dashboardPinnedContainerIds.length : 0)
-  );
 
   const refreshMfaState = useCallback(async () => {
     invalidateDashboardBootstrap();
@@ -559,9 +520,6 @@ export function Dashboard() {
         ),
       }))
     );
-    setHealthLoading(false);
-    setNodesLoading(false);
-    setActivityLoading(false);
   }, [dashboardBootstrap]);
 
   const updateFinalizeSetupStep = useCallback(
@@ -721,7 +679,7 @@ export function Dashboard() {
       <PageTransition>
         <div className="flex h-full min-h-[24rem] items-center justify-center p-6">
           <div className="max-w-sm space-y-4 text-center">
-            <div className="flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5 mx-auto">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5">
               <AlertTriangle className="h-6 w-6 text-destructive" />
             </div>
             <div className="space-y-1">
@@ -731,7 +689,7 @@ export function Dashboard() {
               </p>
             </div>
             <Button onClick={invalidateDashboardBootstrap}>
-              <RotateCw className="mr-2 h-4 w-4" />
+              <RotateCw />
               Retry
             </Button>
           </div>
@@ -741,29 +699,18 @@ export function Dashboard() {
   }
 
   if (!dashboardBootstrap && (dashboardBootstrapLoading || !!user?.id)) {
-    return (
-      <DashboardSkeleton
-        hasScope={hasScopedAccess}
-        pkiEnabled={pkiEnabled}
-        pinnedCards={pinnedSkeletonCards}
-      />
-    );
+    return <DashboardSkeleton />;
   }
 
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6">
-        <div className="mb-4">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Dashboard</h1>
-              <p className="text-sm text-muted-foreground">
-                Gateway and PKI infrastructure overview
-              </p>
-            </div>
-          </div>
-        </div>
+        <PageHeader
+          className="mb-4"
+          leading={<LiteModeBackButton />}
+          title="Dashboard"
+          description="Gateway and PKI infrastructure overview"
+        />
         <div className="space-y-6">
           {license?.status === "expired_grace" ? (
             <LicenseGraceNotice
@@ -779,197 +726,150 @@ export function Dashboard() {
           />
 
           {tlsCertificateDistributionNeedsAttention && (
-            <div className="border border-destructive/60 bg-card" role="alert">
-              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-destructive">
-                      TLS certificate distribution needs attention
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      At least one active route has not received its current certificate.
-                    </p>
-                  </div>
-                </div>
-                <Link
-                  to="/ssl-certificates"
-                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-destructive hover:underline"
-                >
+            <DashboardNotice
+              tone="destructive"
+              role="alert"
+              title="TLS certificate distribution needs attention"
+              actions={
+                <DashboardNoticeAction tone="destructive" to="/ssl-certificates">
                   View certificates
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
-              </div>
-            </div>
+                </DashboardNoticeAction>
+              }
+            >
+              <p className="text-sm text-muted-foreground">
+                At least one active route has not received its current certificate.
+              </p>
+            </DashboardNotice>
           )}
 
           {/* Update available */}
           {(dashboardBootstrap?.update?.updateAvailable ||
             dashboardBootstrap?.update?.relay?.updateAvailable) &&
             showUpdateNotifications && (
-              <div className="border border-warning/60 bg-card">
-                <div className="flex items-center justify-between px-4 py-3">
-                  <div className="flex items-center gap-3">
-                    <span className="text-sm font-semibold text-warning">Update Available</span>
-                    <span className="text-sm text-muted-foreground">
-                      {dashboardBootstrap.update.updateAvailable
-                        ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
-                        : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
-                    </span>
-                  </div>
-                  <Link
+              <DashboardNotice
+                tone="warning"
+                icon={ArrowUpCircle}
+                title="Update Available"
+                actions={
+                  <DashboardNoticeAction
+                    tone="warning"
                     to="/settings/general"
                     state={{ scrollTarget: "system-updates" }}
-                    className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
                   >
                     Go to Settings
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
-                </div>
-              </div>
+                  </DashboardNoticeAction>
+                }
+              >
+                <p className="text-sm text-muted-foreground">
+                  {dashboardBootstrap.update.updateAvailable
+                    ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
+                    : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
+                </p>
+              </DashboardNotice>
             )}
 
           {loggingHealth && !["disabled", "healthy"].includes(loggingHealth.status) && (
-            <div className="border border-warning/60 bg-card">
-              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-warning">
-                      {loggingHealth.status === "exhausted"
-                        ? "Structured logging capacity exhausted"
-                        : loggingHealth.status === "unavailable"
-                          ? "Structured logging unavailable"
-                          : loggingHealth.status === "pressure"
-                            ? loggingHealth.internal.bytes >= loggingHealth.internal.warningBytes
-                              ? "ClickHouse internal logs are running high"
-                              : "Structured logging storage is running low"
-                            : "Structured logging maintenance degraded"}
-                    </p>
-                    <p className="truncate text-sm text-muted-foreground">
-                      {loggingHealth.reason ??
-                        "Check ClickHouse storage health and maintenance settings."}
-                    </p>
-                  </div>
-                </div>
-                <Link
+            <DashboardNotice
+              tone="warning"
+              title={
+                loggingHealth.status === "exhausted"
+                  ? "Structured logging capacity exhausted"
+                  : loggingHealth.status === "unavailable"
+                    ? "Structured logging unavailable"
+                    : loggingHealth.status === "pressure"
+                      ? loggingHealth.internal.bytes >= loggingHealth.internal.warningBytes
+                        ? "ClickHouse internal logs are running high"
+                        : "Structured logging storage is running low"
+                      : "Structured logging maintenance degraded"
+              }
+              actions={
+                <DashboardNoticeAction
+                  tone="warning"
                   to="/settings/features"
                   state={{ scrollTarget: "housekeeping" }}
-                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-warning hover:underline"
                 >
                   Open Housekeeping
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </Link>
-              </div>
-            </div>
+                </DashboardNoticeAction>
+              }
+            >
+              <p className="truncate text-sm text-muted-foreground">
+                {loggingHealth.reason ??
+                  "Check ClickHouse storage health and maintenance settings."}
+              </p>
+            </DashboardNotice>
           )}
 
           {(mfaRequired || mfaGraceReauthenticationRequired) && (
-            <div className="border border-warning/50 bg-card">
-              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-warning">
-                      {mfaHasFactor
-                        ? "Sign in with MFA to keep access"
-                        : "Set up MFA and sign in again to keep access"}
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      {mfaGraceDeadline
-                        ? `Your group now requires MFA. Complete a fresh sign-in with a passkey or authenticator app before ${mfaGraceDeadline}. Setting up a factor alone will not preserve this current session.`
-                        : "Your group requires MFA. Sign in with a passkey or authenticator app to continue."}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-4">
+            <DashboardNotice
+              tone="warning"
+              title={
+                mfaHasFactor
+                  ? "Sign in with MFA to keep access"
+                  : "Set up MFA and sign in again to keep access"
+              }
+              actions={
+                <>
                   {!mfaHasFactor && (
-                    <button
-                      type="button"
-                      className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
-                      onClick={openStandaloneMfaSetup}
-                    >
+                    <DashboardNoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
                       Set up MFA
-                      <ArrowRight className="h-3.5 w-3.5" />
-                    </button>
+                    </DashboardNoticeAction>
                   )}
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
-                    onClick={signOutForMfa}
-                  >
+                  <DashboardNoticeAction tone="warning" onClick={() => void signOutForMfa()}>
                     Sign out
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
+                  </DashboardNoticeAction>
+                </>
+              }
+            >
+              <p className="text-sm text-muted-foreground">
+                {mfaGraceDeadline
+                  ? `Your group now requires MFA. Complete a fresh sign-in with a passkey or authenticator app before ${mfaGraceDeadline}. Setting up a factor alone will not preserve this current session.`
+                  : "Your group requires MFA. Sign in with a passkey or authenticator app to continue."}
+              </p>
+            </DashboardNotice>
           )}
 
           {mfaOnboardingReminder && (
-            <div className="border border-warning/50 bg-card">
-              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-warning">Configure MFA</p>
-                    <p className="text-sm text-muted-foreground">
-                      Protect this administrator account with a passkey or authenticator app.
-                    </p>
-                  </div>
-                </div>
-                <div className="flex shrink-0 items-center gap-4">
-                  <button
-                    type="button"
-                    className="text-sm font-medium text-muted-foreground hover:text-foreground hover:underline"
+            <DashboardNotice
+              tone="warning"
+              title="Configure MFA"
+              actions={
+                <>
+                  <DashboardNoticeAction
+                    tone="warning"
+                    muted
+                    arrow={false}
                     onClick={() => void hideMfaOnboardingReminder()}
                     disabled={mfaReminderBusy}
                   >
                     Hide
-                  </button>
-                  <button
-                    type="button"
-                    className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
-                    onClick={openStandaloneMfaSetup}
-                  >
+                  </DashboardNoticeAction>
+                  <DashboardNoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
                     Set up MFA
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
+                  </DashboardNoticeAction>
+                </>
+              }
+            >
+              <p className="text-sm text-muted-foreground">
+                Protect this administrator account with a passkey or authenticator app.
+              </p>
+            </DashboardNotice>
           )}
 
           {finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !mfaOnboardingReminder && (
-            <div
-              className="border bg-card"
-              style={{
-                borderColor: "color-mix(in srgb, var(--color-link) 55%, transparent)",
-              }}
-            >
-              <div className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <div className="flex min-w-0 items-center gap-3">
-                  <Info className="h-4 w-4 shrink-0 text-[color:var(--color-link)]" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-[color:var(--color-link)]">
-                      Finalize setup
-                    </p>
-                    <p className="text-sm text-muted-foreground">
-                      Connect infrastructure, secure your account, and enable optional Gateway
-                      features.
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="flex shrink-0 items-center gap-1 text-sm font-medium text-[color:var(--color-link)] hover:underline"
-                  onClick={() => setFinalizeSetupOpen(true)}
-                >
+            <DashboardNotice
+              tone="info"
+              icon={Info}
+              title="Finalize setup"
+              actions={
+                <DashboardNoticeAction tone="info" onClick={() => setFinalizeSetupOpen(true)}>
                   Open checklist
-                  <ArrowRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
+                </DashboardNoticeAction>
+              }
+            >
+              <p className="text-sm text-muted-foreground">
+                Connect infrastructure, secure your account, and enable optional Gateway features.
+              </p>
+            </DashboardNotice>
           )}
 
           <QuickStatsCard
@@ -1025,21 +925,13 @@ export function Dashboard() {
             hasScopedAccess={hasExpiringItemScope}
           />
 
-          <HealthOverviewCard
-            healthHosts={visibleHealthHosts}
-            hasScope={hasScopedAccess}
-            loading={healthLoading}
-          />
+          <HealthOverviewCard healthHosts={visibleHealthHosts} hasScope={hasScopedAccess} />
 
-          <NodesCard
-            nodesList={visibleNodesForCards}
-            hasScope={hasScopedAccess}
-            loading={nodesLoading}
-          />
+          <NodesCard nodesList={visibleNodesForCards} hasScope={hasScopedAccess} />
 
           {pkiEnabled && <CertificateAuthoritiesCard cas={cas} hasScope={hasScope} />}
 
-          <RecentActivityCard activity={activity} hasScope={hasScope} loading={activityLoading} />
+          <RecentActivityCard activity={activity} hasScope={hasScope} />
         </div>
         {finalizeSetup && (
           <>

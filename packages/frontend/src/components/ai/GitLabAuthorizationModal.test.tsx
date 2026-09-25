@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAIStore } from "@/stores/ai";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { GitLabUserCredentialStatus } from "@/types/integrations";
 import { GitLabAuthorizationModal } from "./GitLabAuthorizationModal";
 
@@ -150,5 +151,60 @@ describe("GitLabAuthorizationModal", () => {
       token: "secret-token",
     });
     expect(resolveCredentialChallenge).toHaveBeenCalledWith("authorized");
+  });
+
+  it("opens once the connector details are in instead of filling them in later", async () => {
+    let resolveStatus!: (status: GitLabUserCredentialStatus) => void;
+    vi.spyOn(api, "getGitLabUserCredentialStatus").mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      })
+    );
+    act(() => {
+      useAIStore.setState({
+        pendingCredentialChallenge: null,
+        resolveCredentialChallenge: vi.fn(),
+      });
+    });
+
+    // The modal stays mounted with the chat surface and opens when a tool asks for a credential.
+    renderWithRouter(<GitLabAuthorizationModal />);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    act(() => {
+      useAIStore.setState({ pendingCredentialChallenge: challenge });
+    });
+
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.queryByText("Loading connector details…")).not.toBeInTheDocument();
+
+    await act(async () => resolveStatus(missingStatus));
+    await waitForReveal();
+
+    expect(screen.getByText("Main GitLab")).toBeInTheDocument();
+    expect(screen.getByText("https://gitlab.example.com")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /create personal access token/i })).toBeVisible();
+  });
+
+  it("locks Authorize with a pending state while the credential is checked", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(api, "getGitLabUserCredentialStatus").mockResolvedValue(missingStatus);
+    vi.spyOn(api, "authorizeGitLabUserCredential").mockReturnValue(new Promise(() => {}));
+    act(() => {
+      useAIStore.setState({
+        pendingCredentialChallenge: challenge,
+        resolveCredentialChallenge: vi.fn(),
+      });
+    });
+
+    renderWithRouter(<GitLabAuthorizationModal />);
+    await waitForReveal();
+
+    await user.type(screen.getByLabelText("Personal access token"), "glpat-slow");
+    await user.click(screen.getByRole("button", { name: "Authorize" }));
+
+    const checking = screen.getByRole("button", { name: "Checking GitLab access…" });
+    expect(checking).toBeDisabled();
+    expect(checking).toHaveAttribute("aria-busy", "true");
+    expect(api.authorizeGitLabUserCredential).toHaveBeenCalledTimes(1);
   });
 });

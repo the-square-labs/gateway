@@ -9,9 +9,9 @@ import {
 } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { imageMimeForFile } from "@/lib/file-types";
 import { api } from "@/services/api";
@@ -341,6 +341,7 @@ export function DockerFilePopout() {
   };
 
   const handleSave = useCallback(async () => {
+    if (isSaving) return;
     if ((!nodeId && !storageId) || !resourceId || content === null || !canSaveFile) return;
     setIsSaving(true);
     try {
@@ -370,6 +371,7 @@ export function DockerFilePopout() {
     }
   }, [
     canSaveFile,
+    isSaving,
     nodeId,
     resourceId,
     filePath,
@@ -409,8 +411,8 @@ export function DockerFilePopout() {
               <Download className="h-3.5 w-3.5" />
             </Button>
             {canSaveFile && !isImage && (
-              <Button onClick={handleSave} disabled={isSaving || !hasChanges}>
-                <Save className="h-3.5 w-3.5" />
+              <Button onClick={handleSave} pending={isSaving} disabled={!hasChanges}>
+                {!isSaving && <Save className="h-3.5 w-3.5" />}
                 Save
               </Button>
             )}
@@ -419,14 +421,8 @@ export function DockerFilePopout() {
       </div>
 
       {isLoading ? (
-        <div
-          className="flex min-h-0 flex-1 flex-col gap-4 p-4"
-          aria-busy="true"
-          aria-label="Reading file"
-        >
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="min-h-0 flex-1 w-full" />
-        </div>
+        // A popout window has no page gate; the spinner fills the area the file will take.
+        <LoadingSpinner className="min-h-0 flex-1" label="Reading file" />
       ) : error ? (
         <div className="flex-1 flex items-center justify-center text-destructive text-sm">
           {error}

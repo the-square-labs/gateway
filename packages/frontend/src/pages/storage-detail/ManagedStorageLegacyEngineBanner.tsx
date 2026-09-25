@@ -39,7 +39,7 @@ export function ManagedStorageLegacyEngineBanner({
           href={MANAGED_STORAGE_MIGRATION_DOCS_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-medium text-[color:var(--color-link)] hover:underline"
+          className="font-medium text-link hover:underline"
         >
           See the migration guide
         </a>

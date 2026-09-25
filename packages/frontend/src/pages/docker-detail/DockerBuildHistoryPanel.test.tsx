@@ -9,48 +9,57 @@ import type { DockerBuild } from "@/types";
 import { DockerBuildHistoryPanel } from "./DockerBuildHistoryPanel";
 
 vi.mock("@/hooks/use-realtime", () => ({ useRealtime: vi.fn() }));
-vi.mock("@/components/ui/data-table", () => ({
-  DataTable: ({
-    className,
-    columns,
-    data,
-    footer,
-    keyFn,
-    scrollRef,
-  }: {
-    className?: string;
-    columns: Array<{
-      key: string;
-      header: string;
-      align?: "left" | "center" | "right";
-      render?: (row: unknown) => ReactNode;
-    }>;
-    data: unknown[];
-    footer?: ReactNode;
-    keyFn: (row: unknown) => string;
-    scrollRef?: Ref<HTMLDivElement>;
-  }) => (
-    <div className={className}>
-      <div>
-        {columns.map((column) => (
-          <span key={column.key} data-column={column.key} data-align={column.align ?? "left"}>
-            {column.header}
-          </span>
-        ))}
-      </div>
-      <div ref={scrollRef} data-route-scroll-container="" className="overflow-y-auto">
-        {data.map((row) => (
-          <div key={keyFn(row)} role="row">
+vi.mock("@/components/ui/data-table", async () => {
+  const { useContentLoading } = await import("@/components/common/reveal-gate");
+  return {
+    DataTable: ({
+      className,
+      columns,
+      data,
+      footer,
+      keyFn,
+      loading,
+      scrollRef,
+    }: {
+      className?: string;
+      columns: Array<{
+        key: string;
+        header: string;
+        align?: "left" | "center" | "right";
+        render?: (row: unknown) => ReactNode;
+      }>;
+      data: unknown[];
+      footer?: ReactNode;
+      keyFn: (row: unknown) => string;
+      loading?: boolean;
+      scrollRef?: Ref<HTMLDivElement>;
+    }) => {
+      // Like the real table, an empty first load is reported to the enclosing gate.
+      useContentLoading(Boolean(loading) && data.length === 0);
+      return (
+        <div className={className}>
+          <div>
             {columns.map((column) => (
-              <div key={column.key}>{column.render?.(row)}</div>
+              <span key={column.key} data-column={column.key} data-align={column.align ?? "left"}>
+                {column.header}
+              </span>
             ))}
           </div>
-        ))}
-        {footer}
-      </div>
-    </div>
-  ),
-}));
+          <div ref={scrollRef} data-route-scroll-container="" className="overflow-y-auto">
+            {data.map((row) => (
+              <div key={keyFn(row)} role="row">
+                {columns.map((column) => (
+                  <div key={column.key}>{column.render?.(row)}</div>
+                ))}
+              </div>
+            ))}
+            {footer}
+          </div>
+        </div>
+      );
+    },
+  };
+});
 
 describe("DockerBuildHistoryPanel", () => {
   beforeEach(() => {
@@ -117,11 +126,12 @@ describe("DockerBuildHistoryPanel", () => {
 
     const dialog = screen.getByRole("dialog", { name: "Build history" });
     expect(dialog).toBeInTheDocument();
-    expect(screen.getByRole("status", { name: "Loading build history" })).toBeInTheDocument();
+    // The dialog waits for the first history page before it reveals its body.
+    expect(dialog).toHaveAttribute("data-reveal-phase", "pending");
     await act(async () => {
       resolveBuilds?.({ data: builds, nextCursor: null });
     });
-    expect(screen.queryByRole("status", { name: "Loading build history" })).not.toBeInTheDocument();
+    await waitFor(() => expect(dialog).toHaveAttribute("data-reveal-phase", "revealed"));
     const scrollContainer = dialog.querySelector('[data-route-scroll-container=""]');
     expect(scrollContainer).toHaveClass("overflow-y-auto");
     expect(scrollContainer).not.toHaveClass("overflow-auto");

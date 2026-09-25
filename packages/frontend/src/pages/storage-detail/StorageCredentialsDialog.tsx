@@ -7,6 +7,7 @@ import { DownloadButton } from "@/components/common/DownloadButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import type { ManagedObjectStorageCaCertificate, ManagedStorageEngine } from "@/types";
@@ -161,6 +162,8 @@ export function StorageCredentialsDialog({
 }) {
   const [credentials, setCredentials] = useState<RevealedStorageCredentials | null>(null);
   const [loading, setLoading] = useState(false);
+  // Cleared on close, so every opening waits for the revealed credentials.
+  const [settled, setSettled] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [ca, setCa] = useState<ManagedObjectStorageCaCertificate | null>(null);
   const [caError, setCaError] = useState<string | null>(null);
@@ -175,6 +178,7 @@ export function StorageCredentialsDialog({
       setCa(null);
       setCaError(null);
       setLoading(false);
+      setSettled(false);
       return;
     }
 
@@ -210,6 +214,7 @@ export function StorageCredentialsDialog({
         }
       }
       setLoading(false);
+      setSettled(true);
     });
 
     return () => {
@@ -239,10 +244,8 @@ export function StorageCredentialsDialog({
           <DialogTitle>Managed Storage Credentials</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {loading ? (
-            <div className="border border-border bg-card p-6 text-sm text-muted-foreground">
-              Revealing credentials...
-            </div>
+          {open && (loading || !settled) ? (
+            <Skeleton />
           ) : error ? (
             <div className="border border-destructive/50 bg-destructive/5 p-6 text-sm text-destructive">
               {error}

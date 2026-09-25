@@ -211,9 +211,7 @@ export function DockerBuildDetailsDialog({
             </MetaRow>
             {build.errorMessage && (
               <MetaRow label="Error">
-                <span className="break-words text-red-600 dark:text-red-400">
-                  {build.errorMessage}
-                </span>
+                <span className="break-words text-destructive">{build.errorMessage}</span>
               </MetaRow>
             )}
             {scanSummary?.skipped && (

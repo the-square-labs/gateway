@@ -1,5 +1,4 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -393,22 +392,20 @@ export function ManagedDatabaseSettingsTab({
         <DialogFooter>
           <Button
             onClick={() => void save()}
+            pending={saving || operationPending}
             disabled={
-              saving ||
               confirmingRecreate ||
-              operationPending ||
               managed.status === "paused" ||
               !portIsValid ||
               !nativePortIsValid
             }
           >
-            {(saving || operationPending) && <Loader2 className="animate-spin" />}
             {operationPending
               ? "Applying previous change..."
               : saving
                 ? publicationChanged
                   ? "Recreating database..."
-                  : "Saving..."
+                  : "Save Changes"
                 : publicationChanged
                   ? "Save & Recreate"
                   : "Save Changes"}

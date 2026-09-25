@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,7 +20,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -103,8 +103,10 @@ export function InferenceUsersTable({
   const [apiUsageEnabled, setApiUsageEnabled] = useState(false);
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [removingOverride, setRemovingOverride] = useState(false);
   const initializedRef = useRef(hasCachedData);
   const loadGeneration = useRef(0);
+  useContentLoading(loading);
 
   const parsedCredits5h = parseNonNegativeNumber(creditLimitDraft.credits5h);
   const parsedCredits7d = parseNonNegativeNumber(creditLimitDraft.credits7d);
@@ -246,6 +248,20 @@ export function InferenceUsersTable({
     }
   };
 
+  const revertToDefaultLimits = async () => {
+    if (!editing) return;
+    setRemovingOverride(true);
+    try {
+      await api.deleteInferenceUserLimits(editing.id);
+      setLimitsOpen(false);
+      await load();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to remove the limit override");
+    } finally {
+      setRemovingOverride(false);
+    }
+  };
+
   const columns: DataTableColumn<InferenceUserUsage>[] = [
     {
       key: "user",
@@ -341,7 +357,6 @@ export function InferenceUsersTable({
 
   return (
     <>
-      {loading && <Skeleton />}
       <PanelShell
         title="Limits"
         icon={<Gauge className="h-4 w-4" />}
@@ -489,8 +504,8 @@ export function InferenceUsersTable({
                 title="Reset usage limits"
                 description="Close active windows now. New subscription windows start on the user's next inference request. Limit values are unchanged."
               >
-                <Button variant="outline" onClick={() => void resetLimits()} disabled={resetting}>
-                  {resetting ? "Resetting..." : "Reset limits"}
+                <Button variant="outline" onClick={() => void resetLimits()} pending={resetting}>
+                  Reset limits
                 </Button>
               </SettingsControlRow>
             ) : null}
@@ -531,12 +546,9 @@ export function InferenceUsersTable({
               ) && (
                 <Button
                   variant="outline"
-                  onClick={() =>
-                    void api.deleteInferenceUserLimits(editing.id).then(async () => {
-                      setLimitsOpen(false);
-                      await load();
-                    })
-                  }
+                  onClick={() => void revertToDefaultLimits()}
+                  disabled={saving}
+                  pending={removingOverride}
                 >
                   Use default
                 </Button>
@@ -544,8 +556,12 @@ export function InferenceUsersTable({
             <Button variant="outline" onClick={() => setLimitsOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void save()} disabled={saving || !formValid}>
-              {saving ? "Saving..." : "Save limits"}
+            <Button
+              onClick={() => void save()}
+              disabled={!formValid || removingOverride}
+              pending={saving}
+            >
+              Save limits
             </Button>
           </DialogFooter>
         </DialogContent>

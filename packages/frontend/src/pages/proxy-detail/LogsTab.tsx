@@ -1,4 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import {
   ResourceListCell,
@@ -437,15 +438,15 @@ export function LogsTab({ hostId }: { hostId: string }) {
                   ],
                   ["Size", selectedLog.logType === "error" ? "-" : selectedLog.bodyBytesSent],
                 ].map(([label, value]) => (
-                  <div
+                  <DetailRow
                     key={label}
-                    className="grid min-w-0 grid-cols-[minmax(96px,max-content)_minmax(0,1fr)] items-center gap-4 px-4 py-3"
-                  >
-                    <span className="text-sm text-muted-foreground">{label}</span>
-                    <span className="min-w-0 truncate text-right font-mono text-sm" title={value}>
-                      {value}
-                    </span>
-                  </div>
+                    label={label}
+                    value={
+                      <span className="min-w-0 truncate font-mono" title={value}>
+                        {value}
+                      </span>
+                    }
+                  />
                 ))}
               </div>
               <div className="min-w-0 space-y-1.5">

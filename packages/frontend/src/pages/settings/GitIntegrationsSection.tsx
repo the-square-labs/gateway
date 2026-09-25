@@ -4,7 +4,6 @@ import {
   GitBranch,
   Github,
   KeyRound,
-  Loader2,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -118,10 +117,12 @@ function GitConnectorPanel({
   const [testing, setTesting] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [testedTokenSignature, setTestedTokenSignature] = useState<string | null>(null);
   const [form, setForm] = useState(() => initialForm(provider));
   const [repositoryUrls, setRepositoryUrls] = useState<string[]>([""]);
-  const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
+  // null until the availability check answers; the method dialog waits for it.
+  const [githubOAuthAvailable, setGithubOAuthAvailable] = useState<boolean | null>(null);
   const [authMode, setAuthMode] = useState<"oauth" | "token">("token");
   const [githubOAuthActive, setGitHubOAuthActive] = useState(false);
   const [oauthStep, setOAuthStep] = useState(false);
@@ -375,12 +376,15 @@ function GitConnectorPanel({
       confirmLabel: "Delete",
     });
     if (!ok) return;
+    setDeletingId(connector.id);
     try {
       await api.deleteGitConnector(provider, connector.id);
       toast.success(`${provider === "github" ? "GitHub" : "Git"} connector deleted`);
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete connector");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -412,6 +416,7 @@ function GitConnectorPanel({
                 canManage={canManage}
                 testing={testingId === connector.id}
                 syncing={syncingId === connector.id}
+                deleting={deletingId === connector.id}
                 onOpen={canManage ? () => openEditDialog(connector) : undefined}
                 onTest={() => void testConnector(connector)}
                 onSync={() => void syncConnector(connector)}
@@ -439,6 +444,7 @@ function GitConnectorPanel({
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
+              {githubOAuthAvailable === null ? <Skeleton /> : null}
               <Button
                 type="button"
                 variant="outline"
@@ -449,8 +455,8 @@ function GitConnectorPanel({
                 <span className="flex w-full items-center gap-3">
                   <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[15px] font-medium text-foreground">OAuth</span>
-                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                    <span className="block text-base font-medium text-foreground">OAuth</span>
+                    <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
                       Authorize your GitHub account without copying a token into Gateway.
                     </span>
                   </span>
@@ -468,10 +474,10 @@ function GitConnectorPanel({
                 <span className="flex w-full items-center gap-3">
                   <KeyRound className="h-5 w-5 shrink-0 text-muted-foreground" />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-[15px] font-medium text-foreground">
+                    <span className="block text-base font-medium text-foreground">
                       Personal access token
                     </span>
-                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                    <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
                       Connect GitHub.com or a GitHub Enterprise instance with a PAT.
                     </span>
                   </span>
@@ -673,15 +679,12 @@ function GitConnectorPanel({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
-                          disabled={testing || !form.baseUrl.trim() || !form.token.trim()}
+                          className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          disabled={!form.baseUrl.trim() || !form.token.trim()}
+                          pending={testing}
                           onClick={() => void testGitHubConnection()}
                         >
-                          {testing ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : tokenTested ? (
-                            <Check className="h-4 w-4" />
-                          ) : null}
+                          {!testing && tokenTested ? <Check className="h-4 w-4" /> : null}
                           Test Connection
                         </Button>
                       </div>
@@ -732,21 +735,17 @@ function GitConnectorPanel({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                           disabled={
-                            testing ||
                             !form.baseUrl.trim() ||
                             !repositoryUrls.some((url) => url.trim()) ||
                             !form.username?.trim() ||
                             !form.token.trim()
                           }
+                          pending={testing}
                           onClick={() => void testGitConnection()}
                         >
-                          {testing ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : tokenTested ? (
-                            <Check className="h-4 w-4" />
-                          ) : null}
+                          {!testing && tokenTested ? <Check className="h-4 w-4" /> : null}
                           Test Connection
                         </Button>
                       </div>
@@ -782,10 +781,10 @@ function GitConnectorPanel({
             !oauthStep &&
             !switchingToOAuth ? (
               <Button
-                disabled={saving || !(genericGitReady || githubFormReady)}
+                disabled={!(genericGitReady || githubFormReady)}
+                pending={saving}
                 onClick={() => void saveConnector()}
               >
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
                 {saving ? "Saving…" : editingConnector ? "Save" : "Save connector"}
               </Button>
             ) : null}
@@ -802,6 +801,7 @@ function GitConnectorRow({
   canManage,
   testing,
   syncing,
+  deleting,
   onOpen,
   onTest,
   onSync,
@@ -812,6 +812,7 @@ function GitConnectorRow({
   canManage: boolean;
   testing: boolean;
   syncing: boolean;
+  deleting: boolean;
   onOpen?: () => void;
   onTest: () => void;
   onSync: () => void;
@@ -883,10 +884,11 @@ function GitConnectorRow({
               event.stopPropagation();
               onTest();
             }}
-            disabled={testing || syncing}
+            disabled={syncing}
+            pending={testing}
             title="Test connector"
           >
-            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {testing ? null : <Check className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -895,10 +897,11 @@ function GitConnectorRow({
               event.stopPropagation();
               onSync();
             }}
-            disabled={testing || syncing}
+            disabled={testing}
+            pending={syncing}
             title="Sync connector"
           >
-            <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+            {syncing ? null : <RefreshCw className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -907,9 +910,10 @@ function GitConnectorRow({
               event.stopPropagation();
               onDelete();
             }}
+            pending={deleting}
             title="Delete connector"
           >
-            <Trash2 className="h-4 w-4" />
+            {deleting ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       ) : null}

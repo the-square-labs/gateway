@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { AuthWindowLoader } from "@/components/auth/AuthShell";
+import { Button } from "@/components/ui/button";
 import { resolveAuthReturnTo } from "@/lib/auth-return-to";
 
 let currentUserRequest: Promise<void> | null = null;
@@ -66,23 +67,13 @@ export function AuthCallback({
         <div className="flex flex-col items-center gap-4 max-w-sm text-center">
           <h2 className="text-lg font-semibold text-foreground">Authentication Failed</h2>
           <p className="text-sm text-muted-foreground">{error}</p>
-          <button
-            onClick={() => navigate("/login")}
-            className="mt-2 border border-border px-4 py-2 text-sm text-foreground hover:bg-muted transition-colors"
-          >
+          <Button variant="outline" className="mt-2" onClick={() => navigate("/login")}>
             Back to login
-          </button>
+          </Button>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="flex flex-col items-center gap-4">
-        <LoadingSpinner className="" />
-        <p className="text-sm text-muted-foreground">Authenticating...</p>
-      </div>
-    </div>
-  );
+  return <AuthWindowLoader label="Authenticating..." />;
 }

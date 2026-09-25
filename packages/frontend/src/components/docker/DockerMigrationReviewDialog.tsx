@@ -3,7 +3,6 @@ import {
   ArrowLeft,
   Check,
   CheckCircle2,
-  Loader2,
   RotateCcw,
   ShieldCheck,
   Truck,
@@ -79,9 +78,9 @@ function VerificationSection({ preflight }: { preflight: DockerMigrationPrefligh
     <section className="space-y-2">
       <div className="flex items-center gap-2">
         {blocked ? (
-          <AlertTriangle className="h-4 w-4 text-red-600 dark:text-red-400" />
+          <AlertTriangle className="h-4 w-4 text-destructive" />
         ) : (
-          <CheckCircle2 className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+          <CheckCircle2 className="h-4 w-4 text-success" />
         )}
         <h3 className="text-sm font-semibold">Verification</h3>
       </div>
@@ -92,13 +91,13 @@ function VerificationSection({ preflight }: { preflight: DockerMigrationPrefligh
             const isBlocker = row.kind === "blocker";
             const followsBlocker = rows[index - 1]?.kind === "blocker";
             const borderColor = "var(--color-border)";
-            const errorBorderColor = "var(--color-red-500)";
+            const errorBorderColor = "var(--color-destructive)";
 
             return (
               <li
                 key={row.key}
                 className={`flex items-start gap-2 border-x border-t px-4 py-3 last:border-b ${
-                  isBlocker ? "bg-red-500/15" : ""
+                  isBlocker ? "bg-destructive/15" : ""
                 }`}
                 style={
                   isBlocker
@@ -112,7 +111,7 @@ function VerificationSection({ preflight }: { preflight: DockerMigrationPrefligh
                 }
               >
                 {isBlocker ? (
-                  <X className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                  <X className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                 ) : (
                   <Check className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 )}
@@ -180,8 +179,8 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
 
       {migration.errorMessage ? (
         <p
-          className="border bg-red-500/15 px-4 py-3 text-sm text-red-600 dark:text-red-400"
-          style={{ borderColor: "var(--color-red-500)" }}
+          className="border bg-destructive/15 px-4 py-3 text-sm text-destructive"
+          style={{ borderColor: "var(--color-destructive)" }}
         >
           {migration.errorMessage}
         </p>
@@ -189,10 +188,10 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
 
       {completed ? (
         <div
-          className="flex items-start gap-2 border bg-emerald-500/15 px-4 py-3 text-sm"
-          style={{ borderColor: "var(--color-emerald-500)" }}
+          className="flex items-start gap-2 border bg-success/15 px-4 py-3 text-sm"
+          style={{ borderColor: "var(--color-success)" }}
         >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
           <span>
             Migration completed.{" "}
             {migration.keepSource
@@ -321,29 +320,25 @@ export function DockerMigrationReviewDialog({
             </Button>
           ) : null}
           {canCancel ? (
-            <Button variant="outline" onClick={onCancel} disabled={loading}>
+            <Button variant="outline" onClick={onCancel} pending={loading}>
               Cancel and roll back
             </Button>
           ) : null}
           {migration?.status === "cleanup_pending" ? (
-            <Button variant="outline" onClick={onRetryCleanup} disabled={loading}>
-              <RotateCcw className="h-4 w-4" />
+            <Button variant="outline" onClick={onRetryCleanup} pending={loading}>
+              {!loading && <RotateCcw className="h-4 w-4" />}
               Retry cleanup
             </Button>
           ) : null}
           {migration?.status === "needs_attention" && onResolve ? (
-            <Button variant="outline" onClick={onResolve} disabled={loading}>
-              <ShieldCheck className="h-4 w-4" />
+            <Button variant="outline" onClick={onResolve} pending={loading}>
+              {!loading && <ShieldCheck className="h-4 w-4" />}
               Resolve
             </Button>
           ) : null}
           {!migration && preflight ? (
-            <Button onClick={onStart} disabled={preflight.blockers.length > 0 || loading}>
-              {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Truck className="h-4 w-4" />
-              )}
+            <Button onClick={onStart} pending={loading} disabled={preflight.blockers.length > 0}>
+              {!loading && <Truck className="h-4 w-4" />}
               Start migration
             </Button>
           ) : null}

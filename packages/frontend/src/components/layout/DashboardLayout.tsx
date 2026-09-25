@@ -597,9 +597,7 @@ export function DashboardLayout() {
   );
 
   if (isLoading || !systemConfigReady) {
-    return (
-      <ApplicationShellSkeleton scopes={currentUser?.scopes ?? []} pathname={location.pathname} />
-    );
+    return <ApplicationShellSkeleton />;
   }
 
   if (!isAuthenticated) {
@@ -610,13 +608,7 @@ export function DashboardLayout() {
   const isAIConversationRoute = /^\/ai\/chats\/[^/]+$/.test(location.pathname);
   const isAIHome = location.pathname === "/" || isAIConversationRoute;
   if (canUseAI && isAIHome && !interfacePreferenceLoaded) {
-    return (
-      <div
-        className="fixed inset-0 bg-background"
-        aria-busy="true"
-        aria-label="Loading workspace"
-      />
-    );
+    return <ApplicationShellSkeleton label="Loading workspace" />;
   }
 
   const useLiteMode =
@@ -654,8 +646,8 @@ export function DashboardLayout() {
             <div className="flex items-center">
               <Button
                 variant="ghost"
-                size="icon"
-                className="h-10 w-10"
+                size="icon-lg"
+                aria-label="Open navigation"
                 onClick={() => setMobileMenuOpen(true)}
               >
                 <Menu className="h-5 w-5" />

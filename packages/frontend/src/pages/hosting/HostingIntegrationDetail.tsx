@@ -16,6 +16,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
@@ -26,6 +27,7 @@ import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -117,6 +119,9 @@ export function HostingIntegrationDetail({
     return [...merged.values()];
   }, [storedOperations, acceptedOperations, connectorId]);
   const [catalog, setCatalog] = useState<HostingCatalog | null>(null);
+  // The connector the catalog request last settled for. The catalog is auxiliary and never
+  // holds the page; the Proxmox capacity panel says so while it is still on its way.
+  const [catalogConnectorId, setCatalogConnectorId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadedConnectorId, setLoadedConnectorId] = useState<string>();
   const [error, setError] = useState<string | null>(null);
@@ -143,19 +148,25 @@ export function HostingIntegrationDetail({
             if (generation === loadGeneration.current) setAccountSummary({ id: connectorId, data });
           },
           () => {
-            if (generation === loadGeneration.current) setAccountSummary(null);
+            if (generation === loadGeneration.current)
+              setAccountSummary({ id: connectorId, data: null });
           }
         );
       }
       // Catalog metadata is auxiliary; it must never block rendering the resource snapshot.
-      void api.getHostingCatalog(connectorId).then(
-        (value) => {
-          if (generation === loadGeneration.current) setCatalog(value);
-        },
-        () => {
-          if (generation === loadGeneration.current) setCatalog(null);
-        }
-      );
+      void api
+        .getHostingCatalog(connectorId)
+        .then(
+          (value) => {
+            if (generation === loadGeneration.current) setCatalog(value);
+          },
+          () => {
+            if (generation === loadGeneration.current) setCatalog(null);
+          }
+        )
+        .finally(() => {
+          if (generation === loadGeneration.current) setCatalogConnectorId(connectorId);
+        });
       const [resourceResult, operationResult] = await Promise.allSettled([
         api.listHostingResources(connectorId),
         api.listHostingOperations(connectorId),
@@ -249,7 +260,11 @@ export function HostingIntegrationDetail({
   );
 
   if (!canView) {
-    return <EmptyState message="You do not have permission to view hosting integrations." />;
+    return (
+      <PageTransition>
+        <EmptyState message="You do not have permission to view hosting integrations." />
+      </PageTransition>
+    );
   }
 
   if (loading && loadedConnectorId !== connectorId)
@@ -267,6 +282,8 @@ export function HostingIntegrationDetail({
     );
   }
 
+  // The account balance and expense cards come from a follow-up request.
+  const overviewLoading = canViewAccountSummary && accountSummary?.id !== connectorId;
   const managedResources = resources.filter((resource) => resource.origin !== "discovered");
   const unresolvedAdoption = resources.filter(
     (resource) => resource.origin === "discovered" && resource.nodes.length === 0
@@ -342,47 +359,47 @@ export function HostingIntegrationDetail({
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between gap-3 shrink-0">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate(returnTo)} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="min-w-0 truncate text-2xl font-bold">{connector.name}</h1>
-                <Badge variant="outline" size="inline">
-                  {HOSTING_PROVIDER_LABELS[connector.provider]}
-                </Badge>
-                <Badge variant={connector.enabled ? "success" : "secondary"} size="inline">
-                  {connector.enabled ? "enabled" : "disabled"}
-                </Badge>
-                <Badge
-                  variant={connector.syncStatus === "error" ? "destructive" : "outline"}
-                  size="inline"
-                >
-                  {connector.syncStatus}
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {connector.baseUrl} · {resources.length}{" "}
-                {resources.length === 1 ? "resource" : "resources"}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            {headerActions.map((action) => (
-              <Button
-                key={action.id ?? action.label}
-                type="button"
-                variant={action.id === "create" ? "default" : "outline"}
-                disabled={action.disabled}
-                title={action.disabled ? action.disabledReason : undefined}
-                onClick={action.onClick}
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate(returnTo)} />}
+          title={connector.name}
+          badges={
+            <>
+              <Badge variant="outline" size="inline">
+                {HOSTING_PROVIDER_LABELS[connector.provider]}
+              </Badge>
+              <Badge variant={connector.enabled ? "success" : "secondary"} size="inline">
+                {connector.enabled ? "enabled" : "disabled"}
+              </Badge>
+              <Badge
+                variant={connector.syncStatus === "error" ? "destructive" : "outline"}
+                size="inline"
               >
-                {action.icon}
-                {action.label}
-              </Button>
-            ))}
-          </ResponsiveHeaderActions>
-        </div>
+                {connector.syncStatus}
+              </Badge>
+            </>
+          }
+          description={`${connector.baseUrl} · ${resources.length} ${
+            resources.length === 1 ? "resource" : "resources"
+          }`}
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerActions.map((action) => (
+                <Button
+                  key={action.id ?? action.label}
+                  type="button"
+                  variant={action.id === "create" ? "default" : "outline"}
+                  disabled={action.disabled}
+                  title={action.disabled ? action.disabledReason : undefined}
+                  onClick={action.onClick}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {connector.syncLastError && <EmptyState message={connector.syncLastError} />}
         {resourceError && <EmptyState message={resourceError} />}
@@ -399,6 +416,7 @@ export function HostingIntegrationDetail({
           </TabsList>
 
           <TabsContent value="overview" className="pb-6">
+            {overviewLoading && <Skeleton />}
             <div className="space-y-4">
               <div
                 className={`grid gap-4 sm:grid-cols-2 ${
@@ -522,7 +540,14 @@ export function HostingIntegrationDetail({
                       emptyMessage="No Proxmox capacity reported."
                     />
                   ) : (
-                    <EmptyState message="Capacity is unavailable for this connector." embedded />
+                    <EmptyState
+                      message={
+                        catalogConnectorId === connectorId
+                          ? "Capacity is unavailable for this connector."
+                          : "Loading capacity from the provider…"
+                      }
+                      embedded
+                    />
                   )}
                 </PanelShell>
               ) : null}

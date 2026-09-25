@@ -30,9 +30,10 @@ export function AIButton({ iconOnly = false, showLabel = false }: AIButtonProps)
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
-            size="icon"
-            className={`h-8 w-8 ${aiPanelOpen ? "bg-sidebar-accent text-primary" : ""}`}
+            size="icon-sm"
+            className={aiPanelOpen ? "bg-sidebar-accent text-primary" : undefined}
             onClick={handleClick}
+            aria-label="AI Workspace"
           >
             <Sparkles className="h-4 w-4" />
           </Button>
@@ -62,9 +63,10 @@ export function AIButton({ iconOnly = false, showLabel = false }: AIButtonProps)
       <TooltipTrigger asChild>
         <Button
           variant="ghost"
-          size="icon"
-          className={`h-10 w-10 md:h-7 md:w-7 ${aiPanelOpen ? "text-primary" : ""}`}
+          size="icon-lg"
+          className={`md:h-7 md:w-7 ${aiPanelOpen ? "text-primary" : ""}`}
           onClick={handleClick}
+          aria-label="AI Workspace"
         >
           <Sparkles className="h-4 w-4" />
         </Button>

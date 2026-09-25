@@ -1,4 +1,4 @@
-import { Check, KeyRound, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Check, KeyRound, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -36,6 +36,7 @@ export function ExternalSshIntegrationsSection() {
   const [initialLoadComplete, setInitialLoadComplete] = useState(!canView || cached !== undefined);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<ExternalSshConnector | null>(null);
   const displayedEditingConnector = useRetainedDialogValue(
@@ -85,12 +86,15 @@ export function ExternalSshIntegrationsSection() {
       confirmLabel: "Delete",
     });
     if (!ok) return;
+    setDeletingId(connector.id);
     try {
       await api.deleteExternalSshConnector(connector.id);
       toast.success("SSH connector deleted");
       await refresh();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete SSH connector");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -128,7 +132,7 @@ export function ExternalSshIntegrationsSection() {
   };
 
   if (!canView) return null;
-  if (!initialLoadComplete) return <Skeleton className="h-40 w-full" />;
+  if (!initialLoadComplete) return <Skeleton />;
 
   const connectorNames = new Map(connectors.map((connector) => [connector.id, connector.name]));
 
@@ -161,6 +165,7 @@ export function ExternalSshIntegrationsSection() {
                 canManage={canManage}
                 testing={testingId === connector.id}
                 syncing={syncingId === connector.id}
+                deleting={deletingId === connector.id}
                 onOpen={canManage ? () => openEdit(connector) : undefined}
                 onTest={() => void testConnector(connector)}
                 onSync={() => void syncConnector(connector)}
@@ -227,8 +232,11 @@ export function ExternalSshIntegrationsSection() {
             >
               Cancel
             </Button>
-            <Button onClick={() => void saveEdit()} disabled={savingEdit || !editName.trim()}>
-              {savingEdit ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            <Button
+              onClick={() => void saveEdit()}
+              disabled={!editName.trim()}
+              pending={savingEdit}
+            >
               Save
             </Button>
           </DialogFooter>
@@ -244,6 +252,7 @@ function SshConnectorRow({
   canManage,
   testing,
   syncing,
+  deleting,
   onOpen,
   onTest,
   onSync,
@@ -254,6 +263,7 @@ function SshConnectorRow({
   canManage: boolean;
   testing: boolean;
   syncing: boolean;
+  deleting: boolean;
   onOpen?: () => void;
   onTest: () => void;
   onSync: () => void;
@@ -311,10 +321,11 @@ function SshConnectorRow({
               event.stopPropagation();
               onTest();
             }}
-            disabled={testing || syncing}
+            disabled={syncing}
+            pending={testing}
             title="Test connector"
           >
-            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {testing ? null : <Check className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -323,10 +334,11 @@ function SshConnectorRow({
               event.stopPropagation();
               onSync();
             }}
-            disabled={testing || syncing}
+            disabled={testing}
+            pending={syncing}
             title="Sync connector"
           >
-            <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+            {syncing ? null : <RefreshCw className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -335,9 +347,10 @@ function SshConnectorRow({
               event.stopPropagation();
               onDelete();
             }}
+            pending={deleting}
             title="Delete connector"
           >
-            <Trash2 className="h-4 w-4" />
+            {deleting ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       ) : null}

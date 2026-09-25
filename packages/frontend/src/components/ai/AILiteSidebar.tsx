@@ -51,7 +51,6 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
-import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { aiConversationRoute } from "@/lib/ai-conversation-route";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
@@ -152,7 +151,6 @@ export function AILiteSidebar({
     sidebarActiveConversationId,
     recentConversations,
     conversationFolders,
-    isLoadingRecentConversations,
     isStartingConversation,
     clearMessages,
     createConversationFolder,
@@ -165,7 +163,13 @@ export function AILiteSidebar({
     reorderConversationFolders,
     updateConversationFolder,
   } = useAIStore();
-  const initialRecentConversationsLoading = useInitialLoading(isLoadingRecentConversations);
+  // Pinned chats and projects render above the chat list, so a list arriving
+  // late would push it down. Without a cached list the conversation sections
+  // wait for the first fetch, then fade in together.
+  const [conversationListCached] = useState(
+    () => useAIStore.getState().recentConversations.length > 0
+  );
+  const [conversationListSettled, setConversationListSettled] = useState(conversationListCached);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const pointerPositionRef = useRef<SidebarPointerPosition | null>(null);
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(readExpandedProjectIds);
@@ -243,8 +247,10 @@ export function AILiteSidebar({
   const visibleActiveConversationId = messages.length > 0 ? sidebarActiveConversationId : null;
 
   useEffect(() => {
-    void fetchRecentConversations();
-    void fetchConversationFolders();
+    void Promise.allSettled([
+      Promise.resolve(fetchRecentConversations()),
+      Promise.resolve(fetchConversationFolders()),
+    ]).then(() => setConversationListSettled(true));
   }, [fetchConversationFolders, fetchRecentConversations]);
 
   useEffect(() => {
@@ -391,7 +397,12 @@ export function AILiteSidebar({
             <TooltipProvider delayDuration={0} skipDelayDuration={0}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    onClick={toggleSidebar}
+                    aria-label="Open sidebar"
+                  >
                     <PanelLeft className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
@@ -402,8 +413,7 @@ export function AILiteSidebar({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
+                    size="icon-sm"
                     onClick={() => openPalette(true)}
                     aria-label="Search"
                   >
@@ -417,8 +427,7 @@ export function AILiteSidebar({
                 <TooltipTrigger asChild>
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
+                    size="icon-sm"
                     onClick={handleNewChat}
                     aria-label="New Work Session"
                   >
@@ -433,9 +442,8 @@ export function AILiteSidebar({
                   <Button
                     asChild
                     variant="ghost"
-                    size="icon"
+                    size="icon-sm"
                     className={cn(
-                      "h-8 w-8",
                       isSidebarNavigationActive(location.pathname, "/dashboard") &&
                         "bg-sidebar-accent"
                     )}
@@ -466,9 +474,8 @@ export function AILiteSidebar({
                     <Button
                       asChild
                       variant="ghost"
-                      size="icon"
+                      size="icon-sm"
                       className={cn(
-                        "h-8 w-8",
                         isSidebarNavigationActive(location.pathname, profileNavigationItem.href) &&
                           "bg-sidebar-accent"
                       )}
@@ -490,8 +497,8 @@ export function AILiteSidebar({
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 bg-sidebar-accent"
+                        size="icon-sm"
+                        className="bg-sidebar-accent"
                         aria-label="Starting Work Session..."
                       >
                         <AIProgressRing ariaLabel="Starting Work Session" />
@@ -500,31 +507,32 @@ export function AILiteSidebar({
                     <TooltipContent side="right">Starting Work Session...</TooltipContent>
                   </Tooltip>
                 )}
-                {recentConversations.length === 0 && !isStartingConversation && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 bg-sidebar-accent"
-                        aria-label="New Work Session"
-                        onClick={handleNewChat}
-                      >
-                        <MessageSquare className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="right">New Work Session</TooltipContent>
-                  </Tooltip>
-                )}
+                {conversationListSettled &&
+                  recentConversations.length === 0 &&
+                  !isStartingConversation && (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="bg-sidebar-accent"
+                          aria-label="New Work Session"
+                          onClick={handleNewChat}
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent side="right">New Work Session</TooltipContent>
+                    </Tooltip>
+                  )}
                 {recentConversations.map((conversation) => {
                   return (
                     <Tooltip key={conversation.id}>
                       <TooltipTrigger asChild>
                         <Button
                           variant="ghost"
-                          size="icon"
+                          size="icon-sm"
                           className={cn(
-                            "h-8 w-8",
                             visibleActiveConversationId === conversation.id && "bg-sidebar-accent"
                           )}
                           aria-label={conversation.title}
@@ -544,12 +552,7 @@ export function AILiteSidebar({
                   <DropdownMenu>
                     <TooltipTrigger asChild>
                       <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          aria-label="All sections"
-                        >
+                        <Button variant="ghost" size="icon-sm" aria-label="All sections">
                           <span className="relative flex">
                             <Compass className="h-4 w-4" />
                             {sectionAttention && (
@@ -614,8 +617,8 @@ export function AILiteSidebar({
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
+                      size="icon-sm"
+                      className="bg-sidebar-accent text-sidebar-accent-foreground/80 hover:bg-muted hover:text-sidebar-accent-foreground"
                       onClick={handleOpenOperationsConsole}
                       aria-label="Open Operations Console"
                     >
@@ -630,8 +633,7 @@ export function AILiteSidebar({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      size="icon"
-                      className="h-8 w-8"
+                      size="icon-sm"
                       onClick={() => void handleStopImpersonating()}
                       disabled={stoppingImpersonation}
                       aria-label="Stop impersonating"
@@ -645,7 +647,7 @@ export function AILiteSidebar({
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <Button variant="ghost" size="icon-sm" aria-label="Account menu">
                     <Avatar className="h-6 w-6">
                       <AvatarImage src={user?.avatarUrl ?? undefined} />
                       <AvatarFallback className="text-xs">
@@ -698,8 +700,8 @@ export function AILiteSidebar({
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className={cn("md:h-7 md:w-7", mobileMenu ? "h-8 w-8" : "h-10 w-10")}
+                      size={mobileMenu ? "icon-sm" : "icon-lg"}
+                      className="md:h-7 md:w-7"
                       aria-label="Create"
                     >
                       <Plus className="h-4 w-4" />
@@ -722,8 +724,8 @@ export function AILiteSidebar({
                   <TooltipTrigger asChild>
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className={cn("md:h-7 md:w-7", mobileMenu ? "h-8 w-8" : "h-10 w-10")}
+                      size={mobileMenu ? "icon-sm" : "icon-lg"}
+                      className="md:h-7 md:w-7"
                       onClick={onClose ?? toggleSidebar}
                       aria-label={onClose ? "Close menu" : "Close sidebar"}
                     >
@@ -790,172 +792,173 @@ export function AILiteSidebar({
             <div className="flex min-h-0 flex-1 flex-col">
               <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto dashboard-scrollbar">
                 <SidebarPinnedResources loadBootstrap />
-                {initialRecentConversationsLoading && recentConversations.length === 0 ? (
-                  <div className="px-3 py-3 text-xs text-muted-foreground">Loading...</div>
-                ) : (
-                  <>
-                    {pinnedConversations.length > 0 && (
+                <div
+                  className={cn(
+                    !conversationListSettled && "invisible",
+                    conversationListSettled && !conversationListCached && "ai-chat-content-fade-in"
+                  )}
+                  aria-busy={conversationListSettled ? undefined : true}
+                >
+                  {pinnedConversations.length > 0 && (
+                    <nav className="space-y-0.5 px-2 py-2">
+                      <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Pinned
+                      </p>
+                      {pinnedConversations.map((conversation) => (
+                        <ConversationMenuItem
+                          key={conversation.id}
+                          conversation={conversation}
+                          active={visibleActiveConversationId === conversation.id}
+                          pinned
+                          disableLayoutAnimation={isResizing}
+                          hoverSyncRevision={recentConversations.length}
+                          pointerPositionRef={pointerPositionRef}
+                          onLoad={() => void handleLoadConversation(conversation.id)}
+                          onTogglePin={() => togglePinnedAIConversation(conversation.id)}
+                          onDelete={() => void handleDeleteConversation(conversation.id)}
+                        />
+                      ))}
+                    </nav>
+                  )}
+
+                  <DndContext
+                    sensors={sensors}
+                    onDragStart={handleDragStart}
+                    onDragEnd={handleDragEnd}
+                    onDragCancel={() => setDragOverlayConversationId(null)}
+                  >
+                    {sortedFolders.length > 0 && (
                       <nav className="space-y-0.5 px-2 py-2">
                         <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          Pinned
+                          Projects
                         </p>
-                        {pinnedConversations.map((conversation) => (
-                          <ConversationMenuItem
-                            key={conversation.id}
-                            conversation={conversation}
-                            active={visibleActiveConversationId === conversation.id}
-                            pinned
-                            disableLayoutAnimation={isResizing}
-                            hoverSyncRevision={recentConversations.length}
-                            pointerPositionRef={pointerPositionRef}
-                            onLoad={() => void handleLoadConversation(conversation.id)}
-                            onTogglePin={() => togglePinnedAIConversation(conversation.id)}
-                            onDelete={() => void handleDeleteConversation(conversation.id)}
-                          />
-                        ))}
+                        <SortableContext
+                          items={sortedFolders.map((folder) => folder.id)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {sortedFolders.map((folder) => {
+                            const folderConversations = conversationsByFolder.get(folder.id) ?? [];
+                            const isFolderExpanded = expandedFolderIds.has(folder.id);
+                            return (
+                              <div key={folder.id} className="space-y-0.5">
+                                <FolderMenuItem
+                                  folder={folder}
+                                  conversations={folderConversations}
+                                  expanded={isFolderExpanded}
+                                  onToggle={() => handleToggleFolder(folder.id)}
+                                  onEdit={() =>
+                                    setFolderDialog({
+                                      mode: "edit",
+                                      folderId: folder.id,
+                                      name: folder.name,
+                                      description: folder.description,
+                                    })
+                                  }
+                                  onDelete={() => void deleteConversationFolder(folder.id)}
+                                />
+                                {folderConversations.length > 0 && (
+                                  <AnimatePresence initial={false}>
+                                    {isFolderExpanded && (
+                                      <motion.div
+                                        key={`${folder.id}-conversations`}
+                                        initial={{ height: 0, opacity: 0 }}
+                                        animate={{ height: "auto", opacity: 1 }}
+                                        exit={{ height: 0, opacity: 0 }}
+                                        transition={{ duration: 0.16, ease: "easeOut" }}
+                                        className="overflow-hidden"
+                                      >
+                                        <div className="space-y-0.5 pl-4">
+                                          {folderConversations.map((conversation) => (
+                                            <DraggableConversationMenuItem
+                                              key={conversation.id}
+                                              conversation={conversation}
+                                              folderId={folder.id}
+                                              active={
+                                                visibleActiveConversationId === conversation.id
+                                              }
+                                              pinned={false}
+                                              disableLayoutAnimation={isResizing}
+                                              hoverSyncRevision={recentConversations.length}
+                                              pointerPositionRef={pointerPositionRef}
+                                              onLoad={() =>
+                                                void handleLoadConversation(conversation.id)
+                                              }
+                                              onTogglePin={() =>
+                                                togglePinnedAIConversation(conversation.id)
+                                              }
+                                              onDelete={() =>
+                                                void handleDeleteConversation(conversation.id)
+                                              }
+                                            />
+                                          ))}
+                                        </div>
+                                      </motion.div>
+                                    )}
+                                  </AnimatePresence>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </SortableContext>
                       </nav>
                     )}
 
-                    <DndContext
-                      sensors={sensors}
-                      onDragStart={handleDragStart}
-                      onDragEnd={handleDragEnd}
-                      onDragCancel={() => setDragOverlayConversationId(null)}
-                    >
-                      {sortedFolders.length > 0 && (
-                        <nav className="space-y-0.5 px-2 py-2">
-                          <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                            Projects
-                          </p>
-                          <SortableContext
-                            items={sortedFolders.map((folder) => folder.id)}
-                            strategy={verticalListSortingStrategy}
-                          >
-                            {sortedFolders.map((folder) => {
-                              const folderConversations =
-                                conversationsByFolder.get(folder.id) ?? [];
-                              const isFolderExpanded = expandedFolderIds.has(folder.id);
-                              return (
-                                <div key={folder.id} className="space-y-0.5">
-                                  <FolderMenuItem
-                                    folder={folder}
-                                    conversations={folderConversations}
-                                    expanded={isFolderExpanded}
-                                    onToggle={() => handleToggleFolder(folder.id)}
-                                    onEdit={() =>
-                                      setFolderDialog({
-                                        mode: "edit",
-                                        folderId: folder.id,
-                                        name: folder.name,
-                                        description: folder.description,
-                                      })
-                                    }
-                                    onDelete={() => void deleteConversationFolder(folder.id)}
-                                  />
-                                  {folderConversations.length > 0 && (
-                                    <AnimatePresence initial={false}>
-                                      {isFolderExpanded && (
-                                        <motion.div
-                                          key={`${folder.id}-conversations`}
-                                          initial={{ height: 0, opacity: 0 }}
-                                          animate={{ height: "auto", opacity: 1 }}
-                                          exit={{ height: 0, opacity: 0 }}
-                                          transition={{ duration: 0.16, ease: "easeOut" }}
-                                          className="overflow-hidden"
-                                        >
-                                          <div className="space-y-0.5 pl-4">
-                                            {folderConversations.map((conversation) => (
-                                              <DraggableConversationMenuItem
-                                                key={conversation.id}
-                                                conversation={conversation}
-                                                folderId={folder.id}
-                                                active={
-                                                  visibleActiveConversationId === conversation.id
-                                                }
-                                                pinned={false}
-                                                disableLayoutAnimation={isResizing}
-                                                hoverSyncRevision={recentConversations.length}
-                                                pointerPositionRef={pointerPositionRef}
-                                                onLoad={() =>
-                                                  void handleLoadConversation(conversation.id)
-                                                }
-                                                onTogglePin={() =>
-                                                  togglePinnedAIConversation(conversation.id)
-                                                }
-                                                onDelete={() =>
-                                                  void handleDeleteConversation(conversation.id)
-                                                }
-                                              />
-                                            ))}
-                                          </div>
-                                        </motion.div>
-                                      )}
-                                    </AnimatePresence>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </SortableContext>
-                        </nav>
+                    <nav className="space-y-0.5 px-2 py-2">
+                      <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                        Chats
+                      </p>
+                      {isStartingConversation && (
+                        <div
+                          aria-current="page"
+                          className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
+                        >
+                          <MessageSquare className="h-4 w-4 shrink-0" />
+                          <span className="thinking-shimmer truncate text-muted-foreground">
+                            Starting Work Session...
+                          </span>
+                        </div>
                       )}
-
-                      <nav className="space-y-0.5 px-2 py-2">
-                        <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                          Chats
-                        </p>
-                        {isStartingConversation && (
-                          <div
-                            aria-current="page"
-                            className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
-                          >
-                            <MessageSquare className="h-4 w-4 shrink-0" />
-                            <span className="thinking-shimmer truncate text-muted-foreground">
-                              Starting Work Session...
-                            </span>
-                          </div>
-                        )}
-                        {recentConversations.length === 0 &&
-                        sortedFolders.length === 0 &&
-                        !isStartingConversation ? (
-                          <button
-                            type="button"
-                            className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
-                            onClick={handleNewChat}
-                          >
-                            <MessageSquare className="h-4 w-4 shrink-0" />
-                            <span className="truncate">New Work Session</span>
-                          </button>
-                        ) : (
-                          <RootConversationDropZone>
-                            {rootConversations.map((conversation) => (
-                              <DraggableConversationMenuItem
-                                key={conversation.id}
-                                conversation={conversation}
-                                folderId={null}
-                                active={visibleActiveConversationId === conversation.id}
-                                pinned={false}
-                                disableLayoutAnimation={isResizing}
-                                hoverSyncRevision={recentConversations.length}
-                                pointerPositionRef={pointerPositionRef}
-                                onLoad={() => void handleLoadConversation(conversation.id)}
-                                onTogglePin={() => togglePinnedAIConversation(conversation.id)}
-                                onDelete={() => void handleDeleteConversation(conversation.id)}
-                              />
-                            ))}
-                          </RootConversationDropZone>
-                        )}
-                      </nav>
-                      <DragOverlay dropAnimation={null}>
-                        {dragOverlayConversation ? (
-                          <ConversationDragOverlayItem
-                            conversation={dragOverlayConversation}
-                            width={Math.max(160, Math.min(sidebarWidth - 32, 360))}
-                          />
-                        ) : null}
-                      </DragOverlay>
-                    </DndContext>
-                  </>
-                )}
+                      {recentConversations.length === 0 &&
+                      sortedFolders.length === 0 &&
+                      !isStartingConversation ? (
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 overflow-hidden whitespace-nowrap bg-sidebar-accent px-3 py-2 text-left text-sm font-medium text-sidebar-accent-foreground"
+                          onClick={handleNewChat}
+                        >
+                          <MessageSquare className="h-4 w-4 shrink-0" />
+                          <span className="truncate">New Work Session</span>
+                        </button>
+                      ) : (
+                        <RootConversationDropZone>
+                          {rootConversations.map((conversation) => (
+                            <DraggableConversationMenuItem
+                              key={conversation.id}
+                              conversation={conversation}
+                              folderId={null}
+                              active={visibleActiveConversationId === conversation.id}
+                              pinned={false}
+                              disableLayoutAnimation={isResizing}
+                              hoverSyncRevision={recentConversations.length}
+                              pointerPositionRef={pointerPositionRef}
+                              onLoad={() => void handleLoadConversation(conversation.id)}
+                              onTogglePin={() => togglePinnedAIConversation(conversation.id)}
+                              onDelete={() => void handleDeleteConversation(conversation.id)}
+                            />
+                          ))}
+                        </RootConversationDropZone>
+                      )}
+                    </nav>
+                    <DragOverlay dropAnimation={null}>
+                      {dragOverlayConversation ? (
+                        <ConversationDragOverlayItem
+                          conversation={dragOverlayConversation}
+                          width={Math.max(160, Math.min(sidebarWidth - 32, 360))}
+                        />
+                      ) : null}
+                    </DragOverlay>
+                  </DndContext>
+                </div>
               </div>
             </div>
 

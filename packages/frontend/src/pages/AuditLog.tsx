@@ -4,6 +4,8 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -319,7 +321,7 @@ const columns: DataTableColumn<AuditLogEntry>[] = [
         <span className="flex min-w-0 items-center gap-2">
           <Avatar className="h-7 w-7">
             {!isSystem && <AvatarImage src={entry.userAvatarUrl ?? undefined} />}
-            <AvatarFallback className="text-[10px]">
+            <AvatarFallback className="text-xs">
               {isSystem ? <Settings className="h-3.5 w-3.5" /> : getAuditUserInitials(entry)}
             </AvatarFallback>
           </Avatar>
@@ -798,19 +800,14 @@ export function AuditLog({
         }
       >
         {!embedded && (
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <LiteModeBackButton />
-              <div>
-                <h1 className="text-2xl font-bold">Audit Log</h1>
-                <p className="text-sm text-muted-foreground">
-                  {total} entries
-                  {hiddenFilterCount ? ` · ${hiddenFilterCount} hidden by local view` : ""}
-                </p>
-              </div>
-            </div>
-            {auditActions}
-          </div>
+          <PageHeader
+            leading={<LiteModeBackButton />}
+            title="Audit Log"
+            description={`${total} entries${
+              hiddenFilterCount ? ` · ${hiddenFilterCount} hidden by local view` : ""
+            }`}
+            actions={auditActions}
+          />
         )}
 
         {/* Filters */}
@@ -864,6 +861,10 @@ export function AuditLog({
             horizontalScroll
             minWidth="1000px"
             emptyMessage="No audit log entries found"
+            // The first load holds the page; a filter without cached entries loads in place.
+            emptyContent={
+              isLoading ? <LoadingSpinner label="Loading audit log entries" /> : undefined
+            }
             footer={
               hasMore ? <div ref={sentinelRef} className="h-px" aria-hidden="true" /> : undefined
             }
@@ -979,8 +980,8 @@ export function AuditLog({
             <Button variant="outline" onClick={closeExportDialog} disabled={exporting}>
               Cancel
             </Button>
-            <Button onClick={() => void runExport()} disabled={exporting}>
-              {exporting ? "Exporting..." : `Download ${exportFormat.toUpperCase()}`}
+            <Button onClick={() => void runExport()} pending={exporting}>
+              Download {exportFormat.toUpperCase()}
             </Button>
           </DialogFooter>
         </DialogContent>

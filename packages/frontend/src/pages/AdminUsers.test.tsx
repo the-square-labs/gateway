@@ -3,10 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
+import { waitForReveal } from "@/test/reveal";
 import type { PermissionGroup, User } from "@/types";
 import { AdminUsers } from "./AdminUsers";
 
@@ -73,6 +75,49 @@ beforeEach(() => {
   useAuthStore.setState({ user: makeUser({ id: "actor", scopes: ["admin:users"] }) });
   vi.spyOn(api, "listUsers").mockResolvedValue([target]);
   vi.spyOn(api, "listGroups").mockResolvedValue(groups);
+});
+
+describe("AdminUsers loading", () => {
+  it("reveals its tab once users and the group picker options have loaded", async () => {
+    const groupsRequest = deferred<PermissionGroup[]>();
+    vi.mocked(api.listGroups).mockReturnValue(groupsRequest.promise);
+
+    render(
+      <MemoryRouter>
+        <PageTransition>
+          <AdminUsers embedded />
+        </PageTransition>
+      </MemoryRouter>
+    );
+
+    await waitFor(() => expect(api.listUsers).toHaveBeenCalled());
+    await act(async () => {});
+    expect(document.querySelector("[data-reveal-phase]")).not.toHaveAttribute(
+      "data-reveal-phase",
+      "revealed"
+    );
+
+    await act(async () => groupsRequest.resolve(groups));
+    await waitForReveal();
+    expect(screen.getByRole("combobox", { name: "Permission groups" })).toHaveValue("viewer");
+  });
+
+  it("shows cached users and groups at once", () => {
+    api.setCache("admin:users", [target]);
+    api.setCache("admin:groups", groups);
+    vi.mocked(api.listGroups).mockReturnValue(new Promise(() => {}));
+    vi.mocked(api.listUsers).mockReturnValue(new Promise(() => {}));
+
+    render(
+      <MemoryRouter>
+        <PageTransition>
+          <AdminUsers embedded />
+        </PageTransition>
+      </MemoryRouter>
+    );
+
+    expect(screen.getByRole("combobox", { name: "Permission groups" })).toHaveValue("viewer");
+  });
 });
 
 describe("AdminUsers group selection", () => {

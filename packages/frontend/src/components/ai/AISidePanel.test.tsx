@@ -552,6 +552,94 @@ describe("AISidePanel autoscroll", () => {
     expect(screen.queryByText("Recent chat 6")).not.toBeInTheDocument();
   });
 
+  it("keeps the empty panel hidden until the first recent list arrives, then shows it whole", async () => {
+    const conversation = {
+      id: "conversation-1",
+      title: "Earlier chat",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      lastUserMessageAt: new Date().toISOString(),
+      folderId: null,
+      messageCount: 2,
+      status: "active" as const,
+      blockReason: null,
+      activeRunStatus: null,
+    };
+    let finishFetch!: () => void;
+    const fetchRecentConversations = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFetch = () => {
+            useAIStore.setState({ recentConversations: [conversation] });
+            resolve();
+          };
+        })
+    );
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [],
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations,
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const emptyState = screen.getByText(/Ask questions, investigate issues/).parentElement;
+    expect(emptyState).toHaveClass("invisible");
+    expect(emptyState).toHaveAttribute("aria-busy", "true");
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    await act(async () => finishFetch());
+
+    expect(emptyState).not.toHaveClass("invisible");
+    expect(emptyState).toHaveClass("ai-chat-content-fade-in");
+    expect(emptyState).not.toHaveAttribute("aria-busy");
+    expect(screen.getByText("Earlier chat")).toBeInTheDocument();
+    expect(screen.getByText("Recent")).toHaveClass("text-xs", "tracking-wider");
+  });
+
+  it("shows the empty panel at once when a recent list is already cached", () => {
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [
+          {
+            id: "conversation-1",
+            title: "Cached chat",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastUserMessageAt: new Date().toISOString(),
+            folderId: null,
+            messageCount: 2,
+            status: "active",
+            blockReason: null,
+            activeRunStatus: null,
+          },
+        ],
+        isConnected: true,
+        isStreaming: false,
+        retryAfter: null,
+        connect: vi.fn().mockResolvedValue(true),
+        refreshProviderStatus: vi.fn().mockResolvedValue(undefined),
+        fetchRecentConversations: vi.fn(() => new Promise<void>(() => {})),
+      });
+      useUIStore.setState({ aiPanelOpen: true, aiLiteMode: false });
+    });
+
+    renderAISidePanel();
+
+    const emptyState = screen.getByText(/Ask questions, investigate issues/).parentElement;
+    expect(emptyState).not.toHaveClass("invisible");
+    expect(screen.getByText("Cached chat")).toBeInTheDocument();
+  });
+
   it("groups chat actions in a menu and starts a new chat from the plus button", async () => {
     const user = userEvent.setup();
     const clearMessages = vi.fn();
@@ -772,10 +860,11 @@ describe("AISidePanel autoscroll", () => {
 
     expect(screen.getByText("Viewing api")).toBeInTheDocument();
     const contextBanner = screen.getByText("Viewing api").parentElement;
-    expect(contextBanner).toHaveClass("w-full", "border-x-0", "border-b-0", "py-1");
+    expect(contextBanner).toHaveClass("w-full", "border-x-0", "border-b-0");
+    expect(contextBanner).not.toHaveClass("py-1");
     expect(
       screen.getByRole("button", { name: "Exclude this resource from the next request" })
-    ).toHaveClass("h-5", "w-5");
+    ).toHaveClass("h-7", "w-7");
     await user.click(
       screen.getByRole("button", { name: "Exclude this resource from the next request" })
     );
@@ -1533,6 +1622,82 @@ describe("AISidePanel autoscroll", () => {
 
     await user.click(screen.getByRole("button", { name: /User One/i }));
     expect(await screen.findByText("Administration")).toBeInTheDocument();
+  });
+
+  it("keeps lite sidebar chat sections hidden until the first chats and projects arrive", async () => {
+    let finishFolders!: () => void;
+    const fetchRecentConversations = vi.fn(async () => {
+      useAIStore.setState({
+        recentConversations: [
+          {
+            id: "conversation-1",
+            title: "Filed chat",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastUserMessageAt: new Date().toISOString(),
+            folderId: "folder-1",
+            messageCount: 3,
+            status: "active",
+            blockReason: null,
+            activeRunStatus: null,
+          },
+        ],
+      });
+    });
+    const fetchConversationFolders = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          finishFolders = () => {
+            useAIStore.setState({
+              conversationFolders: [
+                {
+                  id: "folder-1",
+                  name: "Migration",
+                  description: "",
+                  sortOrder: 0,
+                  createdAt: new Date().toISOString(),
+                  updatedAt: new Date().toISOString(),
+                },
+              ] as never,
+            });
+            resolve();
+          };
+        })
+    );
+    act(() => {
+      useAIStore.setState({
+        messages: [],
+        recentConversations: [],
+        conversationFolders: [],
+        isStartingConversation: false,
+        fetchRecentConversations,
+        fetchConversationFolders,
+      });
+      useUIStore.setState({ sidebarOpen: true });
+    });
+
+    renderWithRouter(
+      <TooltipProvider>
+        <AILiteSidebar />
+      </TooltipProvider>
+    );
+
+    const chatsHeading = screen.getByText("Chats");
+    const sections = chatsHeading.closest("[aria-busy]");
+    expect(sections).toHaveClass("invisible");
+    expect(screen.queryByText("Loading...")).not.toBeInTheDocument();
+
+    // The chat list alone is not enough: projects would still push it down.
+    await waitFor(() => expect(fetchRecentConversations).toHaveBeenCalled());
+    expect(sections).toHaveClass("invisible");
+
+    await act(async () => finishFolders());
+
+    expect(sections).not.toHaveClass("invisible");
+    expect(sections).toHaveClass("ai-chat-content-fade-in");
+    expect(sections).not.toHaveAttribute("aria-busy");
+    expect(screen.getByText("Migration")).toBeInTheDocument();
+    expect(screen.getByText("Projects")).toBeInTheDocument();
   });
 
   it("keeps the stop impersonating footer action available in expanded and collapsed lite modes", () => {

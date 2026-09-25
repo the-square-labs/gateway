@@ -2,9 +2,14 @@ import { Eye, FlaskConical, HelpCircle, Minus, Plus, Save, Settings2 } from "luc
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
+import { PanelShell } from "@/components/common/PanelShell";
+import { ReferenceTable, type ReferenceTableRow } from "@/components/common/ReferenceTable";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,40 +33,40 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { ProxyHostType, TemplateVariableDef } from "@/types";
 
-const CHEATSHEET_VARIABLES = [
-  { name: "{{id}}", description: "Host UUID" },
-  { name: "{{serverNames}}", description: "Space-separated domains" },
-  { name: "{{upstream}}", description: "scheme://host:port" },
-  { name: "{{forwardScheme}}", description: "http or https" },
-  { name: "{{forwardHost}}", description: "Upstream hostname" },
-  { name: "{{forwardPort}}", description: "Upstream port" },
-  { name: "{{sslEnabled}}", description: "Boolean" },
-  { name: "{{sslForced}}", description: "Boolean" },
-  { name: "{{http2Support}}", description: "Boolean" },
-  { name: "{{websocketSupport}}", description: "Boolean" },
-  { name: "{{sslCertPath}}", description: "SSL cert file path" },
-  { name: "{{sslKeyPath}}", description: "SSL key file path" },
-  { name: "{{sslChainPath}}", description: "SSL chain file path" },
-  { name: "{{redirectUrl}}", description: "Redirect target URL" },
-  { name: "{{redirectStatusCode}}", description: "301/302/307/308" },
-  { name: "{{cacheEnabled}}", description: "Boolean" },
-  { name: "{{cacheMaxAge}}", description: "Seconds" },
-  { name: "{{rateLimitEnabled}}", description: "Boolean" },
-  { name: "{{rateLimitRPS}}", description: "Requests/sec" },
-  { name: "{{rateLimitBurst}}", description: "Burst size" },
-  { name: "{{connectionsPerIp}}", description: "Concurrent connections per client IP" },
-  { name: "{{logPath}}", description: "Log file base path" },
-  { name: "{{advancedConfig}}", description: "Raw advanced config" },
-  { name: "{{#each customHeaders}}", description: "Iterate custom headers" },
-  { name: "{{#each customRewrites}}", description: "Iterate rewrite rules" },
-  { name: "{{#each accessList.ipRules}}", description: "Iterate access-list IP rules" },
+const CHEATSHEET_VARIABLES: ReferenceTableRow[] = [
+  { term: "{{id}}", description: "Host UUID" },
+  { term: "{{serverNames}}", description: "Space-separated domains" },
+  { term: "{{upstream}}", description: "scheme://host:port" },
+  { term: "{{forwardScheme}}", description: "http or https" },
+  { term: "{{forwardHost}}", description: "Upstream hostname" },
+  { term: "{{forwardPort}}", description: "Upstream port" },
+  { term: "{{sslEnabled}}", description: "Boolean" },
+  { term: "{{sslForced}}", description: "Boolean" },
+  { term: "{{http2Support}}", description: "Boolean" },
+  { term: "{{websocketSupport}}", description: "Boolean" },
+  { term: "{{sslCertPath}}", description: "SSL cert file path" },
+  { term: "{{sslKeyPath}}", description: "SSL key file path" },
+  { term: "{{sslChainPath}}", description: "SSL chain file path" },
+  { term: "{{redirectUrl}}", description: "Redirect target URL" },
+  { term: "{{redirectStatusCode}}", description: "301/302/307/308" },
+  { term: "{{cacheEnabled}}", description: "Boolean" },
+  { term: "{{cacheMaxAge}}", description: "Seconds" },
+  { term: "{{rateLimitEnabled}}", description: "Boolean" },
+  { term: "{{rateLimitRPS}}", description: "Requests/sec" },
+  { term: "{{rateLimitBurst}}", description: "Burst size" },
+  { term: "{{connectionsPerIp}}", description: "Concurrent connections per client IP" },
+  { term: "{{logPath}}", description: "Log file base path" },
+  { term: "{{advancedConfig}}", description: "Raw advanced config" },
+  { term: "{{#each customHeaders}}", description: "Iterate custom headers" },
+  { term: "{{#each customRewrites}}", description: "Iterate rewrite rules" },
+  { term: "{{#each accessList.ipRules}}", description: "Iterate access-list IP rules" },
 ];
 
-const CHEATSHEET_HELPERS = [
-  { usage: "{{#if sslEnabled}} ... {{/if}}", description: "Conditional rendering" },
-  { usage: "{{#unless sslForced}} ... {{/unless}}", description: "Inverse conditional rendering" },
-  { usage: "{{sanitize value}}", description: "Strip dangerous characters from values" },
-  { usage: "{{#if (eq a b)}} ... {{/if}}", description: "Equality comparison" },
+const CHEATSHEET_HELPERS: ReferenceTableRow[] = [
+  { term: "{{#if sslEnabled}} ... {{/if}}", description: "Conditional rendering" },
+  { term: "{{#unless sslForced}} ... {{/unless}}", description: "Inverse conditional rendering" },
+  { term: "{{sanitize value}}", description: "Strip dangerous characters from values" },
+  { term: "{{#if (eq a b)}} ... {{/if}}", description: "Equality comparison" },
 ];
 
 const BUILTIN_TEMPLATE_VARIABLES = new Set([
@@ -472,63 +477,68 @@ export function NginxTemplateEdit() {
   return (
     <PageTransition>
       <div className="h-full flex flex-col p-6 gap-4 overflow-hidden">
-        <div className="flex min-w-0 shrink-0 items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate(backHref)} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">
-                  {isNew ? "Create Config Template" : name}
-                </h1>
-                <Badge variant="secondary" size="inline" className="uppercase">
-                  {type}
+        <PageHeader
+          className="min-w-0 shrink-0"
+          leading={<PageBackButton onClick={() => navigate(backHref)} />}
+          title={isNew ? "Create Config Template" : name}
+          badges={
+            <>
+              <Badge variant="secondary" size="inline" className="uppercase">
+                {type}
+              </Badge>
+              {isBuiltin && (
+                <Badge variant="outline" size="inline">
+                  Built-in
                 </Badge>
-                {isBuiltin && (
-                  <Badge variant="outline" size="inline">
-                    Built-in
-                  </Badge>
-                )}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {isNew
-                  ? "Define a Handlebars nginx server block template"
-                  : isBuiltin
-                    ? "Built-in template (read-only)"
-                    : "Edit nginx config template"}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            {!isBuiltin && (
-              <Button variant="outline" onClick={() => setSettingsOpen(true)}>
-                <Settings2 className="h-4 w-4" />
-                Settings
-              </Button>
-            )}
-            <Button variant="outline" onClick={handleTest} disabled={!content.trim() || isTesting}>
-              <FlaskConical className="h-4 w-4" />
-              {isTesting ? "Testing..." : "Test"}
-            </Button>
-            {!isBuiltin && (
+              )}
+            </>
+          }
+          description={
+            isNew
+              ? "Define a Handlebars nginx server block template"
+              : isBuiltin
+                ? "Built-in template (read-only)"
+                : "Edit nginx config template"
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {!isBuiltin && (
+                <Button variant="outline" onClick={() => setSettingsOpen(true)}>
+                  <Settings2 className="h-4 w-4" />
+                  Settings
+                </Button>
+              )}
               <Button
                 variant="outline"
-                onClick={handleSave}
-                disabled={isSaving || !name.trim() || !content.trim()}
+                onClick={handleTest}
+                disabled={!content.trim()}
+                pending={isTesting}
               >
-                <Save className="h-4 w-4" />
-                {isSaving ? "Saving..." : "Save"}
+                {isTesting ? null : <FlaskConical className="h-4 w-4" />}
+                Test
               </Button>
-            )}
-            <Button variant="outline" onClick={handlePreview} disabled={!content.trim()}>
-              <Eye className="h-4 w-4" />
-              Preview
-            </Button>
-            <Button variant="outline" onClick={() => setCheatsheetOpen(true)}>
-              <HelpCircle className="h-4 w-4" />
-              Variables Cheatsheet
-            </Button>
-          </ResponsiveHeaderActions>
-        </div>
+              {!isBuiltin && (
+                <Button
+                  variant="outline"
+                  onClick={handleSave}
+                  disabled={!name.trim() || !content.trim()}
+                  pending={isSaving}
+                >
+                  {isSaving ? null : <Save className="h-4 w-4" />}
+                  Save
+                </Button>
+              )}
+              <Button variant="outline" onClick={handlePreview} disabled={!content.trim()}>
+                <Eye className="h-4 w-4" />
+                Preview
+              </Button>
+              <Button variant="outline" onClick={() => setCheatsheetOpen(true)}>
+                <HelpCircle className="h-4 w-4" />
+                Variables Cheatsheet
+              </Button>
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_10rem] shrink-0">
           <div className="space-y-1.5">
@@ -587,20 +597,15 @@ export function NginxTemplateEdit() {
             <DialogDescription>Preview the template rendered with sample data.</DialogDescription>
           </DialogHeader>
           <div className="flex-1 min-h-0 flex">
-            {isPreviewLoading ? (
-              <div className="flex-1 min-h-0 border border-border bg-card p-4 text-sm text-muted-foreground">
-                Rendering...
-              </div>
-            ) : (
-              <CodeEditor
-                value={previewResult}
-                onChange={() => {}}
-                readOnly
-                className="h-full border-border"
-                minHeight="0"
-                showGutterBorder={false}
-              />
-            )}
+            <ContentLoading loading={isPreviewLoading} />
+            <CodeEditor
+              value={previewResult}
+              onChange={() => {}}
+              readOnly
+              className="h-full border-border"
+              minHeight="0"
+              showGutterBorder={false}
+            />
           </div>
         </DialogContent>
       </Dialog>
@@ -614,48 +619,8 @@ export function NginxTemplateEdit() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Variables</h4>
-              <div className="border border-border rounded-md overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-muted/50 border-b border-border">
-                      <th className="text-left px-3 py-1.5 font-medium">Variable</th>
-                      <th className="text-left px-3 py-1.5 font-medium">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {CHEATSHEET_VARIABLES.map((item) => (
-                      <tr key={item.name} className="border-b border-border last:border-b-0">
-                        <td className="px-3 py-1.5 font-mono text-purple-400">{item.name}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">{item.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Helpers</h4>
-              <div className="border border-border rounded-md overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-muted/50 border-b border-border">
-                      <th className="text-left px-3 py-1.5 font-medium">Usage</th>
-                      <th className="text-left px-3 py-1.5 font-medium">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {CHEATSHEET_HELPERS.map((item) => (
-                      <tr key={item.usage} className="border-b border-border last:border-b-0">
-                        <td className="px-3 py-1.5 font-mono text-purple-400">{item.usage}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">{item.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <ReferenceTable title="Variables" termLabel="Variable" rows={CHEATSHEET_VARIABLES} />
+            <ReferenceTable title="Helpers" termLabel="Usage" rows={CHEATSHEET_HELPERS} />
           </div>
         </DialogContent>
       </Dialog>
@@ -669,20 +634,22 @@ export function NginxTemplateEdit() {
                 Configure custom variables that proxy hosts can fill when using this template.
               </DialogDescription>
             </DialogHeader>
-            <div className="border border-border bg-card">
-              <div className="flex items-center justify-between p-4 border-b border-border shrink-0">
-                <div>
-                  <h3 className="text-sm font-semibold">Custom Variables</h3>
-                  <p className="text-xs text-muted-foreground">
-                    Use them inside the template as{" "}
-                    <code className="bg-muted px-1">{"{{variableName}}"}</code>.
-                  </p>
-                </div>
+            <PanelShell
+              title="Custom Variables"
+              description={
+                <>
+                  Use them inside the template as{" "}
+                  <code className="bg-muted px-1">{"{{variableName}}"}</code>.
+                </>
+              }
+              actions={
                 <Button variant="outline" size="sm" onClick={addVariable}>
-                  <Plus className="h-3.5 w-3.5" />
+                  <Plus />
                   Add
                 </Button>
-              </div>
+              }
+              className="overflow-visible"
+            >
               <div className="overflow-x-hidden">
                 <div className="w-full min-w-0">
                   {variables.length > 0 && (
@@ -783,7 +750,8 @@ export function NginxTemplateEdit() {
                             <Button
                               variant="ghost"
                               size="icon"
-                              className="h-9 w-full rounded-none"
+                              className="w-full rounded-none"
+                              aria-label={`Remove variable ${index + 1}`}
                               onClick={() => removeVariable(index)}
                             >
                               <Minus className="h-3.5 w-3.5" />
@@ -792,14 +760,12 @@ export function NginxTemplateEdit() {
                         </div>
                       ))
                     ) : (
-                      <div className="px-4 py-8 text-sm text-muted-foreground">
-                        No custom variables configured.
-                      </div>
+                      <EmptyState message="No custom variables configured." embedded />
                     )}
                   </div>
                 </div>
               </div>
-            </div>
+            </PanelShell>
           </DialogContent>
         </Dialog>
       )}

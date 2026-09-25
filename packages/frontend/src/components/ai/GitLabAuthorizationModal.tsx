@@ -1,5 +1,6 @@
-import { ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -24,9 +25,13 @@ export function GitLabAuthorizationModal() {
   const [token, setToken] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // The challenge whose connector details have loaded (or failed to): the
+  // dialog opens once they are in, instead of growing when they arrive.
+  const [detailsChallengeId, setDetailsChallengeId] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const open = pendingCredentialChallenge !== null;
   const activeChallenge = useRetainedDialogValue(pendingCredentialChallenge, open);
+  const detailsLoading = open && detailsChallengeId !== pendingCredentialChallenge.id;
 
   useEffect(() => {
     const challenge = pendingCredentialChallenge;
@@ -57,6 +62,9 @@ export function GitLabAuthorizationModal() {
               : "Failed to load repository authorization details"
           );
         }
+      })
+      .finally(() => {
+        if (!cancelled) setDetailsChallengeId(challenge.id);
       });
     return () => {
       cancelled = true;
@@ -126,14 +134,11 @@ export function GitLabAuthorizationModal() {
         </DialogDescription>
 
         <div className="space-y-4">
-          <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
-            <div className="font-medium">
-              {metadata?.connectorName ?? `${providerLabel} connector`}
-            </div>
-            <div className="mt-1 break-all text-xs text-muted-foreground">
-              {metadata?.baseUrl ?? "Loading connector details…"}
-            </div>
-          </div>
+          <ConnectorDetails
+            loading={detailsLoading}
+            name={metadata?.connectorName ?? `${providerLabel} connector`}
+            baseUrl={metadata?.baseUrl}
+          />
 
           {provider !== "git" ? (
             <ol className="list-decimal space-y-2 pl-5 text-sm text-muted-foreground">
@@ -206,13 +211,34 @@ export function GitLabAuthorizationModal() {
           </Button>
           <Button
             onClick={() => void submit()}
-            disabled={loading || !token.trim() || (provider === "git" && !username.trim())}
+            pending={loading}
+            disabled={!token.trim() || (provider === "git" && !username.trim())}
           >
-            {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             {loading ? `Checking ${providerLabel} access…` : "Authorize"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** The connector the credential is for. Reports its load, so the dialog opens complete. */
+function ConnectorDetails({
+  loading,
+  name,
+  baseUrl,
+}: {
+  loading: boolean;
+  name: string;
+  baseUrl?: string;
+}) {
+  useContentLoading(loading);
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+      <div className="font-medium">{name}</div>
+      {baseUrl ? (
+        <div className="mt-1 break-all text-xs text-muted-foreground">{baseUrl}</div>
+      ) : null}
+    </div>
   );
 }

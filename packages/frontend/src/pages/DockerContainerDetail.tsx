@@ -21,6 +21,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
@@ -56,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -302,6 +304,12 @@ export function DockerContainerDetail({
     "id" | "repositoryFullPath" | "deployedCommitSha"
   > | null>(null);
   const [sourceIdentityRevision, setSourceIdentityRevision] = useState(0);
+  // First responses the header depends on; later refreshes update it in place.
+  const [sourceIdentityLoaded, setSourceIdentityLoaded] = useState(false);
+  const [healthCheckLoaded, setHealthCheckLoaded] = useState(false);
+  const [parentAvailabilityLoaded, setParentAvailabilityLoaded] = useState(false);
+  const [composeServiceImageLoaded, setComposeServiceImageLoaded] = useState(false);
+  const [composeOwnerLoadedFor, setComposeOwnerLoadedFor] = useState<string | null>(null);
   const [runtimeSecureLinkDown, setRuntimeSecureLinkDown] = useState(false);
   const [ownAvailabilityPolicy, setAvailabilityPolicy] = useState<DockerAvailabilityPolicy | null>(
     null
@@ -351,7 +359,10 @@ export function DockerContainerDetail({
             project.activeRevision?.normalizedModel.services[composeServiceName]?.image ?? null
           );
       })
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setComposeServiceImageLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -457,6 +468,7 @@ export function DockerContainerDetail({
     const runtimeContainerId = container?.Id ?? containerId;
     if (!nodeId || !routeContainerName || !runtimeContainerId) {
       setSourceIdentity(null);
+      setSourceIdentityLoaded(true);
       return;
     }
 
@@ -491,6 +503,9 @@ export function DockerContainerDetail({
       })
       .catch(() => {
         if (!cancelled) setSourceIdentity(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSourceIdentityLoaded(true);
       });
 
     return () => {
@@ -985,16 +1000,24 @@ export function DockerContainerDetail({
 
   const fetchHealthCheck = useCallback(async () => {
     if (!availabilityLoaded || availabilityManaged) {
-      if (availabilityManaged) setHealthCheck(null);
+      if (availabilityManaged) {
+        setHealthCheck(null);
+        setHealthCheckLoaded(true);
+      }
       return;
     }
-    if (!nodeId || !containerName) return;
+    if (!nodeId || !containerName) {
+      setHealthCheckLoaded(true);
+      return;
+    }
 
     try {
       const next = await api.getContainerHealthCheck(nodeId, containerName);
       setHealthCheck(next);
     } catch {
       setHealthCheck(null);
+    } finally {
+      setHealthCheckLoaded(true);
     }
   }, [availabilityLoaded, availabilityManaged, containerName, nodeId]);
 
@@ -1061,8 +1084,11 @@ export function DockerContainerDetail({
   }, [activeTab, authLoading, setActiveTab, visibleTabs]);
 
   // ── Action helpers ──
-  const doAction = async (fn: () => Promise<void>, successMsg: string) => {
+  // The header action whose request is running, so its button shows the pending state.
+  const [pendingHeaderAction, setPendingHeaderAction] = useState<string | null>(null);
+  const doAction = async (fn: () => Promise<void>, successMsg: string, actionLabel?: string) => {
     setActionLoading(true);
+    setPendingHeaderAction(actionLabel ?? null);
     try {
       await fn();
       toast.success(successMsg);
@@ -1074,6 +1100,7 @@ export function DockerContainerDetail({
       toast.error(err instanceof Error ? err.message : "Action failed");
     } finally {
       setActionLoading(false);
+      setPendingHeaderAction(null);
     }
   };
 
@@ -1089,6 +1116,7 @@ export function DockerContainerDetail({
     });
     if (!ok) return;
     setActionLoading(true);
+    setPendingHeaderAction("Remove");
     try {
       await api.removeContainer(nodeId!, containerId!, false);
       usePinnedContainersStore.getState().removePin(containerId!);
@@ -1098,12 +1126,14 @@ export function DockerContainerDetail({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to remove");
       setActionLoading(false);
+      setPendingHeaderAction(null);
     }
   };
 
   const handleDuplicate = async () => {
     const dName = `${containerDisplayName(container?.Name ?? "")}-copy`;
     setActionLoading(true);
+    setPendingHeaderAction("Duplicate");
     try {
       const result = await api.duplicateContainer(
         nodeId!,
@@ -1126,6 +1156,7 @@ export function DockerContainerDetail({
       toast.error(err instanceof Error ? err.message : "Failed to duplicate");
     } finally {
       setActionLoading(false);
+      setPendingHeaderAction(null);
     }
   };
 
@@ -1203,7 +1234,7 @@ export function DockerContainerDetail({
   };
 
   const handleRename = async () => {
-    if (!renameValue.trim()) return;
+    if (actionLoading || !renameValue.trim()) return;
     const nextName = renameValue.trim();
     setActionLoading(true);
     try {
@@ -1293,12 +1324,15 @@ export function DockerContainerDetail({
         : null;
     if (!resource) {
       setParentAvailabilityPolicy(null);
+      setParentAvailabilityLoaded(true);
       return;
     }
     try {
       setParentAvailabilityPolicy(await api.getDockerAvailability(resource));
     } catch {
       setParentAvailabilityPolicy(null);
+    } finally {
+      setParentAvailabilityLoaded(true);
     }
   }, [composeProjectId, parentDeploymentId]);
   useEffect(() => {
@@ -1372,6 +1406,9 @@ export function DockerContainerDetail({
       })
       .catch(() => {
         if (!cancelled) setComposeOwnerProjectId(null);
+      })
+      .finally(() => {
+        if (!cancelled) setComposeOwnerLoadedFor(composeProjectName);
       });
     return () => {
       cancelled = true;
@@ -1394,6 +1431,24 @@ export function DockerContainerDetail({
       } catch {}
     }
   }, [activeTab, container, containerId, isTabDisabled, isLoading, setActiveTab]);
+
+  const composeOwnerLookupPending =
+    composeManaged &&
+    !composeProjectId &&
+    !!composeProjectName &&
+    !!nodeId &&
+    composeOwnerLoadedFor !== composeProjectName;
+  const composeServiceImagePending =
+    !!parentAvailabilityPolicy?.composeProjectId &&
+    !!composeServiceName &&
+    !composeServiceImageLoaded;
+  const headerDataLoading =
+    !availabilityLoaded ||
+    (Boolean(composeProjectId || parentDeploymentId) && !parentAvailabilityLoaded) ||
+    !sourceIdentityLoaded ||
+    !healthCheckLoaded ||
+    composeOwnerLookupPending ||
+    composeServiceImagePending;
 
   if (isLoading) return <DetailPageSkeleton label="Loading container" tabs={6} />;
   if (!container)
@@ -1446,7 +1501,8 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(
                 () => api.startContainer(managementNodeId, managementContainerId),
-                "Container started"
+                "Container started",
+                "Start"
               ),
             disabled: actionDisabled,
             priority: HEADER_ACTION_PRIORITY.primary,
@@ -1461,7 +1517,8 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(
                 () => api.stopContainer(managementNodeId, managementContainerId),
-                "Container stopping"
+                "Container stopping",
+                "Stop"
               ),
             disabled: actionDisabled,
             priority: HEADER_ACTION_PRIORITY.primary,
@@ -1474,7 +1531,8 @@ export function DockerContainerDetail({
                   onClick: () =>
                     doAction(
                       () => api.restartContainer(managementNodeId, managementContainerId),
-                      "Container restarting"
+                      "Container restarting",
+                      "Restart"
                     ),
                   disabled: actionDisabled,
                   priority: HEADER_ACTION_PRIORITY.primary,
@@ -1531,7 +1589,8 @@ export function DockerContainerDetail({
             onClick: () =>
               doAction(
                 () => api.killContainer(managementNodeId, managementContainerId),
-                "Container killed"
+                "Container killed",
+                "Kill"
               ),
             disabled: unavailable || !lifecycleActions.canKill,
             destructive: true,
@@ -1565,72 +1624,75 @@ export function DockerContainerDetail({
           isTerminalTab ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
-        {/* Header */}
-        <div className="flex shrink-0 items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate(backTarget)} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{name}</h1>
-                <Badge
-                  variant={STATUS_BADGE[displayState] ?? "secondary"}
-                  size="inline"
-                  className="shrink-0"
-                >
-                  {displayState.replaceAll("_", " ")}
-                </Badge>
-                {secureLinkDown && (
-                  <>
-                    <Badge variant="destructive" size="inline" className="shrink-0">
-                      Unhealthy
-                    </Badge>
-                    <Badge variant="destructive" size="inline" className="shrink-0">
-                      Secure Link Down
-                    </Badge>
-                  </>
-                )}
-              </div>
-              {sourceIdentity ? (
-                <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-                  <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
-                  {sourceIdentity.deployedCommitSha ? (
-                    <>
-                      <span aria-hidden="true">&middot;</span>
-                      <span className="shrink-0 font-mono">
-                        {sourceIdentity.deployedCommitSha.slice(0, 10)}
-                      </span>
-                    </>
-                  ) : null}
-                </p>
-              ) : (
-                <p className="break-all text-sm text-muted-foreground">
-                  {formatDisplayImageRef(image)} &middot;{" "}
-                  {(container.Id ?? containerId ?? "").slice(0, 12)}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <ResponsiveHeaderActions actions={headerActions}>
-            {headerActions.map((headerAction) => (
-              <Button
-                key={headerAction.label}
-                variant="outline"
-                size={headerAction.label === "Pin" ? "icon" : "default"}
-                disabled={headerAction.disabled}
-                title={
-                  headerAction.disabled
-                    ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
-                    : undefined
-                }
-                onClick={headerAction.onClick}
+        {headerDataLoading && <Skeleton />}
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate(backTarget)} />}
+          title={name}
+          badges={
+            <>
+              <Badge
+                variant={STATUS_BADGE[displayState] ?? "secondary"}
+                size="inline"
+                className="shrink-0"
               >
-                {headerAction.icon}
-                {headerAction.label === "Pin" ? null : headerAction.label}
-              </Button>
-            ))}
-          </ResponsiveHeaderActions>
-        </div>
+                {displayState.replaceAll("_", " ")}
+              </Badge>
+              {secureLinkDown && (
+                <>
+                  <Badge variant="destructive" size="inline" className="shrink-0">
+                    Unhealthy
+                  </Badge>
+                  <Badge variant="destructive" size="inline" className="shrink-0">
+                    Secure Link Down
+                  </Badge>
+                </>
+              )}
+            </>
+          }
+          description={
+            sourceIdentity ? (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
+                {sourceIdentity.deployedCommitSha ? (
+                  <>
+                    <span aria-hidden="true">&middot;</span>
+                    <span className="shrink-0 font-mono">
+                      {sourceIdentity.deployedCommitSha.slice(0, 10)}
+                    </span>
+                  </>
+                ) : null}
+              </span>
+            ) : (
+              <span className="break-all">
+                {formatDisplayImageRef(image)} &middot;{" "}
+                {(container.Id ?? containerId ?? "").slice(0, 12)}
+              </span>
+            )
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerActions.map((headerAction) => (
+                <Button
+                  key={headerAction.label}
+                  variant="outline"
+                  size={headerAction.label === "Pin" ? "icon" : "default"}
+                  disabled={headerAction.disabled}
+                  pending={pendingHeaderAction === headerAction.label}
+                  title={
+                    headerAction.disabled
+                      ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
+                      : undefined
+                  }
+                  onClick={headerAction.onClick}
+                >
+                  {pendingHeaderAction === headerAction.label ? null : headerAction.icon}
+                  {headerAction.label === "Pin" ? null : headerAction.label}
+                </Button>
+              ))}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {buildRolloutReason && !composeManaged && (
           <div
@@ -1654,16 +1716,17 @@ export function DockerContainerDetail({
               </p>
             </div>
             {(composeProjectId || composeOwnerProjectId) && (
-              <button
-                type="button"
-                className="flex shrink-0 items-center gap-1 text-sm font-medium text-foreground hover:underline"
+              <Button
+                variant="outline"
+                size="sm"
+                className="shrink-0"
                 onClick={() =>
                   navigate(dockerComposeProjectRoute(composeProjectId || composeOwnerProjectId!))
                 }
               >
                 Open Compose project
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
+                <ArrowRight />
+              </Button>
             )}
           </div>
         )}
@@ -2077,8 +2140,8 @@ export function DockerContainerDetail({
             >
               Cancel
             </Button>
-            <Button onClick={() => void handleArchiveExport()} disabled={archiveExporting}>
-              {archiveExporting ? "Exporting..." : "Download .gwca"}
+            <Button onClick={() => void handleArchiveExport()} pending={archiveExporting}>
+              Download .gwca
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2105,7 +2168,8 @@ export function DockerContainerDetail({
             </Button>
             <Button
               onClick={handleRename}
-              disabled={actionLoading || !!effectiveTransition || !renameValue.trim()}
+              pending={actionLoading}
+              disabled={!!effectiveTransition || !renameValue.trim()}
             >
               Rename
             </Button>

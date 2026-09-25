@@ -28,9 +28,11 @@ import { AvatarCropDialog } from "@/components/common/AvatarCropDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import {
   allResourcePages,
@@ -55,7 +57,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -187,6 +188,7 @@ export function Profile() {
   const [proxyHostsList, setProxyHostsList] = useState<ProxyHost[]>([]);
   const [databasesList, setDatabasesList] = useState<DatabaseConnection[]>([]);
   const [loggingSchemasList, setLoggingSchemasList] = useState<LoggingSchema[]>([]);
+  const [resourceListsLoading, setResourceListsLoading] = useState(false);
   const [avatarUploading, setAvatarUploading] = useState(false);
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [inferenceHarnessDevOpen, setInferenceHarnessDevOpen] = useState(false);
@@ -227,44 +229,58 @@ export function Profile() {
     };
   }, [navigate]);
 
+  // Resource pickers of the token and OAuth dialogs; a dialog opened before
+  // they arrive waits for them instead of filling in while open.
   useEffect(() => {
     if (activeTab !== "authorizations") return;
+    let active = true;
+    setResourceListsLoading(true);
 
-    loadScopeResourceList("nodes:details", () =>
-      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
-    )
-      .then(setNodesList)
-      .catch((error) => {
-        setNodesList([]);
-        reportScopeLoadError("nodes", error);
-      });
-    loadScopeResourceList("proxy:view", () =>
-      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
-    )
-      .then(setProxyHostsList)
-      .catch((error) => {
-        setProxyHostsList([]);
-        reportScopeLoadError("routes", error);
-      });
-    loadScopeResourceList("databases:view", () =>
-      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
-    )
-      .then(setDatabasesList)
-      .catch((error) => {
-        setDatabasesList([]);
-        reportScopeLoadError("databases", error);
-      });
+    const loads: Promise<unknown>[] = [
+      loadScopeResourceList("nodes:details", () =>
+        allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      )
+        .then(setNodesList)
+        .catch((error) => {
+          setNodesList([]);
+          reportScopeLoadError("nodes", error);
+        }),
+      loadScopeResourceList("proxy:view", () =>
+        allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      )
+        .then(setProxyHostsList)
+        .catch((error) => {
+          setProxyHostsList([]);
+          reportScopeLoadError("routes", error);
+        }),
+      loadScopeResourceList("databases:view", () =>
+        allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      )
+        .then(setDatabasesList)
+        .catch((error) => {
+          setDatabasesList([]);
+          reportScopeLoadError("databases", error);
+        }),
+    ];
     if (
       scopeMatches(userScopes ?? [], "logs:schemas:view") ||
       (deriveAllowedResourceIdsByScope(userScopes ?? [])["logs:schemas:view"]?.length ?? 0) > 0
     ) {
-      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
-        .then(setLoggingSchemasList)
-        .catch((error) => {
-          setLoggingSchemasList([]);
-          reportScopeLoadError("logging schemas", error);
-        });
+      loads.push(
+        loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
+          .then(setLoggingSchemasList)
+          .catch((error) => {
+            setLoggingSchemasList([]);
+            reportScopeLoadError("logging schemas", error);
+          })
+      );
     }
+    void Promise.allSettled(loads).then(() => {
+      if (active) setResourceListsLoading(false);
+    });
+    return () => {
+      active = false;
+    };
   }, [activeTab, userScopes]);
 
   const handleToggleSystemCertificates = (checked: boolean) => {
@@ -331,13 +347,11 @@ export function Profile() {
   return (
     <PageTransition>
       <div className="h-full space-y-4 overflow-y-auto p-6">
-        <div className="flex items-center gap-3">
-          <LiteModeBackButton />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">Profile</h1>
-            <p className="text-sm text-muted-foreground">Personal settings and authorizations</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Profile"
+          description="Personal settings and authorizations"
+          leading={<LiteModeBackButton />}
+        />
 
         <Tabs value={activeTab} onValueChange={handleTabChange} className="flex flex-col">
           <TabsList className="shrink-0">
@@ -367,6 +381,7 @@ export function Profile() {
                 />
                 {user && (
                   <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center">
+                    {/* The avatar itself is the control; its overlay shows the action. */}
                     <button
                       type="button"
                       aria-label={user.avatarUrl ? "Remove avatar" : "Change avatar"}
@@ -443,6 +458,7 @@ export function Profile() {
                         Choose how the interface looks
                       </p>
                     </div>
+                    {/* Segmented theme switch, styled like the tab list. */}
                     <div className="flex w-fit shrink-0 gap-0 border border-border">
                       {(["light", "dark", "system"] as const).map((value) => (
                         <button
@@ -513,12 +529,14 @@ export function Profile() {
                 proxyHostsList={proxyHostsList}
                 databasesList={databasesList}
                 loggingSchemasList={loggingSchemasList}
+                resourceListsLoading={resourceListsLoading}
               />
               <OAuthApplicationsSection
                 nodesList={nodesList}
                 proxyHostsList={proxyHostsList}
                 databasesList={databasesList}
                 loggingSchemasList={loggingSchemasList}
+                resourceListsLoading={resourceListsLoading}
               />
               {canUseInference && <InferenceTokensSection canManage={canManageInferenceTokens} />}
               <BrowserSessionsPanel />
@@ -541,7 +559,10 @@ const SUPPORTED_AVATAR_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]
 function BrowserSessionsPanel() {
   const [sessions, setSessions] = useState<BrowserSession[]>([]);
   const [loading, setLoading] = useState(true);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [revokingOthers, setRevokingOthers] = useState(false);
   const hasOtherSessions = sessions.some((session) => !session.isCurrent);
+  useContentLoading(loading);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -559,22 +580,28 @@ function BrowserSessionsPanel() {
   }, [load]);
 
   const revoke = async (id: string) => {
+    setRevokingId(id);
     try {
       await api.revokeCurrentUserSession(id);
       setSessions((current) => current.filter((session) => session.id !== id));
       toast.success("Session revoked");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to revoke session");
+    } finally {
+      setRevokingId(null);
     }
   };
 
   const revokeOthers = async () => {
+    setRevokingOthers(true);
     try {
       const count = await api.revokeOtherCurrentUserSessions();
       setSessions((current) => current.filter((session) => session.isCurrent));
       toast.success(count === 1 ? "One other session revoked" : `${count} other sessions revoked`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to revoke sessions");
+    } finally {
+      setRevokingOthers(false);
     }
   };
 
@@ -585,16 +612,19 @@ function BrowserSessionsPanel() {
       icon={<MonitorSmartphone className="h-4 w-4" />}
       actions={
         hasOtherSessions ? (
-          <Button variant="outline" onClick={revokeOthers} disabled={loading}>
+          <Button
+            variant="outline"
+            onClick={revokeOthers}
+            pending={revokingOthers}
+            disabled={loading}
+          >
             Sign out other sessions
           </Button>
         ) : null
       }
     >
       <div className="divide-y divide-border">
-        {loading ? (
-          <SessionRowsSkeleton />
-        ) : sessions.length === 0 ? (
+        {loading ? null : sessions.length === 0 ? (
           <p className="px-4 py-3 text-sm text-muted-foreground">No active browser sessions</p>
         ) : (
           sessions.map((session) => (
@@ -624,11 +654,12 @@ function BrowserSessionsPanel() {
                 <Button
                   variant="outline"
                   size="icon"
+                  pending={revokingId === session.id}
                   onClick={() => revoke(session.id)}
                   aria-label={`Revoke session from ${session.userAgent ? sessionBrowserLabel(session.userAgent) : session.ipAddress || "unknown browser"}`}
                   title="Revoke session"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  {revokingId === session.id ? null : <Trash2 className="h-4 w-4" />}
                 </Button>
               )}
             </div>
@@ -636,28 +667,6 @@ function BrowserSessionsPanel() {
         )}
       </div>
     </PanelShell>
-  );
-}
-
-function SessionRowsSkeleton() {
-  return (
-    <div aria-label="Loading active sessions">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div
-          key={index}
-          className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
-        >
-          <div className="flex min-w-0 items-center gap-4">
-            <Skeleton className="h-10 w-10 shrink-0" />
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="h-3 w-64 max-w-[60vw]" />
-            </div>
-          </div>
-          <Skeleton className="h-9 w-9 shrink-0" />
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -734,8 +743,10 @@ function LocalAccountSecurityPanel() {
     Array<{ id: string; name: string; lastUsedAt: string | null; createdAt: string }>
   >([]);
   const [passkeysOpen, setPasskeysOpen] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
   const [passkeysSearch, setPasskeysSearch] = useState("");
   const [addingPasskey, setAddingPasskey] = useState(false);
+  const [removingPasskeyId, setRemovingPasskeyId] = useState<string | null>(null);
   const [totpSetupOpen, setTotpSetupOpen] = useState(false);
   const [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
   const [totpCode, setTotpCode] = useState("");
@@ -747,7 +758,8 @@ function LocalAccountSecurityPanel() {
   const [stepUpOpen, setStepUpOpen] = useState(false);
   const [stepUpCode, setStepUpCode] = useState("");
   const [stepUpUseRecoveryCode, setStepUpUseRecoveryCode] = useState(false);
-  const [stepUpBusy, setStepUpBusy] = useState(false);
+  // The step-up check in flight: an authenticator/recovery code or a passkey.
+  const [stepUpBusy, setStepUpBusy] = useState<"code" | "passkey" | null>(null);
   const totpCloseTimer = useRef<number | null>(null);
   const recoveryCodesCloseTimer = useRef<number | null>(null);
   const pendingRecoveryCodes = useRef<string[] | null>(null);
@@ -765,12 +777,15 @@ function LocalAccountSecurityPanel() {
       toast.error(
         error instanceof Error ? error.message : "Failed to load account security settings"
       );
+    } finally {
+      setStatusLoaded(true);
     }
   }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
+  useContentLoading(!statusLoaded);
 
   useEffect(
     () => () => {
@@ -849,32 +864,32 @@ function LocalAccountSecurityPanel() {
   };
 
   const verifyStepUpCode = async () => {
-    setStepUpBusy(true);
+    setStepUpBusy("code");
     try {
       await api.verifyCurrentUserStepUp(
         stepUpUseRecoveryCode ? { recoveryCode: stepUpCode.trim() } : { totpCode: stepUpCode }
       );
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Invalid authentication code");
-      setStepUpBusy(false);
+      setStepUpBusy(null);
       return;
     }
-    setStepUpBusy(false);
+    setStepUpBusy(null);
     await completeStepUp();
   };
 
   const verifyStepUpPasskey = async () => {
-    setStepUpBusy(true);
+    setStepUpBusy("passkey");
     try {
       const options = await api.beginCurrentUserStepUpPasskey();
       const response = await startAuthentication({ optionsJSON: options as never });
       await api.finishCurrentUserStepUpPasskey(options.challenge, response);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Passkey verification failed");
-      setStepUpBusy(false);
+      setStepUpBusy(null);
       return;
     }
-    setStepUpBusy(false);
+    setStepUpBusy(null);
     await completeStepUp();
   };
 
@@ -957,6 +972,7 @@ function LocalAccountSecurityPanel() {
   };
 
   const removePasskey = async (id: string) => {
+    setRemovingPasskeyId(id);
     try {
       await api.removeCurrentUserPasskey(id);
       await load();
@@ -967,6 +983,8 @@ function LocalAccountSecurityPanel() {
         return;
       }
       toast.error(error instanceof Error ? error.message : "Failed to remove passkey");
+    } finally {
+      setRemovingPasskeyId(null);
     }
   };
 
@@ -1048,11 +1066,12 @@ function LocalAccountSecurityPanel() {
                     <Button
                       variant="outline"
                       size="icon"
+                      pending={removingPasskeyId === passkey.id}
                       onClick={() => void removePasskey(passkey.id)}
                       aria-label={`Remove ${passkey.name}`}
                       title="Remove passkey"
                     >
-                      <Trash2 />
+                      {removingPasskeyId === passkey.id ? null : <Trash2 />}
                     </Button>
                   </div>
                 ))}
@@ -1060,8 +1079,8 @@ function LocalAccountSecurityPanel() {
             )}
           </div>
           <DialogFooter>
-            <Button onClick={() => void registerPasskey()} disabled={addingPasskey}>
-              {addingPasskey ? <Loader2 className="animate-spin" /> : <Plus />}
+            <Button onClick={() => void registerPasskey()} pending={addingPasskey}>
+              {addingPasskey ? null : <Plus />}
               Add passkey
             </Button>
           </DialogFooter>
@@ -1108,17 +1127,17 @@ function LocalAccountSecurityPanel() {
                 <Button
                   className="shrink-0"
                   onClick={() => void confirmTotp()}
-                  disabled={totpCode.length !== 6 || totpSaving}
+                  pending={totpSaving}
+                  disabled={totpCode.length !== 6}
                 >
-                  {totpSaving ? <Loader2 className="animate-spin" /> : <Check />}
+                  {totpSaving ? null : <Check />}
                   Activate TOTP
                 </Button>
               </div>
             </>
           ) : (
-            <div className="flex justify-center py-8 text-sm text-muted-foreground">
-              <Loader2 className="mr-2 animate-spin" /> Preparing secure setup…
-            </div>
+            // The setup secret is requested as the dialog opens; it opens with it.
+            <ReportLoading loading={totpSetupOpen} />
           )}
         </DialogContent>
       </Dialog>
@@ -1143,9 +1162,8 @@ function LocalAccountSecurityPanel() {
             <Button
               variant="destructive"
               onClick={() => void resetAndReconfigureTotp()}
-              disabled={totpResetting}
+              pending={totpResetting}
             >
-              {totpResetting && <Loader2 className="animate-spin" />}
               Reset &amp; reconfigure
             </Button>
           </DialogFooter>
@@ -1192,19 +1210,20 @@ function LocalAccountSecurityPanel() {
                 <Button
                   type="submit"
                   className="shrink-0"
+                  pending={stepUpBusy === "code"}
                   disabled={
-                    stepUpBusy ||
+                    stepUpBusy !== null ||
                     (stepUpUseRecoveryCode ? stepUpCode.trim().length < 6 : stepUpCode.length !== 6)
                   }
                 >
-                  {stepUpBusy ? <Loader2 className="animate-spin" /> : <Check />}
+                  {stepUpBusy === "code" ? null : <Check />}
                   Verify
                 </Button>
               </div>
               <Button
                 type="button"
                 variant="link"
-                className="h-auto self-start p-0 text-xs"
+                className="h-auto self-start p-0"
                 onClick={() => {
                   setStepUpUseRecoveryCode((current) => !current);
                   setStepUpCode("");
@@ -1218,9 +1237,10 @@ function LocalAccountSecurityPanel() {
             <Button
               variant="outline"
               onClick={() => void verifyStepUpPasskey()}
-              disabled={stepUpBusy}
+              pending={stepUpBusy === "passkey"}
+              disabled={stepUpBusy !== null}
             >
-              <KeyRound />
+              {stepUpBusy === "passkey" ? null : <KeyRound />}
               Use a passkey
             </Button>
           )}
@@ -1279,6 +1299,12 @@ function LocalAccountSecurityPanel() {
       </Dialog>
     </PanelShell>
   );
+}
+
+/** Reports a load to the enclosing page, tab or dialog while rendered inside it. */
+function ReportLoading({ loading }: { loading: boolean }) {
+  useContentLoading(loading);
+  return null;
 }
 
 function isStepUpRequired(error: unknown): boolean {

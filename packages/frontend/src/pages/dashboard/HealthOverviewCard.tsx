@@ -1,15 +1,14 @@
 import { Link } from "react-router-dom";
 import { PanelShell } from "@/components/common/PanelShell";
+import { proxyHealthTone } from "@/components/common/resource-status";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { proxyHostRoute } from "@/lib/resource-routes";
 import type { ProxyHost } from "@/types";
 
 interface HealthOverviewCardProps {
   healthHosts: ProxyHost[];
   hasScope: (scope: string) => boolean;
-  loading?: boolean;
 }
 
 function healthOverviewPriority(host: ProxyHost): number {
@@ -33,14 +32,9 @@ export function sortHealthOverviewHosts(hosts: ProxyHost[]): ProxyHost[] {
   });
 }
 
-export function HealthOverviewCard({
-  healthHosts,
-  hasScope,
-  loading = false,
-}: HealthOverviewCardProps) {
-  // Keep the panel's geometry while its permitted data resolves, then omit it
-  // entirely when there is nothing useful to show on the dashboard.
-  if (!hasScope("proxy:view") || (!loading && healthHosts.length === 0)) return null;
+export function HealthOverviewCard({ healthHosts, hasScope }: HealthOverviewCardProps) {
+  // Omit the panel entirely when there is nothing useful to show on the dashboard.
+  if (!hasScope("proxy:view") || healthHosts.length === 0) return null;
 
   return (
     <PanelShell
@@ -51,50 +45,30 @@ export function HealthOverviewCard({
         </Link>
       }
     >
-      {loading ? (
-        <div className="space-y-3 px-4 py-4" aria-busy="true">
-          {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-9 w-full" />
-          ))}
-        </div>
-      ) : healthHosts.length > 0 ? (
-        <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          {sortHealthOverviewHosts(healthHosts)
-            .slice(0, 6)
-            .map((host) => (
-              <Link
-                key={host.id}
-                to={proxyHostRoute(host.slug)}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition-colors"
+      <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
+        {sortHealthOverviewHosts(healthHosts)
+          .slice(0, 6)
+          .map((host) => (
+            <Link
+              key={host.id}
+              to={proxyHostRoute(host.slug)}
+              className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition-colors"
+            >
+              <span className="text-sm font-medium truncate flex-1">
+                {host.domainNames.join(", ")}
+              </span>
+              <ProxyUpstreamTarget host={host} size="inline" />
+              <Badge
+                variant={proxyHealthTone(host.effectiveHealthStatus ?? host.healthStatus)}
+                size="inline"
               >
-                <span className="text-sm font-medium truncate flex-1">
-                  {host.domainNames.join(", ")}
-                </span>
-                <ProxyUpstreamTarget host={host} size="inline" />
-                <Badge
-                  variant={
-                    (
-                      {
-                        online: "success",
-                        offline: "destructive",
-                        degraded: "warning",
-                        recovering: "warning",
-                        unknown: "secondary",
-                        disabled: "outline",
-                      } as const
-                    )[(host.effectiveHealthStatus ?? host.healthStatus) as string] || "secondary"
-                  }
-                  size="inline"
-                  className="uppercase"
-                >
-                  {(host.effectiveHealthStatus ?? host.healthStatus) === "online"
-                    ? "healthy"
-                    : (host.effectiveHealthStatus ?? host.healthStatus)}
-                </Badge>
-              </Link>
-            ))}
-        </div>
-      ) : null}
+                {(host.effectiveHealthStatus ?? host.healthStatus) === "online"
+                  ? "healthy"
+                  : (host.effectiveHealthStatus ?? host.healthStatus)}
+              </Badge>
+            </Link>
+          ))}
+      </div>
     </PanelShell>
   );
 }

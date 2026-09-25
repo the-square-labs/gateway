@@ -17,9 +17,11 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
   HEADER_ACTION_PRIORITY,
+  type ResponsiveHeaderAction,
   ResponsiveHeaderActions,
 } from "@/components/common/ResponsiveHeaderActions";
 import {
@@ -36,6 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -193,6 +196,9 @@ export function DockerDeploymentDetail({
   > | null>(null);
   const [sourceIdentityRevision, setSourceIdentityRevision] = useState(0);
   const [activeInspect, setActiveInspect] = useState<InspectData | null>(null);
+  // First answers the header depends on (state badge, lifecycle actions, source line).
+  const [activeInspectLoaded, setActiveInspectLoaded] = useState(false);
+  const [sourceIdentityLoaded, setSourceIdentityLoaded] = useState(false);
   const [runtimeSlotInspects, setRuntimeSlotInspects] = useState<
     Partial<Record<DeploymentSlotName, InspectData>>
   >({});
@@ -534,6 +540,7 @@ export function DockerDeploymentDetail({
     void sourceIdentityRevision;
     if (!nodeId || !deploymentId) {
       setSourceIdentity(null);
+      setSourceIdentityLoaded(true);
       return;
     }
     let cancelled = false;
@@ -553,6 +560,9 @@ export function DockerDeploymentDetail({
       })
       .catch(() => {
         if (!cancelled) setSourceIdentity(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSourceIdentityLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -631,11 +641,15 @@ export function DockerDeploymentDetail({
     // A refresh request version deliberately retriggers the same inspect target.
     void runtimeInspectRequest.version;
     if (availabilityManaged === null) return;
-    if (runtimeReplacing) return;
+    if (runtimeReplacing) {
+      setActiveInspectLoaded(true);
+      return;
+    }
     const targetNodeId = availabilityManaged ? runtimeNodeId : nodeId;
     const targetContainerId = availabilityManaged ? runtimeContainerId : activeContainerId;
     if (!targetNodeId || !targetContainerId) {
       setActiveInspect(null);
+      setActiveInspectLoaded(true);
       return;
     }
     let cancelled = false;
@@ -646,6 +660,9 @@ export function DockerDeploymentDetail({
       })
       .catch(() => {
         if (!cancelled) setActiveInspect(null);
+      })
+      .finally(() => {
+        if (!cancelled) setActiveInspectLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -988,6 +1005,9 @@ export function DockerDeploymentDetail({
     });
   };
 
+  const headerDataLoading =
+    availabilityManaged === null || !sourceIdentityLoaded || !activeInspectLoaded;
+
   if (loading && !deployment) return <DetailPageSkeleton label="Loading deployment" tabs={5} />;
 
   if (!deployment) return null;
@@ -998,7 +1018,7 @@ export function DockerDeploymentDetail({
     ? "GPU-attached deployments cannot be migrated in this version"
     : (buildRolloutReason ??
       (actionDisabled ? "Deployment is unavailable or changing state" : undefined));
-  const headerActions = [
+  const headerActions: Array<ResponsiveHeaderAction & { actionKey?: string }> = [
     {
       label: "View config",
       icon: <Code2 className="h-4 w-4" />,
@@ -1028,6 +1048,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Start",
+            actionKey: "start",
             icon: <Play className="h-4 w-4" />,
             onClick: () =>
               runAction("start", async () => {
@@ -1043,6 +1064,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Stop",
+            actionKey: "stop",
             icon: <Square className="h-4 w-4" />,
             onClick: () =>
               runAction("stop", async () => {
@@ -1054,6 +1076,7 @@ export function DockerDeploymentDetail({
           },
           {
             label: "Restart",
+            actionKey: "restart",
             icon: <RotateCcw className="h-4 w-4" />,
             onClick: () =>
               runAction("restart", async () => {
@@ -1069,6 +1092,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Rollback",
+            actionKey: "rollback",
             icon: <RotateCcw className="h-4 w-4" />,
             onClick: () =>
               runAction("rollback", async () => {
@@ -1084,6 +1108,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Stop draining slot",
+            actionKey: `stop-${drainingSlot.slot}`,
             icon: <Square className="h-4 w-4" />,
             onClick: () =>
               runAction(`stop-${drainingSlot.slot}`, async () => {
@@ -1098,6 +1123,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Kill",
+            actionKey: "kill",
             icon: <Skull className="h-4 w-4" />,
             onClick: () =>
               runAction("kill", async () => {
@@ -1115,6 +1141,7 @@ export function DockerDeploymentDetail({
       ? [
           {
             label: "Remove",
+            actionKey: "remove",
             icon: <Trash2 className="h-4 w-4" />,
             onClick: removeDeployment,
             disabled: actionDisabled,
@@ -1131,74 +1158,79 @@ export function DockerDeploymentDetail({
           isTerminalTab ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
-        <div className="flex shrink-0 items-center justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate(backTarget)} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{deployment.name}</h1>
-                {unavailable && !availabilityManaged ? (
-                  <Badge variant="secondary" size="inline" className="shrink-0">
-                    Unavailable
-                  </Badge>
-                ) : (
+        {headerDataLoading && <Skeleton />}
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate(backTarget)} />}
+          title={deployment.name}
+          badges={
+            unavailable && !availabilityManaged ? (
+              <Badge variant="secondary" size="inline" className="shrink-0">
+                Unavailable
+              </Badge>
+            ) : (
+              <>
+                <Badge
+                  variant={statusVariant(logicalServiceState)}
+                  size="inline"
+                  className="shrink-0"
+                >
+                  {String(logicalServiceState).replaceAll("_", " ")}
+                </Badge>
+                <Badge variant="outline" size="inline" className="shrink-0">
+                  blue/green
+                </Badge>
+              </>
+            )
+          }
+          description={
+            sourceIdentity ? (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
+                {sourceIdentity.deployedCommitSha ? (
                   <>
-                    <Badge
-                      variant={statusVariant(logicalServiceState)}
-                      size="inline"
-                      className="shrink-0"
-                    >
-                      {String(logicalServiceState).replaceAll("_", " ")}
-                    </Badge>
-                    <Badge variant="outline" size="inline" className="shrink-0">
-                      blue/green
-                    </Badge>
+                    <span aria-hidden="true">&middot;</span>
+                    <span className="shrink-0 font-mono">
+                      {sourceIdentity.deployedCommitSha.slice(0, 10)}
+                    </span>
                   </>
-                )}
-              </div>
-              {sourceIdentity ? (
-                <p className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
-                  <span className="truncate">{sourceIdentity.repositoryFullPath}</span>
-                  {sourceIdentity.deployedCommitSha ? (
-                    <>
-                      <span aria-hidden="true">&middot;</span>
-                      <span className="shrink-0 font-mono">
-                        {sourceIdentity.deployedCommitSha.slice(0, 10)}
-                      </span>
-                    </>
-                  ) : null}
-                  <span className="shrink-0">&middot; active {deployment.activeSlot}</span>
-                </p>
-              ) : (
-                <p className="break-all text-sm text-muted-foreground">
-                  {displayImage}
-                  {" \u00b7 active "}
-                  {deployment.activeSlot}
-                </p>
-              )}
-            </div>
-          </div>
-
-          <ResponsiveHeaderActions actions={headerActions}>
-            {headerActions.map((headerAction) => (
-              <Button
-                key={headerAction.label}
-                variant="outline"
-                size={headerAction.label === "Pin" ? "icon" : "default"}
-                disabled={headerAction.disabled}
-                title={
-                  headerAction.disabled
-                    ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
-                    : undefined
-                }
-                onClick={headerAction.onClick}
-              >
-                {headerAction.icon}
-                {headerAction.label === "Pin" ? null : headerAction.label}
-              </Button>
-            ))}
-          </ResponsiveHeaderActions>
-        </div>
+                ) : null}
+                <span className="shrink-0">&middot; active {deployment.activeSlot}</span>
+              </span>
+            ) : (
+              <span className="break-all">
+                {displayImage}
+                {" \u00b7 active "}
+                {deployment.activeSlot}
+              </span>
+            )
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerActions.map((headerAction) => {
+                const pending = !!headerAction.actionKey && action === headerAction.actionKey;
+                return (
+                  <Button
+                    key={headerAction.label}
+                    variant="outline"
+                    size={headerAction.label === "Pin" ? "icon" : "default"}
+                    disabled={headerAction.disabled}
+                    pending={pending}
+                    title={
+                      headerAction.disabled
+                        ? (headerAction.disabledReason ?? buildRolloutReason ?? undefined)
+                        : undefined
+                    }
+                    onClick={headerAction.onClick}
+                  >
+                    {pending ? null : headerAction.icon}
+                    {headerAction.label === "Pin" ? null : headerAction.label}
+                  </Button>
+                );
+              })}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {deployment.healthCheck?.enabled && (
           <HealthBars

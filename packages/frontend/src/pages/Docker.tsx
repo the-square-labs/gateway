@@ -15,6 +15,7 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
@@ -548,29 +549,26 @@ export function Docker() {
         }
       >
         {/* Header */}
-        <div className="flex shrink-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <LiteModeBackButton />
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold">Docker</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage containers, images, volumes, networks, and Compose projects
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={headerActions.map((action) => ({
-              ...action,
-              disabled: nodeActionsDisabled || ("disabled" in action && action.disabled),
-            }))}
-          >
-            <RefreshButton
-              onClick={handleRefresh}
-              disabled={nodeActionsDisabled || activeTabLoading}
-            />
-            {renderActions()}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="Docker"
+          description="Manage containers, images, volumes, networks, and Compose projects"
+          actions={
+            <ResponsiveHeaderActions
+              actions={headerActions.map((action) => ({
+                ...action,
+                disabled: nodeActionsDisabled || ("disabled" in action && action.disabled),
+              }))}
+            >
+              <RefreshButton
+                onClick={handleRefresh}
+                disabled={nodeActionsDisabled || activeTabLoading}
+              />
+              {renderActions()}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {/* Tabs */}
         <Tabs

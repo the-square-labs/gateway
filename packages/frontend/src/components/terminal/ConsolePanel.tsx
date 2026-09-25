@@ -37,12 +37,12 @@ export function ConsolePanel({
         <>
           <Button
             variant="ghost"
-            size="icon"
-            className="h-8 w-8"
+            size="icon-sm"
             onClick={openPopout}
             title="Pop out"
+            aria-label="Pop out console"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ExternalLink />
           </Button>
           {headerActions}
         </>

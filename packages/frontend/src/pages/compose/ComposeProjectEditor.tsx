@@ -1,10 +1,11 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, Loader2, Save } from "lucide-react";
+import { CheckCircle2, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -100,6 +101,10 @@ export function ComposeProjectEditor({
     inputSignature: string;
   } | null>(null);
   const [loading, setLoading] = useState(!!projectId);
+  const [nodesLoaded, setNodesLoaded] = useState(false);
+  // Existing projects keep their folder; only a new project lists destination folders.
+  const [foldersLoaded, setFoldersLoaded] = useState(!!projectId);
+  useContentLoading(loading || !nodesLoaded || !foldersLoaded);
   const [validating, setValidating] = useState(false);
   const [saving, setSaving] = useState(false);
   const adoption =
@@ -127,6 +132,9 @@ export function ComposeProjectEditor({
       })
       .catch(() => {
         if (!cancelled) setDestinationFolders([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFoldersLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -154,7 +162,8 @@ export function ComposeProjectEditor({
           setNodeId(available[0].id);
         }
       })
-      .catch(() => toast.error("Failed to load Docker nodes"));
+      .catch(() => toast.error("Failed to load Docker nodes"))
+      .finally(() => setNodesLoaded(true));
   }, [hasScopedAccess, nodeId, projectId, user?.scopes]);
 
   useEffect(() => {
@@ -341,12 +350,8 @@ export function ComposeProjectEditor({
     }
   };
 
-  if (loading)
-    return (
-      <div className="flex h-full items-center justify-center">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-      </div>
-    );
+  // The enclosing dialog shows its loader until the project is loaded.
+  if (loading) return null;
 
   if (compactRevision && editing) {
     return (
@@ -368,21 +373,14 @@ export function ComposeProjectEditor({
           <Button
             variant="outline"
             onClick={() => void validate().catch((error) => toast.error(error.message))}
-            disabled={validating || saving}
+            pending={validating}
+            disabled={saving}
           >
-            {validating ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <CheckCircle2 className="mr-1 h-4 w-4" />
-            )}
+            {!validating && <CheckCircle2 className="mr-1 h-4 w-4" />}
             Validate
           </Button>
-          <Button onClick={() => void save()} disabled={validating || saving || !canSubmit}>
-            {saving ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="mr-1 h-4 w-4" />
-            )}
+          <Button onClick={() => void save()} pending={saving} disabled={validating || !canSubmit}>
+            {!saving && <Save className="mr-1 h-4 w-4" />}
             Apply
           </Button>
         </DialogFooter>
@@ -561,21 +559,14 @@ export function ComposeProjectEditor({
           <Button
             variant="outline"
             onClick={() => void validate().catch((error) => toast.error(error.message))}
-            disabled={validating || saving || repositoryCreation}
+            pending={validating}
+            disabled={saving || repositoryCreation}
           >
-            {validating ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <CheckCircle2 className="mr-1 h-4 w-4" />
-            )}
+            {!validating && <CheckCircle2 className="mr-1 h-4 w-4" />}
             Validate
           </Button>
-          <Button onClick={() => void save()} disabled={validating || saving || !canSubmit}>
-            {saving ? (
-              <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="mr-1 h-4 w-4" />
-            )}
+          <Button onClick={() => void save()} pending={saving} disabled={validating || !canSubmit}>
+            {!saving && <Save className="mr-1 h-4 w-4" />}
             {repositoryCreation
               ? "Create and build"
               : adoption

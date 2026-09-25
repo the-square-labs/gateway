@@ -173,7 +173,7 @@ export function PortMappingsSection({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                    className="shrink-0 rounded-none border-l border-border"
                     onClick={() => removePort(i)}
                   >
                     <Minus className="h-3.5 w-3.5" />

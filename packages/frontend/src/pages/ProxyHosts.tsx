@@ -7,6 +7,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -49,6 +50,7 @@ import { useAuthStore } from "@/stores/auth";
 import { useFolderStore } from "@/stores/folders";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { FolderTreeNode, HealthStatus, ProxyHost, ProxyHostType } from "@/types";
+import { HEALTH_BADGE, HEALTH_LABEL, TYPE_BADGE } from "./proxy-detail/helpers";
 
 const typeOptions: { value: ProxyHostType | "all"; label: string }[] = [
   { value: "all", label: "All types" },
@@ -73,16 +75,7 @@ function pruneEmptyFolders<T extends { children: T[]; hosts: Array<unknown> }>(f
 }
 
 function TypeBadge({ type }: { type: ProxyHostType }) {
-  switch (type) {
-    case "proxy":
-      return <Badge variant="secondary">PROXY</Badge>;
-    case "redirect":
-      return <Badge variant="warning">REDIRECT</Badge>;
-    case "404":
-      return <Badge variant="destructive">404</Badge>;
-    default:
-      return <Badge variant="secondary">{type}</Badge>;
-  }
+  return <Badge variant={TYPE_BADGE[type] ?? "secondary"}>{type}</Badge>;
 }
 
 export function ProxyHosts({
@@ -492,30 +485,8 @@ export function ProxyHosts({
           ? "disabled"
           : host.effectiveHealthStatus || host.healthStatus;
         return (
-          <Badge
-            variant={
-              (
-                {
-                  online: "success",
-                  recovering: "warning",
-                  offline: "destructive",
-                  degraded: "destructive",
-                  unknown: "secondary",
-                  disabled: "secondary",
-                } as Record<string, "success" | "warning" | "destructive" | "secondary">
-              )[status] || "secondary"
-            }
-          >
-            {(
-              {
-                online: "Healthy",
-                recovering: "Recovering",
-                offline: "Offline",
-                degraded: "Degraded",
-                unknown: "Unknown",
-                disabled: "Disabled",
-              } as Record<string, string>
-            )[status] || status}
+          <Badge variant={HEALTH_BADGE[status] ?? "secondary"}>
+            {HEALTH_LABEL[status] ?? status}
           </Badge>
         );
       },
@@ -530,23 +501,19 @@ export function ProxyHosts({
           <div onClick={(e) => e.stopPropagation()}>
             {host.isSystem || publicRouteLocked ? (
               <span
-                className="inline-flex h-5 w-9 cursor-not-allowed items-center border border-border bg-primary opacity-50"
+                className="inline-flex"
                 title={
                   publicRouteLocked ? "The Gateway public route must remain enabled" : undefined
                 }
               >
-                <span className="inline-block h-4 w-4 translate-x-4 bg-background" />
+                <Switch checked onChange={() => undefined} disabled />
               </span>
             ) : (
-              <div
-                className={togglingIds.has(host.id) ? "pointer-events-none opacity-50" : undefined}
-              >
-                <Switch
-                  checked={host.enabled}
-                  onChange={(v) => handleToggle(host.id, !v)}
-                  disabled={!canEditHost(host)}
-                />
-              </div>
+              <Switch
+                checked={host.enabled}
+                onChange={(v) => handleToggle(host.id, !v)}
+                disabled={!canEditHost(host) || togglingIds.has(host.id)}
+              />
             )}
           </div>
         );
@@ -564,7 +531,7 @@ export function ProxyHosts({
                 <div onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <Button variant="ghost" size="icon-sm" aria-label="Route actions">
                         <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
@@ -604,62 +571,57 @@ export function ProxyHosts({
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto px-6 pt-6 pb-3 space-y-4">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Routes</h1>
-              <p className="text-sm text-muted-foreground">
-                Route incoming domain traffic to services
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canManageFolders
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: () => {
-                        setCreateFolderParentId(null);
-                        setCreateFolderOpen(true);
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Routes"
+          description="Route incoming domain traffic to services"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canManageFolders
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: () => {
+                          setCreateFolderParentId(null);
+                          setCreateFolderOpen(true);
+                        },
                       },
-                    },
-                  ]
-                : []),
-              ...(canCreateProxyHost
-                ? [
-                    {
-                      label: "Add Route",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => void openCreateProxyHost(),
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canManageFolders && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setCreateFolderParentId(null);
-                  setCreateFolderOpen(true);
-                }}
-              >
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {canCreateProxyHost && (
-              <Button onClick={() => void openCreateProxyHost()} disabled={checkingCreateNodes}>
-                <Plus className="h-4 w-4" />
-                Add Route
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+                    ]
+                  : []),
+                ...(canCreateProxyHost
+                  ? [
+                      {
+                        label: "Add Route",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => void openCreateProxyHost(),
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canManageFolders && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setCreateFolderParentId(null);
+                    setCreateFolderOpen(true);
+                  }}
+                >
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canCreateProxyHost && (
+                <Button onClick={() => void openCreateProxyHost()} pending={checkingCreateNodes}>
+                  {checkingCreateNodes ? null : <Plus className="h-4 w-4" />}
+                  Add Route
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <ResourceListForm<FolderTreeNode, ProxyHost>
           columns={columns}

@@ -1,5 +1,5 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -96,6 +96,7 @@ export function DomainCertificateFolderDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-1.5">
+          <ContentLoading loading={foldersLoading} />
           <label className="text-sm font-medium">Certificate folder</label>
           <Select
             value={folderId || (choices.allowRoot ? ROOT_FOLDER_VALUE : "")}
@@ -103,9 +104,7 @@ export function DomainCertificateFolderDialog({
             disabled={foldersLoading || isIssuing}
           >
             <SelectTrigger aria-label="Certificate folder" aria-busy={foldersLoading}>
-              <SelectValue
-                placeholder={foldersLoading ? "Loading folders..." : "Select a folder"}
-              />
+              <SelectValue placeholder="Select a folder" />
             </SelectTrigger>
             <SelectContent>
               {choices.allowRoot && <SelectItem value={ROOT_FOLDER_VALUE}>No folder</SelectItem>}
@@ -126,8 +125,7 @@ export function DomainCertificateFolderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isIssuing}>
             Cancel
           </Button>
-          <Button onClick={() => void issue()} disabled={!canIssue}>
-            {isIssuing && <Loader2 className="h-4 w-4 animate-spin" />}
+          <Button onClick={() => void issue()} disabled={!canIssue} pending={isIssuing}>
             Issue
           </Button>
         </DialogFooter>

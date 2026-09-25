@@ -1,4 +1,4 @@
-import { Camera, FolderPlus, Loader2, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
+import { Camera, FolderPlus, RefreshCw, RotateCcw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -856,8 +856,12 @@ export function NodeSnapshotsTab({
             <Button variant="outline" disabled={busy} onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button disabled={!canSubmitSnapshot} onClick={() => void run("snapshot_create")}>
-              {busy && <Loader2 className="animate-spin" />}Create snapshot
+            <Button
+              pending={busy}
+              disabled={!canSubmitSnapshot}
+              onClick={() => void run("snapshot_create")}
+            >
+              Create snapshot
             </Button>
           </DialogFooter>
         </DialogContent>

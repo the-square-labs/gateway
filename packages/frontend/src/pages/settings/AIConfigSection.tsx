@@ -1,10 +1,10 @@
 import { Archive, Bot, Container, Cpu, Download, Eye, Gauge, Server, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { AIToolAccessModal } from "@/components/ai/AIToolAccessModal";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -129,7 +128,7 @@ function SandboxStatusBadge({ status }: { status?: AISandboxStatus | null }) {
 
 function SandboxJobsPanel() {
   const [jobs, setJobs] = useState<AISandboxJob[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [killingId, setKillingId] = useState<string | null>(null);
   const {
     open: outputOpen,
@@ -260,6 +259,7 @@ function SandboxJobsPanel() {
             <Button
               variant="ghost"
               size="icon"
+              aria-label="View output"
               onClick={(event) => {
                 event.stopPropagation();
                 viewOutput(job);
@@ -272,13 +272,14 @@ function SandboxJobsPanel() {
             <Button
               variant="ghost"
               size="icon"
+              aria-label="Kill job"
               onClick={(event) => {
                 event.stopPropagation();
                 killJob(job);
               }}
-              disabled={killingId === job.id}
+              pending={killingId === job.id}
             >
-              <Trash2 className="h-4 w-4" />
+              {killingId === job.id ? null : <Trash2 className="h-4 w-4" />}
             </Button>
           ) : null}
         </div>
@@ -308,19 +309,36 @@ function SandboxJobsPanel() {
           <DialogHeader>
             <DialogTitle>Sandbox Output</DialogTitle>
           </DialogHeader>
-          <div className="border border-border">
-            <div className="border-b border-border px-4 py-3">
-              <p className="truncate font-mono text-xs text-muted-foreground">
-                {outputJob?.containerId ?? outputJob?.id}
-              </p>
-            </div>
-            <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap px-4 py-3 text-xs">
-              {outputLoading ? "Loading..." : outputText}
-            </pre>
-          </div>
+          <SandboxOutputBody
+            loading={outputLoading}
+            jobLabel={outputJob?.containerId ?? outputJob?.id}
+            output={outputText}
+          />
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function SandboxOutputBody({
+  loading,
+  jobLabel,
+  output,
+}: {
+  loading: boolean;
+  jobLabel: string | undefined;
+  output: string;
+}) {
+  useContentLoading(loading);
+  return (
+    <div className="border border-border">
+      <div className="border-b border-border px-4 py-3">
+        <p className="truncate font-mono text-xs text-muted-foreground">{jobLabel}</p>
+      </div>
+      <pre className="max-h-[24rem] overflow-auto whitespace-pre-wrap px-4 py-3 text-xs">
+        {output}
+      </pre>
+    </div>
   );
 }
 
@@ -341,9 +359,15 @@ function openArtifactPreview(artifact: AISandboxArtifact) {
   );
 }
 
+/** The first page of the artifacts dialog holds it; later pages load in place. */
+function AllArtifactsBody({ loading, children }: { loading: boolean; children: ReactNode }) {
+  useContentLoading(loading);
+  return <>{children}</>;
+}
+
 function SandboxArtifactsPanel() {
   const [artifacts, setArtifacts] = useState<AISandboxArtifact[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [allOpen, setAllOpen] = useState(false);
   const [allArtifacts, setAllArtifacts] = useState<AISandboxArtifact[]>([]);
@@ -536,10 +560,10 @@ function SandboxArtifactsPanel() {
               event.stopPropagation();
               deleteArtifact(artifact);
             }}
-            disabled={deletingId === artifact.id}
+            pending={deletingId === artifact.id}
             aria-label={`Delete ${artifact.filename}`}
           >
-            <Trash2 className="h-4 w-4" />
+            {deletingId === artifact.id ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       ),
@@ -630,10 +654,10 @@ function SandboxArtifactsPanel() {
               event.stopPropagation();
               void deleteArtifact(artifact);
             }}
-            disabled={deletingId === artifact.id}
+            pending={deletingId === artifact.id}
             aria-label={`Delete ${artifact.filename}`}
           >
-            <Trash2 className="h-4 w-4" />
+            {deletingId === artifact.id ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       ),
@@ -652,11 +676,7 @@ function SandboxArtifactsPanel() {
         icon={<Archive className="h-4 w-4" />}
         actions={
           <div className="flex items-center gap-3">
-            <Button
-              variant="ghost"
-              className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-              onClick={openAll}
-            >
+            <Button variant="ghost" onClick={openAll}>
               View all
             </Button>
             <RefreshButton minDurationMs={1400} onClick={() => loadArtifacts({ silent: true })} />
@@ -682,9 +702,7 @@ function SandboxArtifactsPanel() {
               All retained assistant sandbox files. Scroll to load older artifacts.
             </DialogDescription>
           </DialogHeader>
-          {allLoading && allArtifacts.length === 0 ? (
-            <LoadingSpinner className="min-h-48" label="Loading stored artifacts" />
-          ) : (
+          <AllArtifactsBody loading={allLoading && allArtifacts.length === 0}>
             <div
               className="max-h-[min(65dvh,40rem)]"
               style={modalTableHeight ? { height: modalTableHeight } : undefined}
@@ -715,7 +733,7 @@ function SandboxArtifactsPanel() {
                 }
               />
             </div>
-          )}
+          </AllArtifactsBody>
         </DialogContent>
       </Dialog>
     </>
@@ -733,7 +751,10 @@ export function AIConfigSection() {
   const [aiWebSearchKey, setAiWebSearchKey] = useState("");
   const [aiToolsModalOpen, setAiToolsModalOpen] = useState(false);
   const [sandboxStatus, setSandboxStatus] = useState<AISandboxStatus | null>(null);
-  const [aiSaving, setAiSaving] = useState(false);
+  const [sandboxStatusLoaded, setSandboxStatusLoaded] = useState(false);
+  // The panel whose save is running; every save stays disabled meanwhile.
+  const [aiSavingSection, setAiSavingSection] = useState<string | null>(null);
+  const aiSaving = aiSavingSection !== null;
   const [aiSavedConfig, setAiSavedConfig] = useState<AIConfigState | null>(() => {
     const cached = api.getCached<AIConfigState>("settings:ai-config");
     return cached ? normalizeAIConfigState(cached) : null;
@@ -813,11 +834,13 @@ export function AIConfigSection() {
       setSandboxStatus(await api.getAISandboxStatus());
     } catch {
       setSandboxStatus(null);
+    } finally {
+      setSandboxStatusLoaded(true);
     }
   }, []);
 
-  const updateAIConfig = async (partial: Record<string, unknown>) => {
-    setAiSaving(true);
+  const updateAIConfig = async (partial: Record<string, unknown>, section: string) => {
+    setAiSavingSection(section);
     try {
       const updated = normalizeAIConfigState(
         (await api.updateAIConfig(partial)) as unknown as AIConfigState
@@ -837,7 +860,7 @@ export function AIConfigSection() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update AI settings");
     } finally {
-      setAiSaving(false);
+      setAiSavingSection(null);
     }
   };
 
@@ -851,7 +874,7 @@ export function AIConfigSection() {
       webSearchBaseUrl: aiConfig.webSearchBaseUrl,
     };
     if (aiWebSearchKey) updates.webSearchApiKey = aiWebSearchKey;
-    await updateAIConfig(updates);
+    await updateAIConfig(updates, "assistant");
     setAiWebSearchKey("");
   };
 
@@ -877,28 +900,34 @@ export function AIConfigSection() {
     if (aiConfig.providerType === "openai_compatible" && aiApiKey) {
       updates.apiKey = aiApiKey;
     }
-    await updateAIConfig(updates);
+    await updateAIConfig(updates, "provider");
     setAiApiKey("");
   };
 
   const saveLimitSettings = async () => {
     if (!aiConfig) return;
-    await updateAIConfig({
-      maxCompletionTokens: aiConfig.maxCompletionTokens,
-      maxTokensField: aiConfig.maxTokensField,
-      rateLimitMax: aiConfig.rateLimitMax,
-      rateLimitWindowSeconds: aiConfig.rateLimitWindowSeconds,
-      maxToolRounds: aiConfig.maxToolRounds,
-      maxContextTokens: aiConfig.maxContextTokens,
-    });
+    await updateAIConfig(
+      {
+        maxCompletionTokens: aiConfig.maxCompletionTokens,
+        maxTokensField: aiConfig.maxTokensField,
+        rateLimitMax: aiConfig.rateLimitMax,
+        rateLimitWindowSeconds: aiConfig.rateLimitWindowSeconds,
+        maxToolRounds: aiConfig.maxToolRounds,
+        maxContextTokens: aiConfig.maxContextTokens,
+      },
+      "limits"
+    );
   };
 
   const saveSandboxSettings = async () => {
     if (!aiConfig) return;
-    await updateAIConfig({
-      sandboxEnabled: aiConfig.sandboxEnabled,
-      sandboxDefaultTier: aiConfig.sandboxDefaultTier,
-    });
+    await updateAIConfig(
+      {
+        sandboxEnabled: aiConfig.sandboxEnabled,
+        sandboxDefaultTier: aiConfig.sandboxDefaultTier,
+      },
+      "sandbox"
+    );
   };
 
   const setToolDisabled = (toolName: string, disabled: boolean) => {
@@ -917,8 +946,11 @@ export function AIConfigSection() {
     if (aiConfig?.sandboxEnabled) loadSandboxStatus();
   }, [aiConfig?.sandboxEnabled, loadSandboxStatus]);
 
-  if (!initialLoadComplete) return <Skeleton />;
-  if (!aiConfig) return null;
+  // The sandbox runtime badge follows the config, so its status is part of the first render.
+  useContentLoading(
+    !initialLoadComplete || (aiConfig?.sandboxEnabled === true && !sandboxStatusLoaded)
+  );
+  if (!initialLoadComplete || !aiConfig) return null;
   const webSearchEnabled = !aiConfig.disabledTools.includes("web_search");
 
   return (
@@ -930,6 +962,7 @@ export function AIConfigSection() {
         actions={
           <SaveSettingsButton
             onClick={saveAssistantSettings}
+            pending={aiSavingSection === "assistant"}
             disabled={!assistantHasChanges || aiSaving}
           />
         }
@@ -1076,6 +1109,7 @@ export function AIConfigSection() {
           actions={
             <SaveSettingsButton
               onClick={saveProviderSettings}
+              pending={aiSavingSection === "provider"}
               disabled={
                 !providerHasChanges ||
                 aiSaving ||
@@ -1285,6 +1319,7 @@ export function AIConfigSection() {
             actions={
               <SaveSettingsButton
                 onClick={saveLimitSettings}
+                pending={aiSavingSection === "limits"}
                 disabled={!limitsHasChanges || aiSaving}
               />
             }
@@ -1385,6 +1420,7 @@ export function AIConfigSection() {
         actions={
           <SaveSettingsButton
             onClick={saveSandboxSettings}
+            pending={aiSavingSection === "sandbox"}
             disabled={!sandboxHasChanges || aiSaving}
           />
         }

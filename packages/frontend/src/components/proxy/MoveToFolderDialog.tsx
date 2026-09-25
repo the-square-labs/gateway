@@ -41,6 +41,7 @@ function FolderOption({
   const allowed = canMoveTo(folder.id);
   return (
     <>
+      {/* Selectable tree row, not an action button. */}
       <button
         type="button"
         className={cn(

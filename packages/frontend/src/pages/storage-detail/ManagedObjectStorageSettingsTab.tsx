@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -205,9 +204,8 @@ export function ManagedObjectStorageSettingsTab({
         </div>
 
         <DialogFooter>
-          <Button onClick={() => void save()} disabled={saving || !portIsValid}>
-            {saving && <Loader2 className="animate-spin" />}
-            {saving ? "Saving..." : "Save Changes"}
+          <Button onClick={() => void save()} pending={saving} disabled={!portIsValid}>
+            Save Changes
           </Button>
         </DialogFooter>
       </div>

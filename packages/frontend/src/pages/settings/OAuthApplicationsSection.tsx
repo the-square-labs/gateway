@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
@@ -19,7 +20,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
@@ -48,6 +48,14 @@ interface OAuthApplicationsSectionProps {
   proxyHostsList: ProxyHost[];
   databasesList: DatabaseConnection[];
   loggingSchemasList: LoggingSchema[];
+  /** The resource lists above are still loading; the details dialog waits for them. */
+  resourceListsLoading?: boolean;
+}
+
+/** Reports a load to the enclosing dialog while rendered inside its content. */
+function ReportLoading({ loading }: { loading: boolean }) {
+  useContentLoading(loading);
+  return null;
 }
 
 function resourceLabel(resource: string): string {
@@ -84,6 +92,7 @@ export function OAuthApplicationsSection({
   proxyHostsList,
   databasesList,
   loggingSchemasList,
+  resourceListsLoading = false,
 }: OAuthApplicationsSectionProps) {
   const { cas } = useCAStore();
   const { user } = useAuthStore();
@@ -282,6 +291,8 @@ export function OAuthApplicationsSection({
     }
   };
 
+  useContentLoading(loading);
+
   return (
     <>
       <PanelShell
@@ -289,9 +300,7 @@ export function OAuthApplicationsSection({
         description="Applications you authorized to access Gateway with your account"
         icon={<ShieldCheck className="h-4 w-4" />}
       >
-        {loading ? (
-          <OAuthApplicationRowsSkeleton />
-        ) : authorizations.length === 0 ? (
+        {loading ? null : authorizations.length === 0 ? (
           <EmptyState message="No OAuth applications authorized yet." embedded />
         ) : (
           <div className="divide-y divide-border">
@@ -348,15 +357,16 @@ export function OAuthApplicationsSection({
                 <Button
                   variant="outline"
                   size="icon"
-                  className="shrink-0"
                   aria-label={`Disconnect ${authorization.clientName}`}
                   onClick={(event) => {
                     event.stopPropagation();
                     void disconnect(authorization);
                   }}
-                  disabled={revokingKey === `${authorization.clientId}:${authorization.resource}`}
+                  pending={revokingKey === `${authorization.clientId}:${authorization.resource}`}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  {revokingKey === `${authorization.clientId}:${authorization.resource}` ? null : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
                 </Button>
               </div>
             ))}
@@ -373,6 +383,7 @@ export function OAuthApplicationsSection({
 
           {selectedAuthorization && (
             <div className="space-y-4">
+              <ReportLoading loading={resourceListsLoading} />
               <div className="flex min-w-0 items-center gap-3">
                 <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-border bg-muted">
                   {selectedLogoUri ? (
@@ -473,42 +484,25 @@ export function OAuthApplicationsSection({
                   </p>
                 </div>
               </div>
-
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setSelectedAuthorization(null)}>
-                  Close
-                </Button>
-                <Button
-                  onClick={() => void saveScopes()}
-                  disabled={savingScopes || !scopesChanged || finalEditableScopes.length === 0}
-                >
-                  {savingScopes ? "Saving..." : "Save Scopes"}
-                </Button>
-              </DialogFooter>
             </div>
+          )}
+          {selectedAuthorization && (
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSelectedAuthorization(null)}>
+                Close
+              </Button>
+              <Button
+                onClick={() => void saveScopes()}
+                pending={savingScopes}
+                disabled={!scopesChanged || finalEditableScopes.length === 0}
+              >
+                Save Scopes
+              </Button>
+            </DialogFooter>
           )}
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-function OAuthApplicationRowsSkeleton() {
-  return (
-    <div className="divide-y divide-border" aria-label="Loading OAuth applications">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Skeleton className="h-10 w-10 shrink-0" />
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-40" />
-              <Skeleton className="h-3 w-64 max-w-[60vw]" />
-            </div>
-          </div>
-          <Skeleton className="h-9 w-9 shrink-0" />
-        </div>
-      ))}
-    </div>
   );
 }
 

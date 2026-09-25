@@ -208,9 +208,10 @@ export function CACreateDialog({ open, onOpenChange, parentId }: CACreateDialogP
           </Button>
           <Button
             onClick={handleCreate}
-            disabled={isSaving || !commonName.trim() || (needsParentPicker && !selectedParentId)}
+            disabled={!commonName.trim() || (needsParentPicker && !selectedParentId)}
+            pending={isSaving}
           >
-            {isSaving ? "Creating..." : "Create CA"}
+            Create CA
           </Button>
         </DialogFooter>
       </DialogContent>

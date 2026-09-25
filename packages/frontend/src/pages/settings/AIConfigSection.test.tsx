@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
 import { DEFAULT_SYSTEM_CONFIG, useSystemConfigStore } from "@/stores/system-config";
+import { waitForReveal } from "@/test/reveal";
 import { AIConfigSection } from "./AIConfigSection";
 
 const AI_CONFIG = {
@@ -180,17 +181,12 @@ describe("AIConfigSection provider guidance", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
     const dialog = screen.getByRole("dialog");
-    expect(
-      within(dialog).getByRole("status", { name: "Loading stored artifacts" })
-    ).toBeInTheDocument();
     await waitFor(() => expect(listArtifacts).toHaveBeenCalledWith({ page: 1, limit: 25 }));
     await act(async () => {
       resolveFullPage?.({ data: [artifact("all-first")], nextPage: 2 });
     });
+    await waitForReveal();
     expect(within(dialog).getAllByText(/Scroll to load older artifacts/)).toHaveLength(2);
-    expect(
-      within(dialog).queryByRole("status", { name: "Loading stored artifacts" })
-    ).not.toBeInTheDocument();
 
     await waitFor(() => expect(intersectionCallback).toBeDefined());
     act(() => {

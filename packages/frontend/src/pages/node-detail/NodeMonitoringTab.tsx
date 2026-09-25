@@ -14,9 +14,9 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatBytes, formatUptime } from "@/lib/utils";
@@ -286,6 +286,11 @@ export function NodeMonitoringTab({
     return () => es.close();
   }, [nodeId, nodeStatus]);
 
+  // The first snapshot arrives with the stream; a Build Worker also waits for its job summary.
+  useContentLoading(
+    nodeStatus === "online" && (!latest || (nodeType === "builder" && recentBuilds === null))
+  );
+
   if (nodeStatus !== "online") {
     return (
       <div className="flex flex-col items-center gap-2 py-16 border border-border bg-card">
@@ -294,22 +299,7 @@ export function NodeMonitoringTab({
     );
   }
 
-  if (!latest) {
-    return (
-      <div
-        className="grid gap-3 md:grid-cols-2 xl:grid-cols-4"
-        aria-label="Loading node monitoring"
-      >
-        {Array.from({ length: 8 }, (_, index) => (
-          <div key={index} className="space-y-3 border border-border bg-card p-4">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-7 w-16" />
-            <Skeleton className="h-2 w-full" />
-          </div>
-        ))}
-      </div>
-    );
-  }
+  if (!latest) return null;
 
   const health = latest.health;
   const stats = latest.stats;
@@ -433,13 +423,7 @@ export function NodeMonitoringTab({
           >
             Build activity
           </h3>
-          {recentBuilds === null ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {Array.from({ length: 4 }, (_, index) => (
-                <Skeleton key={index} className="h-28" />
-              ))}
-            </div>
-          ) : (
+          {recentBuilds === null ? null : (
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <StatCard
                 label="Running jobs"

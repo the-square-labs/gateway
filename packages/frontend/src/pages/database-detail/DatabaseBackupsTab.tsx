@@ -1,4 +1,4 @@
-import { DatabaseBackup, History, Loader2, Pause, Play, RotateCcw, Trash2, X } from "lucide-react";
+import { DatabaseBackup, History, Pause, Play, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
@@ -8,6 +8,7 @@ import {
   isCreateFolderAllowed,
 } from "@/components/common/CreateFolderSelect";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -87,6 +88,7 @@ export function DatabaseBackupsTab({
   database,
   destinations,
   executors,
+  optionsLoading = false,
   canManage,
   canRun,
   canRestore,
@@ -94,6 +96,8 @@ export function DatabaseBackupsTab({
   database: DatabaseConnection;
   destinations: BackupSelectionOption[];
   executors: BackupSelectionOption[];
+  /** Destinations and executors are still loading; policy rows name their destination. */
+  optionsLoading?: boolean;
   canManage: boolean;
   canRun: boolean;
   canRestore: boolean;
@@ -108,6 +112,7 @@ export function DatabaseBackupsTab({
   const [loading, setLoading] = useState(() => api.getCached<BackupsCache>(cacheKey) === undefined);
   const [policyOpen, setPolicyOpen] = useState(false);
   const [restoreRun, setRestoreRun] = useState<BackupRun | null>(null);
+  useContentLoading(loading || optionsLoading);
   const refresh = useCallback(async () => {
     try {
       const [nextPolicies, nextRuns] = await Promise.all([
@@ -334,26 +339,10 @@ export function DatabaseBackupsTab({
         title="Backup policies"
         description="Where backups are stored, which node runs them, and how many are kept."
         actions={
-          canManage ? (
-            <Button size="sm" onClick={() => setPolicyOpen(true)}>
-              Add policy
-            </Button>
-          ) : undefined
+          canManage ? <Button onClick={() => setPolicyOpen(true)}>Add policy</Button> : undefined
         }
       >
-        {loading ? (
-          <div
-            className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
-            aria-busy="true"
-            aria-label="Loading backup policies"
-          >
-            <div className="min-w-0 flex-1 space-y-2">
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="h-3 w-4/5" />
-            </div>
-            <Skeleton className="h-8 w-24 shrink-0" />
-          </div>
-        ) : policies.length ? (
+        {loading ? null : policies.length ? (
           policies.map((policy) => (
             <SettingsControlRow
               key={policy.id}
@@ -367,7 +356,6 @@ export function DatabaseBackupsTab({
               <div className="flex items-center gap-2">
                 {canManage && policy.schedule ? (
                   <Button
-                    size="sm"
                     variant="ghost"
                     onClick={() => void setScheduleEnabled(policy, !policy.enabled)}
                   >
@@ -385,7 +373,7 @@ export function DatabaseBackupsTab({
                     <Trash2 />
                   </Button>
                 ) : null}
-                <Button size="sm" disabled={!canRun} onClick={() => void start(policy)}>
+                <Button disabled={!canRun} onClick={() => void start(policy)}>
                   <Play />
                   Run now
                 </Button>
@@ -717,9 +705,8 @@ function PolicyDialog({
           >
             Cancel
           </Button>
-          <Button type="button" disabled={saving} onClick={() => void save()}>
-            {saving && <Loader2 className="animate-spin" />}
-            {saving ? "Saving..." : "Save policy"}
+          <Button type="button" pending={saving} onClick={() => void save()}>
+            Save policy
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -817,6 +804,7 @@ export function RestoreDialog({
           <DialogTitle>Restore backup</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {foldersLoading && <Skeleton />}
           <DialogDescription>
             Restores the backup from {run ? formatDateTime(run.startedAt ?? run.createdAt) : ""}{" "}
             into a new managed database. Existing databases are never overwritten.
@@ -896,11 +884,11 @@ export function RestoreDialog({
           </Button>
           <Button
             type="button"
-            disabled={restoring || Boolean(targetDatabaseNameError) || !destinationAllowed}
+            pending={restoring}
+            disabled={Boolean(targetDatabaseNameError) || !destinationAllowed}
             onClick={() => void restore()}
           >
-            {restoring && <Loader2 className="animate-spin" />}
-            {restoring ? "Queueing..." : "Queue restore"}
+            Queue restore
           </Button>
         </DialogFooter>
       </DialogContent>

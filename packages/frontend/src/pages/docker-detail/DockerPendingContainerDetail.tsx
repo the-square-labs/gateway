@@ -1,6 +1,7 @@
 import { GitBranch, Hammer } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
@@ -103,17 +104,20 @@ export function DockerPendingContainerDetail({
   return (
     <PageTransition>
       <div className="h-full p-6 flex flex-col gap-4 overflow-y-auto">
-        <div className="flex shrink-0 items-center gap-3">
-          <PageBackButton onClick={() => navigate("/docker/containers")} />
-          <h1 className="min-w-0 truncate text-2xl font-bold">{containerName}</h1>
-          <Badge
-            variant={pending.latestBuild?.status === "failed" ? "warning" : "secondary"}
-            size="inline"
-            className="shrink-0"
-          >
-            {pending.latestBuild?.status === "failed" ? "Build failed" : "Awaiting deployment"}
-          </Badge>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate("/docker/containers")} />}
+          title={containerName}
+          badges={
+            <Badge
+              variant={pending.latestBuild?.status === "failed" ? "warning" : "secondary"}
+              size="inline"
+              className="shrink-0"
+            >
+              {pending.latestBuild?.status === "failed" ? "Build failed" : "Awaiting deployment"}
+            </Badge>
+          }
+        />
         <PanelShell
           className="shrink-0"
           title="Resource created"

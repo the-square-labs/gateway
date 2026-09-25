@@ -350,7 +350,7 @@ export function TerminalConsole({
         <div className="absolute inset-0 bg-card flex flex-col items-center justify-center gap-4">
           <Terminal className="h-10 w-10 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">Console is open in a separate window</p>
-          <Button variant="outline" size="sm" onClick={bringBack}>
+          <Button variant="outline" onClick={bringBack}>
             Bring back here
           </Button>
         </div>

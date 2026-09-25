@@ -9,10 +9,14 @@ export function useDockerSourceRepositories(
   target?: DockerSourceTarget
 ) {
   const [connectorOptions, setConnectorOptions] = useState<ComboboxOption[]>([]);
+  const [connectorsLoaded, setConnectorsLoaded] = useState(false);
   const [repositories, setRepositories] = useState<DockerBuildSourceRepository[]>([]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setConnectorsLoaded(false);
+      return;
+    }
     let cancelled = false;
     // One picker list authorized by the workload's create/edit scope, so a missing integration scope for one
     // provider can no longer blank the whole list.
@@ -28,7 +32,10 @@ export function useDockerSourceRepositories(
           }))
         );
       })
-      .catch(() => !cancelled && setConnectorOptions([]));
+      .catch(() => !cancelled && setConnectorOptions([]))
+      .finally(() => {
+        if (!cancelled) setConnectorsLoaded(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -51,5 +58,6 @@ export function useDockerSourceRepositories(
     };
   }, [connectorId, open, target]);
 
-  return { connectorOptions, repositories };
+  // The integration picker a repository form opens with; repositories follow the user's choice.
+  return { connectorOptions, connectorsLoading: open && !connectorsLoaded, repositories };
 }

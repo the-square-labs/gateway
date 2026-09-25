@@ -93,9 +93,13 @@ export function StatusPageSettingsTab({
         bodyClassName="flex flex-1 flex-col"
         actions={
           canManage ? (
-            <Button onClick={() => void saveGeneralSettings()} disabled={disabled || !generalDirty}>
-              <Save className="h-4 w-4" />
-              {savingSection === "general" ? "Saving…" : "Save"}
+            <Button
+              onClick={() => void saveGeneralSettings()}
+              pending={savingSection === "general"}
+              disabled={disabled || !generalDirty}
+            >
+              {savingSection === "general" ? null : <Save />}
+              Save
             </Button>
           ) : null
         }
@@ -188,10 +192,11 @@ export function StatusPageSettingsTab({
           canManage ? (
             <Button
               onClick={() => void saveAutoIncidentSettings()}
+              pending={savingSection === "auto"}
               disabled={disabled || !autoIncidentDirty}
             >
-              <Save className="h-4 w-4" />
-              {savingSection === "auto" ? "Saving…" : "Save"}
+              {savingSection === "auto" ? null : <Save />}
+              Save
             </Button>
           ) : null
         }

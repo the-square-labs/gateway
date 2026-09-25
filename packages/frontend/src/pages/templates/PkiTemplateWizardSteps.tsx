@@ -277,8 +277,7 @@ export function StepExtKeyUsage({
               <span className="text-xs font-mono flex-1">{oid}</span>
               <Button
                 variant="outline"
-                size="icon"
-                className="h-7 w-7 shrink-0"
+                size="icon-xs"
                 onClick={() => setExtKeyUsage(extKeyUsage.filter((e) => e !== oid))}
               >
                 <Minus className="h-3.5 w-3.5" />
@@ -498,8 +497,7 @@ export function StepDistribution({
             />
             <Button
               variant="outline"
-              size="icon"
-              className="h-8 w-8 shrink-0"
+              size="icon-sm"
               onClick={() =>
                 setCrlDistributionPoints(crlDistributionPoints.filter((_, j) => j !== i))
               }
@@ -573,8 +571,7 @@ export function StepPolicies({
             </div>
             <Button
               variant="outline"
-              size="icon"
-              className="h-8 w-8 shrink-0"
+              size="icon-sm"
               onClick={() => setCertificatePolicies(certificatePolicies.filter((_, j) => j !== i))}
             >
               <Minus className="h-4 w-4" />
@@ -642,8 +639,7 @@ export function StepCustomExtensions({
               </label>
               <Button
                 variant="outline"
-                size="icon"
-                className="h-8 w-8 shrink-0"
+                size="icon-sm"
                 onClick={() => setCustomExtensions(customExtensions.filter((_, j) => j !== i))}
               >
                 <Minus className="h-4 w-4" />

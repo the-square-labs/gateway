@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -23,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { DatabaseConnection } from "@/types";
 import { PostgresColumnSchemaDialog } from "./PostgresColumnSchemaDialog";
 import {
@@ -94,6 +94,8 @@ export function SqlExplorer({
     toggleSort,
     deleteRow,
   } = explorer;
+  // Schemas, then the first schema's tables, then the first table's rows.
+  useContentLoading(loadingExplorer);
   const hasSchemas = schemas.length > 0;
   const hasTables = tables.length > 0;
   const emptyExplorerMessage = !hasSchemas
@@ -124,7 +126,7 @@ export function SqlExplorer({
               disabled={loadingSchemas || !hasSchemas}
             >
               <SelectTrigger className="w-full sm:w-[180px]">
-                <SelectValue placeholder={loadingSchemas ? "Loading schemas..." : "Schema"} />
+                <SelectValue placeholder="Schema" />
               </SelectTrigger>
               <SelectContent>
                 {schemas.map((item) => (
@@ -179,31 +181,27 @@ export function SqlExplorer({
               {database.type === "postgres" && metadata && (
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   onClick={() => explorer.setColumnsOpen(true)}
                   title="Column types"
+                  aria-label="Column types"
                 >
-                  <Settings className="h-3.5 w-3.5" />
+                  <Settings />
                 </Button>
               )}
               <Button
                 variant="ghost"
-                size="icon"
+                size="icon-sm"
                 onClick={onToggleFocus}
                 title={focused ? "Collapse explorer" : "Expand explorer"}
+                aria-label={focused ? "Collapse explorer" : "Expand explorer"}
               >
-                {focused ? (
-                  <Minimize2 className="h-3.5 w-3.5" />
-                ) : (
-                  <Maximize2 className="h-3.5 w-3.5" />
-                )}
+                {focused ? <Minimize2 /> : <Maximize2 />}
               </Button>
               {canWrite && metadata?.mutations.rowInsert && (
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   onClick={() =>
                     setNewRows((current) => [
                       ...current,
@@ -211,38 +209,29 @@ export function SqlExplorer({
                     ])
                   }
                   title="Insert row"
+                  aria-label="Insert row"
                 >
-                  <Plus className="h-3.5 w-3.5" />
+                  <Plus />
                 </Button>
               )}
               {canWrite &&
                 metadata &&
                 (metadata.mutations.rowInsert || metadata.mutations.rowUpdate) && (
-                  <Button onClick={() => void saveChanges()} disabled={!canSaveChanges}>
-                    <Save className="h-3.5 w-3.5" />
-                    {saving ? "Saving..." : `Save${dirtyCount > 0 ? ` (${dirtyCount})` : ""}`}
+                  <Button
+                    onClick={() => void saveChanges()}
+                    pending={saving}
+                    disabled={!canSaveChanges}
+                  >
+                    {saving ? null : <Save />}
+                    {`Save${dirtyCount > 0 ? ` (${dirtyCount})` : ""}`}
                   </Button>
                 )}
             </>
           }
         >
           {loadingRows || !metadata ? (
-            <div
-              className="flex min-h-40 flex-1 flex-col gap-3 p-4"
-              aria-label="Loading table rows"
-            >
-              {Array.from({ length: 6 }, (_, index) => (
-                <div
-                  key={index}
-                  className="grid grid-cols-[minmax(0,1fr)_88px_minmax(0,1fr)_36px] gap-3"
-                >
-                  <Skeleton className="h-8" />
-                  <Skeleton className="h-8" />
-                  <Skeleton className="h-8" />
-                  <Skeleton className="h-8" />
-                </div>
-              ))}
-            </div>
+            // Switching tables keeps the panel; the Refresh icon spins while rows load.
+            <div className="min-h-40 flex-1" aria-busy="true" aria-label="Loading table rows" />
           ) : (
             <>
               {metadata.columns.length > 0 && (
@@ -287,11 +276,12 @@ export function SqlExplorer({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-9 w-9 rounded-none bg-background"
+                    className="rounded-none bg-background"
                     onClick={applySearch}
                     title="Search"
+                    aria-label="Search rows"
                   >
-                    <Search className="h-3.5 w-3.5" />
+                    <Search />
                   </Button>
                 </div>
               )}
@@ -390,11 +380,12 @@ export function SqlExplorer({
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                                  className="rounded-none border-l border-border"
                                   onClick={() => void deleteRow(row)}
                                   title="Delete row"
+                                  aria-label="Delete row"
                                 >
-                                  <Minus className="h-3.5 w-3.5" />
+                                  <Minus />
                                 </Button>
                               )}
                             </div>
@@ -409,7 +400,7 @@ export function SqlExplorer({
                   {newRows.map((newRow, rowIndex) => (
                     <div
                       key={`new-${rowIndex}`}
-                      className={`grid border-border bg-emerald-500/5 ${
+                      className={`grid border-border bg-success/5 ${
                         rowIndex === newRows.length - 1 ? "" : "border-b"
                       }`}
                       style={{ gridTemplateColumns, width: gridWidth }}
@@ -425,7 +416,7 @@ export function SqlExplorer({
                               !column.nullable &&
                               !column.hasDefault &&
                               isBlankValue(newRow[column.name])
-                                ? "bg-red-500/15 text-red-400"
+                                ? "bg-destructive/15 text-destructive"
                                 : ""
                             }`}
                           />
@@ -440,15 +431,16 @@ export function SqlExplorer({
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                                className="rounded-none border-l border-border"
                                 onClick={() =>
                                   setNewRows((current) =>
                                     current.filter((_, index) => index !== rowIndex)
                                   )
                                 }
                                 title="Remove pending row"
+                                aria-label="Remove pending row"
                               >
-                                <Minus className="h-3.5 w-3.5" />
+                                <Minus />
                               </Button>
                             )}
                           </div>
@@ -468,14 +460,12 @@ export function SqlExplorer({
           )}
         </PanelShell>
       ) : loadingSchemas || loadingTables ? (
+        // A schema switch keeps a panel-sized frame while its tables load.
         <div
-          className="space-y-3 border border-border bg-card p-4"
+          className="min-h-40 border border-border bg-card"
+          aria-busy="true"
           aria-label="Loading database explorer"
-        >
-          <Skeleton className="h-9 w-full" />
-          <Skeleton className="h-9 w-2/3" />
-          <Skeleton className="h-24 w-full" />
-        </div>
+        />
       ) : (
         <EmptyState message={emptyExplorerMessage} />
       )}

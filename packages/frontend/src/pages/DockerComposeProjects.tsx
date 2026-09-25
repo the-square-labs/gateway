@@ -13,6 +13,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -110,6 +111,8 @@ export function DockerComposeProjects({
   const setDockerNodes = useDockerStore((state) => state.setDockerNodes);
   const [localNodes, setLocalNodes] = useState<Node[]>([]);
   const [search, setSearch] = useState("");
+  // The first list request; until it settles an empty list is not yet "no projects".
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
   const [createOpen, setCreateOpen] = useState(initialCreateOpen ?? false);
   const [adoptEditorProject, setAdoptEditorProject] = useState<DockerComposeProjectSummary | null>(
     null
@@ -158,7 +161,7 @@ export function DockerComposeProjects({
     user?.scopes,
   ]);
   useEffect(() => {
-    void fetchProjects(fixedNodeId);
+    void fetchProjects(fixedNodeId).finally(() => setInitialFetchDone(true));
     const interval = window.setInterval(() => void fetchProjects(fixedNodeId), 30_000);
     return () => window.clearInterval(interval);
   }, [fetchProjects, fixedNodeId]);
@@ -433,43 +436,41 @@ export function DockerComposeProjects({
   const content = (
     <>
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <h1 className="text-2xl font-bold">Compose Projects</h1>
-            <p className="text-sm text-muted-foreground">
-              Discover and manage single-node Docker Compose projects
-            </p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              {
-                label: "Refresh",
-                icon: <RefreshCw className="h-4 w-4" />,
-                onClick: () => void fetchProjects(fixedNodeId),
-                disabled: loading,
-              },
-              ...(canManageFolders
-                ? [
-                    {
-                      label: "New Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: () => createFolderRef.current?.(),
-                    },
-                  ]
-                : []),
-              ...(canCreate ? [{ label: "New Project", onClick: openCreate }] : []),
-            ]}
-          >
-            <RefreshButton onClick={() => void fetchProjects(fixedNodeId)} disabled={loading} />
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderRef.current?.()}>
-                <FolderPlus className="mr-1 h-4 w-4" />
-                New Folder
-              </Button>
-            )}
-            {canCreate && <Button onClick={openCreate}>New Project</Button>}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          title="Compose Projects"
+          description="Discover and manage single-node Docker Compose projects"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                {
+                  label: "Refresh",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  onClick: () => void fetchProjects(fixedNodeId),
+                  disabled: loading,
+                },
+                ...(canManageFolders
+                  ? [
+                      {
+                        label: "New Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: () => createFolderRef.current?.(),
+                      },
+                    ]
+                  : []),
+                ...(canCreate ? [{ label: "New Project", onClick: openCreate }] : []),
+              ]}
+            >
+              <RefreshButton onClick={() => void fetchProjects(fixedNodeId)} disabled={loading} />
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderRef.current?.()}>
+                  <FolderPlus className="mr-1 h-4 w-4" />
+                  New Folder
+                </Button>
+              )}
+              {canCreate && <Button onClick={openCreate}>New Project</Button>}
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
       <DockerFolderedResourceList
         resourceType="compose"
@@ -504,7 +505,10 @@ export function DockerComposeProjects({
             </Select>
           ),
         }}
-        loading={loading || (!fixedNodeId && !nodesLoaded && nodes.length === 0)}
+        loading={
+          (projects.length === 0 && (!initialFetchDone || loading)) ||
+          (!fixedNodeId && !nodesLoaded && nodes.length === 0)
+        }
         loadingLabel="Loading Compose projects..."
         emptyState={
           <EmptyState

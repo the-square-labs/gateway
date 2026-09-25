@@ -15,6 +15,7 @@ import {
 import { HelpCircle } from "lucide-react";
 import React, { useEffect, useImperativeHandle, useRef, useState } from "react";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ReferenceTable } from "@/components/common/ReferenceTable";
 import {
   Dialog,
   DialogContent,
@@ -124,14 +125,16 @@ const cmTheme = EditorView.theme({
   ".cm-gutters": {
     backgroundColor: "transparent",
     border: "none",
-    color: "hsl(var(--muted-foreground))",
+    color: "var(--color-muted-foreground)",
   },
-  ".cm-activeLine": { backgroundColor: "hsl(var(--accent) / 0.5)" },
-  ".cm-selectionBackground": { backgroundColor: "hsl(var(--accent))" },
-  "&.cm-focused .cm-selectionBackground": { backgroundColor: "hsl(var(--accent))" },
-  "&.cm-focused": { outline: "2px solid hsl(var(--ring))", outlineOffset: "-1px" },
+  ".cm-activeLine": {
+    backgroundColor: "color-mix(in srgb, var(--color-accent) 50%, transparent)",
+  },
+  ".cm-selectionBackground": { backgroundColor: "var(--color-accent)" },
+  "&.cm-focused .cm-selectionBackground": { backgroundColor: "var(--color-accent)" },
+  "&.cm-focused": { outline: "1px solid var(--color-ring)", outlineOffset: "-1px" },
   ".cm-line": { padding: "0 12px" },
-  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "hsl(var(--foreground))" },
+  ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--color-foreground)" },
   ".cm-hbs-var": { color: "#c084fc !important", fontWeight: "600" },
   ".cm-hbs-helper": { color: "#60a5fa !important", fontWeight: "600" },
 });
@@ -204,48 +207,22 @@ export function TemplateCheatsheetLink({
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-5">
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Variables</h4>
-              <div className="border border-border rounded-md overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-muted/50 border-b border-border">
-                      <th className="text-left px-3 py-1.5 font-medium">Variable</th>
-                      <th className="text-left px-3 py-1.5 font-medium">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {variables.map((v) => (
-                      <tr key={v.name} className="border-b border-border last:border-b-0">
-                        <td className="px-3 py-1.5 font-mono text-purple-400">{v.name}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">{v.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Helpers</h4>
-              <div className="border border-border rounded-md overflow-hidden">
-                <table className="w-full text-xs">
-                  <thead>
-                    <tr className="bg-muted/50 border-b border-border">
-                      <th className="text-left px-3 py-1.5 font-medium">Usage</th>
-                      <th className="text-left px-3 py-1.5 font-medium">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {HELPERS_CHEATSHEET.map((h) => (
-                      <tr key={h.name} className="border-b border-border last:border-b-0">
-                        <td className="px-3 py-1.5 font-mono text-purple-400">{h.usage}</td>
-                        <td className="px-3 py-1.5 text-muted-foreground">{h.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+            <ReferenceTable
+              title="Variables"
+              termLabel="Variable"
+              rows={variables.map((variable) => ({
+                term: variable.name,
+                description: variable.description,
+              }))}
+            />
+            <ReferenceTable
+              title="Helpers"
+              termLabel="Usage"
+              rows={HELPERS_CHEATSHEET.map((helper) => ({
+                term: helper.usage,
+                description: helper.description,
+              }))}
+            />
           </div>
         </DialogContent>
       </Dialog>
@@ -335,7 +312,7 @@ export const TemplateEditor = React.forwardRef<
   return (
     <div
       ref={containerRef}
-      className="border border-input rounded-md overflow-hidden bg-background"
+      className="overflow-hidden border border-input bg-background"
       style={{ minHeight }}
     />
   );

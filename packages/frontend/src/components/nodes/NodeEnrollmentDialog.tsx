@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -398,6 +399,8 @@ export function NodeEnrollmentDialog({
                   <motion.div key={effectiveMode} {...STEP_ANIMATION}>
                     {effectiveMode === "external" ? (
                       <div className="space-y-4">
+                        {/* The folder list loads when the dialog opens. */}
+                        {foldersLoading && <Skeleton />}
                         <div className="space-y-1.5">
                           <label className="text-sm font-medium">Node Type</label>
                           <Select
@@ -441,11 +444,7 @@ export function NodeEnrollmentDialog({
                             disabled={foldersLoading}
                           >
                             <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                              <SelectValue
-                                placeholder={
-                                  foldersLoading ? "Loading folders…" : "Select a folder"
-                                }
-                              />
+                              <SelectValue placeholder="Select a folder" />
                             </SelectTrigger>
                             <SelectContent>
                               {canCreateInFolder(user?.scopes ?? [], "nodes:create", null) && (
@@ -498,8 +497,12 @@ export function NodeEnrollmentDialog({
                     <Button variant="outline" onClick={() => onOpenChange(false)}>
                       Cancel
                     </Button>
-                    <Button onClick={() => void createNode()} disabled={creating || !canCreate}>
-                      {creating ? "Creating..." : "Create Node"}
+                    <Button
+                      onClick={() => void createNode()}
+                      pending={creating}
+                      disabled={!canCreate}
+                    >
+                      Create Node
                     </Button>
                   </>
                 ) : (

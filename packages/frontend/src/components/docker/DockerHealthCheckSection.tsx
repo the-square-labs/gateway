@@ -2,6 +2,7 @@ import { Play, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,6 +88,7 @@ export function DockerHealthCheckSection({
   const [base, setBase] = useState<DockerHealthCheck | null>(initialHealthCheck ?? null);
   const [draft, setDraft] = useState<DockerHealthCheck>(initialHealthCheck ?? DEFAULT_CHECK);
   const [loading, setLoading] = useState(!initialHealthCheck);
+  useContentLoading(loading);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
 
@@ -181,16 +183,18 @@ export function DockerHealthCheckSection({
           <Button
             variant="outline"
             onClick={test}
-            disabled={disabled || loading || testing || !draft.enabled || routeRequired}
+            pending={testing}
+            disabled={disabled || loading || !draft.enabled || routeRequired}
           >
-            <Play className="h-3.5 w-3.5" />
+            {!testing && <Play className="h-3.5 w-3.5" />}
             Test
           </Button>
           <Button
             onClick={save}
-            disabled={disabled || loading || saving || !changed || routeRequired}
+            pending={saving}
+            disabled={disabled || loading || !changed || routeRequired}
           >
-            <Save className="h-3.5 w-3.5" />
+            {!saving && <Save className="h-3.5 w-3.5" />}
             Save
           </Button>
         </>

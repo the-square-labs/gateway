@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -33,6 +34,8 @@ const FORM_ANIMATION = {
 };
 
 interface DockerDeployFormFieldsProps {
+  /** Option lists the form opens with are still loading; the dialog waits for them. */
+  loading?: boolean;
   availableRegistries: DockerRegistry[];
   checkingSourceAdmission: boolean;
   deployImage: string;
@@ -123,6 +126,7 @@ export function DockerDeployFormFields(props: DockerDeployFormFieldsProps) {
     sourceRepositories,
     sourceRepositoryOptions,
   } = props;
+  useContentLoading(Boolean(props.loading));
 
   return (
     <AnimatedHeight>

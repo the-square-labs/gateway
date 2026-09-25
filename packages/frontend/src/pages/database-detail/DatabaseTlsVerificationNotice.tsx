@@ -63,8 +63,8 @@ export function DatabaseTlsVerificationNotice({
           <Button variant="outline" size="sm" onClick={onOpenSettings} disabled={verifying}>
             Add CA certificate
           </Button>
-          <Button size="sm" onClick={() => void enableVerification()} disabled={verifying}>
-            {verifying ? "Testing..." : "Test and enable verification"}
+          <Button size="sm" onClick={() => void enableVerification()} pending={verifying}>
+            Test and enable verification
           </Button>
         </div>
       )}

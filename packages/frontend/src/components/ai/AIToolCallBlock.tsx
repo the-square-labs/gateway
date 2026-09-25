@@ -20,7 +20,14 @@ import { useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import type { AIToolCall } from "@/types/ai";
+import {
+  AI_CONTROL_DISABLED,
+  AI_DISCLOSURE_HEADER,
+  AI_DISCLOSURE_HEADER_INTERACTIVE,
+  AI_ICON_CONTROL,
+} from "./ai-control-classes";
 
 const CATEGORY_ICONS: Record<string, React.ElementType> = {
   list_cas: ShieldCheck,
@@ -167,7 +174,9 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
 
   return (
     <div className="my-0.5 text-sm">
+      {/* Disclosure header: stays a raw button so the stream keeps its inline, borderless rows. */}
       <button
+        type="button"
         onClick={
           canToggle
             ? () =>
@@ -179,7 +188,10 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
             : undefined
         }
         aria-expanded={canToggle ? expanded : undefined}
-        className={`group flex items-center gap-2 py-0.5 text-left text-muted-foreground transition-colors ${canToggle ? "cursor-pointer hover:text-foreground focus-visible:text-foreground focus-visible:outline-none" : "cursor-default"}`}
+        className={cn(
+          AI_DISCLOSURE_HEADER,
+          canToggle ? AI_DISCLOSURE_HEADER_INTERACTIVE : "cursor-default"
+        )}
       >
         <Icon
           className={`h-3.5 w-3.5 shrink-0 ${
@@ -231,14 +243,14 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
             </div>
           )}
           {hasArgs && (
-            <pre className="overflow-x-auto whitespace-pre-wrap border border-border bg-muted px-2.5 py-1.5 text-[11px]">
+            <pre className="overflow-x-auto whitespace-pre-wrap border border-border bg-muted px-2.5 py-1.5 text-xs">
               {JSON.stringify(toolArguments, null, 2)}
             </pre>
           )}
           {hasResult && (
             <pre
               data-ai-tool-result-scroll
-              className={`dashboard-scrollbar max-h-48 overflow-auto overscroll-contain whitespace-pre-wrap border border-border bg-muted/50 px-2.5 py-1.5 text-[11px] ${hasArgs || hasCompactSummary ? "border-t-0" : ""}`}
+              className={`dashboard-scrollbar max-h-48 overflow-auto overscroll-contain whitespace-pre-wrap border border-border bg-muted/50 px-2.5 py-1.5 text-xs ${hasArgs || hasCompactSummary ? "border-t-0" : ""}`}
             >
               {typeof safeToolCall.result === "string"
                 ? safeToolCall.result
@@ -256,20 +268,15 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
                     {toolOutputArtifact.estimatedTokens.toLocaleString()} tokens
                   </div>
                 </div>
-                <Button
-                  asChild
-                  variant="outline"
-                  size="sm"
-                  className="h-7 rounded-none px-2 text-xs"
-                >
+                <Button asChild variant="outline" size="sm">
                   <a href={toolOutputArtifact.downloadUrl} download>
-                    <Download className="mr-1 h-3.5 w-3.5" aria-hidden="true" />
+                    <Download aria-hidden="true" />
                     Download
                   </a>
                 </Button>
               </div>
               {toolOutputArtifact.preview && (
-                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap border border-border bg-background p-2 text-[11px]">
+                <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap border border-border bg-background p-2 text-xs">
                   {toolOutputArtifact.preview}
                 </pre>
               )}
@@ -417,19 +424,11 @@ export function ApprovalBlock({
     <div className="flex items-center gap-3 border border-warning bg-muted/30 px-3 py-2">
       <span className="min-w-0 flex-1 text-sm text-foreground">{label}</span>
       <div className="flex shrink-0 items-center gap-2">
-        <Button
-          variant="ghost"
-          className="h-9"
-          disabled={isSending}
-          onClick={() => onReject?.(toolCall.id)}
-        >
+        <Button variant="ghost" disabled={isSending} onClick={() => onReject?.(toolCall.id)}>
           Reject
         </Button>
-        <Button
-          className="h-9 bg-warning text-black hover:bg-warning/90"
-          disabled={isSending}
-          onClick={() => onApprove?.(toolCall.id)}
-        >
+        {/* Warning colours: the kit Button has no warning variant yet. */}
+        <Button variant="warning" disabled={isSending} onClick={() => onApprove?.(toolCall.id)}>
           Approve
         </Button>
       </div>
@@ -513,12 +512,14 @@ export function QuestionBlock({
 
       {options.length > 0 && (
         <div>
+          {/* Answer options are list rows, not kit buttons: full width, text-left, row dividers. */}
           {options.map((opt, i) => (
             <button
               key={i}
+              type="button"
               onClick={() => handleSubmit(opt.label)}
               disabled={isPending}
-              className="w-full px-3 py-2 text-left text-sm hover:bg-accent transition-colors border-b border-border last:border-b-0 disabled:pointer-events-none disabled:opacity-60"
+              className="w-full border-b border-border px-3 py-2 text-left text-sm transition-colors last:border-b-0 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none disabled:pointer-events-none disabled:opacity-60"
             >
               <span>{opt.label}</span>
               {opt.description && (
@@ -545,9 +546,15 @@ export function QuestionBlock({
               disabled={isPending}
             />
             <button
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+              type="button"
+              className={cn(
+                AI_ICON_CONTROL,
+                AI_CONTROL_DISABLED,
+                "absolute right-1.5 top-1/2 -translate-y-1/2 p-1"
+              )}
               disabled={isPending || !answerText.trim()}
               onClick={() => handleSubmit(answerText)}
+              aria-label="Send answer"
             >
               <Send className="h-3.5 w-3.5" />
             </button>

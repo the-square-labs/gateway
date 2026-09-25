@@ -20,12 +20,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { AlertRule } from "@/types";
 import { AlertDialog } from "./AlertDialog";
-
-const SEV_BADGE: Record<string, "warning" | "destructive" | "secondary"> = {
-  info: "secondary",
-  warning: "warning",
-  critical: "destructive",
-};
+import { alertSeverityVariant } from "./notification-status";
 
 const ROOT_DISK_TARGET = "/";
 const CERTIFICATE_EXPIRY_METRIC = "days_until_expiry";
@@ -192,7 +187,9 @@ export function AlertsTab({
     {
       id: "severity",
       header: "Severity",
-      render: (rule) => <Badge variant={SEV_BADGE[rule.severity]}>{rule.severity}</Badge>,
+      render: (rule) => (
+        <Badge variant={alertSeverityVariant(rule.severity)}>{rule.severity}</Badge>
+      ),
     },
     {
       id: "webhooks",
@@ -227,7 +224,7 @@ export function AlertsTab({
           <div onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${rule.name}`}>
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>

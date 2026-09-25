@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
+import { waitForReveal } from "@/test/reveal";
 import type { GitConnector } from "@/types/integrations";
 import { GitIntegrationsSection } from "./GitIntegrationsSection";
 
@@ -112,6 +113,7 @@ describe("GitIntegrationsSection", () => {
 
     await waitFor(() => expect(mocks.getGitHubOAuthAvailability).toHaveBeenCalled());
     await user.click(screen.getAllByRole("button", { name: "Add connector" })[0]);
+    await waitForReveal();
 
     expect(screen.getByRole("heading", { name: "Add GitHub Connector" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /OAuth/ })).toBeEnabled();
@@ -125,6 +127,24 @@ describe("GitIntegrationsSection", () => {
     expect(screen.queryByText("Repository access")).not.toBeInTheDocument();
     expect(screen.queryByPlaceholderText("Repository URL")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Start GitHub authorization" })).toBeEnabled();
+  });
+
+  it("shows GitHub OAuth as available once the availability check answers", async () => {
+    const user = userEvent.setup();
+    let resolveAvailability!: (value: { available: boolean }) => void;
+    mocks.getGitHubOAuthAvailability.mockReturnValue(
+      new Promise<{ available: boolean }>((resolve) => {
+        resolveAvailability = resolve;
+      })
+    );
+    render(<GitIntegrationsSection />);
+
+    await user.click((await screen.findAllByRole("button", { name: "Add connector" }))[0]);
+
+    await act(async () => resolveAvailability({ available: true }));
+    await waitForReveal();
+    expect(screen.getByRole("button", { name: /OAuth/ })).toBeEnabled();
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
   });
 
   it("keeps GitHub token access account-wide and exposes Test Connection", async () => {

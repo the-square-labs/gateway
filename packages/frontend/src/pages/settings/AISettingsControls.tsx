@@ -6,13 +6,15 @@ export { SettingsControlRow } from "@/components/common/SettingsControlRow";
 export function SaveSettingsButton({
   onClick,
   disabled,
+  pending = false,
 }: {
   onClick: () => void;
   disabled: boolean;
+  pending?: boolean;
 }) {
   return (
-    <Button onClick={onClick} disabled={disabled}>
-      <Save className="h-4 w-4" />
+    <Button onClick={onClick} disabled={disabled} pending={pending}>
+      {pending ? null : <Save className="h-4 w-4" />}
       Save
     </Button>
   );

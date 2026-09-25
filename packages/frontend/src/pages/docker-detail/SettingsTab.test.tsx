@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -354,15 +355,21 @@ describe("docker detail SettingsTab", () => {
     expect(screen.getByRole("button", { name: "About Image Cleanup" })).toBeInTheDocument();
   });
 
-  it("keeps permitted webhook and cleanup panels stable while their settings load", () => {
+  it("holds the enclosing tab while webhook and cleanup settings load", () => {
     vi.spyOn(api, "getContainerWebhook").mockReturnValue(new Promise(() => {}));
     vi.spyOn(api, "getContainerImageCleanup").mockReturnValue(new Promise(() => {}));
 
-    render(<WebhookSection nodeId="node-1" containerName="app" />);
+    const { container } = render(
+      <PageTransition>
+        <WebhookSection nodeId="node-1" containerName="app" />
+      </PageTransition>
+    );
 
-    expect(screen.getByText("Webhook")).toBeInTheDocument();
-    expect(screen.getByText("Image Cleanup")).toBeInTheDocument();
-    expect(screen.getByLabelText("Loading webhook")).toBeInTheDocument();
+    expect(container.querySelector("[data-reveal-phase]")).toHaveAttribute(
+      "data-reveal-phase",
+      "pending"
+    );
+    expect(screen.queryByText("Image Cleanup")).not.toBeInTheDocument();
   });
 
   it("does not expose daemon-owned GPU group provenance labels", () => {

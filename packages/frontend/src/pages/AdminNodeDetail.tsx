@@ -31,6 +31,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { HostingResizeDialog } from "@/components/nodes/HostingResizeDialog";
@@ -48,6 +49,7 @@ import {
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -388,8 +390,10 @@ export function AdminNodeDetail({
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [lockSaving, setLockSaving] = useState(false);
   const daemonUpdates = useDaemonUpdatesStore((s) => s.statuses);
+  const daemonUpdatesLoaded = useDaemonUpdatesStore((s) => s.lastLoadedAt > 0);
   const fetchDaemonUpdates = useDaemonUpdatesStore((s) => s.fetchDaemonUpdates);
   const setDaemonUpdates = useDaemonUpdatesStore((s) => s.setDaemonUpdates);
+  const [daemonUpdatesSettled, setDaemonUpdatesSettled] = useState(false);
 
   // Pin dialog
   const [pinOpen, setPinOpen] = useState(false);
@@ -687,7 +691,7 @@ export function AdminNodeDetail({
   }, [loadNode]);
 
   useEffect(() => {
-    void loadDaemonUpdateStatus();
+    void loadDaemonUpdateStatus().finally(() => setDaemonUpdatesSettled(true));
   }, [loadDaemonUpdateStatus]);
 
   useRealtime(id ? "node.changed" : null, (payload) => {
@@ -885,9 +889,11 @@ export function AdminNodeDetail({
   if (isLoading) return <DetailPageSkeleton label="Loading node" tabs={6} />;
   if (!node)
     return (
-      <div className="flex h-full items-center justify-center text-muted-foreground">
-        Node not found
-      </div>
+      <PageTransition>
+        <div className="flex h-full items-center justify-center text-muted-foreground">
+          Node not found
+        </div>
+      </PageTransition>
     );
 
   const updateTargetVersion = getNodeUpdateTargetVersion(node);
@@ -907,6 +913,11 @@ export function AdminNodeDetail({
     node.daemonVersion ?? "unknown",
     nodeUpdating ? "updating" : "stable",
   ].join(":");
+  // Header actions and the Firewall and Snapshots tabs come from the hosting projection,
+  // and the overview offers an available daemon update.
+  const initialLoadPending =
+    hostingLoadState === "loading" ||
+    (hasScope("admin:update") && !daemonUpdatesLoaded && !daemonUpdatesSettled);
   const usesFillLayout =
     activeTab === "configuration" ||
     activeTab === "daemon-logs" ||
@@ -916,6 +927,7 @@ export function AdminNodeDetail({
 
   return (
     <PageTransition>
+      {initialLoadPending && <Skeleton />}
       <div
         className={
           usesFillLayout
@@ -925,178 +937,185 @@ export function AdminNodeDetail({
               : "h-full overflow-y-auto p-6 space-y-4"
         }
       >
-        {/* Header — matches ProxyHostDetail pattern */}
-        <div className="flex items-start justify-between gap-3 shrink-0">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/nodes")} />
-            <div className="min-w-0">
-              <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <h1 className="min-w-0 truncate text-2xl font-bold">
-                  {node.displayName || node.hostname}
-                </h1>
-                <Badge variant={STATUS_BADGE[nodeState] || "secondary"} size="inline">
-                  {nodeState}
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate("/nodes")} />}
+          title={node.displayName || node.hostname}
+          badges={
+            <>
+              <Badge variant={STATUS_BADGE[nodeState] || "secondary"} size="inline">
+                {nodeState}
+              </Badge>
+              {(node.type === "nginx" || node.type === "docker") && node.serviceCreationLocked && (
+                <Badge variant="warning" size="inline">
+                  Locked
                 </Badge>
-                {(node.type === "nginx" || node.type === "docker") &&
-                  node.serviceCreationLocked && (
-                    <Badge variant="warning" size="inline">
-                      Locked
-                    </Badge>
-                  )}
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {node.hostname} &middot; {nodeTypeLabel(node.type)} &middot;{" "}
-                {node.daemonVersion ?? "unknown version"}
-                {nodeUpdating && updateTargetVersion ? (
-                  <> &middot; updating to {updateTargetVersion}</>
-                ) : null}
-                {node.osInfo ? <> &middot; {node.osInfo}</> : null}
-              </p>
-            </div>
-          </div>
-
-          <NodeEnrollmentDialog
-            open={false}
-            onOpenChange={() => undefined}
-            reissueNode={reissueNode}
-            onReissueHandled={clearReissueNode}
-            onNodeEnrolled={() => void loadNode(true)}
-          />
-          <HostingResizeDialog
-            resource={resizeContext?.resource ?? null}
-            catalog={resizeContext?.catalog}
-            provider={hosting?.provider ?? "proxmox"}
-            onClose={() => setResizeContext(null)}
-            onChanged={refreshHosting}
-          />
-          <ResponsiveHeaderActions
-            menuClassName="w-64"
-            actions={[
-              {
-                label: "Pin",
-                alwaysOverflow: true,
-                icon: <Pin className="h-4 w-4" />,
-                onClick: () => setPinOpen(true),
-                disabled: nodeUpdating,
-              },
-              ...hostingActions.map((action, index) => ({
-                ...action,
-                separatorBefore:
-                  index === 0 || ("separatorBefore" in action && action.separatorBefore),
-              })),
-              ...(canOpenNodeSettings
-                ? [
-                    {
-                      label: "Settings",
-                      separatorBefore: hostingActions.length === 0,
-                      icon: <Settings className="h-4 w-4" />,
-                      onClick: openAppearanceDialog,
-                      disabled: nodeActionsLocked,
-                    },
-                  ]
-                : []),
-              ...(canManageServiceCreationLock
-                ? [
-                    {
-                      label: node.serviceCreationLocked
-                        ? "Unlock new services"
-                        : "Lock new services",
-                      onClick: () => handleServiceCreationLock(!node.serviceCreationLocked),
-                      disabled: lockSaving || nodeActionsLocked,
-                    },
-                  ]
-                : []),
-              ...(node.status === "pending" &&
-              !hosting &&
-              (canManageNode ||
-                canCreateInFolder(user?.scopes ?? [], "nodes:create", node.folderId, node.id))
-                ? [
-                    {
-                      label: "New enrollment token",
-                      icon: <KeyRound className="h-4 w-4" />,
-                      onClick: () => setReissueNode(node),
-                      disabled: reissueNode !== null,
-                      separatorBefore: true,
-                    },
-                  ]
-                : []),
-              ...(hasScope("admin:update")
-                ? [
-                    {
-                      label: "Check for updates",
-                      icon: <ArrowUpCircle className="h-4 w-4" />,
-                      onClick: handleCheckUpdates,
-                      disabled: nodeActionsLocked || checkingUpdates,
-                      separatorBefore: canManageServiceCreationLock,
-                    },
-                  ]
-                : []),
-              ...(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)
-                ? [
-                    {
-                      label: "Remove",
-                      icon: <Trash2 className="h-4 w-4" />,
-                      onClick: handleDelete,
-                      disabled: nodeRemovalLocked,
-                      destructive: true,
-                      separatorBefore: hasScope("admin:update") || canManageServiceCreationLock,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setPinOpen(true)}
-              disabled={nodeUpdating}
+              )}
+            </>
+          }
+          description={
+            <>
+              {node.hostname} &middot; {nodeTypeLabel(node.type)} &middot;{" "}
+              {node.daemonVersion ?? "unknown version"}
+              {nodeUpdating && updateTargetVersion ? (
+                <> &middot; updating to {updateTargetVersion}</>
+              ) : null}
+              {node.osInfo ? <> &middot; {node.osInfo}</> : null}
+            </>
+          }
+          actions={
+            <ResponsiveHeaderActions
+              menuClassName="w-64"
+              actions={[
+                {
+                  label: "Pin",
+                  alwaysOverflow: true,
+                  icon: <Pin className="h-4 w-4" />,
+                  onClick: () => setPinOpen(true),
+                  disabled: nodeUpdating,
+                },
+                ...hostingActions.map((action, index) => ({
+                  ...action,
+                  separatorBefore:
+                    index === 0 || ("separatorBefore" in action && action.separatorBefore),
+                })),
+                ...(canOpenNodeSettings
+                  ? [
+                      {
+                        label: "Settings",
+                        separatorBefore: hostingActions.length === 0,
+                        icon: <Settings className="h-4 w-4" />,
+                        onClick: openAppearanceDialog,
+                        disabled: nodeActionsLocked,
+                      },
+                    ]
+                  : []),
+                ...(canManageServiceCreationLock
+                  ? [
+                      {
+                        label: node.serviceCreationLocked
+                          ? "Unlock new services"
+                          : "Lock new services",
+                        onClick: () => handleServiceCreationLock(!node.serviceCreationLocked),
+                        disabled: lockSaving || nodeActionsLocked,
+                      },
+                    ]
+                  : []),
+                ...(node.status === "pending" &&
+                !hosting &&
+                (canManageNode ||
+                  canCreateInFolder(user?.scopes ?? [], "nodes:create", node.folderId, node.id))
+                  ? [
+                      {
+                        label: "New enrollment token",
+                        icon: <KeyRound className="h-4 w-4" />,
+                        onClick: () => setReissueNode(node),
+                        disabled: reissueNode !== null,
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+                ...(hasScope("admin:update")
+                  ? [
+                      {
+                        label: "Check for updates",
+                        icon: <ArrowUpCircle className="h-4 w-4" />,
+                        onClick: handleCheckUpdates,
+                        disabled: nodeActionsLocked || checkingUpdates,
+                        separatorBefore: canManageServiceCreationLock,
+                      },
+                    ]
+                  : []),
+                ...(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)
+                  ? [
+                      {
+                        label: "Remove",
+                        icon: <Trash2 className="h-4 w-4" />,
+                        onClick: handleDelete,
+                        disabled: nodeRemovalLocked,
+                        destructive: true,
+                        separatorBefore: hasScope("admin:update") || canManageServiceCreationLock,
+                      },
+                    ]
+                  : []),
+              ]}
             >
-              <Pin className="h-4 w-4" />
-            </Button>
-            {hostingActions.map((action) => (
-              <Button
-                key={action.label}
-                variant={"destructive" in action && action.destructive ? "destructive" : "outline"}
-                onClick={action.onClick}
-                disabled={"disabled" in action && action.disabled}
-              >
-                {action.icon}
-                {action.label}
-              </Button>
-            ))}
-            {canOpenNodeSettings && (
-              <Button variant="outline" disabled={nodeActionsLocked} onClick={openAppearanceDialog}>
-                <Settings className="h-4 w-4" />
-                Settings
-              </Button>
-            )}
-            {canManageServiceCreationLock && (
               <Button
                 variant="outline"
-                onClick={() => handleServiceCreationLock(!node.serviceCreationLocked)}
-                disabled={lockSaving || nodeActionsLocked}
+                size="icon"
+                aria-label="Pin node"
+                onClick={() => setPinOpen(true)}
+                disabled={nodeUpdating}
               >
-                {node.serviceCreationLocked ? "Unlock new services" : "Lock new services"}
+                <Pin className="h-4 w-4" />
               </Button>
-            )}
-            {hasScope("admin:update") && (
-              <Button
-                variant="outline"
-                onClick={handleCheckUpdates}
-                disabled={nodeActionsLocked || checkingUpdates}
-              >
-                <ArrowUpCircle className="h-4 w-4" />
-                Check for updates
-              </Button>
-            )}
-            {(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)) && (
-              <Button variant="destructive" onClick={handleDelete} disabled={nodeRemovalLocked}>
-                <Trash2 className="h-4 w-4" />
-                Remove
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {hostingActions.map((action) => (
+                <Button
+                  key={action.label}
+                  variant={
+                    "destructive" in action && action.destructive ? "destructive" : "outline"
+                  }
+                  onClick={action.onClick}
+                  disabled={"disabled" in action && action.disabled}
+                >
+                  {action.icon}
+                  {action.label}
+                </Button>
+              ))}
+              {canOpenNodeSettings && (
+                <Button
+                  variant="outline"
+                  disabled={nodeActionsLocked}
+                  onClick={openAppearanceDialog}
+                >
+                  <Settings className="h-4 w-4" />
+                  Settings
+                </Button>
+              )}
+              {canManageServiceCreationLock && (
+                <Button
+                  variant="outline"
+                  onClick={() => handleServiceCreationLock(!node.serviceCreationLocked)}
+                  disabled={nodeActionsLocked}
+                  pending={lockSaving}
+                >
+                  {node.serviceCreationLocked ? "Unlock new services" : "Lock new services"}
+                </Button>
+              )}
+              {hasScope("admin:update") && (
+                <Button
+                  variant="outline"
+                  onClick={handleCheckUpdates}
+                  disabled={nodeActionsLocked}
+                  pending={checkingUpdates}
+                >
+                  {checkingUpdates ? null : <ArrowUpCircle className="h-4 w-4" />}
+                  Check for updates
+                </Button>
+              )}
+              {(hasScope("nodes:delete") || hasScope(`nodes:delete:${node.id}`)) && (
+                <Button variant="destructive" onClick={handleDelete} disabled={nodeRemovalLocked}>
+                  <Trash2 className="h-4 w-4" />
+                  Remove
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
+        <NodeEnrollmentDialog
+          open={false}
+          onOpenChange={() => undefined}
+          reissueNode={reissueNode}
+          onReissueHandled={clearReissueNode}
+          onNodeEnrolled={() => void loadNode(true)}
+        />
+        <HostingResizeDialog
+          resource={resizeContext?.resource ?? null}
+          catalog={resizeContext?.catalog}
+          provider={hosting?.provider ?? "proxmox"}
+          onClose={() => setResizeContext(null)}
+          onChanged={refreshHosting}
+        />
 
         {/* Health bars */}
         <HealthBars history={healthHistory} currentStatus={node.status} />
@@ -1236,16 +1255,13 @@ export function AdminNodeDetail({
               ["snapshots", "firewall"].includes(activeTab) &&
               !visibleTabs.includes(activeTab) && (
                 <TabsContent value={activeTab}>
-                  <EmptyState
-                    message={
-                      hostingLoadState === "error"
-                        ? "Could not load hosting information."
-                        : "Loading hosting information…"
-                    }
-                    {...(hostingLoadState === "error"
-                      ? { actionLabel: "Retry", onAction: refreshHosting }
-                      : {})}
-                  />
+                  {hostingLoadState === "error" ? (
+                    <EmptyState
+                      message="Could not load hosting information."
+                      actionLabel="Retry"
+                      onAction={refreshHosting}
+                    />
+                  ) : null}
                 </TabsContent>
               )}
             {hosting?.resourceId &&
@@ -1386,9 +1402,8 @@ export function AdminNodeDetail({
                     disabled={!canRenameNode}
                     className={cn(
                       "aspect-square w-full border border-input bg-muted",
-                      appearanceColor === null && "border-white"
+                      appearanceColor === null && "border-foreground"
                     )}
-                    style={appearanceColor === null ? { borderColor: "#fff" } : undefined}
                     onClick={() => setAppearanceColor(null)}
                   />
                   {NODE_APPEARANCE_COLOR_OPTIONS.map((option) => (
@@ -1400,9 +1415,8 @@ export function AdminNodeDetail({
                       className={cn(
                         "aspect-square w-full border border-input",
                         option.swatchClassName,
-                        appearanceColor === option.value && "border-white"
+                        appearanceColor === option.value && "border-foreground"
                       )}
-                      style={appearanceColor === option.value ? { borderColor: "#fff" } : undefined}
                       onClick={() => setAppearanceColor(option.value)}
                     />
                   ))}
@@ -1483,7 +1497,7 @@ export function AdminNodeDetail({
                               variant="ghost"
                               size="icon"
                               aria-label={`Remove service address ${index + 1}`}
-                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               disabled={!canEditNodeServiceAddress}
                               onClick={() =>
                                 setServiceAddressRows((rows) =>
@@ -1501,7 +1515,7 @@ export function AdminNodeDetail({
                               variant="ghost"
                               size="icon"
                               aria-label="Add service address"
-                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               disabled={!canEditNodeServiceAddress}
                               onClick={() =>
                                 setServiceAddressRows((rows) => [
@@ -1580,8 +1594,8 @@ export function AdminNodeDetail({
             </Button>
             <Button
               onClick={handleAppearanceSave}
+              pending={appearanceSaving}
               disabled={
-                appearanceSaving ||
                 nodeActionsLocked ||
                 serviceAddressesIncomplete ||
                 serviceAddressesDuplicate ||
@@ -1595,7 +1609,7 @@ export function AdminNodeDetail({
                     builderTimeoutMinutes > 360))
               }
             >
-              {appearanceSaving ? "Saving..." : "Save"}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>

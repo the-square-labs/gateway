@@ -14,8 +14,8 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -251,6 +251,9 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
     };
   }, [hostId, record]);
 
+  // Only the first sample holds the tab; polling then updates it in place.
+  useContentLoading(!link && !loadError);
+
   if (!link && loadError) {
     return (
       <div className="border border-destructive/50 bg-card p-4 text-sm text-destructive">
@@ -259,15 +262,7 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
     );
   }
 
-  if (!link) {
-    return (
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {Array.from({ length: 8 }, (_, index) => (
-          <Skeleton key={index} className="h-32" />
-        ))}
-      </div>
-    );
-  }
+  if (!link) return null;
 
   const runtime = link.runtime;
   const traffic = link.traffic;

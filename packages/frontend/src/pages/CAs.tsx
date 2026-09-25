@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
@@ -163,62 +164,60 @@ export function CAs() {
   return (
     <PageTransition>
       <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden p-6">
-        {/* Header */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">Certificate Authorities</h1>
-                <LicensePlanBadge feature="internal-pki" />
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {activeCAs.length} active &middot; {totalCerts} certificate
-                {totalCerts !== 1 ? "s" : ""} issued
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canCreateIntermediate
-                ? [
-                    {
-                      label: "Create Intermediate",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => openCreate("pick"),
-                      disabled: activeUserManagedCAs.length === 0,
-                    },
-                  ]
-                : []),
-              ...(canCreateRoot
-                ? [
-                    {
-                      label: "Create Root CA",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => openCreate(),
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canCreateIntermediate && (
-              <Button
-                variant="outline"
-                onClick={() => openCreate("pick")}
-                disabled={activeUserManagedCAs.length === 0}
-              >
-                <Plus className="h-4 w-4" />
-                Create Intermediate
-              </Button>
-            )}
-            {canCreateRoot && (
-              <Button onClick={() => openCreate()}>
-                <Plus className="h-4 w-4" />
-                Create Root CA
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="Certificate Authorities"
+          badges={<LicensePlanBadge feature="internal-pki" />}
+          description={
+            <>
+              {activeCAs.length} active &middot; {totalCerts} certificate
+              {totalCerts !== 1 ? "s" : ""} issued
+            </>
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canCreateIntermediate
+                  ? [
+                      {
+                        label: "Create Intermediate",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => openCreate("pick"),
+                        disabled: activeUserManagedCAs.length === 0,
+                      },
+                    ]
+                  : []),
+                ...(canCreateRoot
+                  ? [
+                      {
+                        label: "Create Root CA",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => openCreate(),
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canCreateIntermediate && (
+                <Button
+                  variant="outline"
+                  onClick={() => openCreate("pick")}
+                  disabled={activeUserManagedCAs.length === 0}
+                >
+                  <Plus className="h-4 w-4" />
+                  Create Intermediate
+                </Button>
+              )}
+              {canCreateRoot && (
+                <Button onClick={() => openCreate()}>
+                  <Plus className="h-4 w-4" />
+                  Create Root CA
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {/* Search and filters */}
         <SearchFilterBar

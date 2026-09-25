@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { type Dispatch, type SetStateAction, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -464,9 +463,9 @@ export function RedisConfigDialog({
           <Button
             type="button"
             onClick={() => void save()}
-            disabled={!normalized || !changed || saving || confirming}
+            pending={saving}
+            disabled={!normalized || !changed || confirming}
           >
-            {saving && <Loader2 className="animate-spin" />}
             {saving ? "Recreating database..." : "Save & Recreate"}
           </Button>
         </DialogFooter>

@@ -25,8 +25,8 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
@@ -64,6 +64,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -189,7 +190,9 @@ export function DockerComposeProjectDetail() {
   const [selectedOperation, setSelectedOperation] = useState<DockerComposeOperation | null>(null);
   const [latestOperation, setLatestOperation] = useState<DockerComposeOperation | null>(null);
   const [recentActivity, setRecentActivity] = useState<DockerComposeOperation[]>([]);
-  const [recentActivityLoading, setRecentActivityLoading] = useState(false);
+  // Recent activity loads right after the project; the Overview tab waits for it.
+  const [recentActivityLoading, setRecentActivityLoading] = useState(true);
+  const [availabilityLoaded, setAvailabilityLoaded] = useState(false);
   const [activityOperations, setActivityOperations] = useState<DockerComposeOperation[]>([]);
   const [activityNextCursor, setActivityNextCursor] = useState<string | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
@@ -249,6 +252,8 @@ export function DockerComposeProjectDetail() {
       );
     } catch {
       setAvailabilityPolicy(null);
+    } finally {
+      setAvailabilityLoaded(true);
     }
   }, [projectId]);
 
@@ -461,7 +466,7 @@ export function DockerComposeProjectDetail() {
     icon: <Pin className="h-4 w-4" />,
     onClick: () => setPinOpen(true),
   };
-  const headerActions: ResponsiveHeaderAction[] =
+  const headerActions: Array<ResponsiveHeaderAction & { actionKey?: string }> =
     project.managementState === "external"
       ? canAdopt
         ? [
@@ -490,6 +495,7 @@ export function DockerComposeProjectDetail() {
             ? [
                 {
                   label: project.status === "running" ? "Stop" : "Start",
+                  actionKey: project.status === "running" ? "stop" : "start",
                   icon:
                     project.status === "running" ? (
                       <Square className="h-4 w-4" />
@@ -508,6 +514,7 @@ export function DockerComposeProjectDetail() {
                 },
                 {
                   label: "Pull & Apply",
+                  actionKey: "pull_apply",
                   icon: <UploadCloud className="h-4 w-4" />,
                   onClick: () => void runAction("pull_apply"),
                   disabled:
@@ -538,6 +545,7 @@ export function DockerComposeProjectDetail() {
                   ? [
                       {
                         label: "Cancel operation",
+                        actionKey: "cancel",
                         onClick: () => void runAction("cancel"),
                         destructive: true,
                       },
@@ -549,6 +557,7 @@ export function DockerComposeProjectDetail() {
             ? [
                 {
                   label: "Delete project",
+                  actionKey: "delete",
                   icon: <Trash2 className="h-4 w-4" />,
                   onClick: () => void deleteProject(),
                   disabled: !!currentOperation || deleting || project.status === "deleting",
@@ -836,9 +845,7 @@ export function DockerComposeProjectDetail() {
       header: "Progress / error",
       cellClassName: "max-w-0 truncate",
       render: (operation) => (
-        <span
-          className={operation.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}
-        >
+        <span className={operation.error ? "text-destructive" : "text-muted-foreground"}>
           {operation.error || operation.progress || "—"}
         </span>
       ),
@@ -899,9 +906,7 @@ export function DockerComposeProjectDetail() {
       width: "minmax(240px, 1.5fr)",
       truncate: true,
       render: (operation) => (
-        <span
-          className={operation.error ? "text-red-600 dark:text-red-400" : "text-muted-foreground"}
-        >
+        <span className={operation.error ? "text-destructive" : "text-muted-foreground"}>
           {operation.error || operation.progress || "—"}
         </span>
       ),
@@ -1090,50 +1095,61 @@ export function DockerComposeProjectDetail() {
           usesInternalScroll ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
-        <div className="flex shrink-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate(backTarget)} />
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{project.name}</h1>
-                {project.managementState === "external" && <ExternalComposeBadge />}
-                <Badge
-                  size="inline"
-                  className="shrink-0"
-                  variant={
-                    availabilityBadgeVariant ??
-                    (project.drifted ? "warning" : projectStatusVariant(project.status))
-                  }
-                >
-                  {String(
-                    availabilityStatus ?? (project.drifted ? "Drift" : project.status)
-                  ).replaceAll("_", " ")}
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                {availabilityActive
-                  ? "Availability"
-                  : node?.displayName || node?.hostname || project.nodeId}{" "}
-                · {logicalServiceCount} {logicalServiceCount === 1 ? "service" : "services"}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            {headerActions.map((headerAction) => (
-              <Button
-                key={headerAction.label}
-                variant={headerAction.label === "Pull & Apply" ? "default" : "outline"}
-                size={headerAction.label === "Pin" ? "icon" : "default"}
-                disabled={headerAction.disabled}
-                title={headerAction.disabled ? headerAction.disabledReason : undefined}
-                onClick={headerAction.onClick}
+        {!availabilityLoaded && <Skeleton />}
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate(backTarget)} />}
+          title={project.name}
+          badges={
+            <>
+              {project.managementState === "external" && <ExternalComposeBadge />}
+              <Badge
+                size="inline"
+                className="shrink-0"
+                variant={
+                  availabilityBadgeVariant ??
+                  (project.drifted ? "warning" : projectStatusVariant(project.status))
+                }
               >
-                {headerAction.icon}
-                {headerAction.label === "Pin" ? null : headerAction.label}
-              </Button>
-            ))}
-          </ResponsiveHeaderActions>
-        </div>
+                {String(
+                  availabilityStatus ?? (project.drifted ? "Drift" : project.status)
+                ).replaceAll("_", " ")}
+              </Badge>
+            </>
+          }
+          description={
+            <>
+              {availabilityActive
+                ? "Availability"
+                : node?.displayName || node?.hostname || project.nodeId}{" "}
+              · {logicalServiceCount} {logicalServiceCount === 1 ? "service" : "services"}
+            </>
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerActions.map((headerAction) => {
+                const pending =
+                  headerAction.actionKey === "delete"
+                    ? deleting
+                    : !!headerAction.actionKey && action === headerAction.actionKey;
+                return (
+                  <Button
+                    key={headerAction.label}
+                    variant={headerAction.label === "Pull & Apply" ? "default" : "outline"}
+                    size={headerAction.label === "Pin" ? "icon" : "default"}
+                    disabled={headerAction.disabled}
+                    pending={pending}
+                    title={headerAction.disabled ? headerAction.disabledReason : undefined}
+                    onClick={headerAction.onClick}
+                  >
+                    {pending ? null : headerAction.icon}
+                    {headerAction.label === "Pin" ? null : headerAction.label}
+                  </Button>
+                );
+              })}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {project.availability === "unavailable" && (
           <div className="flex shrink-0 gap-2 border border-warning/30 bg-warning/10 p-3 text-sm">
@@ -1260,11 +1276,7 @@ export function DockerComposeProjectDetail() {
                 icon={<History className="h-4 w-4" />}
                 description="The six latest Compose lifecycle operations."
                 actions={
-                  <Button
-                    variant="ghost"
-                    className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-                    onClick={openActivity}
-                  >
+                  <Button variant="ghost" size="sm" onClick={openActivity}>
                     View all
                   </Button>
                 }
@@ -1491,41 +1503,38 @@ export function DockerComposeProjectDetail() {
               Lifecycle operation history. Scroll the table to load older operations.
             </DialogDescription>
           </DialogHeader>
-          {activityLoading && activityOperations.length === 0 ? (
-            <LoadingSpinner className="min-h-48" label="Loading Compose activity" />
-          ) : (
-            <div
-              className="max-h-[min(70dvh,44rem)] overflow-hidden"
-              style={activityTableHeight ? { height: activityTableHeight } : undefined}
-            >
-              <DataTable
-                columns={activityColumns}
-                data={activityOperations}
-                keyFn={(operation) => operation.id}
-                emptyMessage="No operations yet."
-                horizontalScroll
-                minWidth="900px"
-                className="h-full w-full"
-                scrollRef={activityScrollRef}
-                footer={
-                  activityNextCursor ? (
-                    <div
-                      ref={activitySentinelRef}
-                      className="p-3 text-center text-xs text-muted-foreground"
-                    >
-                      {activityLoadingMore
-                        ? "Loading older activity..."
-                        : "Scroll to load older activity"}
-                    </div>
-                  ) : null
-                }
-                onRowClick={(operation) => {
-                  setSelectedOperation(operation);
-                  setActivityDetailsOpen(true);
-                }}
-              />
-            </div>
-          )}
+          <div
+            className="max-h-[min(70dvh,44rem)] overflow-hidden"
+            style={activityTableHeight ? { height: activityTableHeight } : undefined}
+          >
+            <DataTable
+              columns={activityColumns}
+              data={activityOperations}
+              loading={activityLoading && activityOperations.length === 0}
+              keyFn={(operation) => operation.id}
+              emptyMessage="No operations yet."
+              horizontalScroll
+              minWidth="900px"
+              className="h-full w-full"
+              scrollRef={activityScrollRef}
+              footer={
+                activityNextCursor ? (
+                  <div
+                    ref={activitySentinelRef}
+                    className="p-3 text-center text-xs text-muted-foreground"
+                  >
+                    {activityLoadingMore
+                      ? "Loading older activity..."
+                      : "Scroll to load older activity"}
+                  </div>
+                ) : null
+              }
+              onRowClick={(operation) => {
+                setSelectedOperation(operation);
+                setActivityDetailsOpen(true);
+              }}
+            />
+          </div>
         </DialogContent>
       </Dialog>
       <Dialog open={activityDetailsOpen} onOpenChange={setActivityDetailsOpen}>
@@ -1576,7 +1585,7 @@ export function DockerComposeProjectDetail() {
                 label="Error"
                 value={
                   selectedOperation.error ? (
-                    <span className="whitespace-pre-wrap break-words text-left text-sm text-red-600 dark:text-red-400">
+                    <span className="whitespace-pre-wrap break-words text-left text-sm text-destructive">
                       {selectedOperation.error}
                     </span>
                   ) : (

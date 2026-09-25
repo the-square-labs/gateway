@@ -34,10 +34,11 @@ export function effectiveHealthStatus(host: {
   return "online";
 }
 
-export const TYPE_BADGE: Record<string, "default" | "secondary" | "destructive"> = {
-  proxy: "default",
-  redirect: "secondary",
-  "404": "secondary",
+/** Route type colours, shared by the route list and the route page. */
+export const TYPE_BADGE: Record<string, "secondary" | "warning" | "destructive"> = {
+  proxy: "secondary",
+  redirect: "warning",
+  "404": "destructive",
   raw: "destructive",
 };
 

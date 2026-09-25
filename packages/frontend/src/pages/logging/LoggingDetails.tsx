@@ -14,7 +14,9 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
@@ -80,8 +82,8 @@ export function LoggingSchemaDetail({
   if (!schema) {
     return (
       <PageTransition>
-        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          Logging schema not found.
+        <div className="p-6">
+          <EmptyState message="Logging schema not found." />
         </div>
       </PageTransition>
     );
@@ -125,39 +127,41 @@ export function LoggingSchemaDetail({
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/logging/schemas")} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{schema.name}</h1>
-                <Badge variant="secondary" size="inline" className="uppercase">
-                  {draft.schemaMode ?? schema.schemaMode}
-                </Badge>
-                <Badge variant="outline" size="inline">
-                  {(draft.fieldSchema ?? schema.fieldSchema).length} fields
-                </Badge>
-              </div>
-              <p className="truncate text-sm text-muted-foreground">
-                {schema.slug} · Updated {new Date(schema.updatedAt).toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            {canEdit && (
-              <Button disabled={saving || !dirty} onClick={() => void save()}>
-                <Save className="h-4 w-4" />
-                {saving ? "Saving..." : "Save Changes"}
-              </Button>
-            )}
-            {canDelete && (
-              <Button variant="destructive" onClick={() => void onDelete(schema)}>
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          leading={<PageBackButton onClick={() => navigate("/logging/schemas")} />}
+          title={schema.name}
+          badges={
+            <>
+              <Badge variant="secondary" size="inline">
+                {draft.schemaMode ?? schema.schemaMode}
+              </Badge>
+              <Badge variant="outline" size="inline">
+                {(draft.fieldSchema ?? schema.fieldSchema).length} fields
+              </Badge>
+            </>
+          }
+          description={
+            <span className="block truncate">
+              {schema.slug} · Updated {new Date(schema.updatedAt).toLocaleString()}
+            </span>
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {canEdit && (
+                <Button pending={saving} disabled={!dirty} onClick={() => void save()}>
+                  {saving ? null : <Save />}
+                  Save Changes
+                </Button>
+              )}
+              {canDelete && (
+                <Button variant="destructive" onClick={() => void onDelete(schema)}>
+                  <Trash2 />
+                  Delete
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <SettingsPanel title="Metadata" description="Reusable schema identity">
@@ -178,13 +182,10 @@ export function LoggingSchemaDetail({
           </SettingsPanel>
 
           <SettingsPanel title="Behavior" description="Validation mode for attached environments">
-            <div className="flex items-center justify-between gap-4 px-4 py-3">
-              <div>
-                <p className="text-sm font-medium">Mode</p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Unknown labels and fields are handled during ingest
-                </p>
-              </div>
+            <SettingsControlRow
+              title="Mode"
+              description="Unknown labels and fields are handled during ingest"
+            >
               <Select
                 disabled={!canEdit}
                 value={draft.schemaMode ?? schema.schemaMode}
@@ -201,7 +202,7 @@ export function LoggingSchemaDetail({
                   <SelectItem value="loose">Loose</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
+            </SettingsControlRow>
           </SettingsPanel>
         </div>
 
@@ -264,8 +265,8 @@ export function LoggingEnvironmentDetail({
   if (!environment) {
     return (
       <PageTransition>
-        <div className="flex items-center justify-center py-16 text-sm text-muted-foreground">
-          Logging environment not found.
+        <div className="p-6">
+          <EmptyState message="Logging environment not found." />
         </div>
       </PageTransition>
     );
@@ -344,60 +345,64 @@ export function LoggingEnvironmentDetail({
             : "h-full overflow-y-auto p-6 space-y-4"
         }
       >
-        <div className="flex shrink-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/logging/environments")} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{environment.name}</h1>
-                <Badge variant={environment.enabled ? "success" : "secondary"} size="inline">
-                  {environment.enabled ? "Enabled" : "Disabled"}
-                </Badge>
-                <Badge variant="secondary" size="inline">
-                  {environment.schemaMode}
-                </Badge>
-              </div>
-              <p className="truncate text-sm text-muted-foreground">
-                {environment.slug} · {environment.schemaName ?? "No schema attached"} ·{" "}
-                {environment.retentionDays}d retention
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>
-            <Button variant="outline" onClick={() => setConnectionInstructionsOpen(true)}>
-              <Code2 className="h-4 w-4" />
-              Connect
-            </Button>
-            {activeTab === "logs" && (
-              <RefreshButton
-                onClick={() => setLogsRefreshKey((current) => current + 1)}
-                disabled={!loggingEnabled}
-                minDurationMs={1000}
-              />
-            )}
-            {activeTab === "tokens" && canCreateToken && (
-              <Button onClick={() => setTokenDialogOpenGuarded(true)}>
-                <Plus className="h-4 w-4" />
-                New Token
+        <PageHeader
+          className="shrink-0"
+          leading={<PageBackButton onClick={() => navigate("/logging/environments")} />}
+          title={environment.name}
+          badges={
+            <>
+              <Badge variant={environment.enabled ? "success" : "secondary"} size="inline">
+                {environment.enabled ? "Enabled" : "Disabled"}
+              </Badge>
+              <Badge variant="secondary" size="inline">
+                {environment.schemaMode}
+              </Badge>
+            </>
+          }
+          description={
+            <span className="block truncate">
+              {environment.slug} · {environment.schemaName ?? "No schema attached"} ·{" "}
+              {environment.retentionDays}d retention
+            </span>
+          }
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              <Button variant="outline" onClick={() => setConnectionInstructionsOpen(true)}>
+                <Code2 className="h-4 w-4" />
+                Connect
               </Button>
-            )}
-            {activeTab === "settings" && canEdit && (
-              <Button
-                disabled={!settingsDirty || settingsSaving}
-                onClick={() => void saveSettings()}
-              >
-                <Save className="h-4 w-4" />
-                {settingsSaving ? "Saving..." : "Save Changes"}
-              </Button>
-            )}
-            {activeTab === "settings" && canDelete && (
-              <Button variant="destructive" onClick={() => void onDelete(environment)}>
-                <Trash2 className="h-4 w-4" />
-                Delete
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {activeTab === "logs" && (
+                <RefreshButton
+                  onClick={() => setLogsRefreshKey((current) => current + 1)}
+                  disabled={!loggingEnabled}
+                  minDurationMs={1000}
+                />
+              )}
+              {activeTab === "tokens" && canCreateToken && (
+                <Button onClick={() => setTokenDialogOpenGuarded(true)}>
+                  <Plus className="h-4 w-4" />
+                  New Token
+                </Button>
+              )}
+              {activeTab === "settings" && canEdit && (
+                <Button
+                  pending={settingsSaving}
+                  disabled={!settingsDirty}
+                  onClick={() => void saveSettings()}
+                >
+                  {settingsSaving ? null : <Save />}
+                  Save Changes
+                </Button>
+              )}
+              {activeTab === "settings" && canDelete && (
+                <Button variant="destructive" onClick={() => void onDelete(environment)}>
+                  <Trash2 />
+                  Delete
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <Tabs
           value={activeTab}
@@ -507,9 +512,7 @@ function LoggingEnvironmentSettings({
             description="Effective unknown-field behavior for this environment"
             help="Inherited from the attached schema. Without a schema, the environment uses Loose mode."
           >
-            <Badge variant="secondary" className="uppercase">
-              {effectiveSchemaMode}
-            </Badge>
+            <Badge variant="secondary">{effectiveSchemaMode}</Badge>
           </SettingsControlRow>
           <SettingsControlRow
             title="Enabled"
@@ -613,18 +616,15 @@ function SettingsTextRow({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 px-4 py-3">
-      <div>
-        <p className="text-sm font-medium">{label}</p>
-        <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
-      </div>
+    <SettingsControlRow title={label} description={description}>
       <Input
-        className="w-[260px]"
+        aria-label={label}
+        className="w-full sm:w-[260px]"
         disabled={disabled}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
-    </div>
+    </SettingsControlRow>
   );
 }
 

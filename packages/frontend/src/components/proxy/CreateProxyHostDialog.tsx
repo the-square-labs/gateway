@@ -1,9 +1,10 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, ArrowRight, Loader2, Minus, Plus } from "lucide-react";
+import { ArrowLeft, ArrowRight, Minus, Plus } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Combobox } from "@/components/common/Combobox";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
@@ -139,7 +140,9 @@ export function CreateProxyHostDialog({
   // Create only: destination folder ("" = root). Moving an existing route uses the move dialog.
   const [folderId, setFolderId] = useState<string>("");
   const [folderOptions, setFolderOptions] = useState<CreationFolderOption[]>([]);
-  const [foldersLoading, setFoldersLoading] = useState(false);
+  // Loads started when the dialog opens. Each flag is true from the first open
+  // render and reset when the dialog closes, so the dialog opens at full size.
+  const [foldersLoading, setFoldersLoading] = useState(true);
 
   // Step 2 — Configuration: Proxy
   const [upstream, setUpstream] = useState<ProxyUpstreamSelection>(DEFAULT_PROXY_UPSTREAM);
@@ -174,7 +177,9 @@ export function CreateProxyHostDialog({
   const [nodesLoading, setNodesLoading] = useState(nodes.length === 0);
   const [sslCerts, setSslCerts] = useState<SSLCertificate[]>([]);
   const [nginxTemplateList, setNginxTemplateList] = useState<NginxTemplate[]>([]);
+  const [supportLoading, setSupportLoading] = useState(true);
   const [dockerContainers, setDockerContainers] = useState<DockerContainer[]>([]);
+  const [containersLoading, setContainersLoading] = useState(true);
 
   // Reset entire form to defaults
   const resetForm = useCallback(() => {
@@ -245,12 +250,17 @@ export function CreateProxyHostDialog({
   // Fetch related data when dialog opens
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
 
     void api
       .listNodes({ type: "nginx" })
-      .then((response) => setNodes(mapNodeOptions(response.data ?? [])))
+      .then((response) => {
+        if (!cancelled) setNodes(mapNodeOptions(response.data ?? []));
+      })
       .catch(() => {})
-      .finally(() => setNodesLoading(false));
+      .finally(() => {
+        if (!cancelled) setNodesLoading(false);
+      });
 
     const loadSupportingData = async () => {
       try {
@@ -258,24 +268,38 @@ export function CreateProxyHostDialog({
           api.listSSLCertificates({ limit: 100 }),
           api.listNginxTemplates(),
         ]);
+        if (cancelled) return;
         setSslCerts(sslRes.data || []);
         setNginxTemplateList(templateRes || []);
       } catch {
         // non-critical
+      } finally {
+        if (!cancelled) setSupportLoading(false);
       }
     };
 
     void loadSupportingData();
     void api
       .listDockerContainerSnapshots()
-      .then(setDockerContainers)
-      .catch(() => setDockerContainers([]));
+      .then((containers) => {
+        if (!cancelled) setDockerContainers(containers);
+      })
+      .catch(() => {
+        if (!cancelled) setDockerContainers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setContainersLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      setSupportLoading(true);
+      setContainersLoading(true);
+    };
   }, [open]);
 
   useEffect(() => {
     if (!open || isEditing) return;
     let cancelled = false;
-    setFoldersLoading(true);
     void api
       .listFolders()
       .then((tree) => {
@@ -289,6 +313,7 @@ export function CreateProxyHostDialog({
       });
     return () => {
       cancelled = true;
+      setFoldersLoading(true);
     };
   }, [isEditing, open]);
 
@@ -349,6 +374,10 @@ export function CreateProxyHostDialog({
   const selectedLockedForCreation =
     !!selectedNode?.serviceCreationLocked &&
     (!isEditing || selectedNode.id !== (existingHost as any)?.nodeId);
+
+  // Editing touches only the entrypoint, so it waits for the node list alone.
+  const optionsLoading =
+    nodesLoading || (!isEditing && (foldersLoading || supportLoading || containersLoading));
 
   // Validation
   const isStep1Valid =
@@ -502,6 +531,7 @@ export function CreateProxyHostDialog({
         </DialogHeader>
 
         <AnimatedHeight>
+          <ContentLoading loading={optionsLoading} />
           <AnimatePresence initial={false} mode="popLayout">
             {step === 1 && (
               <motion.div
@@ -556,14 +586,12 @@ export function CreateProxyHostDialog({
                           </Badge>
                         </div>
                       ) : (
-                        <SelectValue
-                          placeholder={nodesLoading ? "Loading nodes..." : "Select a node..."}
-                        />
+                        <SelectValue placeholder="Select a node..." />
                       )}
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="__none__" disabled>
-                        {nodesLoading ? "Loading nodes..." : "Select a node..."}
+                        Select a node...
                       </SelectItem>
                       {visibleNodes.map((node) => {
                         const lockedForCreation =
@@ -595,12 +623,9 @@ export function CreateProxyHostDialog({
                       onValueChange={(value) =>
                         setFolderId(value === ROOT_FOLDER_VALUE ? "" : value)
                       }
-                      disabled={foldersLoading}
                     >
-                      <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                        <SelectValue
-                          placeholder={foldersLoading ? "Loading folders..." : "Select a folder..."}
-                        />
+                      <SelectTrigger aria-label="Folder">
+                        <SelectValue placeholder="Select a folder..." />
                       </SelectTrigger>
                       <SelectContent>
                         {folderChoices.allowRoot && (
@@ -654,7 +679,8 @@ export function CreateProxyHostDialog({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              aria-label={`Remove domain ${i + 1}`}
                               onClick={() => setDomainNames(domainNames.filter((_, j) => j !== i))}
                             >
                               <Minus className="h-4 w-4" />
@@ -665,7 +691,8 @@ export function CreateProxyHostDialog({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              aria-label="Add domain"
                               onClick={() => setDomainNames([...domainNames, ""])}
                             >
                               <Plus className="h-4 w-4" />
@@ -720,38 +747,33 @@ export function CreateProxyHostDialog({
                 )}
 
                 {type === "redirect" && (
-                  <div className="border border-border bg-card">
-                    <div className="border-b border-border p-4">
-                      <h2 className="font-semibold text-sm">Redirect</h2>
-                    </div>
-                    <div className="p-4">
-                      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                        <div className="space-y-1.5">
-                          <label className="text-xs text-muted-foreground">Redirect URL</label>
-                          <Input
-                            value={redirectUrl}
-                            onChange={(e) => setRedirectUrl(e.target.value)}
-                            placeholder="https://example.com"
-                          />
-                        </div>
-                        <div className="space-y-1.5">
-                          <label className="text-xs text-muted-foreground">Status Code</label>
-                          <Select
-                            value={String(redirectStatusCode)}
-                            onValueChange={(v) => setRedirectStatusCode(Number(v))}
-                          >
-                            <SelectTrigger>
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="301">301 - Permanent</SelectItem>
-                              <SelectItem value="302">302 - Temporary</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
+                  <PanelShell title="Redirect" bodyClassName="p-4">
+                    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Redirect URL</label>
+                        <Input
+                          value={redirectUrl}
+                          onChange={(e) => setRedirectUrl(e.target.value)}
+                          placeholder="https://example.com"
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <label className="text-xs text-muted-foreground">Status Code</label>
+                        <Select
+                          value={String(redirectStatusCode)}
+                          onValueChange={(v) => setRedirectStatusCode(Number(v))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="301">301 - Permanent</SelectItem>
+                            <SelectItem value="302">302 - Temporary</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </div>
                     </div>
-                  </div>
+                  </PanelShell>
                 )}
 
                 {/* SSL card — always visible, inner controls disabled when SSL off */}
@@ -846,8 +868,7 @@ export function CreateProxyHostDialog({
 
         <DialogFooter>
           {isEditing ? (
-            <Button onClick={handleSave} disabled={!isStep1Valid || isSaving}>
-              {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+            <Button onClick={handleSave} disabled={!isStep1Valid} pending={isSaving}>
               Save
             </Button>
           ) : step === 1 ? (
@@ -861,8 +882,7 @@ export function CreateProxyHostDialog({
                 <ArrowLeft className="h-4 w-4" />
                 Back
               </Button>
-              <Button onClick={handleSave} disabled={!isStep2Valid || isSaving}>
-                {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Button onClick={handleSave} disabled={!isStep2Valid} pending={isSaving}>
                 Create
               </Button>
             </div>

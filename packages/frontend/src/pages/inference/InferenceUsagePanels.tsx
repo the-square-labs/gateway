@@ -3,6 +3,7 @@ import {
   CircleDollarSign,
   Clock3,
   Gauge,
+  Loader2,
   Plus,
   Server,
   Sigma,
@@ -10,11 +11,11 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { ProgressBar } from "@/components/ui/progress-bar";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import {
   useInferenceSelfUsage,
@@ -85,7 +86,7 @@ function InferenceUsagePanel({ usage }: { usage: InferenceSelfUsage }) {
         description="Usage limits for the AI models available to you. Limits recover automatically."
         actions={
           <Button onClick={() => setInstructionsOpen(true)}>
-            <Plus className="h-4 w-4" />
+            <Plus />
             Set up a harness
           </Button>
         }
@@ -144,16 +145,6 @@ function UsageStatCard({
   );
 }
 
-function InferenceUsageOverviewSkeleton() {
-  return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-busy="true">
-      {Array.from({ length: 4 }, (_, index) => (
-        <Skeleton key={index} className="h-44 w-full" />
-      ))}
-    </div>
-  );
-}
-
 export function InferenceUsage({
   previewUsage,
   previewOverview,
@@ -168,30 +159,9 @@ export function InferenceUsage({
   const loading = previewUsage === undefined && liveUsage.loading;
   const overviewLoading = previewOverview === undefined && liveOverview.loading;
   const error = previewUsage === undefined ? liveUsage.error : null;
+  useContentLoading(loading || overviewLoading);
 
-  if (loading) {
-    return (
-      <div className="space-y-4">
-        <InferenceUsageOverviewSkeleton />
-        <PanelShell
-          icon={<Gauge className="h-4 w-4" />}
-          title="Inference usage"
-          description="Usage limits for the AI models available to you. Limits recover automatically."
-        >
-          <div className="grid grid-cols-1 gap-px bg-border sm:grid-cols-2" aria-busy="true">
-            {Array.from({ length: 2 }, (_, index) => (
-              <div key={index} className="space-y-3 bg-card p-4">
-                <Skeleton className="h-4 w-24" />
-                <Skeleton className="h-7 w-16" />
-                <Skeleton className="h-2 w-full" />
-                <Skeleton className="h-3 w-40" />
-              </div>
-            ))}
-          </div>
-        </PanelShell>
-      </div>
-    );
-  }
+  if (loading) return null;
   if (error || !usage?.enabled) return null;
 
   const hasConfiguredLimit =
@@ -203,11 +173,7 @@ export function InferenceUsage({
 
   return (
     <div className="space-y-4">
-      {overview ? (
-        <InferenceUsageOverviewCards usage={overview} />
-      ) : overviewLoading ? (
-        <InferenceUsageOverviewSkeleton />
-      ) : null}
+      {overview ? <InferenceUsageOverviewCards usage={overview} /> : null}
       {hasConfiguredLimit ? <InferenceUsagePanel usage={usage} /> : null}
     </div>
   );
@@ -226,6 +192,7 @@ export function DashboardInferenceUsage({
     error,
   } = useInferenceSelfUsage(enabled && bootstrapUsage === undefined);
   const usage = bootstrapUsage === undefined ? fetchedUsage : bootstrapUsage;
+  useContentLoading(loading);
 
   if (loading || error || !usage?.enabled) return null;
 
@@ -307,13 +274,20 @@ export function CompactInferenceUsage({
   const [open, setOpen] = useState(initialCompactUsageOpen);
 
   if (waitForDashboardBootstrap) {
+    // The account menu has no reveal gate: hold the section's row in place,
+    // shaped like the disclosure trigger that replaces it.
     return (
       <>
-        {withMenuSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
-        <div className="space-y-2 px-2 py-2" aria-busy="true" aria-label="Loading AI usage">
-          <Skeleton className="h-3 w-24" />
-          <Skeleton className="h-2 w-full" />
+        <div
+          className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground md:py-1.5"
+          aria-busy="true"
+          aria-label="Loading AI usage"
+        >
+          <Gauge className="h-4 w-4 shrink-0" aria-hidden="true" />
+          <span>AI usage remaining</span>
+          <Loader2 className="ml-auto h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
         </div>
+        {withMenuSeparator ? <DropdownMenuSeparator className="bg-border" /> : null}
       </>
     );
   }
@@ -370,7 +344,7 @@ export function CompactInferenceUsage({
                   className="space-y-1"
                   aria-label={`${label} remaining ${remaining}%`}
                 >
-                  <div className="flex items-center justify-between text-[13px] text-muted-foreground">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
                     <span>{label}</span>
                     <span>{remaining}%</span>
                   </div>
@@ -398,9 +372,10 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
 
   const load = useCallback(async () => {
     if (!initializedRef.current) setLoading(true);
-    setError(null);
     try {
       setUsage(await api.getInferenceSystemUsage());
+      // A failed first load keeps its message on screen while Retry runs.
+      setError(null);
       initializedRef.current = true;
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load system usage");
@@ -414,13 +389,15 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
     void load();
   }, [load, refreshToken]);
 
+  useContentLoading(loading && !usage);
+
   if (error && !usage) {
     return (
       <PanelShell
         icon={<Gauge className="h-4 w-4" />}
         title="Inference overview"
         actions={
-          <Button variant="outline" onClick={() => void load()} disabled={loading}>
+          <Button variant="outline" onClick={() => void load()} pending={loading}>
             Retry
           </Button>
         }
@@ -430,9 +407,9 @@ export function InferenceOverview({ refreshToken = 0 }: { refreshToken?: number 
     );
   }
 
-  if (loading && !usage) return <Skeleton />;
+  if (!usage) return null;
 
-  return <InferenceUsageOverviewCards usage={usage!} />;
+  return <InferenceUsageOverviewCards usage={usage} />;
 }
 
 export function InferenceUsageOverviewCards({ usage }: { usage: InferenceUsageOverview }) {

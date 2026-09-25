@@ -17,6 +17,7 @@ import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -31,6 +32,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -110,15 +112,21 @@ export function DockerVolumeDetail({
   const [isLoading, setIsLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  // The header action whose request is running, so its button shows the pending state.
+  const [pendingAction, setPendingAction] = useState<"remove" | "protect" | null>(null);
   const [labelsSaving, setLabelsSaving] = useState(false);
   const [labels, setLabels] = useState<LabelEntry[]>([]);
   const [savedLabels, setSavedLabels] = useState<LabelEntry[]>([]);
   const [composeOwnerProjectId, setComposeOwnerProjectId] = useState<string | null>(null);
+  const [composeOwnerLoadedFor, setComposeOwnerLoadedFor] = useState<string | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameValue, setRenameValue] = useState("");
   const [usageContainers, setUsageContainers] = useState<VolumeUsageContainer[]>([]);
   const [usageLoading, setUsageLoading] = useState(false);
+  // The attachments a Usage table was filled for, so the Settings tab waits for its first rows.
+  const [usageLoadedFor, setUsageLoadedFor] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DockerVolumeMetrics | null>(null);
+  const [metricsLoaded, setMetricsLoaded] = useState(false);
   const [metricHistory, setMetricHistory] = useState({
     space: [] as number[],
     inodes: [] as number[],
@@ -240,6 +248,9 @@ export function DockerVolumeDetail({
       })
       .catch(() => {
         if (!cancelled) setComposeOwnerProjectId(null);
+      })
+      .finally(() => {
+        if (!cancelled) setComposeOwnerLoadedFor(composeProjectName);
       });
     return () => {
       cancelled = true;
@@ -286,7 +297,10 @@ export function DockerVolumeDetail({
         }
       })
       .finally(() => {
-        if (!cancelled) setUsageLoading(false);
+        if (!cancelled) {
+          setUsageLoading(false);
+          setUsageLoadedFor(usedBy.join("\n"));
+        }
       });
     return () => {
       cancelled = true;
@@ -313,6 +327,7 @@ export function DockerVolumeDetail({
       // Keep the last successful sample during transient daemon refreshes.
     } finally {
       if (metricsRequestRef.current === identity) metricsRequestRef.current = null;
+      if (metricsIdentityRef.current === identity) setMetricsLoaded(true);
     }
   }, [decodedVolumeName, nodeId, unavailable]);
 
@@ -445,7 +460,7 @@ export function DockerVolumeDetail({
   }, [decodedVolumeName]);
 
   const handleRename = useCallback(async () => {
-    if (!nodeId || !decodedVolumeName || !renameValue.trim()) return;
+    if (actionLoading || !nodeId || !decodedVolumeName || !renameValue.trim()) return;
     const nextName = renameValue.trim();
     if (nextName === decodedVolumeName) {
       setRenameOpen(false);
@@ -470,7 +485,16 @@ export function DockerVolumeDetail({
     } finally {
       setActionLoading(false);
     }
-  }, [activeTab, decodedVolumeName, location.state, navigate, nodeId, nodeSlug, renameValue]);
+  }, [
+    actionLoading,
+    activeTab,
+    decodedVolumeName,
+    location.state,
+    navigate,
+    nodeId,
+    nodeSlug,
+    renameValue,
+  ]);
 
   const handleRemove = useCallback(async () => {
     if (!nodeId || !decodedVolumeName) return;
@@ -481,6 +505,7 @@ export function DockerVolumeDetail({
     });
     if (!ok) return;
     setActionLoading(true);
+    setPendingAction("remove");
     try {
       await api.removeVolume(nodeId, decodedVolumeName);
       toast.success("Volume removed");
@@ -489,6 +514,7 @@ export function DockerVolumeDetail({
       toast.error(err instanceof Error ? err.message : "Failed to remove volume");
     } finally {
       setActionLoading(false);
+      setPendingAction(null);
     }
   }, [backTarget, decodedVolumeName, navigate, nodeId]);
 
@@ -514,6 +540,7 @@ export function DockerVolumeDetail({
   const handleToggleCleanupProtection = useCallback(async () => {
     if (!nodeId || !decodedVolumeName || !isAnonymousVolume || isUsed) return;
     setActionLoading(true);
+    setPendingAction("protect");
     try {
       const nextLabels = { ...(volume?.labels ?? {}) };
       if (isCleanupProtected) {
@@ -530,6 +557,7 @@ export function DockerVolumeDetail({
       toast.error(err instanceof Error ? err.message : "Failed to update cleanup protection");
     } finally {
       setActionLoading(false);
+      setPendingAction(null);
     }
   }, [
     decodedVolumeName,
@@ -570,6 +598,14 @@ export function DockerVolumeDetail({
     nodeId,
     resizeCapacityGb,
   ]);
+
+  const composeOwnerPending =
+    composeManaged && !!nodeId && composeOwnerLoadedFor !== composeProjectName;
+  // The Settings tab opens with its metrics and the containers using the volume.
+  const settingsTabLoading =
+    isLoading ||
+    (!unavailable && !metricsLoaded) ||
+    (usedBy.length > 0 && usageLoadedFor !== usedBy.join("\n"));
 
   const headerActions = [
     ...(!composeManaged && canEditVolume && isDiskImage && volume?.managementState === "managed"
@@ -625,80 +661,78 @@ export function DockerVolumeDetail({
     <PageTransition>
       <div className="h-full overflow-y-auto p-6">
         <div className="space-y-6">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-4 min-w-0">
-              <PageBackButton onClick={() => navigate(backTarget)} />
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <h1 className="text-2xl font-bold truncate">{decodedVolumeName}</h1>
-                  {unavailable ? (
-                    <Badge variant="secondary" size="inline">
-                      Unavailable
-                    </Badge>
-                  ) : (
-                    volume?.driver && (
-                      <Badge variant="secondary" size="inline">
-                        {volume.driver}
-                      </Badge>
-                    )
+          {isLoading || composeOwnerPending ? <Skeleton /> : null}
+          <PageHeader
+            leading={<PageBackButton onClick={() => navigate(backTarget)} />}
+            title={decodedVolumeName}
+            badges={
+              unavailable ? (
+                <Badge variant="secondary" size="inline">
+                  Unavailable
+                </Badge>
+              ) : volume?.driver ? (
+                <Badge variant="secondary" size="inline">
+                  {volume.driver}
+                </Badge>
+              ) : null
+            }
+            description={
+              <span className="block truncate">{volume?.mountpoint ?? "Docker volume"}</span>
+            }
+            actions={
+              <ResponsiveHeaderActions actions={headerActions}>
+                {!composeManaged &&
+                  canEditVolume &&
+                  isDiskImage &&
+                  volume?.managementState === "managed" && (
+                    <Button
+                      variant="outline"
+                      onClick={openResize}
+                      disabled={actionLoading || unavailable}
+                    >
+                      <Scaling className="h-3.5 w-3.5" />
+                      Resize
+                    </Button>
                   )}
-                </div>
-                <p className="text-sm text-muted-foreground truncate">
-                  {volume?.mountpoint ?? (isLoading ? "Loading volume..." : "Docker volume")}
-                </p>
-              </div>
-            </div>
-            <ResponsiveHeaderActions actions={headerActions}>
-              {!composeManaged &&
-                canEditVolume &&
-                isDiskImage &&
-                volume?.managementState === "managed" && (
+                {!composeManaged && canRenameVolume && (
                   <Button
                     variant="outline"
-                    onClick={openResize}
-                    disabled={actionLoading || unavailable}
+                    onClick={openRename}
+                    disabled={actionLoading || isUsed || unavailable}
                   >
-                    <Scaling className="h-3.5 w-3.5" />
-                    Resize
+                    <Type className="h-3.5 w-3.5" />
+                    Rename
                   </Button>
                 )}
-              {!composeManaged && canRenameVolume && (
-                <Button
-                  variant="outline"
-                  size="default"
-                  onClick={openRename}
-                  disabled={actionLoading || isUsed || unavailable}
-                >
-                  <Type className="h-3.5 w-3.5" />
-                  Rename
-                </Button>
-              )}
-              {!composeManaged && canRenameVolume && isAnonymousVolume && (
-                <Button
-                  variant="outline"
-                  onClick={handleToggleCleanupProtection}
-                  disabled={isUsed || unavailable}
-                >
-                  {isCleanupProtected ? (
-                    <ShieldOff className="h-4 w-4" />
-                  ) : (
-                    <ShieldCheck className="h-4 w-4" />
-                  )}
-                  {isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup"}
-                </Button>
-              )}
-              {!composeManaged && canDeleteVolume && (
-                <Button
-                  variant="destructive"
-                  onClick={handleRemove}
-                  disabled={actionLoading || isUsed || unavailable}
-                >
-                  <Trash2 className="h-4 w-4" />
-                  Remove
-                </Button>
-              )}
-            </ResponsiveHeaderActions>
-          </div>
+                {!composeManaged && canRenameVolume && isAnonymousVolume && (
+                  <Button
+                    variant="outline"
+                    onClick={handleToggleCleanupProtection}
+                    pending={pendingAction === "protect"}
+                    disabled={isUsed || unavailable}
+                  >
+                    {pendingAction === "protect" ? null : isCleanupProtected ? (
+                      <ShieldOff className="h-4 w-4" />
+                    ) : (
+                      <ShieldCheck className="h-4 w-4" />
+                    )}
+                    {isCleanupProtected ? "Unprotect from cleanup" : "Protect from cleanup"}
+                  </Button>
+                )}
+                {!composeManaged && canDeleteVolume && (
+                  <Button
+                    variant="destructive"
+                    onClick={handleRemove}
+                    pending={pendingAction === "remove"}
+                    disabled={actionLoading || isUsed || unavailable}
+                  >
+                    {pendingAction !== "remove" && <Trash2 className="h-4 w-4" />}
+                    Remove
+                  </Button>
+                )}
+              </ResponsiveHeaderActions>
+            }
+          />
 
           {composeManaged && (
             <div className="flex flex-wrap items-center justify-between gap-3 border border-primary/20 bg-primary/5 p-3 text-sm">
@@ -747,6 +781,7 @@ export function DockerVolumeDetail({
             </TabsContent>
             <TabsContent value="settings" className="pb-0">
               <div className="space-y-6">
+                {settingsTabLoading ? <Skeleton /> : null}
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <StatCard
                     label="Space"
@@ -843,14 +878,14 @@ export function DockerVolumeDetail({
                     canRenameVolume ? (
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
+                        size="icon-sm"
                         onClick={handleSaveLabels}
-                        disabled={!labelsChanged || labelsSaving || isUsed || unavailable}
+                        pending={labelsSaving}
+                        disabled={!labelsChanged || isUsed || unavailable}
                         aria-label="Save labels"
                         title="Save labels"
                       >
-                        <Save className="h-3.5 w-3.5" />
+                        {!labelsSaving && <Save className="h-3.5 w-3.5" />}
                       </Button>
                     ) : null
                   }
@@ -862,9 +897,9 @@ export function DockerVolumeDetail({
                     description="Download a tar.gz archive with the current volume contents."
                     headerBorder={false}
                     actions={
-                      <Button onClick={handleExport} disabled={exporting || unavailable}>
-                        <Download className="h-3.5 w-3.5" />
-                        {exporting ? "Exporting..." : "Export"}
+                      <Button onClick={handleExport} pending={exporting} disabled={unavailable}>
+                        {!exporting && <Download className="h-3.5 w-3.5" />}
+                        Export
                       </Button>
                     }
                   />
@@ -895,7 +930,8 @@ export function DockerVolumeDetail({
             </Button>
             <Button
               onClick={handleRename}
-              disabled={actionLoading || unavailable || !renameValue.trim()}
+              pending={actionLoading}
+              disabled={unavailable || !renameValue.trim()}
             >
               Rename
             </Button>
@@ -936,13 +972,13 @@ export function DockerVolumeDetail({
             </Button>
             <Button
               onClick={() => void handleResize()}
+              pending={resizing}
               disabled={
-                resizing ||
                 !Number.isInteger(Number(resizeCapacityGb)) ||
                 Number(resizeCapacityGb) <= currentCapacityGb
               }
             >
-              {resizing ? "Resizing..." : "Resize volume"}
+              Resize volume
             </Button>
           </DialogFooter>
         </DialogContent>

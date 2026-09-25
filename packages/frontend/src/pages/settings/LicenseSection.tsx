@@ -1,9 +1,10 @@
-import { ClipboardCopy, KeyRound, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { ClipboardCopy, KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,9 +15,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { api } from "@/services/api";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { LicensePlan, LicenseStatus, LicenseStatusView } from "@/types";
 import { resolveLicensePlan } from "./license-plan";
 
@@ -80,6 +81,7 @@ function copyToClipboard(text: string) {
 }
 
 function InstallationIdValue({ value }: { value: string }) {
+  // Inline value that copies itself on click, not a standalone action button.
   return (
     <button
       type="button"
@@ -143,6 +145,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [licenseKey, setLicenseKey] = useState("");
   const [saving, setSaving] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
   useScrollToNavigationTarget("gateway-license", !loading);
 
   const loadStatus = useCallback(async () => {
@@ -226,6 +229,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
       variant: "destructive",
     });
     if (!ok) return;
+    setDeactivating(true);
     try {
       const updated = await api.clearLicenseKey();
       api.setCache("settings:license-status", updated);
@@ -233,24 +237,13 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
       toast.success("License deactivated");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to deactivate license");
+    } finally {
+      setDeactivating(false);
     }
   };
 
-  if (loading) {
-    return (
-      <PanelShell
-        icon={<KeyRound className="h-4 w-4" />}
-        id="gateway-license"
-        title="License"
-        description="Loading license status"
-        actions={<Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-      >
-        <Skeleton />
-      </PanelShell>
-    );
-  }
-
-  if (!status) return null;
+  useContentLoading(loading);
+  if (loading || !status) return null;
 
   return (
     <>
@@ -280,8 +273,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
               required files before restarting Gateway.
             </p>
             {canManage ? (
-              <Button onClick={handleModuleActivation} disabled={activatingModule}>
-                {activatingModule && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Button onClick={handleModuleActivation} pending={activatingModule}>
                 Enable paid features
               </Button>
             ) : (
@@ -349,16 +341,12 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
                 </div>
               </div>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={handleCheck} disabled={checking}>
-                  {checking ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <RefreshCw className="h-4 w-4" />
-                  )}
+                <Button variant="outline" onClick={handleCheck} pending={checking}>
+                  {checking ? null : <RefreshCw className="h-4 w-4" />}
                   Check
                 </Button>
-                <Button variant="destructive" onClick={handleDeactivate}>
-                  <Trash2 className="h-4 w-4" />
+                <Button variant="destructive" onClick={handleDeactivate} pending={deactivating}>
+                  {deactivating ? null : <Trash2 className="h-4 w-4" />}
                   Deactivate
                 </Button>
               </div>
@@ -389,8 +377,7 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
               <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>
                 Cancel
               </Button>
-              <Button onClick={handleActivate} disabled={!licenseKey.trim() || saving}>
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Button onClick={handleActivate} pending={saving} disabled={!licenseKey.trim()}>
                 Activate
               </Button>
             </DialogFooter>
@@ -400,5 +387,3 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
     </>
   );
 }
-
-import { useUIBootstrapStore } from "@/stores/ui-bootstrap";

@@ -1,8 +1,9 @@
-import { Loader2, Network, Save } from "lucide-react";
+import { Network, Save } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
 import { PagesTargetPicker } from "@/components/proxy/PagesTargetPicker";
@@ -244,16 +245,28 @@ export function ProxyUpstreamFields({
   );
   const [pageProjects, setPageProjects] = useState<PageProject[]>([]);
   const [pageTags, setPageTags] = useState<PageTag[]>([]);
-  const [pageProjectsLoading, setPageProjectsLoading] = useState(false);
-  const [pageTagsLoading, setPageTagsLoading] = useState(false);
-  const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
   const pagesEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.pagesEnabled === true
   );
+  // Option lists load for the current target kind; the flags start true when the
+  // first render already needs them, so the enclosing gate waits for them.
+  const [composeLoading, setComposeLoading] = useState(value.kind === "docker_container");
+  const [pageProjectsLoading, setPageProjectsLoading] = useState(
+    value.kind === "pages" && pagesEnabled
+  );
+  const [pageTagsLoading, setPageTagsLoading] = useState(
+    value.kind === "pages" && pagesEnabled && Boolean(value.pageProjectId)
+  );
+  const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
+  useContentLoading(composeLoading || pageProjectsLoading || pageTagsLoading);
 
   useEffect(() => {
-    if (value.kind !== "docker_container") return;
+    if (value.kind !== "docker_container") {
+      setComposeLoading(false);
+      return;
+    }
     let cancelled = false;
+    setComposeLoading(true);
     void api
       .listDockerComposeProjects()
       .then((projects) =>
@@ -268,6 +281,9 @@ export function ProxyUpstreamFields({
       })
       .catch(() => {
         if (!cancelled) setComposeProjects([]);
+      })
+      .finally(() => {
+        if (!cancelled) setComposeLoading(false);
       });
     return () => {
       cancelled = true;
@@ -653,6 +669,8 @@ export function ProxyUpstreamPanel({
   const [relaySpreadCount, setRelaySpreadCount] = useState(host.relaySpreadCount ?? 2);
   const [upstreamIpv6Enabled, setUpstreamIpv6Enabled] = useState(host.upstreamIpv6Enabled ?? false);
   const [containers, setContainers] = useState<DockerContainer[]>([]);
+  const [containersLoading, setContainersLoading] = useState(true);
+  useContentLoading(containersLoading);
   const [saving, setSaving] = useState(false);
   const persistedDraft = useMemo(
     () => ({
@@ -670,7 +688,8 @@ export function ProxyUpstreamPanel({
     void api
       .listDockerContainerSnapshots()
       .then(setContainers)
-      .catch(() => setContainers([]));
+      .catch(() => setContainers([]))
+      .finally(() => setContainersLoading(false));
   }, []);
 
   useEffect(() => {
@@ -737,14 +756,11 @@ export function ProxyUpstreamPanel({
           <Button
             className="w-fit"
             onClick={save}
-            disabled={!changed || !isProxyUpstreamValid(selection) || !relaySpreadValid || saving}
+            disabled={!changed || !isProxyUpstreamValid(selection) || !relaySpreadValid}
+            pending={saving}
           >
-            {saving ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Save className="h-3.5 w-3.5" />
-            )}
-            {saving ? "Saving..." : "Save"}
+            {saving ? null : <Save />}
+            Save
           </Button>
         ) : null
       }

@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -48,6 +49,8 @@ export function ObjectBrowser({
   const [newBucketOpen, setNewBucketOpen] = useState(false);
   const [newBucketName, setNewBucketName] = useState("");
   const [creatingBucket, setCreatingBucket] = useState(false);
+  // The tab reveals with the bucket list; a later retry shows the spinner in place.
+  useContentLoading(bucketsLoading);
   const loadBuckets = useCallback(async () => {
     setBucketsLoading(true);
     try {
@@ -168,9 +171,10 @@ export function ObjectBrowser({
             </Button>
             <Button
               onClick={() => void createBucket()}
-              disabled={creatingBucket || !newBucketName.trim()}
+              pending={creatingBucket}
+              disabled={!newBucketName.trim()}
             >
-              {creatingBucket ? "Creating..." : "Create"}
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>

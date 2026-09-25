@@ -1,9 +1,9 @@
 import { Activity } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -24,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDateTime, formatRelativeDate, getInitials } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -57,12 +56,14 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
   });
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [filtersLoading, setFiltersLoading] = useState(false);
   const requestId = useRef(0);
   const filterRequestId = useRef(0);
   const loadingMore = useRef(false);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const recentInitializedRef = useRef(Boolean(cachedRecent));
+  useContentLoading(recentLoading);
 
   const loadRecent = useCallback(async () => {
     if (!recentInitializedRef.current) setRecentLoading(true);
@@ -142,6 +143,9 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
         if (currentRequest === filterRequestId.current) {
           toast.error(error instanceof Error ? error.message : "Failed to load activity filters");
         }
+      })
+      .finally(() => {
+        if (currentRequest === filterRequestId.current) setFiltersLoading(false);
       });
   }, [open, refreshToken]);
 
@@ -174,6 +178,7 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
     setUserId("all");
     setModel("all");
     setFilterOptions({ users: [], models: [] });
+    setFiltersLoading(true);
     setOpen(true);
   };
 
@@ -230,7 +235,6 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
 
   return (
     <TooltipProvider>
-      {recentLoading && <Skeleton />}
       <PanelShell
         icon={<Activity className="h-4 w-4" />}
         title="Recent activity"
@@ -264,99 +268,110 @@ export function InferenceActivityPanel({ refreshToken = 0 }: { refreshToken?: nu
               Metadata-only request history. Scroll the table to load older requests.
             </DialogDescription>
           </DialogHeader>
-          {loading && rows.length === 0 ? (
-            <LoadingSpinner className="min-h-48" label="Loading inference activity" />
-          ) : (
-            <div className="space-y-3 overflow-hidden">
-              <SearchFilterBar
-                search={search}
-                onSearchChange={setSearch}
-                hasActiveFilters={Boolean(
-                  search || status !== "all" || userId !== "all" || model !== "all"
-                )}
-                onReset={() => {
-                  setSearch("");
-                  setStatus("all");
-                  setUserId("all");
-                  setModel("all");
-                }}
-                placeholder="Search user, model, status, or error..."
-                inlineFilters
-                filters={
-                  <>
-                    <Select
-                      value={status}
-                      onValueChange={(value) => setStatus(value as ActivityStatus)}
+          <ActivityDialogBody initialLoading={(loading && rows.length === 0) || filtersLoading}>
+            <SearchFilterBar
+              search={search}
+              onSearchChange={setSearch}
+              hasActiveFilters={Boolean(
+                search || status !== "all" || userId !== "all" || model !== "all"
+              )}
+              onReset={() => {
+                setSearch("");
+                setStatus("all");
+                setUserId("all");
+                setModel("all");
+              }}
+              placeholder="Search user, model, status, or error..."
+              inlineFilters
+              filters={
+                <>
+                  <Select
+                    value={status}
+                    onValueChange={(value) => setStatus(value as ActivityStatus)}
+                  >
+                    <SelectTrigger className="w-40" aria-label="Activity status">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All statuses</SelectItem>
+                      <SelectItem value="reserved">Reserved</SelectItem>
+                      <SelectItem value="running">Running</SelectItem>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                      <SelectItem value="cancelled">Cancelled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Combobox
+                    value={userId}
+                    options={userOptions}
+                    onValueChange={setUserId}
+                    placeholder="All users"
+                    searchPlaceholder="Search users..."
+                    ariaLabel="Activity user"
+                    className="w-52"
+                  />
+                  <Combobox
+                    value={model}
+                    options={modelOptions}
+                    onValueChange={setModel}
+                    placeholder="All models"
+                    searchPlaceholder="Search models..."
+                    ariaLabel="Activity model"
+                    className="w-52"
+                  />
+                </>
+              }
+            />
+            <div
+              className="max-h-[min(56dvh,36rem)]"
+              style={activityTableHeight ? { height: activityTableHeight } : undefined}
+            >
+              <DataTable
+                columns={activityColumns}
+                data={rows}
+                keyFn={(row) => row.id}
+                horizontalScroll
+                minWidth="52rem"
+                className="h-full"
+                fixedRowHeight={49}
+                emptyMessage="No inference activity"
+                scrollRef={tableScrollRef}
+                footer={
+                  nextPage ? (
+                    <div
+                      ref={sentinelRef}
+                      className="py-3 text-center text-xs text-muted-foreground"
                     >
-                      <SelectTrigger className="w-40" aria-label="Activity status">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="all">All statuses</SelectItem>
-                        <SelectItem value="reserved">Reserved</SelectItem>
-                        <SelectItem value="running">Running</SelectItem>
-                        <SelectItem value="completed">Completed</SelectItem>
-                        <SelectItem value="failed">Failed</SelectItem>
-                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Combobox
-                      value={userId}
-                      options={userOptions}
-                      onValueChange={setUserId}
-                      placeholder="All users"
-                      searchPlaceholder="Search users..."
-                      ariaLabel="Activity user"
-                      className="w-52"
-                    />
-                    <Combobox
-                      value={model}
-                      options={modelOptions}
-                      onValueChange={setModel}
-                      placeholder="All models"
-                      searchPlaceholder="Search models..."
-                      ariaLabel="Activity model"
-                      className="w-52"
-                    />
-                  </>
+                      {loading ? "Loading more…" : "Scroll to load older requests"}
+                    </div>
+                  ) : rows.length > 0 ? (
+                    <div className="py-3 text-center text-xs text-muted-foreground">
+                      End of activity
+                    </div>
+                  ) : null
                 }
               />
-              <div
-                className="max-h-[min(56dvh,36rem)]"
-                style={activityTableHeight ? { height: activityTableHeight } : undefined}
-              >
-                <DataTable
-                  columns={activityColumns}
-                  data={rows}
-                  keyFn={(row) => row.id}
-                  horizontalScroll
-                  minWidth="52rem"
-                  className="h-full"
-                  fixedRowHeight={49}
-                  emptyMessage="No inference activity"
-                  scrollRef={tableScrollRef}
-                  footer={
-                    nextPage ? (
-                      <div
-                        ref={sentinelRef}
-                        className="py-3 text-center text-xs text-muted-foreground"
-                      >
-                        {loading ? "Loading more…" : "Scroll to load older requests"}
-                      </div>
-                    ) : rows.length > 0 ? (
-                      <div className="py-3 text-center text-xs text-muted-foreground">
-                        End of activity
-                      </div>
-                    ) : null
-                  }
-                />
-              </div>
             </div>
-          )}
+          </ActivityDialogBody>
         </DialogContent>
       </Dialog>
     </TooltipProvider>
   );
+}
+
+/**
+ * The dialog opens once the first page and the filter options are in; later
+ * filter and page requests update the table in place.
+ */
+function ActivityDialogBody({
+  initialLoading,
+  children,
+}: {
+  initialLoading: boolean;
+  children: ReactNode;
+}) {
+  useContentLoading(initialLoading);
+  return <div className="space-y-3 overflow-hidden">{children}</div>;
 }
 
 const activityColumns: DataTableColumn<InferenceActivity>[] = [
@@ -420,7 +435,7 @@ function ActivityUser({ row }: { row: InferenceActivity }) {
     <span className="flex min-w-0 items-center gap-2">
       <Avatar className="h-7 w-7 shrink-0">
         <AvatarImage src={row.userAvatarUrl ?? undefined} />
-        <AvatarFallback className="text-[10px]">{getInitials(label)}</AvatarFallback>
+        <AvatarFallback className="text-xs">{getInitials(label)}</AvatarFallback>
       </Avatar>
       <span className="truncate font-medium">{label}</span>
     </span>

@@ -197,7 +197,7 @@ describe("AIPlanProgress", () => {
     );
 
     expect(container.firstElementChild).toHaveClass("w-full", "border-x-0", "border-b-0", "py-1.5");
-    expect(screen.getByRole("button", { name: "Cancel plan" })).toHaveClass("h-6", "w-6");
+    expect(screen.getByRole("button", { name: "Cancel plan" })).toHaveClass("h-7", "w-7");
   });
 });
 

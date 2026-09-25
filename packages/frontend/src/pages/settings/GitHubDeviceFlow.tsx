@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ExternalLink, RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -82,8 +82,7 @@ export function GitHubDeviceFlow({
   if (!session) {
     return (
       <DeviceFlowTransition stateKey="start">
-        <Button type="button" disabled={disabled || starting} onClick={() => void start()}>
-          {starting ? <Loader2 className="animate-spin" /> : null}
+        <Button type="button" disabled={disabled} pending={starting} onClick={() => void start()}>
           Start GitHub authorization
         </Button>
       </DeviceFlowTransition>
@@ -127,10 +126,10 @@ export function GitHubDeviceFlow({
             <Button
               type="button"
               variant="ghost"
-              className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => window.open(session.verificationUri, "_blank", "noopener,noreferrer")}
             >
-              <ExternalLink className="h-3.5 w-3.5" />
+              <ExternalLink />
               Open GitHub
             </Button>
           }

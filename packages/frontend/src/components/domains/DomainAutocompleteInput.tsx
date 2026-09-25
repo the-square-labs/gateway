@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { api } from "@/services/api";
 import type {
   Domain,
@@ -88,17 +89,26 @@ export function DomainAutocompleteInput({
   staticSuggestions,
 }: DomainAutocompleteInputProps) {
   const [domains, setDomains] = useState<DomainSearchResult[]>(
-    staticSuggestions ?? getCachedDomainSuggestions()
+    () => staticSuggestions ?? getCachedDomainSuggestions()
   );
+  // Suggestions are the options of this field: without cached ones, the page or
+  // dialog around it waits for the first list instead of filling it in later.
+  const [suggestionsLoading, setSuggestionsLoading] = useState(
+    () => !staticSuggestions && domains.length === 0
+  );
+  useContentLoading(suggestionsLoading);
 
   useEffect(() => {
     if (staticSuggestions) {
       setDomains(staticSuggestions);
+      setSuggestionsLoading(false);
       return;
     }
     let cancelled = false;
     void loadDomainSuggestions(registeredOnly).then((loadedDomains) => {
-      if (!cancelled) setDomains(loadedDomains);
+      if (cancelled) return;
+      setDomains(loadedDomains);
+      setSuggestionsLoading(false);
     });
     return () => {
       cancelled = true;

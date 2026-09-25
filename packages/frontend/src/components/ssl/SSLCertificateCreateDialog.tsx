@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import { Button } from "@/components/ui/button";
 import {
@@ -112,7 +113,8 @@ export function SSLCertificateCreateDialog({
   const [isUploading, setIsUploading] = useState(false);
 
   // Internal CA tab state
-  const [pkiCerts, setPkiCerts] = useState<{ id: string; commonName: string }[]>([]);
+  // null until the list for this opening arrives; the Internal CA tab waits for it.
+  const [pkiCerts, setPkiCerts] = useState<{ id: string; commonName: string }[] | null>(null);
   const [selectedPkiCertId, setSelectedPkiCertId] = useState("");
   const [internalName, setInternalName] = useState("");
   const [isLinking, setIsLinking] = useState(false);
@@ -157,6 +159,7 @@ export function SSLCertificateCreateDialog({
         setPkiCerts((res.data || []).map((c) => ({ id: c.id, commonName: c.commonName })));
       } catch {
         // non-critical
+        setPkiCerts((current) => current ?? []);
       }
     };
     void loadPkiCerts();
@@ -206,6 +209,7 @@ export function SSLCertificateCreateDialog({
     setChainPem("");
     setSelectedPkiCertId("");
     setInternalName("");
+    setPkiCerts(null);
   };
 
   const hasUnselectedDomain = acmeDomains.some(
@@ -421,6 +425,7 @@ export function SSLCertificateCreateDialog({
         </DialogHeader>
 
         <div className="space-y-1.5">
+          <ContentLoading loading={foldersLoading} />
           <label className="text-sm font-medium">Folder</label>
           <Select
             value={folderId || (folderChoices.allowRoot ? "__none__" : "")}
@@ -429,13 +434,7 @@ export function SSLCertificateCreateDialog({
           >
             <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
               <SelectValue
-                placeholder={
-                  foldersLoading
-                    ? "Loading folders…"
-                    : folderChoices.allowRoot
-                      ? "No folder"
-                      : "Select a folder"
-                }
+                placeholder={folderChoices.allowRoot ? "No folder" : "Select a folder"}
               />
             </SelectTrigger>
             <SelectContent>
@@ -530,7 +529,8 @@ export function SSLCertificateCreateDialog({
                                       type="button"
                                       variant="ghost"
                                       size="icon"
-                                      className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      aria-label={`Remove domain ${i + 1}`}
                                       onClick={() => {
                                         setAcmeDomains(acmeDomains.filter((_, j) => j !== i));
                                         setSelectedDomains(
@@ -546,7 +546,8 @@ export function SSLCertificateCreateDialog({
                                       type="button"
                                       variant="ghost"
                                       size="icon"
-                                      className="h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      aria-label="Add domain"
                                       onClick={() => {
                                         setAcmeDomains([...acmeDomains, ""]);
                                         setSelectedDomains([...selectedDomains, null]);
@@ -662,6 +663,7 @@ export function SSLCertificateCreateDialog({
               {pkiEnabled && (
                 <TabsContent value="internal" className="mt-0">
                   <div className="space-y-4">
+                    <ContentLoading loading={pkiCerts === null} />
                     <p className="text-sm text-muted-foreground">
                       Link an existing PKI certificate from your internal Certificate Authorities
                       for use as an SSL certificate.
@@ -683,7 +685,7 @@ export function SSLCertificateCreateDialog({
                           <SelectValue placeholder="Select a certificate..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {pkiCerts.length === 0 ? (
+                          {!pkiCerts?.length ? (
                             <SelectItem value="__none__" disabled>
                               No active TLS server certificates
                             </SelectItem>
@@ -723,38 +725,42 @@ export function SSLCertificateCreateDialog({
                   <Button
                     variant="outline"
                     onClick={() => void handleCancelACME()}
-                    disabled={isVerifying || isCancellingACME}
+                    disabled={isVerifying}
+                    pending={isCancellingACME}
                   >
-                    {isCancellingACME ? "Cancelling..." : "Cancel"}
+                    Cancel
                   </Button>
                 )}
-                <Button onClick={handleVerifyDNS} disabled={isVerifying || isCancellingACME}>
-                  {isVerifying ? "Verifying..." : "Verify DNS"}
+                <Button onClick={handleVerifyDNS} disabled={isCancellingACME} pending={isVerifying}>
+                  Verify DNS
                 </Button>
               </>
             ) : (
               <Button
                 onClick={handleRequestACME}
-                disabled={isRequestingACME || hasUnselectedDomain || !canCreateInSelectedFolder}
+                disabled={hasUnselectedDomain || !canCreateInSelectedFolder}
+                pending={isRequestingACME}
               >
-                {isRequestingACME ? "Requesting..." : "Request Certificate"}
+                Request Certificate
               </Button>
             ))}
           {activeTab === "upload" && (
             <Button
               onClick={handleUpload}
-              disabled={isUploading || !canUploadCertificate || !canCreateInSelectedFolder}
+              disabled={!canUploadCertificate || !canCreateInSelectedFolder}
+              pending={isUploading}
             >
-              <Upload className="h-4 w-4" />
-              {isUploading ? "Uploading..." : "Upload Certificate"}
+              {isUploading ? null : <Upload className="h-4 w-4" />}
+              Upload Certificate
             </Button>
           )}
           {activeTab === "internal" && (
             <Button
               onClick={handleLinkInternal}
-              disabled={isLinking || !canLinkSelectedPkiCert || !canCreateInSelectedFolder}
+              disabled={!canLinkSelectedPkiCert || !canCreateInSelectedFolder}
+              pending={isLinking}
             >
-              {isLinking ? "Linking..." : "Link Certificate"}
+              Link Certificate
             </Button>
           )}
         </DialogFooter>

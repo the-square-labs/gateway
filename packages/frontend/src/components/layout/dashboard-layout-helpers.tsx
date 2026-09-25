@@ -60,14 +60,12 @@ export function resolveAIWorkspaceEntry(
   return canConfigure ? "needs_configuration" : "not_configured";
 }
 
-export function ApplicationShellSkeleton(_props: { scopes: readonly string[]; pathname: string }) {
-  return (
-    <div
-      className="fixed inset-0 bg-background"
-      aria-busy="true"
-      aria-label="Loading application"
-    />
-  );
+/**
+ * The empty shell shown while the session, system config or interface
+ * preference resolves: nothing appears until the real layout can.
+ */
+export function ApplicationShellSkeleton({ label = "Loading application" }: { label?: string }) {
+  return <div className="fixed inset-0 bg-background" aria-busy="true" aria-label={label} />;
 }
 
 export function readSidebarWidth(): number {

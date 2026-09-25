@@ -119,9 +119,10 @@ export function FinalizeSetupWizardDialog({
                 <Button
                   variant="outline"
                   onClick={() => void skip()}
-                  disabled={skipDisabled || skipping}
+                  pending={skipping}
+                  disabled={skipDisabled}
                 >
-                  <MoreHorizontal />
+                  {skipping ? null : <MoreHorizontal />}
                   Skip
                 </Button>
               )}

@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, vi } from "vitest";
+import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { waitForReveal } from "@/test/reveal";
 import type { User } from "@/types";
 import { UserAdditionalPermissionsDialog } from "./UserAdditionalPermissionsDialog";
 
 const mocks = vi.hoisted(() => ({
   updateUserAdditionalPermissions: vi.fn(),
+  fetchCAs: vi.fn(),
 }));
 
 vi.mock("@/components/common/ScopeList", () => ({
@@ -32,7 +35,7 @@ vi.mock("@/services/api", () => ({
 }));
 
 vi.mock("@/stores/ca", () => ({
-  useCAStore: () => ({ cas: [], fetchCAs: vi.fn().mockResolvedValue(undefined) }),
+  useCAStore: () => ({ cas: [], fetchCAs: mocks.fetchCAs }),
 }));
 
 describe("UserAdditionalPermissionsDialog", () => {
@@ -41,6 +44,45 @@ describe("UserAdditionalPermissionsDialog", () => {
       user: { id: "actor-1", scopes: ["admin:users", "nodes:console"] } as User,
     });
     mocks.updateUserAdditionalPermissions.mockReset();
+    mocks.fetchCAs.mockResolvedValue(undefined);
+  });
+
+  it("opens once the resource pickers have their options", async () => {
+    useAuthStore.setState({
+      user: { id: "actor-1", scopes: ["admin:users", "nodes:details"] } as User,
+    });
+    let resolveNodes!: (value: { data: [] }) => void;
+    vi.mocked(api.listNodes).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveNodes = resolve;
+      }) as never
+    );
+
+    render(
+      <UserAdditionalPermissionsDialog
+        open
+        user={{
+          id: "user-1",
+          oidcSubject: "target",
+          email: "target@example.com",
+          name: "Target",
+          avatarUrl: null,
+          groupId: "viewer-group",
+          groupName: "viewer",
+          groupScopes: [],
+          additionalScopes: [],
+          scopes: [],
+          isBlocked: false,
+        }}
+        onOpenChange={vi.fn()}
+        onSaved={vi.fn()}
+      />
+    );
+
+    expect(screen.getByRole("dialog")).not.toHaveAttribute("data-reveal-phase", "revealed");
+    resolveNodes({ data: [] });
+    await waitForReveal();
+    expect(screen.getByRole("button", { name: "Save permissions" })).toBeEnabled();
   });
 
   it("adds an exact resource grant when the group already grants the same scope for another resource", async () => {
@@ -70,6 +112,7 @@ describe("UserAdditionalPermissionsDialog", () => {
         onSaved={vi.fn()}
       />
     );
+    await waitForReveal();
 
     fireEvent.click(screen.getByRole("button", { name: "Grant node 2 console" }));
     fireEvent.click(screen.getByRole("button", { name: "Save permissions" }));
@@ -109,6 +152,7 @@ describe("UserAdditionalPermissionsDialog", () => {
         onSaved={vi.fn()}
       />
     );
+    await waitForReveal();
 
     fireEvent.click(screen.getByRole("button", { name: "Reset additional" }));
     fireEvent.click(screen.getByRole("button", { name: "Save permissions" }));
@@ -146,6 +190,7 @@ describe("UserAdditionalPermissionsDialog", () => {
         onSaved={vi.fn()}
       />
     );
+    await waitForReveal();
 
     fireEvent.click(screen.getByRole("button", { name: "Grant node 2 console" }));
     fireEvent.click(screen.getByRole("button", { name: "Save permissions" }));

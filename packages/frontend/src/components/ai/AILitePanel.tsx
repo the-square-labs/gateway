@@ -1,8 +1,17 @@
 import { Menu, Pencil, Pin, PinOff, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { InitialPageReadyContext, useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -246,6 +255,19 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
   const selectedProviderModel = providerStatus?.models.find((model) => model.id === selectedModel);
   const canAttachImages = selectedModelSupportsImages(providerStatus, selectedModel);
 
+  // A conversation opened by its link, and the provider controls in the
+  // composer, are part of the first render: the page reveals once both are in.
+  // Later conversation switches and provider refreshes update in place.
+  const [routeConversationLoading, setRouteConversationLoading] = useState(
+    () =>
+      Boolean(routeConversationId) &&
+      routeConversationId !== useAIStore.getState().activeConversationId
+  );
+  const [providerStatusLoading, setProviderStatusLoading] = useState(
+    () => useAIStore.getState().providerStatus === null
+  );
+  useContentLoading(routeConversationLoading || providerStatusLoading);
+
   useEffect(() => {
     if (
       !routeConversationId ||
@@ -253,7 +275,9 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
     ) {
       return;
     }
-    void loadConversation(routeConversationId);
+    void Promise.resolve(loadConversation(routeConversationId)).finally(() =>
+      setRouteConversationLoading(false)
+    );
   }, [loadConversation, routeConversationId]);
 
   useEffect(() => {
@@ -315,18 +339,22 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
   );
 
   useEffect(() => {
-    void refreshProviderStatus().catch(() => undefined);
+    void Promise.resolve(refreshProviderStatus())
+      .catch(() => undefined)
+      .finally(() => setProviderStatusLoading(false));
   }, [refreshProviderStatus]);
 
   useEffect(() => {
     if (providerStatus && !canAttachImages && attachments.length > 0) setAttachments([]);
   }, [attachments.length, canAttachImages, providerStatus, setAttachments]);
 
+  // Hidden content cannot take focus, so the composer is focused once the page reveals.
+  const pageRevealed = useContext(InitialPageReadyContext);
   useEffect(() => {
-    if (!isNewConversationDraft) return;
+    if (!isNewConversationDraft || !pageRevealed) return;
     const timer = setTimeout(() => textareaRef.current?.focus(), 0);
     return () => clearTimeout(timer);
-  }, [isNewConversationDraft]);
+  }, [isNewConversationDraft, pageRevealed]);
 
   const continueAfterConnectorSetup = useCallback(
     (_setup: AssistantConnectorSetup, status: "configured" | "cancelled") => {
@@ -602,7 +630,7 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
           <Button
             variant="ghost"
             size="icon"
-            className="-ml-2 mr-2 h-9 w-9 shrink-0"
+            className="-ml-2 mr-2"
             onClick={onOpenMobileMenu}
             aria-label="Open navigation menu"
           >
@@ -619,7 +647,6 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
             onClick={() => activeConversationId && togglePinnedAIConversation(activeConversationId)}
             disabled={!activeConversationId}
             title={isCurrentChatPinned ? "Unpin Work Session" : "Pin Work Session"}
@@ -630,7 +657,6 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
             onClick={openRenameDialog}
             disabled={!activeConversationId}
             title="Rename Work Session"
@@ -641,7 +667,6 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9"
             onClick={() => void handleDeleteCurrentConversation()}
             disabled={!activeConversationId}
             title="Delete Work Session"
@@ -678,7 +703,8 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
             </Button>
             <Button
               onClick={() => void submitRename()}
-              disabled={isRenaming || !renameDraft.trim()}
+              pending={isRenaming}
+              disabled={!renameDraft.trim()}
             >
               Save
             </Button>
@@ -742,7 +768,7 @@ export function AILitePanel({ onOpenMobileMenu }: { onOpenMobileMenu?: () => voi
         {activeQuestion ? (
           <div className="border border-border bg-background">
             {questionsTotal > 1 && (
-              <div className="border-b border-border bg-muted/50 px-3 py-1 text-[11px] text-muted-foreground">
+              <div className="border-b border-border bg-muted/50 px-3 py-1 text-xs text-muted-foreground">
                 Question {questionIndex} of {questionsTotal}
               </div>
             )}

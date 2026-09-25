@@ -197,6 +197,7 @@ function GitLabIntegrationsContent() {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
   const [refreshingAllowlist, setRefreshingAllowlist] = useState(false);
   const [search, setSearch] = useState("");
@@ -567,12 +568,15 @@ function GitLabIntegrationsContent() {
       confirmLabel: "Delete",
     });
     if (!ok) return;
+    setDeletingId(connector.id);
     try {
       await api.deleteGitLabConnector(connector.id);
       toast.success("GitLab connector deleted");
       loadConnectors();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete connector");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -603,6 +607,7 @@ function GitLabIntegrationsContent() {
                 canManage={canManage}
                 testing={testingId === connector.id}
                 syncing={syncingId === connector.id || connector.syncStatus === "running"}
+                deleting={deletingId === connector.id}
                 onOpen={canManage ? () => openEditDialog(connector) : undefined}
                 onTest={() => testConnector(connector)}
                 onSync={() => syncConnector(connector)}
@@ -635,9 +640,8 @@ function GitLabIntegrationsContent() {
           </DialogHeader>
 
           {loadingDetail ? (
-            <div className="flex min-h-64 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
+            // Reports the connector detail load to the dialog, which opens once it is ready.
+            <Skeleton />
           ) : (
             <div>
               <ConnectorStepHeight>
@@ -685,11 +689,11 @@ function GitLabIntegrationsContent() {
                           />
                           <Button
                             variant="ghost"
-                            className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() => void testConnectionForDialog({ advance: false })}
-                            disabled={!canContinueFromConnection() || testingConnection}
+                            disabled={!canContinueFromConnection()}
+                            pending={testingConnection}
                           >
-                            {testingConnection && <Loader2 className="h-4 w-4 animate-spin" />}
                             Test Connection
                           </Button>
                         </div>
@@ -721,11 +725,10 @@ function GitLabIntegrationsContent() {
                             />
                             <Button
                               variant="ghost"
-                              className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                               onClick={() => void testConnectionForDialog({ advance: false })}
-                              disabled={testingConnection}
+                              pending={testingConnection}
                             >
-                              {testingConnection && <Loader2 className="h-4 w-4 animate-spin" />}
                               Test Connection
                             </Button>
                           </div>
@@ -753,12 +756,11 @@ function GitLabIntegrationsContent() {
                             <Button
                               type="button"
                               variant="outline"
-                              disabled={!canManage || refreshingAllowlist}
+                              disabled={!canManage}
+                              pending={refreshingAllowlist}
                               onClick={() => void refreshAllowlistOptions()}
                             >
-                              <RefreshCw
-                                className={cn("h-4 w-4", refreshingAllowlist && "animate-spin")}
-                              />
+                              {refreshingAllowlist ? null : <RefreshCw className="h-4 w-4" />}
                               Update
                             </Button>
                           )}
@@ -1026,8 +1028,7 @@ function GitLabIntegrationsContent() {
                     Next <ArrowRight className="ml-1 h-4 w-4" />
                   </Button>
                 ) : (
-                  <Button onClick={saveConnector} disabled={saving || loadingDetail}>
-                    {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  <Button onClick={saveConnector} disabled={loadingDetail} pending={saving}>
                     {editingConnector ? "Save" : "Create Connector"}
                   </Button>
                 )}
@@ -1045,6 +1046,7 @@ function ConnectorRow({
   canManage,
   testing,
   syncing,
+  deleting,
   onOpen,
   onTest,
   onSync,
@@ -1054,6 +1056,7 @@ function ConnectorRow({
   canManage: boolean;
   testing: boolean;
   syncing: boolean;
+  deleting: boolean;
   onOpen?: () => void;
   onTest: () => void;
   onSync: () => void;
@@ -1111,10 +1114,11 @@ function ConnectorRow({
               event.stopPropagation();
               onTest();
             }}
-            disabled={testing || syncing}
+            disabled={syncing}
+            pending={testing}
             title="Test connector"
           >
-            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {testing ? null : <Check className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -1123,10 +1127,11 @@ function ConnectorRow({
               event.stopPropagation();
               onSync();
             }}
-            disabled={syncing || testing}
+            disabled={testing}
+            pending={syncing}
             title="Sync connector"
           >
-            <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+            {syncing ? null : <RefreshCw className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -1135,9 +1140,10 @@ function ConnectorRow({
               event.stopPropagation();
               onDelete();
             }}
+            pending={deleting}
             title="Delete connector"
           >
-            <Trash2 className="h-4 w-4" />
+            {deleting ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       )}

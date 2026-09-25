@@ -19,23 +19,11 @@ import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
-import type { SiemAuthType, SiemDeliveryStatus, SiemDestination } from "@/types";
+import type { SiemAuthType, SiemDestination } from "@/types";
+import { siemDeliveryVariant } from "./notification-status";
 import { SiemDestinationDialog } from "./SiemDestinationDialog";
 
 export const SIEM_DESTINATION_CACHE_KEY = "audit:siem:destinations";
-
-const DELIVERY_BADGE: Record<
-  SiemDeliveryStatus,
-  "success" | "destructive" | "warning" | "secondary"
-> = {
-  queued: "secondary",
-  delivering: "warning",
-  retrying: "warning",
-  delivered: "success",
-  failed: "destructive",
-  paused: "secondary",
-  discarded: "secondary",
-};
 
 const AUTH_LABEL: Record<SiemAuthType, string> = {
   bearer: "Bearer",
@@ -231,7 +219,7 @@ export function SiemDestinationsTab({
       header: "Last Delivery",
       render: (destination) =>
         destination.lastDeliveryStatus ? (
-          <Badge variant={DELIVERY_BADGE[destination.lastDeliveryStatus]}>
+          <Badge variant={siemDeliveryVariant(destination.lastDeliveryStatus)}>
             {destination.lastDeliveryStatus}
           </Badge>
         ) : (
@@ -278,8 +266,7 @@ export function SiemDestinationsTab({
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   aria-label={`Actions for ${destination.name}`}
                 >
                   <MoreVertical className="h-4 w-4" />

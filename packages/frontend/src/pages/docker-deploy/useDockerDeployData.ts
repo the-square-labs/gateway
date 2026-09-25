@@ -33,23 +33,39 @@ export function useDockerDeployData({
   sourceMode,
 }: UseDockerDeployDataOptions) {
   const [registries, setRegistries] = useState<DockerRegistry[]>([]);
+  const [registriesLoaded, setRegistriesLoaded] = useState(false);
   const [deployLocalImages, setDeployLocalImages] = useState<string[]>([]);
+  // The node whose local images are listed, so the dialog can wait for the preselected node's list.
+  const [localImagesNodeId, setLocalImagesNodeId] = useState<string | null>(null);
   const [deployPullableImages, setDeployPullableImages] = useState<string[]>([]);
   const [sourceAdmission, setSourceAdmission] = useState<DockerBuildAdmissionStatus | null>(null);
   const [checkingSourceAdmission, setCheckingSourceAdmission] = useState(false);
   const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
     useDockerSourceRepositories(open && sourceMode === "repository", sourceConnectorId);
 
+  const canViewRegistries = hasScope("docker:registries:view");
   useEffect(() => {
-    if (!open || !hasScope("docker:registries:view")) {
+    if (!open || !canViewRegistries) {
       setRegistries([]);
+      setRegistriesLoaded(false);
       return;
     }
+    let cancelled = false;
     api
       .listDockerRegistries()
-      .then((items) => setRegistries(items.filter(isUserDockerRegistry)))
-      .catch(() => setRegistries([]));
-  }, [hasScope, open]);
+      .then((items) => {
+        if (!cancelled) setRegistries(items.filter(isUserDockerRegistry));
+      })
+      .catch(() => {
+        if (!cancelled) setRegistries([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRegistriesLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [canViewRegistries, open]);
 
   useEffect(() => {
     if (!open || sourceMode !== "repository" || !deployNodeId) {
@@ -88,19 +104,30 @@ export function useDockerDeployData({
       setDeployPullableImages([]);
       return;
     }
+    let cancelled = false;
     api
       .listDockerImages(deployNodeId)
-      .then((data) => setDeployLocalImages(extractTags(data).sort()))
-      .catch(() => setDeployLocalImages([]));
+      .then((data) => {
+        if (!cancelled) setDeployLocalImages(extractTags(data).sort());
+      })
+      .catch(() => {
+        if (!cancelled) setDeployLocalImages([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLocalImagesNodeId(deployNodeId);
+      });
 
+    const cancel = () => {
+      cancelled = true;
+    };
     if (!hasScope("docker:images:pull") && !hasScope(`docker:images:pull:${deployNodeId}`)) {
       setDeployPullableImages([]);
-      return;
+      return cancel;
     }
     const otherNodes = allNodes.filter((node) => node.id !== deployNodeId);
     if (otherNodes.length === 0) {
       setDeployPullableImages([]);
-      return;
+      return cancel;
     }
     Promise.all(
       otherNodes.map((node) =>
@@ -121,14 +148,23 @@ export function useDockerDeployData({
               if (!localSet.has(tag)) pullable.add(tag);
             }
           }
-          setDeployPullableImages(Array.from(pullable).sort());
+          if (!cancelled) setDeployPullableImages(Array.from(pullable).sort());
         })
         .catch(() => {});
     });
+    return cancel;
   }, [allNodes, deployNodeId, hasScope]);
+
+  // Options the dialog's first render depends on. Pullable images from other nodes stay a background
+  // suggestion list: it fans out to every node and only adds entries to the image picker.
+  const initialLoading =
+    open &&
+    ((canViewRegistries && !registriesLoaded) ||
+      (!!deployNodeId && localImagesNodeId !== deployNodeId));
 
   return {
     checkingSourceAdmission,
+    initialLoading,
     deployLocalImages,
     deployPullableImages,
     registries,

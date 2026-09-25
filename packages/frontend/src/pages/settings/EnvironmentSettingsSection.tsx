@@ -1,11 +1,11 @@
-import { Clock3, FileInput, Gauge, KeyRound, Loader2, RotateCcw, Save } from "lucide-react";
+import { Clock3, FileInput, Gauge, KeyRound, RotateCcw, Save } from "lucide-react";
 import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { NumericInput } from "@/components/ui/numeric-input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type {
   EnvironmentSettings,
@@ -194,8 +194,8 @@ function EnvironmentPanel({
               <RotateCcw className="h-4 w-4" />
               Restore defaults
             </Button>
-            <Button onClick={onSave} disabled={!dirty || saving}>
-              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            <Button onClick={onSave} pending={saving} disabled={!dirty}>
+              {saving ? null : <Save className="h-4 w-4" />}
               Save
             </Button>
           </div>
@@ -212,6 +212,7 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
   const [saved, setSaved] = useState<EnvironmentSettings | null>(null);
   const [defaults, setDefaults] = useState<EnvironmentSettings | null>(null);
   const [savingSection, setSavingSection] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
@@ -221,6 +222,8 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
       setDefaults(response.defaults);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load environment settings");
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -314,9 +317,8 @@ export function EnvironmentSettingsSection({ canEdit }: { canEdit: boolean }) {
     }
   };
 
-  if (!draft || !saved || !defaults) {
-    return <Skeleton className="h-80 w-full" />;
-  }
+  useContentLoading(loading);
+  if (!draft || !saved || !defaults) return null;
 
   const disabled = !canEdit || savingSection !== null;
 

@@ -288,7 +288,12 @@ export function SidebarContent({
             <TooltipProvider delayDuration={0} skipDelayDuration={0}>
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={toggleSidebar}>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Open sidebar"
+                    onClick={toggleSidebar}
+                  >
                     <PanelLeft className="h-4 w-4" />
                   </Button>
                 </TooltipTrigger>
@@ -302,9 +307,9 @@ export function SidebarContent({
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
+                        size="icon-sm"
+                        aria-label={item.name}
                         className={cn(
-                          "h-8 w-8",
                           isSidebarNavigationActive(location.pathname, item.href) &&
                             "bg-sidebar-accent"
                         )}
@@ -346,8 +351,9 @@ export function SidebarContent({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      size="icon"
-                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      variant="warning"
+                      size="icon-sm"
+                      aria-label={updateLabel}
                       onClick={() =>
                         navigate("/settings/general", {
                           state: { scrollTarget: "system-updates" },
@@ -365,14 +371,13 @@ export function SidebarContent({
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-8 w-8 bg-warning text-black hover:bg-warning/90"
+                      variant="warning"
+                      size="icon-sm"
                       onClick={() => void handleStopImpersonating()}
-                      disabled={stoppingImpersonation}
+                      pending={stoppingImpersonation}
                       aria-label="Stop impersonating"
                     >
-                      <UserRoundX className="h-4 w-4" />
+                      {stoppingImpersonation ? null : <UserRoundX className="h-4 w-4" />}
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="right">Stop impersonating</TooltipContent>
@@ -381,7 +386,7 @@ export function SidebarContent({
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8">
+                  <Button variant="ghost" size="icon-sm" aria-label="Account menu">
                     <Avatar className="h-6 w-6">
                       <AvatarImage src={user?.avatarUrl ?? undefined} />
                       <AvatarFallback className="text-xs">
@@ -429,7 +434,12 @@ export function SidebarContent({
               <div className="flex items-center gap-0.5">
                 <AIButton />
                 {alwaysExpanded ? (
-                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={onNavigate}>
+                  <Button
+                    variant="ghost"
+                    size="icon-lg"
+                    aria-label="Close navigation"
+                    onClick={onNavigate}
+                  >
                     <X className="h-4 w-4" />
                   </Button>
                 ) : (
@@ -437,8 +447,9 @@ export function SidebarContent({
                     <TooltipTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-10 w-10 md:h-7 md:w-7"
+                        size="icon-lg"
+                        aria-label="Close sidebar"
+                        className="md:h-7 md:w-7"
                         onClick={toggleSidebar}
                       >
                         <PanelLeftClose className="h-4 w-4" />
@@ -531,15 +542,16 @@ export function SidebarContent({
             {updateAvailable && hasScope("admin:update") && showUpdateNotifications && (
               <>
                 <div className="px-2 py-2">
-                  <Link
-                    to="/settings/general"
-                    state={{ scrollTarget: "system-updates" }}
-                    onClick={onNavigate}
-                    className="flex w-full items-center gap-2 bg-warning px-3 py-2 text-left text-sm font-medium text-black transition-colors hover:bg-warning/90"
-                  >
-                    <ArrowUpCircle className="h-4 w-4 shrink-0" />
-                    <span className="truncate">{updateLabel}</span>
-                  </Link>
+                  <Button asChild variant="warning" className="w-full justify-start px-3">
+                    <Link
+                      to="/settings/general"
+                      state={{ scrollTarget: "system-updates" }}
+                      onClick={onNavigate}
+                    >
+                      <ArrowUpCircle className="h-4 w-4 shrink-0" />
+                      <span className="truncate">{updateLabel}</span>
+                    </Link>
+                  </Button>
                 </div>
                 <Separator />
               </>
@@ -551,9 +563,9 @@ export function SidebarContent({
                   <Button
                     className="w-full justify-start px-3"
                     onClick={() => void handleStopImpersonating()}
-                    disabled={stoppingImpersonation}
+                    pending={stoppingImpersonation}
                   >
-                    <UserRoundX className="h-4 w-4 shrink-0" />
+                    {stoppingImpersonation ? null : <UserRoundX className="h-4 w-4 shrink-0" />}
                     <span className="truncate">Stop impersonating</span>
                   </Button>
                 </div>

@@ -1,8 +1,15 @@
 import { Box, Boxes, Database, GitBranch, Globe, Hammer, Server } from "lucide-react";
 import { useCallback, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
+import {
+  databaseHealthTone,
+  dockerStateTone,
+  isDockerStateTransitional,
+  nodeStatusTone,
+  proxyHealthTone,
+  statusDotClass,
+} from "@/components/common/resource-status";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   databaseRoute,
   dockerComposeProjectRoute,
@@ -208,12 +215,9 @@ export function SidebarPinnedResources({
           <p className="px-3 py-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Pinned Items
           </p>
-          {Array.from({ length: Math.min(sidebarPinCount, 4) }, (_, index) => (
-            <div key={index} className="flex items-center gap-3 px-3 py-2">
-              <Skeleton className="h-4 w-4 shrink-0" />
-              <Skeleton className="h-4 w-28" />
-              <Skeleton className="ml-auto h-2 w-2" />
-            </div>
+          {/* Rows keep the height of the pinned links they stand in for. */}
+          {Array.from({ length: sidebarPinCount }, (_, index) => (
+            <div key={index} className="h-9" />
           ))}
         </nav>
         <Separator />
@@ -241,66 +245,18 @@ export function SidebarPinnedResources({
     status: string | null | undefined,
     kind: "proxy" | "node" | "database" | "docker"
   ) => {
-    const base = "ml-auto h-2 w-2 shrink-0";
-    if (kind === "proxy") {
-      return cn(
-        base,
-        status === "online"
-          ? "bg-emerald-500"
-          : status === "offline" || status === "degraded"
-            ? "bg-red-400"
-            : "bg-muted-foreground/40"
-      );
-    }
-    if (kind === "node") {
-      return cn(
-        base,
-        status === "online"
-          ? "bg-emerald-500"
-          : status === "degraded"
-            ? "bg-warning"
-            : status === "offline" || status === "error"
-              ? "bg-red-400"
-              : "bg-warning"
-      );
-    }
-    if (kind === "database") {
-      return cn(
-        base,
-        status === "online"
-          ? "bg-emerald-500"
-          : status === "degraded"
-            ? "bg-warning"
-            : status === "offline"
-              ? "bg-red-400"
-              : "bg-muted-foreground/40"
-      );
-    }
+    const tone =
+      kind === "proxy"
+        ? proxyHealthTone(status)
+        : kind === "node"
+          ? nodeStatusTone(status)
+          : kind === "database"
+            ? databaseHealthTone(status)
+            : dockerStateTone(status);
     return cn(
-      base,
-      status === "running" || status === "succeeded" || status === "healthy"
-        ? "bg-emerald-500"
-        : status === "exited" || status === "dead" || status === "failed"
-          ? "bg-red-400"
-          : status === "degraded"
-            ? "bg-warning"
-            : status === "stopping" ||
-                status === "restarting" ||
-                status === "recreating" ||
-                status === "killing" ||
-                status === "updating" ||
-                status === "migrating" ||
-                status === "queued" ||
-                status === "claimed" ||
-                status === "checking_out" ||
-                status === "building" ||
-                status === "scanning" ||
-                status === "pushing" ||
-                status === "deploying" ||
-                status === "applying" ||
-                status === "validating"
-              ? "animate-pulse bg-warning"
-              : "bg-muted-foreground/40"
+      "ml-auto h-2 w-2 shrink-0",
+      statusDotClass(tone),
+      kind === "docker" && isDockerStateTransitional(status) && "animate-pulse"
     );
   };
 

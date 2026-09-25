@@ -18,6 +18,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -468,7 +469,7 @@ export function Domains() {
           >
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label="Domain actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -521,54 +522,49 @@ export function Domains() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <LiteModeBackButton />
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold">Domains</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage public hostnames and ingress placement
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canManageFolders && createFolderAction
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: createFolderAction,
-                    },
-                  ]
-                : []),
-              ...(canCreateDomain
-                ? [
-                    {
-                      label: "Add Domain",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => void handleAddDomain(),
-                      disabled: checkingNginxNodes,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {canCreateDomain && (
-              <Button onClick={() => void handleAddDomain()} disabled={checkingNginxNodes}>
-                <Plus className="h-4 w-4" />
-                Add Domain
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Domains"
+          description="Manage public hostnames and ingress placement"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(canCreateDomain
+                  ? [
+                      {
+                        label: "Add Domain",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => void handleAddDomain(),
+                        disabled: checkingNginxNodes,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canCreateDomain && (
+                <Button onClick={() => void handleAddDomain()} pending={checkingNginxNodes}>
+                  {checkingNginxNodes ? null : <Plus className="h-4 w-4" />}
+                  Add Domain
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <FolderedResourceList<Domain>
           resourceType="domain"
@@ -689,6 +685,7 @@ export function Domains() {
         </Dialog>
         <DomainDetailDialog
           domainId={detailId}
+          listDomain={domains.find((domain) => domain.id === detailId) ?? null}
           open={detailOpen}
           initialView={detailInitialView}
           onOpenChange={(nextOpen) => {

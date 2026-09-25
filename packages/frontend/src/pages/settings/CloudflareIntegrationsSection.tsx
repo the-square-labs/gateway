@@ -1,13 +1,4 @@
-import {
-  Check,
-  Cloud,
-  Globe2,
-  Loader2,
-  Plus,
-  RefreshCw,
-  SlidersHorizontal,
-  Trash2,
-} from "lucide-react";
+import { Check, Cloud, Globe2, Plus, RefreshCw, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -90,6 +81,7 @@ export function CloudflareIntegrationsSection() {
   const [saving, setSaving] = useState(false);
   const [testingId, setTestingId] = useState<string | null>(null);
   const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [testingConnection, setTestingConnection] = useState(false);
 
   const loadConnectors = useCallback(async () => {
@@ -264,12 +256,15 @@ export function CloudflareIntegrationsSection() {
       confirmLabel: "Delete",
     });
     if (!ok) return;
+    setDeletingId(connector.id);
     try {
       await api.deleteCloudflareConnector(connector.id);
       toast.success("Cloudflare connector deleted");
       void loadConnectors();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete Cloudflare connector");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -299,6 +294,7 @@ export function CloudflareIntegrationsSection() {
                 canManage={canManage}
                 testing={testingId === connector.id}
                 syncing={syncingId === connector.id || connector.syncStatus === "running"}
+                deleting={deletingId === connector.id}
                 onOpen={canManage ? () => void openEditDialog(connector) : undefined}
                 onTest={() => void testConnector(connector)}
                 onSync={() => void syncConnector(connector)}
@@ -331,9 +327,8 @@ export function CloudflareIntegrationsSection() {
           </DialogHeader>
 
           {loadingDetail ? (
-            <div className="flex min-h-48 items-center justify-center">
-              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-            </div>
+            // Reports the connector detail load to the dialog, which opens once it is ready.
+            <Skeleton />
           ) : (
             <div className="space-y-4">
               <div className="space-y-4">
@@ -367,11 +362,11 @@ export function CloudflareIntegrationsSection() {
                   />
                   <Button
                     variant="ghost"
-                    className="h-9 shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => void testConnectionForDialog()}
-                    disabled={testingConnection || (!editingConnector && !form.token.trim())}
+                    disabled={!editingConnector && !form.token.trim()}
+                    pending={testingConnection}
                   >
-                    {testingConnection && <Loader2 className="h-4 w-4 animate-spin" />}
                     Test Connection
                   </Button>
                 </div>
@@ -486,9 +481,9 @@ export function CloudflareIntegrationsSection() {
             {canManage && (
               <Button
                 onClick={() => void saveConnector()}
-                disabled={saving || loadingDetail || !canSaveConnector}
+                disabled={loadingDetail || !canSaveConnector}
+                pending={saving}
               >
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
                 {editingConnector ? "Save" : "Create Connector"}
               </Button>
             )}
@@ -504,6 +499,7 @@ function CloudflareConnectorRow({
   canManage,
   testing,
   syncing,
+  deleting,
   onOpen,
   onTest,
   onSync,
@@ -513,6 +509,7 @@ function CloudflareConnectorRow({
   canManage: boolean;
   testing: boolean;
   syncing: boolean;
+  deleting: boolean;
   onOpen?: () => void;
   onTest: () => void;
   onSync: () => void;
@@ -584,10 +581,11 @@ function CloudflareConnectorRow({
               event.stopPropagation();
               onTest();
             }}
-            disabled={testing || syncing}
+            disabled={syncing}
+            pending={testing}
             title="Test connector"
           >
-            {testing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            {testing ? null : <Check className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -596,10 +594,11 @@ function CloudflareConnectorRow({
               event.stopPropagation();
               onSync();
             }}
-            disabled={syncing || testing}
+            disabled={testing}
+            pending={syncing}
             title="Sync zones"
           >
-            <RefreshCw className={cn("h-4 w-4", syncing && "animate-spin")} />
+            {syncing ? null : <RefreshCw className="h-4 w-4" />}
           </Button>
           <Button
             variant="outline"
@@ -608,9 +607,10 @@ function CloudflareConnectorRow({
               event.stopPropagation();
               onDelete();
             }}
+            pending={deleting}
             title="Delete connector"
           >
-            <Trash2 className="h-4 w-4" />
+            {deleting ? null : <Trash2 className="h-4 w-4" />}
           </Button>
         </div>
       )}

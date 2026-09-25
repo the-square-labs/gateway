@@ -1,6 +1,7 @@
 import { Boxes, Network } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { useInferenceCoreStatus } from "@/hooks/use-inference-core-status";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
@@ -57,10 +58,14 @@ export function InferenceSettingsSection() {
   const canManageLimits = hasScope("inference:limits:manage");
   const core = useInferenceCoreStatus(canViewProviders);
   const coreReady = isInferenceCoreReady(core.status);
-  // Until the core status is known, keep dependent panels hidden; the core
-  // panel renders its own skeleton. Provider/model panels stay disabled with
-  // an explanation unless the core is compatible and ready.
+  // Until the core status is known, keep dependent panels unmounted.
+  // Provider/model panels stay disabled with an explanation unless the core is
+  // compatible and ready.
   const coreStatusKnown = core.status !== null || core.error !== null;
+  // The tab stays hidden until the core status is known: the panels that wait
+  // for it mount in the same commit and report their own loads before this
+  // one ends, so nothing appears after the tab is revealed.
+  useContentLoading(canViewProviders && !coreStatusKnown);
   const refreshCatalog = () => setCatalogRevision((value) => value + 1);
   const refreshUsage = () => setUsageRevision((value) => value + 1);
   useRealtime(

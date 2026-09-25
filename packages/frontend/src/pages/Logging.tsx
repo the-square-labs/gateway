@@ -9,6 +9,7 @@ import {
   isCreateFolderAllowed,
 } from "@/components/common/CreateFolderSelect";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
@@ -361,84 +362,81 @@ export function Logging({
   return (
     <PageTransition>
       <div className={cn("h-full overflow-y-auto p-6 space-y-4", topTab === "schemas" && "pb-3")}>
-        <div className="flex shrink-0 items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <LiteModeBackButton />
-            <div className="min-w-0">
-              <h1 className="text-2xl font-bold">Logging</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage external log environments and reusable schemas
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              { label: "Refresh", onClick: load, disabled: activeTabLoading },
-              ...(topTab === "environments" && canCreateEnvironment
-                ? [
-                    {
-                      label: "Create Environment",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: openEnvironmentCreate,
-                    },
-                  ]
-                : []),
-              ...(topTab === "environments" && canManageEnvironmentFolders
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: () => createEnvironmentFolderAction?.(),
-                    },
-                  ]
-                : []),
-              ...(topTab === "schemas" && canCreateSchema
-                ? [
-                    {
-                      label: "Create Schema",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: openSchemaCreate,
-                    },
-                  ]
-                : []),
-              ...(topTab === "schemas" && canManageSchemaFolders
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: () => createSchemaFolderAction?.(),
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <RefreshButton onClick={load} disabled={activeTabLoading} />
-            {topTab === "environments" && canManageEnvironmentFolders && (
-              <Button variant="outline" onClick={() => createEnvironmentFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {topTab === "environments" && canCreateEnvironment && (
-              <Button onClick={openEnvironmentCreate}>
-                <Plus className="h-4 w-4 mr-1" />
-                Create Environment
-              </Button>
-            )}
-            {topTab === "schemas" && canManageSchemaFolders && (
-              <Button variant="outline" onClick={() => createSchemaFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {topTab === "schemas" && canCreateSchema && (
-              <Button onClick={openSchemaCreate}>
-                <Plus className="h-4 w-4 mr-1" />
-                Create Schema
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="Logging"
+          description="Manage external log environments and reusable schemas"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                { label: "Refresh", onClick: load, disabled: activeTabLoading },
+                ...(topTab === "environments" && canCreateEnvironment
+                  ? [
+                      {
+                        label: "Create Environment",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openEnvironmentCreate,
+                      },
+                    ]
+                  : []),
+                ...(topTab === "environments" && canManageEnvironmentFolders
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: () => createEnvironmentFolderAction?.(),
+                      },
+                    ]
+                  : []),
+                ...(topTab === "schemas" && canCreateSchema
+                  ? [
+                      {
+                        label: "Create Schema",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openSchemaCreate,
+                      },
+                    ]
+                  : []),
+                ...(topTab === "schemas" && canManageSchemaFolders
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: () => createSchemaFolderAction?.(),
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              <RefreshButton onClick={load} disabled={activeTabLoading} />
+              {topTab === "environments" && canManageEnvironmentFolders && (
+                <Button variant="outline" onClick={() => createEnvironmentFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {topTab === "environments" && canCreateEnvironment && (
+                <Button onClick={openEnvironmentCreate}>
+                  <Plus />
+                  Create Environment
+                </Button>
+              )}
+              {topTab === "schemas" && canManageSchemaFolders && (
+                <Button variant="outline" onClick={() => createSchemaFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {topTab === "schemas" && canCreateSchema && (
+                <Button onClick={openSchemaCreate}>
+                  <Plus />
+                  Create Schema
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <Tabs
           value={topTab}
@@ -615,7 +613,8 @@ function LoggingSchemaDialog({
             Cancel
           </Button>
           <Button
-            disabled={!name.trim() || saving || !isCreateFolderAllowed(folderChoices, folderId)}
+            pending={saving}
+            disabled={!name.trim() || !isCreateFolderAllowed(folderChoices, folderId)}
             onClick={() => void save()}
           >
             Save

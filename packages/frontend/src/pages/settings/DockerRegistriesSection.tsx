@@ -1,14 +1,4 @@
-import {
-  ChevronDown,
-  Container,
-  Gitlab,
-  Globe,
-  Play,
-  Plus,
-  RefreshCw,
-  Server,
-  Trash2,
-} from "lucide-react";
+import { ChevronDown, Container, Gitlab, Globe, Play, Plus, Server, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -81,6 +71,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
   const [regNodeId, setRegNodeId] = useState("");
   const [regSaving, setRegSaving] = useState(false);
   const [regTesting, setRegTesting] = useState<string | null>(null);
+  const [regDeleting, setRegDeleting] = useState<string | null>(null);
   const [gitLabRegistriesExpanded, setGitLabRegistriesExpanded] = useState<boolean | null>(
     readGitLabRegistriesExpanded
   );
@@ -200,12 +191,15 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
       confirmLabel: "Delete",
     });
     if (!ok) return;
+    setRegDeleting(r.id);
     try {
       await api.deleteRegistry(r.id);
       toast.success("Registry deleted");
       loadRegistries();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to delete registry");
+    } finally {
+      setRegDeleting(null);
     }
   };
 
@@ -292,21 +286,22 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
           {canTestRegistry && (
             <Button
               variant="outline"
-              size="default"
-              disabled={regTesting === r.id}
+              pending={regTesting === r.id}
               onClick={() => handleRegTest(r)}
             >
-              {regTesting === r.id ? (
-                <RefreshCw className="mr-1 h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Play className="mr-1 h-3.5 w-3.5" />
-              )}
+              {regTesting === r.id ? null : <Play />}
               Test
             </Button>
           )}
           {canDeleteRegistry && !isIntegration && !r.readOnly && (
-            <Button variant="outline" size="icon" onClick={() => handleRegDelete(r)}>
-              <Trash2 className="h-4 w-4" />
+            <Button
+              variant="outline"
+              size="icon"
+              aria-label={`Delete ${r.name}`}
+              pending={regDeleting === r.id}
+              onClick={() => handleRegDelete(r)}
+            >
+              {regDeleting === r.id ? null : <Trash2 className="h-4 w-4" />}
             </Button>
           )}
         </div>
@@ -337,6 +332,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
               {manualRegistries.map(renderRegistryRow)}
               {gitLabRegistries.length > 0 && (
                 <div>
+                  {/* Structural disclosure header for the GitLab group, not an action button. */}
                   <button
                     type="button"
                     className="flex w-full items-center justify-between bg-muted/30 px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted/45"
@@ -485,14 +481,14 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
             <Button
               onClick={handleRegSave}
               disabled={
-                regSaving ||
                 !regName.trim() ||
                 !regUrl.trim() ||
                 (!regEditId && !canCreateRegistry) ||
                 (!!regEditId && !canEditRegistry)
               }
+              pending={regSaving}
             >
-              {regSaving ? "Saving..." : regEditId ? "Update" : "Add"}
+              {regEditId ? "Update" : "Add"}
             </Button>
           </DialogFooter>
         </DialogContent>

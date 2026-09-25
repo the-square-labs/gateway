@@ -78,7 +78,13 @@ export function ResourceFolderGroup<TFolder, TItem>({
         {...(canReorder ? listeners : {})}
       >
         {collapsible ? (
-          <button type="button" className="shrink-0 text-muted-foreground">
+          // The whole row toggles the folder; this only carries the chevron.
+          <button
+            type="button"
+            className="shrink-0 text-muted-foreground"
+            aria-label={expanded ? "Collapse folder" : "Expand folder"}
+            aria-expanded={expanded}
+          >
             {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </button>
         ) : (
@@ -113,7 +119,7 @@ export function ResourceFolderGroup<TFolder, TItem>({
           <div className="ml-auto" onClick={(e) => e.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label="Folder actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>

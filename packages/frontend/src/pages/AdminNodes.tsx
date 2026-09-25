@@ -6,6 +6,7 @@ import { InterfaceChoiceDialog } from "@/components/ai/InterfaceChoiceDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -183,7 +184,12 @@ export function AdminNodes() {
   }, [showProviderTabs]);
   const [createFolderAction, setCreateFolderAction] = useState<(() => void) | null>(null);
   const daemonUpdates = useDaemonUpdatesStore((s) => s.statuses);
+  const daemonUpdatesLoaded = useDaemonUpdatesStore((s) => s.lastLoadedAt > 0);
   const fetchDaemonUpdates = useDaemonUpdatesStore((s) => s.fetchDaemonUpdates);
+  // The status column shows available daemon updates, so the first list waits for them.
+  const [daemonUpdatesSettled, setDaemonUpdatesSettled] = useState(false);
+  const daemonUpdatesLoading =
+    hasScope("admin:update") && !daemonUpdatesLoaded && !daemonUpdatesSettled;
 
   const loadDaemonUpdates = useCallback(
     async (options?: { force?: boolean }) => {
@@ -207,7 +213,7 @@ export function AdminNodes() {
 
   // Fetch daemon update statuses
   useEffect(() => {
-    void loadDaemonUpdates();
+    void loadDaemonUpdates().finally(() => setDaemonUpdatesSettled(true));
   }, [loadDaemonUpdates]);
 
   const handleSearch = () => setFilters({ search: searchInput });
@@ -318,7 +324,7 @@ export function AdminNodes() {
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
           if (eStatus === "online" && nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
-            return <Badge className="bg-warning text-black">{typeStatus.latestVersion}</Badge>;
+            return <Badge variant="warning">{typeStatus.latestVersion}</Badge>;
           }
           return <Badge variant={STATUS_BADGE[eStatus] || "secondary"}>{eStatus}</Badge>;
         },
@@ -359,58 +365,56 @@ export function AdminNodes() {
 
   return (
     <PageTransition>
-      {hostingSettledAuthKey !== authKey && <Skeleton />}
+      {(hostingSettledAuthKey !== authKey || daemonUpdatesLoading) && <Skeleton />}
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Nodes</h1>
-              <p className="text-sm text-muted-foreground">
-                {activeTab === "providers"
-                  ? `${hostingAccounts.length} hosting account${hostingAccounts.length === 1 ? "" : "s"} connected`
-                  : `${total} node${total !== 1 ? "s" : ""} registered`}
-              </p>
-            </div>
-          </div>
-          {activeTab === "nodes" && (
-            <ResponsiveHeaderActions
-              actions={[
-                ...(canManageFolders && createFolderAction
-                  ? [
-                      {
-                        label: "Add Folder",
-                        icon: <FolderPlus className="h-4 w-4" />,
-                        onClick: createFolderAction,
-                      },
-                    ]
-                  : []),
-                ...(hasScopedAccess("nodes:create")
-                  ? [
-                      {
-                        label: "Add Node",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: () => setChoiceOpen(true),
-                      },
-                    ]
-                  : []),
-              ]}
-            >
-              {canManageFolders && (
-                <Button variant="outline" onClick={() => createFolderAction?.()}>
-                  <FolderPlus className="h-4 w-4" />
-                  Add Folder
-                </Button>
-              )}
-              {hasScopedAccess("nodes:create") && (
-                <Button onClick={() => setChoiceOpen(true)}>
-                  <Plus className="h-4 w-4 mr-1" />
-                  Add Node
-                </Button>
-              )}
-            </ResponsiveHeaderActions>
-          )}
-        </div>
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Nodes"
+          description={
+            activeTab === "providers"
+              ? `${hostingAccounts.length} hosting account${hostingAccounts.length === 1 ? "" : "s"} connected`
+              : `${total} node${total !== 1 ? "s" : ""} registered`
+          }
+          actions={
+            activeTab === "nodes" && (
+              <ResponsiveHeaderActions
+                actions={[
+                  ...(canManageFolders && createFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createFolderAction,
+                        },
+                      ]
+                    : []),
+                  ...(hasScopedAccess("nodes:create")
+                    ? [
+                        {
+                          label: "Add Node",
+                          icon: <Plus className="h-4 w-4" />,
+                          onClick: () => setChoiceOpen(true),
+                        },
+                      ]
+                    : []),
+                ]}
+              >
+                {canManageFolders && (
+                  <Button variant="outline" onClick={() => createFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                {hasScopedAccess("nodes:create") && (
+                  <Button onClick={() => setChoiceOpen(true)}>
+                    <Plus className="h-4 w-4" />
+                    Add Node
+                  </Button>
+                )}
+              </ResponsiveHeaderActions>
+            )
+          }
+        />
 
         <Tabs value={activeTab} onValueChange={setSelectedTab}>
           {showProviderTabs && (

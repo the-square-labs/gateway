@@ -6,7 +6,6 @@ import {
   GitBranch,
   History,
   KeyRound,
-  Loader2,
   Pencil,
   Play,
   Plus,
@@ -20,6 +19,7 @@ import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -152,6 +152,9 @@ export function DockerGitSourcePanel({
       updatedAt: suppliedSource?.updatedAt ?? new Date(0).toISOString(),
     }))
   );
+  // The source whose Build Secrets are listed, so the first list is waited for instead of popping in.
+  const [buildSecretsLoadedFor, setBuildSecretsLoadedFor] = useState<string | null>(null);
+  const [deletingSecretName, setDeletingSecretName] = useState<string | null>(null);
   const [secretDialogOpen, setSecretDialogOpen] = useState(false);
   const [secretName, setSecretName] = useState("");
   const [secretValue, setSecretValue] = useState("");
@@ -191,12 +194,17 @@ export function DockerGitSourcePanel({
           : target?.pageProjectId;
   const composeTarget = target?.kind === "compose_project";
   const pagesTarget = target?.kind === "pages_project";
-  const { connectorOptions, repositories } = useDockerSourceRepositories(
+  const { connectorOptions, connectorsLoading, repositories } = useDockerSourceRepositories(
     connectOpen,
     connectorId,
     target
   );
   const sourceId = source?.id;
+  const listedSourceId = (suppliedSource === undefined ? source : suppliedSource)?.id;
+  useContentLoading(
+    Boolean(suppliedLoading ?? loading) ||
+      (!!listedSourceId && buildSecretsLoadedFor !== listedSourceId)
+  );
 
   useEffect(() => {
     if (suppliedSource !== undefined) {
@@ -251,7 +259,8 @@ export function DockerGitSourcePanel({
       .then(setBuildSecrets)
       .catch((error) =>
         toast.error(error instanceof Error ? error.message : "Failed to load Build Secrets")
-      );
+      )
+      .finally(() => setBuildSecretsLoadedFor(sourceId));
   }, [sourceId, targetKind, targetNodeId, targetResourceId]);
 
   useEffect(() => {
@@ -525,6 +534,7 @@ export function DockerGitSourcePanel({
       variant: "destructive",
     });
     if (!accepted) return;
+    setDeletingSecretName(name);
     try {
       if (target) await api.deleteDockerBuildSecret(target, name);
       setBuildSecrets((current) => current.filter((secret) => secret.name !== name));
@@ -539,6 +549,8 @@ export function DockerGitSourcePanel({
       toast.success("Build Secret removed");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to remove Build Secret");
+    } finally {
+      setDeletingSecretName(null);
     }
   };
 
@@ -600,14 +612,13 @@ export function DockerGitSourcePanel({
   };
 
   if (suppliedLoading ?? loading) {
+    // The first load keeps the tab hidden; a retry keeps the panel header in place.
     return (
       <PanelShell
         icon={<GitBranch className="h-4 w-4" />}
         title="Repository"
         description="Loading repository delivery settings…"
-      >
-        <div className="h-28 animate-pulse bg-muted/30" />
-      </PanelShell>
+      />
     );
   }
 
@@ -626,6 +637,7 @@ export function DockerGitSourcePanel({
   if (!source) {
     const repositorySourceFields = (
       <RepositorySourceFields
+        loading={connectorsLoading}
         connectorId={connectorId}
         connectorOptions={connectorOptions}
         repositories={repositories}
@@ -832,8 +844,8 @@ export function DockerGitSourcePanel({
                   </Button>
                   <Button
                     onClick={() => void continuePagesConnect()}
+                    pending={discovering}
                     disabled={
-                      discovering ||
                       !connectorId ||
                       !projectId ||
                       !connectBranch.trim() ||
@@ -841,10 +853,7 @@ export function DockerGitSourcePanel({
                     }
                   >
                     {discovering ? (
-                      <>
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                        Loading package.json…
-                      </>
+                      "Loading package.json…"
                     ) : (
                       <>
                         Continue
@@ -874,8 +883,8 @@ export function DockerGitSourcePanel({
                   </Button>
                   <Button
                     onClick={() => void connectSource()}
+                    pending={connecting}
                     disabled={
-                      connecting ||
                       !connectorId ||
                       !projectId ||
                       !connectBranch.trim() ||
@@ -887,7 +896,7 @@ export function DockerGitSourcePanel({
                           !connectPublishTag.trim()))
                     }
                   >
-                    {connecting ? "Connecting…" : "Connect"}
+                    Connect
                   </Button>
                 </>
               )}
@@ -916,8 +925,8 @@ export function DockerGitSourcePanel({
             {canEdit && (
               <Button
                 onClick={() => void save()}
+                pending={saving}
                 disabled={
-                  saving ||
                   !dirty ||
                   !branch.trim() ||
                   (composeTarget
@@ -930,14 +939,14 @@ export function DockerGitSourcePanel({
                       : !dockerfilePath.trim() || !contextPath.trim())
                 }
               >
-                <Save className="h-4 w-4" />
-                {saving ? "Saving…" : "Save"}
+                {!saving && <Save className="h-4 w-4" />}
+                Save
               </Button>
             )}
             {canBuild && (
-              <Button onClick={() => void triggerBuild()} disabled={building || dirty}>
-                <Play className="h-4 w-4" />
-                {building ? "Queuing…" : "Build now"}
+              <Button onClick={() => void triggerBuild()} pending={building} disabled={dirty}>
+                {!building && <Play className="h-4 w-4" />}
+                Build now
               </Button>
             )}
             {canEdit && (
@@ -946,10 +955,10 @@ export function DockerGitSourcePanel({
                 size="icon"
                 aria-label="Disconnect repository"
                 title="Disconnect repository"
-                disabled={disconnecting}
+                pending={disconnecting}
                 onClick={() => void disconnectSource()}
               >
-                <Trash2 className="h-4 w-4" />
+                {!disconnecting && <Trash2 className="h-4 w-4" />}
               </Button>
             )}
           </div>
@@ -1341,12 +1350,13 @@ export function DockerGitSourcePanel({
                     size="icon"
                     variant="ghost"
                     aria-label={`Delete ${secret.name}`}
+                    pending={deletingSecretName === secret.name}
                     onClick={(event) => {
                       event.stopPropagation();
                       void removeBuildSecret(secret.name);
                     }}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {deletingSecretName !== secret.name && <Trash2 className="h-4 w-4" />}
                   </Button>
                 </div>
               )}
@@ -1450,9 +1460,10 @@ export function DockerGitSourcePanel({
             </Button>
             <Button
               onClick={() => void saveBuildSecret()}
-              disabled={secretSaving || !secretName.trim() || !secretValue}
+              pending={secretSaving}
+              disabled={!secretName.trim() || !secretValue}
             >
-              {secretSaving ? "Saving…" : "Save secret"}
+              Save secret
             </Button>
           </DialogFooter>
         </DialogContent>

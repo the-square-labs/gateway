@@ -274,8 +274,7 @@ export function ModelAccessFields({
           <Button
             type="button"
             variant="ghost"
-            size="icon"
-            className="h-8 w-8"
+            size="icon-sm"
             aria-label="Add access subject"
             title="Add access subject"
             disabled={rows.some((subject) => !subject.subjectId)}
@@ -371,7 +370,7 @@ export function ModelAccessFields({
                         variant="ghost"
                         size="icon"
                         aria-label={`Remove access subject ${index + 1}`}
-                        className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                        className="rounded-none border-l border-border"
                         onClick={() =>
                           setSubjects(rows.filter((_, rowIndex) => rowIndex !== index))
                         }

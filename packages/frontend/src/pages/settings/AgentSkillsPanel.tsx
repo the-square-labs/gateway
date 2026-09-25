@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { api } from "@/services/api";
@@ -38,6 +38,7 @@ export function AgentSkillsPanel() {
   const [skills, setSkills] = useState<AIAgentSkill[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<SkillDialogMode>("view");
   const [selectedSkill, setSelectedSkill] = useState<AIAgentSkill | null>(null);
@@ -107,12 +108,15 @@ export function AgentSkillsPanel() {
       variant: "destructive",
     });
     if (!confirmed) return;
+    setDeletingId(skill.id);
     try {
       await api.deleteAISkill(skill.id);
       setSkills((current) => current.filter((item) => item.id !== skill.id));
       toast.success("Skill deleted");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to delete skill");
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -122,6 +126,7 @@ export function AgentSkillsPanel() {
 
   const renderSkillRow = (skill: AIAgentSkill) => (
     <div key={skill.id} className="group relative border-b border-border last:border-b-0">
+      {/* Transparent overlay that makes the whole row open the skill. */}
       <button
         type="button"
         aria-label={`Open ${skill.name}`}
@@ -150,12 +155,13 @@ export function AgentSkillsPanel() {
               variant="outline"
               size="icon"
               aria-label={`Delete ${skill.name}`}
+              pending={deletingId === skill.id}
               onClick={(event) => {
                 event.stopPropagation();
                 void remove(skill);
               }}
             >
-              <Trash2 className="h-4 w-4" />
+              {deletingId === skill.id ? null : <Trash2 className="h-4 w-4" />}
             </Button>
           ) : null}
         </div>
@@ -163,6 +169,7 @@ export function AgentSkillsPanel() {
     </div>
   );
 
+  useContentLoading(loading);
   const readOnly = dialogMode === "view";
   const title =
     dialogMode === "create"
@@ -186,12 +193,7 @@ export function AgentSkillsPanel() {
           ) : null
         }
       >
-        {loading ? (
-          <div className="space-y-3 p-4">
-            <Skeleton className="h-12 w-full" />
-            <Skeleton className="h-12 w-full" />
-          </div>
-        ) : (
+        {loading ? null : (
           <div>
             {userSkills.length === 0 ? (
               <EmptyState
@@ -204,6 +206,7 @@ export function AgentSkillsPanel() {
             {userSkills.map(renderSkillRow)}
             {systemSkills.length > 0 ? (
               <div>
+                {/* Section header that expands the system skills list. */}
                 <button
                   type="button"
                   className={`flex w-full items-center justify-between bg-muted/30 px-4 py-2 text-left text-xs font-medium uppercase tracking-wide text-muted-foreground transition-colors hover:bg-muted/45 ${
@@ -313,11 +316,9 @@ export function AgentSkillsPanel() {
             {!readOnly ? (
               <Button
                 onClick={() => void save()}
+                pending={saving}
                 disabled={
-                  saving ||
-                  !form.name.trim() ||
-                  !form.description.trim() ||
-                  !form.instructions.trim()
+                  !form.name.trim() || !form.description.trim() || !form.instructions.trim()
                 }
               >
                 {dialogMode === "create" ? "Add Skill" : "Save Changes"}

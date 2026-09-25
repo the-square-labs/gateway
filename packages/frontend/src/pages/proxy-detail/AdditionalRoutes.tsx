@@ -1,6 +1,5 @@
 import {
   FileCode,
-  Loader2,
   MoreVertical,
   Pencil,
   Plus,
@@ -13,7 +12,9 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirmAction } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { PagesFeatureDisabledDialog } from "@/components/pages/PagesFeatureDisabledDialog";
@@ -381,9 +382,14 @@ export function AdditionalRoutesPanel({
       )
     );
   }, []);
+  // Target badges take their node colour from this list, so the panel waits for it.
+  const [dockerNodeColorsLoading, setDockerNodeColorsLoading] = useState(true);
+  useContentLoading(dockerNodeColorsLoading);
 
   useEffect(() => {
-    void loadDockerNodeColors().catch(() => setDockerNodeColors({}));
+    void loadDockerNodeColors()
+      .catch(() => setDockerNodeColors({}))
+      .finally(() => setDockerNodeColorsLoading(false));
   }, [loadDockerNodeColors]);
   useRealtime("docker.snapshot.changed", loadDockerNodeColors);
   useRealtime("node.changed", loadDockerNodeColors);
@@ -576,16 +582,12 @@ export function AdditionalRoutesPanel({
                     <DropdownMenuTrigger asChild>
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        disabled={!mutationAllowed || pending}
+                        size="icon-sm"
+                        disabled={!mutationAllowed}
+                        pending={pending}
                         aria-label={`Actions for ${route.path}`}
                       >
-                        {pending ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <MoreVertical className="h-4 w-4" />
-                        )}
+                        {pending ? null : <MoreVertical className="h-4 w-4" />}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
@@ -700,13 +702,9 @@ export function AdditionalRoutesPanel({
             >
               Cancel
             </Button>
-            <Button onClick={() => void saveAdvancedConfig()} disabled={savingAdvanced}>
-              {savingAdvanced ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
-              {savingAdvanced ? "Saving…" : "Save"}
+            <Button onClick={() => void saveAdvancedConfig()} pending={savingAdvanced}>
+              {savingAdvanced ? null : <Save className="h-4 w-4" />}
+              Save
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -735,9 +733,11 @@ function AdditionalRouteWizard({
   const [draft, setDraft] = useState<AdditionalRouteDraft>(defaultDraft);
   const [saving, setSaving] = useState(false);
   const [containers, setContainers] = useState<DockerContainer[]>([]);
+  // Loads started on open; true from the first open render, reset on close.
+  const [containersLoading, setContainersLoading] = useState(true);
   const [projects, setProjects] = useState<PageProject[]>([]);
   const [tags, setTags] = useState<PageTag[]>([]);
-  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [tagsLoading, setTagsLoading] = useState(false);
   const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
   const pagesEnabled = useUIBootstrapStore(
@@ -746,23 +746,42 @@ function AdditionalRouteWizard({
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
     setDraft(route ? draftFromRoute(route) : defaultDraft());
 
     void api
       .listDockerContainerSnapshots()
-      .then(setContainers)
-      .catch(() => setContainers([]));
+      .then((nextContainers) => {
+        if (!cancelled) setContainers(nextContainers);
+      })
+      .catch(() => {
+        if (!cancelled) setContainers([]);
+      })
+      .finally(() => {
+        if (!cancelled) setContainersLoading(false);
+      });
     if (pagesEnabled) {
       setProjectsLoading(true);
       void api
         .listPageProjects({ page: 1, limit: 100 })
-        .then((response) => setProjects(response.data ?? []))
-        .catch(() => setProjects([]))
-        .finally(() => setProjectsLoading(false));
+        .then((response) => {
+          if (!cancelled) setProjects(response.data ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setProjects([]);
+        })
+        .finally(() => {
+          if (!cancelled) setProjectsLoading(false);
+        });
     } else {
       setProjects([]);
       setProjectsLoading(false);
     }
+    return () => {
+      cancelled = true;
+      setContainersLoading(true);
+      setProjectsLoading(true);
+    };
   }, [open, pagesEnabled, route]);
 
   useEffect(() => {
@@ -858,6 +877,7 @@ function AdditionalRouteWizard({
         </DialogHeader>
 
         <div className="border border-border">
+          <ContentLoading loading={containersLoading || projectsLoading || tagsLoading} />
           <SettingsControlRow title="Path prefix" description="Literal path prefix for this route.">
             <Input
               id="additional-route-path"
@@ -932,10 +952,11 @@ function AdditionalRouteWizard({
           </Button>
           <Button
             onClick={() => void save()}
-            disabled={!targetValid || Boolean(pathError) || saving}
+            disabled={!targetValid || Boolean(pathError)}
+            pending={saving}
           >
-            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {saving ? "Saving…" : "Save"}
+            {saving ? null : <Save className="h-4 w-4" />}
+            Save
           </Button>
         </DialogFooter>
         <PagesFeatureDisabledDialog

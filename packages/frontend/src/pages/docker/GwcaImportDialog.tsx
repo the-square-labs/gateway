@@ -20,6 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   type GwcaImportMetadata,
   type GwcaPortMappingInput,
@@ -433,6 +434,8 @@ export function GwcaImportDialog({
         <AnimatedHeight>
           <fieldset className="m-0 contents border-0 p-0" disabled={importing}>
             <div className="space-y-4">
+              {/* The dialog opens once the destination folders are known. */}
+              {foldersLoading ? <Skeleton /> : null}
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">Archive</span>
                 <input
@@ -511,9 +514,7 @@ export function GwcaImportDialog({
                   onValueChange={(value) => setFolderId(value === "__root__" ? "" : value)}
                 >
                   <SelectTrigger aria-label="Destination folder">
-                    <SelectValue
-                      placeholder={foldersLoading ? "Loading folders..." : "Select a folder"}
-                    />
+                    <SelectValue placeholder="Select a folder" />
                   </SelectTrigger>
                   <SelectContent>
                     {canImportAtRoot && <SelectItem value="__root__">Root</SelectItem>}
@@ -720,8 +721,8 @@ export function GwcaImportDialog({
           </Button>
           <Button
             onClick={() => void handleImport()}
+            pending={importing}
             disabled={
-              importing ||
               planning ||
               !!planError ||
               unresolvedVolumes > 0 ||
@@ -732,7 +733,7 @@ export function GwcaImportDialog({
               !canImportHere
             }
           >
-            {importing ? "Importing..." : "Import container"}
+            Import container
           </Button>
         </DialogFooter>
       </DialogContent>

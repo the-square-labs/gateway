@@ -1,6 +1,7 @@
 import { Copy, FileKey } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
@@ -23,13 +24,11 @@ export function CertificateDetailView({ pem }: CertificateDetailViewProps) {
   const derLength = Math.ceil((base64Content.length * 3) / 4);
 
   return (
-    <div className="border border-border bg-card">
-      <div className="flex items-center justify-between border-b border-border p-4">
-        <div className="flex items-center gap-2">
-          <FileKey className="h-4 w-4 text-muted-foreground" />
-          <h2 className="font-semibold">X.509 Certificate</h2>
-        </div>
-        <div className="flex items-center gap-2">
+    <PanelShell
+      icon={<FileKey className="h-4 w-4 text-muted-foreground" />}
+      title="X.509 Certificate"
+      actions={
+        <>
           <Button
             variant={showRaw ? "default" : "outline"}
             size="sm"
@@ -48,51 +47,46 @@ export function CertificateDetailView({ pem }: CertificateDetailViewProps) {
             <Copy className="h-4 w-4" />
             Copy
           </Button>
-        </div>
-      </div>
-
-      <div className="p-4">
-        {showRaw ? (
-          <pre className="overflow-x-auto bg-muted p-4 text-xs font-mono whitespace-pre-wrap break-all">
-            {pem}
-          </pre>
-        ) : (
-          <div className="space-y-4">
-            {/* Format indicator */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium">Format</h3>
-              <div className="flex gap-2">
-                <Badge variant="secondary">PEM</Badge>
-                {isValidPEM && (
-                  <Badge className="bg-[color:var(--color-success)] text-white">Valid</Badge>
-                )}
-                <Badge variant="secondary">{derLength} bytes (DER)</Badge>
-              </div>
-            </div>
-
-            {/* PEM Preview */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium">PEM Content</h3>
-              <div className="bg-muted p-3 font-mono text-xs overflow-x-auto">
-                <p className="text-muted-foreground">{lines[0]}</p>
-                <p className="text-foreground">{base64Content.slice(0, 64)}...</p>
-                <p className="text-muted-foreground">
-                  ...({base64Content.length} base64 characters)
-                </p>
-                <p className="text-muted-foreground">{lines[lines.length - 1]}</p>
-              </div>
-            </div>
-
-            {/* Certificate chain indicator */}
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium">Certificate Chain</h3>
-              <p className="text-sm text-muted-foreground">
-                {pem.split("BEGIN CERTIFICATE").length - 1} certificate(s) in chain
-              </p>
+        </>
+      }
+      bodyClassName="p-4"
+    >
+      {showRaw ? (
+        <pre className="overflow-x-auto bg-muted p-4 text-xs font-mono whitespace-pre-wrap break-all">
+          {pem}
+        </pre>
+      ) : (
+        <div className="space-y-4">
+          {/* Format indicator */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Format</h3>
+            <div className="flex gap-2">
+              <Badge variant="secondary">PEM</Badge>
+              {isValidPEM && <Badge variant="success">Valid</Badge>}
+              <Badge variant="secondary">{derLength} bytes (DER)</Badge>
             </div>
           </div>
-        )}
-      </div>
-    </div>
+
+          {/* PEM Preview */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">PEM Content</h3>
+            <div className="bg-muted p-3 font-mono text-xs overflow-x-auto">
+              <p className="text-muted-foreground">{lines[0]}</p>
+              <p className="text-foreground">{base64Content.slice(0, 64)}...</p>
+              <p className="text-muted-foreground">...({base64Content.length} base64 characters)</p>
+              <p className="text-muted-foreground">{lines[lines.length - 1]}</p>
+            </div>
+          </div>
+
+          {/* Certificate chain indicator */}
+          <div className="space-y-2">
+            <h3 className="text-sm font-medium">Certificate Chain</h3>
+            <p className="text-sm text-muted-foreground">
+              {pem.split("BEGIN CERTIFICATE").length - 1} certificate(s) in chain
+            </p>
+          </div>
+        </div>
+      )}
+    </PanelShell>
   );
 }

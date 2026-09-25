@@ -2,10 +2,9 @@ import { RefreshCw, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 
@@ -42,6 +41,7 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [errorLines, setErrorLines] = useState<number[]>([]);
+  useContentLoading(nodeStatus === "online" && loading);
 
   useEffect(() => {
     if (nodeStatus !== "online") return;
@@ -126,17 +126,19 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
           <Button
             variant="ghost"
             onClick={handleTest}
-            disabled={loading || isTesting || actionLocked}
+            pending={isTesting}
+            disabled={loading || isSaving || actionLocked}
           >
-            <RefreshCw className={cn("h-4 w-4", isTesting && "animate-spin")} />
+            {isTesting ? null : <RefreshCw />}
             Validate
           </Button>
           {canManage && (
             <Button
               onClick={handleSave}
-              disabled={loading || isSaving || !hasChanges || actionLocked}
+              pending={isSaving}
+              disabled={loading || isTesting || !hasChanges || actionLocked}
             >
-              <Save className="h-4 w-4" />
+              {isSaving ? null : <Save />}
               Save
             </Button>
           )}
@@ -146,18 +148,7 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
       bodyClassName="flex min-h-0 flex-1"
       wrapHeader
     >
-      {loading ? (
-        <div
-          className="flex min-h-0 flex-1 flex-col gap-3 p-4"
-          aria-label="Loading nginx configuration"
-        >
-          <Skeleton className="h-4 w-1/3" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-4 w-4/5" />
-          <Skeleton className="h-4 w-1/2" />
-        </div>
-      ) : (
+      {loading ? null : (
         <CodeEditor
           value={configContent}
           onChange={

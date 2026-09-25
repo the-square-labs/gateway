@@ -42,8 +42,8 @@ export function StorageSettingsTab({
     <div className="space-y-4">
       <StorageConnectionForm draft={draft} onChange={setDraft} storageId={storage.id} />
       <DialogFooter>
-        <Button onClick={() => void save()} disabled={saving}>
-          {saving ? "Saving..." : "Save Changes"}
+        <Button onClick={() => void save()} pending={saving}>
+          Save Changes
         </Button>
       </DialogFooter>
     </div>

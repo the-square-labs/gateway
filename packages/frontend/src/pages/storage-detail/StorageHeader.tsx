@@ -8,6 +8,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -95,78 +96,82 @@ export function StorageHeader({
   const endpointLabel = storage.endpoint || formatProviderLabel(storage.provider);
 
   return (
-    <div className="flex shrink-0 items-center justify-between gap-3">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <PageBackButton onClick={onBack} />
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-2xl font-bold">{storage.name}</h1>
-            <Badge
-              variant={HEALTH_BADGE[healthStatus] ?? "secondary"}
-              size="inline"
-              className="shrink-0"
-            >
-              {formatHealthStatusLabel(healthStatus)}
-            </Badge>
-            <Badge variant="secondary" size="inline" className="shrink-0">
-              {formatProviderLabel(storage.provider)}
-            </Badge>
-          </div>
-          <p className="break-all text-sm text-muted-foreground">
-            {endpointLabel}
-            {storage.region ? ` · ${storage.region}` : ""}
-            {storage.defaultBucket ? ` · ${storage.defaultBucket}` : ""}
-          </p>
-        </div>
-      </div>
-
-      <div className="hidden items-center gap-2 sm:flex">
-        <Button variant="outline" size="icon" onClick={onOpenPin}>
-          <Pin className="h-4 w-4" />
-        </Button>
-        {canEdit && (
-          <Button variant="outline" onClick={onTest}>
-            <RefreshCw className="h-4 w-4" />
-            Test
-          </Button>
-        )}
-        {(canEdit || canRestart || canRetry || canReveal || canDelete) && (
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon">
-                <EllipsisVertical className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">{menuItems}</DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </div>
-
-      <div className="ml-auto flex shrink-0 sm:hidden">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" size="icon" aria-label="Storage actions">
-              <EllipsisVertical className="h-4 w-4" />
+    <PageHeader
+      className="shrink-0"
+      leading={<PageBackButton onClick={onBack} />}
+      title={storage.name}
+      badges={
+        <>
+          <Badge
+            variant={HEALTH_BADGE[healthStatus] ?? "secondary"}
+            size="inline"
+            className="shrink-0"
+          >
+            {formatHealthStatusLabel(healthStatus)}
+          </Badge>
+          <Badge variant="secondary" size="inline" className="shrink-0">
+            {formatProviderLabel(storage.provider)}
+          </Badge>
+        </>
+      }
+      description={
+        <span className="break-all">
+          {endpointLabel}
+          {storage.region ? ` · ${storage.region}` : ""}
+          {storage.defaultBucket ? ` · ${storage.defaultBucket}` : ""}
+        </span>
+      }
+      actions={
+        <>
+          <div className="hidden items-center gap-2 sm:flex">
+            <Button variant="outline" size="icon" onClick={onOpenPin} aria-label="Pin storage">
+              <Pin className="h-4 w-4" />
             </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuItem onClick={onOpenPin}>
-              <Pin className="h-3.5 w-3.5 mr-2" />
-              Pin
-            </DropdownMenuItem>
             {canEdit && (
-              <DropdownMenuItem onClick={onTest}>
-                <RefreshCw className="h-3.5 w-3.5 mr-2" />
+              <Button variant="outline" onClick={onTest}>
+                <RefreshCw className="h-4 w-4" />
                 Test
-              </DropdownMenuItem>
+              </Button>
             )}
             {(canEdit || canRestart || canRetry || canReveal || canDelete) && (
-              <DropdownMenuSeparator />
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="icon" aria-label="More storage actions">
+                    <EllipsisVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">{menuItems}</DropdownMenuContent>
+              </DropdownMenu>
             )}
-            {menuItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
-    </div>
+          </div>
+
+          <div className="ml-auto flex shrink-0 sm:hidden">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" aria-label="Storage actions">
+                  <EllipsisVertical className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={onOpenPin}>
+                  <Pin className="h-3.5 w-3.5 mr-2" />
+                  Pin
+                </DropdownMenuItem>
+                {canEdit && (
+                  <DropdownMenuItem onClick={onTest}>
+                    <RefreshCw className="h-3.5 w-3.5 mr-2" />
+                    Test
+                  </DropdownMenuItem>
+                )}
+                {(canEdit || canRestart || canRetry || canReveal || canDelete) && (
+                  <DropdownMenuSeparator />
+                )}
+                {menuItems}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </>
+      }
+    />
   );
 }

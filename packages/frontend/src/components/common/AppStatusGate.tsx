@@ -1,5 +1,5 @@
-import { AlertTriangle, Loader2, RotateCw, XCircle } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { AlertTriangle, RotateCw, XCircle } from "lucide-react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   isGatewayUpdateTargetVersion,
@@ -8,7 +8,7 @@ import {
   reloadGatewayClient,
   subscribeGatewayReload,
 } from "@/lib/gateway-update-reload";
-import { formatDateTime } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
@@ -31,6 +31,103 @@ const MAINTENANCE_AUTO_RELOAD_GUARD_KEY = "gateway-maintenance-auto-reload";
 
 export function clearMaintenanceAutoReloadGuard(): void {
   window.sessionStorage.removeItem(MAINTENANCE_AUTO_RELOAD_GUARD_KEY);
+}
+
+/**
+ * The maintenance and restart screens mirror GATEWAY_RESTARTING_HTML in
+ * packages/backend/src/lib/gateway-error-pages.ts. While Gateway is down the
+ * browser reloads onto that static page, which is always dark, so these screens
+ * keep its fixed palette (and the dark theme for their controls) instead of the
+ * current theme: the swap then does not flash between themes.
+ */
+const RESTART_PAGE_PALETTE = {
+  "--restart-page-bg": "#090909",
+  "--restart-page-fg": "#f4f4f5",
+  "--restart-page-muted": "#a1a1aa",
+  "--restart-page-subtle": "#71717a",
+  "--restart-page-line": "#27272a",
+  "--restart-page-row": "#d4d4d8",
+  "--restart-page-error": "#ef4444",
+} as CSSProperties;
+
+const STATUS_SCREEN_ICON_TONES = {
+  "restart-page": {
+    error: "border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)] text-[#ef4444]",
+    warning: "border-[rgba(234,179,8,0.35)] bg-[rgba(234,179,8,0.06)] text-[#facc15]",
+  },
+  app: {
+    error: "border-destructive/30 bg-destructive/5 text-destructive",
+    warning: "border-warning/30 bg-warning/5 text-warning-foreground",
+  },
+} as const;
+
+/** A full-screen status shown over the app: maintenance, updates, restarts, rate limits. */
+function StatusScreen({
+  appearance,
+  layerClassName,
+  tone,
+  icon,
+  title,
+  description,
+  children,
+}: {
+  /** `restart-page` matches the static restart page; `app` follows the current theme. */
+  appearance: "restart-page" | "app";
+  /** Stacking order among the app status screens, such as `z-[205]`. */
+  layerClassName: string;
+  tone: "error" | "warning";
+  icon: ReactNode;
+  title: string;
+  description: ReactNode;
+  children?: ReactNode;
+}) {
+  const restartPage = appearance === "restart-page";
+  return (
+    <div
+      className={cn(
+        "fixed inset-0 flex min-h-screen items-center justify-center px-6",
+        restartPage
+          ? "dark bg-[color:var(--restart-page-bg)] text-[color:var(--restart-page-fg)]"
+          : "bg-background text-foreground",
+        layerClassName
+      )}
+      style={restartPage ? RESTART_PAGE_PALETTE : undefined}
+    >
+      <div className="w-full max-w-sm text-center">
+        <div
+          className={cn(
+            "mx-auto mb-4 flex h-12 w-12 items-center justify-center border",
+            STATUS_SCREEN_ICON_TONES[appearance][tone]
+          )}
+        >
+          {icon}
+        </div>
+        <h2 className="m-0 text-lg font-semibold leading-[1.4]">{title}</h2>
+        <p
+          className={cn(
+            "mt-2 text-sm leading-[1.55]",
+            restartPage ? "text-[color:var(--restart-page-muted)]" : "text-muted-foreground"
+          )}
+        >
+          {description}
+        </p>
+        {children}
+        {restartPage ? (
+          <div className="mt-7 text-xs text-[color:var(--restart-page-subtle)]">
+            Powered by{" "}
+            <a
+              href="https://thesquarelabs.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[color:var(--restart-page-muted)] hover:underline"
+            >
+              Square Labs
+            </a>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 async function fetchGatewayCurrentVersion(): Promise<string | null> {
@@ -115,28 +212,14 @@ function MaintenanceScreen() {
   }, [setMaintenanceActive]);
 
   return (
-    <div className="fixed inset-0 z-[200] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
-      <div className="w-full max-w-sm text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(239,68,68,0.35)] bg-[rgba(239,68,68,0.06)] text-[#ef4444]">
-          <AlertTriangle className="h-6 w-6" />
-        </div>
-        <h2 className="m-0 text-lg font-semibold leading-[1.4]">Temporarily Unavailable</h2>
-        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">
-          The backend is not responding right now. Your session is preserved.
-        </p>
-        <div className="mt-7 text-xs text-[#71717a]">
-          Powered by{" "}
-          <a
-            href="https://thesquarelabs.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#a1a1aa] hover:underline"
-          >
-            Square Labs
-          </a>
-        </div>
-      </div>
-    </div>
+    <StatusScreen
+      appearance="restart-page"
+      layerClassName="z-[200]"
+      tone="error"
+      icon={<AlertTriangle className="h-6 w-6" />}
+      title="Temporarily Unavailable"
+      description="The backend is not responding right now. Your session is preserved."
+    />
   );
 }
 
@@ -155,27 +238,16 @@ function UpdateOperationScreen({
   children?: ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-[#090909] px-6 text-[#f4f4f5]">
-      <div className="w-full max-w-sm text-center">
-        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center border border-[rgba(234,179,8,0.35)] bg-[rgba(234,179,8,0.06)] text-[#facc15]">
-          <RotateCw className="h-6 w-6 animate-spin motion-reduce:[animation-duration:1.8s]" />
-        </div>
-        <h2 className="m-0 text-lg font-semibold leading-[1.4]">{title}</h2>
-        <p className="mt-2 text-sm leading-[1.55] text-[#a1a1aa]">{description}</p>
-        {children}
-        <div className="mt-7 text-xs text-[#71717a]">
-          Powered by{" "}
-          <a
-            href="https://thesquarelabs.com"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-[#a1a1aa] hover:underline"
-          >
-            Square Labs
-          </a>
-        </div>
-      </div>
-    </div>
+    <StatusScreen
+      appearance="restart-page"
+      layerClassName="z-[205]"
+      tone="warning"
+      icon={<RotateCw className="h-6 w-6 animate-spin motion-reduce:[animation-duration:1.8s]" />}
+      title={title}
+      description={description}
+    >
+      {children}
+    </StatusScreen>
   );
 }
 
@@ -217,27 +289,26 @@ function GatewayUpdateWaitingScreen({ operation }: { operation: GatewayUpdateOpe
     >
       <ul
         aria-label="Running operations"
-        className="mt-5 divide-y divide-[#27272a] border border-[#27272a] text-left text-sm"
+        className="mt-5 divide-y divide-[color:var(--restart-page-line)] border border-[color:var(--restart-page-line)] text-left text-sm"
       >
         {operation.operations.map((item) => (
           <li key={item.kind} className="flex items-center justify-between gap-4 px-3 py-2">
-            <span className="text-[#d4d4d8]">{item.label}</span>
-            <span className="font-medium tabular-nums text-[#f4f4f5]">{item.count}</span>
+            <span className="text-[color:var(--restart-page-row)]">{item.label}</span>
+            <span className="font-medium tabular-nums">{item.count}</span>
           </li>
         ))}
       </ul>
       {canUpdate && (
         <div className="mt-5 space-y-2">
-          <Button className="w-full" onClick={handleProceed} disabled={proceeding}>
-            {proceeding && <Loader2 className="animate-spin" />}
+          <Button className="w-full" onClick={handleProceed} pending={proceeding}>
             Update now
           </Button>
-          <p className="text-xs leading-[1.5] text-[#71717a]">
+          <p className="text-xs leading-[1.5] text-[color:var(--restart-page-subtle)]">
             Updating now interrupts these operations. Gateway resumes or reconciles them after the
             restart.
           </p>
           {error && (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className="text-xs text-[color:var(--restart-page-error)]">
               {error}
             </p>
           )}
@@ -474,7 +545,7 @@ function RelayOperationScreen() {
         <div className="mt-5 space-y-2">
           {confirming ? (
             <>
-              <p className="text-xs leading-[1.5] text-[#a1a1aa]">
+              <p className="text-xs leading-[1.5] text-[color:var(--restart-page-muted)]">
                 Abandon this update? Relays it drained return to service. Relays that already
                 updated keep the new version.
               </p>
@@ -491,9 +562,8 @@ function RelayOperationScreen() {
                   variant="destructive"
                   className="flex-1"
                   onClick={handleAbandon}
-                  disabled={abandoning}
+                  pending={abandoning}
                 >
-                  {abandoning && <Loader2 className="animate-spin" />}
                   Abandon update
                 </Button>
               </div>
@@ -504,7 +574,7 @@ function RelayOperationScreen() {
             </Button>
           )}
           {error && (
-            <p role="alert" className="text-xs text-destructive">
+            <p role="alert" className="text-xs text-[color:var(--restart-page-error)]">
               {error}
             </p>
           )}
@@ -598,39 +668,36 @@ function GatewayUpdateErrorScreen() {
   };
 
   return (
-    <div className="fixed inset-0 z-[205] flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-destructive/30 bg-destructive/5 text-destructive">
-            <XCircle className="h-6 w-6" />
-          </div>
-          <h2 className="text-lg font-semibold text-foreground">Update Failed</h2>
-          <p className="text-sm text-muted-foreground">
-            {error.rolledBack
-              ? `Gateway could not complete the update${
-                  error.targetVersion ? ` to ${error.targetVersion}` : ""
-                }. The previous version is running.`
-              : error.targetVersion
-                ? `Gateway could not start the update to ${error.targetVersion}.`
-                : "Gateway could not start the update."}
-          </p>
-          <p className="border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-            {error.message}
-          </p>
-        </div>
-
-        <div className="space-y-3">
-          <Button onClick={handleReturn} className="w-full">
-            Return to Gateway
-          </Button>
-          <p className="text-xs text-muted-foreground">
-            {error.rolledBack
-              ? "Review the update logs on the Gateway host before you retry the update."
-              : "No restart was started. You can retry the update after resolving the error."}
-          </p>
-        </div>
+    <StatusScreen
+      appearance="app"
+      layerClassName="z-[205]"
+      tone="error"
+      icon={<XCircle className="h-6 w-6" />}
+      title="Update Failed"
+      description={
+        error.rolledBack
+          ? `Gateway could not complete the update${
+              error.targetVersion ? ` to ${error.targetVersion}` : ""
+            }. The previous version is running.`
+          : error.targetVersion
+            ? `Gateway could not start the update to ${error.targetVersion}.`
+            : "Gateway could not start the update."
+      }
+    >
+      <p className="mt-4 border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+        {error.message}
+      </p>
+      <div className="mt-8 space-y-3">
+        <Button onClick={handleReturn} className="w-full">
+          Return to Gateway
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          {error.rolledBack
+            ? "Review the update logs on the Gateway host before you retry the update."
+            : "No restart was started. You can retry the update after resolving the error."}
+        </p>
       </div>
-    </div>
+    </StatusScreen>
   );
 }
 
@@ -661,21 +728,20 @@ function RateLimitScreen() {
   if (rateLimitedUntil == null) return null;
 
   return (
-    <div className="fixed inset-0 z-[210] flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-8 text-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center border border-warning/30 bg-warning/5 text-warning-foreground">
-            <AlertTriangle className="h-6 w-6" />
-          </div>
-          <h2 className="text-lg font-semibold text-foreground">Rate Limit Reached</h2>
-          <p className="text-sm text-muted-foreground">
-            You have been rate-limited. Requests will resume automatically in{" "}
-            <span className="font-semibold text-foreground">{secondsRemaining}</span> second
-            {secondsRemaining === 1 ? "" : "s"}.
-          </p>
-        </div>
-      </div>
-    </div>
+    <StatusScreen
+      appearance="app"
+      layerClassName="z-[210]"
+      tone="warning"
+      icon={<AlertTriangle className="h-6 w-6" />}
+      title="Rate Limit Reached"
+      description={
+        <>
+          You have been rate-limited. Requests will resume automatically in{" "}
+          <span className="font-semibold text-foreground">{secondsRemaining}</span> second
+          {secondsRemaining === 1 ? "" : "s"}.
+        </>
+      }
+    />
   );
 }
 

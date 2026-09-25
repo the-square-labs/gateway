@@ -1,4 +1,4 @@
-import { History, Loader2, Play, Square } from "lucide-react";
+import { History, Play, Square } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
@@ -340,17 +340,9 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
                 void execute();
               }
             }}
-            disabled={running && database.type === "redis"}
+            pending={running && database.type === "redis"}
           >
-            {running ? (
-              database.type === "redis" ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Square className="h-3.5 w-3.5" />
-              )
-            ) : (
-              <Play className="h-3.5 w-3.5" />
-            )}
+            {running ? database.type === "redis" ? null : <Square /> : <Play />}
             {running && database.type !== "redis" ? "Cancel" : "Run"}
           </Button>
         </div>

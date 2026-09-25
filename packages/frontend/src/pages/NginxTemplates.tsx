@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Badge } from "@/components/ui/badge";
@@ -132,38 +133,36 @@ export function NginxTemplates({
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
         {!embedded && (
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <h1 className="text-2xl font-bold">Config Templates</h1>
-              <p className="text-sm text-muted-foreground">
-                Nginx server block templates for proxy hosts
-              </p>
-            </div>
-            <ResponsiveHeaderActions
-              actions={
-                hasScope("proxy:templates:manage")
-                  ? [
-                      {
-                        label: "Create Template",
-                        icon: <Plus className="h-4 w-4" />,
-                        onClick: () => navigate("/nginx-templates/new"),
-                      },
-                    ]
-                  : []
-              }
-            >
-              {hasScope("proxy:templates:manage") && (
-                <Button onClick={() => navigate("/nginx-templates/new")}>
-                  <Plus className="h-4 w-4" />
-                  Create Template
-                </Button>
-              )}
-            </ResponsiveHeaderActions>
-          </div>
+          <PageHeader
+            title="Config Templates"
+            description="Nginx server block templates for proxy hosts"
+            actions={
+              <ResponsiveHeaderActions
+                actions={
+                  hasScope("proxy:templates:manage")
+                    ? [
+                        {
+                          label: "Create Template",
+                          icon: <Plus className="h-4 w-4" />,
+                          onClick: () => navigate("/nginx-templates/new"),
+                        },
+                      ]
+                    : []
+                }
+              >
+                {hasScope("proxy:templates:manage") && (
+                  <Button onClick={() => navigate("/nginx-templates/new")}>
+                    <Plus className="h-4 w-4" />
+                    Create Template
+                  </Button>
+                )}
+              </ResponsiveHeaderActions>
+            }
+          />
         )}
 
         {isLoading ? (
-          <TemplateCardsSkeleton />
+          <Skeleton />
         ) : templates.length > 0 ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {templates.map((t) => {
@@ -198,7 +197,11 @@ export function NginxTemplates({
                     {hasActions && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            aria-label={`Actions for ${t.name}`}
+                          >
                             <MoreVertical className="h-4 w-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -273,28 +276,4 @@ export function NginxTemplates({
 
   if (embedded) return content;
   return <PageTransition>{content}</PageTransition>;
-}
-
-function TemplateCardsSkeleton() {
-  return (
-    <div
-      className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3"
-      aria-label="Loading config templates"
-    >
-      {Array.from({ length: 6 }, (_, index) => (
-        <div key={index} className="space-y-3 border border-border bg-card p-4">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <Skeleton className="h-4 w-4" />
-              <Skeleton className="h-4 w-28" />
-            </div>
-            <Skeleton className="h-8 w-8" />
-          </div>
-          <Skeleton className="h-4 w-full" />
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-5 w-16" />
-        </div>
-      ))}
-    </div>
-  );
 }

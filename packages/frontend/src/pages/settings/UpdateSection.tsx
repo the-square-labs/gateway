@@ -1,14 +1,14 @@
-import { Loader2, RefreshCw, ServerCog } from "lucide-react";
+import { RefreshCw, ServerCog } from "lucide-react";
 import { useEffect, useState } from "react";
 import Markdown from "react-markdown";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { isDevForceUpdatesEnabled } from "@/lib/dev-force-updates";
 import { cn } from "@/lib/utils";
@@ -34,6 +34,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
   const [releaseNotesSource, setReleaseNotesSource] = useState<"gateway" | "relay">("gateway");
   const [releaseNotesList, setReleaseNotesList] = useState<string[] | null>(null);
   const [releaseVersions, setReleaseVersions] = useState<string[] | null>(null);
+  const [releaseNotesLoading, setReleaseNotesLoading] = useState(false);
   const [initialLoadComplete, setInitialLoadComplete] = useState(updateStatus !== null);
 
   // Fetch status on mount
@@ -46,12 +47,8 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     highlightDurationMs: 2200,
   });
 
-  if (!initialLoadComplete)
-    return (
-      <div id="system-updates" className="xl:col-span-2">
-        <Skeleton />
-      </div>
-    );
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   const handleCheckUpdate = async () => {
     await checkForUpdates();
@@ -159,9 +156,12 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                   variant="outline"
                   onClick={async () => {
                     setReleaseNotesSource("gateway");
-                    setReleaseNotesOpen(true);
                     setReleaseVersions(null);
                     setReleaseNotesList(null);
+                    // Set with the open state, so the dialog waits for the full list
+                    // instead of showing the latest notes and then replacing them.
+                    setReleaseNotesLoading(true);
+                    setReleaseNotesOpen(true);
                     try {
                       const all = await api.getAllReleaseNotes();
                       if (all.length > 0) {
@@ -170,6 +170,8 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                       }
                     } catch {
                       // Fallback: just show the cached latest release notes
+                    } finally {
+                      setReleaseNotesLoading(false);
                     }
                   }}
                 >
@@ -177,10 +179,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                 </Button>
               )}
               {canUpdate && (
-                <Button
-                  onClick={handleGatewayUpdate}
-                  className="bg-warning text-black hover:bg-warning/90"
-                >
+                <Button onClick={handleGatewayUpdate} variant="warning">
                   Update Gateway to {updateStatus?.latestVersion}
                 </Button>
               )}
@@ -234,16 +233,13 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
                 <Button
                   variant="outline"
                   onClick={() => void handleAbandonRelayUpdate()}
-                  disabled={abandoningRelayUpdate}
+                  pending={abandoningRelayUpdate}
                 >
-                  {abandoningRelayUpdate ? "Abandoning..." : "Abandon update"}
+                  Abandon update
                 </Button>
               )}
               {canUpdate && relayUpdateAvailable && (
-                <Button
-                  onClick={handleRelayUpdate}
-                  className="bg-warning text-black hover:bg-warning/90"
-                >
+                <Button onClick={handleRelayUpdate} variant="warning">
                   Update Relay Pool to {updateStatus?.relay.latestVersion}
                 </Button>
               )}
@@ -280,12 +276,8 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
         description="Application info and updates"
         actions={
           canUpdate ? (
-            <Button onClick={handleCheckUpdate} disabled={isChecking}>
-              {isChecking ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <RefreshCw className="h-4 w-4" />
-              )}
+            <Button onClick={handleCheckUpdate} pending={isChecking}>
+              {isChecking ? null : <RefreshCw className="h-4 w-4" />}
               Check for updates
             </Button>
           ) : null
@@ -322,18 +314,40 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
           <DialogHeader>
             <DialogTitle>Release Notes</DialogTitle>
           </DialogHeader>
-          <div className="prose prose-sm dark:prose-invert max-w-none">
-            {(releaseNotesList ?? [activeReleaseNotes]).filter(Boolean).map((notes, i) => (
-              <div key={i}>
-                {releaseNotesList && releaseNotesList.length > 1 && (
-                  <h3 className="text-base font-semibold mt-0">{releaseVersions?.[i]}</h3>
-                )}
-                <Markdown>{notes ?? ""}</Markdown>
-              </div>
-            ))}
-          </div>
+          <ReleaseNotesBody
+            loading={releaseNotesLoading}
+            notesList={releaseNotesList}
+            versions={releaseVersions}
+            fallbackNotes={activeReleaseNotes}
+          />
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function ReleaseNotesBody({
+  loading,
+  notesList,
+  versions,
+  fallbackNotes,
+}: {
+  loading: boolean;
+  notesList: string[] | null;
+  versions: string[] | null;
+  fallbackNotes: string | null | undefined;
+}) {
+  useContentLoading(loading);
+  return (
+    <div className="prose prose-sm dark:prose-invert max-w-none">
+      {(notesList ?? [fallbackNotes]).filter(Boolean).map((notes, i) => (
+        <div key={i}>
+          {notesList && notesList.length > 1 && (
+            <h3 className="text-base font-semibold mt-0">{versions?.[i]}</h3>
+          )}
+          <Markdown>{notes ?? ""}</Markdown>
+        </div>
+      ))}
+    </div>
   );
 }

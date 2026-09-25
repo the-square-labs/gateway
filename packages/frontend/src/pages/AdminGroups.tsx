@@ -1,7 +1,6 @@
 import {
   EllipsisVertical,
   FolderPlus,
-  Loader2,
   Pencil,
   Plus,
   Shield,
@@ -16,9 +15,11 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
@@ -56,6 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
@@ -82,15 +84,28 @@ import {
   isScopeSubset,
 } from "./admin-groups-helpers";
 
-export function AdminGroups({
-  embedded = false,
-  createRequest = 0,
-  onCreateFolderRef,
-}: {
+interface AdminGroupsProps {
   embedded?: boolean;
   createRequest?: number;
   onCreateFolderRef?: (fn: () => void) => void;
-}) {
+}
+
+export function AdminGroups(props: AdminGroupsProps) {
+  // Embedded in a tab panel, the panel is the gate; standalone, the page is.
+  return props.embedded ? (
+    <AdminGroupsContent {...props} />
+  ) : (
+    <PageTransition>
+      <AdminGroupsContent {...props} />
+    </PageTransition>
+  );
+}
+
+function AdminGroupsContent({
+  embedded = false,
+  createRequest = 0,
+  onCreateFolderRef,
+}: AdminGroupsProps) {
   const navigate = useNavigate();
   const { user, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
   const { cas, fetchCAs } = useCAStore();
@@ -112,11 +127,15 @@ export function AdminGroups({
   const [isLoading, setIsLoading] = useState(
     () => api.getCached<PermissionGroup[]>("admin:groups") === undefined
   );
+  useContentLoading(isLoading);
+  // The group editor's resource pickers wait for the first load of these lists.
+  const [scopeListsReady, setScopeListsReady] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingGroup, setEditingGroup] = useState<PermissionGroup | null>(null);
   const [formName, setFormName] = useState("");
   const [formFolderId, setFormFolderId] = useState<string | null>(null);
-  const [destinationFolders, setDestinationFolders] = useState<FolderOption[]>([]);
+  // null until the create dialog's folder list arrives.
+  const [destinationFolders, setDestinationFolders] = useState<FolderOption[] | null>(null);
   useEffect(() => {
     if (!dialogOpen || editingGroup) return;
     let cancelled = false;
@@ -192,54 +211,70 @@ export function AdminGroups({
 
   useEffect(() => {
     fetchGroups();
-    if (canLoadScopeResource("pki:ca:view")) void fetchCAs();
-    loadScopeResourceList("nodes:details", () =>
-      allResourcePages((page) => api.listNodes({ page, limit: 100 }))
-    )
-      .then((r) => {
-        api.setCache("admin:scope-nodes", r);
-        setNodesList(r);
-      })
-      .catch((error) => {
-        setNodesList([]);
-        reportScopeLoadError("nodes", error);
-      });
-    loadScopeResourceList("proxy:view", () =>
-      allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
-    )
-      .then((r) => {
-        api.setCache("admin:scope-proxy-hosts", r);
-        setProxyHostsList(r);
-      })
-      .catch((error) => {
-        setProxyHostsList([]);
-        reportScopeLoadError("routes", error);
-      });
-    loadScopeResourceList("databases:view", () =>
-      allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
-    )
-      .then((r) => {
-        api.setCache("admin:scope-databases", r);
-        setDatabasesList(r);
-      })
-      .catch((error) => {
-        setDatabasesList([]);
-        reportScopeLoadError("databases", error);
-      });
+    const loads: Promise<unknown>[] = [];
+    if (canLoadScopeResource("pki:ca:view")) loads.push(fetchCAs());
+    loads.push(
+      loadScopeResourceList("nodes:details", () =>
+        allResourcePages((page) => api.listNodes({ page, limit: 100 }))
+      )
+        .then((r) => {
+          api.setCache("admin:scope-nodes", r);
+          setNodesList(r);
+        })
+        .catch((error) => {
+          setNodesList([]);
+          reportScopeLoadError("nodes", error);
+        })
+    );
+    loads.push(
+      loadScopeResourceList("proxy:view", () =>
+        allResourcePages((page) => api.listProxyHosts({ page, limit: 100 }))
+      )
+        .then((r) => {
+          api.setCache("admin:scope-proxy-hosts", r);
+          setProxyHostsList(r);
+        })
+        .catch((error) => {
+          setProxyHostsList([]);
+          reportScopeLoadError("routes", error);
+        })
+    );
+    loads.push(
+      loadScopeResourceList("databases:view", () =>
+        allResourcePages((page) => api.listDatabases({ page, limit: 100 }))
+      )
+        .then((r) => {
+          api.setCache("admin:scope-databases", r);
+          setDatabasesList(r);
+        })
+        .catch((error) => {
+          setDatabasesList([]);
+          reportScopeLoadError("databases", error);
+        })
+    );
     if (
       scopeMatches(userScopes, "logs:schemas:view") ||
       (deriveAllowedResourceIdsByScope(userScopes)["logs:schemas:view"]?.length ?? 0) > 0
     ) {
-      loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
-        .then((data) => {
-          api.setCache("admin:scope-logging-schemas", data);
-          setLoggingSchemasList(data);
-        })
-        .catch((error) => {
-          setLoggingSchemasList([]);
-          reportScopeLoadError("logging schemas", error);
-        });
+      loads.push(
+        loadScopeResourceList("logs:schemas:view", () => api.listLoggingSchemas())
+          .then((data) => {
+            api.setCache("admin:scope-logging-schemas", data);
+            setLoggingSchemasList(data);
+          })
+          .catch((error) => {
+            setLoggingSchemasList([]);
+            reportScopeLoadError("logging schemas", error);
+          })
+      );
     }
+    let active = true;
+    void Promise.allSettled(loads).then(() => {
+      if (active) setScopeListsReady(true);
+    });
+    return () => {
+      active = false;
+    };
   }, [fetchGroups, fetchCAs, userScopes]);
 
   useRealtime("group.changed", () => {
@@ -309,6 +344,7 @@ export function AdminGroups({
     setInitialResourceLimitedScopes([]);
     setScopeSearch("");
     setScopeFilter("all");
+    setDestinationFolders(null);
     setDialogOpen(true);
   }, []);
 
@@ -589,7 +625,7 @@ export function AdminGroups({
           >
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" disabled={!canManage}>
+                <Button variant="ghost" size="icon-sm" disabled={!canManage}>
                   <EllipsisVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -622,52 +658,46 @@ export function AdminGroups({
     },
   ];
 
-  const content = (
+  return (
     <>
       <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
         {!embedded && (
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-3">
-              <LiteModeBackButton />
-              <div>
-                <h1 className="text-2xl font-bold">Permission Groups</h1>
-                <p className="text-sm text-muted-foreground">
-                  {isLoading
-                    ? "Loading permission groups..."
-                    : `${groups.length} group${groups.length !== 1 ? "s" : ""} · Manage scoped access control`}
-                </p>
-              </div>
-            </div>
-            <ResponsiveHeaderActions
-              actions={[
-                ...(canManageFolders && createFolderAction
-                  ? [
-                      {
-                        label: "Add Folder",
-                        icon: <FolderPlus className="h-4 w-4" />,
-                        onClick: createFolderAction,
-                      },
-                    ]
-                  : []),
-                {
-                  label: "Create Group",
-                  icon: <Plus className="h-4 w-4" />,
-                  onClick: openCreateDialog,
-                },
-              ]}
-            >
-              {canManageFolders && (
-                <Button variant="outline" onClick={() => createFolderAction?.()}>
-                  <FolderPlus className="h-4 w-4" />
-                  Add Folder
+          <PageHeader
+            title="Permission Groups"
+            description={`${groups.length} group${groups.length !== 1 ? "s" : ""} · Manage scoped access control`}
+            leading={<LiteModeBackButton />}
+            actions={
+              <ResponsiveHeaderActions
+                actions={[
+                  ...(canManageFolders && createFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createFolderAction,
+                        },
+                      ]
+                    : []),
+                  {
+                    label: "Create Group",
+                    icon: <Plus className="h-4 w-4" />,
+                    onClick: openCreateDialog,
+                  },
+                ]}
+              >
+                {canManageFolders && (
+                  <Button variant="outline" onClick={() => createFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                <Button onClick={openCreateDialog}>
+                  <Plus className="h-4 w-4" />
+                  Create Group
                 </Button>
-              )}
-              <Button onClick={openCreateDialog}>
-                <Plus className="h-4 w-4" />
-                Create Group
-              </Button>
-            </ResponsiveHeaderActions>
-          </div>
+              </ResponsiveHeaderActions>
+            }
+          />
         )}
 
         <FolderedResourceList<PermissionGroup>
@@ -724,31 +754,35 @@ export function AdminGroups({
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {!editingGroup && (destinationFolders.length > 0 || !hasScope("admin:groups")) && (
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">Folder</label>
-                <Select
-                  value={formFolderId ?? (hasScope("admin:groups") ? "__none__" : "")}
-                  onValueChange={(value) => setFormFolderId(value === "__none__" ? null : value)}
-                >
-                  <SelectTrigger aria-label="Group folder">
-                    <SelectValue placeholder="Select a folder" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {hasScope("admin:groups") && (
-                      <SelectItem value="__none__">No folder</SelectItem>
-                    )}
-                    {destinationFolders
-                      .filter((folder) => canCreateInFolder(userScopes, "admin:groups", folder.id))
-                      .map((folder) => (
-                        <SelectItem key={folder.id} value={folder.id}>
-                          {folder.label}
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
+            {(!scopeListsReady || (!editingGroup && destinationFolders === null)) && <Skeleton />}
+            {!editingGroup &&
+              ((destinationFolders?.length ?? 0) > 0 || !hasScope("admin:groups")) && (
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">Folder</label>
+                  <Select
+                    value={formFolderId ?? (hasScope("admin:groups") ? "__none__" : "")}
+                    onValueChange={(value) => setFormFolderId(value === "__none__" ? null : value)}
+                  >
+                    <SelectTrigger aria-label="Group folder">
+                      <SelectValue placeholder="Select a folder" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {hasScope("admin:groups") && (
+                        <SelectItem value="__none__">No folder</SelectItem>
+                      )}
+                      {(destinationFolders ?? [])
+                        .filter((folder) =>
+                          canCreateInFolder(userScopes, "admin:groups", folder.id)
+                        )
+                        .map((folder) => (
+                          <SelectItem key={folder.id} value={folder.id}>
+                            {folder.label}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Name</label>
               <Input
@@ -851,8 +885,7 @@ export function AdminGroups({
               {groupDialogReadOnly ? "Close" : "Cancel"}
             </Button>
             {!groupDialogReadOnly && (
-              <Button onClick={handleSave} disabled={saving}>
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              <Button onClick={handleSave} pending={saving}>
                 {editingGroup ? "Save Changes" : "Create Group"}
               </Button>
             )}
@@ -861,6 +894,4 @@ export function AdminGroups({
       </Dialog>
     </>
   );
-
-  return embedded ? content : <PageTransition>{content}</PageTransition>;
 }

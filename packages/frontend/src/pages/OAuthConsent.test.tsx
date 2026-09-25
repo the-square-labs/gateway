@@ -5,6 +5,7 @@ import { OAuthConsent } from "@/pages/OAuthConsent";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { renderWithRouter } from "@/test/render";
+import { waitForReveal } from "@/test/reveal";
 import type { OAuthConsentPreview } from "@/types";
 
 const preview: OAuthConsentPreview = {
@@ -79,6 +80,32 @@ describe("OAuthConsent", () => {
     expect(screen.queryByText("Unavailable scopes")).not.toBeInTheDocument();
   });
 
+  it("keeps the consent card behind the loader until its resource pickers load", async () => {
+    vi.spyOn(api, "getOAuthConsent").mockResolvedValue(preview);
+    let resolveNodes!: (value: { data: [] }) => void;
+    vi.mocked(api.listNodes).mockReturnValue(
+      new Promise((resolve) => {
+        resolveNodes = resolve;
+      }) as never
+    );
+
+    renderWithRouter(<OAuthConsent />, {
+      path: "/oauth/consent",
+      route: "/oauth/consent?request=request-1",
+    });
+
+    await screen.findByText("Authorize Gateway API access");
+    expect(screen.getByRole("status", { name: "Loading authorization request..." })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Authorize/i })).not.toBeInTheDocument();
+
+    resolveNodes({ data: [] });
+    await waitForReveal();
+    expect(screen.getByRole("button", { name: /Authorize/i })).toBeVisible();
+    expect(
+      screen.queryByRole("status", { name: "Loading authorization request..." })
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the inference setup scope once with useful metadata and a content-sized scope section", async () => {
     vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
       ...preview,
@@ -120,6 +147,7 @@ describe("OAuthConsent", () => {
     });
 
     await screen.findByText("Authorize Gateway API access");
+    await waitForReveal();
     const viewport = document.querySelector("[data-oauth-consent-scroll-viewport]");
     const card = document.querySelector("[data-oauth-consent-card]");
     const body = document.querySelector("[data-oauth-consent-body]");
@@ -141,6 +169,7 @@ describe("OAuthConsent", () => {
     });
 
     const nodes = await screen.findByLabelText(/View Nodes/i);
+    await waitForReveal();
     await userEvent.click(nodes);
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
@@ -180,6 +209,7 @@ describe("OAuthConsent", () => {
     });
 
     await screen.findByText("Authorize Gateway API access");
+    await waitForReveal();
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
     expect(await screen.findByText("Authorization complete")).toBeInTheDocument();
@@ -208,6 +238,7 @@ describe("OAuthConsent", () => {
     });
 
     await screen.findByText("Authorize Gateway API access");
+    await waitForReveal();
     await userEvent.click(screen.getByRole("button", { name: /Deny/i }));
 
     expect(await screen.findByText("Authorization denied")).toBeInTheDocument();
@@ -233,6 +264,7 @@ describe("OAuthConsent", () => {
     });
 
     await screen.findByText("Authorize Gateway API access");
+    await waitForReveal();
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
     expect(await screen.findByText("Authorization complete")).toBeInTheDocument();
@@ -255,6 +287,7 @@ describe("OAuthConsent", () => {
     });
 
     await screen.findByText("Authorize Gateway API access");
+    await waitForReveal();
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
     expect(
@@ -294,6 +327,8 @@ describe("OAuthConsent", () => {
       });
 
       await screen.findByText("Authorize Gateway API access");
+      await waitForReveal();
+      await waitForReveal();
       await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
       expect(hrefSetter).toHaveBeenCalledWith("https://client.example.com/callback?code=abc");
@@ -336,6 +371,8 @@ describe("OAuthConsent", () => {
       });
 
       await screen.findByText("Authorize Gateway API access");
+      await waitForReveal();
+      await waitForReveal();
       await userEvent.click(screen.getByRole("button", { name: /Deny/i }));
 
       expect(hrefSetter).toHaveBeenCalledWith(
@@ -372,6 +409,7 @@ describe("OAuthConsent", () => {
     expect(await screen.findByText("View Containers")).toBeInTheDocument();
     // Restrictions stay collapsed behind a summary until opened.
     expect(await screen.findByText("Docker 1")).toBeInTheDocument();
+    await waitForReveal();
     await userEvent.click(screen.getByRole("button", { name: /Restrict View Containers/i }));
     expect(screen.getByRole("checkbox", { name: /Docker 1/i })).toBeChecked();
 
@@ -398,6 +436,7 @@ describe("OAuthConsent", () => {
     });
 
     expect(await screen.findByText(/reveal sensitive data/)).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByRole("checkbox", { name: /View Nodes/i })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /Container Secrets/i })).not.toBeChecked();
 

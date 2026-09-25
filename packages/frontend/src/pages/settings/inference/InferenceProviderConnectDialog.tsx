@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { ArrowLeft, Check, ExternalLink, Loader2, MoreHorizontal, RefreshCw } from "lucide-react";
+import { ArrowLeft, Check, ExternalLink, MoreHorizontal, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -405,12 +405,12 @@ export function InferenceProviderConnectDialog({
                         actions={
                           <Button
                             variant="ghost"
-                            className="h-9 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            className="rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() =>
                               window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
                             }
                           >
-                            <ExternalLink className="h-3.5 w-3.5" />
+                            <ExternalLink />
                             Open
                           </Button>
                         }
@@ -460,16 +460,13 @@ export function InferenceProviderConnectDialog({
                         type="submit"
                         variant="ghost"
                         size="icon"
-                        className="relative h-9 w-9 shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
-                        disabled={saving || !isCompleteCallback(callback.trim(), oauth.providerId)}
+                        className="relative rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                        disabled={!isCompleteCallback(callback.trim(), oauth.providerId)}
+                        pending={saving}
                         aria-label={`Complete ${authorizationProviderLabel} authorization`}
                         title="Complete authorization"
                       >
-                        {saving ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Check className="h-3.5 w-3.5" />
-                        )}
+                        {saving ? null : <Check />}
                       </Button>
                     </form>
                     {saving && (
@@ -521,11 +518,10 @@ export function InferenceProviderConnectDialog({
           {!oauth && (
             <Button
               onClick={() => void connect()}
-              disabled={
-                saving || !selected || !name.trim() || (authType === "api_key" && !apiKey.trim())
-              }
+              disabled={!selected || !name.trim() || (authType === "api_key" && !apiKey.trim())}
+              pending={saving}
             >
-              {saving ? "Connecting…" : authType === "oauth" ? "Start authorization" : "Connect"}
+              {authType === "oauth" ? "Start authorization" : "Connect"}
             </Button>
           )}
         </DialogFooter>

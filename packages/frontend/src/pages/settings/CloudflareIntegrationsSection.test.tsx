@@ -2,6 +2,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAuthStore } from "@/stores/auth";
+import { waitForReveal } from "@/test/reveal";
 import type { CloudflareConnector } from "@/types/integrations";
 import { CloudflareIntegrationsSection } from "./CloudflareIntegrationsSection";
 
@@ -89,6 +90,7 @@ describe("CloudflareIntegrationsSection", () => {
     render(<CloudflareIntegrationsSection />);
 
     await user.click(await screen.findByText("Production Cloudflare"));
+    await waitForReveal();
     const tokenInput = await screen.findByPlaceholderText("****old1");
     await user.type(tokenInput, "replacement-token");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -107,6 +109,7 @@ describe("CloudflareIntegrationsSection", () => {
     render(<CloudflareIntegrationsSection />);
 
     await user.click(await screen.findByText("Production Cloudflare"));
+    await waitForReveal();
     const nameInput = await screen.findByDisplayValue("Production Cloudflare");
     await user.clear(nameInput);
     await user.type(nameInput, "Renamed Cloudflare");

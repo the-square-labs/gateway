@@ -1,6 +1,7 @@
-import { Check, Cpu, Info, Loader2, Plus } from "lucide-react";
+import { Check, Cpu, Info, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -12,7 +13,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInferenceCoreStatus } from "@/hooks/use-inference-core-status";
 import {
   InferenceCoreLifecyclePanel,
@@ -101,6 +101,13 @@ export function InferenceSetupWizard({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
+  // The providers and models load as the wizard opens; mark them loading in
+  // that very render so the dialog waits for them.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open && inferenceEnabled) setLoading(true);
+  }
 
   const loadInferenceData = useCallback(async () => {
     setLoading(true);
@@ -402,23 +409,22 @@ export function InferenceSetupWizard({
               onContinue={coreReady ? () => setCoreAcknowledged(true) : undefined}
             />
           ) : !inferenceEnabled ? (
-            <Button onClick={() => void enable()} disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" /> : <Cpu />} Enable Inference
+            <Button onClick={() => void enable()} pending={saving}>
+              {saving ? null : <Cpu />} Enable Inference
             </Button>
           ) : sources.length > 0 && !ready ? (
             <Button
               onClick={() => void configureModel()}
+              pending={saving}
               disabled={
-                saving ||
-                !selectedSource ||
-                (selectedSourceNeedsPricing && !selectedSourceHasPricing)
+                !selectedSource || (selectedSourceNeedsPricing && !selectedSourceHasPricing)
               }
             >
-              {saving ? <Loader2 className="animate-spin" /> : <Plus />} Add model
+              {saving ? null : <Plus />} Add model
             </Button>
           ) : ready ? (
-            <Button onClick={() => void completeSetup()} disabled={saving}>
-              {saving ? <Loader2 className="animate-spin" /> : <Check />} Complete Inference setup
+            <Button onClick={() => void completeSetup()} pending={saving}>
+              {saving ? null : <Check />} Complete Inference setup
             </Button>
           ) : null
         }
@@ -431,14 +437,8 @@ export function InferenceSetupWizard({
             Gateway Inference is configured, and AI Workspace will use the selected managed model.
           </FinalizeSetupCompletion>
         ) : loading || coreLoading ? (
-          <div className="space-y-4" aria-busy="true" aria-label="Loading Gateway Inference">
-            <Skeleton className="h-5 w-48" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-4/5" />
-            <div className="border border-border p-4 space-y-3">
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="h-10 w-full" />
-            </div>
+          <div aria-busy="true" aria-label="Loading Gateway Inference">
+            <ContentLoading loading />
           </div>
         ) : coreStepActive ? (
           <InferenceCoreLifecyclePanel
@@ -450,17 +450,10 @@ export function InferenceSetupWizard({
             onRefresh={core.refresh}
           />
         ) : !inferenceEnabled ? (
-          <div
-            className="flex items-center gap-3 border p-4"
-            style={{
-              borderColor: "color-mix(in srgb, var(--color-link) 55%, transparent)",
-            }}
-          >
-            <Info className="h-5 w-5 shrink-0 text-[color:var(--color-link)]" />
+          <div className="flex items-center gap-3 border border-link/55 p-4">
+            <Info className="h-5 w-5 shrink-0 text-link" />
             <div>
-              <p className="text-sm font-medium text-[color:var(--color-link)]">
-                Inference is disabled
-              </p>
+              <p className="text-sm font-medium text-link">Inference is disabled</p>
               <p className="mt-1 text-sm text-muted-foreground">
                 Enable it to connect providers centrally and make selected models available to
                 Gateway users.

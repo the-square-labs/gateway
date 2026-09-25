@@ -5,7 +5,6 @@ import {
   FolderPlus,
   HardDrive,
   HardDriveDownload,
-  Loader2,
   Plus,
   RefreshCw,
 } from "lucide-react";
@@ -22,6 +21,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { ManagedResourceFields } from "@/components/common/ManagedResourceFields";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -46,6 +46,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
@@ -70,6 +71,12 @@ import type {
   ObjectStorageConnection,
   ObjectStorageProvider,
 } from "@/types";
+import {
+  estimateMoreTagsWidth,
+  estimateResourceTagWidth,
+  parseResourceTag,
+  resourceTagBadgeProps,
+} from "./database-detail/resource-tags";
 import {
   canDeployManagedStorage,
   type ManagedStorageCapacity,
@@ -109,6 +116,7 @@ const MANAGED_STORAGE_STATUS_BADGE: Record<
 };
 
 const MANAGED_STORAGE_PROVISION_TIMEOUT_MS = 120_000;
+const STORAGE_NODE_APPEARANCE_CACHE_KEY = "storage:nodes";
 const MANAGED_STORAGE_PROVISION_INTERVAL_MS = 750;
 
 function delay(ms: number) {
@@ -173,46 +181,6 @@ function parseStorageTags(value: string) {
   );
 }
 
-const STORAGE_TAG_COLORS = {
-  blue: "bg-blue-500/15 text-blue-600 dark:bg-blue-500/15 dark:text-blue-400",
-  red: "bg-red-500/15 text-red-600 dark:bg-red-500/15 dark:text-red-400",
-  green: "bg-emerald-500/15 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
-  yellow: "bg-amber-500/15 text-amber-700 dark:bg-amber-500/15 dark:text-amber-400",
-  purple: "bg-violet-500/15 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
-  pink: "bg-pink-500/15 text-pink-600 dark:bg-pink-500/15 dark:text-pink-400",
-  orange: "bg-orange-500/15 text-orange-600 dark:bg-orange-500/15 dark:text-orange-400",
-  gray: "bg-zinc-500/15 text-zinc-600 dark:bg-zinc-500/15 dark:text-zinc-300",
-} as const;
-
-type StorageTagColor = keyof typeof STORAGE_TAG_COLORS;
-
-interface ParsedStorageTag {
-  raw: string;
-  label: string;
-  color: StorageTagColor;
-}
-
-function parseStorageTag(raw: string): ParsedStorageTag {
-  const trimmed = raw.trim();
-  const colonIndex = trimmed.indexOf(":");
-  if (colonIndex > 0) {
-    const color = trimmed.slice(0, colonIndex).toLowerCase();
-    const label = trimmed.slice(colonIndex + 1).trim();
-    if (color in STORAGE_TAG_COLORS && label) {
-      return { raw, label, color: color as StorageTagColor };
-    }
-  }
-  return { raw, label: trimmed, color: "blue" };
-}
-
-function estimateTagWidth(tag: ParsedStorageTag): number {
-  return Math.min(180, Math.max(44, tag.label.length * 7 + 24));
-}
-
-function estimateMoreWidth(count: number): number {
-  return 44 + String(count).length * 7;
-}
-
 function formatLastCheck(dateStr: string | null): string {
   if (!dateStr) return "Never";
   const date = new Date(dateStr);
@@ -240,7 +208,7 @@ function StorageTagSummary({
   const typeRef = useRef<HTMLSpanElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const [typeWidth, setTypeWidth] = useState<number | null>(null);
-  const parsedTags = useMemo(() => tags.map(parseStorageTag), [tags]);
+  const parsedTags = useMemo(() => tags.map(parseResourceTag), [tags]);
   const visibleCount = useMemo(() => {
     if (parsedTags.length <= 2 && containerWidth === null) return parsedTags.length;
     if (containerWidth === null || containerWidth <= 0) return Math.min(2, parsedTags.length);
@@ -252,8 +220,8 @@ function StorageTagSummary({
 
     for (let index = 0; index < parsedTags.length; index += 1) {
       const remaining = parsedTags.length - index - 1;
-      const tagWidth = estimateTagWidth(parsedTags[index]!);
-      const moreWidth = remaining > 0 ? estimateMoreWidth(remaining) + gapWidth : 0;
+      const tagWidth = estimateResourceTagWidth(parsedTags[index]!);
+      const moreWidth = remaining > 0 ? estimateMoreTagsWidth(remaining) + gapWidth : 0;
       const nextWidth = usedWidth + (count > 0 ? gapWidth : 0) + tagWidth;
       if (nextWidth + moreWidth > availableWidth) break;
       usedWidth = nextWidth;
@@ -284,16 +252,19 @@ function StorageTagSummary({
       <span ref={typeRef} className="inline-flex shrink-0">
         <Badge variant="secondary">{formatProviderLabel(provider)}</Badge>
       </span>
-      {visibleTags.map((tag, index) => (
-        <Badge
-          key={`${tag.raw}:${index}`}
-          variant="secondary"
-          className={cn("max-w-[180px]", STORAGE_TAG_COLORS[tag.color])}
-          title={tag.raw}
-        >
-          {tag.label}
-        </Badge>
-      ))}
+      {visibleTags.map((tag, index) => {
+        const badge = resourceTagBadgeProps(tag.color);
+        return (
+          <Badge
+            key={`${tag.raw}:${index}`}
+            variant={badge.variant}
+            className={cn("max-w-[180px]", badge.className)}
+            title={tag.raw}
+          >
+            {tag.label}
+          </Badge>
+        );
+      })}
       {hiddenTags.length > 0 && (
         <Tooltip>
           <TooltipTrigger asChild>
@@ -303,15 +274,18 @@ function StorageTagSummary({
           </TooltipTrigger>
           <TooltipContent className="max-w-xs">
             <div className="flex flex-wrap gap-1.5">
-              {hiddenTags.map((tag, index) => (
-                <Badge
-                  key={`${tag.raw}:${visibleCount + index}`}
-                  variant="secondary"
-                  className={cn("max-w-[180px]", STORAGE_TAG_COLORS[tag.color])}
-                >
-                  {tag.label}
-                </Badge>
-              ))}
+              {hiddenTags.map((tag, index) => {
+                const badge = resourceTagBadgeProps(tag.color);
+                return (
+                  <Badge
+                    key={`${tag.raw}:${visibleCount + index}`}
+                    variant={badge.variant}
+                    className={cn("max-w-[180px]", badge.className)}
+                  >
+                    {tag.label}
+                  </Badge>
+                );
+              })}
             </div>
           </TooltipContent>
         </Tooltip>
@@ -565,7 +539,10 @@ function StorageContent() {
     defaultManagedStorageDraft
   );
   const [managedCatalog, setManagedCatalog] = useState<ManagedObjectStorageCatalogEntry[]>([]);
-  const [storageNodes, setStorageNodes] = useState<Node[]>([]);
+  // Cached with the list so a cached list keeps its node icon colors on the first frame.
+  const [storageNodes, setStorageNodes] = useState<Node[]>(
+    () => api.getCached<Node[]>(STORAGE_NODE_APPEARANCE_CACHE_KEY) ?? []
+  );
   const [managedSaving, setManagedSaving] = useState(false);
   const [managedProvisioning, setManagedProvisioning] = useState<{ phase: "waiting" } | null>(null);
   const [managedProvisioningError, setManagedProvisioningError] = useState<{
@@ -640,8 +617,11 @@ function StorageContent() {
         listManagedDatabaseCandidateNodes(100),
         api.listManagedObjectStorageCatalog(),
       ]);
-      if (nodes.status === "fulfilled")
-        setStorageNodes(nodes.value.filter(isManagedStorageCandidateNode));
+      if (nodes.status === "fulfilled") {
+        const candidates = nodes.value.filter(isManagedStorageCandidateNode);
+        api.setCache(STORAGE_NODE_APPEARANCE_CACHE_KEY, candidates);
+        setStorageNodes(candidates);
+      }
       if (catalog.status === "fulfilled") setManagedCatalog(catalog.value);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load storage");
@@ -876,71 +856,73 @@ function StorageContent() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Storage</h1>
-              <p className="text-sm text-muted-foreground">
-                Saved S3-compatible object storage connections managed through Gateway
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              {
-                label: "Refresh",
-                icon: <RefreshCw className="h-4 w-4" />,
-                onClick: () => void load(),
-              },
-              ...(canManageFolders && createFolderAction
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: createFolderAction,
-                    },
-                  ]
-                : []),
-              ...(canCreate
-                ? [
-                    {
-                      label: "Deploy managed storage",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: openManagedCreate,
-                    },
-                    {
-                      label: "Connect existing storage",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: openConnectionCreate,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <Button variant="outline" size="icon" onClick={() => void load()} title="Refresh">
-              <RefreshCw className="h-4 w-4" />
-            </Button>
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Storage"
+          description="Saved S3-compatible object storage connections managed through Gateway"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                {
+                  label: "Refresh",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  onClick: () => void load(),
+                },
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(canCreate
+                  ? [
+                      {
+                        label: "Deploy managed storage",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openManagedCreate,
+                      },
+                      {
+                        label: "Connect existing storage",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: openConnectionCreate,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => void load()}
+                title="Refresh"
+                aria-label="Refresh storage"
+              >
+                <RefreshCw className="h-4 w-4" />
               </Button>
-            )}
-            {canCreate && (
-              <Button variant="outline" onClick={openConnectionCreate}>
-                <Plus className="h-4 w-4" />
-                Connect existing
-              </Button>
-            )}
-            {canCreate && (
-              <Button onClick={openManagedCreate}>
-                <Plus className="h-4 w-4" />
-                Deploy managed storage
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canCreate && (
+                <Button variant="outline" onClick={openConnectionCreate}>
+                  <Plus className="h-4 w-4" />
+                  Connect existing
+                </Button>
+              )}
+              {canCreate && (
+                <Button onClick={openManagedCreate}>
+                  <Plus className="h-4 w-4" />
+                  Deploy managed storage
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <FolderedResourceList<ObjectStorageConnection>
           resourceType="storage"
@@ -1030,6 +1012,7 @@ function StorageContent() {
               Connect an existing S3-compatible, FTP, FTPS, or SFTP endpoint.
             </DialogDescription>
           </DialogHeader>
+          {foldersLoading && <Skeleton />}
           <SettingsControlRow title="Folder" description="Organization folder">
             <CreateFolderSelect
               choices={connectionFolderChoices}
@@ -1045,9 +1028,10 @@ function StorageContent() {
             </Button>
             <Button
               onClick={() => void save()}
-              disabled={saving || !isCreateFolderAllowed(connectionFolderChoices, folderId)}
+              pending={saving}
+              disabled={!isCreateFolderAllowed(connectionFolderChoices, folderId)}
             >
-              {saving ? "Creating..." : "Create"}
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1076,6 +1060,7 @@ function StorageContent() {
             </DialogDescription>
           </DialogHeader>
           <AnimatedHeight>
+            {foldersLoading && <Skeleton />}
             {managedCreateStep === 1 && (
               <div className="mb-4 space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="managed-storage-folder">
@@ -1132,10 +1117,10 @@ function StorageContent() {
                 ) : (
                   <Button
                     onClick={() => void saveManaged()}
-                    disabled={managedSaving || !canDeployManaged}
+                    pending={managedSaving}
+                    disabled={!canDeployManaged}
                   >
-                    {managedSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                    {managedSaving ? "Deploying..." : "Deploy storage"}
+                    Deploy storage
                   </Button>
                 )}
               </div>
@@ -1164,9 +1149,8 @@ function StorageContent() {
             >
               Close
             </Button>
-            <Button onClick={() => void retryManagedProvisioning()} disabled={managedRetrying}>
-              {managedRetrying && <Loader2 className="h-4 w-4 animate-spin" />}
-              {managedRetrying ? "Retrying..." : "Retry"}
+            <Button onClick={() => void retryManagedProvisioning()} pending={managedRetrying}>
+              Retry
             </Button>
           </DialogFooter>
         </DialogContent>

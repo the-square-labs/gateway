@@ -59,8 +59,12 @@ export function DockerDeployDialog({
   const { hasScope } = useAuthStore();
   const effectiveScopes = useAuthStore((state) => state.user?.scopes ?? []);
   const [creationNodes, setCreationNodes] = useState<Node[]>([]);
+  const [creationNodesLoaded, setCreationNodesLoaded] = useState(false);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setCreationNodesLoaded(false);
+      return;
+    }
     let cancelled = false;
     void loadVisibleDockerNodes(effectiveScopes, ["docker:containers:create"], false)
       .then((nodes) => {
@@ -68,6 +72,9 @@ export function DockerDeployDialog({
       })
       .catch(() => {
         if (!cancelled) setCreationNodes([]);
+      })
+      .finally(() => {
+        if (!cancelled) setCreationNodesLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -75,6 +82,7 @@ export function DockerDeployDialog({
   }, [open, effectiveScopes]);
   const [deployFolderId, setDeployFolderId] = useState<string | null>(null);
   const [folderOptions, setFolderOptions] = useState<ComboboxOption[]>([]);
+  const [folderOptionsLoaded, setFolderOptionsLoaded] = useState(false);
 
   const [deployNodeId, setDeployNodeId] = useState<string>("");
   const [deployImage, setDeployImage] = useState("");
@@ -121,7 +129,10 @@ export function DockerDeployDialog({
     [allNodes, effectiveScopes, deployFolderId]
   );
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setFolderOptionsLoaded(false);
+      return;
+    }
     let cancelled = false;
     void api
       .listDockerFolders("container")
@@ -139,6 +150,9 @@ export function DockerDeployDialog({
       })
       .catch(() => {
         if (!cancelled) setFolderOptions([]);
+      })
+      .finally(() => {
+        if (!cancelled) setFolderOptionsLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -146,6 +160,7 @@ export function DockerDeployDialog({
   }, [open, effectiveScopes, deployNodeId]);
   const {
     checkingSourceAdmission,
+    initialLoading: deployDataLoading,
     deployLocalImages,
     deployPullableImages,
     registries,
@@ -273,7 +288,7 @@ export function DockerDeployDialog({
   };
 
   const handleDeploy = async () => {
-    if (!deployNodeId) return;
+    if (deploying || !deployNodeId) return;
     if (
       !canCreateInFolder(effectiveScopes, "docker:containers:create", deployFolderId, deployNodeId)
     ) {
@@ -373,6 +388,7 @@ export function DockerDeployDialog({
         </DialogHeader>
 
         <DockerDeployFormFields
+          loading={open && (!creationNodesLoaded || !folderOptionsLoaded || deployDataLoading)}
           availableRegistries={availableRegistries}
           checkingSourceAdmission={checkingSourceAdmission}
           deployImage={deployImage}
@@ -443,8 +459,8 @@ export function DockerDeployDialog({
           </Button>
           <Button
             onClick={handleDeploy}
+            pending={deploying}
             disabled={
-              deploying ||
               !deployNodeId ||
               !canCreateInFolder(
                 effectiveScopes,
@@ -464,13 +480,7 @@ export function DockerDeployDialog({
                 (!deployName.trim() || !Number(routeHostPort) || !Number(routeContainerPort)))
             }
           >
-            {deploying
-              ? sourceMode === "repository"
-                ? "Creating…"
-                : "Deploying..."
-              : sourceMode === "repository"
-                ? "Create and build"
-                : "Deploy"}
+            {sourceMode === "repository" ? "Create and build" : "Deploy"}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -52,8 +52,8 @@ export function DatabaseSettingsTab({
     <div className="space-y-4">
       <DatabaseConnectionForm draft={draft} onChange={setDraft} disableType mode="metadata" />
       <DialogFooter>
-        <Button onClick={() => void save()} disabled={saving || passwordConfirmationMissing}>
-          {saving ? "Saving..." : "Save Changes"}
+        <Button onClick={() => void save()} pending={saving} disabled={passwordConfirmationMissing}>
+          Save Changes
         </Button>
       </DialogFooter>
     </div>

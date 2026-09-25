@@ -1,4 +1,4 @@
-import { Gauge, Link2, Loader2, RefreshCw, Trash2, WalletCards } from "lucide-react";
+import { Gauge, Link2, RefreshCw, Trash2, WalletCards } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -63,6 +63,7 @@ export function InferenceProviderDialog({
   const [apiMonthlyLimitUsd, setApiMonthlyLimitUsd] = useState("");
   const [saving, setSaving] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [retainedConnection, setRetainedConnection] = useState(connection);
   const [retainedProvider, setRetainedProvider] = useState(provider);
   const initializedDraftRef = useRef<string | null>(null);
@@ -176,6 +177,7 @@ export function InferenceProviderDialog({
       confirmLabel: "Disconnect",
     });
     if (!accepted) return;
+    setDisconnecting(true);
     try {
       await api.disconnectInferenceProvider(displayedConnection.id);
       onOpenChange(false);
@@ -183,6 +185,8 @@ export function InferenceProviderDialog({
       toast.success("Provider disconnected");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to disconnect provider");
+    } finally {
+      setDisconnecting(false);
     }
   };
 
@@ -352,13 +356,23 @@ export function InferenceProviderDialog({
 
         {canManage && (
           <DialogFooter className="sm:justify-between sm:space-x-0">
-            <Button variant="destructive" onClick={() => void disconnect()}>
-              <Trash2 />
+            <Button
+              variant="destructive"
+              onClick={() => void disconnect()}
+              disabled={saving || syncing}
+              pending={disconnecting}
+            >
+              {disconnecting ? null : <Trash2 />}
               Disconnect
             </Button>
             <div className="flex flex-col-reverse gap-2 sm:flex-row">
-              <Button variant="outline" onClick={() => void sync()} disabled={syncing || saving}>
-                {syncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+              <Button
+                variant="outline"
+                onClick={() => void sync()}
+                disabled={saving || disconnecting}
+                pending={syncing}
+              >
+                {syncing ? null : <RefreshCw />}
                 Sync now
               </Button>
               <Button
@@ -368,11 +382,11 @@ export function InferenceProviderDialog({
                   !name.trim() ||
                   !minimumRemainingPercentValid ||
                   !apiMonthlyLimitValid ||
-                  saving ||
-                  syncing
+                  syncing ||
+                  disconnecting
                 }
+                pending={saving}
               >
-                {saving && <Loader2 className="animate-spin" />}
                 Save settings
               </Button>
             </div>

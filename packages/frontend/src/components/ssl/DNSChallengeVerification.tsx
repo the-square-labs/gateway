@@ -63,8 +63,8 @@ export function DNSChallengeVerification({
         ))}
       </PanelShell>
       {showAction && (
-        <Button onClick={onVerify} disabled={isVerifying}>
-          {isVerifying ? "Verifying..." : verifyLabel}
+        <Button onClick={onVerify} pending={isVerifying}>
+          {verifyLabel}
         </Button>
       )}
     </div>

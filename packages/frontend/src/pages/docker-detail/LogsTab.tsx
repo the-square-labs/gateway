@@ -302,7 +302,7 @@ function AggregatedLogsTab({
       actions={
         <>
           {lines.length > 0 && (
-            <Button variant="ghost" size="icon" onClick={downloadLogs} title="Download">
+            <Button variant="ghost" size="icon-sm" onClick={downloadLogs} title="Download">
               <Download className="h-3.5 w-3.5" />
             </Button>
           )}
@@ -656,7 +656,7 @@ function SingleLogsTab(props: SingleLogsTabProps) {
         <div className="flex flex-1 flex-col items-center justify-center gap-4">
           <ScrollText className="h-10 w-10 text-muted-foreground/40" />
           <p className="text-sm text-muted-foreground">Logs are open in a separate window</p>
-          <Button variant="outline" size="sm" onClick={bringBack}>
+          <Button variant="outline" onClick={bringBack}>
             Bring back here
           </Button>
         </div>
@@ -673,21 +673,14 @@ function SingleLogsTab(props: SingleLogsTabProps) {
       actions={
         <>
           {lines.length > 0 && (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={downloadLogs}
-              title="Download"
-            >
+            <Button variant="ghost" size="icon-sm" onClick={downloadLogs} title="Download">
               <Download className="h-3.5 w-3.5" />
             </Button>
           )}
           {source.popoutUrl && (
             <Button
               variant="ghost"
-              size="icon"
-              className="h-8 w-8"
+              size="icon-sm"
               onClick={openPopout}
               title="Open in separate window"
             >
@@ -720,7 +713,7 @@ function SingleLogsTab(props: SingleLogsTabProps) {
                       Exit Code:{" "}
                       <span
                         className={
-                          inspectData.State.ExitCode === 0 ? "text-foreground" : "text-red-400"
+                          inspectData.State.ExitCode === 0 ? "text-foreground" : "text-destructive"
                         }
                       >
                         {inspectData.State.ExitCode ?? "unknown"}
@@ -728,11 +721,11 @@ function SingleLogsTab(props: SingleLogsTabProps) {
                     </div>
                     {inspectData.State.Error && (
                       <div>
-                        Error: <span className="text-red-400">{inspectData.State.Error}</span>
+                        Error: <span className="text-destructive">{inspectData.State.Error}</span>
                       </div>
                     )}
                     {inspectData.State.OOMKilled && (
-                      <div className="text-red-400">
+                      <div className="text-destructive">
                         Container was killed by OOM (out of memory)
                       </div>
                     )}

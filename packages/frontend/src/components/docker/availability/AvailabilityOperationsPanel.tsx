@@ -2,7 +2,6 @@ import { Activity, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -85,6 +84,7 @@ export function AvailabilityOperationsPanel({
   const [rows, setRows] = useState<DockerAvailabilityOperation[]>([]);
   const [nextPage, setNextPage] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
   const requestId = useRef(0);
   const loadingMore = useRef(false);
   const tableScrollRef = useRef<HTMLDivElement>(null);
@@ -167,6 +167,7 @@ export function AvailabilityOperationsPanel({
 
   const retry = useCallback(
     async (operation: DockerAvailabilityOperation) => {
+      setRetryingId(operation.id);
       try {
         await api.retryDockerAvailabilityOperation(policyId, operation.id);
         toast.success("Availability operation queued again");
@@ -176,6 +177,8 @@ export function AvailabilityOperationsPanel({
         toast.error(
           error instanceof Error ? error.message : "Failed to retry Availability operation"
         );
+      } finally {
+        setRetryingId(null);
       }
     },
     [loadPage, loadRecent, open, policyId]
@@ -267,14 +270,19 @@ export function AvailabilityOperationsPanel({
           const status = operationStatus(row, desiredGeneration);
           const retryable = ["failed", "waiting", "cleanup_pending"].includes(status);
           return retryable && canManage ? (
-            <Button variant="outline" onClick={() => void retry(row)}>
-              <RefreshCw /> Retry
+            <Button
+              variant="outline"
+              size="sm"
+              pending={retryingId === row.id}
+              onClick={() => void retry(row)}
+            >
+              {retryingId !== row.id && <RefreshCw />} Retry
             </Button>
           ) : null;
         },
       },
     ],
-    [canManage, desiredGeneration, retry]
+    [canManage, desiredGeneration, retry, retryingId]
   );
 
   const tableHeight = rows.length ? 49 + rows.length * 49 + 44 : undefined;
@@ -286,11 +294,7 @@ export function AvailabilityOperationsPanel({
         title="Operations"
         description="Enable, scaling, failover, rollout, and cleanup history."
         actions={
-          <Button
-            variant="ghost"
-            className="h-auto p-0 font-normal text-muted-foreground hover:bg-transparent hover:text-foreground"
-            onClick={openAll}
-          >
+          <Button variant="ghost" size="sm" onClick={openAll}>
             View all
           </Button>
         }
@@ -316,40 +320,34 @@ export function AvailabilityOperationsPanel({
             <DialogTitle>Availability operations</DialogTitle>
             <DialogDescription>Scroll the table to load older operations.</DialogDescription>
           </DialogHeader>
-          {loading && rows.length === 0 ? (
-            <LoadingSpinner className="min-h-48" label="Loading Availability operations" />
-          ) : (
-            <div
-              className="max-h-[min(64dvh,40rem)]"
-              style={tableHeight ? { height: tableHeight } : undefined}
-            >
-              <DataTable
-                columns={columns}
-                data={rows}
-                keyFn={(row) => row.id}
-                horizontalScroll
-                minWidth="64rem"
-                className="h-full"
-                fixedRowHeight={49}
-                emptyMessage="No Availability operations"
-                scrollRef={tableScrollRef}
-                footer={
-                  nextPage ? (
-                    <div
-                      ref={sentinelRef}
-                      className="py-3 text-center text-xs text-muted-foreground"
-                    >
-                      {loading ? "Loading more…" : "Scroll to load older operations"}
-                    </div>
-                  ) : rows.length > 0 ? (
-                    <div className="py-3 text-center text-xs text-muted-foreground">
-                      End of operations
-                    </div>
-                  ) : null
-                }
-              />
-            </div>
-          )}
+          <div
+            className="max-h-[min(64dvh,40rem)]"
+            style={tableHeight ? { height: tableHeight } : undefined}
+          >
+            <DataTable
+              columns={columns}
+              data={rows}
+              loading={loading && rows.length === 0}
+              keyFn={(row) => row.id}
+              horizontalScroll
+              minWidth="64rem"
+              className="h-full"
+              fixedRowHeight={49}
+              emptyMessage="No Availability operations"
+              scrollRef={tableScrollRef}
+              footer={
+                nextPage ? (
+                  <div ref={sentinelRef} className="py-3 text-center text-xs text-muted-foreground">
+                    {loading ? "Loading more…" : "Scroll to load older operations"}
+                  </div>
+                ) : rows.length > 0 ? (
+                  <div className="py-3 text-center text-xs text-muted-foreground">
+                    End of operations
+                  </div>
+                ) : null
+              }
+            />
+          </div>
         </DialogContent>
       </Dialog>
     </TooltipProvider>

@@ -11,6 +11,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PoweredByFooter } from "@/components/common/PoweredByFooter";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -142,13 +143,11 @@ export function Settings() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        <div className="flex items-center gap-3">
-          <LiteModeBackButton />
-          <div className="min-w-0">
-            <h1 className="text-2xl font-bold">Settings</h1>
-            <p className="text-sm text-muted-foreground">Application and system settings</p>
-          </div>
-        </div>
+        <PageHeader
+          title="Settings"
+          description="Application and system settings"
+          leading={<LiteModeBackButton />}
+        />
 
         <Tabs value={currentTab} onValueChange={handleTabChange} className="flex flex-col">
           <TabsList className="shrink-0">

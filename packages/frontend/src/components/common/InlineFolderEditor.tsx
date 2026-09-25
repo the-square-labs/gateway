@@ -52,14 +52,14 @@ export function InlineFolderEditor({
       />
       <Button
         variant="ghost"
-        size="icon"
-        className="h-7 w-7"
+        size="icon-xs"
+        aria-label="Save folder name"
         onClick={handleSubmit}
         disabled={!name.trim()}
       >
         <Check className="h-3.5 w-3.5" />
       </Button>
-      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onCancel}>
+      <Button variant="ghost" size="icon-xs" aria-label="Cancel renaming" onClick={onCancel}>
         <X className="h-3.5 w-3.5" />
       </Button>
     </div>

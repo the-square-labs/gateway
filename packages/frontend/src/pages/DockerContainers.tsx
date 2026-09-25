@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderCreateDialog } from "@/components/common/FolderCreateDialog";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResourceListForm } from "@/components/common/ResourceListForm";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -177,6 +178,7 @@ export function DockerContainers({
   const [searchInput, setSearchInput] = useState(filters.search);
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
   const [nodesLoading, setNodesLoading] = useState(true);
+  // Cached rows stay hidden until the first refresh, so stale folder placements never reshuffle.
   const [initialContentReady, setInitialContentReady] = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, string>>({});
   const [deployOpen, setDeployOpen] = useState(false);
@@ -845,44 +847,44 @@ export function DockerContainers({
                     <>
                       <Button
                         variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
+                        size="icon-xs"
+                        pending={loadingAction === "stop"}
                         disabled={!!loadingAction || transitioning || unavailable}
                         onClick={() => handleStop(container)}
                         title="Stop"
                       >
-                        <Square className="h-3.5 w-3.5" />
+                        {loadingAction !== "stop" && <Square className="h-3.5 w-3.5" />}
                       </Button>
                       {lifecycleActions.canRestart && (
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
+                          size="icon-xs"
+                          pending={loadingAction === "restart"}
                           disabled={!!loadingAction || transitioning || unavailable}
                           onClick={() => handleRestart(container)}
                           title="Restart"
                         >
-                          <RefreshCw className="h-3.5 w-3.5" />
+                          {loadingAction !== "restart" && <RefreshCw className="h-3.5 w-3.5" />}
                         </Button>
                       )}
                     </>
                   ) : lifecycleActions.canStart ? (
                     <Button
                       variant="ghost"
-                      size="icon"
-                      className="h-7 w-7"
+                      size="icon-xs"
+                      pending={loadingAction === "start"}
                       disabled={!!loadingAction || transitioning || unavailable}
                       onClick={() => handleStart(container)}
                       title="Start"
                     >
-                      <Play className="h-3.5 w-3.5" />
+                      {loadingAction !== "start" && <Play className="h-3.5 w-3.5" />}
                     </Button>
                   ) : null}
 
                   {!container.folderIsSystem && reorganize && (
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon" className="h-8 w-8">
+                        <Button variant="ghost" size="icon-sm">
                           <MoreVertical className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -920,82 +922,80 @@ export function DockerContainers({
   const content = (
     <>
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">Docker Containers</h1>
-              {initialContentReady && !isLoading && visibleNodeId && (
-                <Badge variant="secondary" size="inline">
-                  {containers.length}
-                </Badge>
-              )}
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Manage containers across your Docker nodes
-            </p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(visibleNodeId
-                ? [
-                    {
-                      label: "Refresh",
-                      icon: <RefreshCw className="h-4 w-4" />,
-                      onClick: () => void requestSnapshotRefresh("containers", visibleNodeId),
-                      disabled: isLoading || foldersLoading,
-                    },
-                  ]
-                : []),
-              ...(canManageFolders
-                ? [
-                    {
-                      label: "New Folder",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => {
-                        setCreateFolderParentId(null);
-                        setCreateFolderOpen(true);
+        <PageHeader
+          title="Docker Containers"
+          description="Manage containers across your Docker nodes"
+          badges={
+            initialContentReady && !isLoading && visibleNodeId ? (
+              <Badge variant="secondary" size="inline">
+                {containers.length}
+              </Badge>
+            ) : null
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(visibleNodeId
+                  ? [
+                      {
+                        label: "Refresh",
+                        icon: <RefreshCw className="h-4 w-4" />,
+                        onClick: () => void requestSnapshotRefresh("containers", visibleNodeId),
+                        disabled: isLoading || foldersLoading,
                       },
-                    },
-                  ]
-                : []),
-              ...(canCreateOnVisibleNode
-                ? [
-                    {
-                      label: "Deploy Container",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => void openDeploy(),
-                      disabled: checkingDeployNodes,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {visibleNodeId && (
-              <RefreshButton
-                onClick={() => void requestSnapshotRefresh("containers", visibleNodeId)}
-                disabled={isLoading || foldersLoading}
-              />
-            )}
-            {canManageFolders && (
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setCreateFolderParentId(null);
-                  setCreateFolderOpen(true);
-                }}
-              >
-                <Plus className="h-4 w-4 mr-1" />
-                New Folder
-              </Button>
-            )}
-            {canCreateOnVisibleNode && (
-              <Button onClick={() => void openDeploy()} disabled={checkingDeployNodes}>
-                <Plus className="h-4 w-4 mr-1" />
-                Deploy Container
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+                    ]
+                  : []),
+                ...(canManageFolders
+                  ? [
+                      {
+                        label: "New Folder",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => {
+                          setCreateFolderParentId(null);
+                          setCreateFolderOpen(true);
+                        },
+                      },
+                    ]
+                  : []),
+                ...(canCreateOnVisibleNode
+                  ? [
+                      {
+                        label: "Deploy Container",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => void openDeploy(),
+                        disabled: checkingDeployNodes,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {visibleNodeId && (
+                <RefreshButton
+                  onClick={() => void requestSnapshotRefresh("containers", visibleNodeId)}
+                  disabled={isLoading || foldersLoading}
+                />
+              )}
+              {canManageFolders && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setCreateFolderParentId(null);
+                    setCreateFolderOpen(true);
+                  }}
+                >
+                  <Plus className="h-4 w-4 mr-1" />
+                  New Folder
+                </Button>
+              )}
+              {canCreateOnVisibleNode && (
+                <Button onClick={() => void openDeploy()} pending={checkingDeployNodes}>
+                  {!checkingDeployNodes && <Plus className="h-4 w-4 mr-1" />}
+                  Deploy Container
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       <ResourceListForm<DockerFolderTreeNodeWithContainers, DockerContainerListItem>
@@ -1075,7 +1075,7 @@ export function DockerContainers({
               )}
           </>
         }
-        loading={canListDockerResources && (!initialContentReady || isLoading || foldersLoading)}
+        loading={!initialContentReady || (canListDockerResources && (isLoading || foldersLoading))}
         loadingLabel="Loading containers..."
         hasContent={
           initialContentReady &&

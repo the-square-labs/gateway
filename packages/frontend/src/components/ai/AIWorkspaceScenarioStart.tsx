@@ -10,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -168,12 +169,14 @@ export function AIWorkspaceScenarioStart({
   } | null>(null);
   const [finalizeSetupOpen, setFinalizeSetupOpen] = useState(false);
   const [relayNeedsAttention, setRelayNeedsAttention] = useState(false);
+  // The start screen appears once its data is in: the page gate waits for it
+  // on first load, and a later remount (a new Work Session) fades it in.
+  // A context change refetches in place without hiding what is shown.
   const [startDataReady, setStartDataReady] = useState(false);
+  useContentLoading(!startDataReady);
 
   useEffect(() => {
     let disposed = false;
-    setStartDataReady(false);
-    setScenarios([]);
     void Promise.allSettled([
       api.getAIScenarios(scenarioContext),
       api.getFinalizeSetupState(),
@@ -267,14 +270,15 @@ export function AIWorkspaceScenarioStart({
                       </p>
                     </div>
                   </div>
-                  <button
+                  <Button
                     type="button"
+                    variant="link"
                     onClick={onInvestigateOperationalIssue}
-                    className="flex shrink-0 items-center gap-1 text-sm font-medium text-destructive hover:underline"
+                    className="h-auto shrink-0 justify-start gap-1 p-0 text-destructive"
                   >
                     Investigate
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
+                    <ArrowRight />
+                  </Button>
                 </div>
               </div>
             ) : setupPending ? (
@@ -292,14 +296,15 @@ export function AIWorkspaceScenarioStart({
                       </p>
                     </div>
                   </div>
-                  <button
+                  <Button
                     type="button"
+                    variant="link"
                     onClick={() => setFinalizeSetupOpen(true)}
-                    className="flex shrink-0 items-center gap-1 text-sm font-medium text-[color:var(--color-link)] hover:underline"
+                    className="h-auto shrink-0 justify-start gap-1 p-0"
                   >
                     Open checklist
-                    <ArrowRight className="h-3.5 w-3.5" />
-                  </button>
+                    <ArrowRight />
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -317,14 +322,15 @@ export function AIWorkspaceScenarioStart({
               </div>
             )}
 
-            <button
+            <Button
               type="button"
-              className="justify-self-center text-sm font-medium text-[color:var(--color-link)] hover:underline disabled:pointer-events-none disabled:opacity-50"
+              variant="link"
+              className="h-auto justify-self-center gap-1 p-0"
               disabled={scenarios.length === 0}
               onClick={() => setCatalogOpen(true)}
             >
               Show all scenarios <span aria-hidden="true">→</span>
-            </button>
+            </Button>
           </div>
         </div>
       )}

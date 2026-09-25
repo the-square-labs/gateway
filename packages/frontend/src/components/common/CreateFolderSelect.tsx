@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import {
   Select,
   SelectContent,
@@ -59,6 +60,8 @@ export function CreateFolderSelect({
   id?: string;
   ariaLabel?: string;
 }) {
+  // The folder list decides the destinations offered: the dialog waits for it.
+  useContentLoading(loading);
   const allowed = isCreateFolderAllowed(choices, value);
   // Keep the selection valid when the folder tree or the grants change (for example
   // after picking another node): fall back to the root or the only allowed folder.

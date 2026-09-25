@@ -12,6 +12,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { HostingAdoptionCandidates } from "@/types/hosting";
 
@@ -32,6 +33,8 @@ export function HostingAdoptDialog({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
+  // Cleared when the dialog closes: every opening waits for fresh candidates.
+  const [candidatesSettled, setCandidatesSettled] = useState(false);
   const submitting = useRef(false);
   const generation = useRef(0);
   const load = useCallback(() => {
@@ -54,7 +57,9 @@ export function HostingAdoptDialog({
           );
       })
       .finally(() => {
-        if (generation.current === current) setLoading(false);
+        if (generation.current !== current) return;
+        setLoading(false);
+        setCandidatesSettled(true);
       });
   }, [open, connectorId]);
   useEffect(() => {
@@ -63,6 +68,9 @@ export function HostingAdoptDialog({
       generation.current++;
     };
   }, [load]);
+  useEffect(() => {
+    if (!open) setCandidatesSettled(false);
+  }, [open]);
   const adopt = async () => {
     if (submitting.current || !resourceId || !nodeId) return;
     submitting.current = true;
@@ -102,6 +110,7 @@ export function HostingAdoptDialog({
           </DialogDescription>
         </DialogHeader>
         <PanelShell title="Node association">
+          {open && !candidatesSettled && <Skeleton />}
           <SettingsControlRow
             title="VM or container"
             description="Discovered resources without a Gateway association."
@@ -111,7 +120,7 @@ export function HostingAdoptDialog({
               value={resourceId}
               onValueChange={setResourceId}
               disabled={loading || busy || !candidates?.resources.length}
-              placeholder={loading ? "Loading resources…" : "Select a resource"}
+              placeholder="Select a resource"
               options={(candidates?.resources ?? []).map((r) => ({
                 value: r.id,
                 label: `${r.name} · ${r.kind === "ct" ? "CT" : "VM"} ${r.remoteId}`,
@@ -127,7 +136,7 @@ export function HostingAdoptDialog({
               value={nodeId}
               onValueChange={setNodeId}
               disabled={loading || busy || !candidates?.nodes.length}
-              placeholder={loading ? "Loading nodes…" : "Select a node"}
+              placeholder="Select a node"
               options={(candidates?.nodes ?? []).map((n) => ({
                 value: n.id,
                 label: `${n.displayName || n.hostname} · ${n.status}`,
@@ -152,15 +161,16 @@ export function HostingAdoptDialog({
             Cancel
           </Button>
           {error && !candidates ? (
-            <Button onClick={load} disabled={loading}>
+            <Button onClick={load} pending={loading}>
               Try again
             </Button>
           ) : (
             <Button
               onClick={() => void adopt()}
-              disabled={busy || loading || empty || !resourceId || !nodeId}
+              pending={busy}
+              disabled={loading || empty || !resourceId || !nodeId}
             >
-              {busy ? "Verifying…" : "Verify and adopt"}
+              Verify and adopt
             </Button>
           )}
         </DialogFooter>

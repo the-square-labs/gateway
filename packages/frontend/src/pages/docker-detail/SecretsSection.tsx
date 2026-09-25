@@ -1,5 +1,6 @@
 import { Eye, EyeOff, Lock, Minus, Plus } from "lucide-react";
 import { useState } from "react";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -89,17 +90,11 @@ export function SecretsSection({
         canManageSecrets ? (
           <div className="flex items-center gap-2">
             {onSave && (
-              <Button onClick={onSave} disabled={saveDisabled || isSaving}>
+              <Button onClick={onSave} pending={isSaving} disabled={saveDisabled}>
                 {saveButtonLabel ?? "Save"}
               </Button>
             )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-8 w-8"
-              onClick={addSecretRow}
-              title="Add secret"
-            >
+            <Button variant="ghost" size="icon-sm" onClick={addSecretRow} title="Add secret">
               <Plus className="h-3.5 w-3.5" />
             </Button>
           </div>
@@ -134,7 +129,7 @@ export function SecretsSection({
                     onChange={(e) => isNew && updateSecretRow(idx, "key", e.target.value)}
                     readOnly={!isNew}
                     className={`h-9 border-0 rounded-none shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
-                      hasKeyError ? "bg-red-500/15 text-red-400" : ""
+                      hasKeyError ? "bg-destructive/10 text-destructive" : ""
                     }`}
                     placeholder="SECRET_KEY"
                   />
@@ -150,7 +145,7 @@ export function SecretsSection({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                        className="shrink-0 rounded-none border-l border-border"
                         onClick={() => toggleReveal(idx)}
                         title={isRevealed ? "Hide" : "Show"}
                       >
@@ -164,7 +159,7 @@ export function SecretsSection({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                      className="shrink-0 rounded-none border-l border-border"
                       onClick={() => removeSecretRow(idx)}
                     >
                       <Minus className="h-3.5 w-3.5" />
@@ -185,19 +180,12 @@ export function SecretsSection({
       </div>
 
       {visibleSecretRows.length === 0 && (
-        <div className="flex items-center justify-center py-8">
-          <p className="text-sm text-muted-foreground">
-            No secrets configured.
-            {canManageSecrets && (
-              <>
-                {" "}
-                <button onClick={addSecretRow} className="text-foreground hover:underline">
-                  Add one
-                </button>
-              </>
-            )}
-          </p>
-        </div>
+        <EmptyState
+          message="No secrets configured."
+          actionLabel={canManageSecrets ? "Add one" : undefined}
+          onAction={canManageSecrets ? addSecretRow : undefined}
+          embedded
+        />
       )}
     </PanelShell>
   );

@@ -231,8 +231,8 @@ export function NodeSetupWizard({
             <Check /> {completionActionLabel}
           </Button>
         ) : !enrollment ? (
-          <Button onClick={() => void create()} disabled={saving || !name.trim()}>
-            {saving ? <Loader2 className="animate-spin" /> : <Server />}
+          <Button onClick={() => void create()} pending={saving} disabled={!name.trim()}>
+            {saving ? null : <Server />}
             Create enrollment
           </Button>
         ) : null

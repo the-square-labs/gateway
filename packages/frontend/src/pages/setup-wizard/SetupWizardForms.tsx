@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
@@ -79,12 +79,8 @@ export function PublicUrlStep({
           onChange={(event) => setPublicUrl(event.target.value)}
         />
         <div className="flex justify-center">
-          <Button type="submit" disabled={busy || !isPublicUrlValid(publicUrl)}>
-            {busy ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <ArrowRight className="h-4 w-4" />
-            )}
+          <Button type="submit" pending={busy} disabled={!isPublicUrlValid(publicUrl)}>
+            {busy ? null : <ArrowRight className="h-4 w-4" />}
             Continue
           </Button>
         </div>
@@ -153,8 +149,7 @@ export function AuthMethodsStep({
             <ArrowLeft className="h-4 w-4" />
             Back
           </Button>
-          <Button type="submit" className="w-max flex-none" disabled={busy || !canContinue}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          <Button type="submit" className="w-max flex-none" pending={busy} disabled={!canContinue}>
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
@@ -238,9 +233,9 @@ export function OidcConfigStep({
           <Button
             type="submit"
             className="w-max flex-none"
-            disabled={busy || !isOidcDraftValid(oidc, alreadyConfigured)}
+            pending={busy}
+            disabled={!isOidcDraftValid(oidc, alreadyConfigured)}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
@@ -387,9 +382,9 @@ export function SmtpConfigStep({
           <Button
             type="submit"
             className="w-max flex-none"
-            disabled={busy || !isSmtpDraftValid(smtp, preset, alreadyConfigured)}
+            pending={busy}
+            disabled={!isSmtpDraftValid(smtp, preset, alreadyConfigured)}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>

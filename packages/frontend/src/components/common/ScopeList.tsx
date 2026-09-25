@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -98,12 +99,25 @@ export function ScopeList({
   const features = useSystemConfigStore((state) => state.config.features);
   const [dockerResources, setDockerResources] = useState<DockerResourceOption[]>([]);
   const [resourceCatalog, setResourceCatalog] = useState<ScopeResourceCatalog>({});
+  // The first load of each option list holds the enclosing dialog or page, so
+  // restriction rows do not change after it appears. Later reloads (another
+  // scope selected, fresh grants) update in place without being reported.
+  const [catalogReady, setCatalogReady] = useState(false);
+  const [foldersReady, setFoldersReady] = useState(false);
+  const [dockerReady, setDockerReady] = useState(false);
+  const [registriesReady, setRegistriesReady] = useState(false);
+  useContentLoading(!(catalogReady && foldersReady && dockerReady && registriesReady));
   // biome-ignore lint/correctness/useExhaustiveDependencies: Lookup helpers read current auth/features from stores; rerun and cancel old loads when either changes.
   useEffect(() => {
     let cancelled = false;
-    void loadScopeResourceCatalog(scopes, nodes ?? []).then((catalog) => {
-      if (!cancelled) setResourceCatalog(catalog);
-    });
+    void loadScopeResourceCatalog(scopes, nodes ?? [])
+      .then((catalog) => {
+        if (!cancelled) setResourceCatalog(catalog);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setCatalogReady(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -148,25 +162,30 @@ export function ScopeList({
     if (families.length === 0) {
       setFolderOptions([]);
       onFolderOptionsChange?.([]);
+      setFoldersReady(true);
       return;
     }
     let cancelled = false;
-    void Promise.all(families.map(loadFolderFamily)).then((options) => {
-      if (cancelled) return;
-      setFolderOptions(options.flat());
-      onFolderOptionsChange?.(options.flat());
-    });
+    const loads: Promise<unknown>[] = [
+      Promise.all(families.map(loadFolderFamily)).then((options) => {
+        if (cancelled) return;
+        setFolderOptions(options.flat());
+        onFolderOptionsChange?.(options.flat());
+      }),
+    ];
     if (families.includes("domains") && canLoadScopeResource("domains:view")) {
-      void allResourcePages((page) => api.listDomains({ page, limit: 100 }))
-        .then((response) => {
-          if (!cancelled) setDomainResources(response);
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setDomainResources([]);
-            reportScopeLoadError("domains", error);
-          }
-        });
+      loads.push(
+        allResourcePages((page) => api.listDomains({ page, limit: 100 }))
+          .then((response) => {
+            if (!cancelled) setDomainResources(response);
+          })
+          .catch((error) => {
+            if (!cancelled) {
+              setDomainResources([]);
+              reportScopeLoadError("domains", error);
+            }
+          })
+      );
     } else {
       setDomainResources([]);
     }
@@ -174,20 +193,25 @@ export function ScopeList({
       families.includes("logging-environments") &&
       canLoadScopeResource("logs:environments:view")
     ) {
-      void api
-        .listLoggingEnvironments()
-        .then((items) => {
-          if (!cancelled) setLoggingEnvironments(items ?? []);
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setLoggingEnvironments([]);
-            reportScopeLoadError("logging environments", error);
-          }
-        });
+      loads.push(
+        api
+          .listLoggingEnvironments()
+          .then((items) => {
+            if (!cancelled) setLoggingEnvironments(items ?? []);
+          })
+          .catch((error) => {
+            if (!cancelled) {
+              setLoggingEnvironments([]);
+              reportScopeLoadError("logging environments", error);
+            }
+          })
+      );
     } else {
       setLoggingEnvironments([]);
     }
+    void Promise.allSettled(loads).then(() => {
+      if (!cancelled) setFoldersReady(true);
+    });
     return () => {
       cancelled = true;
     };
@@ -207,6 +231,7 @@ export function ScopeList({
     );
     if (!needsDockerResources || dockerNodes.length === 0) {
       setDockerResources([]);
+      setDockerReady(true);
       return;
     }
 
@@ -235,9 +260,13 @@ export function ScopeList({
             : []
         );
       })
-    ).then((resourcesByNode) => {
-      if (!cancelled) setDockerResources(resourcesByNode.flat());
-    });
+    )
+      .then((resourcesByNode) => {
+        if (!cancelled) setDockerResources(resourcesByNode.flat());
+      })
+      .finally(() => {
+        if (!cancelled) setDockerReady(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -252,6 +281,7 @@ export function ScopeList({
     );
     if (!needsRepositories || !canLoadScopeResource("docker:registries:view")) {
       setDockerRegistryRepositories([]);
+      setRegistriesReady(true);
       return;
     }
     let cancelled = false;
@@ -265,6 +295,9 @@ export function ScopeList({
           setDockerRegistryRepositories([]);
           reportScopeLoadError("registry repositories", error);
         }
+      })
+      .finally(() => {
+        if (!cancelled) setRegistriesReady(true);
       });
     return () => {
       cancelled = true;
@@ -540,12 +573,10 @@ function ScopeRow({
           <div className="flex flex-wrap items-baseline gap-2">
             <p className="text-sm">{scope.label}</p>
             {showTechnicalValue && (
-              <p className="text-[10px] text-muted-foreground font-mono">{scope.value}</p>
+              <p className="text-xs text-muted-foreground font-mono">{scope.value}</p>
             )}
             {baseLocked && inheritedFromName && (
-              <p className="text-[10px] text-muted-foreground">
-                inherited from {inheritedFromName}
-              </p>
+              <p className="text-xs text-muted-foreground">inherited from {inheritedFromName}</p>
             )}
           </div>
           {showDescription && <p className="text-xs text-muted-foreground">{scope.desc}</p>}
@@ -623,12 +654,10 @@ function ScopeRow({
                     className="form-checkbox"
                   />
                   <span>{opt.label}</span>
-                  {opt.kind && (
-                    <span className="text-[10px] text-muted-foreground">{opt.kind}</span>
-                  )}
+                  {opt.kind && <span className="text-xs text-muted-foreground">{opt.kind}</span>}
                   {(inheritedSet.has(opt.id) || parentInherited || folderInherited) &&
                     inheritedFromName && (
-                      <span className="text-[10px] text-muted-foreground">inherited</span>
+                      <span className="text-xs text-muted-foreground">inherited</span>
                     )}
                 </label>
               );
@@ -662,9 +691,9 @@ function ScopeRow({
                   className="form-checkbox"
                 />
                 <span>{folder.label}</span>
-                <span className="text-[10px] text-muted-foreground">folder</span>
+                <span className="text-xs text-muted-foreground">folder</span>
                 {inherited && inheritedFromName && (
-                  <span className="text-[10px] text-muted-foreground">inherited</span>
+                  <span className="text-xs text-muted-foreground">inherited</span>
                 )}
               </label>
             );

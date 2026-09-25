@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -15,7 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
@@ -34,6 +34,8 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
   const [creating, setCreating] = useState(false);
   const [secret, setSecret] = useState<string | null>(null);
   const [secretOpen, setSecretOpen] = useState(false);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
+  useContentLoading(initialLoading);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -81,12 +83,15 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
       confirmLabel: "Revoke",
     });
     if (!accepted) return;
+    setRevokingId(token.id);
     try {
       await api.revokeInferenceToken(token.id);
       await load();
       toast.success("Inference token revoked");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to revoke inference token");
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -105,9 +110,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
           ) : null
         }
       >
-        {initialLoading ? (
-          <InferenceTokenRowsSkeleton />
-        ) : tokens.length === 0 ? (
+        {initialLoading ? null : tokens.length === 0 ? (
           <EmptyState
             message={
               canManage
@@ -143,11 +146,11 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
                   <Button
                     variant="outline"
                     size="icon"
-                    className="shrink-0"
                     aria-label={`Revoke ${token.name}`}
+                    pending={revokingId === token.id}
                     onClick={() => void revoke(token)}
                   >
-                    <Trash2 className="h-4 w-4" />
+                    {revokingId === token.id ? null : <Trash2 className="h-4 w-4" />}
                   </Button>
                 )}
               </div>
@@ -178,8 +181,8 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
             <Button variant="outline" onClick={() => setCreateOpen(false)}>
               Cancel
             </Button>
-            <Button onClick={() => void create()} disabled={!name.trim() || creating}>
-              {creating ? "Creating..." : "Create token"}
+            <Button onClick={() => void create()} pending={creating} disabled={!name.trim()}>
+              Create token
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -210,24 +213,5 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
         </DialogContent>
       </Dialog>
     </>
-  );
-}
-
-function InferenceTokenRowsSkeleton() {
-  return (
-    <div className="divide-y divide-border" aria-label="Loading inference API tokens">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Skeleton className="h-10 w-10 shrink-0" />
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="h-3 w-56 max-w-[60vw]" />
-            </div>
-          </div>
-          <Skeleton className="h-9 w-9 shrink-0" />
-        </div>
-      ))}
-    </div>
   );
 }

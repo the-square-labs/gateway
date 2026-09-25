@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
+import { waitForReveal } from "@/test/reveal";
 import { RawConfigTab, type RawConfigTabProps } from "./RawConfigTab";
 
 vi.mock("@/components/ui/code-editor", () => ({
@@ -28,17 +30,27 @@ it("retains the rendered editor DOM and scroll during background refresh", () =>
   rerender(<RawConfigTab {...props} isLoadingRaw />);
   expect(screen.getByTestId("editor")).toBe(editor);
   expect(editor.scrollTop).toBe(170);
-  expect(screen.queryByLabelText("Loading rendered config")).not.toBeInTheDocument();
+  expect(editor).toBeVisible();
   expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
   rerender(<RawConfigTab {...props} renderedConfig="server { listen 80; }" />);
   expect(screen.getByTestId("editor")).toBe(editor);
   expect(editor.scrollTop).toBe(170);
 });
-it("uses a skeleton only before the first rendered document has loaded", () => {
+it("keeps the tab hidden only until the first rendered document has loaded", async () => {
   const { rerender } = render(
-    <RawConfigTab {...props} renderedConfig="" hasLoadedRendered={false} isLoadingRaw />
+    <PageTransition>
+      <RawConfigTab {...props} renderedConfig="" hasLoadedRendered={false} isLoadingRaw />
+    </PageTransition>
   );
-  expect(screen.getByLabelText("Loading rendered config")).toBeInTheDocument();
-  rerender(<RawConfigTab {...props} renderedConfig="" hasLoadedRendered isLoadingRaw />);
+  const gate = document.querySelector("[data-reveal-phase]");
+  expect(gate).not.toHaveAttribute("data-reveal-phase", "revealed");
+  expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
+  rerender(
+    <PageTransition>
+      <RawConfigTab {...props} renderedConfig="" hasLoadedRendered isLoadingRaw />
+    </PageTransition>
+  );
+  await waitForReveal();
   expect(screen.getByTestId("editor")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
 });

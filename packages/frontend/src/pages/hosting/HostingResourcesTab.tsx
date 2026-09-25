@@ -32,6 +32,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { createClientUuid } from "@/lib/client-id";
 import { performHostingAction } from "@/lib/hosting-intents";
@@ -197,6 +198,10 @@ export function HostingResourcesTab({
   const displayedRetry = useRetainedDialogValue(retryTarget, Boolean(retryTarget));
   const [retrySsh, setRetrySsh] = useState("");
   const [sshOptions, setSshOptions] = useState<Array<{ value: string; label: string }>>([]);
+  // The retry target whose SSH connections have loaded; the dialog opens with them.
+  const [sshLoadedFor, setSshLoadedFor] = useState<typeof retryTarget>(null);
+  const sshOptionsLoading =
+    !!retryTarget && hasScope("integrations:ssh:use") && sshLoadedFor !== retryTarget;
   useEffect(() => {
     if (!retryTarget) return;
     let cancelled = false;
@@ -212,6 +217,9 @@ export function HostingResourcesTab({
         .catch((error) => {
           if (!cancelled)
             toast.error(error instanceof Error ? error.message : "Could not load SSH connections");
+        })
+        .finally(() => {
+          if (!cancelled) setSshLoadedFor(retryTarget);
         });
     }
     return () => {
@@ -567,6 +575,7 @@ export function HostingResourcesTab({
               title="Trusted SSH connection"
               description="Choose a connection to this VM."
             >
+              {sshOptionsLoading && <Skeleton />}
               <Combobox
                 ariaLabel="Retry SSH connection"
                 value={retrySsh}
@@ -580,13 +589,14 @@ export function HostingResourcesTab({
               Cancel
             </Button>
             <Button
+              pending={pending === `${displayedRetry?.resource.id}:install`}
               disabled={
                 Boolean(pending) ||
                 (!displayedRetry?.resource.capabilities.bootstrap.available && !retrySsh)
               }
               onClick={() => void retryInstall()}
             >
-              {pending && <Loader2 className="h-4 w-4 animate-spin" />}Retry installation
+              Retry installation
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -2,6 +2,7 @@ import { ArchiveRestore, FolderPlus, Plus, ScrollText, Shield, Users } from "luc
 import { useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import {
@@ -137,80 +138,76 @@ export function Administration() {
             : "h-full overflow-y-auto p-6 space-y-4"
         }
       >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-3">
-              <LiteModeBackButton />
-              <div className="min-w-0">
-                <h1 className="text-2xl font-bold">{currentMeta.title}</h1>
-                <p className="text-sm text-muted-foreground">{currentMeta.subtitle}</p>
-              </div>
-            </div>
-          </div>
-          {currentMeta.actionLabel && currentMeta.onAction ? (
-            <ResponsiveHeaderActions
-              actions={[
-                ...(currentTab === "users" && canManageUserFolders && createUserFolderAction
-                  ? [
-                      {
-                        label: "Add Folder",
-                        icon: <FolderPlus className="h-4 w-4" />,
-                        onClick: createUserFolderAction,
-                      },
-                    ]
-                  : []),
-                ...(currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction
-                  ? [
-                      {
-                        label: "Deleted Users",
-                        icon: <ArchiveRestore className="h-4 w-4" />,
-                        onClick: openDeletedUsersAction,
-                      },
-                    ]
-                  : []),
-                ...(currentTab === "groups" && canManageGroupFolders && createGroupFolderAction
-                  ? [
-                      {
-                        label: "Add Folder",
-                        icon: <FolderPlus className="h-4 w-4" />,
-                        onClick: createGroupFolderAction,
-                      },
-                    ]
-                  : []),
-                {
-                  label: currentMeta.actionLabel,
-                  icon: <Plus className="h-4 w-4" />,
-                  onClick: currentMeta.onAction,
-                },
-              ]}
-            >
-              {currentTab === "users" && canManageUserFolders && createUserFolderAction && (
-                <Button variant="outline" onClick={() => createUserFolderAction?.()}>
-                  <FolderPlus className="h-4 w-4" />
-                  Add Folder
+        <PageHeader
+          title={currentMeta.title}
+          description={currentMeta.subtitle}
+          leading={<LiteModeBackButton />}
+          actions={
+            currentMeta.actionLabel && currentMeta.onAction ? (
+              <ResponsiveHeaderActions
+                actions={[
+                  ...(currentTab === "users" && canManageUserFolders && createUserFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createUserFolderAction,
+                        },
+                      ]
+                    : []),
+                  ...(currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction
+                    ? [
+                        {
+                          label: "Deleted Users",
+                          icon: <ArchiveRestore className="h-4 w-4" />,
+                          onClick: openDeletedUsersAction,
+                        },
+                      ]
+                    : []),
+                  ...(currentTab === "groups" && canManageGroupFolders && createGroupFolderAction
+                    ? [
+                        {
+                          label: "Add Folder",
+                          icon: <FolderPlus className="h-4 w-4" />,
+                          onClick: createGroupFolderAction,
+                        },
+                      ]
+                    : []),
+                  {
+                    label: currentMeta.actionLabel,
+                    icon: <Plus className="h-4 w-4" />,
+                    onClick: currentMeta.onAction,
+                  },
+                ]}
+              >
+                {currentTab === "users" && canManageUserFolders && createUserFolderAction && (
+                  <Button variant="outline" onClick={() => createUserFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                {currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction && (
+                  <Button variant="outline" onClick={openDeletedUsersAction}>
+                    <ArchiveRestore className="h-4 w-4" />
+                    Deleted Users
+                  </Button>
+                )}
+                {currentTab === "groups" && canManageGroupFolders && createGroupFolderAction && (
+                  <Button variant="outline" onClick={() => createGroupFolderAction?.()}>
+                    <FolderPlus className="h-4 w-4" />
+                    Add Folder
+                  </Button>
+                )}
+                <Button onClick={currentMeta.onAction}>
+                  <Plus className="h-4 w-4" />
+                  {currentMeta.actionLabel}
                 </Button>
-              )}
-              {currentTab === "users" && canManageDeletedUsers && openDeletedUsersAction && (
-                <Button variant="outline" onClick={openDeletedUsersAction}>
-                  <ArchiveRestore className="h-4 w-4" />
-                  Deleted Users
-                </Button>
-              )}
-              {currentTab === "groups" && canManageGroupFolders && createGroupFolderAction && (
-                <Button variant="outline" onClick={() => createGroupFolderAction?.()}>
-                  <FolderPlus className="h-4 w-4" />
-                  Add Folder
-                </Button>
-              )}
-              <Button onClick={currentMeta.onAction}>
-                <Plus className="h-4 w-4" />
-                {currentMeta.actionLabel}
-              </Button>
-            </ResponsiveHeaderActions>
-          ) : currentTab === "audit" ? (
-            <div ref={setAuditHeaderActionsEl} className="shrink-0" />
-          ) : null}
-        </div>
+              </ResponsiveHeaderActions>
+            ) : currentTab === "audit" ? (
+              <div ref={setAuditHeaderActionsEl} className="shrink-0" />
+            ) : null
+          }
+        />
 
         <Tabs
           value={activeTab}

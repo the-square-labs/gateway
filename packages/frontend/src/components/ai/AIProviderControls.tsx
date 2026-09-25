@@ -9,7 +9,13 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { cn } from "@/lib/utils";
 import type { AIInferenceModelOption } from "@/types/ai";
+import {
+  AI_ICON_CONTROL,
+  AI_TOOLBAR_TRIGGER,
+  AI_TOOLBAR_TRIGGER_MUTED,
+} from "./ai-control-classes";
 
 const PROVIDER_CONTROLS_WIDTH_RESERVE = 32;
 
@@ -124,7 +130,7 @@ export function AIProviderControls({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+              className={cn(AI_ICON_CONTROL, "h-8 w-8")}
               title="Model and reasoning"
               aria-label="Model and reasoning settings"
               disabled={disabled}
@@ -190,7 +196,7 @@ export function AIProviderControls({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="flex h-8 max-w-[13rem] items-center gap-2 px-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+                  className={cn(AI_TOOLBAR_TRIGGER, AI_TOOLBAR_TRIGGER_MUTED, "max-w-[13rem]")}
                   title={selectedModelLabel}
                   aria-label="AI model"
                   disabled={disabled}
@@ -220,7 +226,7 @@ export function AIProviderControls({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  className="flex h-8 max-w-[10rem] items-center gap-2 px-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+                  className={cn(AI_TOOLBAR_TRIGGER, AI_TOOLBAR_TRIGGER_MUTED, "max-w-[10rem]")}
                   title={`Reasoning: ${selectedReasoningEffort ?? "default"}`}
                   aria-label="Reasoning effort"
                   disabled={disabled}

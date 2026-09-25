@@ -352,7 +352,7 @@ export function AIArtifactPopout() {
         </div>
         {hasPreview && (
           <div className="flex items-center gap-2">
-            <Button variant="ghost" size="icon" onClick={handleCopy} title="Copy">
+            <Button variant="ghost" size="icon" onClick={handleCopy} title="Copy" aria-label="Copy">
               <Check
                 className={`absolute h-3.5 w-3.5 transition-all duration-200 ${copied ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
               />
@@ -360,7 +360,13 @@ export function AIArtifactPopout() {
                 className={`h-3.5 w-3.5 transition-all duration-200 ${copied ? "scale-0 opacity-0" : "scale-100 opacity-100"}`}
               />
             </Button>
-            <Button variant="ghost" size="icon" onClick={handleDownload} title="Download">
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={handleDownload}
+              title="Download"
+              aria-label="Download"
+            >
               <Download className="h-3.5 w-3.5" />
             </Button>
           </div>

@@ -1,14 +1,14 @@
-import { Archive, Loader2, Play, Save } from "lucide-react";
+import { Archive, Play, Save } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { cn, formatBytes, formatRelativeDate } from "@/lib/utils";
@@ -62,6 +62,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   const [hkSaving, setHkSaving] = useState(false);
   const [hkHistoryOpen, setHkHistoryOpen] = useState(false);
   const [hkHistory, setHkHistory] = useState<HousekeepingRunResult[]>([]);
+  const [hkHistoryLoading, setHkHistoryLoading] = useState(false);
 
   const loadHousekeeping = useCallback(async () => {
     try {
@@ -194,21 +195,20 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
   ];
 
   const handleViewHistory = async () => {
+    setHkHistoryLoading(true);
     try {
       const history = await api.getHousekeepingHistory();
       setHkHistory(history);
       setHkHistoryOpen(true);
     } catch {
       toast.error("Failed to load history");
+    } finally {
+      setHkHistoryLoading(false);
     }
   };
 
-  if (!initialLoadComplete)
-    return (
-      <div id="housekeeping">
-        <Skeleton />
-      </div>
-    );
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   return (
     <>
@@ -221,6 +221,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
         actions={
           <Button
             onClick={saveHkConfig}
+            pending={hkSaving}
             disabled={
               !hkHasChanges ||
               masterControlsDisabled ||
@@ -229,7 +230,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               !internalRegistryRetentionValid
             }
           >
-            <Save className="h-4 w-4" />
+            {hkSaving ? null : <Save className="h-4 w-4" />}
             Save
           </Button>
         }
@@ -275,16 +276,13 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
                 />
                 <Button
                   onClick={handleRunHousekeeping}
-                  disabled={hkRunning || !hkConfig.enabled || !canRun || hkHasChanges}
+                  pending={hkRunning}
+                  disabled={!hkConfig.enabled || !canRun || hkHasChanges}
                   title={
                     hkHasChanges ? "Save housekeeping settings before running cleanup" : undefined
                   }
                 >
-                  {hkRunning ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Play className="h-4 w-4" />
-                  )}
+                  {hkRunning ? null : <Play className="h-4 w-4" />}
                   Run Now
                 </Button>
               </div>
@@ -682,12 +680,14 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
                 <span>No runs yet</span>
               )}
             </div>
-            <button
-              onClick={handleViewHistory}
-              className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void handleViewHistory()}
+              pending={hkHistoryLoading}
             >
               View history
-            </button>
+            </Button>
           </div>
         </div>
       </PanelShell>

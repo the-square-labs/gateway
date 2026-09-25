@@ -1,9 +1,11 @@
-import { Link2, Loader2, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Link2, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
 import { confirmAction } from "@/components/common/ConfirmDialog";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import {
   DEFAULT_PROXY_UPSTREAM,
@@ -59,6 +61,7 @@ export function AdditionalSecureLinkBindings({
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const hiddenBindingIds = useRef(new Set<string>());
   const requestGeneration = useRef(0);
+  useContentLoading(bindings === null);
 
   const load = useCallback(async () => {
     const generation = ++requestGeneration.current;
@@ -261,16 +264,17 @@ export function AdditionalSecureLinkBindings({
       actions={
         canManage ? (
           <Button onClick={() => setAdding(true)} disabled={pending}>
-            <Plus className="h-3.5 w-3.5" /> Add binding
+            <Plus /> Add binding
           </Button>
         ) : null
       }
       wrapHeader
     >
       {bindings === null ? null : bindings.length === 0 ? (
-        <div className="px-3 py-4 text-sm text-muted-foreground">
-          No additional bindings. Provision one to reference it from Advanced config.
-        </div>
+        <EmptyState
+          message="No additional bindings. Provision one to reference it from Advanced config."
+          embedded
+        />
       ) : (
         <div className="overflow-x-auto">
           <div className="min-w-[900px]">
@@ -356,17 +360,14 @@ export function AdditionalSecureLinkBindings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 rounded-none border-l border-border"
+                      className="rounded-none border-l border-border"
                       onClick={() => void retry(binding)}
-                      disabled={!canManage || retryingId === binding.id}
+                      disabled={!canManage}
+                      pending={retryingId === binding.id}
                       aria-label={`Retry ${binding.name}`}
                       title="Retry"
                     >
-                      {retryingId === binding.id ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <RefreshCw className="h-4 w-4" />
-                      )}
+                      {retryingId === binding.id ? null : <RefreshCw className="h-4 w-4" />}
                     </Button>
                   ) : (
                     <div className="h-9 w-9 border-l border-border" />
@@ -377,7 +378,7 @@ export function AdditionalSecureLinkBindings({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 rounded-none border-l border-border"
+                      className="rounded-none border-l border-border"
                       onClick={() => remove(binding)}
                       disabled={!canManage}
                       aria-label={`Remove ${binding.name}`}
@@ -479,13 +480,9 @@ export function AdditionalSecureLinkBindings({
             <Button variant="outline" onClick={resetDraft} disabled={pending}>
               Cancel
             </Button>
-            <Button onClick={provision} disabled={!canProvision || pending}>
-              {pending ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Plus className="h-3.5 w-3.5" />
-              )}
-              {pending ? "Provisioning..." : "Provision"}
+            <Button onClick={provision} disabled={!canProvision} pending={pending}>
+              {pending ? null : <Plus />}
+              Provision
             </Button>
           </DialogFooter>
         </DialogContent>

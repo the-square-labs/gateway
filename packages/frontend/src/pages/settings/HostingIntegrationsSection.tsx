@@ -5,9 +5,9 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useScrollToNavigationTarget } from "@/hooks/use-scroll-to-navigation-target";
 import { useStableNavigate } from "@/hooks/use-stable-navigate";
@@ -35,7 +35,9 @@ export function HostingIntegrationsSection({
   const navigate = useStableNavigate();
   const location = useLocation();
   const [connectors, setConnectors] = useState<HostingConnector[]>([]);
-  const [loading, setLoading] = useState(canView);
+  // The first load settles once; later loads (retry, realtime) update in place.
+  const [initialLoadSettled, setInitialLoadSettled] = useState(false);
+  const loading = canView && !initialLoadSettled;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingConnector, setEditingConnector] = useState<HostingConnector | null>(null);
@@ -44,6 +46,7 @@ export function HostingIntegrationsSection({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const loadGeneration = useRef(0);
   const initialLoadComplete = useRef(false);
+  useContentLoading(loading);
   const navigationHighlighted = useScrollToNavigationTarget("hosting-integrations", !loading, {
     block: "center",
     highlightDurationMs: 2200,
@@ -52,11 +55,10 @@ export function HostingIntegrationsSection({
   const loadConnectors = useCallback(async () => {
     if (!canView) return;
     const generation = ++loadGeneration.current;
-    setLoadError(null);
-    if (!initialLoadComplete.current) setLoading(true);
     try {
       const result = (await api.listHostingConnectors()) ?? [];
       if (generation !== loadGeneration.current) return;
+      setLoadError(null);
       setConnectors(result);
       initialLoadComplete.current = true;
       onConnectorsChange?.(result);
@@ -66,7 +68,7 @@ export function HostingIntegrationsSection({
       if (!initialLoadComplete.current) setLoadError(message);
       toast.error(message);
     } finally {
-      if (generation === loadGeneration.current) setLoading(false);
+      if (generation === loadGeneration.current) setInitialLoadSettled(true);
     }
   }, [canView, onConnectorsChange]);
 
@@ -160,9 +162,7 @@ export function HostingIntegrationsSection({
           ) : undefined
         }
       >
-        {loading ? (
-          <Skeleton />
-        ) : loadError ? (
+        {loading ? null : loadError ? (
           <EmptyState
             message={loadError}
             actionLabel="Retry"
@@ -235,37 +235,38 @@ export function HostingIntegrationsSection({
                       variant="outline"
                       size="icon"
                       aria-label={`Test ${connector.name}`}
-                      disabled={testingId === connector.id}
+                      pending={testingId === connector.id}
                       onClick={(event) => {
                         event.stopPropagation();
                         void testConnector(connector);
                       }}
                     >
-                      <Check />
+                      {testingId === connector.id ? null : <Check />}
                     </Button>
                     <Button
                       variant="outline"
                       size="icon"
                       aria-label={`Sync ${connector.name}`}
-                      disabled={syncingId === connector.id || connector.syncStatus === "running"}
+                      disabled={connector.syncStatus === "running"}
+                      pending={syncingId === connector.id}
                       onClick={(event) => {
                         event.stopPropagation();
                         void syncConnector(connector);
                       }}
                     >
-                      <RefreshCw />
+                      {syncingId === connector.id ? null : <RefreshCw />}
                     </Button>
                     <Button
                       variant="outline"
                       size="icon"
                       aria-label={`Disconnect ${connector.name}`}
-                      disabled={deletingId === connector.id}
+                      pending={deletingId === connector.id}
                       onClick={(event) => {
                         event.stopPropagation();
                         void deleteConnector(connector);
                       }}
                     >
-                      <Trash2 />
+                      {deletingId === connector.id ? null : <Trash2 />}
                     </Button>
                   </div>
                 )}

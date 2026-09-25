@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   ListChecks,
+  Loader2,
   Pause,
   Pencil,
   Play,
@@ -48,6 +49,14 @@ import { AIContextUsageDialog } from "./AIContextUsageDialog";
 import { AIProgressRing } from "./AIProgressRing";
 import { AIProviderControls } from "./AIProviderControls";
 import { QuestionBlock } from "./AIToolCallBlock";
+import {
+  AI_ATTACHMENT_TILE,
+  AI_CONTROL_DISABLED,
+  AI_ICON_CONTROL,
+  AI_TEXT_ACTION,
+  AI_TOOLBAR_TRIGGER,
+  AI_TOOLBAR_TRIGGER_MUTED,
+} from "./ai-control-classes";
 import { InferenceQuotaStatus, useInferenceQuota } from "./InferenceQuotaStatus";
 import { getComposerAttachmentId, getComposerAttachmentPreviewUrl } from "./useAIComposerDraft";
 
@@ -138,7 +147,7 @@ export function AIPlanBlock({
               <div key={step.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
                 <span
                   className={cn(
-                    "flex h-5 w-5 shrink-0 items-center justify-center border border-border text-[11px]",
+                    "flex h-5 w-5 shrink-0 items-center justify-center border border-border text-xs",
                     (step.status === "completed" || step.status === "skipped") &&
                       "border-primary bg-primary text-primary-foreground"
                   )}
@@ -322,9 +331,8 @@ export function AIPlanProgress({
       </div>
       {plan.status === "paused" ? (
         <Button
-          size="icon"
+          size="icon-xs"
           variant="ghost"
-          className="h-7 w-7 shrink-0"
           onClick={onResume}
           aria-label="Resume plan"
           title="Resume plan"
@@ -333,9 +341,8 @@ export function AIPlanProgress({
         </Button>
       ) : canPause ? (
         <Button
-          size="icon"
+          size="icon-xs"
           variant="ghost"
-          className="h-7 w-7 shrink-0"
           onClick={onPause}
           aria-label="Pause plan"
           title="Pause plan"
@@ -344,9 +351,8 @@ export function AIPlanProgress({
         </Button>
       ) : null}
       <Button
-        size="icon"
+        size="icon-xs"
         variant="ghost"
-        className="h-6 w-6 shrink-0"
         onClick={() => void cancel()}
         aria-label="Cancel plan"
         title="Cancel plan"
@@ -390,9 +396,10 @@ export function AIQueuedMessages({
           <span className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {item.content || `${item.attachments.length} attached image(s)`}
           </span>
+          {/* Queue row actions share the composer's borderless controls. */}
           <button
             type="button"
-            className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+            className={cn(AI_ICON_CONTROL, "h-7 w-7")}
             onClick={() => onEdit(item)}
             aria-label="Edit queued message"
           >
@@ -400,7 +407,7 @@ export function AIQueuedMessages({
           </button>
           <button
             type="button"
-            className="flex h-7 w-7 shrink-0 items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+            className={cn(AI_ICON_CONTROL, "h-7 w-7")}
             onClick={() => onRemove(item.id)}
             aria-label="Remove queued message"
           >
@@ -408,7 +415,7 @@ export function AIQueuedMessages({
           </button>
           <button
             type="button"
-            className="flex shrink-0 items-center gap-1 text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:underline"
+            className={cn(AI_TEXT_ACTION, "text-sm text-primary")}
             onClick={() => onSendNow(item.id)}
           >
             Send now
@@ -429,11 +436,7 @@ function ContextRing({ usage }: { usage: AIContextUsage | null }) {
   return (
     <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
-        <button
-          type="button"
-          className="flex h-8 w-8 items-center justify-center text-muted-foreground focus-visible:outline-none"
-          aria-label="Context usage"
-        >
+        <button type="button" className={cn(AI_ICON_CONTROL, "h-8 w-8")} aria-label="Context usage">
           <svg className="h-4 w-4 -rotate-90" viewBox="0 0 20 20" aria-hidden="true">
             <circle
               cx="10"
@@ -679,6 +682,7 @@ export function AIComposer({
               slashPaletteClassName
             )}
           >
+            {/* Palette rows: the textarea keeps focus and drives them with the arrow keys. */}
             {slashResults.map((command, index) => (
               <button
                 key={command.name}
@@ -717,7 +721,7 @@ export function AIComposer({
                 <button
                   key={getComposerAttachmentId(attachment)}
                   type="button"
-                  className="group relative h-16 w-16 overflow-hidden border border-border bg-muted transition-colors hover:border-foreground"
+                  className={cn(AI_ATTACHMENT_TILE, "group relative")}
                   onClick={() => onPreviewAttachment?.(attachment)}
                   aria-label={`Preview ${attachment.filename}`}
                 >
@@ -769,12 +773,13 @@ export function AIComposer({
                   <button
                     type="button"
                     className={cn(
-                      "flex h-8 max-w-[15rem] items-center gap-2 px-1.5 text-sm transition-colors focus-visible:outline-none",
+                      AI_TOOLBAR_TRIGGER,
+                      "max-w-[15rem]",
                       planModeActive
                         ? "text-link hover:text-link focus-visible:text-link"
                         : approvalMode === "bypass-everything"
                           ? "text-warning-foreground hover:text-warning focus-visible:text-warning"
-                          : "text-muted-foreground hover:text-foreground focus-visible:text-foreground"
+                          : AI_TOOLBAR_TRIGGER_MUTED
                     )}
                     title={planModeActive ? "Plan" : approvalModeLabel}
                     aria-label={planModeActive ? "Plan" : approvalModeLabel}
@@ -839,14 +844,14 @@ export function AIComposer({
                   />
                   <button
                     type="button"
-                    className="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30"
+                    className={cn(AI_ICON_CONTROL, AI_CONTROL_DISABLED, "h-8 w-8")}
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadingAttachments || disabled}
                     aria-label="Attach images"
                     title="Attach images"
                   >
                     {uploadingAttachments ? (
-                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-muted-foreground" />
+                      <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Plus className="h-4 w-4" />
                     )}
@@ -857,7 +862,9 @@ export function AIComposer({
               <button
                 type="button"
                 className={cn(
-                  "flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:text-foreground disabled:opacity-30",
+                  AI_ICON_CONTROL,
+                  AI_CONTROL_DISABLED,
+                  "h-8 w-8",
                   canResume && "text-foreground"
                 )}
                 onClick={
@@ -899,7 +906,7 @@ export function AIComposer({
 
 export function AIComposerDisclaimer({ className }: { className?: string }) {
   return (
-    <p className={cn("pt-2 text-center text-[11px] text-muted-foreground", className)}>
+    <p className={cn("pt-2 text-center text-xs text-muted-foreground", className)}>
       AI can make mistakes. Check important information.
     </p>
   );

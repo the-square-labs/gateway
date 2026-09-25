@@ -77,8 +77,8 @@ export function InterfaceChoiceDialog(props: InterfaceChoiceDialogProps) {
               <span className="flex w-full items-center gap-3">
                 <Icon className="!h-5 !w-5 shrink-0 text-muted-foreground" />
                 <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium text-foreground">{label}</span>
-                  <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
+                  <span className="block text-base font-medium text-foreground">{label}</span>
+                  <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
                     {description}
                   </span>
                 </span>

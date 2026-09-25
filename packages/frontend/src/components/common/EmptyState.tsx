@@ -46,7 +46,7 @@ export function EmptyState({
         {actionLabel && onAction && !actionHref && (
           <>
             {" "}
-            <button onClick={onAction} className="text-foreground hover:underline">
+            <button type="button" onClick={onAction} className="text-foreground hover:underline">
               {actionLabel}
             </button>
           </>

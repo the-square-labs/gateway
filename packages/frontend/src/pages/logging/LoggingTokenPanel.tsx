@@ -1,9 +1,11 @@
-import { Copy, Key, Trash2 } from "lucide-react";
+import { Key, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,8 +35,12 @@ export function LoggingTokenPanel({
   onCreateDialogOpenChange: (open: boolean) => void;
 }) {
   const [tokens, setTokens] = useState<LoggingIngestToken[]>([]);
+  // The first list holds the tab; refreshes after changes update it in place.
+  const [tokensLoaded, setTokensLoaded] = useState(false);
   const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [createdToken, setCreatedToken] = useState<string | null>(null);
+  useContentLoading(!tokensLoaded);
 
   const load = useCallback(() => {
     api
@@ -42,7 +48,8 @@ export function LoggingTokenPanel({
       .then(setTokens)
       .catch((error) =>
         toast.error(error instanceof Error ? error.message : "Failed to load tokens")
-      );
+      )
+      .finally(() => setTokensLoaded(true));
   }, [environment.id]);
 
   useEffect(() => {
@@ -58,6 +65,7 @@ export function LoggingTokenPanel({
   );
 
   const create = async () => {
+    setCreating(true);
     try {
       const token = await api.createLoggingToken(environment.id, { name });
       setCreatedToken(token.token ?? null);
@@ -67,6 +75,8 @@ export function LoggingTokenPanel({
       if (!handleLicenseApiError(error, "Logging ingest tokens")) {
         toast.error(error instanceof Error ? error.message : "Failed to create token");
       }
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -119,7 +129,12 @@ export function LoggingTokenPanel({
                   </div>
                 </div>
                 {canDelete && (
-                  <Button variant="outline" size="icon" onClick={() => void revoke(token)}>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label={`Revoke ${token.name}`}
+                    onClick={() => void revoke(token)}
+                  >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 )}
@@ -139,19 +154,12 @@ export function LoggingTokenPanel({
           {createdToken ? (
             <div className="min-w-0 space-y-3">
               <p className="text-sm text-muted-foreground">This token is shown once.</p>
-              <div className="flex max-w-full min-w-0 items-stretch overflow-hidden border border-border">
-                <code className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-3 py-2 font-mono text-xs">
-                  {createdToken}
-                </code>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  className="h-auto shrink-0 rounded-none border-y-0 border-r-0"
-                  onClick={() => void navigator.clipboard.writeText(createdToken)}
-                >
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </div>
+              <CopyValueField
+                label="Ingest token"
+                showLabel={false}
+                value={createdToken}
+                valueClassName="font-mono text-xs"
+              />
             </div>
           ) : (
             <label className="block space-y-1.5">
@@ -173,7 +181,7 @@ export function LoggingTokenPanel({
               Close
             </Button>
             {!createdToken && (
-              <Button disabled={!name.trim()} onClick={() => void create()}>
+              <Button pending={creating} disabled={!name.trim()} onClick={() => void create()}>
                 Create
               </Button>
             )}

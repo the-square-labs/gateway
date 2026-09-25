@@ -1,8 +1,8 @@
 import { RefreshCw, Save } from "lucide-react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 export interface RawConfigTabProps {
@@ -38,6 +38,9 @@ export function RawConfigTab({
   dirty,
   canManage,
 }: RawConfigTabProps) {
+  // The tab reveals with the first rendered document; later refreshes keep it.
+  useContentLoading(!isRawMode && !hasLoadedRendered);
+
   if (isRawMode) {
     return (
       <PanelShell
@@ -50,8 +53,8 @@ export function RawConfigTab({
               <Button variant="outline" onClick={onValidate}>
                 Validate
               </Button>
-              <Button onClick={onSaveRaw} disabled={isSavingRaw}>
-                <Save className="h-4 w-4" />
+              <Button onClick={onSaveRaw} pending={isSavingRaw}>
+                {isSavingRaw ? null : <Save className="h-4 w-4" />}
                 Save
               </Button>
             </div>
@@ -91,28 +94,15 @@ export function RawConfigTab({
       bodyClassName="flex min-h-0 flex-1"
       wrapHeader
     >
-      {isLoadingRaw && !hasLoadedRendered ? (
-        <div
-          className="flex min-h-0 flex-1 flex-col gap-3 p-4"
-          aria-label="Loading rendered config"
-        >
-          <Skeleton className="h-4 w-1/3" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-4 w-4/5" />
-          <Skeleton className="h-4 w-1/2" />
-        </div>
-      ) : (
-        <CodeEditor
-          value={renderedConfig}
-          preserveScrollOnChange
-          onChange={() => {}}
-          readOnly
-          minHeight="0px"
-          bordered={false}
-          showGutterBorder={false}
-        />
-      )}
+      <CodeEditor
+        value={renderedConfig}
+        preserveScrollOnChange
+        onChange={() => {}}
+        readOnly
+        minHeight="0px"
+        bordered={false}
+        showGutterBorder={false}
+      />
     </PanelShell>
   );
 }

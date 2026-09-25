@@ -1,4 +1,4 @@
-import { Loader2, Power, Save } from "lucide-react";
+import { Power, Save } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -89,9 +89,10 @@ export function GracefulShutdownSettingsPanel({
         <Button
           aria-label="Save graceful shutdown settings"
           onClick={save}
-          disabled={!canEdit || isSaving || !hasChanges || !isValid}
+          pending={isSaving}
+          disabled={!canEdit || !hasChanges || !isValid}
         >
-          {isSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          {isSaving ? null : <Save className="h-4 w-4" />}
           Save
         </Button>
       }

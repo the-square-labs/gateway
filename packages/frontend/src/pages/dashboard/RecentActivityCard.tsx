@@ -4,7 +4,6 @@ import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate } from "@/lib/utils";
 import { getAuditEntryUserLabel } from "@/pages/audit-log/audit-format";
 import type { AuditLogEntry } from "@/types";
@@ -12,14 +11,9 @@ import type { AuditLogEntry } from "@/types";
 interface RecentActivityCardProps {
   activity: AuditLogEntry[];
   hasScope: (scope: string) => boolean;
-  loading?: boolean;
 }
 
-export function RecentActivityCard({
-  activity,
-  hasScope,
-  loading = false,
-}: RecentActivityCardProps) {
+export function RecentActivityCard({ activity, hasScope }: RecentActivityCardProps) {
   if (!hasScope("admin:audit")) return null;
 
   const getInitials = (entry: AuditLogEntry) =>
@@ -41,7 +35,7 @@ export function RecentActivityCard({
           <span className="flex min-w-0 items-center gap-2">
             <Avatar className="h-7 w-7">
               {entry.userId && <AvatarImage src={entry.userAvatarUrl ?? undefined} />}
-              <AvatarFallback className="text-[10px]">
+              <AvatarFallback className="text-xs">
                 {entry.userId ? getInitials(entry) : "SY"}
               </AvatarFallback>
             </Avatar>
@@ -82,13 +76,7 @@ export function RecentActivityCard({
         </Link>
       }
     >
-      {loading ? (
-        <div className="space-y-3 px-4 py-4" aria-busy="true">
-          {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-9 w-full" />
-          ))}
-        </div>
-      ) : activity.length > 0 ? (
+      {activity.length > 0 ? (
         <SimpleTable
           columns={activityColumns}
           rows={activity}

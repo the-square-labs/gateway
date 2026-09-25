@@ -128,10 +128,10 @@ export function ManagedCertificateStatus({
           size="sm"
           className="shrink-0"
           onClick={() => void renew()}
-          disabled={renewing}
+          pending={renewing}
         >
-          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", renewing && "animate-spin")} />
-          {renewing ? "Renewing..." : renewLabel}
+          {renewing ? null : <RefreshCw />}
+          {renewLabel}
         </Button>
       )}
     </div>

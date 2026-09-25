@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { beforeEach, vi } from "vitest";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
+import { waitForReveal } from "@/test/reveal";
 import type { PageProject } from "@/types";
 import { PageProjectDetail } from "./PageProjectDetail";
 
@@ -165,6 +166,7 @@ describe("PageProjectDetail", () => {
     render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
 
     expect(await screen.findByText("Latest immutable preview")).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByText("preview-slug.pages.example.test")).toBeInTheDocument();
     expect(screen.queryByText("Pages Project")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy preview" })).toBeInTheDocument();
@@ -189,6 +191,7 @@ describe("PageProjectDetail", () => {
     render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
 
     expect(await screen.findByText("Domain")).toBeInTheDocument();
+    await waitForReveal();
     expect(screen.getByText("docs.example.test")).toBeInTheDocument();
     expect(screen.queryByText("preview-slug.pages.example.test")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open domain" })).toHaveAttribute(
@@ -244,6 +247,7 @@ describe("PageProjectDetail", () => {
     );
     render(<PageProjectDetail projectId={project.id} resolvedSlug={project.slug} />);
     await screen.findByText("Latest immutable preview");
+    await waitForReveal();
     await user.click(screen.getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("button", { name: "Enable public previews" }));
     expect(update).not.toHaveBeenCalled();

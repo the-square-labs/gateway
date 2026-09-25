@@ -11,6 +11,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import {
   HEADER_ACTION_PRIORITY,
   type ResponsiveHeaderAction,
@@ -215,45 +216,47 @@ export function DatabaseHeader({
   ];
 
   return (
-    <div className="flex shrink-0 items-center justify-between gap-3">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <PageBackButton onClick={onBack} />
-        <div className="min-w-0">
-          <div className="flex min-w-0 items-center gap-2">
-            <h1 className="truncate text-2xl font-bold">{database.name}</h1>
-            <Badge
-              variant={HEALTH_BADGE[healthStatus] ?? "secondary"}
-              size="inline"
-              className="shrink-0"
-            >
-              {formatHealthStatusLabel(healthStatus)}
-            </Badge>
-            <Badge variant="secondary" size="inline" className="shrink-0">
-              {database.type}
-            </Badge>
-          </div>
-          <p className="break-all text-sm text-muted-foreground">
-            {database.managed
-              ? `Managed ${database.type} ${database.managed.version} · ${database.managed.publishedPort === null ? "private" : `TCP ${database.managed.publishedPort}${database.type === "clickhouse" && database.managed.publishedNativePort != null ? ` · native ${database.managed.publishedNativePort}` : ""}`}`
-              : `${database.host}:${database.port}${database.databaseName ? ` · ${database.databaseName}` : ""}`}
-          </p>
-        </div>
-      </div>
-
-      <ResponsiveHeaderActions actions={headerActions}>
-        {headerActions.map((headerAction) => (
-          <Button
-            key={headerAction.id}
-            variant={headerAction.destructive ? "destructive" : "outline"}
-            size={headerAction.iconOnly ? "icon" : "default"}
-            aria-label={headerAction.iconOnly ? headerAction.label : undefined}
-            onClick={headerAction.onClick}
+    <PageHeader
+      className="shrink-0"
+      leading={<PageBackButton onClick={onBack} />}
+      title={database.name}
+      badges={
+        <>
+          <Badge
+            variant={HEALTH_BADGE[healthStatus] ?? "secondary"}
+            size="inline"
+            className="shrink-0"
           >
-            {headerAction.icon}
-            {!headerAction.iconOnly ? headerAction.buttonLabel : null}
-          </Button>
-        ))}
-      </ResponsiveHeaderActions>
-    </div>
+            {formatHealthStatusLabel(healthStatus)}
+          </Badge>
+          <Badge variant="secondary" size="inline" className="shrink-0">
+            {database.type}
+          </Badge>
+        </>
+      }
+      description={
+        <span className="break-all">
+          {database.managed
+            ? `Managed ${database.type} ${database.managed.version} · ${database.managed.publishedPort === null ? "private" : `TCP ${database.managed.publishedPort}${database.type === "clickhouse" && database.managed.publishedNativePort != null ? ` · native ${database.managed.publishedNativePort}` : ""}`}`
+            : `${database.host}:${database.port}${database.databaseName ? ` · ${database.databaseName}` : ""}`}
+        </span>
+      }
+      actions={
+        <ResponsiveHeaderActions actions={headerActions}>
+          {headerActions.map((headerAction) => (
+            <Button
+              key={headerAction.id}
+              variant={headerAction.destructive ? "destructive" : "outline"}
+              size={headerAction.iconOnly ? "icon" : "default"}
+              aria-label={headerAction.iconOnly ? headerAction.label : undefined}
+              onClick={headerAction.onClick}
+            >
+              {headerAction.icon}
+              {!headerAction.iconOnly ? headerAction.buttonLabel : null}
+            </Button>
+          ))}
+        </ResponsiveHeaderActions>
+      }
+    />
   );
 }

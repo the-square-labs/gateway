@@ -130,7 +130,7 @@ export function PostgresColumnSchemaDialog({
                       type="button"
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 rounded-none border-l border-border"
+                      className="rounded-none border-l border-border"
                       onClick={() =>
                         setDeletedColumnNames((prev) =>
                           prev.includes(column.name)
@@ -139,9 +139,10 @@ export function PostgresColumnSchemaDialog({
                         )
                       }
                       title={markedDeleted ? "Undo column removal" : "Remove column"}
+                      aria-label={markedDeleted ? "Undo column removal" : "Remove column"}
                       disabled={changingColumn !== null}
                     >
-                      <Minus className="h-3.5 w-3.5" />
+                      <Minus />
                     </Button>
                   )}
                 </div>
@@ -152,7 +153,7 @@ export function PostgresColumnSchemaDialog({
               return (
                 <div
                   key={draft.id}
-                  className="grid grid-cols-[minmax(0,1fr)_220px_36px] border-b border-border bg-emerald-500/5 last:border-b-0"
+                  className="grid grid-cols-[minmax(0,1fr)_220px_36px] border-b border-border bg-success/5 last:border-b-0"
                 >
                   <Input
                     value={draft.name}
@@ -166,7 +167,7 @@ export function PostgresColumnSchemaDialog({
                       )
                     }
                     className={`h-9 rounded-none border-0 text-xs shadow-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring ${
-                      invalid ? "bg-red-500/15 text-red-400" : ""
+                      invalid ? "bg-destructive/15 text-destructive" : ""
                     }`}
                     placeholder="new_column"
                     disabled={changingColumn !== null}
@@ -199,16 +200,17 @@ export function PostgresColumnSchemaDialog({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="h-9 w-9 rounded-none border-l border-border"
+                    className="rounded-none border-l border-border"
                     onClick={() =>
                       setNewColumnDrafts((prev) =>
                         prev.filter((candidate) => candidate.id !== draft.id)
                       )
                     }
                     title="Remove pending column"
+                    aria-label="Remove pending column"
                     disabled={changingColumn !== null}
                   >
-                    <Minus className="h-3.5 w-3.5" />
+                    <Minus />
                   </Button>
                 </div>
               );
@@ -221,12 +223,13 @@ export function PostgresColumnSchemaDialog({
                   type="button"
                   variant="ghost"
                   size="icon"
-                  className="h-9 w-9 rounded-none border-l border-border"
+                  className="rounded-none border-l border-border"
                   onClick={() => setNewColumnDrafts((prev) => [...prev, createNewColumnDraft()])}
                   disabled={changingColumn !== null}
                   title="Add column"
+                  aria-label="Add column"
                 >
-                  <Plus className="h-3.5 w-3.5" />
+                  <Plus />
                 </Button>
               </div>
             )}
@@ -261,10 +264,13 @@ export function PostgresColumnSchemaDialog({
               >
                 Reset
               </Button>
-              <Button type="button" onClick={onSave} disabled={!canSaveColumnSchemaChanges}>
-                {changingColumn
-                  ? "Saving..."
-                  : `Save${schemaChangeCount > 0 ? ` (${schemaChangeCount})` : ""}`}
+              <Button
+                type="button"
+                onClick={onSave}
+                pending={changingColumn !== null}
+                disabled={!canSaveColumnSchemaChanges}
+              >
+                {`Save${schemaChangeCount > 0 ? ` (${schemaChangeCount})` : ""}`}
               </Button>
             </div>
           )}

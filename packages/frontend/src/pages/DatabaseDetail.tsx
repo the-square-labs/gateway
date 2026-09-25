@@ -91,6 +91,10 @@ function DatabaseDetailContent({
   const [monitoringLoading, setMonitoringLoading] = useState(
     (initialMonitoringCache?.history.length ?? 0) === 0
   );
+  // The database whose stream has delivered its saved history (possibly empty). A reload of
+  // the same database must not wait for monitoring again: an empty history is final until
+  // the next snapshot.
+  const monitoringHistoryReceivedFor = useRef<string | null>(null);
   const [pinOpen, setPinOpen] = useState(false);
   const [credentialsOpen, setCredentialsOpen] = useState(false);
   const [privateManagedInfoOpen, setPrivateManagedInfoOpen] = useState(false);
@@ -125,6 +129,8 @@ function DatabaseDetailContent({
   const canRestoreBackups = hasDatabaseScope(hasScope, "databases:backups:restore", id);
   const [backupDestinations, setBackupDestinations] = useState<BackupSelectionOption[]>([]);
   const [backupExecutors, setBackupExecutors] = useState<BackupSelectionOption[]>([]);
+  // The Backups tab names each policy's destination, so its first reveal waits for the options.
+  const [backupOptionsLoaded, setBackupOptionsLoaded] = useState(false);
   const canViewMonitoring = hasDatabaseScope(hasScope, "databases:view", id);
 
   const [activeTab, setActiveTab] = useUrlTab(
@@ -165,7 +171,10 @@ function DatabaseDetailContent({
       })
       .catch((error) =>
         toast.error(error instanceof Error ? error.message : "Failed to load backup destinations")
-      );
+      )
+      .finally(() => {
+        if (current) setBackupOptionsLoaded(true);
+      });
     return () => {
       current = false;
     };
@@ -322,7 +331,8 @@ function DatabaseDetailContent({
       canViewMonitoring &&
         database.healthStatus !== "offline" &&
         database.managed?.status !== "paused" &&
-        (cached?.history.length ?? 0) === 0
+        (cached?.history.length ?? 0) === 0 &&
+        monitoringHistoryReceivedFor.current !== database.id
     );
   }, [canViewMonitoring, database]);
 
@@ -350,6 +360,7 @@ function DatabaseDetailContent({
     es.addEventListener("history", (event: MessageEvent) => {
       const message = JSON.parse(event.data);
       const history = message.history ?? [];
+      monitoringHistoryReceivedFor.current = id;
       setMonitoringHistory(history);
       updateDatabaseMonitoringCache(id, { history });
       setMonitoringLoading(false);
@@ -364,7 +375,10 @@ function DatabaseDetailContent({
       setLiveHealthStatus(snapshot.status);
       setMonitoringLoading(false);
     });
-    es.onerror = () => setMonitoringLoading(false);
+    es.onerror = () => {
+      monitoringHistoryReceivedFor.current = id;
+      setMonitoringLoading(false);
+    };
     return () => es.close();
   }, [canViewMonitoring, id, isManagedPaused]);
 
@@ -578,9 +592,11 @@ function DatabaseDetailContent({
   if (loading) return <DetailPageSkeleton label="Loading database" tabs={5} />;
   if (!database)
     return (
-      <div className="flex h-full items-center justify-center text-muted-foreground">
-        Database not found
-      </div>
+      <PageTransition>
+        <div className="flex h-full items-center justify-center text-muted-foreground">
+          Database not found
+        </div>
+      </PageTransition>
     );
 
   const isFullHeightTab =
@@ -722,6 +738,7 @@ function DatabaseDetailContent({
                 database={database}
                 destinations={backupDestinations}
                 executors={backupExecutors}
+                optionsLoading={!backupOptionsLoaded}
                 canManage={canManageBackups}
                 canRun={canRunBackups}
                 canRestore={canRestoreBackups}

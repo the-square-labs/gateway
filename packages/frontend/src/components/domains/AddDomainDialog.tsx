@@ -3,6 +3,7 @@ import { LoaderCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailRow } from "@/components/common/DetailRow";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -299,6 +300,10 @@ export function AddDomainDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
+          {/* Nodes and folders are the options of this form: open with them in place. */}
+          <ContentLoading
+            loading={foldersLoading || (nodeOptions === null && nodesError === null)}
+          />
           <div className="border border-border bg-card">
             <SettingsControlRow
               title="Domain"
@@ -337,13 +342,9 @@ export function AddDomainDialog({
                 disabled={foldersLoading}
               >
                 <SelectTrigger aria-label="Folder" aria-busy={foldersLoading}>
-                  {foldersLoading ? (
-                    <span>Loading folders...</span>
-                  ) : (
-                    <SelectValue
-                      placeholder={folderChoices.allowRoot ? "No folder" : "Select a folder"}
-                    />
-                  )}
+                  <SelectValue
+                    placeholder={folderChoices.allowRoot ? "No folder" : "Select a folder"}
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {folderChoices.allowRoot && <SelectItem value="__none__">No folder</SelectItem>}
@@ -361,9 +362,7 @@ export function AddDomainDialog({
               className="sm:grid-cols-[minmax(8rem,1fr)_minmax(0,12rem)]"
               controlsClassName="sm:w-full sm:min-w-0 sm:max-w-none"
             >
-              {nodesLoading ? (
-                <span className="text-sm text-muted-foreground">Loading nodes...</span>
-              ) : nodeOptions && nodeOptions.eligibleNodes.length > 0 ? (
+              {nodeOptions && nodeOptions.eligibleNodes.length > 0 ? (
                 <Select value={nginxNodeId} onValueChange={setNginxNodeId}>
                   <SelectTrigger aria-label="Ingress node">
                     <SelectValue placeholder="Select node">
@@ -519,8 +518,8 @@ export function AddDomainDialog({
           </Button>
           <Button
             onClick={handleSubmit}
+            pending={isSaving}
             disabled={
-              isSaving ||
               nodesLoading ||
               !nginxNodeId ||
               !canCreateInSelectedFolder ||
@@ -531,11 +530,7 @@ export function AddDomainDialog({
                   preview.status !== "valid"))
             }
           >
-            {isSaving
-              ? "Adding..."
-              : dnsProvider === "external"
-                ? "Check DNS and Add"
-                : "Add Domain"}
+            {dnsProvider === "external" ? "Check DNS and Add" : "Add Domain"}
           </Button>
         </DialogFooter>
       </DialogContent>

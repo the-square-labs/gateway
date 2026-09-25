@@ -1,9 +1,10 @@
-import { Loader2, Save, ShieldCheck } from "lucide-react";
+import { Save, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -78,6 +79,7 @@ export function NodeFirewallTab({
   const draftBaseFingerprintRef = useRef<string | null>(null);
   const notificationRef = useRef("");
   const rulesLockedRef = useRef(true);
+  useContentLoading(!view && loading);
 
   const applySnapshot = useCallback((next: HostingFirewallView) => {
     const previous = viewRef.current;
@@ -374,18 +376,16 @@ export function NodeFirewallTab({
             <Button
               type="button"
               aria-label="Save firewall"
+              pending={saving}
               disabled={saveDisabled}
               onClick={() => void saveFirewall()}
             >
-              {saving ? <Loader2 className="animate-spin" /> : <Save />}
+              {saving ? null : <Save />}
               Save
             </Button>
           </>
         }
       >
-        {!view && loading ? (
-          <EmptyState message="Loading current firewall snapshot…" embedded />
-        ) : null}
         {!view && !loading && !loadError ? (
           <EmptyState message="No firewall snapshot is available for this VM yet." embedded />
         ) : null}

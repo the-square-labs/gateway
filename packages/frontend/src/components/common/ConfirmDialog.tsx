@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { create } from "zustand";
 import { Button } from "@/components/ui/button";
 import {
@@ -181,12 +180,11 @@ export function ConfirmDialog() {
           </Button>
           <Button
             variant={variant === "destructive" ? "destructive" : "default"}
-            disabled={pending}
+            pending={pending}
             onClick={() => {
               void onConfirm?.();
             }}
           >
-            {pending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
             {confirmLabel}
           </Button>
         </DialogFooter>

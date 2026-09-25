@@ -24,6 +24,7 @@ import {
   resourceAwareMarkdown,
   resourceMarkdownLinkComponent,
 } from "@/lib/ai-resource-links";
+import { cn } from "@/lib/utils";
 import type {
   AIMessageAttachment,
   AIMessage as AIMessageType,
@@ -31,6 +32,14 @@ import type {
   AIToolCall,
 } from "@/types/ai";
 import { AIToolCallBlock } from "./AIToolCallBlock";
+import {
+  AI_ATTACHMENT_TILE,
+  AI_CONTROL_DISABLED,
+  AI_DISCLOSURE_HEADER,
+  AI_DISCLOSURE_HEADER_INTERACTIVE,
+  AI_ICON_CONTROL,
+  AI_TEXT_ACTION,
+} from "./ai-control-classes";
 
 interface AIMessageProps {
   message: AIMessageType;
@@ -292,7 +301,7 @@ export function AIMessage({
                 <button
                   key={attachment.artifactId}
                   type="button"
-                  className="h-16 w-16 overflow-hidden border border-border bg-muted transition-colors hover:border-foreground"
+                  className={AI_ATTACHMENT_TILE}
                   onClick={() => openArtifactPreview(attachment)}
                   aria-label={`Preview ${attachment.filename}`}
                 >
@@ -338,7 +347,7 @@ export function AIMessage({
                 onEditUserMessage(message.id, displayContent, message.attachments ?? [])
               }
               disabled={editUserMessageDisabled}
-              className="flex h-5 w-5 items-center justify-center transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground disabled:pointer-events-none disabled:opacity-35"
+              className={cn(AI_ICON_CONTROL, AI_CONTROL_DISABLED, "h-5 w-5")}
               aria-label="Edit message"
             >
               <SquarePen className="h-3.5 w-3.5" />
@@ -360,7 +369,11 @@ export function AIMessage({
             onRetry ? (
               <button
                 type="button"
-                className="shrink-0 font-medium text-primary transition-colors hover:text-primary/80 hover:underline disabled:pointer-events-none disabled:opacity-40"
+                className={cn(
+                  AI_TEXT_ACTION,
+                  AI_CONTROL_DISABLED,
+                  "text-primary transition-colors hover:text-primary/80"
+                )}
                 onClick={onRetry}
                 disabled={retryDisabled}
               >
@@ -607,7 +620,7 @@ function ArtifactAttachmentCard({ artifact }: { artifact: ArtifactAttachment }) 
             <span className="block truncate text-xs font-medium leading-snug text-foreground">
               {artifact.filename}
             </span>
-            <span className="block truncate text-[11px] leading-snug text-muted-foreground">
+            <span className="block truncate text-xs leading-snug text-muted-foreground">
               {[formatBytes(artifact.sizeBytes), artifact.mediaType].filter(Boolean).join(" · ")}
             </span>
           </span>
@@ -753,7 +766,7 @@ function ToolCallsGroup({ toolCalls }: { toolCalls: AIToolCall[] }) {
             return next;
           });
         }}
-        className="group flex cursor-pointer items-center gap-2 py-0.5 text-left text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:text-foreground"
+        className={cn(AI_DISCLOSURE_HEADER, AI_DISCLOSURE_HEADER_INTERACTIVE)}
       >
         <TerminalSquare className="h-3.5 w-3.5 shrink-0 opacity-70" />
         <span className={`truncate ${showWaiting ? "thinking-shimmer" : ""}`}>{groupLabel}</span>

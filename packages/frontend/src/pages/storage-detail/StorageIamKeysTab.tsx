@@ -4,7 +4,6 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { EmptyState } from "@/components/common/EmptyState";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import {
   ResourceListCell,
@@ -14,6 +13,7 @@ import {
   ResourceListRow,
   ResourceListTable,
 } from "@/components/common/ResourceListLayout";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -111,6 +111,9 @@ export function StorageIamKeysTab({
 }) {
   const [keys, setKeys] = useState<ManagedStorageAccessKey[]>([]);
   const [loading, setLoading] = useState(true);
+  // Refreshes keep the list on screen; only the first load hides the tab.
+  const [loaded, setLoaded] = useState(false);
+  useContentLoading(!loaded);
   const [createOpen, setCreateOpen] = useState(false);
   const [newKeyName, setNewKeyName] = useState("");
   const [newKeyAccess, setNewKeyAccess] = useState<ManagedStorageAccessKeyAccess>("read-write");
@@ -134,6 +137,7 @@ export function StorageIamKeysTab({
       toast.error(error instanceof Error ? error.message : "Failed to load access keys");
     } finally {
       setLoading(false);
+      setLoaded(true);
     }
   }, [managedId]);
 
@@ -237,11 +241,7 @@ export function StorageIamKeysTab({
         }
         bodyClassName="min-w-0"
       >
-        {loading ? (
-          <div className="flex items-center justify-center py-16">
-            <LoadingSpinner className="" />
-          </div>
-        ) : keys.length > 0 ? (
+        {!loaded ? null : keys.length > 0 ? (
           <ResourceListFrame minWidth={900} className="border-0">
             <ResourceListHeaderTable columns={KEY_COLUMNS} />
             <ResourceListTable columns={KEY_COLUMNS}>
@@ -399,8 +399,12 @@ export function StorageIamKeysTab({
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating}>
               Cancel
             </Button>
-            <Button onClick={() => void handleCreate()} disabled={creating || !!bucketsError}>
-              {creating ? "Creating..." : "Create Key"}
+            <Button
+              onClick={() => void handleCreate()}
+              pending={creating}
+              disabled={!!bucketsError}
+            >
+              Create Key
             </Button>
           </DialogFooter>
         </DialogContent>

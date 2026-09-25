@@ -1,10 +1,12 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
-import type { InferenceUsageOverview } from "@/types/inference";
+import { waitForReveal } from "@/test/reveal";
+import type { InferenceSystemUsage, InferenceUsageOverview } from "@/types/inference";
 import {
   CompactInferenceUsage,
   DashboardInferenceUsage,
@@ -270,7 +272,7 @@ describe("InferenceUsage", () => {
 
     const rows = [fiveHours, screen.getByLabelText("Monthly remaining 97%")];
     for (const row of rows) {
-      expect(row.firstElementChild).toHaveClass("text-[13px]", "text-muted-foreground");
+      expect(row.firstElementChild).toHaveClass("text-xs", "text-muted-foreground");
     }
 
     const trigger = screen.getByRole("button", { name: "AI usage remaining" });
@@ -392,6 +394,65 @@ describe("InferenceUsage", () => {
     expect(screen.getByText("Inference tokens")).toHaveClass("text-sm");
     expect(screen.getByText("14,564,765,420")).toHaveClass("text-2xl");
     expect(screen.queryByText("Upstream health")).not.toBeInTheDocument();
+  });
+
+  it("keeps the page hidden until personal usage and its overview have loaded", async () => {
+    vi.mocked(api.getInferenceSelfUsage).mockResolvedValue({
+      enabled: true,
+      api: { configured: true, percentage: 25, recoveryAt: "2026-08-30T00:00:00.000Z" },
+      subscription: {
+        "5h": { configured: false, percentage: 0, recoveryAt: "2026-08-30T00:00:00.000Z" },
+        "7d": { configured: false, percentage: 0, recoveryAt: "2026-09-05T00:00:00.000Z" },
+        "30d": { configured: false, percentage: 0, recoveryAt: "2026-09-28T00:00:00.000Z" },
+      },
+    });
+    let resolveOverview!: (overview: InferenceUsageOverview) => void;
+    vi.mocked(api.getInferenceSelfUsageOverview).mockReturnValue(
+      new Promise((resolve) => {
+        resolveOverview = resolve;
+      })
+    );
+
+    const { container } = render(
+      <PageTransition>
+        <InferenceUsage />
+      </PageTransition>
+    );
+    const gate = container.querySelector("[data-page-transition]");
+
+    await waitFor(() => expect(api.getInferenceSelfUsage).toHaveBeenCalledTimes(1));
+    await screen.findByText("API usage");
+    expect(gate).not.toHaveAttribute("data-reveal-phase", "revealed");
+
+    await act(async () => resolveOverview(PERSONAL_OVERVIEW));
+
+    await waitForReveal();
+    expect(screen.getByText("Inference API usage")).toBeVisible();
+    expect(screen.getByText("API usage")).toBeVisible();
+  });
+
+  it("keeps a failed system overview on screen while Retry runs", async () => {
+    vi.mocked(api.getInferenceSystemUsage).mockRejectedValueOnce(new Error("Usage unavailable"));
+    let resolveRetry!: (usage: InferenceSystemUsage) => void;
+    vi.mocked(api.getInferenceSystemUsage).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveRetry = resolve;
+      })
+    );
+    const user = userEvent.setup();
+
+    render(<InferenceOverview />);
+
+    expect(await screen.findByText("Usage unavailable")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(screen.getByText("Usage unavailable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+
+    await act(async () => resolveRetry({ ...PERSONAL_OVERVIEW }));
+
+    expect(await screen.findByText("Inference tokens")).toBeInTheDocument();
+    expect(screen.queryByText("Usage unavailable")).not.toBeInTheDocument();
   });
 
   it("renders cached system totals while refreshing them in the background", () => {

@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { FinalizeSetupState, FinalizeSetupStep, FinalizeSetupStepStatus } from "@/types";
+import { SetupChoiceButton } from "./finalize-setup/SetupChoiceButton";
 
 export type FinalizeSetupRootStep =
   | Exclude<FinalizeSetupStep, "cloudflare" | "gitlab">
@@ -98,7 +99,7 @@ function stepStatus(
   return "pending";
 }
 
-function StatusBadge({ status }: { status: FinalizeSetupRootStepStatus }) {
+function StepStatusBadge({ status }: { status: FinalizeSetupRootStepStatus }) {
   if (status === "configured") {
     return (
       <Badge variant="success" className="gap-1">
@@ -209,33 +210,18 @@ export function FinalizeSetupDialog({
         </DialogDescription>
         <div className="space-y-3">
           {ROOT_STEPS.filter((step) => step.id !== "invite_users" || canInviteUsers).map((step) => {
-            const Icon = step.icon;
             const status = stepStatus(state, step.id);
             const canOpen = !isComplete && status !== "configured";
             return (
-              <Button
+              <SetupChoiceButton
                 key={step.id}
-                type="button"
-                variant="outline"
-                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                icon={step.icon}
+                title={step.title}
+                description={step.description}
+                trailing={<StepStatusBadge status={status} />}
                 disabled={!canOpen || busy}
                 onClick={() => onOpenWizard(step.id)}
-              >
-                <span className="flex w-full items-center gap-3">
-                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[15px] font-medium text-foreground">
-                      {step.title}
-                    </span>
-                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                      {step.description}
-                    </span>
-                  </span>
-                  <span className="shrink-0">
-                    <StatusBadge status={status} />
-                  </span>
-                </span>
-              </Button>
+              />
             );
           })}
         </div>
@@ -243,7 +229,8 @@ export function FinalizeSetupDialog({
           <Button
             variant={isComplete ? "default" : "outline"}
             onClick={() => void (isComplete ? onFinish() : requestDismiss())}
-            disabled={busy || dismissing}
+            pending={dismissing}
+            disabled={busy}
           >
             {isComplete ? (
               <>

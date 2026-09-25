@@ -6,6 +6,7 @@ import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -305,7 +306,7 @@ export function AccessLists() {
           <div onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label="Access list actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -332,34 +333,29 @@ export function AccessLists() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-4">
-        {/* Header */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Access Lists</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage IP rules and basic authentication
-              </p>
-            </div>
-          </div>
-          {canCreateAccessList && (
-            <ResponsiveHeaderActions
-              actions={[
-                {
-                  label: "Add Access List",
-                  icon: <Plus className="h-4 w-4" />,
-                  onClick: openCreate,
-                },
-              ]}
-            >
-              <Button onClick={openCreate}>
-                <Plus className="h-4 w-4" />
-                Add Access List
-              </Button>
-            </ResponsiveHeaderActions>
-          )}
-        </div>
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Access Lists"
+          description="Manage IP rules and basic authentication"
+          actions={
+            canCreateAccessList ? (
+              <ResponsiveHeaderActions
+                actions={[
+                  {
+                    label: "Add Access List",
+                    icon: <Plus className="h-4 w-4" />,
+                    onClick: openCreate,
+                  },
+                ]}
+              >
+                <Button onClick={openCreate}>
+                  <Plus className="h-4 w-4" />
+                  Add Access List
+                </Button>
+              </ResponsiveHeaderActions>
+            ) : null
+          }
+        />
 
         {/* Table */}
         {initialLoading && accessLists.length === 0 ? (
@@ -460,7 +456,8 @@ export function AccessLists() {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-9 w-9 shrink-0 rounded-none"
+                                className="rounded-none"
+                                aria-label={`Remove IP rule ${index + 1}`}
                                 onClick={() => removeIpRule(index)}
                               >
                                 <Minus className="h-3.5 w-3.5" />
@@ -470,17 +467,20 @@ export function AccessLists() {
                         ))}
                       </AnimatePresence>
                       <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
+                        {/* Mouse shortcut: the whole footer row adds a rule; the + button is the labelled control. */}
                         <button
                           type="button"
                           className="h-9 min-w-0 cursor-pointer"
-                          aria-label="Add IP rule"
+                          aria-hidden="true"
+                          tabIndex={-1}
                           onClick={addIpRule}
                         />
                         <div className="flex border-l border-border">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none"
+                            className="rounded-none"
+                            aria-label="Add IP rule"
                             onClick={addIpRule}
                           >
                             <Plus className="h-3.5 w-3.5" />
@@ -553,7 +553,8 @@ export function AccessLists() {
                                     <Button
                                       variant="ghost"
                                       size="icon"
-                                      className="h-9 w-9 shrink-0 rounded-none"
+                                      className="rounded-none"
+                                      aria-label={`Remove auth user ${index + 1}`}
                                       onClick={() => removeBasicAuthUser(index)}
                                     >
                                       <Minus className="h-3.5 w-3.5" />
@@ -563,17 +564,20 @@ export function AccessLists() {
                               ))}
                             </AnimatePresence>
                             <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
+                              {/* Mouse shortcut, like the IP rules footer row. */}
                               <button
                                 type="button"
                                 className="h-9 min-w-0 cursor-pointer"
-                                aria-label="Add auth user"
+                                aria-hidden="true"
+                                tabIndex={-1}
                                 onClick={addBasicAuthUser}
                               />
                               <div className="flex border-l border-border">
                                 <Button
                                   variant="ghost"
                                   size="icon"
-                                  className="h-9 w-9 shrink-0 rounded-none"
+                                  className="rounded-none"
+                                  aria-label="Add auth user"
                                   onClick={addBasicAuthUser}
                                 >
                                   <Plus className="h-3.5 w-3.5" />
@@ -593,8 +597,8 @@ export function AccessLists() {
               <Button variant="outline" onClick={() => setDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button onClick={handleSave} disabled={isSaving}>
-                {isSaving ? "Saving..." : editing ? "Update" : "Create"}
+              <Button onClick={handleSave} pending={isSaving}>
+                {editing ? "Update" : "Create"}
               </Button>
             </DialogFooter>
           </DialogContent>

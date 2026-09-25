@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { DatabaseConnection } from "@/types";
 import { type ManagedDatabaseCapacity, managedDatabaseCapacity } from "./managed-database-capacity";
@@ -29,10 +30,15 @@ export function ResizeManagedDatabaseDialog({
   const currentStorageSizeGb = Math.max(1, Math.round(managed.storageSizeBytes / 1024 ** 3));
   const [storageSizeGb, setStorageSizeGb] = useState(String(currentStorageSizeGb + 1));
   const [capacity, setCapacity] = useState<ManagedDatabaseCapacity | null>(null);
+  // The node's free space sets the maximum size; cleared on close so each opening waits for it.
+  const [capacityLoaded, setCapacityLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      setCapacityLoaded(false);
+      return;
+    }
 
     let cancelled = false;
     setStorageSizeGb(String(currentStorageSizeGb + 1));
@@ -44,6 +50,9 @@ export function ResizeManagedDatabaseDialog({
       })
       .catch(() => {
         if (!cancelled) setCapacity(null);
+      })
+      .finally(() => {
+        if (!cancelled) setCapacityLoaded(true);
       });
     return () => {
       cancelled = true;
@@ -82,6 +91,7 @@ export function ResizeManagedDatabaseDialog({
           <DialogTitle>Resize database</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
+          {open && !capacityLoaded && <Skeleton />}
           <DialogDescription>
             Database storage can only be increased. This change expands the managed storage image
             without recreating the database.
@@ -115,8 +125,13 @@ export function ResizeManagedDatabaseDialog({
           >
             Cancel
           </Button>
-          <Button type="button" onClick={() => void resize()} disabled={saving || !isValidSize}>
-            {saving ? "Resizing..." : "Resize database"}
+          <Button
+            type="button"
+            onClick={() => void resize()}
+            pending={saving}
+            disabled={!isValidSize}
+          >
+            Resize database
           </Button>
         </DialogFooter>
       </DialogContent>

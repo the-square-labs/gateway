@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { AvailabilitySummary } from "@/components/docker/availability/AvailabilitySummary";
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -86,6 +87,9 @@ export function OverviewTab({
   // Recent tasks — refresh on inspect cycle and whenever a docker.task event arrives
   const containerName = logicalContainerName || (data.Name ?? "").replace(/^\//, "");
   const [recentTasks, setRecentTasks] = useState<any[]>([]);
+  // Recent Activity appears only when there are tasks: wait for the first answer.
+  const [recentTasksLoaded, setRecentTasksLoaded] = useState(false);
+  useContentLoading(!recentTasksLoaded);
   const refreshTasks = useCallback(() => {
     api
       .listDockerTasks({ nodeId })
@@ -95,7 +99,8 @@ export function OverviewTab({
           .slice(0, 3);
         setRecentTasks(filtered);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setRecentTasksLoaded(true));
   }, [nodeId, containerId, containerName]);
   useEffect(() => {
     refreshTasks();
@@ -134,6 +139,7 @@ export function OverviewTab({
           <DetailRow
             label="Container ID"
             value={
+              // Inline copy control inside the value text; a Button would change the row height.
               <button
                 type="button"
                 className="flex items-center gap-1.5 font-mono hover:text-primary cursor-pointer"
@@ -160,6 +166,7 @@ export function OverviewTab({
                       </span>
                     </>
                   ) : null}
+                  {/* Inline copy icon inside the value text, like the Container ID above. */}
                   <button
                     type="button"
                     className="shrink-0 text-muted-foreground hover:text-primary"

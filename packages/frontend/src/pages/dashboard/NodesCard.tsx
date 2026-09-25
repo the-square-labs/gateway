@@ -1,7 +1,7 @@
 import { Link } from "react-router-dom";
 import { PanelShell } from "@/components/common/PanelShell";
+import { nodeStatusTone } from "@/components/common/resource-status";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { nodeTypeLabel } from "@/lib/node-appearance";
 import { nodeRoute } from "@/lib/resource-routes";
 import type { Node } from "@/types";
@@ -10,7 +10,6 @@ import { effectiveNodeStatus } from "@/types";
 interface NodesCardProps {
   nodesList: Node[];
   hasScope: (scope: string) => boolean;
-  loading?: boolean;
 }
 
 function dashboardNodePriority(node: Node): number {
@@ -33,10 +32,9 @@ export function sortDashboardNodes(nodes: Node[]): Node[] {
   });
 }
 
-export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardProps) {
-  // Keep the panel's geometry while its permitted data resolves, then omit it
-  // entirely when there is nothing useful to show on the dashboard.
-  if (!hasScope("nodes:details") || (!loading && nodesList.length === 0)) return null;
+export function NodesCard({ nodesList, hasScope }: NodesCardProps) {
+  // Omit the panel entirely when there is nothing useful to show on the dashboard.
+  if (!hasScope("nodes:details") || nodesList.length === 0) return null;
 
   return (
     <PanelShell
@@ -47,53 +45,32 @@ export function NodesCard({ nodesList, hasScope, loading = false }: NodesCardPro
         </Link>
       }
     >
-      {loading ? (
-        <div className="space-y-3 px-4 py-4" aria-busy="true">
-          {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-9 w-full" />
-          ))}
-        </div>
-      ) : nodesList.length > 0 ? (
-        <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
-          {sortDashboardNodes(nodesList)
-            .slice(0, 8)
-            .map((node) => (
-              <Link
-                key={node.id}
-                to={nodeRoute(node.slug)}
-                className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition-colors"
-              >
-                <span className="text-sm font-medium truncate flex-1">
-                  {node.displayName || node.hostname}
-                </span>
-                <Badge variant="secondary" size="inline" className="uppercase">
-                  {nodeTypeLabel(node.type)}
+      <div className="divide-y divide-border -mb-px [&>*:last-child]:border-b [&>*:last-child]:border-border">
+        {sortDashboardNodes(nodesList)
+          .slice(0, 8)
+          .map((node) => (
+            <Link
+              key={node.id}
+              to={nodeRoute(node.slug)}
+              className="flex items-center gap-3 px-4 py-3 hover:bg-accent transition-colors"
+            >
+              <span className="text-sm font-medium truncate flex-1">
+                {node.displayName || node.hostname}
+              </span>
+              <Badge variant="secondary" size="inline">
+                {nodeTypeLabel(node.type)}
+              </Badge>
+              {node.daemonVersion && (
+                <Badge variant="outline" size="inline">
+                  {node.daemonVersion}
                 </Badge>
-                {node.daemonVersion && (
-                  <Badge variant="outline" size="inline" className="uppercase">
-                    {node.daemonVersion}
-                  </Badge>
-                )}
-                {(() => {
-                  const s = effectiveNodeStatus(node);
-                  const v =
-                    s === "online"
-                      ? "success"
-                      : s === "degraded"
-                        ? "warning"
-                        : s === "pending"
-                          ? "secondary"
-                          : "destructive";
-                  return (
-                    <Badge variant={v} size="inline" className="uppercase">
-                      {s}
-                    </Badge>
-                  );
-                })()}
-              </Link>
-            ))}
-        </div>
-      ) : null}
+              )}
+              <Badge variant={nodeStatusTone(effectiveNodeStatus(node))} size="inline">
+                {effectiveNodeStatus(node)}
+              </Badge>
+            </Link>
+          ))}
+      </div>
     </PanelShell>
   );
 }

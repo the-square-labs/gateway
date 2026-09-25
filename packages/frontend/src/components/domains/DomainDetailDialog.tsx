@@ -1,9 +1,11 @@
-import { ArrowRight, ExternalLink, Loader2, Lock, RefreshCw, Truck } from "lucide-react";
+import { ArrowRight, ExternalLink, Lock, RefreshCw, Truck } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailRow } from "@/components/common/DetailRow";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable } from "@/components/common/SimpleTable";
@@ -32,6 +34,7 @@ import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
+  Domain,
   DomainIngressMigrationImpact,
   DomainNginxNodeOptions,
   DomainWithUsage,
@@ -49,6 +52,8 @@ import { getDomainPermissions } from "./domain-permissions";
 
 interface DomainDetailDialogProps {
   domainId: string | null;
+  /** The list row, so the header is complete while the details still load. */
+  listDomain?: Pick<Domain, "domain" | "lastDnsCheckAt"> | null;
   open: boolean;
   initialView?: "details" | "ingress-migration";
   onOpenChange: (open: boolean) => void;
@@ -57,6 +62,7 @@ interface DomainDetailDialogProps {
 
 export function DomainDetailDialog({
   domainId,
+  listDomain = null,
   open,
   initialView = "details",
   onOpenChange,
@@ -351,30 +357,26 @@ export function DomainDetailDialog({
       "No address record"
     : "";
   const detailsReady = Boolean(domain && domainId && loadedDomainIdRef.current === domainId);
+  const headerDomain = detailsReady ? domain : listDomain;
 
   return (
     <>
       <Dialog
-        open={
-          open &&
-          detailsReady &&
-          initialView === "details" &&
-          !resolutionOpen &&
-          !ingressMigrationOpen
-        }
+        open={open && initialView === "details" && !resolutionOpen && !ingressMigrationOpen}
         onOpenChange={handleClose}
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>{domain?.domain}</DialogTitle>
+            <DialogTitle>{headerDomain?.domain ?? "Domain"}</DialogTitle>
             <DialogDescription>
-              {domain?.lastDnsCheckAt
-                ? `Last checked ${formatRelativeDate(domain.lastDnsCheckAt)}`
+              {headerDomain?.lastDnsCheckAt
+                ? `Last checked ${formatRelativeDate(headerDomain.lastDnsCheckAt)}`
                 : "DNS not checked yet"}
             </DialogDescription>
           </DialogHeader>
 
-          {domain ? (
+          <ContentLoading loading={!detailsReady} />
+          {detailsReady && domain ? (
             <div className="space-y-4">
               {/* Description */}
               {canEdit && (
@@ -441,9 +443,9 @@ export function DomainDetailDialog({
                   </div>
                 }
                 actions={
-                  <Button onClick={handleCheckDns} disabled={isCheckingDns}>
-                    <RefreshCw className={`h-3.5 w-3.5 ${isCheckingDns ? "animate-spin" : ""}`} />
-                    {isCheckingDns ? "Checking..." : "Check"}
+                  <Button onClick={handleCheckDns} pending={isCheckingDns}>
+                    {isCheckingDns ? null : <RefreshCw />}
+                    Check
                   </Button>
                 }
               >
@@ -461,9 +463,12 @@ export function DomainDetailDialog({
                     </SettingsControlRow>
                   ))
                 ) : (
-                  <p className="px-4 py-3 text-sm text-muted-foreground">
-                    {domain.dnsRecords ? "No DNS records found" : "Run a DNS check to see records"}
-                  </p>
+                  <EmptyState
+                    message={
+                      domain.dnsRecords ? "No DNS records found" : "Run a DNS check to see records"
+                    }
+                    embedded
+                  />
                 )}
               </PanelShell>
 
@@ -637,7 +642,7 @@ export function DomainDetailDialog({
             >
               Cancel
             </Button>
-            <Button onClick={handleUpdateDns} disabled={!selectedNode || isResolving}>
+            <Button onClick={handleUpdateDns} disabled={!selectedNode} pending={isResolving}>
               Update DNS and migrate
             </Button>
           </DialogFooter>
@@ -658,6 +663,7 @@ export function DomainDetailDialog({
           </DialogHeader>
 
           <div className="space-y-4">
+            <ContentLoading loading={isLoadingIngressMigration} />
             <PanelShell title="Routing">
               <SettingsControlRow title="Source node">
                 <span className="text-right text-sm">
@@ -770,16 +776,10 @@ export function DomainDetailDialog({
             </Button>
             <Button
               onClick={handleMigrateIngress}
-              disabled={
-                !ingressMigrationImpact ||
-                ingressMigrationDnsBlocked ||
-                isLoadingIngressMigration ||
-                isMigratingIngress
-              }
+              disabled={!ingressMigrationImpact || ingressMigrationDnsBlocked}
+              pending={isMigratingIngress || isLoadingIngressMigration}
             >
-              {isMigratingIngress || isLoadingIngressMigration ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
+              {isMigratingIngress || isLoadingIngressMigration ? null : (
                 <Truck className="h-4 w-4" />
               )}
               {ingressMigrationImpact?.status === "waiting_dns"

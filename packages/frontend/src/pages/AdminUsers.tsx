@@ -19,9 +19,11 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -48,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { canCreateInFolder, scopeMatches } from "@/lib/scope-utils";
@@ -73,17 +76,30 @@ function isScopeSubset(requestedScopes: string[], availableScopes: string[]): bo
   return requestedScopes.every((scope) => scopeMatches(availableScopes, scope));
 }
 
-export function AdminUsers({
-  embedded = false,
-  createRequest = 0,
-  onCreateFolderRef,
-  onOpenDeletedUsersRef,
-}: {
+interface AdminUsersProps {
   embedded?: boolean;
   createRequest?: number;
   onCreateFolderRef?: (fn: () => void) => void;
   onOpenDeletedUsersRef?: (fn: () => void) => void;
-}) {
+}
+
+export function AdminUsers(props: AdminUsersProps) {
+  // Embedded in a tab panel, the panel is the gate; standalone, the page is.
+  return props.embedded ? (
+    <AdminUsersContent {...props} />
+  ) : (
+    <PageTransition>
+      <AdminUsersContent {...props} />
+    </PageTransition>
+  );
+}
+
+function AdminUsersContent({
+  embedded = false,
+  createRequest = 0,
+  onCreateFolderRef,
+  onOpenDeletedUsersRef,
+}: AdminUsersProps) {
   const navigate = useNavigate();
   const { user: currentUser, hasAnyScope, hasScope, hasScopedAccess } = useAuthStore();
   const cachedUsers = api.getCached<User[]>("admin:users");
@@ -91,9 +107,12 @@ export function AdminUsers({
   const [users, setUsers] = useState<User[]>(cachedUsers ?? []);
   const [groups, setGroups] = useState<PermissionGroup[]>(cachedGroups ?? []);
   const [isLoading, setIsLoading] = useState(!cachedUsers);
+  const [groupsLoading, setGroupsLoading] = useState(!cachedGroups);
+  useContentLoading(isLoading || groupsLoading);
   const [createOpen, setCreateOpen] = useState(false);
   const [createFolderId, setCreateFolderId] = useState<string | null>(null);
-  const [destinationFolders, setDestinationFolders] = useState<FolderOption[]>([]);
+  // null until the create dialog's folder list arrives.
+  const [destinationFolders, setDestinationFolders] = useState<FolderOption[] | null>(null);
   useEffect(() => {
     if (!createOpen) return;
     let cancelled = false;
@@ -125,6 +144,7 @@ export function AdminUsers({
   const [configureUser, setConfigureUser] = useState<User | null>(null);
   const [configureOpen, setConfigureOpen] = useState(false);
   const [deletedUsers, setDeletedUsers] = useState<DeletedUser[]>([]);
+  const [deletedUsersLoaded, setDeletedUsersLoaded] = useState(false);
   const [deletedUsersOpen, setDeletedUsersOpen] = useState(false);
   const [deletedUsersSearch, setDeletedUsersSearch] = useState("");
   const [restoreUser, setRestoreUser] = useState<DeletedUser | null>(null);
@@ -177,6 +197,8 @@ export function AdminUsers({
       setDeletedUsers(data ?? []);
     } catch {
       toast.error("Failed to load deleted users");
+    } finally {
+      setDeletedUsersLoaded(true);
     }
   }, []);
 
@@ -206,7 +228,8 @@ export function AdminUsers({
         api.setCache("admin:groups", data);
         setGroups(data);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setGroupsLoading(false));
   }, []);
 
   useEffect(() => {
@@ -346,6 +369,7 @@ export function AdminUsers({
       groups[0];
     setCreateGroupId(preferred?.id ?? "");
     setCreateAdditionalGroupIds([]);
+    setDestinationFolders(null);
     setCreateOpen(true);
   }, [groups]);
 
@@ -524,7 +548,7 @@ export function AdminUsers({
           >
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="User actions">
+                <Button variant="ghost" size="icon-sm" aria-label="User actions">
                   <EllipsisVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -589,67 +613,65 @@ export function AdminUsers({
   );
   if (blockedCount > 0) summaryParts.push(`${blockedCount} blocked`);
 
-  const content = (
+  return (
     <div className={embedded ? "space-y-4" : "h-full overflow-y-auto p-6 space-y-4"}>
       {!embedded && (
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">Users</h1>
-              <p className="text-sm text-muted-foreground">
-                {isLoading
-                  ? "Loading users..."
-                  : `${users.length} user${users.length !== 1 ? "s" : ""}`}
-                {!isLoading && summaryParts.length > 0 && <> &middot; {summaryParts.join(", ")}</>}
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canManageFolders && createFolderAction
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: createFolderAction,
-                    },
-                  ]
-                : []),
-              ...(canManageDeletedUsers
-                ? [
-                    {
-                      label: "Deleted Users",
-                      icon: <ArchiveRestore className="h-4 w-4" />,
-                      onClick: openDeletedUsers,
-                    },
-                  ]
-                : []),
-              {
-                label: "Create User",
-                icon: <Plus className="h-4 w-4" />,
-                onClick: openCreateDialog,
-              },
-            ]}
-          >
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
+        <PageHeader
+          title="Users"
+          description={
+            <>
+              {users.length} user{users.length !== 1 ? "s" : ""}
+              {summaryParts.length > 0 && <> &middot; {summaryParts.join(", ")}</>}
+            </>
+          }
+          leading={<LiteModeBackButton />}
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(canManageDeletedUsers
+                  ? [
+                      {
+                        label: "Deleted Users",
+                        icon: <ArchiveRestore className="h-4 w-4" />,
+                        onClick: openDeletedUsers,
+                      },
+                    ]
+                  : []),
+                {
+                  label: "Create User",
+                  icon: <Plus className="h-4 w-4" />,
+                  onClick: openCreateDialog,
+                },
+              ]}
+            >
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canManageDeletedUsers && (
+                <Button variant="outline" onClick={openDeletedUsers}>
+                  <ArchiveRestore className="h-4 w-4" />
+                  Deleted Users
+                </Button>
+              )}
+              <Button onClick={openCreateDialog}>
+                <Plus className="h-4 w-4" />
+                Create User
               </Button>
-            )}
-            {canManageDeletedUsers && (
-              <Button variant="outline" onClick={openDeletedUsers}>
-                <ArchiveRestore className="h-4 w-4" />
-                Deleted Users
-              </Button>
-            )}
-            <Button onClick={openCreateDialog}>
-              <Plus className="h-4 w-4" />
-              Create User
-            </Button>
-          </ResponsiveHeaderActions>
-        </div>
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       <FolderedResourceList<User>
@@ -690,7 +712,8 @@ export function AdminUsers({
             <DialogTitle>Create User</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {(destinationFolders.length > 0 || !hasScope("admin:users")) && (
+            {destinationFolders === null && <Skeleton />}
+            {((destinationFolders?.length ?? 0) > 0 || !hasScope("admin:users")) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Folder</label>
                 <Select
@@ -702,7 +725,7 @@ export function AdminUsers({
                   </SelectTrigger>
                   <SelectContent>
                     {hasScope("admin:users") && <SelectItem value="__none__">No folder</SelectItem>}
-                    {destinationFolders
+                    {(destinationFolders ?? [])
                       .filter((folder) =>
                         canCreateInFolder(currentUser?.scopes ?? [], "admin:users", folder.id)
                       )
@@ -780,7 +803,8 @@ export function AdminUsers({
             </Button>
             <Button
               onClick={handleCreateUser}
-              disabled={creating || !createEmail.trim() || !createName.trim() || !createGroupId}
+              pending={creating}
+              disabled={!createEmail.trim() || !createName.trim() || !createGroupId}
             >
               Create
             </Button>
@@ -835,6 +859,7 @@ export function AdminUsers({
             Restoring an account keeps it blocked. Its old sessions and tokens are not restored.
           </p>
           <div className="border border-border">
+            {!deletedUsersLoaded && <Skeleton />}
             <Input
               value={deletedUsersSearch}
               onChange={(event) => setDeletedUsersSearch(event.target.value)}
@@ -862,7 +887,7 @@ export function AdminUsers({
                           {user.email} · deleted {new Date(user.deletedAt).toLocaleString()}
                         </p>
                         {!user.originalGroupExists && (
-                          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+                          <p className="mt-1 text-xs text-warning-foreground">
                             Original group was deleted
                           </p>
                         )}
@@ -871,7 +896,6 @@ export function AdminUsers({
                     <Button
                       variant="ghost"
                       size="icon"
-                      className="h-9 w-9 shrink-0"
                       onClick={() => openRestore(user)}
                       aria-label={`Restore ${user.name || user.email}`}
                       title="Restore user"
@@ -922,9 +946,8 @@ export function AdminUsers({
             </Button>
             <Button
               onClick={handleRestore}
-              disabled={
-                restoring || (!displayedRestoreUser?.originalGroupExists && !restoreGroupId)
-              }
+              pending={restoring}
+              disabled={!displayedRestoreUser?.originalGroupExists && !restoreGroupId}
             >
               Restore blocked user
             </Button>
@@ -933,6 +956,4 @@ export function AdminUsers({
       </Dialog>
     </div>
   );
-
-  return embedded ? content : <PageTransition>{content}</PageTransition>;
 }

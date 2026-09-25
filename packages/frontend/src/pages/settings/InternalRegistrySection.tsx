@@ -2,6 +2,7 @@ import { HardDrive, Save, ShieldCheck } from "lucide-react";
 import { type ComponentProps, useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { DomainAutocompleteInput } from "@/components/domains/DomainAutocompleteInput";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
@@ -57,6 +58,7 @@ function RegistryBadgeWithTooltip({
   if (!tooltip) return badge;
   return (
     <Tooltip>
+      {/* A focusable tooltip trigger around the badge, not an action button. */}
       <TooltipTrigger asChild>
         <button
           type="button"
@@ -100,6 +102,8 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
   const [certificateId, setCertificateId] = useState("");
   const [saving, setSaving] = useState(false);
   const [certificates, setCertificates] = useState<SSLCertificate[]>([]);
+  const [loading, setLoading] = useState(true);
+  useContentLoading(loading);
 
   const applyState = useCallback((next: DockerInternalRegistryState, syncForm = true) => {
     setState(next);
@@ -121,7 +125,8 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
       })
       .catch((error) =>
         toast.error(error instanceof Error ? error.message : "Failed to load internal registry")
-      );
+      )
+      .finally(() => setLoading(false));
   }, [applyState]);
 
   const nginxNodes = useMemo(() => nodesList.filter((node) => node.type === "nginx"), [nodesList]);
@@ -230,14 +235,12 @@ export function InternalRegistrySection({ nodesList }: InternalRegistrySectionPr
           <Button
             onClick={() => void save()}
             disabled={
-              !state ||
-              saving ||
-              !dirty ||
-              (externalEnabled && (!hostname || !nginxNodeId || !certificateId))
+              !state || !dirty || (externalEnabled && (!hostname || !nginxNodeId || !certificateId))
             }
+            pending={saving}
           >
-            <Save className="h-4 w-4" />
-            {saving ? "Saving…" : "Save"}
+            {saving ? null : <Save className="h-4 w-4" />}
+            Save
           </Button>
         </div>
       }

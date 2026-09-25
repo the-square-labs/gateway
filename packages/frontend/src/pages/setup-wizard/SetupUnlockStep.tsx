@@ -1,4 +1,4 @@
-import { KeyRound, Loader2, LockKeyhole } from "lucide-react";
+import { KeyRound, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -37,8 +37,8 @@ export function SetupUnlockStep({
         placeholder="gws_…"
         onChange={(event) => setCode(event.target.value)}
       />
-      <Button type="submit" className="w-full" disabled={busy || !code.trim()}>
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+      <Button type="submit" className="w-full" pending={busy} disabled={!code.trim()}>
+        {busy ? null : <KeyRound className="h-4 w-4" />}
         Start setup
       </Button>
     </form>

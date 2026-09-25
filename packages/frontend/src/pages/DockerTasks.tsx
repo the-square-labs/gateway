@@ -14,8 +14,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
 import { confirmDockerMigrationResolve } from "@/components/docker/confirm-docker-migration-resolve";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { RefreshButton } from "@/components/ui/refresh-button";
 import {
   Select,
   SelectContent,
@@ -138,7 +141,9 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
   const [migrations, setMigrations] = useState<DockerMigration[]>([]);
+  // Tasks and migrations arrive together on the first load; cached tasks alone would miss the migration rows.
   const [isLoading, setIsLoading] = useState(true);
+  useContentLoading(isLoading);
   const [search, setSearch] = useState("");
   const [filterNode, setFilterNode] = useState("all");
   const [filterType, setFilterType] = useState("all");
@@ -418,48 +423,44 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">Docker Tasks</h1>
-              <Badge variant="secondary" size="inline">
-                {taskRows.length}
-              </Badge>
-            </div>
-            <p className="text-sm text-muted-foreground">
-              View pending and completed Docker operations (auto-refreshes every 5s)
-            </p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              {
-                label: "Refresh",
-                icon: <RefreshCw className="h-4 w-4" />,
-                onClick: () => void loadTasks(),
-                disabled: isLoading,
-              },
-              ...(taskRows.some((task) => task.status === "succeeded" || task.status === "failed")
-                ? [
-                    {
-                      label: "Hide Completed",
-                      icon: <Trash2 className="h-4 w-4" />,
-                      onClick: () => void handleClearCompleted(),
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            <Button variant="outline" size="icon" onClick={loadTasks} disabled={isLoading}>
-              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            </Button>
-            {taskRows.some((t) => t.status === "succeeded" || t.status === "failed") && (
-              <Button variant="outline" onClick={handleClearCompleted}>
-                <Trash2 className="h-4 w-4 mr-1" />
-                Hide Completed
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          title="Docker Tasks"
+          description="View pending and completed Docker operations (auto-refreshes every 5s)"
+          badges={
+            <Badge variant="secondary" size="inline">
+              {taskRows.length}
+            </Badge>
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                {
+                  label: "Refresh",
+                  icon: <RefreshCw className="h-4 w-4" />,
+                  onClick: () => void loadTasks(),
+                  disabled: isLoading,
+                },
+                ...(taskRows.some((task) => task.status === "succeeded" || task.status === "failed")
+                  ? [
+                      {
+                        label: "Hide Completed",
+                        icon: <Trash2 className="h-4 w-4" />,
+                        onClick: () => void handleClearCompleted(),
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              <RefreshButton onClick={loadTasks} disabled={isLoading} />
+              {taskRows.some((t) => t.status === "succeeded" || t.status === "failed") && (
+                <Button variant="outline" onClick={handleClearCompleted}>
+                  <Trash2 className="h-4 w-4 mr-1" />
+                  Hide Completed
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       {/* Filters */}
@@ -539,16 +540,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
             ) : undefined
           }
         />
-      ) : isLoading ? (
-        <DataTable<DockerTaskRow>
-          columns={taskColumns}
-          data={[]}
-          keyFn={(task) => task.id}
-          horizontalScroll
-          minWidth="900px"
-          loading
-        />
-      ) : (
+      ) : isLoading ? null : (
         <EmptyState
           message="No tasks found."
           hasActiveFilters={hasActiveFilters}
@@ -646,7 +638,7 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 </div>
               </div>
               {selectedTask.error && (
-                <div className="mt-3 bg-red-500/15 p-3 text-red-600 dark:text-red-400">
+                <div className="mt-3 bg-destructive/10 p-3 text-destructive">
                   <pre className="text-xs whitespace-pre-wrap break-words font-mono">
                     {selectedTask.error}
                   </pre>
@@ -659,9 +651,9 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
               <Button
                 variant="outline"
                 onClick={() => handleRetryCleanup(selectedTask)}
-                disabled={forceCancellingTaskId === selectedTask.id}
+                pending={forceCancellingTaskId === selectedTask.id}
               >
-                <RotateCcw className="h-4 w-4" />
+                {forceCancellingTaskId !== selectedTask.id && <RotateCcw className="h-4 w-4" />}
                 Retry cleanup
               </Button>
             </DialogFooter>
@@ -671,10 +663,10 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
               <Button
                 variant="outline"
                 onClick={() => handleResolveMigration(selectedTask)}
-                disabled={forceCancellingTaskId === selectedTask.id}
+                pending={forceCancellingTaskId === selectedTask.id}
               >
-                <CircleCheck className="h-4 w-4" />
-                {forceCancellingTaskId === selectedTask.id ? "Resolving..." : "Resolve"}
+                {forceCancellingTaskId !== selectedTask.id && <CircleCheck className="h-4 w-4" />}
+                Resolve
               </Button>
             </DialogFooter>
           )}
@@ -688,12 +680,10 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 <Button
                   variant="destructive"
                   onClick={() => handleCancelMigration(selectedTask)}
-                  disabled={forceCancellingTaskId === selectedTask.id}
+                  pending={forceCancellingTaskId === selectedTask.id}
                 >
-                  <XCircle className="h-4 w-4" />
-                  {forceCancellingTaskId === selectedTask.id
-                    ? "Cancelling..."
-                    : "Cancel and roll back"}
+                  {forceCancellingTaskId !== selectedTask.id && <XCircle className="h-4 w-4" />}
+                  Cancel and roll back
                 </Button>
               </DialogFooter>
             )}
@@ -705,10 +695,10 @@ export function DockerTasks({ embedded }: { embedded?: boolean } = {}) {
                 <Button
                   variant="destructive"
                   onClick={() => handleForceCancelTask(selectedTask)}
-                  disabled={forceCancellingTaskId === selectedTask.id}
+                  pending={forceCancellingTaskId === selectedTask.id}
                 >
-                  <XCircle className="h-4 w-4" />
-                  {forceCancellingTaskId === selectedTask.id ? "Cancelling..." : "Force Cancel"}
+                  {forceCancellingTaskId !== selectedTask.id && <XCircle className="h-4 w-4" />}
+                  Force Cancel
                 </Button>
               </DialogFooter>
             )}

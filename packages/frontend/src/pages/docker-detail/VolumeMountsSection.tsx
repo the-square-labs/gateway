@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -88,6 +89,7 @@ export function VolumeMountsSection({
 }: VolumeMountsSectionProps) {
   const [managedVolumeNames, setManagedVolumeNames] = useState<string[]>([]);
   const [volumeOptionsLoaded, setVolumeOptionsLoaded] = useState(false);
+  useContentLoading(!volumeOptionsLoaded);
   useEffect(() => {
     let cancelled = false;
     setVolumeOptionsLoaded(false);
@@ -202,7 +204,7 @@ export function VolumeMountsSection({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                        className="shrink-0 rounded-none border-l border-border"
                         onClick={() => removeMount(i)}
                       >
                         <Minus className="h-3.5 w-3.5" />

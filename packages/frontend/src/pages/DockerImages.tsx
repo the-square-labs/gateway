@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -93,10 +94,12 @@ export function DockerImages({
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
-  const [nodesLoaded, setNodesLoaded] = useState(false);
+  // The first list request; until it settles an empty list is not yet "no results".
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
   const [search, setSearch] = useState("");
   const [filterUsage, setFilterUsage] = useState("all");
   const [pruning, setPruning] = useState(false);
+  const [removingImageId, setRemovingImageId] = useState<string | null>(null);
   const createFolderRef = useRef<(() => void) | null>(null);
 
   // Details dialog
@@ -166,12 +169,10 @@ export function DockerImages({
     } catch {}
 
     if (embedded && !fixedNodeId) {
-      setNodesLoaded(dockerNodesLoaded);
       return;
     }
     if (fixedNodeId) {
       setSelectedNode(fixedNodeId);
-      setNodesLoaded(true);
       return;
     }
 
@@ -183,11 +184,11 @@ export function DockerImages({
       );
       setDockerNodes(onlineNodes);
       useDockerStore.getState().setDockerNodes(onlineNodes);
-      setNodesLoaded(true);
     } catch {
       toast.error("Failed to load Docker nodes");
+      setInitialFetchDone(true);
     }
-  }, [dockerNodesLoaded, embedded, fixedNodeId, setSelectedNode, user?.scopes]);
+  }, [embedded, fixedNodeId, setSelectedNode, user?.scopes]);
 
   useEffect(() => {
     void loadImagePageState();
@@ -195,7 +196,7 @@ export function DockerImages({
 
   useEffect(() => {
     if (!canFetchData) return;
-    fetchImages(fixedNodeId, search);
+    void fetchImages(fixedNodeId, search).finally(() => setInitialFetchDone(true));
     const interval = setInterval(() => fetchImages(fixedNodeId, search), 30_000);
     return () => clearInterval(interval);
   }, [canFetchData, fetchImages, fixedNodeId, search]);
@@ -255,12 +256,15 @@ export function DockerImages({
         confirmLabel: "Remove",
       });
       if (!ok) return;
+      setRemovingImageId(imageId);
       try {
         await api.removeImage(nid, imageId);
         toast.success("Image removed");
         fetchImages(undefined, search);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to remove image");
+      } finally {
+        setRemovingImageId(null);
       }
     },
     [fetchImages, selectedNodeId, search]
@@ -310,7 +314,7 @@ export function DockerImages({
   }, []);
 
   const handlePull = useCallback(async () => {
-    if (!pullNodeId || !pullRef.trim()) return;
+    if (pulling || !pullNodeId || !pullRef.trim()) return;
     if (!canPullHere) {
       toast.error("Select an authorized destination folder");
       return;
@@ -338,6 +342,7 @@ export function DockerImages({
   }, [
     closePull,
     fetchImages,
+    pulling,
     pullFolderId,
     pullNodeId,
     pullRef,
@@ -456,12 +461,12 @@ export function DockerImages({
                 img.availability !== "unavailable" && (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
+                    size="icon-xs"
+                    pending={removingImageId === id}
                     onClick={() => handleRemove(id, tag, img._nodeId)}
                     title="Remove"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    {removingImageId !== id && <Trash2 className="h-3.5 w-3.5" />}
                   </Button>
                 )}
             </div>
@@ -469,7 +474,7 @@ export function DockerImages({
         },
       },
     ],
-    [hasScope, handleRemove, hasScopedAccess]
+    [hasScope, handleRemove, hasScopedAccess, removingImageId]
   );
   const imageColumns = allImageColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
@@ -481,88 +486,88 @@ export function DockerImages({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">Docker Images</h1>
-              {!isLoading && visibleNodeId && (
-                <Badge variant="secondary" size="inline">
-                  {images.length}
-                </Badge>
+        <PageHeader
+          title="Docker Images"
+          description="Manage Docker images across your nodes"
+          badges={
+            !isLoading && visibleNodeId ? (
+              <Badge variant="secondary" size="inline">
+                {images.length}
+              </Badge>
+            ) : null
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={
+                selectedNodeId
+                  ? [
+                      {
+                        label: "Refresh",
+                        icon: <RefreshCw className="h-4 w-4" />,
+                        onClick: () => requestSnapshotRefresh("images", visibleNodeId),
+                        disabled: isLoading,
+                      },
+                      ...(canManageFolders
+                        ? [
+                            {
+                              label: "New Folder",
+                              onClick: () => createFolderRef.current?.(),
+                            },
+                          ]
+                        : []),
+                      ...(hasScope("docker:images:delete") ||
+                      hasScope(`docker:images:delete:${selectedNodeId}`)
+                        ? [
+                            {
+                              label: "Prune Dangling",
+                              icon: <Trash2 className="h-4 w-4" />,
+                              onClick: handlePrune,
+                              disabled: pruning,
+                            },
+                          ]
+                        : []),
+                      ...(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")
+                        ? [
+                            {
+                              label: "Pull Image",
+                              icon: <Download className="h-4 w-4" />,
+                              onClick: () => openPull(),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []
+              }
+            >
+              {selectedNodeId && (
+                <>
+                  <RefreshButton
+                    onClick={() => requestSnapshotRefresh("images", visibleNodeId)}
+                    disabled={isLoading}
+                  />
+                  {canManageFolders && (
+                    <Button variant="outline" onClick={() => createFolderRef.current?.()}>
+                      New Folder
+                    </Button>
+                  )}
+                  {(hasScope("docker:images:delete") ||
+                    hasScope(`docker:images:delete:${selectedNodeId}`)) && (
+                    <Button variant="outline" onClick={handlePrune} pending={pruning}>
+                      {!pruning && <Trash2 className="h-4 w-4 mr-1" />}
+                      Prune Dangling
+                    </Button>
+                  )}
+                  {(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")) && (
+                    <Button onClick={() => openPull()}>
+                      <Download className="h-4 w-4 mr-1" />
+                      Pull Image
+                    </Button>
+                  )}
+                </>
               )}
-            </div>
-            <p className="text-sm text-muted-foreground">Manage Docker images across your nodes</p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={
-              selectedNodeId
-                ? [
-                    {
-                      label: "Refresh",
-                      icon: <RefreshCw className="h-4 w-4" />,
-                      onClick: () => requestSnapshotRefresh("images", visibleNodeId),
-                      disabled: isLoading,
-                    },
-                    ...(canManageFolders
-                      ? [
-                          {
-                            label: "New Folder",
-                            onClick: () => createFolderRef.current?.(),
-                          },
-                        ]
-                      : []),
-                    ...(hasScope("docker:images:delete") ||
-                    hasScope(`docker:images:delete:${selectedNodeId}`)
-                      ? [
-                          {
-                            label: pruning ? "Pruning..." : "Prune Dangling",
-                            icon: <Trash2 className="h-4 w-4" />,
-                            onClick: handlePrune,
-                            disabled: pruning,
-                          },
-                        ]
-                      : []),
-                    ...(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")
-                      ? [
-                          {
-                            label: "Pull Image",
-                            icon: <Download className="h-4 w-4" />,
-                            onClick: () => openPull(),
-                          },
-                        ]
-                      : []),
-                  ]
-                : []
-            }
-          >
-            {selectedNodeId && (
-              <>
-                <RefreshButton
-                  onClick={() => requestSnapshotRefresh("images", visibleNodeId)}
-                  disabled={isLoading}
-                />
-                {canManageFolders && (
-                  <Button variant="outline" onClick={() => createFolderRef.current?.()}>
-                    New Folder
-                  </Button>
-                )}
-                {(hasScope("docker:images:delete") ||
-                  hasScope(`docker:images:delete:${selectedNodeId}`)) && (
-                  <Button variant="outline" onClick={handlePrune} disabled={pruning}>
-                    <Trash2 className="h-4 w-4 mr-1" />
-                    {pruning ? "Pruning..." : "Prune Dangling"}
-                  </Button>
-                )}
-                {(hasScope("docker:images:pull") || hasScopedAccess("docker:images:pull")) && (
-                  <Button onClick={() => openPull()}>
-                    <Download className="h-4 w-4 mr-1" />
-                    Pull Image
-                  </Button>
-                )}
-              </>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       <DockerFolderedResourceList<DockerImageListItem>
@@ -620,7 +625,7 @@ export function DockerImages({
             </div>
           ) : null
         }
-        loading={isLoading || (!visibleNodeId && !nodesLoaded)}
+        loading={images.length === 0 && (!initialFetchDone || isLoading)}
         loadingLabel="Loading images..."
         emptyState={
           <EmptyState
@@ -767,9 +772,10 @@ export function DockerImages({
             </Button>
             <Button
               onClick={handlePull}
-              disabled={pulling || !pullRef.trim() || !pullNodeId || !canPullHere}
+              pending={pulling}
+              disabled={!pullRef.trim() || !pullNodeId || !canPullHere}
             >
-              {pulling ? "Pulling..." : "Pull"}
+              Pull
             </Button>
           </DialogFooter>
         </DialogContent>

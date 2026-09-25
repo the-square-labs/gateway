@@ -1,5 +1,6 @@
 import { Cpu, HardDrive, MemoryStick } from "lucide-react";
 import { Link } from "react-router-dom";
+import { nodeStatusTone } from "@/components/common/resource-status";
 import { Badge } from "@/components/ui/badge";
 import { HealthBars } from "@/components/ui/health-bars";
 import { StatCard as MetricCard } from "@/components/ui/stat-card";
@@ -48,8 +49,6 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
   const h = liveHealth ?? node.lastHealthReport;
   const resolvedHealthHistory = healthHistory ?? node.healthHistory ?? [];
   const eStatus = effectiveNodeStatus({ ...node, healthHistory: resolvedHealthHistory });
-  const statusColor =
-    eStatus === "online" ? "success" : eStatus === "degraded" ? "warning" : "destructive";
 
   const memPercent =
     h && h.systemMemoryTotalBytes > 0
@@ -84,13 +83,7 @@ export function PinnedNodeCard({ node, liveHealth, healthHistory }: PinnedNodeCa
             showLabels={false}
             className="flex-1"
           />
-          <Badge
-            variant={statusColor}
-            className="uppercase"
-            style={{
-              border: `1px solid ${eStatus === "online" ? "rgb(16 185 129)" : eStatus === "degraded" ? "var(--color-warning)" : "rgb(248 113 113)"}`,
-            }}
-          >
+          <Badge variant={nodeStatusTone(eStatus)} className="border border-current">
             {eStatus}
           </Badge>
         </div>

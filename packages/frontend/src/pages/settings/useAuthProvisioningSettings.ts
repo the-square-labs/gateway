@@ -157,6 +157,48 @@ function getMfaExistingSessionGracePeriodDays(
   );
 }
 
+// Drafts start from cached settings as well, so a cached page does not show
+// empty provider fields that fill in (and a dirty marker that clears) a moment later.
+function oidcDraftFrom(settings: AuthProvisioningSettings | null | undefined) {
+  if (!settings) return DEFAULT_OIDC_DRAFT;
+  return {
+    issuer: settings.oidc?.issuer ?? "",
+    clientId: settings.oidc?.clientId ?? "",
+    clientSecret: "",
+    redirectUri: settings.oidc?.redirectUri ?? "",
+    scopes: settings.oidc?.scopes ?? "openid email profile",
+  };
+}
+
+function loggingDraftFrom(settings: AuthProvisioningSettings | null | undefined) {
+  if (!settings) return DEFAULT_LOGGING_DRAFT;
+  return {
+    mode: settings.logging?.mode ?? "disabled",
+    url: settings.logging?.url ?? "",
+    username: settings.logging?.username ?? "",
+    password: "",
+    database: settings.logging?.database ?? "gateway_logs",
+    table: settings.logging?.table ?? "logs",
+    requestTimeoutMs: String(settings.logging?.requestTimeoutMs ?? 5000),
+  };
+}
+
+function smtpDraftFrom(settings: AuthProvisioningSettings, current: SmtpDraft): SmtpDraft {
+  return {
+    ...current,
+    host: settings.smtp?.host ?? DEFAULT_SMTP_DRAFT.host,
+    port: String(settings.smtp?.port ?? DEFAULT_SMTP_DRAFT.port),
+    tlsMode: settings.smtp?.tlsMode ?? DEFAULT_SMTP_DRAFT.tlsMode,
+    username: settings.smtp?.username ?? DEFAULT_SMTP_DRAFT.username,
+    senderName: settings.smtp?.senderName ?? "Gateway",
+    senderEmail: settings.smtp?.senderEmail ?? "",
+  };
+}
+
+function smtpPresetFrom(settings: AuthProvisioningSettings | null | undefined): SmtpPresetId {
+  return settings?.smtp?.host ? getSmtpPresetId(settings.smtp.host) : "resend";
+}
+
 export function useAuthProvisioningSettings(canEdit: boolean) {
   const licenseFeatures = useUIBootstrapStore(
     (state) => state.snapshot?.license.entitlements.features
@@ -182,9 +224,13 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
   const [isSavingLocalAuth, setIsSavingLocalAuth] = useState(false);
   const [isSavingMfaGracePeriod, setIsSavingMfaGracePeriod] = useState(false);
   const [isSavingOidc, setIsSavingOidc] = useState(false);
-  const [oidcDraft, setOidcDraft] = useState(DEFAULT_OIDC_DRAFT);
+  const [oidcDraft, setOidcDraft] = useState(() =>
+    oidcDraftFrom(api.getCached<AuthProvisioningSettings>("settings:auth-provisioning"))
+  );
   const [isSavingLogging, setIsSavingLogging] = useState(false);
-  const [loggingDraft, setLoggingDraft] = useState(DEFAULT_LOGGING_DRAFT);
+  const [loggingDraft, setLoggingDraft] = useState(() =>
+    loggingDraftFrom(api.getCached<AuthProvisioningSettings>("settings:auth-provisioning"))
+  );
   const [mfaGracePeriodDays, setMfaGracePeriodDays] = useState(() =>
     getMfaExistingSessionGracePeriodDays(
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")
@@ -218,8 +264,13 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       api.getCached<AuthProvisioningSettings>("settings:auth-provisioning")?.generalSettings
         ?.updateChannel ?? "stable"
   );
-  const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(DEFAULT_SMTP_DRAFT);
-  const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>("resend");
+  const [smtpDraft, setSmtpDraft] = useState<SmtpDraft>(() => {
+    const cached = api.getCached<AuthProvisioningSettings>("settings:auth-provisioning");
+    return cached ? smtpDraftFrom(cached, DEFAULT_SMTP_DRAFT) : DEFAULT_SMTP_DRAFT;
+  });
+  const [smtpPreset, setSmtpPreset] = useState<SmtpPresetId>(() =>
+    smtpPresetFrom(api.getCached<AuthProvisioningSettings>("settings:auth-provisioning"))
+  );
   const [smtpTestOpen, setSmtpTestOpen] = useState(false);
   const [smtpTestRecipient, setSmtpTestRecipient] = useState("");
   const [smtpTestEmailKind, setSmtpTestEmailKind] =
@@ -298,35 +349,10 @@ export function useAuthProvisioningSettings(canEdit: boolean) {
       setMfaGracePeriodDays(mfaGracePeriodDays);
       setMfaGracePeriodRaw(String(mfaGracePeriodDays));
       setMfaGracePeriodInputKey((key) => key + 1);
-      const smtpPresetId = settingsData.smtp?.host
-        ? getSmtpPresetId(settingsData.smtp.host)
-        : "resend";
-      setSmtpDraft((current) => ({
-        ...current,
-        host: settingsData.smtp?.host ?? DEFAULT_SMTP_DRAFT.host,
-        port: String(settingsData.smtp?.port ?? DEFAULT_SMTP_DRAFT.port),
-        tlsMode: settingsData.smtp?.tlsMode ?? DEFAULT_SMTP_DRAFT.tlsMode,
-        username: settingsData.smtp?.username ?? DEFAULT_SMTP_DRAFT.username,
-        senderName: settingsData.smtp?.senderName ?? "Gateway",
-        senderEmail: settingsData.smtp?.senderEmail ?? "",
-      }));
-      setSmtpPreset(smtpPresetId);
-      setOidcDraft({
-        issuer: settingsData.oidc?.issuer ?? "",
-        clientId: settingsData.oidc?.clientId ?? "",
-        clientSecret: "",
-        redirectUri: settingsData.oidc?.redirectUri ?? "",
-        scopes: settingsData.oidc?.scopes ?? "openid email profile",
-      });
-      setLoggingDraft({
-        mode: settingsData.logging?.mode ?? "disabled",
-        url: settingsData.logging?.url ?? "",
-        username: settingsData.logging?.username ?? "",
-        password: "",
-        database: settingsData.logging?.database ?? "gateway_logs",
-        table: settingsData.logging?.table ?? "logs",
-        requestTimeoutMs: String(settingsData.logging?.requestTimeoutMs ?? 5000),
-      });
+      setSmtpDraft((current) => smtpDraftFrom(settingsData, current));
+      setSmtpPreset(smtpPresetFrom(settingsData));
+      setOidcDraft(oidcDraftFrom(settingsData));
+      setLoggingDraft(loggingDraftFrom(settingsData));
       setPublicUrl(settingsData.generalSettings.publicUrl ?? "");
       setHideExternalBranding(settingsData.generalSettings.hideExternalBranding ?? false);
       setAutoAssignCreatedResourcePermissions(

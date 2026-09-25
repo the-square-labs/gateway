@@ -1,7 +1,9 @@
-import { Check, Cloud, GitBranch, Github, Loader2 } from "lucide-react";
+import { Check, Cloud, GitBranch, Github } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EditableStringList } from "@/components/common/EditableStringList";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +17,7 @@ import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
 import type { GitConnectorProvider } from "@/types/integrations";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
+import { SetupChoiceButton } from "./SetupChoiceButton";
 
 export type ConnectorSetupKind = "cloudflare" | "gitlab" | "github" | "git";
 type TrackedIntegration = Extract<ConnectorSetupKind, "cloudflare" | "gitlab">;
@@ -151,6 +154,14 @@ export function IntegrationsSetupWizard({
   const [githubToken, setGithubToken] = useState("");
   const [githubOAuthAvailable, setGithubOAuthAvailable] = useState(false);
   const [githubAuthMode, setGithubAuthMode] = useState<"oauth" | "token">("token");
+  // Whether GitHub OAuth is available decides the GitHub form, so the form
+  // shows only once that is known (checked once per opening).
+  const [githubOAuthChecked, setGithubOAuthChecked] = useState(false);
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setGithubOAuthChecked(false);
+  }
   const [gitName, setGitName] = useState("Git");
   const [gitUrl, setGitUrl] = useState("");
   const [gitRepositoryUrls, setGitRepositoryUrls] = useState<string[]>([""]);
@@ -183,8 +194,9 @@ export function IntegrationsSetupWizard({
     setConfiguredOptionalConnectors(new Set());
   }, [directSetup?.baseUrl, directSetup?.connector, directSetup?.repositoryUrl, open]);
 
+  const needsGithubForm = directSetup?.connector === "github" || screen === "github";
   useEffect(() => {
-    if (!open || (directSetup?.connector !== "github" && screen !== "github")) return;
+    if (!open || !needsGithubForm || githubOAuthChecked) return;
     let cancelled = false;
     void api
       .getGitHubOAuthAvailability()
@@ -198,11 +210,14 @@ export function IntegrationsSetupWizard({
           setGithubOAuthAvailable(false);
           setGithubAuthMode("token");
         }
+      })
+      .finally(() => {
+        if (!cancelled) setGithubOAuthChecked(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [directSetup?.connector, open, screen]);
+  }, [githubOAuthChecked, needsGithubForm, open]);
 
   const updateTrackedStep = async (step: TrackedIntegration, status: "configured" | "skipped") => {
     if (isDirectSetup || !onStep) return;
@@ -357,32 +372,35 @@ export function IntegrationsSetupWizard({
     ) : screen === "cloudflare" ? (
       <Button
         onClick={() => void saveCloudflare()}
-        disabled={saving || !cloudflareName.trim() || !cloudflareToken.trim()}
+        pending={saving}
+        disabled={!cloudflareName.trim() || !cloudflareToken.trim()}
       >
-        {saving ? <Loader2 className="animate-spin" /> : <Cloud />}
+        {saving ? null : <Cloud />}
         Save Cloudflare
       </Button>
     ) : screen === "gitlab" ? (
       <Button
         onClick={() => void saveGitLab()}
-        disabled={saving || !gitlabName.trim() || !gitlabUrl.trim() || !gitlabToken.trim()}
+        pending={saving}
+        disabled={!gitlabName.trim() || !gitlabUrl.trim() || !gitlabToken.trim()}
       >
-        {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
+        {saving ? null : <GitBranch />}
         Save GitLab
       </Button>
     ) : screen === "github" && githubAuthMode === "token" ? (
       <Button
         onClick={() => void saveGitConnector("github")}
-        disabled={saving || !githubName.trim() || !githubUrl.trim() || !githubToken.trim()}
+        pending={saving}
+        disabled={!githubName.trim() || !githubUrl.trim() || !githubToken.trim()}
       >
-        {saving ? <Loader2 className="animate-spin" /> : <Github />}
+        {saving ? null : <Github />}
         Save GitHub
       </Button>
     ) : screen === "git" ? (
       <Button
         onClick={() => void saveGitConnector("git")}
+        pending={saving}
         disabled={
-          saving ||
           !gitName.trim() ||
           !gitUrl.trim() ||
           !gitRepositoryUrls.some((url) => url.trim()) ||
@@ -390,7 +408,7 @@ export function IntegrationsSetupWizard({
           !gitToken.trim()
         }
       >
-        {saving ? <Loader2 className="animate-spin" /> : <GitBranch />}
+        {saving ? null : <GitBranch />}
         Save Git connector
       </Button>
     ) : null;
@@ -441,6 +459,7 @@ export function IntegrationsSetupWizard({
       }
       footer={footer}
     >
+      <ContentLoading loading={directSetup?.connector === "github" && !githubOAuthChecked} />
       {screen === "cloudflare_complete" ? (
         <FinalizeSetupCompletion
           title="Cloudflare connected"
@@ -496,24 +515,15 @@ export function IntegrationsSetupWizard({
               status === "configured" ||
               (!isTrackedIntegration(id) && configuredOptionalConnectors.has(id));
             return (
-              <Button
+              <SetupChoiceButton
                 key={id}
-                type="button"
-                variant="outline"
-                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                icon={Icon}
+                title={title}
+                description={description}
                 disabled={saving || configured}
                 onClick={() => setScreen(id)}
-              >
-                <span className="flex w-full items-center gap-3">
-                  <Icon className="h-5 w-5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-[15px] font-medium text-foreground">{title}</span>
-                    <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                      {description}
-                    </span>
-                  </span>
+                trailing={
                   <Badge
-                    className="shrink-0"
                     variant={
                       configured
                         ? "success"
@@ -527,8 +537,8 @@ export function IntegrationsSetupWizard({
                     {configured && <Check className="mr-1 h-3 w-3" />}
                     {configured ? "Configured" : statusLabel(status)}
                   </Badge>
-                </span>
-              </Button>
+                }
+              />
             );
           })}
         </div>
@@ -606,6 +616,8 @@ export function IntegrationsSetupWizard({
             />
           </SettingsControlRow>
         </PanelShell>
+      ) : screen === "github" && !githubOAuthChecked ? (
+        <LoadingSpinner label="Checking GitHub sign-in options" />
       ) : (
         <div className="space-y-4">
           <PanelShell

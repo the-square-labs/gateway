@@ -1,14 +1,14 @@
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { DatabaseConnection, ManagedPostgresExtension } from "@/types";
 
@@ -32,6 +32,7 @@ export function PostgresExtensionsTab({
   );
   const [search, setSearch] = useState("");
   const [pendingExtension, setPendingExtension] = useState<string | null>(null);
+  useContentLoading(loading);
 
   const load = useCallback(async () => {
     const cached = api.getCached<ManagedPostgresExtension[]>(cacheKey);
@@ -134,26 +135,7 @@ export function PostgresExtensionsTab({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {loading ? (
-          <div
-            className="divide-y divide-border"
-            aria-busy="true"
-            aria-label="Loading PostgreSQL extensions"
-          >
-            {Array.from({ length: 5 }, (_, index) => (
-              <div
-                key={index}
-                className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1 space-y-2">
-                  <Skeleton className="h-4 w-36" />
-                  <Skeleton className="h-3 w-4/5" />
-                </div>
-                <Skeleton className="h-9 w-20 shrink-0" />
-              </div>
-            ))}
-          </div>
-        ) : filteredExtensions.length === 0 ? (
+        {loading ? null : filteredExtensions.length === 0 ? (
           <EmptyState message="No PostgreSQL extensions match your search." embedded />
         ) : (
           filteredExtensions.map((extension) => {
@@ -174,10 +156,10 @@ export function PostgresExtensionsTab({
               >
                 <Button
                   variant={enabled ? "outline" : "default"}
+                  pending={waiting}
                   disabled={!canManage || pendingExtension !== null}
                   onClick={() => void (enabled ? disable(extension) : enable(extension))}
                 >
-                  {waiting && <Loader2 className="animate-spin" />}
                   {enabled ? "Disable" : "Enable"}
                 </Button>
               </SettingsControlRow>

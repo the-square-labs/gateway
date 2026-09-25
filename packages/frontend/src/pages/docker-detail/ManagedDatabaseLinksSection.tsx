@@ -768,11 +768,12 @@ export const ManagedDatabaseLinksSection = forwardRef<
           <div className="flex items-center gap-2">
             <Button
               type="button"
-              className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
-              disabled={disabled || loading || saving || !hasChanges}
+              variant="warning"
+              pending={saving}
+              disabled={disabled || loading || !hasChanges}
               onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
             >
-              <RotateCcw className="h-3.5 w-3.5" />
+              {!saving && <RotateCcw className="h-3.5 w-3.5" />}
               {recreatesRunningWorkload ? "Save & Recreate" : "Save"}
             </Button>
             <Button type="button" disabled={disabled || loading || saving} onClick={openAddDialog}>
@@ -783,24 +784,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         }
       >
         {initialLoading ? (
-          <div
-            className="divide-y divide-border"
-            aria-busy="true"
-            aria-label="Loading managed database links"
-          >
-            {Array.from({ length: 3 }, (_, index) => (
-              <div
-                key={index}
-                className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1 space-y-2">
-                  <Skeleton className="h-4 w-36" />
-                  <Skeleton className="h-3 w-52" />
-                </div>
-                <Skeleton className="h-6 w-20" />
-              </div>
-            ))}
-          </div>
+          <Skeleton />
         ) : displayBindings.length === 0 ? (
           <EmptyState message="No managed database links" embedded />
         ) : (
@@ -897,8 +881,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
                   <Button
                     type="button"
                     variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0 text-muted-foreground hover:text-destructive"
+                    size="icon-sm"
+                    className="shrink-0 text-muted-foreground hover:text-destructive"
                     disabled={disabled || saving || !canChangeLink}
                     onClick={() => void stageUnlink(entry)}
                     aria-label={

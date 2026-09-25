@@ -546,8 +546,8 @@ export function StorageConnectionForm({
 
           {storageId && (
             <div className="flex justify-end">
-              <Button variant="outline" onClick={() => void testConnection()} disabled={testing}>
-                {testing ? "Testing..." : "Test connection"}
+              <Button variant="outline" onClick={() => void testConnection()} pending={testing}>
+                Test connection
               </Button>
             </div>
           )}
@@ -641,8 +641,8 @@ export function StorageConnectionForm({
 
           {storageId && (
             <div className="flex justify-end">
-              <Button variant="outline" onClick={() => void testConnection()} disabled={testing}>
-                {testing ? "Testing..." : "Test connection"}
+              <Button variant="outline" onClick={() => void testConnection()} pending={testing}>
+                Test connection
               </Button>
             </div>
           )}

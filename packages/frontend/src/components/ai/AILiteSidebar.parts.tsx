@@ -139,7 +139,7 @@ export function ConversationFolderDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={() => void submit()} disabled={isSubmitting || !canSubmit}>
+          <Button onClick={() => void submit()} pending={isSubmitting} disabled={!canSubmit}>
             {state.mode === "create" ? "Create" : "Save"}
           </Button>
         </DialogFooter>

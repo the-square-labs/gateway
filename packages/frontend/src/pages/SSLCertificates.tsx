@@ -7,6 +7,7 @@ import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -569,7 +570,7 @@ export function SSLCertificates() {
             className={cn(
               "text-sm",
               expDays !== null && expDays <= 7
-                ? "font-medium text-red-600 dark:text-red-400"
+                ? "font-medium text-destructive"
                 : expDays !== null && expDays <= 30
                   ? "text-warning-foreground"
                   : "text-muted-foreground"
@@ -672,7 +673,7 @@ export function SSLCertificates() {
           <div onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label="Certificate actions">
                   <MoreVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
@@ -739,54 +740,50 @@ export function SSLCertificates() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-3">
-        {/* Header */}
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <LiteModeBackButton />
-            <div>
-              <h1 className="text-2xl font-bold">SSL Certificates</h1>
-              <p className="text-sm text-muted-foreground">
-                Manage TLS certificates for ingress domains
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canManageFolders && createFolderAction
-                ? [
-                    {
-                      label: "Add Folder",
-                      icon: <FolderPlus className="h-4 w-4" />,
-                      onClick: createFolderAction,
-                    },
-                  ]
-                : []),
-              ...(canCreateCertificate
-                ? [
-                    {
-                      label: "Add Certificate",
-                      icon: <Plus className="h-4 w-4" />,
-                      onClick: () => void openCreateCertificate(),
-                      disabled: isCheckingDomains,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canManageFolders && (
-              <Button variant="outline" onClick={() => createFolderAction?.()}>
-                <FolderPlus className="h-4 w-4" />
-                Add Folder
-              </Button>
-            )}
-            {canCreateCertificate && (
-              <Button onClick={() => void openCreateCertificate()} disabled={isCheckingDomains}>
-                <Plus className="h-4 w-4" />
-                Add Certificate
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+        <PageHeader
+          className="shrink-0"
+          leading={<LiteModeBackButton />}
+          title="SSL Certificates"
+          description="Manage TLS certificates for ingress domains"
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canManageFolders && createFolderAction
+                  ? [
+                      {
+                        label: "Add Folder",
+                        icon: <FolderPlus className="h-4 w-4" />,
+                        onClick: createFolderAction,
+                      },
+                    ]
+                  : []),
+                ...(canCreateCertificate
+                  ? [
+                      {
+                        label: "Add Certificate",
+                        icon: <Plus className="h-4 w-4" />,
+                        onClick: () => void openCreateCertificate(),
+                        disabled: isCheckingDomains,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canManageFolders && (
+                <Button variant="outline" onClick={() => createFolderAction?.()}>
+                  <FolderPlus className="h-4 w-4" />
+                  Add Folder
+                </Button>
+              )}
+              {canCreateCertificate && (
+                <Button onClick={() => void openCreateCertificate()} pending={isCheckingDomains}>
+                  {isCheckingDomains ? null : <Plus className="h-4 w-4" />}
+                  Add Certificate
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <FolderedResourceList<SSLCertificate>
           resourceType="ssl-certificate"

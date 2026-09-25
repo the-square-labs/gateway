@@ -4,6 +4,7 @@ import {
   ResourceListFrame,
   ResourceListHeaderTable,
 } from "@/components/common/ResourceListLayout";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -60,6 +61,9 @@ export function NodeLogsTab({ nodeId, nodeStatus }: NodeLogsTabProps) {
   const [levelFilter, setLevelFilter] = useState("all");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const esRef = useRef<EventSource | null>(null);
+  // The stream sends its buffered history right after "connected"; the tab reveals with it.
+  const [historyPending, setHistoryPending] = useState(nodeStatus === "online");
+  useContentLoading(nodeStatus === "online" && historyPending);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
@@ -80,7 +84,16 @@ export function NodeLogsTab({ nodeId, nodeStatus }: NodeLogsTabProps) {
     });
     esRef.current = es;
 
-    es.addEventListener("connected", () => setLogs([]));
+    let historyRemaining = 0;
+    es.addEventListener("connected", (e) => {
+      setLogs([]);
+      try {
+        historyRemaining = Number(JSON.parse(e.data)?.historyCount) || 0;
+      } catch {
+        historyRemaining = 0;
+      }
+      if (historyRemaining === 0) setHistoryPending(false);
+    });
     es.addEventListener("log", (e) => {
       try {
         const entry = JSON.parse(e.data) as LogEntry;
@@ -89,8 +102,13 @@ export function NodeLogsTab({ nodeId, nodeStatus }: NodeLogsTabProps) {
           return next.length > 300 ? next.slice(-300) : next;
         });
       } catch {}
+      if (historyRemaining > 0) {
+        historyRemaining -= 1;
+        if (historyRemaining === 0) setHistoryPending(false);
+      }
     });
     es.onerror = () => {
+      setHistoryPending(false);
       if (es.readyState === EventSource.CLOSED) {
         es.close();
       }
@@ -111,14 +129,6 @@ export function NodeLogsTab({ nodeId, nodeStatus }: NodeLogsTabProps) {
     return (
       <div className="flex flex-col items-center gap-2 py-16 border border-border bg-card">
         <p className="text-muted-foreground">Node is offline — daemon logs unavailable</p>
-      </div>
-    );
-  }
-
-  if (logs.length === 0 && !search && levelFilter === "all") {
-    return (
-      <div className="flex flex-col items-center gap-2 py-16 border border-border bg-card">
-        <p className="text-muted-foreground">No daemon logs yet</p>
       </div>
     );
   }
@@ -185,7 +195,9 @@ export function NodeLogsTab({ nodeId, nodeStatus }: NodeLogsTabProps) {
           className="min-h-0 flex-1 overflow-y-auto"
           emptyState={
             <div className="text-center py-16 text-sm text-muted-foreground">
-              Waiting for logs...
+              {search || levelFilter !== "all"
+                ? "Waiting for matching logs..."
+                : "No daemon logs yet"}
             </div>
           }
         />

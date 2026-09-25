@@ -4,6 +4,7 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
@@ -102,7 +103,8 @@ export function DockerNetworks({
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
-  const [nodesLoaded, setNodesLoaded] = useState(false);
+  // The first list request; until it settles an empty list is not yet "no results".
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
   const [search, setSearch] = useState("");
   const createFolderRef = useRef<(() => void) | null>(null);
 
@@ -130,6 +132,7 @@ export function DockerNetworks({
   const [createGateway, setCreateGateway] = useState("");
   const [createFolderId, setCreateFolderId] = useState("");
   const [creating, setCreating] = useState(false);
+  const [removingNetworkId, setRemovingNetworkId] = useState<string | null>(null);
   const folderList = useMemo(() => flattenFolders(networkFolders), [networkFolders]);
   // Same destination rules as POST /nodes/:nodeId/networks: root needs create on the node (or broadly), a folder
   // needs create on that folder.
@@ -183,6 +186,7 @@ export function DockerNetworks({
       const nodeSlug = net._nodeSlug;
       if (!nid) return;
       setSelectedNetwork(net);
+      setDetailContainers([]);
       setDetailContainersLoading(true);
       try {
         const c = (net as any).containers ?? (net as any).Containers ?? {};
@@ -225,12 +229,10 @@ export function DockerNetworks({
 
   const loadNetworkNodes = useCallback(async () => {
     if (embedded && !fixedNodeId) {
-      setNodesLoaded(dockerNodesLoaded);
       return;
     }
     if (fixedNodeId) {
       setSelectedNode(fixedNodeId);
-      setNodesLoaded(true);
       return;
     }
 
@@ -242,11 +244,11 @@ export function DockerNetworks({
       );
       setDockerNodes(onlineNodes);
       useDockerStore.getState().setDockerNodes(onlineNodes);
-      setNodesLoaded(true);
     } catch {
       toast.error("Failed to load Docker nodes");
+      setInitialFetchDone(true);
     }
-  }, [dockerNodesLoaded, embedded, fixedNodeId, hasScopedAccess, setSelectedNode, user?.scopes]);
+  }, [embedded, fixedNodeId, hasScopedAccess, setSelectedNode, user?.scopes]);
 
   useEffect(() => {
     void loadNetworkNodes();
@@ -254,7 +256,7 @@ export function DockerNetworks({
 
   useEffect(() => {
     if (!canFetchData) return;
-    fetchNetworks(fixedNodeId, search);
+    void fetchNetworks(fixedNodeId, search).finally(() => setInitialFetchDone(true));
     const interval = setInterval(() => fetchNetworks(fixedNodeId, search), 30_000);
     return () => clearInterval(interval);
   }, [canFetchData, fetchNetworks, fixedNodeId, search]);
@@ -313,21 +315,24 @@ export function DockerNetworks({
         confirmLabel: "Remove",
       });
       if (!ok) return;
+      const nid = net._nodeId || selectedNodeId;
+      if (!nid) return;
+      setRemovingNetworkId(net.id);
       try {
-        const nid = net._nodeId || selectedNodeId;
-        if (!nid) return;
         await api.removeNetwork(nid, net.id);
         toast.success("Network removed");
         fetchNetworks(undefined, search);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to remove network");
+      } finally {
+        setRemovingNetworkId(null);
       }
     },
     [containerCount, fetchNetworks, selectedNodeId, search]
   );
 
   const handleCreate = async () => {
-    if (!createNodeId || !createName.trim() || !canCreateHere) return;
+    if (creating || !createNodeId || !createName.trim() || !canCreateHere) return;
     setCreating(true);
     try {
       await api.createNetwork(createNodeId, {
@@ -458,12 +463,12 @@ export function DockerNetworks({
                 net.availability !== "unavailable" && (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
+                    size="icon-xs"
+                    pending={removingNetworkId === net.id}
                     onClick={() => handleRemove(net)}
                     title="Remove"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    {removingNetworkId !== net.id && <Trash2 className="h-3.5 w-3.5" />}
                   </Button>
                 )}
             </div>
@@ -471,7 +476,7 @@ export function DockerNetworks({
         },
       },
     ],
-    [hasScope, handleRemove, containerCount, getIPAM]
+    [hasScope, handleRemove, containerCount, getIPAM, removingNetworkId]
   );
   const networkColumns = allNetworkColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
@@ -513,72 +518,70 @@ export function DockerNetworks({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">Docker Networks</h1>
-              {!isLoading && visibleNodeId && (
-                <Badge variant="secondary" size="inline">
-                  {networks.length}
-                </Badge>
+        <PageHeader
+          title="Docker Networks"
+          description="Manage Docker networks across your nodes"
+          badges={
+            !isLoading && visibleNodeId ? (
+              <Badge variant="secondary" size="inline">
+                {networks.length}
+              </Badge>
+            ) : null
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={
+                selectedNodeId
+                  ? [
+                      {
+                        label: "Refresh",
+                        icon: <RefreshCw className="h-4 w-4" />,
+                        onClick: () => requestSnapshotRefresh("networks", visibleNodeId),
+                        disabled: isLoading,
+                      },
+                      ...(canManageFolders
+                        ? [
+                            {
+                              label: "New Folder",
+                              onClick: () => createFolderRef.current?.(),
+                            },
+                          ]
+                        : []),
+                      ...(hasScopedAccess("docker:networks:create")
+                        ? [
+                            {
+                              label: "Create Network",
+                              icon: <Plus className="h-4 w-4" />,
+                              onClick: () => openCreate(),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []
+              }
+            >
+              {selectedNodeId && (
+                <>
+                  <RefreshButton
+                    onClick={() => requestSnapshotRefresh("networks", visibleNodeId)}
+                    disabled={isLoading}
+                  />
+                  {canManageFolders && (
+                    <Button variant="outline" onClick={() => createFolderRef.current?.()}>
+                      New Folder
+                    </Button>
+                  )}
+                  {hasScopedAccess("docker:networks:create") && (
+                    <Button onClick={() => openCreate()}>
+                      <Plus className="h-4 w-4 mr-1" />
+                      Create Network
+                    </Button>
+                  )}
+                </>
               )}
-            </div>
-            <p className="text-sm text-muted-foreground">
-              Manage Docker networks across your nodes
-            </p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={
-              selectedNodeId
-                ? [
-                    {
-                      label: "Refresh",
-                      icon: <RefreshCw className="h-4 w-4" />,
-                      onClick: () => requestSnapshotRefresh("networks", visibleNodeId),
-                      disabled: isLoading,
-                    },
-                    ...(canManageFolders
-                      ? [
-                          {
-                            label: "New Folder",
-                            onClick: () => createFolderRef.current?.(),
-                          },
-                        ]
-                      : []),
-                    ...(hasScopedAccess("docker:networks:create")
-                      ? [
-                          {
-                            label: "Create Network",
-                            icon: <Plus className="h-4 w-4" />,
-                            onClick: () => openCreate(),
-                          },
-                        ]
-                      : []),
-                  ]
-                : []
-            }
-          >
-            {selectedNodeId && (
-              <>
-                <RefreshButton
-                  onClick={() => requestSnapshotRefresh("networks", visibleNodeId)}
-                  disabled={isLoading}
-                />
-                {canManageFolders && (
-                  <Button variant="outline" onClick={() => createFolderRef.current?.()}>
-                    New Folder
-                  </Button>
-                )}
-                {hasScopedAccess("docker:networks:create") && (
-                  <Button onClick={() => openCreate()}>
-                    <Plus className="h-4 w-4 mr-1" />
-                    Create Network
-                  </Button>
-                )}
-              </>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       <DockerFolderedResourceList<DockerNetworkListItem>
@@ -623,7 +626,7 @@ export function DockerNetworks({
             </div>
           ) : null
         }
-        loading={isLoading || (!visibleNodeId && !nodesLoaded)}
+        loading={networks.length === 0 && (!initialFetchDone || isLoading)}
         loadingLabel="Loading networks..."
         emptyState={
           <EmptyState
@@ -746,9 +749,10 @@ export function DockerNetworks({
             </Button>
             <Button
               onClick={handleCreate}
-              disabled={creating || !createName.trim() || !createNodeId || !canCreateHere}
+              pending={creating}
+              disabled={!createName.trim() || !createNodeId || !canCreateHere}
             >
-              {creating ? "Creating..." : "Create"}
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>

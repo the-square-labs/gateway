@@ -1,11 +1,15 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { toast } from "sonner";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConfirmDialog, useConfirmDialog } from "@/components/common/ConfirmDialog";
+import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
 import type { InferenceCoreStatus } from "@/types/inference-core";
-import { InferenceCoreLifecyclePanel } from "./InferenceCoreLifecyclePanel";
+import {
+  InferenceCoreLifecyclePanel,
+  InferenceCoreSetupFooterAction,
+} from "./InferenceCoreLifecyclePanel";
 
 const DIGEST = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -212,7 +216,67 @@ describe("InferenceCoreLifecyclePanel", () => {
     });
 
     expect(screen.getByText("Updating")).toBeInTheDocument();
-    expect(screen.getByLabelText("Inference core status")).toHaveClass("border-blue-500");
+    expect(screen.getByLabelText("Inference core status")).toHaveClass("border-link");
+  });
+
+  it("keeps the enclosing page hidden while the first status request runs", async () => {
+    const view = (status: InferenceCoreStatus | null, loading: boolean) => (
+      <PageTransition>
+        <InferenceCoreLifecyclePanel
+          mode="settings"
+          status={status}
+          loading={loading}
+          canManage
+          onRefresh={vi.fn().mockResolvedValue(undefined)}
+        />
+      </PageTransition>
+    );
+    const { container, rerender } = render(view(null, true));
+    const gate = container.querySelector("[data-page-transition]");
+
+    expect(gate).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.queryByLabelText("Inference core status")).not.toBeInTheDocument();
+
+    rerender(view(readyStatus, false));
+
+    await waitFor(() => {
+      expect(gate).toHaveAttribute("data-reveal-phase", "revealed");
+      expect(screen.getByLabelText("Inference core status")).toBeVisible();
+    });
+  });
+
+  it("disables the retry action while a failed status request is retried", async () => {
+    let resolveRefresh!: () => void;
+    const onRefresh = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        })
+    );
+    renderPanel({ status: null, error: "Core unreachable", onRefresh });
+    const user = userEvent.setup();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Retry" })).toBeDisabled();
+    await act(async () => resolveRefresh());
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
+  });
+
+  it("shows the setup footer's in-place status request as a pending button", () => {
+    render(
+      <InferenceCoreSetupFooterAction
+        status={null}
+        loading
+        canManage
+        onRefresh={vi.fn().mockResolvedValue(undefined)}
+      />
+    );
+
+    const button = screen.getByRole("button", { name: "Loading core status" });
+    expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
   });
 
   it("reports an installed current release as up to date", async () => {

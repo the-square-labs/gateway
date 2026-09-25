@@ -1,6 +1,9 @@
 import { Info, Loader2, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/common/EmptyState";
+import { ReferenceTable } from "@/components/common/ReferenceTable";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
@@ -50,6 +53,9 @@ export function LoggingExplorer({
   const [searchPending, setSearchPending] = useState(false);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  // The first search holds the Logs tab; later searches show their progress in the table.
+  const [firstSearchDone, setFirstSearchDone] = useState(false);
+  useContentLoading(storageAvailable && !firstSearchDone);
   const inputRef = useRef<HTMLInputElement>(null);
   const tableScrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
@@ -109,6 +115,7 @@ export function LoggingExplorer({
           setRows([]);
           setNextCursor(null);
           setSearchPending(false);
+          setFirstSearchDone(true);
         }
         return;
       }
@@ -125,6 +132,7 @@ export function LoggingExplorer({
         else {
           setLoading(false);
           setSearchPending(false);
+          setFirstSearchDone(true);
         }
       }
     },
@@ -138,15 +146,21 @@ export function LoggingExplorer({
     ]
   );
 
+  // Typing waits for a pause; the first search of the tab starts at once.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: firstSearchDone only picks the delay and must not restart a pending search.
   useEffect(() => {
     if (!storageAvailable || parsedQuery.errors.length > 0 || parsedQuery.incomplete) {
       setSearchPending(false);
+      setFirstSearchDone(true);
       return;
     }
     setSearchPending(true);
-    const timer = window.setTimeout(() => {
-      void load();
-    }, 300);
+    const timer = window.setTimeout(
+      () => {
+        void load();
+      },
+      firstSearchDone ? 300 : 0
+    );
     return () => window.clearTimeout(timer);
   }, [load, parsedQuery.errors.length, parsedQuery.incomplete, storageAvailable]);
 
@@ -255,9 +269,7 @@ export function LoggingExplorer({
 
   if (!storageAvailable) {
     return (
-      <div className="rounded-md border border-border p-6 text-sm text-muted-foreground">
-        ClickHouse is configured but unavailable. Metadata management remains available.
-      </div>
+      <EmptyState message="ClickHouse is configured but unavailable. Metadata management remains available." />
     );
   }
 
@@ -340,6 +352,7 @@ export function LoggingExplorer({
               <Button
                 variant="ghost"
                 size="icon"
+                aria-label="Clear search"
                 className="absolute right-0 top-1/2 -translate-y-1/2"
                 onClick={() => {
                   setQueryText("");
@@ -353,8 +366,9 @@ export function LoggingExplorer({
               </Button>
             )}
             {showSuggestions && (
-              <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 overflow-hidden rounded-md border border-border bg-popover shadow-md">
+              <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-30 overflow-hidden border border-border bg-popover shadow-md">
                 {suggestions.map((suggestion, index) => (
+                  // Suggestion rows are list options; the input keeps focus and keyboard control.
                   <button
                     key={`${suggestion.replacement}:${suggestion.detail ?? ""}`}
                     type="button"
@@ -386,7 +400,7 @@ export function LoggingExplorer({
             <Button
               variant="outline"
               size="icon"
-              className="h-9 w-9"
+              aria-label="Query syntax cheatsheet"
               onClick={() => setCheatsheetOpen(true)}
             >
               <Info className="h-4 w-4" />
@@ -490,24 +504,13 @@ function LoggingQueryCheatsheet({
           <DialogTitle>Log Query Cheatsheet</DialogTitle>
           <DialogDescription>Compact search syntax for filtering log events.</DialogDescription>
         </DialogHeader>
-        <div className="overflow-hidden rounded-md border border-border">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border bg-muted/50">
-                <th className="px-3 py-1.5 text-left font-medium">Syntax</th>
-                <th className="px-3 py-1.5 text-left font-medium">Description</th>
-              </tr>
-            </thead>
-            <tbody>
-              {QUERY_CHEATSHEET.map((item) => (
-                <tr key={item.syntax} className="border-b border-border last:border-b-0">
-                  <td className="px-3 py-1.5 font-mono text-purple-400">{item.syntax}</td>
-                  <td className="px-3 py-1.5 text-muted-foreground">{item.description}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ReferenceTable
+          termLabel="Syntax"
+          rows={QUERY_CHEATSHEET.map((item) => ({
+            term: item.syntax,
+            description: item.description,
+          }))}
+        />
       </DialogContent>
     </Dialog>
   );

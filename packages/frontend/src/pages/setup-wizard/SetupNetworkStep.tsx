@@ -1,4 +1,4 @@
-import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useMemo } from "react";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { PanelShell } from "@/components/common/PanelShell";
@@ -122,8 +122,7 @@ export function SetupNetworkStep({
             <ArrowLeft className="h-4 w-4" />
             Back
           </Button>
-          <Button type="submit" className="w-max flex-none" disabled={busy || !canContinue}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          <Button type="submit" className="w-max flex-none" pending={busy} disabled={!canContinue}>
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>

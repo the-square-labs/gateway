@@ -1,18 +1,12 @@
 import { DndContext, MeasuringStrategy } from "@dnd-kit/core";
 import { SortableContext, verticalListSortingStrategy } from "@dnd-kit/sortable";
-import {
-  ResourceListCell,
-  ResourceListFrame,
-  ResourceListHeaderTable,
-  ResourceListRow,
-  ResourceListTable,
-} from "@/components/common/ResourceListLayout";
+import { ResourceListFrame, ResourceListHeaderTable } from "@/components/common/ResourceListLayout";
 import { ResourceDragOverlay } from "@/components/common/resource-list/ResourceDragOverlay";
 import { ResourceFolderGroup } from "@/components/common/resource-list/ResourceFolderGroup";
 import { ResourceUngroupedSection } from "@/components/common/resource-list/ResourceUngroupedSection";
 import type { ResourceListFormProps } from "@/components/common/resource-list/types";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { pointerFirstCollisionDetection } from "@/lib/dnd-collision";
 
@@ -34,6 +28,7 @@ export function ResourceListForm<TFolder, TItem>({
   const ungroupedItems = folders.ungroupedItems;
   const initialLoading = useInitialLoading(Boolean(loading));
   const showLoading = initialLoading && !hasContent;
+  useContentLoading(initialLoading);
   const frame = (
     <ResourceListFrame minWidth={minWidth} className={embedded ? "border-0 text-sm" : undefined}>
       <ResourceListHeaderTable columns={columns} />
@@ -65,28 +60,11 @@ export function ResourceListForm<TFolder, TItem>({
       )}
     </ResourceListFrame>
   );
-  const loadingFrame = (
-    <div aria-label={loadingLabel} aria-busy="true">
-      <ResourceListFrame minWidth={minWidth} className={embedded ? "border-0 text-sm" : undefined}>
-        <ResourceListHeaderTable columns={columns} />
-        <ResourceListTable columns={columns}>
-          {Array.from({ length: 5 }, (_, row) => (
-            <ResourceListRow key={row} aria-hidden="true">
-              {columns.map((column, columnIndex) => (
-                <ResourceListCell key={column.id} align={column.align}>
-                  <Skeleton className={columnIndex === 0 ? "h-5 w-2/3" : "h-4 w-1/2"} />
-                </ResourceListCell>
-              ))}
-            </ResourceListRow>
-          ))}
-        </ResourceListTable>
-      </ResourceListFrame>
-    </div>
-  );
+  // The first load keeps the page hidden (reported below), so nothing stands in for the rows.
+  const loadingFrame = <div aria-label={loadingLabel} aria-busy="true" />;
 
   return (
     <div className={embedded ? undefined : "space-y-3"}>
-      {initialLoading && <Skeleton />}
       <SearchFilterBar
         {...search}
         className={embedded ? "border-b border-border" : undefined}

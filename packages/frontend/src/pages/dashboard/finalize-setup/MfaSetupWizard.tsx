@@ -1,5 +1,5 @@
 import { startRegistration } from "@simplewebauthn/browser";
-import { Check, KeyRound, Loader2, ShieldCheck, Smartphone } from "lucide-react";
+import { Check, KeyRound, ShieldCheck, Smartphone } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/services/api";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
+import { SetupChoiceButton } from "./SetupChoiceButton";
 
 type MfaScreen = "method" | "totp" | "recovery" | "complete";
 type MfaSetupMode = "onboarding" | "standalone";
@@ -44,6 +45,7 @@ export function MfaSetupWizard({
   const [code, setCode] = useState("");
   const [recoveryCodes, setRecoveryCodes] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
+  const [pendingChoice, setPendingChoice] = useState<"passkey" | "totp" | null>(null);
   const isStandalone = mode === "standalone";
 
   useEffect(() => {
@@ -56,6 +58,7 @@ export function MfaSetupWizard({
   }, [open]);
 
   const startTotp = async () => {
+    setPendingChoice("totp");
     setSaving(true);
     try {
       setTotp(await api.beginCurrentUserTotpSetup());
@@ -81,6 +84,7 @@ export function MfaSetupWizard({
   };
 
   const registerPasskey = async () => {
+    setPendingChoice("passkey");
     setSaving(true);
     try {
       const options = await api.beginCurrentUserPasskeyRegistration();
@@ -124,8 +128,8 @@ export function MfaSetupWizard({
       skipDisabled={saving}
       footer={
         screen === "totp" ? (
-          <Button onClick={() => void confirmTotp()} disabled={saving || code.length !== 6}>
-            {saving ? <Loader2 className="animate-spin" /> : <Check />}
+          <Button onClick={() => void confirmTotp()} pending={saving} disabled={code.length !== 6}>
+            {saving ? null : <Check />}
             Activate TOTP
           </Button>
         ) : screen === "recovery" ? (
@@ -148,47 +152,26 @@ export function MfaSetupWizard({
     >
       {screen === "method" ? (
         <div className="space-y-3">
-          <Button
-            variant="outline"
-            className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+          <SetupChoiceButton
+            icon={KeyRound}
+            title="Add a passkey"
+            description="Use this device, a password manager, or a security key."
+            pending={saving && pendingChoice === "passkey"}
+            disabled={saving}
             onClick={() => void registerPasskey()}
+          />
+          <SetupChoiceButton
+            icon={Smartphone}
+            title="Authenticator app"
+            description="Scan a QR code with any compatible TOTP app."
+            pending={saving && pendingChoice === "totp"}
             disabled={saving}
-          >
-            <span className="flex w-full items-center gap-3">
-              {saving ? (
-                <Loader2 className="h-5 w-5 shrink-0 animate-spin text-muted-foreground" />
-              ) : (
-                <KeyRound className="h-5 w-5 shrink-0 text-muted-foreground" />
-              )}
-              <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-medium text-foreground">Add a passkey</span>
-                <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                  Use this device, a password manager, or a security key.
-                </span>
-              </span>
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
             onClick={() => void startTotp()}
-            disabled={saving}
-          >
-            <span className="flex w-full items-center gap-3">
-              <Smartphone className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-medium text-foreground">
-                  Authenticator app
-                </span>
-                <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                  Scan a QR code with any compatible TOTP app.
-                </span>
-              </span>
-            </span>
-          </Button>
+          />
         </div>
       ) : screen === "totp" ? (
-        totp ? (
+        // The screen opens once the setup secret has arrived.
+        totp && (
           <div className="space-y-4">
             <div className="flex justify-center bg-white p-4">
               <QRCodeSVG
@@ -211,10 +194,6 @@ export function MfaSetupWizard({
                 autoFocus
               />
             </label>
-          </div>
-        ) : (
-          <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
-            <Loader2 className="mr-2 animate-spin" /> Preparing secure setup…
           </div>
         )
       ) : screen === "recovery" ? (

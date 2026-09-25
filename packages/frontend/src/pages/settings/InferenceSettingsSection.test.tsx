@@ -1,14 +1,17 @@
 import { act, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PageTransition } from "@/components/common/PageTransition";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { makeUser } from "@/test/fixtures";
+import { waitForReveal } from "@/test/reveal";
 import type { InferenceCoreStatus } from "@/types/inference-core";
 import { InferenceSettingsSection } from "./InferenceSettingsSection";
 
 const realtimeSubscriptions = vi.hoisted(
   () => new Map<string, { handler: () => void; onReconnect?: () => void }>()
 );
+const providersPanelState = vi.hoisted(() => ({ ready: true }));
 
 vi.mock("@/hooks/use-realtime", () => ({
   useRealtime: (
@@ -42,11 +45,19 @@ vi.mock("./inference/InferenceModelsPanel", () => ({
     <div data-testid="models-revision">Models panel {refreshToken}</div>
   ),
 }));
-vi.mock("./inference/InferenceProvidersPanel", () => ({
-  InferenceProvidersPanel: ({ refreshToken }: { refreshToken?: number }) => (
-    <div data-testid="providers-revision">Providers panel {refreshToken}</div>
-  ),
-}));
+vi.mock("./inference/InferenceProvidersPanel", async () => {
+  const { Skeleton } = await vi.importActual<typeof import("@/components/ui/skeleton")>(
+    "@/components/ui/skeleton"
+  );
+  return {
+    InferenceProvidersPanel: ({ refreshToken }: { refreshToken?: number }) =>
+      providersPanelState.ready ? (
+        <div data-testid="providers-revision">Providers panel {refreshToken}</div>
+      ) : (
+        <Skeleton />
+      ),
+  };
+});
 
 function makeStatus(overrides: Partial<InferenceCoreStatus> = {}): InferenceCoreStatus {
   return {
@@ -91,6 +102,7 @@ function setUser(scopes: string[]) {
 describe("InferenceSettingsSection", () => {
   afterEach(() => {
     realtimeSubscriptions.clear();
+    providersPanelState.ready = true;
     vi.restoreAllMocks();
   });
 
@@ -158,5 +170,43 @@ describe("InferenceSettingsSection", () => {
     expect(screen.getByTestId("overview-revision")).toHaveTextContent("1");
     expect(screen.getByTestId("users-revision")).toHaveTextContent("1");
     expect(screen.getByTestId("activity-revision")).toHaveTextContent("1");
+  });
+
+  it("keeps the tab hidden until panels waiting for the core status have loaded", async () => {
+    setUser(["inference:providers:view", "inference:providers:manage", "inference:models:manage"]);
+    providersPanelState.ready = false;
+    let resolveStatus!: (status: InferenceCoreStatus) => void;
+    vi.spyOn(api, "getInferenceCoreStatus").mockReturnValue(
+      new Promise((resolve) => {
+        resolveStatus = resolve;
+      })
+    );
+    const view = () => (
+      <PageTransition>
+        <InferenceSettingsSection />
+      </PageTransition>
+    );
+
+    const { container, rerender } = render(view());
+    const gate = container.querySelector("[data-page-transition]");
+    expect(gate).not.toHaveAttribute("data-reveal-phase", "revealed");
+
+    await act(async () => resolveStatus(readyStatus));
+    // The core status is in, but the providers panel it unlocked is still loading.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 120)));
+    expect(screen.getByTestId("models-revision")).toBeInTheDocument();
+    expect(gate).not.toHaveAttribute("data-reveal-phase", "revealed");
+
+    providersPanelState.ready = true;
+    rerender(view());
+
+    await waitForReveal();
+    expect(screen.getByText("Running")).toBeVisible();
+    expect(screen.getByTestId("providers-revision")).toBeVisible();
+
+    // Realtime refreshes update the revealed tab in place.
+    act(() => realtimeSubscriptions.get("inference.catalog.changed")?.handler());
+    expect(gate).toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.getByTestId("providers-revision")).toHaveTextContent("1");
   });
 });

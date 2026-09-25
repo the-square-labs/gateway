@@ -123,7 +123,8 @@ export function LoggingEnvironmentDialog({
             Cancel
           </Button>
           <Button
-            disabled={!name.trim() || saving || !destinationAllowed}
+            pending={saving}
+            disabled={!name.trim() || !destinationAllowed}
             onClick={() => void save()}
           >
             Save

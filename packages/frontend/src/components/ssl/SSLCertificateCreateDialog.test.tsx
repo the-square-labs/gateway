@@ -8,6 +8,7 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { useAuthStore } from "@/stores/auth";
 import { useResourceFolderStore } from "@/stores/resource-folders";
+import { waitForReveal } from "@/test/reveal";
 import { SSLCertificateCreateDialog } from "./SSLCertificateCreateDialog";
 
 function renderDialog(props: Partial<ComponentProps<typeof SSLCertificateCreateDialog>> = {}) {
@@ -59,6 +60,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog();
+    await waitForReveal();
     await user.click(screen.getByPlaceholderText("example.com"));
     await user.click(await screen.findByRole("button", { name: /app\.example\.com/i }));
     const challengeSelect = screen.getByRole("combobox", { name: "Challenge Type" });
@@ -101,6 +103,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog({ cloudflareConfigured: false, onCloudflareRequired });
+    await waitForReveal();
     await user.click(screen.getByPlaceholderText("example.com"));
     await user.click(await screen.findByRole("button", { name: /app\.example\.com/i }));
     const challengeSelect = screen.getByRole("combobox", { name: "Challenge Type" });
@@ -137,6 +140,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog({ cloudflareConfigured: true, onCloudflareRequired });
+    await waitForReveal();
     await user.click(screen.getByPlaceholderText("example.com"));
     await user.click(await screen.findByRole("button", { name: /app\.example\.com/i }));
     const challengeSelect = screen.getByRole("combobox", { name: "Challenge Type" });
@@ -159,6 +163,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog();
+    await waitForReveal();
     const challengeSelect = screen.getByRole("combobox", { name: "Challenge Type" });
     expect(challengeSelect).toHaveTextContent("Automatic DNS via Cloudflare");
 
@@ -189,6 +194,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog({ cloudflareConfigured: false, onCloudflareRequired });
+    await waitForReveal();
     await user.click(screen.getByPlaceholderText("example.com"));
     await user.click(await screen.findByRole("button", { name: /app\.example\.com/i }));
 
@@ -236,6 +242,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog({ onOpenChange, onCreated });
+    await waitForReveal();
     await user.click(screen.getByPlaceholderText("example.com"));
     await user.click(await screen.findByRole("button", { name: /app\.example\.com/i }));
     await user.click(screen.getByRole("button", { name: "Request Certificate" }));
@@ -266,6 +273,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     const user = userEvent.setup();
 
     renderDialog();
+    await waitForReveal();
     await user.type(screen.getByPlaceholderText("example.com"), "unregistered.example.com");
     expect(screen.getByRole("button", { name: "Request Certificate" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Request Certificate" }));
@@ -286,6 +294,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
   it("enables manual upload only after all required fields are filled", async () => {
     const user = userEvent.setup();
     renderDialog({ hasDomains: false, pkiEnabled: false, initialTab: "upload" });
+    await waitForReveal();
     const uploadButton = screen.getByRole("button", { name: "Upload Certificate" });
 
     await user.type(screen.getByPlaceholderText("My Certificate"), "My Certificate");
@@ -340,6 +349,7 @@ describe("SSLCertificateCreateDialog internal PKI linking", () => {
   it("disables linking without any PKI key export permission", async () => {
     setScopes(["ssl:cert:issue", "pki:cert:view"]);
     renderDialog({ hasDomains: false, initialTab: "internal" });
+    await waitForReveal();
 
     expect(
       await screen.findByText(/Linking requires the PKI certificate export permission/)
@@ -352,6 +362,7 @@ describe("SSLCertificateCreateDialog internal PKI linking", () => {
     setScopes(["ssl:cert:issue", "pki:cert:export:pki-2"]);
     const link = vi.spyOn(api, "linkInternalCert").mockResolvedValue({ id: "ssl-1" } as any);
     renderDialog({ hasDomains: false, initialTab: "internal" });
+    await waitForReveal();
 
     await waitFor(() => expect(api.listCertificates).toHaveBeenCalled());
     expect(
@@ -408,6 +419,7 @@ describe("SSLCertificateCreateDialog folder destination", () => {
     const user = userEvent.setup();
 
     renderDialog({ hasDomains: false, pkiEnabled: false, initialTab: "upload" });
+    await waitForReveal();
 
     const folderTrigger = screen.getByRole("combobox", { name: "Folder" });
     await waitFor(() => expect(folderTrigger).toHaveTextContent("Team A"));
@@ -439,6 +451,7 @@ describe("SSLCertificateCreateDialog folder destination", () => {
     const user = userEvent.setup();
 
     renderDialog({ hasDomains: false, pkiEnabled: false, initialTab: "upload" });
+    await waitForReveal();
     await user.type(screen.getByPlaceholderText("My Certificate"), "My Certificate");
     await user.type(screen.getAllByPlaceholderText(/BEGIN CERTIFICATE/)[0]!, "certificate");
     await user.type(screen.getByPlaceholderText(/BEGIN PRIVATE KEY/), "private key");

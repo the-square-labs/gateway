@@ -1,6 +1,7 @@
-import { Check, Loader2, UserPlus } from "lucide-react";
+import { Check, UserPlus } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -59,6 +60,13 @@ export function InviteUsersSetupWizard({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [completed, setCompleted] = useState(false);
+  // The groups load as the wizard opens; mark them loading in that very render
+  // so the dialog waits for them instead of filling the group picker later.
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) setLoading(true);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -139,13 +147,15 @@ export function InviteUsersSetupWizard({
         ) : (
           <Button
             onClick={() => void invite()}
-            disabled={loading || saving || !email.trim() || !name.trim() || !groupId}
+            pending={saving}
+            disabled={loading || !email.trim() || !name.trim() || !groupId}
           >
-            {saving ? <Loader2 className="animate-spin" /> : <UserPlus />} Invite user
+            {saving ? null : <UserPlus />} Invite user
           </Button>
         )
       }
     >
+      <ContentLoading loading={loading && !completed} />
       {completed ? (
         <FinalizeSetupCompletion
           title="User invited"

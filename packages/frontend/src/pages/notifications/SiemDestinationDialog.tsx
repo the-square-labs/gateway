@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ToggleField } from "@/components/common/ToggleField";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -19,7 +20,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import { handleLicenseApiError } from "@/stores/license-paywall";
@@ -286,15 +286,13 @@ export function SiemDestinationDialog({
             </AnimatePresence>
           </AnimatedHeight>
           <div className="pt-4">
-            <div className="flex items-center justify-between gap-4 border border-border bg-muted/30 p-3">
-              <div>
-                <p className="text-sm font-medium">Delivery enabled</p>
-                <p className="text-xs text-muted-foreground">
-                  Disabled destinations keep their queued events paused until re-enabled.
-                </p>
-              </div>
-              <Switch checked={enabled} onChange={setEnabled} />
-            </div>
+            <ToggleField
+              title="Delivery enabled"
+              description="Disabled destinations keep their queued events paused until re-enabled."
+              checked={enabled}
+              onChange={setEnabled}
+              ariaLabel="Delivery enabled"
+            />
           </div>
           <p className="text-xs text-muted-foreground">
             Secrets are encrypted at rest and cannot be viewed again. Full audit details and
@@ -305,8 +303,8 @@ export function SiemDestinationDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={saving}>
-            {saving ? "Saving..." : isEdit ? "Save Changes" : "Create Destination"}
+          <Button onClick={() => void save()} pending={saving}>
+            {isEdit ? "Save Changes" : "Create Destination"}
           </Button>
         </DialogFooter>
       </DialogContent>

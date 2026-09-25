@@ -3,7 +3,9 @@ import { Code2, Minus, Plus, RotateCcw, Table2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
 import { Input } from "@/components/ui/input";
@@ -708,6 +710,15 @@ export function EnvironmentTab({
     }
   };
 
+  const initialLoading =
+    isLoading ||
+    databaseNodeLoading ||
+    (hasDatabaseNode && databaseLinksLoading) ||
+    (managedStorageLinksEnabled && canEdit && canManageSecrets && storageLinksLoading);
+  // The tab stays hidden until the environment and its link sections have loaded; later
+  // refreshes update in place.
+  useContentLoading(initialLoading);
+
   // ── Derived state ────────────────────────────────────────────────
 
   if (!canEdit && !canManageSecrets) {
@@ -830,18 +841,12 @@ export function EnvironmentTab({
   const hasChanges = hasEnvChanges || hasSecretsChanges;
   const hasCombinedChanges =
     hasChanges || databaseLinkDraft.hasChanges || storageLinkDraft.hasChanges;
-  const initialLoading =
-    isLoading ||
-    databaseNodeLoading ||
-    (hasDatabaseNode && databaseLinksLoading) ||
-    (managedStorageLinksEnabled && canEdit && canManageSecrets && storageLinksLoading);
 
   return (
-    <motion.div
-      aria-busy={initialLoading}
-      animate={{ opacity: initialLoading ? 0 : 1 }}
-      initial={false}
-      className={`${rawMode ? "flex flex-col flex-1 min-h-0 gap-4" : `${flushBottom ? "" : "pb-6 "}space-y-4`} ${initialLoading ? "invisible" : "visible"}`}
+    <div
+      className={
+        rawMode ? "flex flex-col flex-1 min-h-0 gap-4" : `${flushBottom ? "" : "pb-6 "}space-y-4`
+      }
     >
       {managedDatabaseLinksEnabled &&
         canEdit &&
@@ -899,20 +904,13 @@ export function EnvironmentTab({
             actions={
               <>
                 {canEdit && !rawMode && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8"
-                    onClick={addVar}
-                    title="Add variable"
-                  >
+                  <Button variant="ghost" size="icon-sm" onClick={addVar} title="Add variable">
                     <Plus className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 <Button
                   variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
+                  size="icon-sm"
                   onClick={rawMode ? switchToTable : switchToRaw}
                   title={rawMode ? "Table view" : "Raw view"}
                   disabled={hasErrors}
@@ -921,11 +919,12 @@ export function EnvironmentTab({
                 </Button>
                 {canEdit && (
                   <Button
-                    className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
+                    variant="warning"
                     onClick={handleSave}
-                    disabled={isSaving || !hasCombinedChanges || hasErrors}
+                    pending={isSaving}
+                    disabled={!hasCombinedChanges || hasErrors}
                   >
-                    <RotateCcw className="h-3.5 w-3.5" />
+                    {!isSaving && <RotateCcw className="h-3.5 w-3.5" />}
                     {onSaveServiceEnv
                       ? resolvedServiceSaveLabel
                       : databaseLinkDraft.hasChanges ||
@@ -987,7 +986,7 @@ export function EnvironmentTab({
                             duplicateKeyIndices.has(idx) ||
                             managedEnvCollisionIndices.has(idx) ||
                             (env.key.trim() && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(env.key.trim()))
-                              ? "bg-red-500/15 text-red-400"
+                              ? "bg-destructive/10 text-destructive"
                               : ""
                           }`}
                           placeholder="KEY"
@@ -1002,7 +1001,7 @@ export function EnvironmentTab({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none border-l border-border"
+                            className="shrink-0 rounded-none border-l border-border"
                             onClick={() => removeVar(idx)}
                           >
                             <Minus className="h-3.5 w-3.5" />
@@ -1012,14 +1011,12 @@ export function EnvironmentTab({
                     ))}
                   </div>
                   {visibleEnvRows.length === 0 && (
-                    <div className="flex items-center justify-center py-8">
-                      <p className="text-sm text-muted-foreground">
-                        No environment variables.{" "}
-                        <button onClick={addVar} className="text-foreground hover:underline">
-                          Add one
-                        </button>
-                      </p>
-                    </div>
+                    <EmptyState
+                      message="No environment variables."
+                      actionLabel="Add one"
+                      onAction={addVar}
+                      embedded
+                    />
                   )}
                 </motion.div>
               )}
@@ -1047,6 +1044,6 @@ export function EnvironmentTab({
           />
         )}
       </fieldset>
-    </motion.div>
+    </div>
   );
 }

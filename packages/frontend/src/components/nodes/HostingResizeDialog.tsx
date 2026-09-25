@@ -1,4 +1,4 @@
-import { Loader2, Server } from "lucide-react";
+import { Server } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
@@ -234,15 +234,13 @@ export function HostingResizeDialog({
             Cancel
           </Button>
           <Button
+            pending={busy}
             disabled={
-              busy ||
-              shrink ||
-              !resource?.incarnation ||
-              (provider !== "proxmox" && (!size || !price))
+              shrink || !resource?.incarnation || (provider !== "proxmox" && (!size || !price))
             }
             onClick={() => void submit()}
           >
-            {busy && <Loader2 className="h-4 w-4 animate-spin" />}Resize resource
+            Resize resource
           </Button>
         </DialogFooter>
       </DialogContent>

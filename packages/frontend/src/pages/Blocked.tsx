@@ -1,19 +1,24 @@
 import { Ban } from "lucide-react";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 
 export function BlockedPage() {
   const navigate = useNavigate();
   const { user, logout } = useAuthStore();
+  const [signingOut, setSigningOut] = useState(false);
 
   const handleLogout = async () => {
+    setSigningOut(true);
     try {
       await api.logout();
     } catch {
       // ignore
     }
     logout();
+    setSigningOut(false);
     navigate("/login");
   };
 
@@ -28,12 +33,9 @@ export function BlockedPage() {
           Your account{user?.email ? ` (${user.email})` : ""} has been blocked by an administrator.
           Contact your admin if you believe this is an error.
         </p>
-        <button
-          onClick={handleLogout}
-          className="mt-2 border border-border px-4 py-2 text-sm text-foreground hover:bg-muted transition-colors"
-        >
+        <Button variant="outline" className="mt-2" onClick={handleLogout} pending={signingOut}>
           Sign out
-        </button>
+        </Button>
       </div>
     </div>
   );

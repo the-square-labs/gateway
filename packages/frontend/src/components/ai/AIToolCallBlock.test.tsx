@@ -1,7 +1,8 @@
 import { fireEvent, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import { renderWithRouter } from "@/test/render";
-import { AIToolCallBlock } from "./AIToolCallBlock";
+import { AIToolCallBlock, QuestionBlock } from "./AIToolCallBlock";
 
 describe("AIToolCallBlock tool-output artifacts", () => {
   it("renders a bounded manifest and download action instead of dumping the descriptor", () => {
@@ -76,5 +77,32 @@ describe("AIToolCallBlock tool-output artifacts", () => {
     const crosses = toolButton.querySelectorAll(".lucide-x");
     expect(crosses).toHaveLength(1);
     expect(crosses[0]).toHaveClass("text-destructive");
+  });
+});
+
+describe("QuestionBlock", () => {
+  it("names the free-text send action and keeps it inert until an answer is typed", async () => {
+    const user = userEvent.setup();
+    const onAnswer = vi.fn();
+    renderWithRouter(
+      <QuestionBlock
+        toolCall={{
+          id: "question-1",
+          name: "ask_question",
+          arguments: { question: "Which port?", allowFreeText: true },
+          status: "awaiting_approval",
+        }}
+        onAnswer={onAnswer}
+      />
+    );
+
+    const send = screen.getByRole("button", { name: "Send answer" });
+    expect(send).toHaveAttribute("type", "button");
+    expect(send).toBeDisabled();
+
+    await user.type(screen.getByPlaceholderText("Type your answer..."), "8081");
+    await user.click(send);
+
+    expect(onAnswer).toHaveBeenCalledWith("question-1", "8081");
   });
 });

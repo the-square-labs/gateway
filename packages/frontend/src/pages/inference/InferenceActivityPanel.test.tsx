@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { api } from "@/services/api";
+import { waitForReveal } from "@/test/reveal";
 import type { InferenceActivity } from "@/types/inference";
 import { InferenceActivityPanel } from "./InferenceActivityPanel";
 
@@ -80,9 +81,8 @@ describe("InferenceActivityPanel", () => {
       )
     );
     const dialog = screen.getByRole("dialog");
-    await waitFor(() =>
-      expect(within(dialog).queryByText("Loading activity...")).not.toBeInTheDocument()
-    );
+    await waitForReveal();
+    expect(within(dialog).queryByText("Loading activity...")).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Filters" })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Load more" })).not.toBeInTheDocument();
     expect(within(dialog).queryByText("Operation")).not.toBeInTheDocument();
@@ -142,7 +142,7 @@ describe("InferenceActivityPanel", () => {
     expect(api.listInferenceActivity).toHaveBeenCalledTimes(2);
   });
 
-  it("opens the full activity dialog immediately with a loader", async () => {
+  it("opens the full activity dialog at full size once its first page and filters load", async () => {
     let resolveFullPage:
       | ((page: { data: InferenceActivity[]; nextPage: null }) => void)
       | undefined;
@@ -161,20 +161,45 @@ describe("InferenceActivityPanel", () => {
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
 
     const dialog = screen.getByRole("dialog", { name: "Inference activity" });
-    expect(
-      within(dialog).getByRole("status", { name: "Loading inference activity" })
-    ).toBeInTheDocument();
+    expect(dialog).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(await within(dialog).findByRole("status", { name: "Loading" })).toBeInTheDocument();
+    expect(dialog).not.toHaveAttribute("data-reveal-phase", "revealed");
 
     await act(async () => {
       resolveFullPage?.({ data: [activity("full")], nextPage: null });
     });
 
+    await waitForReveal();
+    expect(within(dialog).queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+    expect(within(dialog).getByText("End of activity")).toBeVisible();
+    expect(within(dialog).getByRole("combobox", { name: "Activity user" })).toBeVisible();
+  });
+
+  it("keeps the search and filters in place while a filtered request runs", async () => {
+    vi.mocked(api.listInferenceActivity).mockImplementation(async (query = {}) => {
+      if (query.limit === 6) return { data: [activity("recent")], nextPage: null };
+      if (query.search) return new Promise(() => {});
+      return { data: [], nextPage: null };
+    });
+
+    render(<InferenceActivityPanel />);
+    await screen.findByText("User recent");
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    await waitForReveal();
+    const dialog = screen.getByRole("dialog", { name: "Inference activity" });
+    const search = within(dialog).getByPlaceholderText("Search user, model, status, or error...");
+
+    fireEvent.change(search, { target: { value: "nothing" } });
     await waitFor(() =>
-      expect(
-        within(dialog).queryByRole("status", { name: "Loading inference activity" })
-      ).not.toBeInTheDocument()
+      expect(api.listInferenceActivity).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "nothing" })
+      )
     );
-    expect(within(dialog).getByText("End of activity")).toBeInTheDocument();
+
+    expect(within(dialog).getByPlaceholderText("Search user, model, status, or error...")).toBe(
+      search
+    );
+    expect(dialog).toHaveAttribute("data-reveal-phase", "revealed");
   });
 });
 

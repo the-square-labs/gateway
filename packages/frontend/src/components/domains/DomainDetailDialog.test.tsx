@@ -78,7 +78,7 @@ describe("DomainDetailDialog", () => {
     vi.mocked(useRealtime).mockReset();
   });
 
-  it("waits for domain details before opening to avoid resizing the dialog", () => {
+  it("keeps the details hidden until they arrive to avoid resizing the dialog", () => {
     useAuthStore.setState({
       user: makeUser({ scopes: ["domains:view"] }),
       isAuthenticated: true,
@@ -88,11 +88,20 @@ describe("DomainDetailDialog", () => {
 
     render(
       <MemoryRouter>
-        <DomainDetailDialog domainId={domain.id} open onOpenChange={vi.fn()} onUpdated={vi.fn()} />
+        <DomainDetailDialog
+          domainId={domain.id}
+          listDomain={domain}
+          open
+          onOpenChange={vi.fn()}
+          onUpdated={vi.fn()}
+        />
       </MemoryRouter>
     );
 
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(screen.getByRole("heading", { name: "app.example.com" })).toBeInTheDocument();
+    expect(screen.queryByText("DNS Management")).not.toBeInTheDocument();
   });
 
   it("uses shared DNS rows, Cloudflare target rows, and Type/Target usage columns", async () => {

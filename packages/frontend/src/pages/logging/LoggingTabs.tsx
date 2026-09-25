@@ -45,11 +45,7 @@ const environmentColumns: ResourceListColumn<LoggingEnvironment>[] = [
     id: "mode",
     label: "Mode",
     width: "7rem",
-    renderCell: (environment) => (
-      <Badge variant="secondary" className="uppercase">
-        {environment.schemaMode}
-      </Badge>
-    ),
+    renderCell: (environment) => <Badge variant="secondary">{environment.schemaMode}</Badge>,
   },
   {
     id: "retention",
@@ -65,7 +61,7 @@ const environmentColumns: ResourceListColumn<LoggingEnvironment>[] = [
     width: "7rem",
     align: "right",
     renderCell: (environment) => (
-      <Badge variant={environment.enabled ? "success" : "secondary"} className="uppercase">
+      <Badge variant={environment.enabled ? "success" : "secondary"}>
         {environment.enabled ? "Enabled" : "Disabled"}
       </Badge>
     ),
@@ -164,11 +160,7 @@ function schemaColumns({
       id: "mode",
       label: "Mode",
       width: "7rem",
-      renderCell: (schema) => (
-        <Badge variant="secondary" className="uppercase">
-          {schema.schemaMode}
-        </Badge>
-      ),
+      renderCell: (schema) => <Badge variant="secondary">{schema.schemaMode}</Badge>,
     },
     {
       id: "fields",
@@ -198,7 +190,7 @@ function schemaColumns({
           <div className="flex justify-end" onClick={(event) => event.stopPropagation()}>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Button variant="ghost" size="icon-sm" aria-label={`Actions for ${schema.name}`}>
                   <EllipsisVertical className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>

@@ -5,7 +5,6 @@ import {
   Check,
   Database,
   KeyRound,
-  Loader2,
   type LucideIcon,
   Mail,
   MoreHorizontal,
@@ -96,8 +95,8 @@ export function LicenseStep({
           <Button type="button" variant="outline" onClick={onCommunity} disabled={busy}>
             Continue with Community
           </Button>
-          <Button type="submit" disabled={busy || !trimmedKey}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound />}
+          <Button type="submit" pending={busy} disabled={!trimmedKey}>
+            {busy ? null : <KeyRound />}
             Activate license
           </Button>
         </div>
@@ -279,9 +278,9 @@ export function AdminDetailsStep({
           <Button
             type="submit"
             className="w-max flex-none"
-            disabled={busy || !isAdminDraftValid(admin)}
+            pending={busy}
+            disabled={!isAdminDraftValid(admin)}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
@@ -410,9 +409,9 @@ export function LoggingStep({
           <Button
             type="submit"
             className="w-max flex-none"
-            disabled={busy || !isLoggingDraftValid(logging, hasSavedPassword)}
+            pending={busy}
+            disabled={!isLoggingDraftValid(logging, hasSavedPassword)}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Continue
             {!busy && <ArrowRight className="h-4 w-4" />}
           </Button>
@@ -542,8 +541,8 @@ export function FinishStep({
           <ArrowLeft className="h-4 w-4" />
           Back
         </Button>
-        <Button type="button" className="w-max flex-none" onClick={onContinue} disabled={busy}>
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+        <Button type="button" className="w-max flex-none" onClick={onContinue} pending={busy}>
+          {busy ? null : <Check className="h-4 w-4" />}
           Apply configuration
         </Button>
       </div>

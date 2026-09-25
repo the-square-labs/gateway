@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import type { ResourceListColumn } from "@/components/common/ResourceListLayout";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -77,7 +78,8 @@ export function DockerVolumes({
   const canFetchData = !!visibleNodeId || dockerNodesLoaded;
 
   const [dockerNodes, setDockerNodes] = useState<Node[]>([]);
-  const [nodesLoaded, setNodesLoaded] = useState(false);
+  // The first list request; until it settles an empty list is not yet "no results".
+  const [initialFetchDone, setInitialFetchDone] = useState(false);
   const [search, setSearch] = useState("");
   const createFolderRef = useRef<(() => void) | null>(null);
 
@@ -109,16 +111,15 @@ export function DockerVolumes({
     createNodeId
   );
   const [creating, setCreating] = useState(false);
+  const [pendingVolumeAction, setPendingVolumeAction] = useState<string | null>(null);
   const folderList = useMemo(() => flattenFolders(volumeFolders), [volumeFolders]);
 
   const loadVolumeNodes = useCallback(async () => {
     if (embedded && !fixedNodeId) {
-      setNodesLoaded(dockerNodesLoaded);
       return;
     }
     if (fixedNodeId) {
       setSelectedNode(fixedNodeId);
-      setNodesLoaded(true);
       return;
     }
 
@@ -130,11 +131,11 @@ export function DockerVolumes({
       );
       setDockerNodes(onlineNodes);
       useDockerStore.getState().setDockerNodes(onlineNodes);
-      setNodesLoaded(true);
     } catch {
       toast.error("Failed to load Docker nodes");
+      setInitialFetchDone(true);
     }
-  }, [dockerNodesLoaded, embedded, fixedNodeId, setSelectedNode, user?.scopes]);
+  }, [embedded, fixedNodeId, setSelectedNode, user?.scopes]);
 
   useEffect(() => {
     void loadVolumeNodes();
@@ -142,7 +143,7 @@ export function DockerVolumes({
 
   useEffect(() => {
     if (!canFetchData) return;
-    fetchVolumes(fixedNodeId, search);
+    void fetchVolumes(fixedNodeId, search).finally(() => setInitialFetchDone(true));
     const interval = setInterval(() => fetchVolumes(fixedNodeId, search), 30_000);
     return () => clearInterval(interval);
   }, [canFetchData, fetchVolumes, fixedNodeId, search]);
@@ -180,19 +181,22 @@ export function DockerVolumes({
         confirmLabel: "Remove",
       });
       if (!ok) return;
+      setPendingVolumeAction(`remove:${nid}/${name}`);
       try {
         await api.removeVolume(nid, name);
         toast.success("Volume removed");
         fetchVolumes(undefined, search);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to remove volume");
+      } finally {
+        setPendingVolumeAction(null);
       }
     },
     [fetchVolumes, selectedNodeId, search]
   );
 
   const handleCreate = async () => {
-    if (!createNodeId || !createName.trim()) return;
+    if (creating || !createNodeId || !createName.trim()) return;
     if (!canCreateHere) {
       toast.error("Select an authorized destination folder");
       return;
@@ -231,12 +235,15 @@ export function DockerVolumes({
 
   const handleAdopt = useCallback(
     async (name: string, nodeId: string) => {
+      setPendingVolumeAction(`adopt:${nodeId}/${name}`);
       try {
         await api.adoptVolume(nodeId, name);
         toast.success("Volume migrated to Gateway management");
         await fetchVolumes(undefined, search);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Failed to migrate volume");
+      } finally {
+        setPendingVolumeAction(null);
       }
     },
     [fetchVolumes, search]
@@ -390,12 +397,14 @@ export function DockerVolumes({
                 v.availability !== "unavailable" && (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="h-7 w-7"
+                    size="icon-xs"
+                    pending={pendingVolumeAction === `remove:${(v as any)._nodeId}/${v.name}`}
                     onClick={() => handleRemove(v.name, (v as any)._nodeId)}
                     title="Remove"
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
+                    {pendingVolumeAction !== `remove:${(v as any)._nodeId}/${v.name}` && (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
                   </Button>
                 )}
               {v.managementState === "legacy" &&
@@ -403,13 +412,15 @@ export function DockerVolumes({
                 canEditDockerVolume(hasScope, (v as any)._nodeId, v.scopeResourceId ?? v.name) && (
                   <Button
                     variant="ghost"
-                    size="icon"
-                    className="size-7"
+                    size="icon-xs"
+                    pending={pendingVolumeAction === `adopt:${(v as any)._nodeId}/${v.name}`}
                     onClick={() => handleAdopt(v.name, (v as any)._nodeId)}
                     title="Migrate to Gateway management"
                     aria-label="Migrate to Gateway management"
                   >
-                    <ArrowRightLeft />
+                    {pendingVolumeAction !== `adopt:${(v as any)._nodeId}/${v.name}` && (
+                      <ArrowRightLeft />
+                    )}
                   </Button>
                 )}
             </div>
@@ -417,7 +428,7 @@ export function DockerVolumes({
         },
       },
     ],
-    [handleAdopt, hasScope, handleRemove, hasScopedAccess]
+    [handleAdopt, hasScope, handleRemove, hasScopedAccess, pendingVolumeAction]
   );
   const volumeColumns = allVolumeColumns.filter((c) => {
     if (fixedNodeId && c.id === "node") return false;
@@ -435,72 +446,72 @@ export function DockerVolumes({
     <>
       {/* Header — hidden in embedded mode */}
       {!embedded && (
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <h1 className="text-2xl font-bold">Docker Volumes</h1>
-              {!isLoading && visibleNodeId && (
-                <Badge variant="secondary" size="inline">
-                  {volumes.length}
-                </Badge>
+        <PageHeader
+          title="Docker Volumes"
+          description="Manage Docker volumes across your nodes"
+          badges={
+            !isLoading && visibleNodeId ? (
+              <Badge variant="secondary" size="inline">
+                {volumes.length}
+              </Badge>
+            ) : null
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={
+                selectedNodeId
+                  ? [
+                      {
+                        label: "Refresh",
+                        icon: <RefreshCw className="h-4 w-4" />,
+                        onClick: () => requestSnapshotRefresh("volumes", visibleNodeId),
+                        disabled: isLoading,
+                      },
+                      ...(canManageFolders
+                        ? [
+                            {
+                              label: "New Folder",
+                              onClick: () => createFolderRef.current?.(),
+                            },
+                          ]
+                        : []),
+                      ...(hasScope("docker:volumes:create") ||
+                      hasScopedAccess("docker:volumes:create")
+                        ? [
+                            {
+                              label: "Create Volume",
+                              icon: <Plus className="h-4 w-4" />,
+                              onClick: () => openCreate(),
+                            },
+                          ]
+                        : []),
+                    ]
+                  : []
+              }
+            >
+              {selectedNodeId && (
+                <>
+                  <RefreshButton
+                    onClick={() => requestSnapshotRefresh("volumes", visibleNodeId)}
+                    disabled={isLoading}
+                  />
+                  {canManageFolders && (
+                    <Button variant="outline" onClick={() => createFolderRef.current?.()}>
+                      New Folder
+                    </Button>
+                  )}
+                  {(hasScope("docker:volumes:create") ||
+                    hasScopedAccess("docker:volumes:create")) && (
+                    <Button onClick={() => openCreate()}>
+                      <Plus className="h-4 w-4 mr-1" />
+                      Create Volume
+                    </Button>
+                  )}
+                </>
               )}
-            </div>
-            <p className="text-sm text-muted-foreground">Manage Docker volumes across your nodes</p>
-          </div>
-          <ResponsiveHeaderActions
-            actions={
-              selectedNodeId
-                ? [
-                    {
-                      label: "Refresh",
-                      icon: <RefreshCw className="h-4 w-4" />,
-                      onClick: () => requestSnapshotRefresh("volumes", visibleNodeId),
-                      disabled: isLoading,
-                    },
-                    ...(canManageFolders
-                      ? [
-                          {
-                            label: "New Folder",
-                            onClick: () => createFolderRef.current?.(),
-                          },
-                        ]
-                      : []),
-                    ...(hasScope("docker:volumes:create") ||
-                    hasScopedAccess("docker:volumes:create")
-                      ? [
-                          {
-                            label: "Create Volume",
-                            icon: <Plus className="h-4 w-4" />,
-                            onClick: () => openCreate(),
-                          },
-                        ]
-                      : []),
-                  ]
-                : []
-            }
-          >
-            {selectedNodeId && (
-              <>
-                <RefreshButton
-                  onClick={() => requestSnapshotRefresh("volumes", visibleNodeId)}
-                  disabled={isLoading}
-                />
-                {canManageFolders && (
-                  <Button variant="outline" onClick={() => createFolderRef.current?.()}>
-                    New Folder
-                  </Button>
-                )}
-                {(hasScope("docker:volumes:create") ||
-                  hasScopedAccess("docker:volumes:create")) && (
-                  <Button onClick={() => openCreate()}>
-                    <Plus className="h-4 w-4 mr-1" />
-                    Create Volume
-                  </Button>
-                )}
-              </>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+            </ResponsiveHeaderActions>
+          }
+        />
       )}
 
       <DockerFolderedResourceList<DockerVolumeListItem>
@@ -545,7 +556,7 @@ export function DockerVolumes({
             </div>
           ) : null
         }
-        loading={isLoading || (!visibleNodeId && !nodesLoaded)}
+        loading={volumes.length === 0 && (!initialFetchDone || isLoading)}
         loadingLabel="Loading volumes..."
         emptyState={
           <EmptyState
@@ -726,15 +737,15 @@ export function DockerVolumes({
             </Button>
             <Button
               onClick={handleCreate}
+              pending={creating}
               disabled={
-                creating ||
                 !createName.trim() ||
                 !createNodeId ||
                 (createStorageKind === "disk-image" &&
                   (!supportsDiskImages || !createCapacityValid))
               }
             >
-              {creating ? "Creating..." : "Create"}
+              Create
             </Button>
           </DialogFooter>
         </DialogContent>

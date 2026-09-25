@@ -1,10 +1,12 @@
-import { ArrowRight, ArrowUpCircle, Loader2, ShieldCheck } from "lucide-react";
+import { ArrowRight, ArrowUpCircle, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
+import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -100,6 +102,9 @@ export function NodeDetailsTab({
 }: NodeDetailsTabProps) {
   const navigate = useNavigate();
   const [proxyHosts, setProxyHosts] = useState<ProxyHost[]>([]);
+  const [proxyHostsLoading, setProxyHostsLoading] = useState(
+    node.type === "nginx" && node.status === "online" && node.isConnected
+  );
   const user = useAuthStore((state) => state.user);
   const authKey = authContextKey(user);
   const dockerResources = useMemo(() => {
@@ -116,6 +121,7 @@ export function NodeDetailsTab({
     });
   }, [node.id, user?.scopes]);
   const [dockerCounts, setDockerCounts] = useState<Partial<Record<DockerResourceTab, number>>>({});
+  const [dockerCountsLoading, setDockerCountsLoading] = useState(node.type === "docker");
   const [containerStates, setContainerStates] = useState<{
     running: number;
     stopped: number;
@@ -173,11 +179,15 @@ export function NodeDetailsTab({
     [authKey, dockerResources, node.id, node.type]
   );
   useEffect(() => {
+    let active = true;
     dockerReadGeneration.current++;
     setDockerCounts({});
     setContainerStates(null);
-    void refreshDockerCounts();
+    void refreshDockerCounts().finally(() => {
+      if (active) setDockerCountsLoading(false);
+    });
     return () => {
+      active = false;
       dockerReadGeneration.current++;
     };
   }, [refreshDockerCounts]);
@@ -251,6 +261,7 @@ export function NodeDetailsTab({
       if (node.type === "nginx") {
         if (node.status !== "online" || !node.isConnected) {
           setProxyHosts([]);
+          setProxyHostsLoading(false);
           return;
         }
         try {
@@ -258,6 +269,8 @@ export function NodeDetailsTab({
           if (!cancelled) setProxyHosts(resp.data ?? []);
         } catch {
           if (!cancelled) setProxyHosts([]);
+        } finally {
+          if (!cancelled) setProxyHostsLoading(false);
         }
       }
     };
@@ -309,6 +322,36 @@ export function NodeDetailsTab({
   };
 
   const runtimeInstalling = runtimeAction === "install" || runtimeStatus?.state === "installing";
+  useContentLoading(dockerCountsLoading || proxyHostsLoading);
+  const proxyHostColumns: SimpleTableColumn<ProxyHost>[] = [
+    {
+      id: "domain",
+      header: "Domain",
+      cellClassName: "font-medium",
+      render: (host) => host.domainNames.join(", "),
+    },
+    {
+      id: "type",
+      header: "Type",
+      cellClassName: "capitalize text-muted-foreground",
+      render: (host) => host.type,
+    },
+    {
+      id: "target",
+      header: "Target",
+      cellClassName: "text-muted-foreground",
+      render: (host) => <ProxyUpstreamTarget host={host} />,
+    },
+    {
+      id: "status",
+      header: "Status",
+      render: (host) => (
+        <Badge variant={host.enabled ? "success" : "secondary"}>
+          {host.enabled ? "active" : "disabled"}
+        </Badge>
+      ),
+    },
+  ];
 
   return (
     <div className="space-y-4">
@@ -409,16 +452,17 @@ export function NodeDetailsTab({
           dirty
           actions={
             <Button
-              className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
+              variant="warning"
               onClick={handleDaemonUpdate}
-              disabled={isUpdating || !canTriggerDaemonUpdate}
+              pending={isUpdating}
+              disabled={!canTriggerDaemonUpdate}
               title={
                 canTriggerDaemonUpdate
                   ? undefined
                   : "Daemon update requires a connected compatible node"
               }
             >
-              <ArrowUpCircle className="h-3.5 w-3.5" />
+              {isUpdating ? null : <ArrowUpCircle />}
               Update to {daemonUpdate.latestVersion}
             </Button>
           }
@@ -440,26 +484,24 @@ export function NodeDetailsTab({
           }
           actions={
             !canManageSecureRuntime ? null : runtimeInstalling ? (
-              <Button disabled>
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Setting up...
-              </Button>
+              <Button pending>Setting up...</Button>
             ) : (runtimeStatus?.state === "installable" || runtimeStatus?.state === "failed") &&
               runtimeStatus.remoteInstallable ? (
               <Button
                 onClick={() => handleRuntimeAction("install")}
                 disabled={runtimeAction !== null || node.status !== "online" || !node.isConnected}
               >
-                <ShieldCheck className="h-3.5 w-3.5" />
+                <ShieldCheck />
                 {runtimeStatus.state === "failed" ? "Retry setup" : "Setup"}
               </Button>
             ) : runtimeStatus?.state !== "unsupported" ? (
               <Button
                 variant="outline"
                 onClick={() => handleRuntimeAction("preflight")}
+                pending={runtimeAction === "preflight"}
                 disabled={runtimeAction !== null || node.status !== "online" || !node.isConnected}
               >
-                {runtimeAction === "preflight" ? "Checking..." : "Check compatibility"}
+                Check compatibility
               </Button>
             ) : null
           }
@@ -654,7 +696,14 @@ export function NodeDetailsTab({
                     </div>
                     <div className="h-1.5 w-full bg-muted overflow-hidden">
                       <div
-                        className={`h-full ${m.usagePercent >= 90 ? "bg-red-400" : m.usagePercent >= 80 ? "bg-warning" : "bg-foreground"}`}
+                        className={cn(
+                          "h-full",
+                          m.usagePercent >= 90
+                            ? "bg-destructive"
+                            : m.usagePercent >= 80
+                              ? "bg-warning"
+                              : "bg-foreground"
+                        )}
                         style={{ width: `${Math.min(m.usagePercent, 100)}%` }}
                       />
                     </div>
@@ -690,42 +739,13 @@ export function NodeDetailsTab({
           title="Assigned Routes"
           actions={<Badge variant="secondary">{proxyHosts.length}</Badge>}
         >
-          {proxyHosts.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b border-border text-left">
-                    <th className="p-3 text-xs font-medium text-muted-foreground">Domain</th>
-                    <th className="p-3 text-xs font-medium text-muted-foreground">Type</th>
-                    <th className="p-3 text-xs font-medium text-muted-foreground">Target</th>
-                    <th className="p-3 text-xs font-medium text-muted-foreground">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {proxyHosts.map((host) => (
-                    <tr
-                      key={host.id}
-                      className="hover:bg-accent transition-colors cursor-pointer"
-                      onClick={() => navigate(proxyHostRoute(host.slug))}
-                    >
-                      <td className="p-3 text-sm font-medium">{host.domainNames.join(", ")}</td>
-                      <td className="p-3 text-sm text-muted-foreground capitalize">{host.type}</td>
-                      <td className="p-3 text-sm text-muted-foreground">
-                        <ProxyUpstreamTarget host={host} />
-                      </td>
-                      <td className="p-3 align-middle">
-                        <Badge variant={host.enabled ? "success" : "secondary"}>
-                          {host.enabled ? "active" : "disabled"}
-                        </Badge>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <EmptyState message="No routes assigned yet" embedded />
-          )}
+          <SimpleTable
+            columns={proxyHostColumns}
+            rows={proxyHosts}
+            getRowKey={(host) => host.id}
+            onRowClick={(host) => navigate(proxyHostRoute(host.slug))}
+            emptyMessage="No routes assigned yet"
+          />
         </PanelShell>
       )}
     </div>

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PageBackButton } from "@/components/common/PageBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -163,154 +164,154 @@ export function CertificateDetail() {
   return (
     <PageTransition>
       <div className="h-full overflow-y-auto p-6 space-y-6">
-        {/* Header */}
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <PageBackButton onClick={() => navigate("/certificates")} />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold">{cert.commonName}</h1>
-                <StatusBadge status={cert.status} size="inline" />
-                {cert.isSystem && (
-                  <Badge variant="outline" size="inline">
-                    System
-                  </Badge>
-                )}
-              </div>
-              <p className="truncate text-sm text-muted-foreground">
-                {cert.type} certificate &middot; Issuer: {cert.issuerDn || cert.caId}
-              </p>
-            </div>
-          </div>
-
-          <ResponsiveHeaderActions
-            actions={[
-              ...(canExportCertificate
-                ? [
-                    {
-                      id: "certificate:download-pem-bundle",
-                      label: "Download PEM bundle (ZIP)",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("pem-bundle"),
-                    },
-                    {
-                      id: "certificate:download-pem",
-                      label: "Download certificate as PEM",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("pem"),
-                    },
-                    {
-                      id: "certificate:download-der",
-                      label: "Download certificate as DER",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("der"),
-                    },
-                    {
-                      id: "certificate:download-chain",
-                      label: "Download intermediate CA chain",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("chain"),
-                    },
-                    {
-                      id: "certificate:download-fullchain",
-                      label: "Download full chain as PEM",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("fullchain"),
-                    },
-                    {
-                      id: "certificate:download-private-key",
-                      label: "Download private key as PEM",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => void handleDownload("private-key"),
-                    },
-                    {
-                      id: "certificate:download-pkcs12",
-                      label: "Download certificate as PKCS#12",
-                      icon: <Download className="h-4 w-4" />,
-                      onClick: () => setPkcs12DialogOpen(true),
-                    },
-                  ]
-                : []),
-              {
-                id: "certificate:copy-serial",
-                label: "Copy certificate serial",
-                icon: <Copy className="h-4 w-4" />,
-                onClick: copySerial,
-              },
-              ...(canExportCertificate && cert.certificatePem
-                ? [
-                    {
-                      id: "certificate:copy-pem",
-                      label: "Copy certificate PEM",
-                      icon: <Copy className="h-4 w-4" />,
-                      onClick: copyPem,
-                    },
-                  ]
-                : []),
-              ...(canRevokeCertificate && cert.status === "active" && !cert.isSystem
-                ? [
-                    {
-                      id: "certificate:revoke",
-                      label: "Revoke certificate",
-                      icon: <ShieldOff className="h-4 w-4" />,
-                      onClick: () => setRevokeDialogOpen(true),
-                      destructive: true,
-                      separatorBefore: true,
-                    },
-                  ]
-                : []),
-            ]}
-          >
-            {canExportCertificate && (
-              <>
-                <Button variant="outline" onClick={() => void handleDownload("pem-bundle")}>
-                  <Download className="h-4 w-4" />
-                  Download PEM bundle
-                </Button>
-                <Button variant="outline" onClick={() => void handleDownload("pem")}>
-                  <Download className="h-4 w-4" />
-                  Download PEM
-                </Button>
-                <Button variant="outline" onClick={() => void handleDownload("der")}>
-                  <Download className="h-4 w-4" />
-                  Download DER
-                </Button>
-                <Button variant="outline" onClick={() => void handleDownload("chain")}>
-                  <Download className="h-4 w-4" />
-                  Download intermediate CA chain
-                </Button>
-                <Button variant="outline" onClick={() => void handleDownload("fullchain")}>
-                  <Download className="h-4 w-4" />
-                  Download full chain
-                </Button>
-                <Button variant="outline" onClick={() => void handleDownload("private-key")}>
-                  <Download className="h-4 w-4" />
-                  Download private key
-                </Button>
-                <Button variant="outline" onClick={() => setPkcs12DialogOpen(true)}>
-                  <Download className="h-4 w-4" />
-                  Download PKCS#12
-                </Button>
-              </>
-            )}
-            <Button variant="outline" onClick={copySerial}>
-              <Copy className="h-4 w-4" />
-              Copy Serial Number
-            </Button>
-            {canExportCertificate && cert.certificatePem && (
-              <Button variant="outline" onClick={copyPem}>
+        <PageHeader
+          leading={<PageBackButton onClick={() => navigate("/certificates")} />}
+          title={cert.commonName}
+          badges={
+            <>
+              <StatusBadge status={cert.status} size="inline" />
+              {cert.isSystem && (
+                <Badge variant="outline" size="inline">
+                  System
+                </Badge>
+              )}
+            </>
+          }
+          description={
+            <span className="block truncate">
+              {cert.type} certificate &middot; Issuer: {cert.issuerDn || cert.caId}
+            </span>
+          }
+          actions={
+            <ResponsiveHeaderActions
+              actions={[
+                ...(canExportCertificate
+                  ? [
+                      {
+                        id: "certificate:download-pem-bundle",
+                        label: "Download PEM bundle (ZIP)",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("pem-bundle"),
+                      },
+                      {
+                        id: "certificate:download-pem",
+                        label: "Download certificate as PEM",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("pem"),
+                      },
+                      {
+                        id: "certificate:download-der",
+                        label: "Download certificate as DER",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("der"),
+                      },
+                      {
+                        id: "certificate:download-chain",
+                        label: "Download intermediate CA chain",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("chain"),
+                      },
+                      {
+                        id: "certificate:download-fullchain",
+                        label: "Download full chain as PEM",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("fullchain"),
+                      },
+                      {
+                        id: "certificate:download-private-key",
+                        label: "Download private key as PEM",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => void handleDownload("private-key"),
+                      },
+                      {
+                        id: "certificate:download-pkcs12",
+                        label: "Download certificate as PKCS#12",
+                        icon: <Download className="h-4 w-4" />,
+                        onClick: () => setPkcs12DialogOpen(true),
+                      },
+                    ]
+                  : []),
+                {
+                  id: "certificate:copy-serial",
+                  label: "Copy certificate serial",
+                  icon: <Copy className="h-4 w-4" />,
+                  onClick: copySerial,
+                },
+                ...(canExportCertificate && cert.certificatePem
+                  ? [
+                      {
+                        id: "certificate:copy-pem",
+                        label: "Copy certificate PEM",
+                        icon: <Copy className="h-4 w-4" />,
+                        onClick: copyPem,
+                      },
+                    ]
+                  : []),
+                ...(canRevokeCertificate && cert.status === "active" && !cert.isSystem
+                  ? [
+                      {
+                        id: "certificate:revoke",
+                        label: "Revoke certificate",
+                        icon: <ShieldOff className="h-4 w-4" />,
+                        onClick: () => setRevokeDialogOpen(true),
+                        destructive: true,
+                        separatorBefore: true,
+                      },
+                    ]
+                  : []),
+              ]}
+            >
+              {canExportCertificate && (
+                <>
+                  <Button variant="outline" onClick={() => void handleDownload("pem-bundle")}>
+                    <Download className="h-4 w-4" />
+                    Download PEM bundle
+                  </Button>
+                  <Button variant="outline" onClick={() => void handleDownload("pem")}>
+                    <Download className="h-4 w-4" />
+                    Download PEM
+                  </Button>
+                  <Button variant="outline" onClick={() => void handleDownload("der")}>
+                    <Download className="h-4 w-4" />
+                    Download DER
+                  </Button>
+                  <Button variant="outline" onClick={() => void handleDownload("chain")}>
+                    <Download className="h-4 w-4" />
+                    Download intermediate CA chain
+                  </Button>
+                  <Button variant="outline" onClick={() => void handleDownload("fullchain")}>
+                    <Download className="h-4 w-4" />
+                    Download full chain
+                  </Button>
+                  <Button variant="outline" onClick={() => void handleDownload("private-key")}>
+                    <Download className="h-4 w-4" />
+                    Download private key
+                  </Button>
+                  <Button variant="outline" onClick={() => setPkcs12DialogOpen(true)}>
+                    <Download className="h-4 w-4" />
+                    Download PKCS#12
+                  </Button>
+                </>
+              )}
+              <Button variant="outline" onClick={copySerial}>
                 <Copy className="h-4 w-4" />
-                Copy PEM
+                Copy Serial Number
               </Button>
-            )}
-            {canRevokeCertificate && cert.status === "active" && !cert.isSystem && (
-              <Button variant="destructive" onClick={() => setRevokeDialogOpen(true)}>
-                <ShieldOff className="h-4 w-4" />
-                Revoke Certificate
-              </Button>
-            )}
-          </ResponsiveHeaderActions>
-        </div>
+              {canExportCertificate && cert.certificatePem && (
+                <Button variant="outline" onClick={copyPem}>
+                  <Copy className="h-4 w-4" />
+                  Copy PEM
+                </Button>
+              )}
+              {canRevokeCertificate && cert.status === "active" && !cert.isSystem && (
+                <Button variant="destructive" onClick={() => setRevokeDialogOpen(true)}>
+                  <ShieldOff className="h-4 w-4" />
+                  Revoke Certificate
+                </Button>
+              )}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
           <PanelShell title="Certificate Details" bodyClassName="divide-y divide-border">
@@ -421,8 +422,8 @@ export function CertificateDetail() {
               <Button variant="outline" onClick={() => setRevokeDialogOpen(false)}>
                 Cancel
               </Button>
-              <Button variant="destructive" onClick={handleRevoke} disabled={isRevoking}>
-                {isRevoking ? "Revoking..." : "Revoke"}
+              <Button variant="destructive" onClick={handleRevoke} pending={isRevoking}>
+                Revoke
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -465,9 +466,10 @@ export function CertificateDetail() {
               </Button>
               <Button
                 onClick={handlePkcs12Download}
-                disabled={downloadingFormat === "pkcs12" || !pkcs12Passphrase.trim()}
+                disabled={!pkcs12Passphrase.trim()}
+                pending={downloadingFormat === "pkcs12"}
               >
-                {downloadingFormat === "pkcs12" ? "Exporting..." : "Export"}
+                Export
               </Button>
             </DialogFooter>
           </DialogContent>

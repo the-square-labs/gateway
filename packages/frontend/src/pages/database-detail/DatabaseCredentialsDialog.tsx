@@ -5,6 +5,7 @@ import { DownloadButton } from "@/components/common/DownloadButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import type { DatabaseConnection } from "@/types";
 
 type RevealedCredentials = Record<string, unknown>;
@@ -131,9 +132,7 @@ export function DatabaseCredentialsDialog({
         </DialogHeader>
         <div className="space-y-4">
           {loading ? (
-            <div className="border border-border bg-card p-6 text-sm text-muted-foreground">
-              Revealing credentials...
-            </div>
+            <Skeleton />
           ) : credentials ? (
             <>
               {connectionUri && <CredentialField label="Connection URI" value={connectionUri} />}

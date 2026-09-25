@@ -110,8 +110,7 @@ export function ModelReasoningFields({
       actions={
         <Button
           variant="ghost"
-          size="icon"
-          className="h-8 w-8"
+          size="icon-sm"
           aria-label="Add mapping"
           title="Add mapping"
           disabled={Object.hasOwn(mapping, "")}
@@ -220,7 +219,7 @@ function SortableReasoningRow({
         ref={sortable.setActivatorNodeRef}
         variant="ghost"
         size="icon"
-        className="h-9 w-9 cursor-grab rounded-none text-muted-foreground active:cursor-grabbing"
+        className="cursor-grab rounded-none text-muted-foreground active:cursor-grabbing"
         aria-label={`Reorder reasoning mapping ${index + 1}`}
         {...sortable.attributes}
         {...sortable.listeners}
@@ -253,7 +252,7 @@ function SortableReasoningRow({
           variant="ghost"
           size="icon"
           aria-label={`Remove reasoning mapping ${index + 1}`}
-          className="h-9 w-9 rounded-none border-l border-border"
+          className="rounded-none border-l border-border"
           onClick={remove}
         >
           <Minus />

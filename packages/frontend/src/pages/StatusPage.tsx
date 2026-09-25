@@ -34,7 +34,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
+import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
@@ -61,12 +64,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
+import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type {
@@ -153,10 +156,10 @@ function displayIncidentUpdateStatus(
   return update.status;
 }
 
-function incidentSeverityBorderColor(severity: StatusPageIncidentSeverity) {
-  if (severity === "critical") return "#f87171";
-  if (severity === "warning") return "var(--color-warning)";
-  return "#60a5fa";
+function incidentSeverityBorderClass(severity: StatusPageIncidentSeverity) {
+  if (severity === "critical") return "border-l-destructive";
+  if (severity === "warning") return "border-l-warning";
+  return "border-l-blue-400";
 }
 
 function incidentUpdateMarkerClass(status: StatusPageIncidentUpdateStatus) {
@@ -164,8 +167,8 @@ function incidentUpdateMarkerClass(status: StatusPageIncidentUpdateStatus) {
     update: "bg-muted-foreground",
     investigating: "rotate-45 bg-warning",
     identified: "rotate-45 bg-blue-500",
-    monitoring: "bg-emerald-500",
-    resolved: "rounded-full bg-emerald-500",
+    monitoring: "bg-success",
+    resolved: "rounded-full bg-success",
   }[status];
 }
 
@@ -232,16 +235,13 @@ export function StatusPage() {
 
   // One status-page endpoint lists the resources the caller may expose (and can view), so the
   // picker needs no view scope of each resource domain.
+  // Realtime refreshes of an open picker update it in place; only the load that
+  // starts with the dialog is reported as loading (see openServiceDialog).
   const loadSourceOptions = useCallback(async () => {
     if (!canManage) return;
-    setSourceOptionsLoading(true);
-    try {
-      const rows = await api.listStatusPageSources();
-      api.setCache("status-page:sources", rows);
-      setSources(rows);
-    } finally {
-      setSourceOptionsLoading(false);
-    }
+    const rows = await api.listStatusPageSources();
+    api.setCache("status-page:sources", rows);
+    setSources(rows);
   }, [canManage]);
 
   const loadStatusPage = useCallback(async () => {
@@ -307,7 +307,9 @@ export function StatusPage() {
 
   useEffect(() => {
     if (!serviceOpen) return;
-    loadSourceOptions().catch(() => {});
+    loadSourceOptions()
+      .catch(() => {})
+      .finally(() => setSourceOptionsLoading(false));
   }, [loadSourceOptions, serviceOpen]);
 
   useRealtime("status-page.changed", () => {
@@ -379,10 +381,17 @@ export function StatusPage() {
 
   if (!canView) return <Navigate to="/" replace />;
 
+  // The source list loads as the dialog opens: mark it loading in that same
+  // render so the dialog can wait for the picker's options.
+  const openServiceDialog = (service: StatusPageServiceItem | null) => {
+    setEditingService(service);
+    setSourceOptionsLoading(true);
+    setServiceOpen(true);
+  };
+
   const openCreateService = () => {
     if (!canManage) return;
-    setEditingService(null);
-    setServiceOpen(true);
+    openServiceDialog(null);
   };
 
   const deleteService = async (service: StatusPageServiceItem) => {
@@ -471,12 +480,12 @@ export function StatusPage() {
   const headerAction =
     activeTab === "services" && canManage ? (
       <Button onClick={openCreateService}>
-        <Plus className="h-4 w-4" />
+        <Plus />
         Expose Service
       </Button>
     ) : activeTab === "incidents" && canCreateIncidents ? (
       <Button onClick={openCreateIncident}>
-        <Plus className="h-4 w-4" />
+        <Plus />
         Create Incident
       </Button>
     ) : activeTab === "settings" ? (
@@ -549,23 +558,23 @@ export function StatusPage() {
   return (
     <PageTransition>
       <div className="h-full space-y-4 overflow-y-auto p-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <LiteModeBackButton />
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                <h1 className="text-2xl font-bold">Status Page</h1>
-                <Badge variant={config.enabled ? "success" : "secondary"} size="inline">
-                  {config.enabled ? "Enabled" : "Disabled"}
-                </Badge>
-              </div>
-              <p className="text-sm text-muted-foreground">
-                Manage public services and incident communication
-              </p>
-            </div>
-          </div>
-          <ResponsiveHeaderActions actions={headerActions}>{headerAction}</ResponsiveHeaderActions>
-        </div>
+        {/* The settings, services and incidents all come from the first load. */}
+        <ContentLoading loading={loading} />
+        <PageHeader
+          leading={<LiteModeBackButton />}
+          title="Status Page"
+          badges={
+            <Badge variant={config.enabled ? "success" : "secondary"} size="inline">
+              {config.enabled ? "Enabled" : "Disabled"}
+            </Badge>
+          }
+          description="Manage public services and incident communication"
+          actions={
+            <ResponsiveHeaderActions actions={headerActions}>
+              {headerAction}
+            </ResponsiveHeaderActions>
+          }
+        />
 
         {!config.enabled && !loading && (
           <div className="border border-border bg-card p-4">
@@ -603,10 +612,8 @@ export function StatusPage() {
               groupedServices={groupedServices}
               loading={loading}
               canManage={canManage}
-              onEdit={(service) => {
-                setEditingService(service);
-                setServiceOpen(true);
-              }}
+              onCreate={openCreateService}
+              onEdit={openServiceDialog}
               onDelete={deleteService}
               onReorderGroups={reorderGroups}
             />
@@ -678,6 +685,7 @@ function ServicesTab({
   groupedServices,
   loading,
   canManage,
+  onCreate,
   onEdit,
   onDelete,
   onReorderGroups,
@@ -685,6 +693,7 @@ function ServicesTab({
   groupedServices: Array<[string, StatusPageServiceItem[]]>;
   loading: boolean;
   canManage: boolean;
+  onCreate: () => void;
   onEdit: (service: StatusPageServiceItem) => void;
   onDelete: (service: StatusPageServiceItem) => void;
   onReorderGroups: (activeGroup: string, overGroup: string) => void;
@@ -700,26 +709,15 @@ function ServicesTab({
     onReorderGroups(String(event.active.id), String(event.over.id));
   };
 
-  if (initialLoading && groupedServices.length === 0) {
-    return (
-      <div className="space-y-4" aria-label="Loading status page services">
-        {Array.from({ length: 2 }, (_, index) => (
-          <PanelShell key={index} title={<Skeleton className="h-4 w-28" />}>
-            <div className="space-y-3 p-4">
-              <Skeleton className="h-5 w-48" />
-              <Skeleton className="h-4 w-4/5" />
-            </div>
-          </PanelShell>
-        ))}
-      </div>
-    );
-  }
+  if (initialLoading && groupedServices.length === 0) return <ContentLoading loading />;
 
   if (groupedServices.length === 0) {
     return (
-      <div className="border border-border bg-card p-4 text-sm text-muted-foreground">
-        No services exposed.
-      </div>
+      <EmptyState
+        message="No services exposed."
+        actionLabel={canManage ? "Expose a service" : undefined}
+        onAction={canManage ? onCreate : undefined}
+      />
     );
   }
 
@@ -777,9 +775,9 @@ function SortableServiceGroup({
           canManage ? (
             <Button
               ref={sortable.setActivatorNodeRef}
-              size="icon"
+              size="icon-xs"
               variant="ghost"
-              className="h-7 w-7 cursor-grab text-muted-foreground active:cursor-grabbing"
+              className="cursor-grab text-muted-foreground active:cursor-grabbing"
               aria-label={`Reorder ${group}`}
               {...sortable.attributes}
               {...sortable.listeners}
@@ -946,27 +944,9 @@ function IncidentsTab({
     }
   }, [hasMore, incidents.length, lastVirtualItemIndex, loadingMore, onLoadMore]);
 
-  if (initialLoading && incidents.length === 0) {
-    return (
-      <div className="space-y-3" aria-label="Loading status page incidents">
-        {Array.from({ length: 3 }, (_, index) => (
-          <div key={index} className="space-y-3 border border-border bg-card p-4">
-            <Skeleton className="h-5 w-56" />
-            <Skeleton className="h-4 w-full" />
-            <Skeleton className="h-4 w-2/3" />
-          </div>
-        ))}
-      </div>
-    );
-  }
+  if (initialLoading && incidents.length === 0) return <ContentLoading loading />;
 
-  if (incidents.length === 0) {
-    return (
-      <div className="border border-border bg-card p-4 text-sm text-muted-foreground">
-        No incidents.
-      </div>
-    );
-  }
+  if (incidents.length === 0) return <EmptyState message="No incidents." />;
 
   return (
     <div ref={listRef} aria-label="Status page incidents">
@@ -1019,12 +999,10 @@ function IncidentsTab({
               style={{ transform: `translateY(${virtualItem.start - scrollMargin}px)` }}
             >
               <div
-                className="border border-l-4 border-border bg-card"
-                style={
-                  incident.status === "active"
-                    ? { borderLeftColor: incidentSeverityBorderColor(incident.severity) }
-                    : undefined
-                }
+                className={cn(
+                  "border border-l-4 border-border bg-card",
+                  incident.status === "active" && incidentSeverityBorderClass(incident.severity)
+                )}
               >
                 <div className="flex flex-wrap items-center justify-between gap-3 p-4">
                   <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1154,7 +1132,7 @@ function IncidentsTab({
                                 {incidentStatusLabel(displayStatus)}
                               </span>
                             </div>
-                            <p className="mt-1 text-[0.94rem] leading-6">{update.message}</p>
+                            <p className="mt-1 text-sm leading-6">{update.message}</p>
                           </div>
                         </div>
                       );
@@ -1183,6 +1161,7 @@ function IncidentUpdateDialog({
 }) {
   const [status, setStatus] = useState<StatusPageIncidentUpdateStatus>("update");
   const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     if (!incident) return;
@@ -1197,6 +1176,7 @@ function IncidentUpdateDialog({
 
   const save = async () => {
     if (!incident) return;
+    setSaving(true);
     try {
       await api.createStatusPageIncidentUpdate(incident.id, {
         status,
@@ -1207,6 +1187,8 @@ function IncidentUpdateDialog({
       onSaved();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to post incident update");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1246,7 +1228,7 @@ function IncidentUpdateDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <Button onClick={save} disabled={!message.trim()}>
+          <Button onClick={save} pending={saving} disabled={!message.trim()}>
             Post Update
           </Button>
         </DialogFooter>

@@ -7,6 +7,7 @@ import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { api } from "@/services/api";
 import type {
   ManagedObjectStorage,
@@ -101,6 +102,8 @@ export const ManagedStorageLinksSection = forwardRef<
   >([]);
   const [changes, setChanges] = useState<PendingStorageLinkChanges>(EMPTY_CHANGES);
   const [loading, setLoading] = useState(true);
+  // Reloads after a save keep the current rows; only the first load holds the tab.
+  const initialLoading = useInitialLoading(loading);
   const [saving, setSaving] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
 
@@ -139,8 +142,8 @@ export const ManagedStorageLinksSection = forwardRef<
   }, [load]);
 
   useEffect(() => {
-    onInitialLoadingChange?.(loading);
-  }, [loading, onInitialLoadingChange]);
+    onInitialLoadingChange?.(initialLoading);
+  }, [initialLoading, onInitialLoadingChange]);
 
   const displayBindings = useMemo<DisplayBinding[]>(() => {
     const clusterById = new Map(clusters.map((cluster) => [cluster.id, cluster]));
@@ -370,11 +373,12 @@ export const ManagedStorageLinksSection = forwardRef<
             {canManage && (
               <Button
                 type="button"
-                className="bg-warning text-black hover:bg-warning/90 disabled:opacity-50"
-                disabled={disabled || loading || saving || !hasChanges}
+                variant="warning"
+                pending={saving}
+                disabled={disabled || loading || !hasChanges}
                 onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
               >
-                <RotateCcw className="h-3.5 w-3.5" />
+                {!saving && <RotateCcw className="h-3.5 w-3.5" />}
                 {recreatesRunningWorkload ? "Save & Recreate" : "Save"}
               </Button>
             )}
@@ -391,21 +395,8 @@ export const ManagedStorageLinksSection = forwardRef<
           </div>
         }
       >
-        {loading ? (
-          <div aria-busy="true" aria-label="Loading managed storage links">
-            {Array.from({ length: 2 }, (_, index) => (
-              <div
-                key={index}
-                className="flex min-h-16 items-center justify-between gap-4 px-4 py-3"
-              >
-                <div className="min-w-0 flex-1 space-y-2">
-                  <Skeleton className="h-4 w-36" />
-                  <Skeleton className="h-3 w-52" />
-                </div>
-                <Skeleton className="h-6 w-20" />
-              </div>
-            ))}
-          </div>
+        {initialLoading ? (
+          <Skeleton />
         ) : displayBindings.length === 0 ? (
           <EmptyState message="No managed storage links" embedded />
         ) : (

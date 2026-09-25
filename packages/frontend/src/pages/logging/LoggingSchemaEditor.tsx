@@ -1,6 +1,7 @@
 import { Minus, Plus } from "lucide-react";
 import { useMemo } from "react";
 import { toast } from "sonner";
+import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,7 +84,7 @@ export function LoggingSchemaEditor({
               else addField();
             }}
           >
-            <Plus className="h-4 w-4" /> Add Field
+            <Plus /> Add Field
           </Button>
         ) : null
       }
@@ -98,7 +99,7 @@ export function LoggingSchemaEditor({
           <div />
         </div>
         {schema.fieldSchema.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted-foreground">No declared fields</div>
+          <EmptyState message="No declared fields" embedded />
         ) : (
           schema.fieldSchema.map((field, index) => {
             const duplicate = duplicateKeys.has(`${field.location}:${field.key}`);
@@ -180,7 +181,8 @@ export function LoggingSchemaEditor({
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-9 w-9 rounded-none border-l border-border"
+                    aria-label={`Remove field ${field.key || index + 1}`}
+                    className="border-l border-border"
                     onClick={() => removeField(index)}
                   >
                     <Minus className="h-3.5 w-3.5" />

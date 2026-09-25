@@ -1,7 +1,8 @@
-import { CheckCircle2, Clock, XCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
+import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import {
   ResourceListCell,
   type ResourceListColumn,
@@ -20,27 +21,19 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { WebhookDelivery } from "@/types";
+import {
+  alertSeverityVariant,
+  DeliveryStatusIcon,
+  httpStatusVariant,
+  webhookDeliveryVariant,
+} from "./notification-status";
 
 export const DELIVERY_PAGE_SIZE = 100;
-
-const SEV_BADGE: Record<string, "warning" | "destructive" | "secondary"> = {
-  info: "secondary",
-  warning: "warning",
-  critical: "destructive",
-};
-
-const STATUS_BADGE: Record<string, "success" | "destructive" | "warning" | "secondary"> = {
-  success: "success",
-  failed: "destructive",
-  retrying: "warning",
-  pending: "secondary",
-};
 
 const DELIVERY_COLUMNS: ResourceListColumn<WebhookDelivery>[] = [
   { id: "status", label: "", width: "56px" },
@@ -79,6 +72,7 @@ export function DeliveryLogTab({
     onOpenChange: onDetailOpenChange,
   } = useDeferredDialogState<WebhookDelivery>();
   const [detailLoadFailed, setDetailLoadFailed] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
   const pageRef = useRef(0);
   const requestIdRef = useRef(0);
   const detailRequestIdRef = useRef(0);
@@ -140,6 +134,7 @@ export function DeliveryLogTab({
   const openDeliveryDetail = async (delivery: WebhookDelivery) => {
     const requestId = ++detailRequestIdRef.current;
     setDetailLoadFailed(false);
+    setDetailLoading(true);
     setDetail(delivery);
     try {
       const full = await api.getDelivery(delivery.id);
@@ -149,6 +144,8 @@ export function DeliveryLogTab({
       if (requestId !== detailRequestIdRef.current) return;
       setDetailLoadFailed(true);
       toast.error("Failed to load delivery details");
+    } finally {
+      if (requestId === detailRequestIdRef.current) setDetailLoading(false);
     }
   };
 
@@ -189,23 +186,6 @@ export function DeliveryLogTab({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [fetchPage, hasMore, loadingMore, isLoading]);
-
-  const sIcon = (s: string) => {
-    const icon =
-      s === "success" ? (
-        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-      ) : s === "failed" ? (
-        <XCircle className="h-4 w-4 text-red-500" />
-      ) : s === "pending" ? (
-        <Clock className="h-4 w-4 text-muted-foreground" aria-label="Pending" />
-      ) : (
-        <Clock className="h-4 w-4 text-warning" />
-      );
-
-    return (
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">{icon}</span>
-    );
-  };
 
   const filteredDeliveries = useMemo(() => {
     if (!search) return deliveries;
@@ -257,8 +237,13 @@ export function DeliveryLogTab({
           </Select>
         }
       />
-      {initialLoading && deliveries.length === 0 ? (
-        <DeliveryRowsSkeleton />
+      {isLoading && deliveries.length === 0 ? (
+        // The first load holds the tab; a filter without cached results loads in place.
+        initialLoading ? (
+          <ContentLoading loading />
+        ) : (
+          <LoadingSpinner label="Loading deliveries" />
+        )
       ) : deliveries.length === 0 ? (
         <EmptyState
           message="No deliveries yet. Delivery attempts will appear here when alerts fire."
@@ -286,7 +271,19 @@ export function DeliveryLogTab({
                     interactive
                     onClick={() => void openDeliveryDetail(d)}
                   >
-                    <ResourceListCell>{sIcon(d.status)}</ResourceListCell>
+                    <ResourceListCell>
+                      <DeliveryStatusIcon
+                        state={
+                          d.status === "success"
+                            ? "delivered"
+                            : d.status === "failed"
+                              ? "failed"
+                              : d.status === "pending"
+                                ? "pending"
+                                : "in-progress"
+                        }
+                      />
+                    </ResourceListCell>
                     <ResourceListCell>
                       <span className="text-sm font-medium">
                         {d.webhookName ?? d.webhookId.slice(0, 8)}
@@ -298,11 +295,11 @@ export function DeliveryLogTab({
                       </span>
                     </ResourceListCell>
                     <ResourceListCell>
-                      <Badge variant={SEV_BADGE[d.severity] ?? "secondary"}>{d.severity}</Badge>
+                      <Badge variant={alertSeverityVariant(d.severity)}>{d.severity}</Badge>
                     </ResourceListCell>
                     <ResourceListCell>
                       {d.responseStatus ? (
-                        <Badge variant={d.responseStatus < 300 ? "success" : "destructive"}>
+                        <Badge variant={httpStatusVariant(d.responseStatus)}>
                           {d.responseStatus}
                         </Badge>
                       ) : (
@@ -351,6 +348,7 @@ export function DeliveryLogTab({
             if (!open) {
               detailRequestIdRef.current++;
               setDetailLoadFailed(false);
+              setDetailLoading(false);
             }
             onDetailOpenChange(open);
           }}
@@ -360,10 +358,12 @@ export function DeliveryLogTab({
               <DialogTitle>Delivery Details</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 text-sm">
+              {/* The dialog opens once the full request and response bodies arrive. */}
+              <ContentLoading loading={detailLoading} />
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <span className="text-muted-foreground">Status:</span>{" "}
-                  <Badge variant={STATUS_BADGE[detail.status]} size="inline">
+                  <Badge variant={webhookDeliveryVariant(detail.status)} size="inline">
                     {detail.status}
                   </Badge>
                 </div>
@@ -373,10 +373,7 @@ export function DeliveryLogTab({
                 <div>
                   <span className="text-muted-foreground">HTTP:</span>{" "}
                   {detail.responseStatus ? (
-                    <Badge
-                      variant={detail.responseStatus < 300 ? "success" : "destructive"}
-                      size="inline"
-                    >
+                    <Badge variant={httpStatusVariant(detail.responseStatus)} size="inline">
                       {detail.responseStatus}
                     </Badge>
                   ) : (
@@ -410,11 +407,9 @@ export function DeliveryLogTab({
                   <pre className="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-[200px] overflow-auto font-mono">
                     {detail.requestBody ?? detail.requestBodyPreview}
                   </pre>
-                  {!detail.requestBody && detail.requestBodyTruncated && (
+                  {!detail.requestBody && detail.requestBodyTruncated && detailLoadFailed && (
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {detailLoadFailed
-                        ? "Preview truncated. Full details could not be loaded."
-                        : "Preview truncated. Loading full details..."}
+                      Preview truncated. Full details could not be loaded.
                     </p>
                   )}
                 </div>
@@ -425,11 +420,9 @@ export function DeliveryLogTab({
                   <pre className="bg-muted p-3 rounded text-xs whitespace-pre-wrap max-h-[200px] overflow-auto font-mono">
                     {detail.responseBody ?? detail.responseBodyPreview}
                   </pre>
-                  {!detail.responseBody && detail.responseBodyTruncated && (
+                  {!detail.responseBody && detail.responseBodyTruncated && detailLoadFailed && (
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {detailLoadFailed
-                        ? "Preview truncated. Full details could not be loaded."
-                        : "Preview truncated. Loading full details..."}
+                      Preview truncated. Full details could not be loaded.
                     </p>
                   )}
                 </div>
@@ -439,47 +432,5 @@ export function DeliveryLogTab({
         </Dialog>
       )}
     </div>
-  );
-}
-
-function DeliveryRowsSkeleton() {
-  return (
-    <ResourceListFrame
-      minWidth={896}
-      innerClassName="flex flex-col"
-      aria-label="Loading delivery log"
-    >
-      <ResourceListHeaderTable columns={DELIVERY_COLUMNS} />
-      <ResourceListTable columns={DELIVERY_COLUMNS} bodyClassName="[&>tr:last-child]:border-b-0">
-        {Array.from({ length: 6 }, (_, index) => (
-          <ResourceListRow key={index} className="opacity-100">
-            <ResourceListCell>
-              <Skeleton className="h-8 w-8" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-28" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-36" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-5 w-16" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-5 w-12" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-12" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-10" />
-            </ResourceListCell>
-            <ResourceListCell>
-              <Skeleton className="h-4 w-32" />
-            </ResourceListCell>
-          </ResourceListRow>
-        ))}
-      </ResourceListTable>
-    </ResourceListFrame>
   );
 }

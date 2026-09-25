@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
@@ -292,8 +291,7 @@ export function InferenceModelDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <Button onClick={() => void save()} disabled={!valid || saving}>
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+          <Button onClick={() => void save()} disabled={!valid} pending={saving}>
             {editing ? "Save model" : "Add model"}
           </Button>
         </DialogFooter>

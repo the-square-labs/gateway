@@ -1,8 +1,8 @@
 import { Activity } from "lucide-react";
 import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
-import { LoadingSpinner } from "@/components/common/LoadingSpinner";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
 import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
@@ -37,6 +37,8 @@ export function StorageOverviewTab({
   const latest = history.at(-1);
   const engine = managedStorageEngine(storage);
   const showMonitoring = canViewMonitoring && healthStatus !== "offline";
+  // The metric cards wait for the stream's saved history.
+  useContentLoading(showMonitoring && monitoringLoading && !latest);
   const overviewMetrics = useMemo<
     Array<{
       key: string;
@@ -92,12 +94,7 @@ export function StorageOverviewTab({
   return (
     <div className="space-y-4">
       {showMonitoring &&
-        (monitoringLoading && !latest ? (
-          <div className="flex items-center gap-3 border border-border bg-card p-4 text-sm text-muted-foreground">
-            <LoadingSpinner className="" />
-            <span>Loading monitoring data...</span>
-          </div>
-        ) : latest ? (
+        (monitoringLoading && !latest ? null : latest ? (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             {overviewMetrics.map((metric) => (
               <StatCard

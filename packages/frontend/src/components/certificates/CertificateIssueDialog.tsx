@@ -3,6 +3,9 @@ import { ChevronLeft, ChevronRight, Plus, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ContentLoading } from "@/components/common/ContentLoading";
+import { DetailRow } from "@/components/common/DetailRow";
+import { PanelShell } from "@/components/common/PanelShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -48,10 +51,11 @@ export function CertificateIssueDialog({
   caId,
   onSuccess,
 }: CertificateIssueDialogProps) {
-  const { cas } = useCAStore();
+  const { cas, isLoading: casLoading, fetchCAs } = useCAStore();
   const hasScope = useAuthStore((state) => state.hasScope);
   const [step, setStep] = useState(1);
-  const [templates, setTemplates] = useState<Template[]>([]);
+  // null until this opening's template list arrives: the dialog waits for it.
+  const [templates, setTemplates] = useState<Template[] | null>(null);
   const [isIssuing, setIsIssuing] = useState(false);
 
   // Form state
@@ -68,23 +72,36 @@ export function CertificateIssueDialog({
   const [dnC, setDnC] = useState("");
 
   useEffect(() => {
-    if (open) {
-      api
-        .listTemplates()
-        .then((data) => setTemplates(data || []))
-        .catch(() => {});
-      setStep(1);
-      setSelectedCAId(caId || "");
-      setSelectedTemplateId("");
-      setCommonName("");
-      setSans([]);
-      setSanInput("");
-    }
+    if (!open) return;
+    let cancelled = false;
+    api
+      .listTemplates()
+      .then((data) => {
+        if (!cancelled) setTemplates(data || []);
+      })
+      .catch(() => {
+        if (!cancelled) setTemplates((current) => current ?? []);
+      });
+    setStep(1);
+    setSelectedCAId(caId || "");
+    setSelectedTemplateId("");
+    setCommonName("");
+    setSans([]);
+    setSanInput("");
+    return () => {
+      cancelled = true;
+      setTemplates(null);
+    };
   }, [open, caId]);
+
+  // The CA select needs the CA list; load it when nothing has loaded it yet.
+  useEffect(() => {
+    if (open && useCAStore.getState().cas.length === 0) void fetchCAs();
+  }, [fetchCAs, open]);
 
   const handleTemplateSelect = (templateId: string) => {
     setSelectedTemplateId(templateId);
-    const template = templates.find((t) => t.id === templateId);
+    const template = templates?.find((t) => t.id === templateId);
     if (template) {
       setType(template.certType);
       setKeyAlgorithm(template.keyAlgorithm);
@@ -177,6 +194,7 @@ export function CertificateIssueDialog({
         </DialogHeader>
 
         <AnimatedHeight>
+          <ContentLoading loading={templates === null || (casLoading && cas.length === 0)} />
           <AnimatePresence initial={false} mode="popLayout">
             {/* Step 1: CA & Template Selection */}
             {step === 1 && (
@@ -200,7 +218,7 @@ export function CertificateIssueDialog({
                   </Select>
                 </div>
 
-                {templates.length > 0 && (
+                {templates && templates.length > 0 && (
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">Template</label>
                     <Select
@@ -314,7 +332,7 @@ export function CertificateIssueDialog({
                       onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), addSAN())}
                       placeholder="e.g., *.example.com or 192.168.1.1"
                     />
-                    <Button variant="outline" size="icon" onClick={addSAN}>
+                    <Button variant="outline" size="icon" aria-label="Add SAN" onClick={addSAN}>
                       <Plus className="h-4 w-4" />
                     </Button>
                   </div>
@@ -323,7 +341,12 @@ export function CertificateIssueDialog({
                       {sans.map((san) => (
                         <Badge key={san} variant="secondary" className="gap-1">
                           {san}
-                          <button onClick={() => removeSAN(san)}>
+                          {/* Inline chip control: a Button would not fit inside the badge. */}
+                          <button
+                            type="button"
+                            aria-label={`Remove ${san}`}
+                            onClick={() => removeSAN(san)}
+                          >
                             <X className="h-3 w-3" />
                           </button>
                         </Badge>
@@ -359,45 +382,34 @@ export function CertificateIssueDialog({
 
             {/* Step 3: Review */}
             {step === 3 && (
-              <motion.div
-                key="certificate-step-3"
-                {...STEP_ANIMATION}
-                className="space-y-3 text-sm"
-              >
-                <div className="border border-border p-4 space-y-2">
-                  <h3 className="font-semibold">Review</h3>
-                  <div className="space-y-1.5">
-                    <p>
-                      <span className="text-muted-foreground">CA:</span>{" "}
-                      {activeCAs.find((c) => c.id === selectedCAId)?.commonName}
-                    </p>
-                    <p>
-                      <span className="text-muted-foreground">Type:</span>{" "}
-                      <span className="capitalize">{type}</span>
-                    </p>
-                    <p>
-                      <span className="text-muted-foreground">Common Name:</span> {commonName}
-                    </p>
-                    <p>
-                      <span className="text-muted-foreground">Key Algorithm:</span> {keyAlgorithm}
-                    </p>
-                    <p>
-                      <span className="text-muted-foreground">Validity:</span> {validityDays} days
-                    </p>
-                    {sans.length > 0 && (
-                      <div>
-                        <span className="text-muted-foreground">SANs:</span>
-                        <div className="flex flex-wrap gap-1 mt-1">
+              <motion.div key="certificate-step-3" {...STEP_ANIMATION}>
+                <PanelShell title="Review" bodyClassName="divide-y divide-border">
+                  <DetailRow
+                    label="CA"
+                    value={activeCAs.find((c) => c.id === selectedCAId)?.commonName ?? "—"}
+                  />
+                  <DetailRow label="Type" value={<span className="capitalize">{type}</span>} />
+                  <DetailRow
+                    label="Common Name"
+                    value={<span className="break-all">{commonName}</span>}
+                  />
+                  <DetailRow label="Key Algorithm" value={keyAlgorithm} />
+                  <DetailRow label="Validity" value={`${validityDays} days`} />
+                  {sans.length > 0 && (
+                    <DetailRow
+                      label="SANs"
+                      value={
+                        <span className="flex max-w-full flex-wrap justify-end gap-1">
                           {sans.map((san) => (
                             <Badge key={san} variant="secondary">
                               {san}
                             </Badge>
                           ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
+                        </span>
+                      }
+                    />
+                  )}
+                </PanelShell>
               </motion.div>
             )}
           </AnimatePresence>
@@ -420,8 +432,8 @@ export function CertificateIssueDialog({
               <ChevronRight className="h-4 w-4" />
             </Button>
           ) : (
-            <Button onClick={handleIssue} disabled={isIssuing}>
-              {isIssuing ? "Issuing..." : "Issue Certificate"}
+            <Button onClick={handleIssue} pending={isIssuing}>
+              Issue Certificate
             </Button>
           )}
         </DialogFooter>

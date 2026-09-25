@@ -1,5 +1,5 @@
 import { ArrowRight, Bot, Cpu, ExternalLink, Loader2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -17,6 +17,7 @@ import { useAIStore } from "@/stores/ai";
 import type { InferenceLimitInput } from "@/types/inference";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
+import { SetupChoiceButton } from "./SetupChoiceButton";
 
 export interface AssistantSetupDraft {
   source: "external" | "inference" | null;
@@ -96,21 +97,38 @@ export function AssistantSetupWizard({
     if (!open) setCompleted(false);
   }, [open]);
 
+  // Load the models once per choice of Gateway Inference: picking a model
+  // changes the draft and must not reload the list under the open Select.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const onDraftChangeRef = useRef(onDraftChange);
+  onDraftChangeRef.current = onDraftChange;
   useEffect(() => {
     if (!open || draft.source !== "inference") return;
+    let active = true;
     setLoadingModels(true);
     api
       .getAIConfig()
       .then((config) => {
+        if (!active) return;
         const models = readInferenceModels(config);
         setInferenceModels(models);
-        if (!draft.model && models[0]) onDraftChange({ ...draft, model: models[0].id });
+        const current = draftRef.current;
+        if (!current.model && models[0])
+          onDraftChangeRef.current({ ...current, model: models[0].id });
       })
-      .catch((cause) =>
-        toast.error(cause instanceof Error ? cause.message : "Failed to load inference models")
-      )
-      .finally(() => setLoadingModels(false));
-  }, [draft, onDraftChange, open]);
+      .catch((cause) => {
+        if (active) {
+          toast.error(cause instanceof Error ? cause.message : "Failed to load inference models");
+        }
+      })
+      .finally(() => {
+        if (active) setLoadingModels(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [draft.source, open]);
 
   const save = async () => {
     if (!draft.source) return;
@@ -199,13 +217,13 @@ export function AssistantSetupWizard({
         ) : draft.source ? (
           <Button
             onClick={() => void save()}
+            pending={saving}
             disabled={
-              saving ||
               !draft.model ||
               (draft.source === "external" && (!draft.baseUrl.trim() || !draft.apiKey.trim()))
             }
           >
-            {saving ? <Loader2 className="animate-spin" /> : <Bot />}
+            {saving ? null : <Bot />}
             Save AI Workspace
           </Button>
         ) : null
@@ -221,41 +239,19 @@ export function AssistantSetupWizard({
         </FinalizeSetupCompletion>
       ) : draft.source === null ? (
         <div className="space-y-3">
-          <Button
-            variant="outline"
-            className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+          <SetupChoiceButton
+            icon={ExternalLink}
+            title="OAI-compatible provider"
+            description="Connect OpenAI or any compatible endpoint with your own API key and model."
             onClick={() => setSource("external")}
-          >
-            <span className="flex w-full items-center gap-3">
-              <ExternalLink className="h-5 w-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-[15px] font-medium text-foreground">
-                  OAI-compatible provider
-                </span>
-                <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                  Connect OpenAI or any compatible endpoint with your own API key and model.
-                </span>
-              </span>
-            </span>
-          </Button>
+          />
           {allowGatewayInference && (
-            <Button
-              variant="outline"
-              className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+            <SetupChoiceButton
+              icon={Cpu}
+              title="Gateway Inference"
+              description="Use centrally managed providers and models that Gateway makes available."
               onClick={() => setSource("inference")}
-            >
-              <span className="flex w-full items-center gap-3">
-                <Cpu className="h-5 w-5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[15px] font-medium text-foreground">
-                    Gateway Inference
-                  </span>
-                  <span className="mt-0.5 block text-[13px] font-normal text-muted-foreground">
-                    Use centrally managed providers and models that Gateway makes available.
-                  </span>
-                </span>
-              </span>
-            </Button>
+            />
           )}
         </div>
       ) : draft.source === "external" ? (

@@ -1,7 +1,6 @@
 import {
   Database,
   KeyRound,
-  Loader2,
   Mail,
   Network,
   Save,
@@ -11,6 +10,7 @@ import {
   Webhook,
 } from "lucide-react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useAuthStore } from "@/stores/auth";
 import { requireLicenseFeature } from "@/stores/license-paywall";
@@ -161,8 +160,8 @@ export function AuthProvisioningSection({
   const canEditIdentityTrust = canEdit && hasScope("admin:system");
   const identityTrustLocked = canEdit && !canEditIdentityTrust;
 
-  if (!initialLoadComplete) return <Skeleton />;
-  if (!settings) return null;
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete || !settings) return null;
 
   return (
     <div className="space-y-4">
@@ -524,9 +523,10 @@ export function AuthProvisioningSection({
           <Button
             aria-label="Save OIDC provider"
             onClick={saveOidc}
-            disabled={!canEditIdentityTrust || isSavingOidc || !oidcHasChanges}
+            pending={isSavingOidc}
+            disabled={!canEditIdentityTrust || !oidcHasChanges}
           >
-            <Save className="h-4 w-4" />
+            {isSavingOidc ? null : <Save className="h-4 w-4" />}
             Save
           </Button>
         }
@@ -623,9 +623,10 @@ export function AuthProvisioningSection({
           <Button
             aria-label="Save structured logging storage"
             onClick={saveLogging}
-            disabled={!canEdit || isSavingLogging || !loggingHasChanges}
+            pending={isSavingLogging}
+            disabled={!canEdit || !loggingHasChanges}
           >
-            <Save className="h-4 w-4" />
+            {isSavingLogging ? null : <Save className="h-4 w-4" />}
             Save
           </Button>
         }
@@ -902,15 +903,10 @@ export function AuthProvisioningSection({
           <Button
             aria-label="Save MFA grace period"
             onClick={saveMfaGracePeriod}
-            disabled={
-              !canEdit || isSavingMfaGracePeriod || !mfaHasChanges || !mfaGracePeriodIsValid
-            }
+            pending={isSavingMfaGracePeriod}
+            disabled={!canEdit || !mfaHasChanges || !mfaGracePeriodIsValid}
           >
-            {isSavingMfaGracePeriod ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Save className="h-4 w-4" />
-            )}
+            {isSavingMfaGracePeriod ? null : <Save className="h-4 w-4" />}
             Save
           </Button>
         }
@@ -969,13 +965,10 @@ export function AuthProvisioningSection({
             <Button
               aria-label="Save SMTP settings"
               onClick={() => saveSmtp()}
-              disabled={!canEditIdentityTrust || isSavingLocalAuth || !smtpHasChanges}
+              pending={isSavingLocalAuth}
+              disabled={!canEditIdentityTrust || !smtpHasChanges}
             >
-              {isSavingLocalAuth ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Save className="h-4 w-4" />
-              )}
+              {isSavingLocalAuth ? null : <Save className="h-4 w-4" />}
               Save
             </Button>
           </div>
@@ -1185,10 +1178,10 @@ export function AuthProvisioningSection({
             </Button>
             <Button
               onClick={() => saveSmtp(smtpTestRecipient)}
-              disabled={isSavingLocalAuth || isSendingSmtpTest || !smtpTestRecipient}
+              pending={isSendingSmtpTest}
+              disabled={isSavingLocalAuth || !smtpTestRecipient}
             >
-              {isSendingSmtpTest && <Loader2 className="h-4 w-4 animate-spin" />}
-              {isSendingSmtpTest ? "Sending…" : "Send test"}
+              Send test
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1306,23 +1299,19 @@ export function AuthProvisioningSection({
 
           <div className="grid grid-cols-1 divide-y divide-border md:grid-cols-3 md:divide-x md:divide-y-0">
             <div className="px-4 py-3">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Resolved IP
-              </p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Resolved IP</p>
               <p className="mt-1 font-mono text-sm">
                 {settings.currentRequestIp.ipAddress ?? "unknown"}
               </p>
             </div>
             <div className="px-4 py-3">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                Remote peer
-              </p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Remote peer</p>
               <p className="mt-1 font-mono text-sm">
                 {settings.currentRequestIp.remoteAddress ?? "unknown"}
               </p>
             </div>
             <div className="px-4 py-3">
-              <p className="text-[10px] uppercase tracking-wider text-muted-foreground">Source</p>
+              <p className="text-xs uppercase tracking-wider text-muted-foreground">Source</p>
               <p className="mt-1 font-mono text-sm">{settings.currentRequestIp.source}</p>
             </div>
           </div>
@@ -1347,7 +1336,7 @@ export function AuthProvisioningSection({
               </p>
             </div>
             <Input
-              className="w-full shrink-0 border-border bg-[#080808] text-foreground placeholder:text-muted-foreground sm:max-w-80"
+              className="w-full shrink-0 sm:max-w-80"
               value={trustedProxyCidrs}
               disabled={!canEdit || isSavingNetwork}
               placeholder="10.0.0.0/8, 172.16.0.0/12"
@@ -1437,7 +1426,7 @@ export function AuthProvisioningSection({
               </p>
             </div>
             <Input
-              className="w-full shrink-0 border-border bg-[#080808] text-foreground placeholder:text-muted-foreground sm:max-w-80"
+              className="w-full shrink-0 sm:max-w-80"
               value={webhookPrivateCidrs}
               disabled={
                 !canEdit ||

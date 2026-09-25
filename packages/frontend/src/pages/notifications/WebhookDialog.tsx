@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ArrowLeft, ArrowRight, Minus, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -45,6 +46,8 @@ export function WebhookDialog({
   const isEdit = !!webhook;
   const [saving, setSaving] = useState(false);
   const [presets, setPresets] = useState<WebhookPreset[]>([]);
+  // The presets are fetched on every opening, but the dialog only waits for the first list.
+  const [presetsLoaded, setPresetsLoaded] = useState(false);
   const [step, setStep] = useState(1);
 
   const [name, setName] = useState("");
@@ -82,7 +85,8 @@ export function WebhookDialog({
     api
       .getWebhookPresets()
       .then(setPresets)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setPresetsLoaded(true));
   }, [open, webhook]);
 
   const applyPreset = (id: string) => {
@@ -178,6 +182,7 @@ export function WebhookDialog({
           </DialogDescription>
         </DialogHeader>
         <AnimatedHeight>
+          <ContentLoading loading={!presetsLoaded} />
           <AnimatePresence mode="wait">
             {step === 1 && (
               <motion.div key="wh-step-1" {...STEP_ANIMATION} className="space-y-5">
@@ -260,7 +265,7 @@ export function WebhookDialog({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-9 w-9 shrink-0 rounded-none"
+                            aria-label={`Remove header ${idx + 1}`}
                             onClick={() => removeHeader(idx)}
                           >
                             <Minus className="h-3.5 w-3.5" />
@@ -269,17 +274,19 @@ export function WebhookDialog({
                       </div>
                     ))}
                     <div className="grid grid-cols-[minmax(0,1fr)_2.25rem] bg-muted/60 dark:bg-muted">
+                      {/* The empty row area adds a header too, like the button beside it. */}
                       <button
                         type="button"
                         className="h-9 min-w-0 cursor-pointer"
-                        aria-label="Add header"
+                        aria-hidden="true"
+                        tabIndex={-1}
                         onClick={addHeader}
                       />
                       <div className="flex border-l border-border">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-9 w-9 shrink-0 rounded-none"
+                          aria-label="Add header"
                           onClick={addHeader}
                         >
                           <Plus className="h-3.5 w-3.5" />
@@ -341,16 +348,16 @@ export function WebhookDialog({
                   setStep(2);
                 }}
               >
-                Next <ArrowRight className="h-4 w-4 ml-1" />
+                Next <ArrowRight />
               </Button>
             </>
           ) : (
             <>
               <Button variant="outline" onClick={() => setStep(1)}>
-                <ArrowLeft className="h-4 w-4 mr-1" /> Back
+                <ArrowLeft /> Back
               </Button>
-              <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Saving..." : isEdit ? "Update" : "Create"}
+              <Button onClick={handleSave} pending={saving}>
+                {isEdit ? "Update" : "Create"}
               </Button>
             </>
           )}

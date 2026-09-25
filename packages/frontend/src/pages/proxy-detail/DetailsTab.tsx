@@ -3,9 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { ProxyUpstreamTarget } from "@/components/proxy/ProxyUpstreamTarget";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { nodeRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
@@ -51,6 +51,7 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
       : null
   );
   const [nodeLoadComplete, setNodeLoadComplete] = useState(!nodeId || Boolean(initialNode));
+  useContentLoading(!nodeLoadComplete);
 
   useEffect(() => {
     if (!nodeId) {
@@ -88,7 +89,6 @@ export function DetailsTab({ host }: { host: ProxyHost }) {
 
   return (
     <div className="space-y-4">
-      {!nodeLoadComplete && <Skeleton />}
       {/* Node Card */}
       {nodeInfo && (
         <PanelShell

@@ -1,4 +1,4 @@
-import { Loader2, Truck } from "lucide-react";
+import { Truck } from "lucide-react";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,6 +16,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Node } from "@/types";
 import type { MigrationResource } from "./DockerMigrationDialog";
@@ -56,15 +57,15 @@ export function DockerMigrationSetupDialog({
         </DialogHeader>
 
         <div className="space-y-5">
+          {/* The dialog opens once the target nodes are known. */}
+          {loadingTargets ? <Skeleton /> : null}
           <div className="space-y-1.5">
             <label htmlFor="migration-target" className="text-sm font-medium">
               Target node
             </label>
             <Select value={targetNodeId} onValueChange={onTargetNodeChange}>
               <SelectTrigger id="migration-target" disabled={loadingTargets || nodes.length === 0}>
-                <SelectValue
-                  placeholder={loadingTargets ? "Loading nodes..." : "Select a Docker node"}
-                />
+                <SelectValue placeholder="Select a Docker node" />
               </SelectTrigger>
               <SelectContent>
                 {nodes.map((node) => (
@@ -100,13 +101,10 @@ export function DockerMigrationSetupDialog({
           </Button>
           <Button
             onClick={onRunPreflight}
-            disabled={!targetNodeId || loadingTargets || loadingPreflight}
+            pending={loadingPreflight}
+            disabled={!targetNodeId || loadingTargets}
           >
-            {loadingPreflight ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Truck className="h-4 w-4" />
-            )}
+            {!loadingPreflight && <Truck className="h-4 w-4" />}
             Run preflight
           </Button>
         </DialogFooter>

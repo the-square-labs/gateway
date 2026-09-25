@@ -1,38 +1,33 @@
 import { Award, Globe, Lock, Server } from "lucide-react";
 import { Link } from "react-router-dom";
-import { cn } from "@/lib/utils";
+import { StatCard } from "@/components/ui/stat-card";
 import type { DashboardStats, Node } from "@/types";
 
-function StatCard({
+function StatLink({
+  href,
   title,
   value,
-  icon: Icon,
+  icon,
   subtitle,
-  href,
 }: {
+  href: string;
   title: string;
   value: number;
   icon: React.ElementType;
-  subtitle?: string;
-  href?: string;
+  subtitle: string;
 }) {
-  const content = (
-    <div
-      className={cn(
-        "border border-border bg-card p-4 space-y-2",
-        href && "cursor-pointer hover:bg-accent transition-colors"
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">{title}</p>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </div>
-      <p className="text-2xl font-bold">{value}</p>
-      {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
-    </div>
+  return (
+    <Link to={href} className="block">
+      <StatCard
+        appearance="dashboard"
+        label={title}
+        value={String(value)}
+        icon={icon}
+        subtitle={subtitle}
+        className="h-full transition-colors hover:bg-accent"
+      />
+    </Link>
   );
-  if (href) return <Link to={href}>{content}</Link>;
-  return content;
 }
 
 interface QuickStatsCardProps {
@@ -64,7 +59,7 @@ export function QuickStatsCard({
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-[repeat(auto-fit,minmax(14rem,1fr))]">
       {hasScope("proxy:view") && (
-        <StatCard
+        <StatLink
           title="Routes"
           value={displayStats.proxyHosts.total}
           icon={Globe}
@@ -73,7 +68,7 @@ export function QuickStatsCard({
         />
       )}
       {hasScope("ssl:cert:view") && (
-        <StatCard
+        <StatLink
           title="SSL Certificates"
           value={displayStats.sslCertificates.total}
           icon={Lock}
@@ -86,7 +81,7 @@ export function QuickStatsCard({
         />
       )}
       {pkiEnabled && hasScope("pki:cert:view") && (
-        <StatCard
+        <StatLink
           title="PKI Certificates"
           value={displayStats.pkiCertificates.active}
           icon={Award}
@@ -95,7 +90,7 @@ export function QuickStatsCard({
         />
       )}
       {hasScope("nodes:details") && (
-        <StatCard
+        <StatLink
           title="Nodes"
           value={nodesList.filter((n) => n.status === "online").length}
           icon={Server}
