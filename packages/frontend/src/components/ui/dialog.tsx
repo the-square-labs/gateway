@@ -84,7 +84,15 @@ const DIALOG_LOADER_DELAY_MS = 250;
 const DIALOG_LOADER_MIN_MS = 400;
 const DIALOG_LOADER_HEIGHT_PX = 128;
 
-const DialogContent = React.forwardRef<
+type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+  hideCloseButton?: boolean;
+  unstyled?: boolean;
+  clipOverflow?: boolean;
+};
+
+// Rendered inside the portal, which mounts it only while the dialog is open,
+// so each opening waits for its own data.
+const DialogContentPanel = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
     hideCloseButton?: boolean;
@@ -130,118 +138,118 @@ const DialogContent = React.forwardRef<
 
   if (unstyled) {
     return (
-      <DialogPortal>
-        <DialogOverlay>
-          <DialogPrimitive.Content
-            ref={ref}
-            className={cn(
-              "dialog-content relative z-50 grid w-full gap-4 border bg-background p-6 shadow-lg outline-none",
-              "max-h-[85dvh] max-w-none overflow-y-auto",
-              "sm:mx-auto sm:my-auto sm:max-h-none sm:overflow-visible sm:max-w-lg",
-              className
-            )}
-            {...props}
-          >
-            <InitialPageLoadContext.Provider value={null}>
-              {children}
-            </InitialPageLoadContext.Provider>
-            {!hideCloseButton && (
-              <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-                <X className="h-4 w-4" />
-                <span className="sr-only">Close</span>
-              </DialogPrimitive.Close>
-            )}
-          </DialogPrimitive.Content>
-        </DialogOverlay>
-      </DialogPortal>
+      <DialogPrimitive.Content
+        ref={ref}
+        className={cn(
+          "dialog-content relative z-50 grid w-full gap-4 border bg-background p-6 shadow-lg outline-none",
+          "max-h-[85dvh] max-w-none overflow-y-auto",
+          "sm:mx-auto sm:my-auto sm:max-h-none sm:overflow-visible sm:max-w-lg",
+          className
+        )}
+        {...props}
+      >
+        <InitialPageLoadContext.Provider value={null}>{children}</InitialPageLoadContext.Provider>
+        {!hideCloseButton && (
+          <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+            <X className="h-4 w-4" />
+            <span className="sr-only">Close</span>
+          </DialogPrimitive.Close>
+        )}
+      </DialogPrimitive.Content>
     );
   }
 
   return (
-    <DialogPortal>
-      <DialogOverlay>
-        <DialogPrimitive.Content
-          ref={ref}
-          className={cn(
-            "dialog-content relative z-50 flex w-full max-w-none flex-col border bg-background p-0 shadow-lg outline-none",
-            "max-h-[85dvh]",
-            "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
-            contentClassName,
-            clipOverflow && "sm:overflow-clip",
-            "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
-          )}
-          {...props}
-          // While the content is still settling the open animation holds its
-          // first, transparent frame; the panel stays focusable for autofocus.
-          style={
-            gate.phase === "pending"
-              ? { ...props.style, animationPlayState: "paused" }
-              : props.style
-          }
-          data-reveal-phase={gate.phase}
-        >
-          <InitialPageLoadContext.Provider value={gate.register}>
-            <InitialPageReadyContext.Provider value={gate.revealed}>
-              {hasHeader ? (
-                <div
-                  data-dialog-header-slot=""
-                  className={cn(
-                    "flex shrink-0 items-start justify-between gap-4 px-4 pb-4 pt-4 transition-shadow duration-200 ease-out sm:px-6 sm:pt-6",
-                    bodyScrolled ? "max-sm:shadow-[inset_0_-1px_0_var(--color-border)]" : ""
-                  )}
-                >
-                  <div className="min-w-0 flex-1">{headerChildren}</div>
-                  {!hideCloseButton && (
-                    <DialogPrimitive.Close className="shrink-0 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-                      <X className="h-4 w-4" />
-                      <span className="sr-only">Close</span>
-                    </DialogPrimitive.Close>
-                  )}
-                </div>
-              ) : null}
-              {bodyChildren.length > 0 ? (
-                <div
-                  ref={bodyRef}
-                  data-dialog-body=""
-                  style={
-                    gate.phase === "loading"
-                      ? {
-                          height: DIALOG_LOADER_HEIGHT_PX,
-                          overflow: "hidden",
-                          visibility: "hidden",
-                        }
-                      : undefined
-                  }
-                  className={cn(
-                    "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
-                    bodyChildren.length > 1 && "grid gap-4",
-                    hasHeader ? "pt-0" : "pt-4 sm:pt-6",
-                    hasFooter ? "pb-0" : "pb-4 sm:pb-6"
-                  )}
-                  onScroll={(event) => setBodyScrolled(event.currentTarget.scrollTop > 0)}
-                >
-                  {bodyChildren}
-                  {gate.phase === "loading" ? (
-                    <ContentLoader className="pointer-events-none absolute inset-0 flex items-center justify-center" />
-                  ) : null}
-                </div>
-              ) : null}
-              {hasFooter ? (
-                <div className="shrink-0 px-4 pb-4 pt-4 sm:px-6 sm:pb-6">{footerChildren}</div>
-              ) : null}
-              {!hideCloseButton && !hasHeader && (
-                <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+    <DialogPrimitive.Content
+      ref={ref}
+      className={cn(
+        "dialog-content relative z-50 flex w-full max-w-none flex-col border bg-background p-0 shadow-lg outline-none",
+        "max-h-[85dvh]",
+        "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
+        contentClassName,
+        clipOverflow && "sm:overflow-clip",
+        "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
+      )}
+      {...props}
+      // While the content is still settling the open animation holds its
+      // first, transparent frame; the panel stays focusable for autofocus.
+      style={
+        gate.phase === "pending" ? { ...props.style, animationPlayState: "paused" } : props.style
+      }
+      data-reveal-phase={gate.phase}
+    >
+      <InitialPageLoadContext.Provider value={gate.register}>
+        <InitialPageReadyContext.Provider value={gate.revealed}>
+          {hasHeader ? (
+            <div
+              data-dialog-header-slot=""
+              className={cn(
+                "flex shrink-0 items-start justify-between gap-4 px-4 pb-4 pt-4 transition-shadow duration-200 ease-out sm:px-6 sm:pt-6",
+                bodyScrolled ? "max-sm:shadow-[inset_0_-1px_0_var(--color-border)]" : ""
+              )}
+            >
+              <div className="min-w-0 flex-1">{headerChildren}</div>
+              {!hideCloseButton && (
+                <DialogPrimitive.Close className="shrink-0 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
                   <X className="h-4 w-4" />
                   <span className="sr-only">Close</span>
                 </DialogPrimitive.Close>
               )}
-            </InitialPageReadyContext.Provider>
-          </InitialPageLoadContext.Provider>
-        </DialogPrimitive.Content>
-      </DialogOverlay>
-    </DialogPortal>
+            </div>
+          ) : null}
+          {bodyChildren.length > 0 ? (
+            <div
+              ref={bodyRef}
+              data-dialog-body=""
+              style={
+                gate.phase === "loading"
+                  ? {
+                      height: DIALOG_LOADER_HEIGHT_PX,
+                      overflow: "hidden",
+                      visibility: "hidden",
+                    }
+                  : undefined
+              }
+              className={cn(
+                "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
+                bodyChildren.length > 1 && "grid gap-4",
+                hasHeader ? "pt-0" : "pt-4 sm:pt-6",
+                hasFooter ? "pb-0" : "pb-4 sm:pb-6"
+              )}
+              onScroll={(event) => setBodyScrolled(event.currentTarget.scrollTop > 0)}
+            >
+              {bodyChildren}
+              {gate.phase === "loading" ? (
+                <ContentLoader className="pointer-events-none absolute inset-0 flex items-center justify-center" />
+              ) : null}
+            </div>
+          ) : null}
+          {hasFooter ? (
+            <div className="shrink-0 px-4 pb-4 pt-4 sm:px-6 sm:pb-6">{footerChildren}</div>
+          ) : null}
+          {!hideCloseButton && !hasHeader && (
+            <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+              <X className="h-4 w-4" />
+              <span className="sr-only">Close</span>
+            </DialogPrimitive.Close>
+          )}
+        </InitialPageReadyContext.Provider>
+      </InitialPageLoadContext.Provider>
+    </DialogPrimitive.Content>
   );
 });
+DialogContentPanel.displayName = "DialogContentPanel";
+
+const DialogContent = React.forwardRef<
+  React.ElementRef<typeof DialogPrimitive.Content>,
+  DialogContentProps
+>((props, ref) => (
+  <DialogPortal>
+    <DialogOverlay>
+      <DialogContentPanel ref={ref} {...props} />
+    </DialogOverlay>
+  </DialogPortal>
+));
 DialogContent.displayName = DialogPrimitive.Content.displayName;
 
 const DialogTitle = React.forwardRef<
