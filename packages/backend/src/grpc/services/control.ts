@@ -1108,6 +1108,8 @@ export function createControlHandlers(deps: GrpcServerDeps) {
                         blockReadBytes: Number(c.blockReadBytes ?? 0),
                         blockWriteBytes: Number(c.blockWriteBytes ?? 0),
                         pids: c.pids ?? 0,
+                        logBytes: Number(c.logBytes ?? 0),
+                        logBytesAvailable: c.logBytesAvailable === true,
                         metricsAvailable: hasDockerMetricSample(c),
                       })),
                     }

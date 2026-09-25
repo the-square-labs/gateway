@@ -907,6 +907,8 @@ export interface ContainerStats {
   blockReadBytes: number;
   blockWriteBytes: number;
   pids: number;
+  logBytes: number;
+  logBytesAvailable: boolean;
 }
 
 // ─── Log Streaming ──────────────────────────────────────────────────

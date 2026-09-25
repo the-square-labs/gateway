@@ -234,6 +234,9 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
     metrics: [
       { id: 'cpu', label: 'CPU Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
       { id: 'memory', label: 'Memory Usage (%)', unit: '%', defaultOperator: '>', defaultValue: 90 },
+      // Containers with Gateway's default rotation stay under 150 MB, so this
+      // catches workloads whose logs are unbounded.
+      { id: 'log_size', label: 'Log Size (MB)', unit: 'MB', defaultOperator: '>', defaultValue: 1024 },
     ],
     events: [
       { id: 'stopped', label: 'Container Stopped', defaultSeverity: 'warning', supportsThreshold: true },

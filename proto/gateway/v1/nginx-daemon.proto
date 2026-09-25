@@ -1033,6 +1033,11 @@ message ContainerStats {
   int64 block_read_bytes = 10;
   int64 block_write_bytes = 11;
   int64 pids = 12;
+  // Bytes in the container's log files on the node, rotated files included.
+  int64 log_bytes = 13;
+  // False when log_bytes is unknown: the container is not running, its log
+  // driver keeps no readable files, or the daemon may not read them.
+  bool log_bytes_available = 14;
 }
 
 // A node-scoped physical GPU. `id` is stable for the lifetime of the device

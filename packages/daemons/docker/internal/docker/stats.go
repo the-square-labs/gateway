@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,6 +29,9 @@ type StatsCollector struct {
 	logger    *slog.Logger
 	mu        sync.RWMutex
 	stats     map[string]*pb.ContainerStats // keyed by container ID
+	// logReadWarning reports once that log files are unreadable, typically a
+	// daemon running as a user outside the Docker data directory's group.
+	logReadWarning sync.Once
 }
 
 // NewStatsCollector creates a new StatsCollector.
@@ -145,7 +150,39 @@ func (sc *StatsCollector) collectOne(ctx context.Context, containerID string) (*
 		return statsResponseToProto(&stats, nil), nil
 	}
 
-	return statsResponseToProto(&stats, &inspectResult.Container), nil
+	proto := statsResponseToProto(&stats, &inspectResult.Container)
+	logBytes, err := containerLogBytes(inspectResult.Container.LogPath)
+	if err != nil {
+		sc.logReadWarning.Do(func() {
+			sc.logger.Warn("stats: cannot read container log files; log sizes are not reported", "error", err)
+		})
+	}
+	proto.LogBytes, proto.LogBytesAvailable = logBytes, inspectResult.Container.LogPath != "" && err == nil
+	return proto, nil
+}
+
+// containerLogBytes sums the container's log file and its rotated siblings
+// (json-file keeps <id>-json.log.1, .2 and so on next to it). Drivers other
+// than json-file expose no log path, which is reported as zero without error.
+func containerLogBytes(logPath string) (int64, error) {
+	if logPath == "" {
+		return 0, nil
+	}
+	entries, err := os.ReadDir(filepath.Dir(logPath))
+	if err != nil {
+		return 0, err
+	}
+	prefix := filepath.Base(logPath)
+	var total int64
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasPrefix(entry.Name(), prefix) {
+			continue
+		}
+		if info, err := entry.Info(); err == nil {
+			total += info.Size()
+		}
+	}
+	return total, nil
 }
 
 // statsResponseToProto converts a Docker StatsResponse to the protobuf ContainerStats.

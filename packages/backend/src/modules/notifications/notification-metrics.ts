@@ -73,6 +73,17 @@ export function extractMetricFromHealthReport(
             };
           }),
         };
+      case 'log_size':
+        // Containers whose log size is unknown (no readable files, or an older daemon) are
+        // left out rather than reported as empty.
+        return {
+          values: metricStats
+            .filter((s: any) => s.logBytesAvailable === true || s.log_bytes_available === true)
+            .map((s: any) => ({
+              resourceId: s.name ?? s.containerId ?? '',
+              value: Number(s.logBytes ?? s.log_bytes ?? 0) / (1024 * 1024),
+            })),
+        };
     }
   }
 

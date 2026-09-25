@@ -423,7 +423,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 			values = append(values, "docker_runsc_healthy_v1")
 		}
 		if p.composeExecutor != nil {
-			values = append(values, "docker_compose_v1")
+			values = append(values, "docker_compose_v1", composeLoggingCapability)
 		}
 		return values
 	}()

@@ -8754,8 +8754,13 @@ type ContainerStats struct {
 	BlockReadBytes   int64                  `protobuf:"varint,10,opt,name=block_read_bytes,json=blockReadBytes,proto3" json:"block_read_bytes,omitempty"`
 	BlockWriteBytes  int64                  `protobuf:"varint,11,opt,name=block_write_bytes,json=blockWriteBytes,proto3" json:"block_write_bytes,omitempty"`
 	Pids             int64                  `protobuf:"varint,12,opt,name=pids,proto3" json:"pids,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Bytes in the container's log files on the node, rotated files included.
+	LogBytes int64 `protobuf:"varint,13,opt,name=log_bytes,json=logBytes,proto3" json:"log_bytes,omitempty"`
+	// False when log_bytes is unknown: the container is not running, its log
+	// driver keeps no readable files, or the daemon may not read them.
+	LogBytesAvailable bool `protobuf:"varint,14,opt,name=log_bytes_available,json=logBytesAvailable,proto3" json:"log_bytes_available,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *ContainerStats) Reset() {
@@ -8870,6 +8875,20 @@ func (x *ContainerStats) GetPids() int64 {
 		return x.Pids
 	}
 	return 0
+}
+
+func (x *ContainerStats) GetLogBytes() int64 {
+	if x != nil {
+		return x.LogBytes
+	}
+	return 0
+}
+
+func (x *ContainerStats) GetLogBytesAvailable() bool {
+	if x != nil {
+		return x.LogBytesAvailable
+	}
+	return false
 }
 
 // A node-scoped physical GPU. `id` is stable for the lifetime of the device
@@ -11332,7 +11351,7 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\aexec_id\x18\x01 \x01(\tR\x06execId\x12\x12\n" +
 	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
 	"\x06exited\x18\x03 \x01(\bR\x06exited\x12\x1b\n" +
-	"\texit_code\x18\x04 \x01(\x05R\bexitCode\"\xae\x03\n" +
+	"\texit_code\x18\x04 \x01(\x05R\bexitCode\"\xfb\x03\n" +
 	"\x0eContainerStats\x12!\n" +
 	"\fcontainer_id\x18\x01 \x01(\tR\vcontainerId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -11347,7 +11366,9 @@ const file_gateway_v1_nginx_daemon_proto_rawDesc = "" +
 	"\x10block_read_bytes\x18\n" +
 	" \x01(\x03R\x0eblockReadBytes\x12*\n" +
 	"\x11block_write_bytes\x18\v \x01(\x03R\x0fblockWriteBytes\x12\x12\n" +
-	"\x04pids\x18\f \x01(\x03R\x04pids\"\xf3\x05\n" +
+	"\x04pids\x18\f \x01(\x03R\x04pids\x12\x1b\n" +
+	"\tlog_bytes\x18\r \x01(\x03R\blogBytes\x12.\n" +
+	"\x13log_bytes_available\x18\x0e \x01(\bR\x11logBytesAvailable\"\xf3\x05\n" +
 	"\tGpuDevice\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x16\n" +
 	"\x06vendor\x18\x02 \x01(\tR\x06vendor\x12\x14\n" +

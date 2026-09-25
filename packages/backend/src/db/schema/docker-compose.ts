@@ -75,6 +75,13 @@ export interface DockerComposeNormalizedService {
   volumes?: DockerComposeNormalizedVolume[];
   networks?: string[];
   labels?: Record<string, string>;
+  logging?: DockerComposeNormalizedLogging;
+}
+
+/** A service's own log rotation; services without it get the node default (json-file, 50m x 3). */
+export interface DockerComposeNormalizedLogging {
+  driver: 'json-file' | 'local' | 'none';
+  options?: Record<string, string>;
 }
 
 export interface DockerComposeNormalizedResource {

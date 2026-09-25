@@ -2,6 +2,8 @@ package docker
 
 import (
 	"math"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/moby/moby/api/types/container"
@@ -127,5 +129,24 @@ func testStatsResponse(cpuDelta uint64, systemDelta uint64, onlineCPUs uint32) *
 			SystemUsage: 1000,
 			OnlineCPUs:  onlineCPUs,
 		},
+	}
+}
+
+func TestContainerLogBytesCountsRotatedFiles(t *testing.T) {
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "abc-json.log")
+	for name, size := range map[string]int{"abc-json.log": 100, "abc-json.log.1": 50, "abc-json.log.2.gz": 25, "config.v2.json": 999} {
+		if err := os.WriteFile(filepath.Join(directory, name), make([]byte, size), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := containerLogBytes(logPath); err != nil || got != 175 {
+		t.Fatalf("log bytes = %d, %v; want 175", got, err)
+	}
+	if _, err := containerLogBytes(filepath.Join(directory, "missing", "x-json.log")); err == nil {
+		t.Fatal("an unreadable log directory must be reported")
+	}
+	if got, err := containerLogBytes(""); err != nil || got != 0 {
+		t.Fatalf("no log path = %d, %v; want 0 without error", got, err)
 	}
 }

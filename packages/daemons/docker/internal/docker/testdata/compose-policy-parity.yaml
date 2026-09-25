@@ -325,3 +325,91 @@ cases:
       volumes:
         data:
           external: "true"
+
+  - name: service log rotation with json-file and local
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            driver: json-file
+            options:
+              max-size: 200m
+              max-file: "5"
+        worker:
+          image: busybox
+          logging:
+            driver: local
+            options:
+              compress: "true"
+        quiet:
+          image: busybox
+          logging:
+            driver: none
+
+  - name: logging options written as YAML numbers and booleans
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            options:
+              max-size: 10m
+              max-file: 3
+              compress: True
+
+  - name: logging max-file that is not a whole number
+    valid: false
+    backendCode: INVALID_LOGGING
+    backendMessage: max-file
+    daemonError: max-file
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            options:
+              max-file: "2.5"
+
+  - name: logging driver that ships logs off the node
+    valid: false
+    backendCode: INVALID_LOGGING
+    backendMessage: json-file, local or none
+    daemonError: json-file, local or none
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            driver: syslog
+            options:
+              syslog-address: udp://10.0.0.1:514
+
+  - name: unsupported logging option
+    valid: false
+    backendCode: INVALID_LOGGING
+    backendMessage: tag
+    daemonError: tag
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            options:
+              tag: web
+
+  - name: logging driver none with options
+    valid: false
+    backendCode: INVALID_LOGGING
+    backendMessage: none takes no options
+    daemonError: none takes no options
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          logging:
+            driver: none
+            options:
+              max-size: 1m

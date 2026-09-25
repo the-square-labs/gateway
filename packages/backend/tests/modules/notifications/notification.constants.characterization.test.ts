@@ -26,7 +26,7 @@ describe('notification constants characterization', () => {
         severityColor: SEVERITY_COLOR,
         categories: ALERT_CATEGORIES,
       })
-    ).toBe('da8d7800ee2b4801818ee191eec6df9a8af2690e55548aad4ca8cbe07cfc8c44');
+    ).toBe('86bca40106eed6b1cf07c28c6089165529992ad9490b37abb02778baeeec3321');
   });
 
   it('keeps EventBus topic, event, and stateful topology stable', () => {

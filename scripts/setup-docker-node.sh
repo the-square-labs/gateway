@@ -1006,11 +1006,28 @@ remove_conflicting_docker_packages() {
     esac
 }
 
+# A Docker Engine this script installs starts with log rotation for every
+# container, including ones created outside Gateway. An existing daemon.json
+# belongs to the operator and is left alone.
+seed_docker_log_defaults() {
+    local config=/etc/docker/daemon.json
+    [[ -e "$config" ]] && return 0
+    mkdir -p /etc/docker
+    cat > "$config" <<'JSON'
+{
+  "log-driver": "json-file",
+  "log-opts": { "max-size": "50m", "max-file": "3" }
+}
+JSON
+    log "Docker will rotate container logs at 50 MB x 3 ($config)"
+}
+
 install_docker_engine() {
     local repo_family
     repo_family=$(docker_repo_distro_family)
     [[ -n "$repo_family" ]] || die "Automatic Docker installation is supported only on Alpine/Debian/Ubuntu/Fedora/CentOS/RHEL."
     remove_conflicting_docker_packages "$repo_family"
+    seed_docker_log_defaults
     case "$repo_family" in
         alpine)
             install_system_packages docker docker-cli-compose

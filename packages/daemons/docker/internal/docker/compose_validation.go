@@ -14,8 +14,14 @@ var composeServiceFields = map[string]bool{
 	"image": true, "environment": true, "command": true, "entrypoint": true, "working_dir": true, "user": true,
 	"hostname": true, "ports": true, "healthcheck": true, "depends_on": true, "restart": true, "volumes": true,
 	"networks": true, "extra_hosts": true, "labels": true, "cpus": true, "cpu_shares": true, "mem_limit": true,
-	"mem_reservation": true, "memswap_limit": true, "pids_limit": true,
+	"mem_reservation": true, "memswap_limit": true, "pids_limit": true, "logging": true,
 }
+
+// Services may choose their own log rotation, but only with drivers that keep
+// the files on the node, so a Compose project cannot ship logs elsewhere.
+var composeLoggingDrivers = map[string]bool{"json-file": true, "local": true, "none": true}
+
+var composeLoggingOptions = map[string]bool{"max-size": true, "max-file": true, "compress": true}
 
 var composeByteValuePattern = regexp.MustCompile(`(?i)^\d+(?:\.\d+)?(?:[kmgtpe]i?b?|b)?$`)
 
@@ -121,7 +127,102 @@ func validateComposeService(name string, service, services, volumes, networks *y
 	if err := validatePidsLimit(values["pids_limit"], "pids_limit"); err != nil {
 		return err
 	}
+	return validateServiceLogging(values["logging"])
+}
+
+func validateServiceLogging(node *yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return errors.New("compose service logging must be a mapping")
+	}
+	values := mappingValues(node)
+	for key := range values {
+		if key != "driver" && key != "options" {
+			return fmt.Errorf("compose service logging field %q is not supported", key)
+		}
+	}
+	driver := jsonFileLogDriver
+	if value := values["driver"]; value != nil {
+		if value.Kind != yaml.ScalarNode || !composeLoggingDrivers[value.Value] {
+			return errors.New("compose service logging driver must be json-file, local or none")
+		}
+		driver = value.Value
+	}
+	options := values["options"]
+	if options == nil {
+		return nil
+	}
+	if options.Kind != yaml.MappingNode {
+		return errors.New("compose service logging options must be a mapping")
+	}
+	if driver == "none" && len(options.Content) > 0 {
+		return errors.New("compose service logging driver none takes no options")
+	}
+	for key, value := range mappingValues(options) {
+		if !composeLoggingOptions[key] {
+			return fmt.Errorf("compose service logging option %q is not supported", key)
+		}
+		if value.Kind != yaml.ScalarNode {
+			return fmt.Errorf("compose service logging option %s must be a scalar", key)
+		}
+		switch key {
+		case "max-size":
+			if err := validateByteValue(value, "logging max-size"); err != nil {
+				return err
+			}
+		case "max-file":
+			if count, err := strconv.Atoi(strings.TrimSpace(value.Value)); err != nil || count < 1 {
+				return errors.New("compose service logging max-file must be a positive integer")
+			}
+		case "compress":
+			if !strings.EqualFold(value.Value, "true") && !strings.EqualFold(value.Value, "false") {
+				return errors.New("compose service logging compress must be true or false")
+			}
+		}
+	}
 	return nil
+}
+
+// injectComposeLogLimits gives every service without its own logging the
+// rotation single workloads get (json-file, 50m x 3). Callers use it only
+// when the host's default driver is plain json-file.
+func injectComposeLogLimits(composeYAML []byte) ([]byte, error) {
+	var document yaml.Node
+	if err := yaml.Unmarshal(composeYAML, &document); err != nil || len(document.Content) != 1 {
+		return nil, errors.New("compose_yaml is invalid")
+	}
+	services := mappingValues(document.Content[0])["services"]
+	if services == nil || services.Kind != yaml.MappingNode {
+		return composeYAML, nil
+	}
+	for i := 1; i < len(services.Content); i += 2 {
+		service := services.Content[i]
+		if mappingValues(service)["logging"] != nil {
+			continue
+		}
+		service.Content = append(service.Content, composeScalar("logging"), composeMapping(
+			composeScalar("driver"), composeScalar(jsonFileLogDriver),
+			composeScalar("options"), composeMapping(
+				composeScalar("max-size"), composeScalar(workloadLogMaxSize),
+				composeScalar("max-file"), composeScalar(workloadLogMaxFile),
+			),
+		))
+	}
+	output, err := yaml.Marshal(&document)
+	if err != nil {
+		return nil, errors.New("normalize compose_yaml")
+	}
+	return output, nil
+}
+
+func composeScalar(value string) *yaml.Node {
+	return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: value}
+}
+
+func composeMapping(content ...*yaml.Node) *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", Content: content}
 }
 
 func validateNonNegativeFloat(node *yaml.Node, field string) error {

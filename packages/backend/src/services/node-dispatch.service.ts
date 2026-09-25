@@ -1,4 +1,5 @@
 import { and, eq } from 'drizzle-orm';
+import { parseDocument } from 'yaml';
 import type { DrizzleClient } from '@/db/client.js';
 import { nodes } from '@/db/schema/index.js';
 import type { ManagedStorageEngine } from '@/db/schema/managed-storage.js';
@@ -32,6 +33,30 @@ const managedBackupCommandTimeoutMs = 25 * 60 * 1000;
 // acknowledges the command. Leave a small margin for verification and replace.
 const daemonUpdateCommandTimeoutMs = 5 * 60 * 1000 + 30_000;
 const dockerComposeCommandTimeoutMs = 30 * 60 * 1000;
+
+/**
+ * Docker daemons without `compose_logging_v1` reject a Compose service that sets `logging`. Until
+ * the node is updated its services keep Docker's log defaults, as before, rather than failing a
+ * deploy or an availability failover on that node.
+ */
+function withoutComposeLogging(composeYaml: Buffer | undefined, normalizedModelJson: string | undefined) {
+  let model: { services?: Record<string, { logging?: unknown }> } | undefined;
+  try {
+    model = normalizedModelJson ? JSON.parse(normalizedModelJson) : undefined;
+  } catch {
+    return { composeYaml, normalizedModelJson };
+  }
+  const logged = Object.entries(model?.services ?? {}).filter(([, service]) => service?.logging != null);
+  if (!model || logged.length === 0) return { composeYaml, normalizedModelJson };
+  for (const [, service] of logged) delete service.logging;
+  let yaml = composeYaml;
+  if (composeYaml?.length) {
+    const document = parseDocument(composeYaml.toString('utf8'));
+    for (const [name] of logged) document.deleteIn(['services', name, 'logging']);
+    yaml = Buffer.from(document.toString(), 'utf8');
+  }
+  return { composeYaml: yaml, normalizedModelJson: JSON.stringify(model) };
+}
 
 export class NodeDispatchService {
   private daemonUpdateService?: DaemonUpdateService;
@@ -1240,6 +1265,9 @@ export class NodeDispatchService {
         'The connected Docker daemon does not support first-class Compose operations'
       );
     }
+    const { composeYaml, normalizedModelJson } = this.registry.hasCapability(nodeId, 'compose_logging_v1')
+      ? options
+      : withoutComposeLogging(options.composeYaml, options.normalizedModelJson);
     return this.registry.sendCommand(
       nodeId,
       {
@@ -1250,8 +1278,8 @@ export class NodeDispatchService {
           projectName: options.projectName,
           revisionId: options.revisionId ?? '',
           configDigest: options.configDigest ?? '',
-          composeYaml: options.composeYaml ?? Buffer.alloc(0),
-          normalizedModelJson: options.normalizedModelJson ?? '',
+          composeYaml: composeYaml ?? Buffer.alloc(0),
+          normalizedModelJson: normalizedModelJson ?? '',
           variables: options.variables ?? {},
           secrets: options.secrets ?? {},
           removeOrphans: options.removeOrphans ?? false,

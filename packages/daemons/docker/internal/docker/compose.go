@@ -20,7 +20,10 @@ import (
 )
 
 const (
-	composeCapability          = "docker_compose_v1"
+	composeCapability = "docker_compose_v1"
+	// composeLoggingCapability: Compose services may set logging, and services
+	// without it get the workload log rotation.
+	composeLoggingCapability   = "compose_logging_v1"
 	composeOperationCacheLimit = 256
 	composeSidecarPullLimit    = 5 * time.Minute
 	composeErrorDetailLimit    = 4 * 1024
@@ -71,6 +74,9 @@ type composeExecutor struct {
 	sidecar composeSidecar
 	timeout time.Duration
 	logger  *slog.Logger
+	// logLimits reports whether services without their own logging get the
+	// workload log rotation; nil means never.
+	logLimits func() bool
 
 	mu             sync.Mutex
 	active         map[string]*composeOperation
@@ -104,9 +110,12 @@ func newComposeExecutor(cfg *config.Config, dockerClient *Client, logger *slog.L
 		return nil, err
 	}
 	return &composeExecutor{
-		sidecar:   sidecar,
-		timeout:   time.Duration(cfg.Docker.Compose.CommandTimeoutSeconds) * time.Second,
-		logger:    logger,
+		sidecar: sidecar,
+		timeout: time.Duration(cfg.Docker.Compose.CommandTimeoutSeconds) * time.Second,
+		logger:  logger,
+		logLimits: func() bool {
+			return dockerClient.defaultWorkloadLogDriver() == jsonFileLogDriver
+		},
 		active:    make(map[string]*composeOperation),
 		completed: make(map[string]composeOperationResult),
 	}, nil
@@ -134,6 +143,12 @@ func (e *composeExecutor) handle(cmd *pb.DockerComposeCommand) (string, error) {
 	}
 	if request.action == "cancel" {
 		return "", e.cancel(request)
+	}
+	// delete_volumes never stages the document, so it is left as sent.
+	if request.action != "delete_volumes" && len(request.composeYAML) > 0 && e.logLimits != nil && e.logLimits() {
+		if request.composeYAML, err = injectComposeLogLimits(request.composeYAML); err != nil {
+			return "", err
+		}
 	}
 
 	fingerprint := composeRequestFingerprint(request)

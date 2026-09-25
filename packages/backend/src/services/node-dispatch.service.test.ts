@@ -313,6 +313,46 @@ describe('NodeDispatchService', () => {
     );
   });
 
+  it('drops Compose logging settings for a node whose daemon cannot apply them', async () => {
+    const command = {
+      operationId: 'operation-1',
+      projectId: 'project-1',
+      projectName: 'demo',
+      revisionId: 'revision-1',
+      configDigest: 'sha256:digest',
+      composeYaml: Buffer.from(
+        'services:\n  web:\n    image: nginx\n    logging:\n      driver: local\n  worker:\n    image: busybox\n'
+      ),
+      normalizedModelJson: JSON.stringify({
+        name: 'demo',
+        services: { web: { image: 'nginx', logging: { driver: 'local' } }, worker: { image: 'busybox' } },
+      }),
+    };
+    const sent = (service: ReturnType<typeof createService>) =>
+      service.registry.sendCommand.mock.calls[0][1].dockerCompose as {
+        composeYaml: Buffer;
+        normalizedModelJson: string;
+      };
+
+    const older = createService();
+    older.registry.hasCapability.mockImplementation(
+      (_nodeId: string, capability: string) => capability !== 'compose_logging_v1'
+    );
+    await older.service.sendDockerComposeCommand('node-1', 'apply', command);
+    expect(sent(older).composeYaml.toString()).toBe(
+      'services:\n  web:\n    image: nginx\n  worker:\n    image: busybox\n'
+    );
+    expect(JSON.parse(sent(older).normalizedModelJson)).toEqual({
+      name: 'demo',
+      services: { web: { image: 'nginx' }, worker: { image: 'busybox' } },
+    });
+
+    const updated = createService();
+    await updated.service.sendDockerComposeCommand('node-1', 'apply', command);
+    expect(sent(updated).composeYaml).toBe(command.composeYaml);
+    expect(sent(updated).normalizedModelJson).toBe(command.normalizedModelJson);
+  });
+
   it('generation-normalizes and capability-gates Docker Availability commands', async () => {
     const unsupported = createService();
     unsupported.registry.hasCapability.mockReturnValue(false);

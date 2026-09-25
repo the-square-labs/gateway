@@ -87,7 +87,11 @@ export const NOTIFICATION_AI_TOOLS: AIToolDefinition[] = [
           description: 'Resource category',
         },
         severity: { type: 'string', enum: ['info', 'warning', 'critical'], description: 'Alert severity' },
-        metric: { type: 'string', description: 'For threshold: metric name (cpu, memory, disk, days_until_expiry)' },
+        metric: {
+          type: 'string',
+          description:
+            'For threshold: metric name (cpu, memory, disk, log_size for containers in MB, days_until_expiry)',
+        },
         metricTarget: {
           type: 'string',
           description: 'For threshold: optional sub-target like a specific disk mount point',
