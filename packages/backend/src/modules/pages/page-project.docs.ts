@@ -157,6 +157,17 @@ export const migratePageProjectRoute = appRoute({
   responses: okJson(UnknownDataResponseSchema),
 });
 
+export const rotatePageProjectPreviewHashRoute = appRoute({
+  method: 'post',
+  path: '/{id}/preview-hash/rotate',
+  tags,
+  summary: 'Rotate every preview link of a Page Project',
+  description:
+    'Gives the Project a new random preview hash and new Deployment preview slugs, revokes every old preview hostname at once, and republishes the new links. Requires pages:edit.',
+  request: { params: IdParamSchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
 export const deletePageProjectRoute = appRoute({
   method: 'delete',
   path: '/{id}',

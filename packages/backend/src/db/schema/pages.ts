@@ -14,6 +14,7 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
+import { accessLists } from './access-lists.js';
 import { domains } from './domains.js';
 import { nodes } from './nodes.js';
 import { proxyHosts } from './proxy-hosts.js';
@@ -134,11 +135,17 @@ export const pageProjects = pgTable(
     id: uuid('id').primaryKey().defaultRandom(),
     name: varchar('name', { length: 255 }).notNull(),
     slug: varchar('slug', { length: 60 }).notNull(),
+    // Random, never derived from the name. Prefixes every Tag preview label and
+    // is replaced (with every Deployment preview slug) by a link rotation.
+    previewHash: varchar('preview_hash', { length: 12 }).notNull(),
     description: text('description'),
     appearanceColor: varchar('appearance_color', { length: 32 }),
     previewsEnabled: boolean('previews_enabled').notNull().default(true),
     spaFallback: boolean('spa_fallback').notNull().default(false),
     fallbackUrl: text('fallback_url'),
+    // Applies to every preview host of the Project (Deployment and Tag). Restrict
+    // deletion: silently dropping it would publish protected previews.
+    accessListId: uuid('access_list_id').references(() => accessLists.id, { onDelete: 'restrict' }),
     nodeId: uuid('node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     migrationSourceNodeId: uuid('migration_source_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
     migrationTargetNodeId: uuid('migration_target_node_id').references(() => nodes.id, { onDelete: 'restrict' }),
@@ -160,6 +167,8 @@ export const pageProjects = pgTable(
   },
   (table) => [
     uniqueIndex('page_projects_slug_unique').on(table.slug),
+    uniqueIndex('page_projects_preview_hash_unique').on(table.previewHash),
+    index('page_projects_access_list_idx').on(table.accessListId),
     index('page_projects_folder_idx').on(table.folderId),
     index('page_projects_sort_idx').on(table.folderId, table.sortOrder),
     index('page_projects_created_by_idx').on(table.createdById),
@@ -196,6 +205,8 @@ export const pageDeployments = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
     readyAt: timestamp('ready_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
+    // Optional. Only a Deployment with an expiry is ever expired by maintenance.
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
   },
   (table) => [
     uniqueIndex('page_deployments_public_slug_unique').on(table.publicSlug),
@@ -204,6 +215,7 @@ export const pageDeployments = pgTable(
     uniqueIndex('page_deployments_project_idempotency_unique').on(table.projectId, table.idempotencyKey),
     index('page_deployments_project_status_idx').on(table.projectId, table.status),
     index('page_deployments_project_created_idx').on(table.projectId, table.createdAt),
+    index('page_deployments_expires_idx').on(table.expiresAt).where(sql`${table.expiresAt} is not null`),
   ]
 );
 
@@ -218,12 +230,16 @@ export const pageTags = pgTable(
     deploymentId: uuid('deployment_id').references(() => pageDeployments.id, { onDelete: 'restrict' }),
     system: boolean('system').notNull().default(false),
     generation: integer('generation').notNull().default(0),
+    // `<project previewHash>-<name>.<Pages domain>`; null until first published
+    // or when the label does not fit one DNS label.
+    previewHostname: varchar('preview_hostname', { length: 253 }),
     updatedById: uuid('updated_by_id').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     uniqueIndex('page_tags_project_name_unique').on(table.projectId, table.name),
+    uniqueIndex('page_tags_preview_hostname_unique').on(table.previewHostname),
     index('page_tags_deployment_idx').on(table.deploymentId),
   ]
 );
@@ -291,6 +307,9 @@ export const pageUploadSessions = pgTable(
     declaredSha256: varchar('declared_sha256', { length: 64 }).notNull(),
     receivedBytes: bigint('received_bytes', { mode: 'number' }).notNull().default(0),
     tempKey: text('temp_key').notNull(),
+    // `html` wraps one uploaded HTML file as index.html; `tar.gz`, or null for
+    // content detection, keeps the archive as uploaded.
+    artifactFormat: varchar('artifact_format', { length: 16 }),
     failureCode: varchar('failure_code', { length: 128 }),
     expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),

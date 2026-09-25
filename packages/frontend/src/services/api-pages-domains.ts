@@ -28,6 +28,7 @@ import type {
   PageProject,
   PageProjectFolderTreeNode,
   PageProjectPlacementOption,
+  PageProjectPreviewRotation,
   PageRuntimeConfigRecord,
   PageRuntimeConfigsResponse,
   PageTag,
@@ -116,6 +117,16 @@ export function withPagesDomainsApi<TBase extends ApiClientBaseConstructor>(Base
       );
       this.invalidateCache("pages:");
       return project;
+    }
+
+    async rotatePagePreviewHash(id: string): Promise<PageProjectPreviewRotation> {
+      const result = await this.unwrapData(
+        this.request<{ data: PageProjectPreviewRotation }>(`/pages/${id}/preview-hash/rotate`, {
+          method: "POST",
+        })
+      );
+      this.invalidateCache("pages:");
+      return result;
     }
 
     async getPageRuntimeConfigs(projectId: string): Promise<PageRuntimeConfigsResponse> {

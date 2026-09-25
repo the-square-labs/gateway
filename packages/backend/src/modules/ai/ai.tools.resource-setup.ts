@@ -4,16 +4,37 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'upload_pages_artifact',
     description:
-      'Upload a static Pages project archive through authenticated MCP using a resumable begin/chunk/finalize workflow. Authentication comes from the MCP connection; never pass a token or Authorization value. Chunks contain at most 1 MiB of decoded base64 data.',
+      'Publish a static site to a Page Project through authenticated MCP with a resumable begin/chunk/finalize workflow. Upload either a .tar.gz archive with index.html at its root or one HTML file (format "html", or detected from content), which becomes index.html. Declare the exact byte size and lowercase SHA-256 at begin, send ordered chunks of at most 1 MiB decoded base64, then finalize. Finalize returns the Deployment, its preview URL and, when a Tag was requested, the stable Tag preview URL (`<project hash>-<tag>`); a link still being published is returned with status "pending" after about 15 seconds instead of null. Optional expiresAt or expiresInHours makes maintenance delete the Deployment, its previews and files later. Needs pages:deploy. Authentication comes from the MCP connection; never pass a token or Authorization value.',
     parameters: {
       type: 'object',
       properties: {
         operation: { type: 'string', enum: ['begin', 'chunk', 'finalize'] },
         projectId: { type: 'string', description: 'Page Project UUID for begin.' },
-        declaredSizeBytes: { type: 'number', description: 'Exact compressed archive size in bytes for begin.' },
-        sha256: { type: 'string', description: 'Lowercase SHA-256 of the complete compressed archive for begin.' },
+        declaredSizeBytes: {
+          type: 'number',
+          description: 'Exact uploaded size in bytes (archive or HTML file) for begin.',
+        },
+        sha256: { type: 'string', description: 'Lowercase SHA-256 of the complete uploaded bytes for begin.' },
         idempotencyKey: { type: 'string' },
-        tag: { type: 'string', description: 'Optional mutable Tag to publish after finalize.' },
+        tag: {
+          type: 'string',
+          description:
+            'Optional mutable Tag to publish after finalize, for a stable preview link. Lowercase DNS label; new Tags are at most 50 characters so `<hash>-<tag>` fits one DNS label.',
+        },
+        format: {
+          type: 'string',
+          enum: ['tar.gz', 'html'],
+          description: 'begin only: artifact format. Omit to detect from content (gzip archive or HTML).',
+        },
+        expiresAt: {
+          type: 'string',
+          description:
+            'begin or finalize: optional ISO 8601 expiry (5 minutes to 1 year ahead). null at finalize clears it.',
+        },
+        expiresInHours: {
+          type: 'number',
+          description: 'begin or finalize: optional lifetime in whole hours (1-8760) instead of expiresAt.',
+        },
         source: {
           type: 'object',
           properties: {
@@ -47,7 +68,7 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_pages',
     description:
-      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, runtime configuration, and Git sources. project_placement_options lists nodes a Project can be created on or migrated to; project_migrate also needs pages:create for the target node, and source_upsert needs pages:edit and pages:deploy. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
+      'Inspect and manage Pages profiles, Projects, Deployments, Tags, deploy tokens, runtime configuration, and Git sources. project_placement_options lists nodes a Project can be created on or migrated to; project_migrate also needs pages:create for the target node, and source_upsert needs pages:edit and pages:deploy. project_update with accessListId protects every preview host of the Project (needs pages:edit and acl:view on the list; null removes it). project_rotate_preview_hash (pages:edit) gives the Project a new preview hash and Deployment slugs and revokes every old preview link at once. deployment_links returns the preview and Tag preview URLs of one Deployment; tag_list includes each Tag preview link. Pages must be licensed and enabled for runtime-changing operations. Artifact bytes use the MCP-only upload_pages_artifact tool or the REST resumable deploy API, not this metadata tool.',
     parameters: {
       type: 'object',
       properties: {
@@ -64,10 +85,12 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
             'project_placement_options',
             'project_create',
             'project_update',
+            'project_rotate_preview_hash',
             'project_migrate',
             'project_delete',
             'deployment_list',
             'deployment_get',
+            'deployment_links',
             'deployment_pin',
             'deployment_delete',
             'tag_list',
@@ -112,6 +135,10 @@ export const RESOURCE_SETUP_AI_TOOLS: AIToolDefinition[] = [
         appearanceColor: { type: 'string' },
         maxDeployments: { type: 'number' },
         storageQuotaBytes: { type: 'number' },
+        accessListId: {
+          type: ['string', 'null'],
+          description: 'project_update: access list UUID applied to every preview host, or null to remove it.',
+        },
         pinned: { type: 'boolean' },
         allowedTagPatterns: { type: 'array', items: { type: 'string' } },
         allowUserTag: { type: 'boolean' },

@@ -38,12 +38,18 @@ func TestPagesCapabilityRequiresCompleteRuntimeInitialization(t *testing.T) {
 	if hasCapability(plugin.capabilities(), "nginx_pages_v1") {
 		t.Fatal("Pages capability advertised before v1 preflight")
 	}
+	if hasCapability(plugin.capabilities(), "nginx_pages_preview_access_v1") {
+		t.Fatal("preview access capability advertised before v1 preflight")
+	}
 	plugin.pagesV1Available = true
 	if !hasCapability(plugin.capabilities(), "nginx_pages_v1") {
 		t.Fatal("Pages capability missing after complete v1 runtime initialization")
 	}
 	if !hasCapability(plugin.capabilities(), "nginx_pages_route_probe_v1") {
 		t.Fatal("Pages Route probe capability missing after complete v1 runtime initialization")
+	}
+	if !hasCapability(plugin.capabilities(), "nginx_pages_preview_access_v1") {
+		t.Fatal("preview access capability missing after complete v1 runtime initialization")
 	}
 	if hasCapability(plugin.capabilities(), "nginx_pages_reconcile_v1") {
 		t.Fatal("binding inspection advertised before runtime config support")
@@ -272,4 +278,19 @@ func hasCapability(capabilities []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func TestPagesPreviewAccessWireMapping(t *testing.T) {
+	if pagesPreviewAccess(nil) != nil || pagesPreviewAccess(&pb.PagesPreviewAccess{AccessListId: "44444444-4444-4444-8444-444444444444"}) != nil {
+		t.Fatal("an empty access list must keep the preview public")
+	}
+	mapped := pagesPreviewAccess(&pb.PagesPreviewAccess{
+		AccessListId:     "44444444-4444-4444-8444-444444444444",
+		IpRules:          []*pb.PagesPreviewIpRule{{Type: "allow", Value: "10.0.0.0/8"}},
+		BasicAuthEnabled: true,
+	})
+	if mapped == nil || mapped.AccessListID != "44444444-4444-4444-8444-444444444444" || !mapped.BasicAuth ||
+		len(mapped.IPRules) != 1 || mapped.IPRules[0].Type != "allow" || mapped.IPRules[0].Value != "10.0.0.0/8" {
+		t.Fatalf("unexpected mapping: %#v", mapped)
+	}
 }

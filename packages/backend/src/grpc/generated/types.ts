@@ -439,6 +439,19 @@ export interface PagesMaterializePreviewCommand {
   certificateVersion: string;
   spaFallback: boolean;
   fallbackUrl: string;
+  /** Only sent to daemons advertising nginx_pages_preview_access_v1. */
+  access?: PagesPreviewAccess;
+}
+
+export interface PagesPreviewAccess {
+  accessListId: string;
+  ipRules: PagesPreviewIpRule[];
+  basicAuthEnabled: boolean;
+}
+
+export interface PagesPreviewIpRule {
+  type: 'allow' | 'deny';
+  value: string;
 }
 
 export interface PagesDeployCertificateCommand {

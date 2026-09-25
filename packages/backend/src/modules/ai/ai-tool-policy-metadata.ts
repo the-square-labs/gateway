@@ -269,6 +269,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
       'project_placement_options',
       'deployment_list',
       'deployment_get',
+      'deployment_links',
       'tag_list',
       'token_list',
       'config_list',
@@ -289,7 +290,7 @@ const OPERATION_POLICIES: Record<string, Record<string, AIToolOperationPolicy>> 
       'source_upsert',
     ],
     external: ['source_discover'],
-    execute: ['project_migrate', 'source_build'],
+    execute: ['project_migrate', 'project_rotate_preview_hash', 'source_build'],
     delete: [
       'project_delete',
       'deployment_delete',

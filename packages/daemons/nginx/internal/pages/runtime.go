@@ -40,10 +40,11 @@ type Nginx interface {
 }
 
 type Runtime struct {
-	root      string
-	configDir string
-	certsDir  string
-	nginx     Nginx
+	root        string
+	configDir   string
+	certsDir    string
+	htpasswdDir string
+	nginx       Nginx
 }
 
 type uploadMeta struct {
@@ -323,6 +324,12 @@ func (r *Runtime) MaterializePreview(profileID, deploymentID, hostname, certific
 	}
 	if fallback.URL != "" && !validPagesFallbackURL(fallback.URL) {
 		return errors.New("invalid Pages fallback URL")
+	}
+	if err := validatePreviewAccess(fallback.Access); err != nil {
+		return err
+	}
+	if err := r.ensurePreviewCredentials(fallback.Access); err != nil {
+		return err
 	}
 	runtimeConfigPath, err := r.RuntimeConfigPath(RuntimeConfigBindingPreview, hostname)
 	if err != nil {

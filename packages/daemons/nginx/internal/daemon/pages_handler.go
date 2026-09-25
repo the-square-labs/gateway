@@ -90,9 +90,23 @@ func (h *Handler) handlePagesMaterializePreview(cmd *pb.PagesMaterializePreviewC
 	if h.pagesUnavailable(result) {
 		return
 	}
-	if err := h.pagesRuntime.MaterializePreview(cmd.ProfileId, cmd.DeploymentId, cmd.Hostname, cmd.CertificateId, cmd.CertificateVersion, pages.PreviewFallback{SPAFallback: cmd.SpaFallback, URL: cmd.FallbackUrl}); err != nil {
+	options := pages.PreviewFallback{SPAFallback: cmd.SpaFallback, URL: cmd.FallbackUrl, Access: pagesPreviewAccess(cmd.Access)}
+	if err := h.pagesRuntime.MaterializePreview(cmd.ProfileId, cmd.DeploymentId, cmd.Hostname, cmd.CertificateId, cmd.CertificateVersion, options); err != nil {
 		h.pagesCommandError(result, "preview materialization", err)
 	}
+}
+
+// pagesPreviewAccess maps the optional wire access list. An absent or empty
+// list keeps the preview public, exactly like a proxy host without one.
+func pagesPreviewAccess(access *pb.PagesPreviewAccess) *pages.PreviewAccess {
+	if access == nil || (len(access.IpRules) == 0 && !access.BasicAuthEnabled) {
+		return nil
+	}
+	rules := make([]pages.PreviewIPRule, 0, len(access.IpRules))
+	for _, rule := range access.IpRules {
+		rules = append(rules, pages.PreviewIPRule{Type: rule.Type, Value: rule.Value})
+	}
+	return &pages.PreviewAccess{AccessListID: access.AccessListId, IPRules: rules, BasicAuth: access.BasicAuthEnabled}
 }
 
 func (h *Handler) handlePagesDeployCertificate(cmd *pb.PagesDeployCertificateCommand, result *pb.CommandResult) {

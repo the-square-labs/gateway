@@ -46,3 +46,34 @@ export function nodeSupportsPages(
     capabilities[name] === true || (Array.isArray(advertised) && advertised.includes(name));
   return hasCapability("nginx_pages_v1") && hasCapability("nginx_pages_config_v1");
 }
+
+const PREVIEW_LINK_REASONS: Record<string, string> = {
+  publishing: "Publishing",
+  not_ready: "Publishing",
+  previews_disabled: "Previews disabled",
+  profile_disabled: "Pages domain disabled",
+  no_deployment: "No Deployment",
+  label_too_long: "Name too long for a link",
+  label_invalid: "No link for this name",
+  label_collision: "Link unavailable",
+  access_unsupported: "Daemon update required",
+  materialization_failed: "Publication failed",
+  revoked: "Revoked",
+  deployment_unavailable: "Deployment removed",
+  tag_missing: "Tag missing",
+};
+
+export function pagePreviewLinkReason(reason: string | null | undefined): string {
+  return (reason && PREVIEW_LINK_REASONS[reason]) || "Unavailable";
+}
+
+/** Expiry label for a Deployment; `null` when it never expires. */
+export function formatPageExpiry(
+  value: string | null | undefined,
+  now = Date.now()
+): string | null {
+  if (!value) return null;
+  const expiresAt = new Date(value).getTime();
+  if (Number.isNaN(expiresAt)) return null;
+  return expiresAt <= now ? "Expired" : `Expires ${new Date(value).toLocaleString()}`;
+}

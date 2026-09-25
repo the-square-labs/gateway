@@ -435,6 +435,27 @@ message PagesMaterializePreviewCommand {
   bool spa_fallback = 6;
   // Absolute HTTP(S) redirect used for missing paths when spa_fallback is false.
   string fallback_url = 7;
+  // Optional Project access list, rendered like a proxy host's access list for
+  // every location of the preview. Only sent to daemons advertising
+  // nginx_pages_preview_access_v1; older daemons would ignore it and publish the
+  // preview unprotected, so the control plane never materializes there.
+  PagesPreviewAccess access = 8;
+}
+
+// IP allow/deny rules and optional basic authentication for a Pages preview.
+// Basic-auth credentials are deployed separately with DeployHtpasswdCommand
+// under the same access_list_id before the preview references them.
+message PagesPreviewAccess {
+  string access_list_id = 1;
+  repeated PagesPreviewIpRule ip_rules = 2;
+  bool basic_auth_enabled = 3;
+}
+
+message PagesPreviewIpRule {
+  // "allow" or "deny".
+  string type = 1;
+  // IP address or CIDR.
+  string value = 2;
 }
 
 // Stages and atomically activates a versioned certificate for a Pages-only

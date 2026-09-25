@@ -2,6 +2,7 @@ import { ArrowRightLeft, Tags, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { CopyButton } from "@/components/common/CopyButton";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
@@ -26,7 +27,12 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageDeployment, PageTag } from "@/types";
-import { formatPageDate, pageStatusLabel, pageStatusVariant } from "./page-format";
+import {
+  formatPageDate,
+  pagePreviewLinkReason,
+  pageStatusLabel,
+  pageStatusVariant,
+} from "./page-format";
 
 export function PageTagsTab({ projectId }: { projectId: string }) {
   const canManage = useAuthStore((state) =>
@@ -140,6 +146,46 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
         ),
     },
     {
+      id: "preview",
+      header: "Preview link",
+      render: (tag) => {
+        const preview = tag.preview;
+        if (!preview?.url) {
+          return (
+            <Badge variant="secondary" size="inline">
+              {preview ? pagePreviewLinkReason(preview.reason) : "Unavailable"}
+            </Badge>
+          );
+        }
+        return (
+          <div
+            className="flex min-w-0 items-center gap-1"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <a
+              className="truncate text-sm text-primary underline"
+              href={preview.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {preview.hostname}
+            </a>
+            <CopyButton
+              value={preview.url}
+              label={`${tag.name} preview URL`}
+              className="h-auto w-auto bg-transparent p-0 text-muted-foreground hover:bg-transparent hover:text-primary"
+              iconClassName="h-3 w-3"
+            />
+            {preview.status === "pending" && (
+              <Badge variant="warning" size="inline">
+                Publishing
+              </Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    {
       id: "updated",
       header: "Updated",
       render: (tag) => <span>{formatPageDate(tag.updatedAt)}</span>,
@@ -181,7 +227,7 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
       <PanelShell
         icon={<Tags className="h-4 w-4" />}
         title="Tags"
-        description="Mutable publication pointers used by Routes."
+        description="Mutable publication pointers used by Routes. Each Tag has a stable preview link that follows it."
         actions={
           canManage ? (
             <Button onClick={openCreate} disabled={readyDeployments.length === 0}>

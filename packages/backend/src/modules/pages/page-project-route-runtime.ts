@@ -44,6 +44,7 @@ import {
   movePageProjectsToFolderRoute,
   reorderPageProjectFoldersRoute,
   reorderPageProjectsRoute,
+  rotatePageProjectPreviewHashRoute,
   updatePageProjectFolderRoute,
   updatePageProjectRoute,
 } from './page-project.docs.js';
@@ -54,7 +55,12 @@ import {
   UpdatePageProjectSchema,
 } from './page-project.schemas.js';
 import { PageProjectService } from './page-project.service.js';
-import { canAccessEveryPageProject, canAccessPageProject, visiblePageProjectIds } from './page-project-access.js';
+import {
+  canAccessEveryPageProject,
+  canAccessPageProject,
+  canAttachPageAccessList,
+  visiblePageProjectIds,
+} from './page-project-access.js';
 import { PageProjectFolderService } from './page-project-folder.service.js';
 import { requirePagesEnabledForMutation } from './profile/page-enabled.middleware.js';
 export const pageProjectRouteRuntime = {
@@ -100,6 +106,7 @@ export const pageProjectRouteRuntime = {
   movePageProjectsToFolderRoute,
   reorderPageProjectFoldersRoute,
   reorderPageProjectsRoute,
+  rotatePageProjectPreviewHashRoute,
   updatePageProjectFolderRoute,
   updatePageProjectRoute,
   CreatePageProjectSchema,
@@ -109,6 +116,7 @@ export const pageProjectRouteRuntime = {
   PageProjectService,
   canAccessEveryPageProject,
   canAccessPageProject,
+  canAttachPageAccessList,
   visiblePageProjectIds,
   PageProjectFolderService,
   requirePagesEnabledForMutation,

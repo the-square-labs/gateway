@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { CreateAccessListSchema, UpdateAccessListSchema } from './access-list.schemas.js';
 import { AccessListService } from './access-list.service.js';
 
-vi.mock('@/db/schema/index.js', () => ({ accessLists: { id: 'access_lists.id' } }));
+vi.mock('@/db/schema/index.js', () => ({
+  accessLists: { id: 'access_lists.id' },
+  pageProjects: { name: 'page_projects.name', accessListId: 'page_projects.access_list_id' },
+}));
 vi.mock('@/db/schema/proxy-hosts.js', () => ({
   proxyHosts: {
     accessListId: 'proxy_hosts.access_list_id',
@@ -179,6 +182,33 @@ describe('AccessListService update', () => {
     await service.update('access-list-1', { description: '' }, 'user-1');
 
     expect(writes[0]).toMatchObject({ description: null });
+  });
+});
+
+describe('AccessListService delete', () => {
+  it('refuses a list that protects Pages previews before touching its credentials', async () => {
+    const deleted = vi.fn();
+    const removeHtpasswd = vi.fn();
+    const db = {
+      query: {
+        accessLists: { findFirst: vi.fn().mockResolvedValue({ id: 'access-list-1', name: 'office' }) },
+        proxyHosts: { findMany: vi.fn().mockResolvedValue([]) },
+      },
+      select: vi.fn(() => ({
+        from: () => ({ where: vi.fn().mockResolvedValue([{ name: 'Quarterly report' }]) }),
+      })),
+      delete: deleted,
+    } as any;
+    const service = new AccessListService(db, {} as any, {} as any, {} as any, {} as any, {} as any);
+    (service as any).removeHtpasswd = removeHtpasswd;
+
+    await expect(service.delete('access-list-1', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ACCESS_LIST_IN_USE',
+      details: { pageProjects: ['Quarterly report'] },
+    });
+    expect(removeHtpasswd).not.toHaveBeenCalled();
+    expect(deleted).not.toHaveBeenCalled();
   });
 });
 

@@ -32,6 +32,7 @@ export type PagesConstructors = typeof constructors;
 import { and, asc, count, desc, eq, ilike, inArray, isNull, lt, max, ne, sql } from 'drizzle-orm';
 import { getDomain } from 'tldts';
 import {
+  accessLists,
   dockerArtifactPins,
   dockerBuildArtifacts,
   dockerBuilds,
@@ -60,6 +61,7 @@ import { hasScopeForResource } from '@/lib/permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { resolvePageDeploymentExpiry } from '@/modules/pages/deployments/page-deployment-expiry.js';
 import { PAGE_EVENT_CHANNELS, pageProjectEvent } from '@/modules/pages/page-events.js';
 import {
   CreatePageProjectSchema,
@@ -120,4 +122,6 @@ export const pagesCommercialRuntime = {
   visiblePageProjectIds,
   PageProjectFolderService,
   createChildLogger,
+  accessLists,
+  resolvePageDeploymentExpiry,
 };

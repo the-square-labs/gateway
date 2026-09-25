@@ -11,9 +11,12 @@ import (
 
 const gatewayNotFoundHTML = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta name="color-scheme" content="light dark"><title>Page not found</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:#fff;color:#09090b;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}main{width:100%;max-width:560px;text-align:center}.status{color:#71717a;font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}h1{margin:16px 0 0;font-size:clamp(40px,8vw,64px);line-height:1.05;font-weight:700;letter-spacing:-.04em}p.message{margin:20px auto 0;max-width:440px;color:#71717a;font-size:15px;line-height:1.6}.footer{margin-top:48px;color:#71717a;font-size:12px}.footer a{color:inherit;text-decoration:none}.footer a:hover{text-decoration:underline}@media(prefers-color-scheme:dark){body{background:#09090b;color:#fafafa}.status,p.message,.footer{color:#a1a1aa}.footer a{color:#fafafa}}</style></head><body><main><section><div class="status">Error 404</div><h1>Page not found</h1><p class="message">The requested host or page is not available.</p></section><div class="footer">Powered by <a href="https://thesquarelabs.com" rel="noopener noreferrer">Square Labs</a></div></main></body></html>`
 
+// PreviewFallback carries the per-preview serving options: missing-path
+// handling and the optional Project access list.
 type PreviewFallback struct {
 	SPAFallback bool
 	URL         string
+	Access      *PreviewAccess
 }
 
 func validPagesFallbackURL(value string) bool {
@@ -89,7 +92,9 @@ func (r *Runtime) previewConfig(hostname, deploymentID, certificateID, certifica
 		certRoot := filepath.Join(r.certsDir, certificateID, "versions", certificateVersion)
 		lines = append(lines, "    listen 443 ssl;", "    ssl_certificate "+filepath.Join(certRoot, "fullchain.pem")+";", "    ssl_certificate_key "+filepath.Join(certRoot, "privkey.pem")+";")
 	}
-	lines = append(lines, "    server_name "+hostname+";", "    root "+r.releaseContentDir(deploymentID)+";", "    index index.html;", "    add_header X-Content-Type-Options nosniff always;", "    add_header Referrer-Policy same-origin always;")
+	lines = append(lines, "    server_name "+hostname+";")
+	lines = append(lines, r.previewAccessDirectives(fallback.Access)...)
+	lines = append(lines, "    root "+r.releaseContentDir(deploymentID)+";", "    index index.html;", "    add_header X-Content-Type-Options nosniff always;", "    add_header Referrer-Policy same-origin always;")
 	if !fallback.SPAFallback && fallback.URL != "" {
 		lines = append(lines, "    error_page 404 =302 "+fallback.URL+";")
 	} else {

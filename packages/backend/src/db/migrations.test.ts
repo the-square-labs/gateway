@@ -329,4 +329,39 @@ describe('drizzle migration metadata', () => {
     expect(migration).toContain('WHERE "name" = \'guest\' AND "is_builtin" = false');
     expect(migration).not.toContain('DELETE FROM "permission_groups"');
   });
+
+  it('backfills a random per-Project preview hash before enforcing it', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0206_pages_preview_links.sql'), 'utf8');
+    const add = migration.indexOf('ADD COLUMN IF NOT EXISTS "preview_hash" varchar(12);');
+    const backfill = migration.indexOf('UPDATE "page_projects" AS "project"');
+    const notNull = migration.indexOf('ALTER COLUMN "preview_hash" SET NOT NULL');
+    const unique = migration.indexOf('CREATE UNIQUE INDEX IF NOT EXISTS "page_projects_preview_hash_unique"');
+    expect(add).toBeGreaterThan(-1);
+    expect(backfill).toBeGreaterThan(add);
+    expect(notNull).toBeGreaterThan(backfill);
+    expect(unique).toBeGreaterThan(notNull);
+    // Random bytes, never derived from the name; evaluated per row (correlated) so rows never share a hash.
+    expect(migration).toContain('gen_random_uuid()');
+    expect(migration).toContain("'abcdefghijklmnopqrstuvwxyz234567'");
+    expect(migration).toContain('WHERE "project"."id" IS NOT NULL');
+    expect(migration).not.toMatch(/preview_hash[^\n]*"name"/);
+    // Deleting an access list still used by previews is refused rather than silently unprotecting them.
+    expect(migration).toContain('ON DELETE restrict');
+
+    const previous = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0205_snapshot.json'), 'utf8'));
+    const current = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0206_snapshot.json'), 'utf8'));
+    expect(current.prevId).toBe(previous.id);
+    const hash = current.tables['public.page_projects'].columns.preview_hash;
+    expect(hash).toMatchObject({ type: 'varchar(12)', notNull: true });
+    expect(hash.default).toBeUndefined();
+    const changed = Object.keys(current.tables).filter(
+      (table) => JSON.stringify(current.tables[table]) !== JSON.stringify(previous.tables[table])
+    );
+    expect(changed.sort()).toEqual([
+      'public.page_deployments',
+      'public.page_projects',
+      'public.page_tags',
+      'public.page_upload_sessions',
+    ]);
+  });
 });

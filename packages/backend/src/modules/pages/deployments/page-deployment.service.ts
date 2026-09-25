@@ -9,6 +9,32 @@ import type { PageArtifactStore } from '../artifacts/page-artifact-store.js';
 import type { PageRetentionService } from '../retention/page-retention.service.js';
 import type { ValidatedPageDeployToken } from '../tokens/page-deploy-token.service.js';
 import type { CreatePageDeploymentInput, PageDeploymentListQuery } from './page-deployment.schemas.js';
+export type PagePreviewLinkStatus = 'ready' | 'pending' | 'unavailable';
+export interface PagePreviewLink {
+  hostname: string | null;
+  url: string | null;
+  status: PagePreviewLinkStatus;
+  /**
+   * Why the link is not ready: publishing, previews_disabled, profile_disabled,
+   * label_too_long, label_collision, access_unsupported, not_ready or
+   * materialization_failed.
+   */
+  reason: string | null;
+}
+export interface PageTagPreviewLink extends PagePreviewLink {
+  name: string;
+}
+export interface PagePublicationLinks {
+  preview: PagePreviewLink;
+  /** The Tag requested for this Deployment, when one was set or moved. */
+  tag: PageTagPreviewLink | null;
+  /** The system `latest` Tag when it points at this Deployment. */
+  latest: PageTagPreviewLink | null;
+}
+export interface PageFinalizeOptions {
+  /** Overrides the expiry declared at upload start; null clears it. */
+  expiresAt?: Date | null;
+}
 export type PageDeployPrincipal =
   | {
       kind: 'user';
@@ -41,6 +67,7 @@ export class PageDeploymentService {
       updatedAt: string;
       readyAt: string | null;
       deletedAt: string | null;
+      expiresAt: string | null;
       failureMessage: string | null;
       id: string;
       createdById: string | null;
@@ -79,7 +106,8 @@ export class PageDeploymentService {
   }
   async finalize(
     _uploadId: string,
-    _principal: PageDeployPrincipal
+    _principal: PageDeployPrincipal,
+    _options?: PageFinalizeOptions
   ): Promise<{
     deployment: {
       credentialType: string | null;
@@ -88,6 +116,7 @@ export class PageDeploymentService {
       updatedAt: string;
       readyAt: string | null;
       deletedAt: string | null;
+      expiresAt: string | null;
       failureMessage: string | null;
       id: string;
       createdById: string | null;
@@ -121,6 +150,7 @@ export class PageDeploymentService {
       updatedAt: string;
       readyAt: string | null;
       deletedAt: string | null;
+      expiresAt: string | null;
       failureMessage: string | null;
       id: string;
       createdById: string | null;
@@ -153,6 +183,7 @@ export class PageDeploymentService {
     updatedAt: string;
     readyAt: string | null;
     deletedAt: string | null;
+    expiresAt: string | null;
     failureMessage: string | null;
     id: string;
     createdById: string | null;
@@ -181,6 +212,7 @@ export class PageDeploymentService {
     updatedAt: string;
     readyAt: string | null;
     deletedAt: string | null;
+    expiresAt: string | null;
     failureMessage: string | null;
     id: string;
     createdById: string | null;
@@ -197,6 +229,12 @@ export class PageDeploymentService {
     pinned: boolean;
     failureCode: string | null;
   }> {
+    return commercialModuleUnavailable();
+  }
+  async publicationLinks(
+    _deploymentId: string,
+    _options?: { waitMs?: number; pollMs?: number }
+  ): Promise<PagePublicationLinks> {
     return commercialModuleUnavailable();
   }
 }

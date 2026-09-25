@@ -39,6 +39,8 @@ export const UpdatePageProjectSchema = z
     fallbackUrl: PageFallbackUrlSchema.nullable().optional(),
     maxDeployments: z.number().int().min(1).max(500).optional(),
     storageQuotaBytes: z.number().int().min(1_048_576).max(Number.MAX_SAFE_INTEGER).optional(),
+    /** Access list applied to every preview host of the Project; null removes it. */
+    accessListId: z.string().uuid().nullable().optional(),
   })
   .refine((value) => Object.keys(value).length > 0, 'At least one field must be provided');
 

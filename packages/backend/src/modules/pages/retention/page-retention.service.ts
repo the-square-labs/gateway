@@ -12,6 +12,11 @@ export interface PageRetentionRunResult {
 export interface PageRetentionRuntimeAdapter {
   cleanupRetainedDeployment(deploymentId: string): Promise<void>;
 }
+export interface PageDeploymentExpiryResult {
+  expired: number;
+  tagsCleared: number;
+  skipped: Array<{ deploymentId: string; reason: 'route' | 'publication' | 'protected' }>;
+}
 export class PageRetentionService {
   // biome-ignore lint/complexity/noUselessConstructor: Preserve the private factory ABI.
   constructor(_db: DrizzleClient, _auditService: AuditService, _store: PageArtifactStore) {}
@@ -38,6 +43,9 @@ export class PageRetentionService {
     return { itemsCleaned: 0, spaceFreedBytes: 0, protectedOverLimit: 0 };
   }
   async runProject(_projectId: string): Promise<PageRetentionRunResult> {
+    return commercialModuleUnavailable();
+  }
+  async expireDeployments(_now?: Date): Promise<PageDeploymentExpiryResult> {
     return commercialModuleUnavailable();
   }
 }

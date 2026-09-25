@@ -2,7 +2,7 @@ import bcrypt from 'bcryptjs';
 import { and, count, desc, eq, ilike, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
 import type { BasicAuthUser } from '@/db/schema/access-lists.js';
-import { accessLists } from '@/db/schema/index.js';
+import { accessLists, pageProjects } from '@/db/schema/index.js';
 import { proxyHosts } from '@/db/schema/proxy-hosts.js';
 import { createChildLogger } from '@/lib/logger.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
@@ -313,6 +313,21 @@ export class AccessListService {
         'ACCESS_LIST_IN_USE',
         `Cannot delete access list: it is referenced by ${referencingHosts.length} proxy host(s)`,
         { proxyHosts: hostNames }
+      );
+    }
+
+    // Pages previews it protects would otherwise lose their credentials file
+    // before the database refuses the delete.
+    const referencingProjects = await this.db
+      .select({ name: pageProjects.name })
+      .from(pageProjects)
+      .where(eq(pageProjects.accessListId, id));
+    if (referencingProjects.length > 0) {
+      throw new AppError(
+        409,
+        'ACCESS_LIST_IN_USE',
+        `Cannot delete access list: it protects the previews of ${referencingProjects.length} Pages project(s)`,
+        { pageProjects: referencingProjects.map((project) => project.name) }
       );
     }
 

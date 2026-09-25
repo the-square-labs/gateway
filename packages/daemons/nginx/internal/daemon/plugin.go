@@ -151,6 +151,9 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
 	if err != nil {
 		logger.Warn("Gateway Pages runtime is unavailable; Pages capability is disabled", "error", err)
+	} else if err := p.pagesRuntime.SetHtpasswdDir(p.cfg.Nginx.HtpasswdDir); err != nil {
+		logger.Warn("Gateway Pages htpasswd directory is unsafe; Pages capability is disabled", "error", err)
+		p.pagesRuntime = nil
 	} else if err := p.pagesRuntime.RepairStorage(); err != nil {
 		logger.Warn("Gateway Pages storage is unavailable; Pages capability is disabled", "error", err)
 		p.pagesRuntime = nil
@@ -341,7 +344,7 @@ func (p *NginxPlugin) capabilities() []string {
 		capabilities = append(capabilities, "proxy_maintenance_access_v1")
 	}
 	if p.pagesV1Available && p.pagesRuntime != nil {
-		capabilities = append(capabilities, "nginx_pages_v1", "nginx_pages_route_probe_v1", "nginx_pages_preview_revocation_v1")
+		capabilities = append(capabilities, "nginx_pages_v1", "nginx_pages_route_probe_v1", "nginx_pages_preview_revocation_v1", "nginx_pages_preview_access_v1")
 	}
 	if p.pagesRuntimeConfigAvailable && p.pagesRuntime != nil {
 		capabilities = append(capabilities, "nginx_pages_config_v1")

@@ -27,6 +27,8 @@ describe('resource setup AI tools', () => {
     const appendChunk = vi.fn().mockResolvedValue({ id: 'upload-1', offset: 4, complete: true });
     const finalize = vi.fn().mockResolvedValue({ deployment: { id: 'deployment-1' } });
     const get = vi.fn().mockResolvedValue({ id: 'deployment-1', status: 'ready' });
+    const links = { preview: { hostname: 'slug.pages.example', url: 'https://slug.pages.example', status: 'ready' } };
+    const publicationLinks = vi.fn().mockResolvedValue(links);
     const markDeploymentReady = vi.fn().mockResolvedValue(undefined);
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
@@ -40,6 +42,7 @@ describe('resource setup AI tools', () => {
       appendChunk,
       finalize,
       get,
+      publicationLinks,
     } as unknown as PageDeploymentService);
     container.registerInstance(PagePublicationService, {
       markDeploymentReady,
@@ -68,7 +71,8 @@ describe('resource setup AI tools', () => {
         operation: 'finalize',
         uploadId: 'upload-1',
       })
-    ).resolves.toEqual({ deployment: { id: 'deployment-1', status: 'ready' } });
+    ).resolves.toEqual({ deployment: { id: 'deployment-1', status: 'ready' }, links });
+    expect(publicationLinks).toHaveBeenCalledWith('deployment-1', { waitMs: 15_000 });
 
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ projectId: PROJECT_ID, declaredSizeBytes: 4 }), {
       kind: 'user',

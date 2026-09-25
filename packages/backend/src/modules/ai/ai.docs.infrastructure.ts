@@ -218,17 +218,36 @@ Managed database instances are not generic Docker workloads. Storage nodes run G
 
 Pages serves immutable static Deployments owned by a Page Project. Use \`find_resource({ types: ["page_project"] })\` and \`manage_pages\` for profile, project, deployment, Tag, deploy-token, migration, pinning, retention, runtime-config, Git-source, Build Secret, and source-build operations.
 
+## Agent recipe: publish HTML and share a link
+1. Pick or create a Project (\`manage_pages\` \`project_list\` / \`project_create\`). The Pages profile must be licensed and enabled.
+2. Produce the site: either one self-contained HTML file or a \`.tar.gz\` with \`index.html\` at its root.
+3. Upload with the MCP-only \`upload_pages_artifact\`: \`begin\` with the exact byte size and lowercase SHA-256 of the bytes you send (add \`format: "html"\` for a single HTML file; it is detected from content when omitted and becomes \`index.html\`), ordered \`chunk\` calls of at most 1 MiB decoded base64 each at the returned upload ID and current offset, then \`finalize\`.
+4. \`finalize\` returns \`links.preview\` (the immutable Deployment preview URL). With \`tag\` set at \`begin\`, \`links.tag\` is the stable Tag preview URL \`https://<project hash>-<tag>.<Pages domain>\`, which follows the Tag to every later Deployment; \`links.latest\` is the same for the system \`latest\` Tag. A link still being published after about 15 seconds is returned with \`status: "pending"\`; re-check with \`deployment_links\` or \`tag_list\` instead of guessing. \`status: "unavailable"\` carries a \`reason\` (previews_disabled, profile_disabled, label_too_long, access_unsupported, ...).
+5. Share the Tag URL for a link that stays stable across uploads; share the Deployment URL for an exact immutable version.
+
+## Options
+- Expiry: \`expiresAt\` (ISO 8601, 5 minutes to 1 year ahead) or \`expiresInHours\` (1-8760) at \`begin\` or \`finalize\`, also on the REST deploy API. Maintenance deletes an expired Deployment with its previews and files and clears Tags that pointed at it (their Tag preview goes away). Pinned Deployments, and Deployments a custom-domain Route still serves, are not expired. A Deployment without an expiry is never expired.
+- Access list: \`project_update\` with \`accessListId\` protects every preview host of the Project (Deployment and Tag previews) with the list's IP rules and basic authentication, exactly like a proxy host. It needs pages:edit and acl:view on the list, and a Pages node daemon that supports preview access lists; \`accessListId: null\` removes it.
+- Rotate links: \`project_rotate_preview_hash\` gives the Project a new hash and new Deployment slugs, revokes every old preview link at once, republishes the new ones, and is audit logged. Use it when a preview link leaked.
+- Tag names are lowercase DNS labels; new Tags are at most 50 characters so \`<hash>-<tag>\` stays one DNS label. Older longer Tags keep working but report \`label_too_long\` for their preview link.
+
+## Limits
+- Uploads obey the Gateway file-upload size limit and the Project storage quota and retention limit. MCP chunks carry at most 1 MiB decoded data; REST chunks at most 8 MiB. Archives are validated: no links or special files, bounded file count and expanded size, and an \`index.html\` (or \`index.htm\`) at the root.
+- Upload sessions expire after 24 hours.
+
 ## Workflow
-- The Pages profile must be licensed and enabled. A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
-- Remote MCP clients upload artifact bytes with \`upload_pages_artifact\`: call \`begin\` with the exact archive size and lowercase SHA-256, send ordered \`chunk\` calls with the returned upload ID/current offset and no more than 1 MiB decoded data per base64 chunk, then call \`finalize\`. Authentication comes from the MCP OAuth connection; never pass a token or Authorization value as a tool argument. The embedded AI Workspace does not expose this binary-transfer tool.
+- A Project is placed on one Pages-capable node and can be migrated with \`project_migrate\`.
+- Authentication for \`upload_pages_artifact\` comes from the MCP OAuth connection; never pass a token or Authorization value as a tool argument. The embedded AI Workspace does not expose this binary-transfer tool.
 - On Business and Enterprise, \`manage_pages\` can list source repositories, discover package.json, attach or remove a Git source, manage source-scoped Build Secrets, and queue builds. Use \`list_docker_builds\` and \`manage_docker_build\` for the resulting Build Worker jobs, logs, cancellation, and retry.
 - \`manage_pages\` operates deployment metadata, source configuration, builds, and publication, not local archive bytes. The REST resumable deploy API remains available to ordinary API clients.
 - Deploy tokens can be listed, created, and revoked with \`manage_pages\`. A newly created raw token is returned once; do not repeat it in later chat messages, notifications, or logs.
 - Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
-- Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override.
+- Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override and its Tag preview. Previews serve the default configuration.
 - Disabling Pages stops immutable preview publication but existing Tag routes and stored content continue to work.
 
-Required scopes are under \`pages:*\`; profile changes require \`pages:settings:*\`. Never bypass the Pages entitlement or daemon capability checks.`,
+## Permissions
+- \`pages:deploy\` uploads (MCP and REST); \`pages:view\` reads Projects, Deployments, Tags and links; \`pages:edit\` changes Project settings, the access list and rotates links; \`pages:tags:manage\` moves and deletes Tags; \`pages:deployments:manage\` pins and deletes Deployments. All are resource-scopable per Project and follow Project folders. Profile changes require \`pages:settings:*\`.
+- Never bypass the Pages entitlement or daemon capability checks.`,
 
   postgres: `# Postgres in Gateway
 

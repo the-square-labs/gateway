@@ -22,6 +22,7 @@ import type { PageDeployment } from "@/types";
 import {
   formatPageBytes,
   formatPageDate,
+  formatPageExpiry,
   pagePreviewUrl,
   pageStatusLabel,
   pageStatusVariant,
@@ -114,6 +115,15 @@ export function PageDeploymentsTab({
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate">{deployment.publicSlug}</span>
           {deployment.pinned && <Badge variant="outline">Pinned</Badge>}
+          {deployment.expiresAt && (
+            <Badge
+              variant="warning"
+              size="inline"
+              title={formatPageExpiry(deployment.expiresAt) ?? undefined}
+            >
+              Expires
+            </Badge>
+          )}
         </div>
       ),
     },
@@ -253,6 +263,15 @@ export function PageDeploymentsTab({
                     selectedDeployment.sourceMetadata.commitSha ??
                     selectedDeployment.sourceMetadata.ref ??
                     "Static artifact"}
+                </span>
+              </SettingsControlRow>
+              <SettingsControlRow
+                title="Expiry"
+                description="Expired Deployments are deleted with their previews and files."
+                controlsClassName="sm:min-w-0"
+              >
+                <span className="text-sm">
+                  {formatPageExpiry(selectedDeployment.expiresAt) ?? "Never"}
                 </span>
               </SettingsControlRow>
               <SettingsControlRow title="Requested Tag" controlsClassName="sm:min-w-0">

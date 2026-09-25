@@ -43,7 +43,18 @@ export interface PageDeployment {
   updatedAt: string;
   readyAt: string | null;
   deletedAt: string | null;
+  /** Optional; maintenance deletes the Deployment with its previews and files after it. */
+  expiresAt?: string | null;
   credentialType: "deploy-token" | "user" | null;
+}
+
+export type PagePreviewLinkStatus = "ready" | "pending" | "unavailable";
+
+export interface PagePreviewLink {
+  hostname: string | null;
+  url: string | null;
+  status: PagePreviewLinkStatus;
+  reason: string | null;
 }
 
 export interface PageDeploymentUploadCreated {
@@ -69,6 +80,8 @@ export interface PageTag {
   system: boolean;
   generation: number;
   deployment: PageTagDeploymentSummary | null;
+  /** Stable `<project hash>-<tag>` preview link that follows the Tag. */
+  preview?: PagePreviewLink;
   createdAt: string;
   updatedAt: string;
 }
@@ -83,6 +96,10 @@ export interface PageProject {
   id: string;
   name: string;
   slug: string;
+  /** Random prefix of every Tag preview link; rotating it replaces every preview link. */
+  previewHash?: string;
+  /** Access list protecting every preview host of the Project. */
+  accessListId?: string | null;
   description: string | null;
   appearanceColor: NodeAppearanceColor | null;
   spaFallback: boolean;
@@ -264,6 +281,16 @@ export interface UpdatePageProjectRequest {
   fallbackUrl?: string | null;
   maxDeployments?: number;
   storageQuotaBytes?: number;
+  accessListId?: string | null;
+}
+
+export interface PageProjectPreviewRotation {
+  project: PageProject;
+  rotation: {
+    revokedHostnames: number;
+    cleanupPendingHostnames: number;
+    republishFailures: number;
+  };
 }
 
 export interface ConfigurePageProfileRequest {

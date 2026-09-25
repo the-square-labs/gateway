@@ -15,6 +15,14 @@ export interface PageProjectRuntimeAdapter {
   refreshProjectFallback(projectId: string): Promise<void>;
   disableProjectPreviews(projectId: string): Promise<void>;
 }
+export interface PageProjectPreviewRotation {
+  /** Old preview hostnames revoked on the Project node (deny vhosts). */
+  revokedHostnames: number;
+  /** Hostnames whose revocation is retried by reconciliation (node unreachable). */
+  cleanupPendingHostnames: number;
+  /** New preview links that could not be published yet; reconciliation retries them. */
+  republishFailures: number;
+}
 export interface PageProjectRouteRuntimeAdapter {
   reconcileAdditionalRouteHost(hostId: string): Promise<void>;
 }
@@ -45,6 +53,8 @@ export class PageProjectService {
       updatedAt: Date;
       createdById: string;
       slug: string;
+      previewHash: string;
+      accessListId: string | null;
       updatedById: string | null;
       appearanceColor: string | null;
       nodeId: string | null;
@@ -84,6 +94,8 @@ export class PageProjectService {
     updatedAt: Date;
     createdById: string;
     slug: string;
+    previewHash: string;
+    accessListId: string | null;
     updatedById: string | null;
     appearanceColor: string | null;
     nodeId: string | null;
@@ -116,6 +128,8 @@ export class PageProjectService {
     updatedAt: Date;
     createdById: string;
     slug: string;
+    previewHash: string;
+    accessListId: string | null;
     updatedById: string | null;
     appearanceColor: string | null;
     nodeId: string | null;
@@ -151,6 +165,8 @@ export class PageProjectService {
     updatedAt: Date;
     createdById: string;
     slug: string;
+    previewHash: string;
+    accessListId: string | null;
     updatedById: string | null;
     appearanceColor: string | null;
     nodeId: string | null;
@@ -198,6 +214,8 @@ export class PageProjectService {
     updatedAt: Date;
     createdById: string;
     slug: string;
+    previewHash: string;
+    accessListId: string | null;
     updatedById: string | null;
     appearanceColor: string | null;
     nodeId: string | null;
@@ -237,6 +255,8 @@ export class PageProjectService {
     updatedAt: Date;
     createdById: string;
     slug: string;
+    previewHash: string;
+    accessListId: string | null;
     updatedById: string | null;
     appearanceColor: string | null;
     nodeId: string | null;
@@ -256,6 +276,15 @@ export class PageProjectService {
     return commercialModuleUnavailable();
   }
   async delete(_id: string, _userId: string): Promise<void> {
+    return commercialModuleUnavailable();
+  }
+  async rotatePreviewHash(
+    _id: string,
+    _userId: string
+  ): Promise<{
+    project: Awaited<ReturnType<PageProjectService['get']>>;
+    rotation: PageProjectPreviewRotation;
+  }> {
     return commercialModuleUnavailable();
   }
 }

@@ -2,6 +2,7 @@ import type { DrizzleClient } from '@/db/client.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
+import type { PagePreviewLink } from '../deployments/page-deployment.service.js';
 export interface PageTagActivationRequest {
   id: string;
   projectId: string;
@@ -30,6 +31,8 @@ export class PageTagService {
         publicSlug: string;
         status: 'stored' | 'validating' | 'failed' | 'ready' | 'deleted' | 'uploading' | 'staging' | 'cleaning';
       } | null;
+      /** Stable `<project previewHash>-<name>` preview host serving the Tag's current Deployment. */
+      preview: PagePreviewLink;
       createdAt: string;
       updatedAt: string;
     }[]

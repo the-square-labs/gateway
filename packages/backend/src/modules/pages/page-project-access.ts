@@ -16,3 +16,11 @@ export function canAccessEveryPageProject(
 ): boolean {
   return projectIds.every((projectId) => canAccessPageProject(scopes, baseScope, projectId));
 }
+
+/**
+ * Attaching an access list to a Project's previews needs the same visibility of
+ * the list as attaching it to a proxy host (see proxy-reference-access.ts).
+ */
+export function canAttachPageAccessList(scopes: readonly string[], accessListId: string): boolean {
+  return hasScope([...scopes], `acl:view:${accessListId}`);
+}

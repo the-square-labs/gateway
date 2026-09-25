@@ -19,6 +19,7 @@ import { getNodeAppearanceColor, NODE_APPEARANCE_COLOR_OPTIONS } from "@/lib/nod
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { NodeAppearanceColor, PageProject } from "@/types";
+import { PagePreviewLinksPanel } from "./PagePreviewLinksPanel";
 
 export function PageProjectSettingsDialog({
   project,
@@ -43,6 +44,7 @@ export function PageProjectSettingsDialog({
   const [storageQuotaGiB, setStorageQuotaGiB] = useState(
     String((project.storageQuotaBytes / 1024 / 1024 / 1024).toFixed(2))
   );
+  const [accessListId, setAccessListId] = useState(project.accessListId ?? "");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -55,6 +57,7 @@ export function PageProjectSettingsDialog({
     setFallbackUrl(project.fallbackUrl ?? "");
     setMaxDeployments(String(project.maxDeployments));
     setStorageQuotaGiB(String((project.storageQuotaBytes / 1024 / 1024 / 1024).toFixed(2)));
+    setAccessListId(project.accessListId ?? "");
   }, [open, project]);
 
   const save = async () => {
@@ -96,6 +99,9 @@ export function PageProjectSettingsDialog({
         fallbackUrl: normalizedFallbackUrl || null,
         maxDeployments: retention,
         storageQuotaBytes: Math.round(quotaGiB * 1024 * 1024 * 1024),
+        ...(accessListId !== (project.accessListId ?? "")
+          ? { accessListId: accessListId || null }
+          : {}),
       });
       onProjectChange(updated);
       onOpenChange(false);
@@ -113,7 +119,7 @@ export function PageProjectSettingsDialog({
         <DialogHeader>
           <DialogTitle>Project settings</DialogTitle>
           <DialogDescription>
-            Update project details, retention, and storage quota.
+            Update project details, retention, storage quota, and preview links.
           </DialogDescription>
         </DialogHeader>
         <PanelShell
@@ -238,6 +244,13 @@ export function PageProjectSettingsDialog({
             />
           </SettingsControlRow>
         </PanelShell>
+        <PagePreviewLinksPanel
+          project={project}
+          accessListId={accessListId}
+          onAccessListChange={setAccessListId}
+          onProjectChange={onProjectChange}
+          disabled={saving}
+        />
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
