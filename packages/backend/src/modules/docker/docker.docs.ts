@@ -1,8 +1,10 @@
 import { z } from '@hono/zod-openapi';
 import {
+  ApiErrorSchema,
   appRoute,
   createdJson,
   jsonBody,
+  jsonContent,
   okJson,
   optionalJsonBody,
   pathParamSchema,
@@ -250,6 +252,21 @@ export const exportContainerArchiveRoute = appRoute({
     200: {
       description: 'GWCA v1 stream. Volume contents are never included.',
       content: { 'application/vnd.wiolett.gwca': { schema: { type: 'string', format: 'binary' } } },
+    },
+    409: {
+      description:
+        'The container cannot be exported as a standalone archive. DOCKER_ARCHIVE_COMPOSE_CONTAINER: it belongs to a Compose project and is managed through that project. GPU_ARCHIVE_UNSUPPORTED: it has GPU mappings.',
+      content: jsonContent(ApiErrorSchema, {
+        code: 'DOCKER_ARCHIVE_COMPOSE_CONTAINER',
+        message:
+          'This container belongs to Compose project shop and cannot be exported as a container archive; manage it through the Compose project instead',
+        details: {
+          nodeId: '550e8400-e29b-41d4-a716-446655440000',
+          containerId: 'shop-web-1',
+          projectName: 'shop',
+          projectId: null,
+        },
+      }),
     },
   },
 });

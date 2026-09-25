@@ -17,7 +17,8 @@ export class DockerMigrationPreflightService {
   async run(
     _input: DockerMigrationPreflightInput,
     _scopes: string[],
-    _enforcePermissions?: boolean
+    _enforcePermissions?: boolean,
+    _gate?: 'current' | 'existing'
   ): Promise<DockerMigrationPreflight> {
     return commercialModuleUnavailable();
   }

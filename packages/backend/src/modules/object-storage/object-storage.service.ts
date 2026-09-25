@@ -4,6 +4,7 @@ import type { ObjectStorageHealthEntry } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { StorageBackupTargetConfig } from '@/modules/backups/backups.types.js';
+import type { StorageBackupHistoryOptions } from '@/modules/object-storage/storage-backup-references.js';
 import type { ManagedStorageTunnelProxy } from '@/modules/storage/managed-storage-tunnel-proxy.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
@@ -68,7 +69,7 @@ export class ObjectStorageService {
   ): Promise<ObjectStorageConnectionView> {
     return commercialModuleUnavailable();
   }
-  async delete(_id: string, _userId: string): Promise<void> {
+  async delete(_id: string, _userId: string, _options?: StorageBackupHistoryOptions): Promise<void> {
     return commercialModuleUnavailable();
   }
   async testSavedConnection(

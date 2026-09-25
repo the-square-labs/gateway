@@ -241,6 +241,7 @@ Gateway uses a scope-based permission system with nested group inheritance. Each
 | storage:edit | Edit/test connections and manage managed-storage lifecycle (resource-scopable) |
 | storage:delete | Delete external or managed storage resources (resource-scopable) |
 | storage:credentials:reveal | Reveal explicitly requested stored storage credentials or managed-storage root credentials (resource-scopable) |
+| storage:credentials:use | Let backups send the saved credentials to the backup runner on an authorized Storage node without revealing them to the caller (resource-scopable); implied by storage:credentials:reveal |
 | storage:iam | Create/remove scoped IAM keys and create/delete managed-storage workload links (resource-scopable); target workload scopes are also required for links |
 | storage:objects:read | List buckets/objects, read metadata or objects, and create signed GET URLs (resource-scopable) |
 | storage:objects:write | Upload objects, create prefixes, and delete objects (resource-scopable) |

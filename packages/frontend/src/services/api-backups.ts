@@ -1,4 +1,6 @@
 import type {
+  BackupHistoryArtifactsAction,
+  BackupHistoryDeleteResult,
   BackupPolicy,
   BackupPolicyInput,
   BackupRestoreInput,
@@ -60,9 +62,18 @@ export function withBackupApi<TBase extends ApiClientBaseConstructor>(Base: TBas
         )
       );
     }
-    async deleteBackupHistory(databaseId: string, runId: string) {
-      await this.request(
-        `/databases/${encodeURIComponent(databaseId)}/backups/runs/${encodeURIComponent(runId)}`,
+    /**
+     * A backup whose files still exist needs `artifacts`: "delete" removes the
+     * files first, "forget" removes only the history entry.
+     */
+    deleteBackupHistory(
+      databaseId: string,
+      runId: string,
+      options: { artifacts?: BackupHistoryArtifactsAction } = {}
+    ) {
+      const query = options.artifacts ? `?artifacts=${options.artifacts}` : "";
+      return this.request<BackupHistoryDeleteResult>(
+        `/databases/${encodeURIComponent(databaseId)}/backups/runs/${encodeURIComponent(runId)}${query}`,
         { method: "DELETE" }
       );
     }

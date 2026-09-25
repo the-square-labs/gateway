@@ -64,6 +64,8 @@ const IMPLIED_SCOPES_BY_REQUIRED_SCOPE: Record<string, readonly string[]> = {
   'storage:view': ['storage:edit', 'storage:objects:read', 'storage:objects:write', 'storage:objects:admin'],
   'storage:objects:read': ['storage:objects:write', 'storage:objects:admin'],
   'storage:objects:write': ['storage:objects:admin'],
+  // Revealing the saved credentials is broader than letting a backup use them.
+  'storage:credentials:use': ['storage:credentials:reveal'],
   'databases:backups:view': ['databases:backups:manage', 'databases:backups:run', 'databases:backups:restore'],
   'databases:view': ['databases:edit', 'databases:query:read', 'databases:query:write', 'databases:query:admin'],
   'databases:query:read': ['databases:query:write', 'databases:query:admin'],

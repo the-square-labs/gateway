@@ -35,6 +35,19 @@ export interface BackupRestoreInput {
   limits?: Partial<BackupLimits>;
 }
 
+/**
+ * Removing a backup from history while its files still exist: `delete` removes the
+ * files first and keeps the entry when that fails; `forget` removes only the entry
+ * and leaves the files in storage (for files that are unreachable or kept on purpose).
+ */
+export type BackupHistoryArtifactsAction = 'delete' | 'forget';
+
+export interface BackupHistoryDeleteResult {
+  success: boolean;
+  /** What happened to the backup files: none existed, they were deleted, or they were left in storage. */
+  artifacts: 'none' | 'deleted' | 'kept';
+}
+
 export interface BackupRunView {
   id: string;
   policyId: string | null;
@@ -69,6 +82,12 @@ export interface BackupRuntimeConnection {
   username?: string;
   password?: string;
   tls?: boolean;
+  /**
+   * Explicit server certificate verification of an external database. Sent
+   * only to executors that report database_backups_tls_verification_v1; older
+   * daemons reject unknown fields. Absent on managed relay routes.
+   */
+  tlsVerifyCertificate?: boolean;
   caPem?: string;
   serverName?: string;
   relayRouteId?: string;

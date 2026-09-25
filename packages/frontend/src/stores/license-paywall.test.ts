@@ -3,15 +3,21 @@ import { ApiRequestError } from "@/services/api-base";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import {
   handleLicenseApiError,
+  handleLicenseError,
+  hasLicenseFeature,
   requireLicenseFeature,
   requireMinimumLicensePlan,
   useLicensePaywallStore,
 } from "./license-paywall";
 
-function setLicense(plan: "community" | "personal" | "business", features: string[]) {
+function setLicense(
+  plan: "community" | "personal" | "business",
+  features: string[],
+  entitlementsVersion?: number
+) {
   useUIBootstrapStore.setState({
     snapshot: {
-      license: { plan, entitlements: { features } },
+      license: { plan, entitlementsVersion, entitlements: { features } },
     } as never,
   });
 }
@@ -26,6 +32,9 @@ describe("license paywall store", () => {
     "storage-connections",
     "external-database-connections",
     "gitlab",
+    "ai-plan-mode",
+    "ai-scenarios",
+    "ai-sandboxes",
   ] as const)("requires Personal for %s", (feature) => {
     setLicense("community", []);
     expect(requireLicenseFeature(feature, feature)).toBe(false);
@@ -36,6 +45,65 @@ describe("license paywall store", () => {
     setLicense("personal", [feature]);
     useLicensePaywallStore.setState({ request: null });
     expect(requireLicenseFeature(feature, feature)).toBe(true);
+  });
+
+  it.each([
+    "storage-connections",
+    "external-database-connections",
+    "ai-plan-mode",
+    "ai-scenarios",
+    "ai-sandboxes",
+  ] as const)("grants %s to a paid pre-v5 license through managed-databases", (feature) => {
+    setLicense("personal", ["managed-databases"], 4);
+    expect(hasLicenseFeature(feature)).toBe(true);
+
+    setLicense("community", [], 4);
+    expect(hasLicenseFeature(feature)).toBe(false);
+
+    // v5 grants name every capability explicitly.
+    setLicense("personal", ["managed-databases"], 5);
+    expect(hasLicenseFeature(feature)).toBe(false);
+  });
+
+  it("does not extend the pre-v5 rule to other paid features", () => {
+    setLicense("personal", ["managed-databases"], 4);
+    expect(hasLicenseFeature("gitlab")).toBe(false);
+    expect(hasLicenseFeature("status-pages")).toBe(false);
+  });
+
+  it("opens the dialog for a structured AI WebSocket license denial", () => {
+    setLicense("community", []);
+
+    expect(
+      handleLicenseError(
+        {
+          code: "LICENSE_ENTITLEMENT_REQUIRED",
+          details: {
+            feature: "ai-plan-mode",
+            requiredPlan: "personal",
+            currentPlan: "community",
+            licenseStatus: "community",
+          },
+        },
+        "AI Plan Mode"
+      )
+    ).toBe(true);
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "AI Plan Mode",
+      requiredPlan: "personal",
+      currentPlan: "community",
+      quota: undefined,
+    });
+  });
+
+  it("ignores other error codes and keeps REST handling limited to API errors", () => {
+    setLicense("community", []);
+
+    expect(handleLicenseError({ code: "AI_RATE_LIMITED" }, "AI Plan Mode")).toBe(false);
+    expect(handleLicenseApiError({ code: "LICENSE_ENTITLEMENT_REQUIRED" }, "AI Plan Mode")).toBe(
+      false
+    );
+    expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 
   it.each([

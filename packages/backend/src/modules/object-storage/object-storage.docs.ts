@@ -13,6 +13,7 @@ import {
   CreateObjectStorageConnectionSchema,
   CreatePrefixSchema,
   DeleteObjectsSchema,
+  DeleteStorageQuerySchema,
   ListObjectsQuerySchema,
   ObjectMetadataQuerySchema,
   ObjectStorageListQuerySchema,
@@ -84,7 +85,9 @@ export const deleteObjectStorageConnectionRoute = appRoute({
   path: '/{id}',
   tags: [TAG],
   summary: 'Delete an object storage connection',
-  request: { params: IdParamSchema },
+  description:
+    'Refused while backup policies or active backup runs use the storage. Finished backup history also blocks deletion (409 STORAGE_BACKUP_HISTORY_EXISTS with historyRecords and backupsWithFiles) unless backupHistory=forget confirms removing it; forgotten backups can no longer be restored or deleted through Gateway, and their files are not deleted.',
+  request: { params: IdParamSchema, query: DeleteStorageQuerySchema },
   responses: okJson(z.object({ success: z.boolean() })),
 });
 

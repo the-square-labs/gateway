@@ -3,6 +3,8 @@ import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import { errorHandler } from '@/middleware/error-handler.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
+import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
 import { DockerAvailabilityService } from './availability/docker-availability.service.js';
 import { DockerWorkloadResolverService } from './availability/docker-workload-resolver.service.js';
@@ -12,6 +14,7 @@ import {
   containerUpdateRequiredScopes,
   registerContainerRoutes,
 } from './docker-container.routes.js';
+import { DockerMigrationDispatchAdapter } from './docker-migration-dispatch.js';
 import { DockerSecretService } from './docker-secret.service.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
 
@@ -222,5 +225,67 @@ describe('archive import planning', () => {
 
     expect(response.status).toBe(403);
     expect(JSON.stringify(await response.json())).toContain('destination node');
+  });
+});
+
+describe('container archive export', () => {
+  const EXPORT_SCOPES = [`docker:containers:export:${NODE_ID}/resource-a`];
+  const EXPORT_PATH = `/nodes/${NODE_ID}/containers/${CONTAINER_ID}/archive?imageMode=registry&includeEnvironment=false`;
+
+  function registerArchiveExport(labels: Record<string, string>) {
+    const docker = registerDocker();
+    docker.inspectContainer.mockResolvedValue({
+      Id: CONTAINER_ID,
+      Name: '/app-a',
+      scopeResourceId: 'resource-a',
+      Config: { Labels: labels },
+    });
+    const executeDockerArchive = vi.fn().mockResolvedValue({
+      archiveId: 'archive-1',
+      filename: 'app-a.gwca',
+      stream: new Blob([Buffer.from('gwca')]).stream(),
+    });
+    const audit = { log: vi.fn().mockResolvedValue(undefined) };
+    container.registerInstance(TOKENS.CommercialEdition, { executeDockerArchive } as never);
+    container.registerInstance(LicensePolicyService, { requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
+    container.registerInstance(AuditService, audit as never);
+    container.registerInstance(DockerMigrationDispatchAdapter, {} as never);
+    return { audit, executeDockerArchive };
+  }
+
+  it('refuses a Compose container before any export work starts', async () => {
+    const { audit, executeDockerArchive } = registerArchiveExport({
+      'com.docker.compose.project': 'shop',
+      'com.docker.compose.service': 'web',
+      'wiolett.gateway.compose.project-id': 'compose-1',
+    });
+
+    const response = await appWithScopes(EXPORT_SCOPES).request(EXPORT_PATH);
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: 'DOCKER_ARCHIVE_COMPOSE_CONTAINER',
+      message:
+        'This container belongs to Compose project shop and cannot be exported as a container archive; manage it through the Compose project instead',
+      details: { nodeId: NODE_ID, containerId: CONTAINER_ID, projectName: 'shop', projectId: 'compose-1' },
+    });
+    expect(executeDockerArchive).not.toHaveBeenCalled();
+    expect(audit.log).not.toHaveBeenCalled();
+  });
+
+  it('streams a standalone container archive', async () => {
+    const { audit, executeDockerArchive } = registerArchiveExport({ 'com.example.team': 'web' });
+
+    const response = await appWithScopes(EXPORT_SCOPES).request(EXPORT_PATH);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Disposition')).toBe('attachment; filename="app-a.gwca"');
+    expect(await response.text()).toBe('gwca');
+    expect(executeDockerArchive).toHaveBeenCalledWith(
+      'openGwcaExport',
+      expect.objectContaining({ nodeId: NODE_ID, containerId: CONTAINER_ID, imageMode: 'registry' }),
+      expect.anything()
+    );
+    expect(audit.log).toHaveBeenCalledWith(expect.objectContaining({ action: 'docker.container.archive.export' }));
   });
 });

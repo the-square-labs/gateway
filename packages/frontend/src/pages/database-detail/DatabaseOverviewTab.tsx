@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
+import { hasUnverifiedTls } from "./DatabaseTlsVerificationNotice";
 import { formatHealthStatusLabel, formatMetricValue, HEALTH_BADGE, METRIC_COLORS } from "./shared";
 
 interface DatabaseOverviewTabProps {
@@ -109,6 +110,7 @@ export function DatabaseOverviewTab({
   const showMonitoring =
     canViewMonitoring && healthStatus !== "offline" && database.managed?.status !== "paused";
   const connectionTLSEnabled = database.managed?.tlsEnabled ?? database.tlsEnabled;
+  const connectionTLSUnverified = hasUnverifiedTls(database);
   const overviewMetrics = useMemo<OverviewMetric[]>(() => {
     if (!latest) return [];
     const appendManaged = (metrics: OverviewMetric[]) => {
@@ -464,9 +466,13 @@ export function DatabaseOverviewTab({
           <DetailRow
             label="TLS"
             value={
-              <Badge variant={connectionTLSEnabled ? "success" : "secondary"}>
-                {connectionTLSEnabled ? "Enabled" : "Disabled"}
-              </Badge>
+              connectionTLSUnverified ? (
+                <Badge variant="warning">Enabled, not verified</Badge>
+              ) : (
+                <Badge variant={connectionTLSEnabled ? "success" : "secondary"}>
+                  {connectionTLSEnabled ? "Enabled" : "Disabled"}
+                </Badge>
+              )
             }
           />
           <DetailRow

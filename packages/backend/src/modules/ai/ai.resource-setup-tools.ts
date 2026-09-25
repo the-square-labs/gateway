@@ -156,9 +156,39 @@ function decodeMcpPageUploadChunk(value: string): Uint8Array {
   return bytes;
 }
 
+/** Pages operations that read or delete existing resources; they keep working after the grace period. */
+const PAGES_EXISTING_OPERATIONS = new Set([
+  'profile_get',
+  'profile_options',
+  'project_list',
+  'project_get',
+  'project_get_by_slug',
+  'project_placement_options',
+  'project_delete',
+  'source_get',
+  'source_repositories',
+  'source_remove',
+  'source_secret_list',
+  'source_secret_delete',
+  'deployment_list',
+  'deployment_get',
+  'deployment_delete',
+  'tag_list',
+  'tag_delete',
+  'token_list',
+  'token_revoke',
+  'config_list',
+  'config_reset_tag',
+]);
+
+/** Managed database operations that change configuration or create resources. */
+const MANAGED_DATABASE_CHANGE_OPERATIONS = new Set(['create', 'update', 'create_binding']);
+
 async function managePages(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
-  await container.resolve(LicensePolicyService).requireFeature('pages');
+  const policy = container.resolve(LicensePolicyService);
+  if (PAGES_EXISTING_OPERATIONS.has(operation)) await policy.requireFeatureForExistingRuntime('pages');
+  else await policy.requireFeature('pages');
 
   const profile = container.resolve(PageProfileService);
   if (operation === 'profile_get') {
@@ -439,7 +469,8 @@ async function manageAdditionalRoute(user: User, args: Record<string, unknown>) 
   }
   if (operation === 'retry') {
     const existing = await service.get(routeId, requiredValue(additionalRouteId));
-    if (existing.targetKind === 'pages') await container.resolve(LicensePolicyService).requireFeature('pages');
+    if (existing.targetKind === 'pages')
+      await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('pages');
     return visible(await service.present(await service.retry(routeId, existing.id, user.id, user.scopes)));
   }
   if (operation === 'delete') {
@@ -499,8 +530,11 @@ async function requirePagesForAdditionalTarget(input: {
 
 async function manageManagedDatabase(user: User, args: Record<string, unknown>) {
   const operation = requiredString(args.operation);
-  // LICENSE ENFORCEMENT: same gate as every /api/databases route.
-  await container.resolve(LicensePolicyService).requireFeature('external-database-connections');
+  // LICENSE ENFORCEMENT: same classes as the /api/databases routes. Existing managed
+  // databases stay viewable, operable, and deletable after the license grace period.
+  const policy = container.resolve(LicensePolicyService);
+  if (MANAGED_DATABASE_CHANGE_OPERATIONS.has(operation)) await policy.requireFeature('external-database-connections');
+  else await policy.requireFeatureForExistingRuntime('external-database-connections');
   if (MANAGED_DATABASE_ACCESS_OPERATIONS.has(operation)) return manageManagedDatabaseAccess(user, operation, args);
   const service = container.resolve(ManagedDatabaseService);
   const bindings = container.resolve(ManagedDatabaseBindingService);

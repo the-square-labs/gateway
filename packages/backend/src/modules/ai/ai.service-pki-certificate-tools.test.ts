@@ -65,7 +65,10 @@ function createService(caService: Record<string, unknown>, certService: Record<s
     {} as never,
     {} as never
   );
-  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  (service as any).licensePolicyService = {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+    requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+  };
   return service;
 }
 

@@ -1,7 +1,19 @@
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { createRef } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { api } from "@/services/api";
+import { useLicensePaywallStore } from "@/stores/license-paywall";
+import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 import type { AIConversationInput, AIPlanRuntimeSnapshot } from "@/types/ai";
-import { AIPlanBlock, AIPlanDecision, AIPlanProgress, AIQueuedMessages } from "./AIComposer";
+import {
+  AIComposer,
+  AIPlanBlock,
+  AIPlanDecision,
+  AIPlanProgress,
+  AIQueuedMessages,
+} from "./AIComposer";
 
 const queuedInput: AIConversationInput = {
   id: "queued-1",
@@ -186,5 +198,83 @@ describe("AIPlanProgress", () => {
 
     expect(container.firstElementChild).toHaveClass("w-full", "border-x-0", "border-b-0", "py-1.5");
     expect(screen.getByRole("button", { name: "Cancel plan" })).toHaveClass("h-6", "w-6");
+  });
+});
+
+describe("AIComposer Plan Mode license", () => {
+  afterEach(() => {
+    useUIBootstrapStore.setState({ snapshot: null });
+    useLicensePaywallStore.setState({ request: null });
+    vi.restoreAllMocks();
+  });
+
+  function setLicense(plan: "community" | "personal", features: string[]) {
+    useUIBootstrapStore.setState({
+      snapshot: {
+        license: { plan, entitlementsVersion: 5, entitlements: { features } },
+      } as never,
+    });
+  }
+
+  function renderComposer() {
+    vi.spyOn(api, "getAIContextEstimate").mockRejectedValue(new Error("offline"));
+    vi.spyOn(api, "getAIConfig").mockRejectedValue(new Error("offline"));
+    const setWorkMode = vi.fn();
+    render(
+      <TooltipProvider>
+        <AIComposer
+          textareaRef={createRef<HTMLTextAreaElement>()}
+          input=""
+          onInputChange={vi.fn()}
+          onKeyDown={vi.fn()}
+          onSend={vi.fn()}
+          onStop={vi.fn()}
+          onSlashCommandSelect={vi.fn()}
+          slashResults={[]}
+          slashIndex={0}
+          messages={[]}
+          isStreaming={false}
+          isConnected
+          approvalMode="normal"
+          approvalModeLabel="AI mode: normal"
+          setApprovalMode={vi.fn()}
+          workMode="normal"
+          setWorkMode={setWorkMode}
+        />
+      </TooltipProvider>
+    );
+    return setWorkMode;
+  }
+
+  it("opens the upgrade dialog instead of entering Plan Mode on Community", async () => {
+    const user = userEvent.setup();
+    setLicense("community", []);
+    const setWorkMode = renderComposer();
+
+    await user.click(screen.getByRole("button", { name: "AI mode: normal" }));
+    const planItem = await screen.findByRole("menuitem", { name: /^Plan/ });
+    expect(planItem).toHaveTextContent("Personal");
+    await user.click(planItem);
+
+    expect(setWorkMode).not.toHaveBeenCalled();
+    expect(useLicensePaywallStore.getState().request).toEqual({
+      capability: "AI Plan Mode",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+  });
+
+  it("enters Plan Mode when the license includes it", async () => {
+    const user = userEvent.setup();
+    setLicense("personal", ["ai-plan-mode"]);
+    const setWorkMode = renderComposer();
+
+    await user.click(screen.getByRole("button", { name: "AI mode: normal" }));
+    const planItem = await screen.findByRole("menuitem", { name: /^Plan/ });
+    expect(planItem).not.toHaveTextContent("Personal");
+    await user.click(planItem);
+
+    expect(setWorkMode).toHaveBeenCalledWith("plan");
+    expect(useLicensePaywallStore.getState().request).toBeNull();
   });
 });

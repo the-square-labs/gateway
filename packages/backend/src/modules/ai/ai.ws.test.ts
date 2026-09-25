@@ -310,9 +310,15 @@ describe('AI websocket backend runtime commands', () => {
     container.registerInstance(TOKENS.RedisClient, allowingRedis() as never);
     const startUserRun = vi.fn();
     container.registerInstance(AIRunService, { startUserRun } as unknown as AIRunService);
+    const details = {
+      feature: 'ai-plan-mode',
+      requiredPlan: 'personal',
+      currentPlan: 'community',
+      licenseStatus: 'community',
+    };
     const requireFeature = vi
       .fn()
-      .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Plan Mode requires Personal'));
+      .mockRejectedValue(new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Plan Mode requires Personal', details));
     container.registerInstance(LicensePolicyService, { requireFeature } as unknown as LicensePolicyService);
     await handlers.onMessage(
       new MessageEvent('message', {
@@ -329,12 +335,45 @@ describe('AI websocket backend runtime commands', () => {
     expect(requireFeature).toHaveBeenCalledWith('ai-plan-mode');
     expect(startUserRun).not.toHaveBeenCalled();
     expect(container.resolve(AIProviderRuntimeService).generateConversationTitle).not.toHaveBeenCalled();
+    // The client needs the plan metadata to open the upgrade dialog.
     expect(ws.send.mock.calls.map(([data]) => JSON.parse(data))).toContainEqual(
       expect.objectContaining({
         type: 'command.error',
+        clientCommandId: 'plan-denied',
         code: 'LICENSE_ENTITLEMENT_REQUIRED',
+        statusCode: 403,
+        details,
       })
     );
+  });
+
+  it('does not forward the details of a command error that is not a license denial', async () => {
+    const { ws, handlers } = await openAuthenticatedWs();
+    container.registerInstance(TOKENS.RedisClient, allowingRedis() as never);
+    container.registerInstance(AIRunService, { startUserRun: vi.fn() } as unknown as AIRunService);
+    const requireFeature = vi.fn().mockRejectedValue(
+      new AppError(503, 'SERVICE_UNAVAILABLE', 'The requested operation is temporarily unavailable', {
+        internal: 'policy-state',
+      })
+    );
+    container.registerInstance(LicensePolicyService, { requireFeature } as unknown as LicensePolicyService);
+    await handlers.onMessage(
+      new MessageEvent('message', {
+        data: JSON.stringify({
+          type: 'conversation.send_message',
+          clientCommandId: 'plan-unavailable',
+          content: 'deploy',
+          workMode: 'plan',
+        }),
+      }),
+      ws as any
+    );
+    handlers.onClose(new Event('close'), ws as any);
+    const error = ws.send.mock.calls
+      .map(([data]) => JSON.parse(data))
+      .find((message) => message.type === 'command.error');
+    expect(error).toMatchObject({ clientCommandId: 'plan-unavailable', code: 'SERVICE_UNAVAILABLE' });
+    expect(error).not.toHaveProperty('details');
   });
 
   it('rejects a direct scenario command without a commercial package before starting work', async () => {

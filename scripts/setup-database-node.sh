@@ -68,7 +68,7 @@ prompt_choice() {
 }
 
 SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
-RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/wiolett-industries/gateway/releases}"
+RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/the-square-labs/gateway/releases}"
 STORAGE_ROOT="${GATEWAY_DATABASE_STORAGE_ROOT:-}"
 RUN_USER="root"
 DRY_RUN=0

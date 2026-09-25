@@ -33,6 +33,41 @@ type ContainerArchiveExportQuery = z.infer<typeof ContainerArchiveExportQuerySch
 type ContainerArchivePlanInput = z.infer<typeof ContainerArchivePlanSchema>;
 type ContainerArchiveResolution = z.infer<typeof ContainerArchiveResolutionSchema>;
 
+const COMPOSE_PROJECT_LABEL = 'com.docker.compose.project';
+const COMPOSE_PROJECT_ID_LABEL = 'wiolett.gateway.compose.project-id';
+
+function inspectedContainerLabels(inspected: unknown): Record<string, unknown> {
+  if (!inspected || typeof inspected !== 'object') return {};
+  const record = inspected as { Config?: { Labels?: unknown }; Labels?: unknown; labels?: unknown };
+  const labels = record.Config?.Labels ?? record.Labels ?? record.labels;
+  if (!labels || typeof labels !== 'object' || Array.isArray(labels)) return {};
+  return labels as Record<string, unknown>;
+}
+
+/**
+ * A container that carries a Compose project label is owned by that project,
+ * so it is never exported as a standalone archive. This is the rule the
+ * container page uses to hide the export action; it runs on the inspected
+ * container before any export work starts.
+ */
+export function assertDockerContainerArchiveExportAllowed(nodeId: string, containerId: string, inspected: unknown) {
+  const labels = inspectedContainerLabels(inspected);
+  const projectName = labels[COMPOSE_PROJECT_LABEL];
+  if (typeof projectName !== 'string' || projectName === '') return;
+  const projectId = labels[COMPOSE_PROJECT_ID_LABEL];
+  throw new AppError(
+    409,
+    'DOCKER_ARCHIVE_COMPOSE_CONTAINER',
+    `This container belongs to Compose project ${projectName} and cannot be exported as a container archive; manage it through the Compose project instead`,
+    {
+      nodeId,
+      containerId,
+      projectName,
+      projectId: typeof projectId === 'string' && projectId !== '' ? projectId : null,
+    }
+  );
+}
+
 function archiveImportPlanAccess(actorScopes: readonly string[], nodeId: string) {
   return {
     canViewNetworks: hasScopeForResource([...actorScopes], 'docker:networks:view', nodeId),
@@ -73,7 +108,8 @@ export async function planDockerContainerArchiveImport(
 /**
  * Open a container archive export stream. The caller already holds
  * docker:containers:export for the container; environment, secrets and
- * portable image contents need their own container scopes.
+ * portable image contents need their own container scopes. Compose
+ * containers are refused before anything is read or streamed.
  */
 export async function openDockerContainerArchiveExport(args: {
   nodeId: string;
@@ -86,6 +122,7 @@ export async function openDockerContainerArchiveExport(args: {
   const actorScopes = [...args.actorScopes];
   const docker = container.resolve(DockerManagementService);
   const inspected = await inspectUserContainer(docker, nodeId, containerId);
+  assertDockerContainerArchiveExportAllowed(nodeId, containerId, inspected);
   if (dockerGpuAttachmentFromInspect(inspected).mode !== 'none') {
     throw new AppError(
       409,

@@ -32,7 +32,10 @@ function createService(templatesService: Record<string, unknown>) {
     {} as never,
     {} as never
   );
-  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  (service as any).licensePolicyService = {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+    requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+  };
   return service;
 }
 

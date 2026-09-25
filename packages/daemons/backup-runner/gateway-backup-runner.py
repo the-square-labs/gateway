@@ -158,13 +158,43 @@ def postgres_restore_tool(target, artifact):
     return tool
 
 
+SYSTEM_CA_BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
+
+
+def tls_verification(endpoint):
+    """Explicit per-connection verification; None keeps the behavior of endpoints that do not carry it (managed relay routes)."""
+    value = endpoint.get("tlsVerifyCertificate")
+    return value if isinstance(value, bool) else None
+
+
+def write_ca(endpoint, name):
+    ca = WORK / name; ca.write_text(endpoint["caPem"]); os.chmod(ca, 0o600)
+    return ca
+
+
+def is_ip_address(value):
+    try:
+        socket.inet_pton(socket.AF_INET6 if ":" in value else socket.AF_INET, value)
+        return True
+    except OSError:
+        return False
+
+
 def postgres_env(endpoint):
     env = os.environ.copy()
     env["PGPASSWORD"] = endpoint.get("password", "")
     if endpoint.get("tls"):
-        env["PGSSLMODE"] = "verify-ca" if endpoint.get("caPem") else "require"
-        if endpoint.get("caPem"):
-            ca = WORK / "postgres-ca.pem"; ca.write_text(endpoint["caPem"]); os.chmod(ca, 0o600); env["PGSSLROOTCERT"] = str(ca)
+        verify = tls_verification(endpoint)
+        if verify is False:
+            env["PGSSLMODE"] = "require"
+        elif verify is True:
+            # Chain and hostname, against the connection's CA or the public bundle.
+            env["PGSSLMODE"] = "verify-full"
+            env["PGSSLROOTCERT"] = str(write_ca(endpoint, "postgres-ca.pem")) if endpoint.get("caPem") else SYSTEM_CA_BUNDLE
+        else:
+            env["PGSSLMODE"] = "verify-ca" if endpoint.get("caPem") else "require"
+            if endpoint.get("caPem"):
+                env["PGSSLROOTCERT"] = str(write_ca(endpoint, "postgres-ca.pem"))
         if endpoint.get("serverName"):
             env["PGHOST"] = endpoint["host"]
     return env
@@ -298,9 +328,15 @@ def upload_artifacts(config, artifact_dir, engine_version):
 def redis_command(endpoint, command, last_argument=None):
     args = ["redis-cli", "--no-auth-warning", "-h", endpoint["host"], "-p", str(endpoint["port"])]
     if endpoint.get("username"): args.extend(["--user", endpoint["username"]])
-    if endpoint.get("tls"): args.append("--tls")
-    if endpoint.get("caPem"):
-        ca = WORK / "redis-ca.pem"; ca.write_text(endpoint["caPem"]); os.chmod(ca, 0o600); args.extend(["--cacert", str(ca)])
+    verify = tls_verification(endpoint)
+    if endpoint.get("tls"):
+        args.append("--tls")
+        if verify is False:
+            args.append("--insecure")
+        elif verify is True and not is_ip_address(endpoint["host"]):
+            args.extend(["--sni", endpoint["host"]])
+    if endpoint.get("caPem") and verify is not False:
+        args.extend(["--cacert", str(write_ca(endpoint, "redis-ca.pem"))])
     env = os.environ.copy()
     if endpoint.get("password"):
         env["REDISCLI_AUTH"] = endpoint["password"]
@@ -354,15 +390,21 @@ def redis_has_keys(target):
     return False
 
 
+def clickhouse_ssl_context(endpoint):
+    context = ssl.create_default_context(cadata=endpoint["caPem"]) if endpoint.get("caPem") else ssl.create_default_context()
+    if tls_verification(endpoint) is False:
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context
+
+
 def clickhouse_query(endpoint, query, timeout=60):
     scheme = "https" if endpoint.get("tls") else "http"
     url = f"{scheme}://{endpoint['host']}:{endpoint['port']}/?database={urllib.parse.quote(endpoint.get('database', 'default'))}"
     request = urllib.request.Request(url, data=query.encode(), method="POST")
     token = base64.b64encode(f"{endpoint.get('username','')}:{endpoint.get('password','')}".encode()).decode()
     request.add_header("Authorization", "Basic " + token)
-    context = ssl.create_default_context()
-    if endpoint.get("caPem"):
-        context = ssl.create_default_context(cadata=endpoint["caPem"])
+    context = clickhouse_ssl_context(endpoint)
     try:
         with urllib.request.urlopen(request, timeout=timeout, context=context) as response:
             return response.read().decode()

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { container } from '@/container.js';
 import { appRoute, createdJson, jsonBody, okJson, UnknownDataResponseSchema } from '@/lib/openapi.js';
 import { authMiddleware, rejectImpersonation, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import { PageDeploymentListQuerySchema } from './deployments/page-deployment.schemas.js';
 import { PageDeploymentService } from './deployments/page-deployment.service.js';
 import { requirePagesEnabledForMutation } from './profile/page-enabled.middleware.js';
@@ -32,6 +32,7 @@ export const pageManagementRouteRuntime = {
   rejectImpersonation,
   requireScopeForResource,
   requireLicenseFeature,
+  requireLicenseFeatureForRequest,
   PageDeploymentListQuerySchema,
   PageDeploymentService,
   requirePagesEnabledForMutation,

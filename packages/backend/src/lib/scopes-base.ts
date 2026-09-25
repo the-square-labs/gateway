@@ -12,6 +12,7 @@ export const ALL_SCOPES = [
   'storage:edit',
   'storage:delete',
   'storage:credentials:reveal',
+  'storage:credentials:use',
   'storage:iam',
   'storage:objects:read',
   'storage:objects:write',

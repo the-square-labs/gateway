@@ -1,7 +1,7 @@
 import { DatabaseBackup, History, Loader2, Pause, Play, RotateCcw, Trash2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { confirm } from "@/components/common/ConfirmDialog";
+import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -30,6 +30,7 @@ import {
 } from "@/lib/managed-database-name";
 import { formatBytes, formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
 import type {
   BackupPolicy,
   BackupPolicyInput,
@@ -125,12 +126,63 @@ export function DatabaseBackupsTab({
   }, [runs, refresh]);
   const deleteHistory = useCallback(
     async (run: BackupRun) => {
+      if (!run.manifest || run.artifactsDeletedAt) {
+        try {
+          await api.deleteBackupHistory(database.id, run.id);
+          toast.success("History entry removed");
+          await refresh();
+        } catch (error) {
+          toast.error(errorMessage(error, "Failed to remove history entry"));
+        }
+        return;
+      }
+      // The backup still has files: deleting them is explicit, and a storage
+      // failure keeps the entry and offers to forget it instead.
+      const location = `${run.destinationBucket}/${run.manifest.ownedPrefix}`;
+      const outcome: { failure?: string } = {};
+      const confirmed = await confirmAction(
+        {
+          title: "Delete backup",
+          description: `This deletes the backup files in ${location} and removes the entry from history. The backup can no longer be restored.`,
+          confirmLabel: "Delete backup and files",
+          variant: "destructive",
+        },
+        async () => {
+          try {
+            await api.deleteBackupHistory(database.id, run.id, { artifacts: "delete" });
+          } catch (error) {
+            if (
+              error instanceof ApiRequestError &&
+              error.code === "BACKUP_ARTIFACT_DELETE_FAILED"
+            ) {
+              outcome.failure = error.message;
+              return;
+            }
+            toast.error(errorMessage(error, "Failed to delete backup"));
+            throw error;
+          }
+        }
+      );
+      if (!confirmed) return;
+      if (outcome.failure === undefined) {
+        toast.success("Backup deleted");
+        await refresh();
+        return;
+      }
+      const forget = await confirm({
+        title: "Backup files could not be deleted",
+        description: `${outcome.failure} Forgetting removes the entry from history and leaves the files in ${location}.`,
+        confirmLabel: "Forget entry",
+        cancelLabel: "Keep entry",
+        variant: "destructive",
+      });
+      if (!forget) return;
       try {
-        await api.deleteBackupHistory(database.id, run.id);
-        toast.success("History entry removed");
+        await api.deleteBackupHistory(database.id, run.id, { artifacts: "forget" });
+        toast.success("Entry forgotten; the backup files were left in storage");
         await refresh();
       } catch (error) {
-        toast.error(errorMessage(error, "Failed to remove history entry"));
+        toast.error(errorMessage(error, "Failed to forget history entry"));
       }
     },
     [database.id, refresh]
@@ -203,12 +255,10 @@ export function DatabaseBackupsTab({
                 Restore
               </Button>
             ) : null}
-            {canManage &&
-            !["queued", "running"].includes(run.status) &&
-            (!run.manifest || run.artifactsDeletedAt) ? (
+            {canManage && !["queued", "running"].includes(run.status) ? (
               <Button size="sm" variant="ghost" onClick={() => void deleteHistory(run)}>
                 <Trash2 />
-                Remove
+                {run.manifest && !run.artifactsDeletedAt ? "Delete" : "Remove"}
               </Button>
             ) : null}
             {(run.status === "queued" || run.status === "running") && canRun ? (

@@ -64,6 +64,10 @@ type backupPayload struct {
 	DeadlineAt *time.Time `json:"deadlineAt,omitempty"`
 }
 
+// backupEndpoint.TLSVerifyCertificate is the connection's explicit server
+// certificate verification setting. It is sent only to nodes advertising
+// database_backups_tls_verification_v1; nil keeps the runner's behavior for
+// endpoints without it (managed relay routes).
 type backupEndpoint struct {
 	ConnectionID         string `json:"connectionId"`
 	Provider             string `json:"provider,omitempty"`
@@ -73,6 +77,7 @@ type backupEndpoint struct {
 	Username             string `json:"username,omitempty"`
 	Password             string `json:"password,omitempty"`
 	TLS                  bool   `json:"tls,omitempty"`
+	TLSVerifyCertificate *bool  `json:"tlsVerifyCertificate,omitempty"`
 	CAPEM                string `json:"caPem,omitempty"`
 	ServerName           string `json:"serverName,omitempty"`
 	Endpoint             string `json:"endpoint,omitempty"`

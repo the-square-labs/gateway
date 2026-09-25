@@ -67,6 +67,14 @@ export interface BackupRun {
   createdAt: string;
 }
 
+/** What to do with files that still exist when a backup is removed from history. */
+export type BackupHistoryArtifactsAction = "delete" | "forget";
+
+export interface BackupHistoryDeleteResult {
+  success: boolean;
+  artifacts: "none" | "deleted" | "kept";
+}
+
 export interface BackupPolicyInput {
   destinationId: string;
   bucket: string;

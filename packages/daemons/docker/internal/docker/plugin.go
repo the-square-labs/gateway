@@ -398,7 +398,7 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 				"relay_pool_v1",
 			}
 			if p.backupHandler != nil {
-				values = append(values, "database_backups_v1", "database_backups_deadline_v1")
+				values = append(values, "database_backups_v1", "database_backups_deadline_v1", "database_backups_tls_verification_v1")
 			}
 			return values
 		}

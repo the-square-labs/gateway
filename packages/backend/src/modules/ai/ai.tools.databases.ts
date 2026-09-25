@@ -166,7 +166,7 @@ export const DATABASE_AI_TOOLS: AIToolDefinition[] = [
         config: {
           type: 'object',
           description:
-            'Connection config. Postgres: connectionString or host/port/database/username/password/sslEnabled. Redis: connectionString or host/port/username/password/db/tlsEnabled. ClickHouse: connectionString/url or host/port/database/username/password/tlsEnabled.',
+            'Connection config. Postgres: connectionString or host/port/database/username/password/sslEnabled. Redis: connectionString or host/port/username/password/db/tlsEnabled. ClickHouse: connectionString/url or host/port/database/username/password/tlsEnabled. TLS verification (all types): tlsVerifyCertificate (default true: verify the server certificate chain and hostname; false disables verification and is insecure) and tlsCaCertificate (PEM CA bundle for a private CA; null clears it). Create and update test the connection with these settings before saving, so enabling verification on an existing connection fails without changes when the certificate cannot be verified.',
         },
       },
       required: ['operation'],

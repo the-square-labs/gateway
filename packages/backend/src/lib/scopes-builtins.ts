@@ -9,6 +9,7 @@ export const ADMIN_SCOPES: readonly string[] = [
   'storage:edit',
   'storage:delete',
   'storage:credentials:reveal',
+  'storage:credentials:use',
   'storage:iam',
   'storage:objects:read',
   'storage:objects:write',
@@ -312,6 +313,8 @@ export const OPERATOR_SCOPES: readonly string[] = [
   'storage:view',
   'storage:create',
   'storage:edit',
+  // Lets backups hand the saved credentials to the runner without revealing them.
+  'storage:credentials:use',
   'storage:objects:read',
   'storage:objects:write',
   'storage:folders:manage',

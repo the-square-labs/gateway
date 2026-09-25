@@ -10,12 +10,18 @@ Gateway manages infrastructure hosts through small Go daemons. Each daemon conne
 |------|--------|---------|
 | nginx | `nginx-daemon` | Public ingress, routes, TLS termination, access lists, configuration, logs, and stats for host-native nginx. |
 | docker | `docker-daemon` | Docker containers, deployments, cross-node migrations, portable and registry-backed `.gwca` archives, images, volumes, networks, tasks, files, consoles, registries, and offline inventory snapshots. |
-| storage | `docker-daemon` | Managed Postgres, Redis, ClickHouse, object storage, and native backup jobs; generic workloads are rejected. |
+| builder | `docker-daemon` (`builder` profile) | Build Worker: builds Git revisions and scans artifacts on an isolated Docker worker; application workloads and managed databases are rejected. |
+| storage | `docker-daemon` (`storage` profile) | Managed Postgres, Redis, ClickHouse, MinIO object storage, and native backup jobs; generic workloads are rejected. |
 | monitoring | `monitoring-daemon` | Metrics-only host monitoring without nginx or Docker control. |
+| relay | `relay-supervisor` and relay worker | Adds a physical host to the Relay Pool; see [Relay Nodes](#relay-nodes). |
+
+The console labels these node types **Ingress**, **Docker**, **Build Worker**, **Storage**, **Monitoring**, and **Relay**.
 
 Use a monitoring node when you want host metrics but do not want to grant Gateway ingress or Docker management on that host.
 
-Existing `databases` nodes are compatible with the Storage profile. Updating their daemon enables the unified capabilities without changing their identity, enrollment, or database storage root. Older daemons remain limited to the capabilities they advertise.
+Existing `databases` nodes are shown as Storage nodes and are compatible with the Storage profile. Updating their daemon enables the unified capabilities without changing their identity, enrollment, or database storage root. Older daemons remain limited to the capabilities they advertise.
+
+Every node counts toward the plan's managed-node limit, whatever its type and including nodes still pending enrollment. Community allows 25 managed nodes; paid plans have no plan quota. The limit is checked when a node is created, so existing nodes above it keep working.
 
 ## Host Resource Sizing
 
@@ -30,7 +36,7 @@ Gateway daemons have a small resource footprint compared with the services they 
 
 1. Open Gateway.
 2. Go to **Nodes > Add Node**.
-3. Choose the daemon type.
+3. Choose the node type.
 4. Create the node.
 5. Copy the setup command from the dialog.
 6. Run it on the target host.
@@ -38,7 +44,7 @@ Gateway daemons have a small resource footprint compared with the services they 
 Universal setup command:
 
 ```bash
-curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -52,16 +58,27 @@ The wrapper downloads the daemon-specific installer and forwards all arguments.
 Nginx node:
 
 ```bash
-curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-node.sh | \
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
 Docker node:
 
 ```bash
-curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-docker-node.sh | \
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-docker-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
+
+A Build Worker uses the same Docker installer with `--mode builder`.
+
+Storage node:
+
+```bash
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-storage-node.sh | \
+  sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
+```
+
+See [Storage nodes, external storage and database backups](storage-and-backups.md) for what runs on a Storage node.
 
 ## Docker Secure Runtime
 
@@ -134,7 +151,7 @@ The GPU must appear as attachable on the node before it can be selected. A devic
 Monitoring node:
 
 ```bash
-curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-monitoring-node.sh | \
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-monitoring-node.sh | \
   sudo bash -s -- --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT>
 ```
 
@@ -150,6 +167,7 @@ Common daemon setup options:
 | `--host <host>` / `--port <port>` | Alternative to `--gateway` when specifying the Gateway address in separate parts. |
 | `--version <tag>` | Install a specific daemon version. |
 | `--user <username>` | Run nginx, Docker, or monitoring daemons as a specific user. Storage nodes (including legacy database nodes) accept only `--user root`. |
+| `--mode <profile>` | Docker installer only: `docker` (default), `builder`, or `storage`; `databases` is accepted as a legacy alias of the Storage profile. |
 | `--dry-run` | Validate inputs and show the plan without changing the host. |
 | `-y`, `--yes` | Non-interactive mode. |
 | `--help` | Show all supported options. |
@@ -168,7 +186,7 @@ The nginx installer supports:
 Example:
 
 ```bash
-curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
+curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-daemon.sh | \
   sudo bash -s -- --type nginx --gateway gw.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<FINGERPRINT> --nginx-mode integrate
 ```
 
@@ -189,6 +207,8 @@ On first start, the daemon:
 
 The token is only needed for enrollment. Long-term daemon authentication uses mTLS.
 
+Setup commands always carry the fingerprint of the gRPC certificate Gateway currently serves. Because Gateway renews that certificate while running, it postpones renewal while enrollment tokens are outstanding and renews it anyway only in the certificate's last week. If that happens before a node enrolls, generate a fresh setup command.
+
 ## Firewall Requirements
 
 | Direction | Port | Purpose |
@@ -203,7 +223,13 @@ Managed nodes do not need inbound management ports for Gateway.
 
 Relay hosts use the same enrollment lifecycle as every other managed node. Create one from **Nodes > Add Node > Relay**, or use **Settings > Relay > Add relay node** to open that same flow with Relay preselected. The node remains pending and can be deleted normally until its supervisor enrolls successfully; only then does it appear in the Relay Pool. The generated command installs a signed `relay-supervisor` and its separately signed worker, pins the Gateway certificate before sending the one-time enrollment token, and persists a physical host identity used as the Relay Pool fault domain. Two relay processes on the same physical host do not count as redundant.
 
-The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, database, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Adding a healthy relay does not remap existing endpoints; use explicit **Rebalance** after confirming reachability.
+The supervisor connects outbound to Gateway. The worker listens on the advertised address and port (TCP `9443` by default), which must be reachable from participating Docker, nginx, Storage, and Gateway hosts. Gateway does not open that port, alter firewall rules, create an overlay, or traverse NAT. Adding a healthy relay does not remap existing endpoints; use explicit **Rebalance** after confirming reachability.
+
+Remote relay server certificates are issued for 365 days. Gateway checks them hourly and renews each one automatically from 60 days before expiry; the worker keeps serving the previous certificate during the renewal so connected daemons are not cut off. A worker too old for that rollover reports that it needs a Relay Pool update or re-enrollment instead. When a renewal fails or a certificate has expired, **Settings > Relay** offers **Renew certificate** for that relay.
+
+A remote relay that is offline, stuck synchronizing, locked out of policy sync, or holding an expired certificate can be re-enrolled from **Settings > Relay** with **Re-enroll**. Gateway issues a single-use token and shows a ready installer command pinned to the pool's relay version; run it on the relay host. The local relay is never re-enrolled: when it refuses Gateway's policy because its pinned trust no longer matches (for example after Gateway's database was restored or Gateway was reinstalled over an existing relay volume), Gateway re-pins the active policy signing key on it automatically, at most once every 10 minutes, and records the reset in the audit log.
+
+Gateway also renews its own gRPC, web, and local relay certificates while running. It checks hourly and renews each one within 30 days of expiry; existing daemon and relay connections keep their current certificate and new handshakes receive the renewed one. Until the local relay confirms that it loaded the renewed files, Gateway keeps trusting both the previous and the new relay certificates and retries the reload, so neither side locks the other out. The local relay identity files are written as one set, so an interrupted write leaves the installed identity intact.
 
 If Gateway is behind Cloudflare for the UI/API, configure Gateway's public gRPC target as a direct `9443/tcp` endpoint. A Cloudflare-proxied web hostname must not be selected unless it explicitly routes the Gateway gRPC port. Generated commands use the configured target, so normal enrollment does not require replacing the address by hand.
 
@@ -257,7 +283,7 @@ The crash-safe launcher introduced in 2.10 preserves the previous binary and an 
 
 Daemons installed before signed-manifest support can perform one transition update: Gateway verifies the signed manifest and sends the verified checksum, while the old daemon enforces the checksum. After that update, daemon-side signature verification is enforced.
 
-Release and update units are independent: nginx, Docker, monitoring, the Relay Pool supervisor, and the Relay Pool worker have their own signed artifact contracts. The local Relay image and the nginx/workload Secure Link connector image are digest-pinned and signed as one Relay release contract rather than inheriting the Gateway application version. Managed database application bindings do not require a database connector image; their listeners are owned by the target Docker daemon.
+Release and update units are independent: nginx, Docker, monitoring, the Relay Pool supervisor, and the Relay Pool worker have their own signed artifact contracts. The local Relay image and the nginx/workload Secure Link connector image are digest-pinned and signed as one Relay release contract rather than inheriting the Gateway application version. Each Relay release names the minimum Gateway version it requires; Gateway offers or applies a standalone relay update only once it runs that version, so a relay update cannot run ahead of the Gateway update. Managed database application bindings do not require a database connector image; their listeners are owned by the target Docker daemon.
 
 The installation-wide update channel applies to managed daemon checks. `stable` offers production tags only, while `preview` also allows matching `vX.Y.Z-rc.N-<component>` GitHub prereleases. Gateway resolves one staged target per daemon type from the oldest compatible installed version cohort, preferring a newer patch on that minor and otherwise the baseline release of the next minor. This avoids advertising a later target that would skip an older cohort's required upgrade step.
 
@@ -302,19 +328,19 @@ nginx-daemon install --gateway gw.example.com:9443 --token <TOKEN> --gateway-cer
 systemctl enable --now nginx-daemon
 ```
 
-Replace `nginx-daemon` with `docker-daemon` or `monitoring-daemon` as needed. A database node also uses `docker-daemon`, installed in its `databases` profile.
+Replace `nginx-daemon` with `docker-daemon` or `monitoring-daemon` as needed. A Storage node also uses `docker-daemon`, installed in its `storage` profile (`docker.mode: storage`); legacy database nodes keep the `databases` alias of that profile. A Build Worker uses the `builder` profile.
 
-For a database node, use the installer rather than preparing filesystems manually:
+For a Storage node, use the installer rather than preparing filesystems manually:
 
 ```bash
-sudo ./scripts/setup-daemon.sh --type databases
+sudo ./scripts/setup-daemon.sh --type storage
 ```
 
-It rejects a host that cannot complete the same fixed-size storage lifecycle used at runtime: preallocate and format an ext4 image, attach a free loop device, mount and write it, grow the image and filesystem, then unmount and detach it. It also verifies the local Docker Engine before enrollment. Failed probes clean their temporary mount, loop attachment, and image before the installer exits. The database profile then uses fixed-size preallocated ext4 images under `/var/lib/docker-daemon/databases` by default (or the configured external mount), so each managed database has a hard storage limit without reformatting the VM disk.
+It rejects a host that cannot complete the same fixed-size storage lifecycle used at runtime: preallocate and format an ext4 image, attach a free loop device, mount and write it, grow the image and filesystem, then unmount and detach it. It also verifies the local Docker Engine before enrollment. Failed probes clean their temporary mount, loop attachment, and image before the installer exits. The Storage profile then uses fixed-size preallocated ext4 images under `/var/lib/docker-daemon/databases` by default (or the configured external mount), so each managed database, object storage volume, and backup workspace has a hard storage limit without reformatting the VM disk.
 
-VM and bare-metal hosts normally expose the required loop and mount capabilities directly. An LXC database node is supported only when its outer host explicitly passes `/dev/loop-control` plus a loop-device pool and permits loop block devices and mounts. The installer detects an ordinary LXC guest without those capabilities and stops before enrollment with that remediation; it never falls back to an unbounded Docker volume.
+VM and bare-metal hosts normally expose the required loop and mount capabilities directly. An LXC Storage node is supported only when its outer host explicitly passes `/dev/loop-control` plus a loop-device pool and permits loop block devices and mounts. The installer detects an ordinary LXC guest without those capabilities and stops before enrollment with that remediation; it never falls back to an unbounded Docker volume.
 
-The database installer runs `docker-daemon` only as root and shows a local-disk selector in an interactive terminal. Choose an eligible mounted filesystem or a custom path; the selected location becomes the storage root. For automation, pass `--storage-root <path>` (or set `GATEWAY_DATABASE_STORAGE_ROOT`) together with the normal enrollment flags and `--yes`. The preflight runs before enrollment, and `--dry-run` performs no storage preparation or other host mutation.
+The Storage installer runs `docker-daemon` only as root and shows a local-disk selector in an interactive terminal. Choose an eligible mounted filesystem or a custom path; the selected location becomes the storage root. For automation, pass `--storage-root <path>` (or set `GATEWAY_DATABASE_STORAGE_ROOT`) together with the normal enrollment flags and `--yes`. The preflight runs before enrollment, and `--dry-run` performs no storage preparation or other host mutation.
 
 Managed application bindings use a TCP listener owned directly by the target Docker daemon. Gateway does not deploy a per-binding connector container or require a database connector image. During upgrades, successful listener reconciliation removes any connector containers left by older Gateway versions.
 

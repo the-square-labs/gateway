@@ -59,7 +59,10 @@ function createService({
     siemDeliveryService as never,
     generalSettingsService as never
   );
-  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  (service as any).licensePolicyService = {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+    requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+  };
   return service;
 }
 
@@ -68,14 +71,36 @@ describe('AIService notification tool routing', () => {
     const siemDestinationService = { list: vi.fn() };
     const service = createService({ siemDestinationService });
     const error = new Error('license denied');
-    const policy = { requireFeature: vi.fn().mockRejectedValue(error) };
+    const policy = {
+      requireFeature: vi.fn().mockRejectedValue(error),
+      requireFeatureForExistingRuntime: vi.fn().mockRejectedValue(error),
+    };
     (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['audit:siem:view'] }, 'list_siem_destinations', {})
     ).resolves.toMatchObject({ error: 'license denied' });
-    expect(policy.requireFeature).toHaveBeenCalledWith('siem-export');
+    // Viewing existing destinations uses continuity; it is still refused without any paid history.
+    expect(policy.requireFeatureForExistingRuntime).toHaveBeenCalledWith('siem-export');
     expect(siemDestinationService.list).not.toHaveBeenCalled();
+  });
+
+  it('keeps SIEM destinations viewable after the grace period but refuses new ones', async () => {
+    const siemDestinationService = { list: vi.fn().mockResolvedValue({ data: [] }), create: vi.fn() };
+    const service = createService({ siemDestinationService });
+    const policy = {
+      requireFeature: vi.fn().mockRejectedValue(new Error('license denied')),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+    };
+    (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
+
+    await service.executeTool({ ...BASE_USER, scopes: ['audit:siem:view'] }, 'list_siem_destinations', {});
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['audit:siem:manage'] }, 'create_siem_destination', {})
+    ).resolves.toMatchObject({ error: 'license denied' });
+    expect(policy.requireFeatureForExistingRuntime).toHaveBeenCalledWith('siem-export');
+    expect(policy.requireFeature).toHaveBeenCalledWith('siem-export');
+    expect(siemDestinationService.create).not.toHaveBeenCalled();
   });
 
   it('returns a clear tool result when notification services are unavailable', async () => {

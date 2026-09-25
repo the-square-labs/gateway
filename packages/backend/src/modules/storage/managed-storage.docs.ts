@@ -9,6 +9,7 @@ import {
   UnknownDataResponseSchema,
   UnknownListResponseSchema,
 } from '@/lib/openapi.js';
+import { DeleteStorageQuerySchema } from '@/modules/object-storage/object-storage.schemas.js';
 import {
   CreateManagedStorageAccessKeySchema,
   CreateManagedStorageBindingSchema,
@@ -69,7 +70,9 @@ export const deleteManagedStorageRoute = appRoute({
   path: '/{id}',
   tags: [TAG],
   summary: 'Delete a managed object storage cluster',
-  request: { params: IdParamSchema },
+  description:
+    'Refused while backup policies or active backup runs use the storage. Finished backup history also blocks deletion (409 STORAGE_BACKUP_HISTORY_EXISTS with historyRecords and backupsWithFiles) unless backupHistory=forget confirms removing it; forgotten backups can no longer be restored or deleted through Gateway, and files stored in this managed storage are deleted with it.',
+  request: { params: IdParamSchema, query: DeleteStorageQuerySchema },
   responses: okJson(z.object({ success: z.boolean() })),
 });
 

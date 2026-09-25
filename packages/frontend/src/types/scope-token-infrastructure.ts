@@ -15,6 +15,12 @@ export const INFRASTRUCTURE_TOKEN_SCOPES = [
     group: "Storage",
   },
   {
+    value: "storage:credentials:use",
+    label: "Use Storage Credentials for Backups",
+    desc: "Back up to this storage without revealing its credentials",
+    group: "Storage",
+  },
+  {
     value: "storage:objects:read",
     label: "Read Storage",
     desc: "storage:objects:read",

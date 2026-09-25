@@ -29,7 +29,7 @@ export async function manageLoggingTool(user: User, args: Record<string, unknown
     const { LoggingMaintenanceService } = await import('@/modules/logging/logging-maintenance.service.js');
     return container.resolve(LoggingMaintenanceService).getSnapshot();
   }
-  await requireLoggingEnabled();
+  await requireLoggingEnabled(operation);
   if (resource === 'environment') {
     const { LoggingEnvironmentService } = await import('@/modules/logging/logging-environment.service.js');
     const service = container.resolve(LoggingEnvironmentService);
@@ -205,9 +205,15 @@ function normalizeLoggingOperation(operation: string): string {
   return aliases[normalized] ?? normalized;
 }
 
-/** Same gate as the logging routes' `requireLoggingEnabledMiddleware`. */
-async function requireLoggingEnabled() {
-  await container.resolve(LicensePolicyService).requireFeature('structured-logging');
+/**
+ * Same gate as the logging routes' `requireLoggingEnabledMiddleware`: reading,
+ * searching, and deleting existing environments and schemas keep working after the
+ * license grace period; creating or changing them needs the current plan.
+ */
+async function requireLoggingEnabled(operation: string) {
+  const policy = container.resolve(LicensePolicyService);
+  if (operation === 'create' || operation === 'update') await policy.requireFeature('structured-logging');
+  else await policy.requireFeatureForExistingRuntime('structured-logging');
   const { LoggingFeatureService } = await import('@/modules/logging/logging-feature.service.js');
   container.resolve(LoggingFeatureService).requireEnabled();
 }

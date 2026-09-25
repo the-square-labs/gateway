@@ -1,0 +1,327 @@
+# Shared Compose policy parity fixtures.
+#
+# The docker daemon (compose_test.go) and the backend Compose policy in the
+# commercial core (backend/docker/compose/compose-policy.test.ts) both run every
+# case, so a document the backend accepts is never rejected at apply by the
+# daemon, and the daemon never accepts a document the backend rejects. Every
+# case runs with project name "example" and without variables.
+#
+# backendCode/backendMessage: a diagnostic code and message fragment the backend
+# must report. daemonError: a fragment of the daemon validation error.
+cases:
+  - name: short-syntax named volumes
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - data:/data
+            - data:/cache:ro
+            - data:/state:rw
+      volumes:
+        data: {}
+
+  - name: long-syntax named volume with type
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: volume
+              source: data
+              target: /data
+              read_only: true
+      volumes:
+        data: {}
+
+  - name: long-syntax volume without type
+    valid: false
+    backendCode: VOLUME_TYPE_REQUIRED
+    backendMessage: Volume entry 1 of service web uses long syntax without type
+    daemonError: compose service "web" volume 1 uses long syntax without type
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - data:/cache
+            - source: data
+              target: /data
+      volumes:
+        data: {}
+
+  - name: long-syntax bind mount
+    valid: false
+    backendCode: HOST_BIND_FORBIDDEN
+    daemonError: host bind mounts
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: bind
+              source: /etc
+              target: /data
+
+  - name: long-syntax volume without target
+    valid: false
+    backendCode: INVALID_VOLUME
+    daemonError: absolute container path
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: volume
+              source: data
+      volumes:
+        data: {}
+
+  - name: long-syntax volume with relative target
+    valid: false
+    backendCode: INVALID_VOLUME
+    daemonError: absolute container path
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: volume
+              source: data
+              target: data
+      volumes:
+        data: {}
+
+  - name: long-syntax volume options
+    valid: false
+    backendCode: UNSUPPORTED_VOLUME_FIELD
+    daemonError: volume feature "volume" is not supported
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: volume
+              source: data
+              target: /data
+              volume:
+                nocopy: true
+      volumes:
+        data: {}
+
+  - name: long-syntax volume with non-boolean read_only
+    valid: false
+    backendCode: INVALID_VOLUME
+    daemonError: read_only must be a boolean
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - type: volume
+              source: data
+              target: /data
+              read_only: "yes"
+      volumes:
+        data: {}
+
+  - name: short-syntax volume with empty mode
+    valid: false
+    backendCode: INVALID_VOLUME
+    daemonError: mode must be ro or rw
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - "data:/data:"
+      volumes:
+        data: {}
+
+  - name: short-syntax volume with unsupported mode
+    valid: false
+    backendCode: INVALID_VOLUME
+    daemonError: mode must be ro or rw
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - data:/data:z
+      volumes:
+        data: {}
+
+  - name: short-syntax volume without target
+    valid: false
+    backendCode: ANONYMOUS_VOLUME
+    daemonError: unnamed volumes are not supported
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - data
+      volumes:
+        data: {}
+
+  - name: short-syntax undeclared volume
+    valid: false
+    backendCode: UNDECLARED_VOLUME
+    daemonError: undeclared named volume "cache"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          volumes:
+            - cache:/cache
+      volumes:
+        data: {}
+
+  - name: implicit default network
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [default]
+
+  - name: default network next to a declared network with aliases
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks:
+            default:
+            app:
+              aliases: [api]
+      networks:
+        app: {}
+
+  - name: service network settings beyond aliases
+    valid: false
+    backendCode: UNSUPPORTED_NETWORK
+    daemonError: only supports aliases
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks:
+            app:
+              ipv4_address: 172.30.0.10
+      networks:
+        app: {}
+
+  - name: undeclared service network
+    valid: false
+    backendCode: UNDECLARED_NETWORK
+    daemonError: network "missing" is not declared
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          networks: [missing]
+
+  - name: depends_on list and long syntax with condition
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on:
+            db:
+              condition: service_healthy
+        worker:
+          image: nginx:alpine
+          depends_on: [db]
+        db:
+          image: postgres:16-alpine
+
+  - name: long-syntax depends_on without condition
+    valid: false
+    backendCode: DEPENDS_ON_CONDITION_REQUIRED
+    daemonError: depends_on "db" requires condition
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on:
+            db: {}
+        db:
+          image: postgres:16-alpine
+
+  - name: long-syntax depends_on null entry
+    valid: false
+    backendCode: INVALID_DEPENDS_ON
+    daemonError: depends_on "db" must be a mapping with condition
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on:
+            db:
+        db:
+          image: postgres:16-alpine
+
+  - name: long-syntax depends_on with unknown condition
+    valid: false
+    backendCode: INVALID_DEPENDS_ON_CONDITION
+    daemonError: condition must be service_started, service_healthy, or service_completed_successfully
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on:
+            db:
+              condition: whenever
+        db:
+          image: postgres:16-alpine
+
+  - name: long-syntax depends_on fields beyond condition
+    valid: false
+    backendCode: UNSUPPORTED_DEPENDS_ON
+    daemonError: depends_on "db" feature "restart" is not supported
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on:
+            db:
+              condition: service_started
+              restart: true
+        db:
+          image: postgres:16-alpine
+
+  - name: depends_on undefined service
+    valid: false
+    backendCode: UNDEFINED_DEPENDENCY
+    daemonError: depends on undefined service "db"
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+          depends_on: [db]
+
+  - name: capitalized boolean external resource
+    valid: true
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+      volumes:
+        data:
+          external: True
+
+  - name: quoted external resource flag
+    valid: false
+    backendCode: INVALID_RESOURCE_EXTERNAL
+    daemonError: external must be boolean
+    yaml: |
+      services:
+        web:
+          image: nginx:alpine
+      volumes:
+        data:
+          external: "true"

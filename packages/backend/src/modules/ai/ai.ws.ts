@@ -46,6 +46,14 @@ function send(ws: WSContext, msg: WSServerMessage): void {
   }
 }
 
+// License denials carry plan metadata the client needs to open the upgrade
+// dialog. Details of every other error stay server-side.
+const LICENSE_ERROR_CODES = new Set([
+  'LICENSE_ENTITLEMENT_REQUIRED',
+  'LICENSE_QUOTA_EXCEEDED',
+  'COMMERCIAL_MODULE_UNAVAILABLE',
+]);
+
 function sendCommandError(
   ws: WSContext,
   msg: WSClientMessage,
@@ -62,6 +70,7 @@ function sendCommandError(
       code: error.code,
       message: error.message,
       statusCode: error.statusCode,
+      ...(LICENSE_ERROR_CODES.has(error.code) && error.details !== undefined ? { details: error.details } : {}),
     });
     return;
   }

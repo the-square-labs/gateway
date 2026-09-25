@@ -3,7 +3,7 @@ import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
 import { authMiddleware, requireScope } from '@/modules/auth/auth.middleware.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import {
   createTemplateRoute,
   deleteTemplateRoute,
@@ -21,6 +21,7 @@ export const templateRouteRuntime = {
   authMiddleware,
   requireScope,
   requireLicenseFeature,
+  requireLicenseFeatureForRequest,
   createTemplateRoute,
   deleteTemplateRoute,
   getTemplateRoute,

@@ -8,6 +8,7 @@ import type { ManagedWorkloadLifecycle } from '@/modules/managed-workloads/manag
 import type { ManagedWorkloadProvider } from '@/modules/managed-workloads/managed-workload-provider.js';
 import type { ManagedWorkloadStore } from '@/modules/managed-workloads/managed-workload-store.js';
 import type { ObjectStorageService } from '@/modules/object-storage/object-storage.service.js';
+import type { StorageBackupHistoryOptions } from '@/modules/object-storage/storage-backup-references.js';
 import type { CryptoService } from '@/services/crypto.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { NodeDispatchService } from '@/services/node-dispatch.service.js';
@@ -175,7 +176,7 @@ export class ManagedStorageService {
   async restart(_id: string, _userId: string): Promise<unknown> {
     return commercialModuleUnavailable();
   }
-  async delete(_id: string, _userId: string): Promise<unknown> {
+  async delete(_id: string, _userId: string, _options?: StorageBackupHistoryOptions): Promise<unknown> {
     return commercialModuleUnavailable();
   }
   async retryProvisioning(_id: string, _userId: string): Promise<unknown> {

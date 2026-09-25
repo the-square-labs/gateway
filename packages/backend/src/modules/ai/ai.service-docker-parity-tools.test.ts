@@ -1,4 +1,8 @@
 import { createHash } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
@@ -36,7 +40,10 @@ vi.mock('@/modules/docker/compose/compose-child.guard.js', () => ({
   assertComposeChildMutationAllowed: vi.fn().mockResolvedValue(undefined),
   assertComposeVolumeMutationAllowed: vi.fn().mockResolvedValue(undefined),
 }));
-vi.mock('@/modules/docker/docker-container-archive-operations.js', () => ({
+vi.mock('@/modules/docker/docker-container-archive-operations.js', async (importOriginal) => ({
+  assertDockerContainerArchiveExportAllowed: (
+    await importOriginal<typeof import('@/modules/docker/docker-container-archive-operations.js')>()
+  ).assertDockerContainerArchiveExportAllowed,
   importDockerContainerArchive: vi.fn(),
   openDockerContainerArchiveExport: vi.fn(),
   planDockerContainerArchiveImport: vi.fn(),
@@ -1041,6 +1048,50 @@ describe('Docker archive transfer over MCP', () => {
       { operation: 'close', downloadId: (begin.result as { downloadId: string }).downloadId },
       { source: 'mcp', scopes }
     );
+  });
+
+  it('refuses a Compose container export before a transfer or spool exists', async () => {
+    registerLicense();
+    const composeContainer = inspectedContainer({
+      Config: { Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'api' } },
+    });
+    const scopes = ['docker:containers:export:node-1/scope-1'];
+    const args = {
+      operation: 'begin',
+      kind: 'container',
+      nodeId: 'node-1',
+      containerId: 'api',
+      imageMode: 'registry',
+      includeEnvironment: false,
+    };
+
+    const result = await createService({ inspectContainer: composeContainer }).executeTool(
+      userWith(scopes),
+      'download_docker_archive',
+      args,
+      { source: 'mcp', scopes }
+    );
+    expect(result.error).toBe(
+      'This container belongs to Compose project shop and cannot be exported as a container archive; manage it through the Compose project instead'
+    );
+
+    const root = await mkdtemp(join(tmpdir(), 'gwca-compose-export-'));
+    const store = new DockerArchiveTransferStore(join(root, 'spool'));
+    try {
+      await expect(
+        store.download({ inspectContainer: composeContainer } as never, userWith(scopes), args)
+      ).rejects.toMatchObject({
+        statusCode: 409,
+        code: 'DOCKER_ARCHIVE_COMPOSE_CONTAINER',
+        details: { nodeId: 'node-1', containerId: 'api', projectName: 'shop', projectId: null },
+      });
+      expect(existsSync(join(root, 'spool'))).toBe(false);
+      expect((store as unknown as { downloads: Map<string, unknown> }).downloads.size).toBe(0);
+    } finally {
+      store.dispose();
+      await rm(root, { recursive: true, force: true });
+    }
+    expect(openDockerContainerArchiveExport).not.toHaveBeenCalled();
   });
 });
 

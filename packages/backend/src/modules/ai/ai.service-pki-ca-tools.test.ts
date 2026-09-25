@@ -42,7 +42,10 @@ function createService(caService: Record<string, unknown>) {
     {} as never,
     {} as never
   );
-  (service as any).licensePolicyService = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  (service as any).licensePolicyService = {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+    requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+  };
   return service;
 }
 
@@ -59,11 +62,18 @@ describe('AIService PKI CA tool routing', () => {
     const caService = { getCATree: vi.fn() };
     const service = createService(caService);
     const error = new Error('license denied');
-    const policy = { requireFeature: vi.fn().mockRejectedValue(error) };
+    const policy = {
+      requireFeature: vi.fn().mockRejectedValue(error),
+      requireFeatureForExistingRuntime: vi.fn().mockRejectedValue(error),
+    };
     (service as unknown as { licensePolicyService: typeof policy }).licensePolicyService = policy;
 
     await expect(
       service.executeTool({ ...BASE_USER, scopes: ['pki:ca:view:root'] }, 'list_cas', {})
+    ).resolves.toMatchObject({ error: 'license denied' });
+    expect(policy.requireFeatureForExistingRuntime).toHaveBeenCalledWith('internal-pki');
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: ['pki:ca:create:root'] }, 'create_root_ca', { commonName: 'Root' })
     ).resolves.toMatchObject({ error: 'license denied' });
     expect(policy.requireFeature).toHaveBeenCalledWith('internal-pki');
     expect(caService.getCATree).not.toHaveBeenCalled();

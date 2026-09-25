@@ -6,6 +6,7 @@ import type { DatabaseHealthEntry } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { AuditService } from '@/modules/audit/audit.service.js';
 import type { CryptoService } from '@/services/crypto.service.js';
+import type { DatabaseCAService } from '@/services/database-ca.service.js';
 import type { EventBusService } from '@/services/event-bus.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type {
@@ -33,6 +34,8 @@ export class DatabaseConnectionService {
     _managedTunnelProxy?: ManagedDatabaseTunnelProxy | undefined
   ) {}
   setEventBus(_bus: EventBusService): void {}
+  /** Trust anchor for the TLS endpoints of managed databases Gateway provisions. */
+  setDatabaseCA(_databaseCA: Pick<DatabaseCAService, 'getDatabaseCA'>): void {}
   async getDecryptedConfig(
     _id: string,
     _lane?: ManagedDatabaseTunnelLane,
@@ -53,6 +56,8 @@ export class DatabaseConnectionService {
       databaseName: string | null;
       username: string | null;
       tlsEnabled: boolean;
+      tlsVerifyCertificate: boolean;
+      tlsCaCertificate: string | null;
       manualSizeLimitMb: number | null;
       interactiveQueryBudgetSeconds: number;
       encryptedConfig: string;

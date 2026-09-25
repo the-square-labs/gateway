@@ -206,7 +206,8 @@ describe('AI folder tools', () => {
       moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
     };
     vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
-      if (token === LicensePolicyService) return { requireFeature } as never;
+      if (token === LicensePolicyService)
+        return { requireFeature, requireFeatureForExistingRuntime: requireFeature } as never;
       if (token === PageProfileService) return { requireEnabled } as never;
       if (token === PageProjectFolderService) return pageFolderService as never;
       throw new Error('Unexpected service resolution');

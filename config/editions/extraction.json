@@ -267,6 +267,7 @@
       "sharedMethods": [],
       "emptyMethods": [
         "setEventBus",
+        "setDatabaseCA",
         "disposeClient"
       ],
       "emptyConstructor": true

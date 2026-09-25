@@ -19,6 +19,10 @@ var composeServiceFields = map[string]bool{
 
 var composeByteValuePattern = regexp.MustCompile(`(?i)^\d+(?:\.\d+)?(?:[kmgtpe]i?b?|b)?$`)
 
+var composeDependsOnConditions = map[string]bool{
+	"service_started": true, "service_healthy": true, "service_completed_successfully": true,
+}
+
 func validateAndInjectComposeYAML(request *composeRequest) error {
 	var document yaml.Node
 	if err := yaml.Unmarshal(request.composeYAML, &document); err != nil {
@@ -60,7 +64,7 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 		return err
 	}
 	for i := 0; i < len(services.Content); i += 2 {
-		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], volumes, networks); err != nil {
+		if err := validateComposeService(services.Content[i].Value, services.Content[i+1], services, volumes, networks); err != nil {
 			return err
 		}
 		injectComposeLabels(services.Content[i+1], request.projectID, request.configDigest)
@@ -73,7 +77,7 @@ func validateAndInjectComposeYAML(request *composeRequest) error {
 	return nil
 }
 
-func validateComposeService(name string, service, volumes, networks *yaml.Node) error {
+func validateComposeService(name string, service, services, volumes, networks *yaml.Node) error {
 	if name == "" || service.Kind != yaml.MappingNode {
 		return errors.New("compose service definition is invalid")
 	}
@@ -90,10 +94,13 @@ func validateComposeService(name string, service, volumes, networks *yaml.Node) 
 	if err := validateServiceLabels(values["labels"]); err != nil {
 		return err
 	}
-	if err := validateServiceVolumes(values["volumes"], volumes); err != nil {
+	if err := validateServiceVolumes(name, values["volumes"], volumes); err != nil {
 		return err
 	}
-	if err := validateServiceNetworks(values["networks"], networks); err != nil {
+	if err := validateServiceNetworks(name, values["networks"], networks); err != nil {
+		return err
+	}
+	if err := validateServiceDependsOn(name, values["depends_on"], services); err != nil {
 		return err
 	}
 	if err := validateNonNegativeFloat(values["cpus"], "cpus"); err != nil {
@@ -188,10 +195,11 @@ func validateTopLevelResources(node *yaml.Node, resource string) error {
 			if key != "external" && key != "name" && key != "driver" && key != "labels" {
 				return fmt.Errorf("compose %s feature %q is not supported", resource, key)
 			}
-			if key == "external" && (value.Kind != yaml.ScalarNode || (value.Value != "true" && value.Value != "false")) {
+			// Match the backend YAML core schema: True/TRUE are booleans, quoted "true" is a string.
+			if key == "external" && !isComposeBool(value) {
 				return fmt.Errorf("compose %s external must be boolean", resource)
 			}
-			if (key == "name" || key == "driver") && value.Kind != yaml.ScalarNode {
+			if (key == "name" || key == "driver") && !isComposeString(value) {
 				return fmt.Errorf("compose %s %s must be a string", resource, key)
 			}
 			if key == "labels" {
@@ -204,60 +212,191 @@ func validateTopLevelResources(node *yaml.Node, resource string) error {
 	return nil
 }
 
-func validateServiceVolumes(node, topLevel *yaml.Node) error {
+// validateServiceVolumes mirrors the backend Compose policy: only declared named
+// volumes, as SOURCE:TARGET[:ro|rw] strings or long-syntax type: volume mappings.
+// The shared cases in testdata/compose-policy-parity.yaml keep the two in step.
+func validateServiceVolumes(service string, node, topLevel *yaml.Node) error {
 	if node == nil {
 		return nil
 	}
 	if node.Kind != yaml.SequenceNode {
-		return errors.New("compose service volumes must be a list")
+		return fmt.Errorf("compose service %q volumes must be a list", service)
 	}
 	known := mappingValues(topLevel)
-	for _, entry := range node.Content {
-		if entry.Kind == yaml.ScalarNode {
-			source := strings.Split(entry.Value, ":")[0]
-			if source == "" || strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") || strings.ContainsAny(source, `\\$`) || known[source] == nil {
-				return errors.New("host bind mounts and unnamed volumes are not supported")
+	for index, entry := range node.Content {
+		var err error
+		switch {
+		case entry.Kind == yaml.ScalarNode && entry.Tag == "!!str":
+			err = validateShortServiceVolume(service, index, entry.Value, known)
+		case entry.Kind == yaml.MappingNode:
+			err = validateLongServiceVolume(service, index, entry, known)
+		default:
+			err = fmt.Errorf("compose service %q volume %d must be a named-volume string or mapping", service, index)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateShortServiceVolume(service string, index int, value string, known map[string]*yaml.Node) error {
+	parts := strings.Split(value, ":")
+	if len(parts) < 2 || len(parts) > 3 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("compose service %q volume %d: host bind mounts and unnamed volumes are not supported", service, index)
+	}
+	source, target := parts[0], parts[1]
+	if isComposeHostPath(source) {
+		return fmt.Errorf("compose service %q volume %d: host bind mounts and unnamed volumes are not supported", service, index)
+	}
+	// Compose rejects an empty mode section ("data:/data:"), so only ro or rw may follow the target.
+	if !strings.HasPrefix(target, "/") || (len(parts) == 3 && parts[2] != "ro" && parts[2] != "rw") {
+		return fmt.Errorf("compose service %q volume %d target must be an absolute container path and mode must be ro or rw", service, index)
+	}
+	if known[source] == nil {
+		return fmt.Errorf("compose service %q volume %d uses undeclared named volume %q", service, index, source)
+	}
+	return nil
+}
+
+func validateLongServiceVolume(service string, index int, entry *yaml.Node, known map[string]*yaml.Node) error {
+	for i := 0; i+1 < len(entry.Content); i += 2 {
+		switch key := entry.Content[i].Value; key {
+		case "type", "source", "target", "read_only":
+		default:
+			return fmt.Errorf("compose service %q volume %d: long-syntax volume feature %q is not supported", service, index, key)
+		}
+	}
+	values := mappingValues(entry)
+	// The Compose specification requires type on every long-syntax mount, and
+	// docker compose rejects the entry without it.
+	volumeType := values["type"]
+	if volumeType == nil {
+		return fmt.Errorf("compose service %q volume %d uses long syntax without type; add type: volume", service, index)
+	}
+	if !isComposeString(volumeType) || volumeType.Value != "volume" {
+		return fmt.Errorf("compose service %q volume %d: host bind mounts and unnamed volumes are not supported; only type: volume is allowed", service, index)
+	}
+	source := values["source"]
+	if source == nil || !isComposeString(source) || source.Value == "" {
+		return fmt.Errorf("compose service %q volume %d: named volumes require a string source", service, index)
+	}
+	if isComposeHostPath(source.Value) {
+		return fmt.Errorf("compose service %q volume %d: host bind mounts and unnamed volumes are not supported", service, index)
+	}
+	if target := values["target"]; target == nil || !isComposeString(target) || !strings.HasPrefix(target.Value, "/") {
+		return fmt.Errorf("compose service %q volume %d target must be an absolute container path", service, index)
+	}
+	if readOnly := values["read_only"]; readOnly != nil && !isComposeBool(readOnly) {
+		return fmt.Errorf("compose service %q volume %d read_only must be a boolean", service, index)
+	}
+	if known[source.Value] == nil {
+		return fmt.Errorf("compose service %q volume %d uses undeclared named volume %q", service, index, source.Value)
+	}
+	return nil
+}
+
+func validateServiceNetworks(service string, node, topLevel *yaml.Node) error {
+	if node == nil {
+		return nil
+	}
+	known := mappingValues(topLevel)
+	// Compose always provides the project default network, so it needs no top-level declaration.
+	declared := func(name string) bool { return name == "default" || known[name] != nil }
+	if node.Kind == yaml.SequenceNode {
+		for _, entry := range node.Content {
+			if !isComposeString(entry) {
+				return fmt.Errorf("compose service %q networks are invalid", service)
 			}
+			if !declared(entry.Value) {
+				return fmt.Errorf("compose service %q network %q is not declared", service, entry.Value)
+			}
+		}
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("compose service %q networks are invalid", service)
+	}
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		name, definition := node.Content[i].Value, node.Content[i+1]
+		if !declared(name) {
+			return fmt.Errorf("compose service %q network %q is not declared", service, name)
+		}
+		if isComposeNull(definition) {
 			continue
 		}
-		if entry.Kind != yaml.MappingNode {
-			return errors.New("compose service volume is invalid")
+		if definition.Kind != yaml.MappingNode {
+			return fmt.Errorf("compose service %q network %q is invalid", service, name)
 		}
-		values := mappingValues(entry)
-		if values["type"] == nil || values["type"].Value != "volume" || values["source"] == nil || strings.ContainsAny(values["source"].Value, `\\$`) || known[values["source"].Value] == nil {
-			return errors.New("host bind mounts and unnamed volumes are not supported")
-		}
-		for key := range values {
-			if key != "type" && key != "source" && key != "target" && key != "read_only" && key != "volume" {
-				return fmt.Errorf("compose service volume feature %q is not supported", key)
+		for j := 0; j+1 < len(definition.Content); j += 2 {
+			if definition.Content[j].Value != "aliases" {
+				return fmt.Errorf("compose service %q network %q only supports aliases", service, name)
 			}
 		}
 	}
 	return nil
 }
 
-func validateServiceNetworks(node, topLevel *yaml.Node) error {
+// validateServiceDependsOn accepts a list of service names or a long-syntax
+// mapping whose entries name a Compose condition, as docker compose requires.
+func validateServiceDependsOn(service string, node, services *yaml.Node) error {
 	if node == nil {
 		return nil
 	}
-	known := mappingValues(topLevel)
-	if node.Kind == yaml.SequenceNode {
+	defined := mappingValues(services)
+	switch node.Kind {
+	case yaml.SequenceNode:
 		for _, entry := range node.Content {
-			if entry.Kind != yaml.ScalarNode || known[entry.Value] == nil {
-				return errors.New("compose service network is not declared")
+			if !isComposeString(entry) {
+				return fmt.Errorf("compose service %q depends_on must be a service list or mapping", service)
+			}
+			if defined[entry.Value] == nil {
+				return fmt.Errorf("compose service %q depends on undefined service %q", service, entry.Value)
 			}
 		}
 		return nil
-	}
-	if node.Kind != yaml.MappingNode {
-		return errors.New("compose service networks are invalid")
-	}
-	for name, definition := range mappingValues(node) {
-		if known[name] == nil || (definition.Kind != yaml.MappingNode && !(definition.Kind == yaml.ScalarNode && definition.Tag == "!!null")) {
-			return errors.New("compose service network is not declared")
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(node.Content); i += 2 {
+			dependency, definition := node.Content[i].Value, node.Content[i+1]
+			if definition.Kind != yaml.MappingNode {
+				return fmt.Errorf("compose service %q depends_on %q must be a mapping with condition", service, dependency)
+			}
+			for j := 0; j+1 < len(definition.Content); j += 2 {
+				if key := definition.Content[j].Value; key != "condition" {
+					return fmt.Errorf("compose service %q depends_on %q feature %q is not supported", service, dependency, key)
+				}
+			}
+			condition := mappingValues(definition)["condition"]
+			if condition == nil {
+				return fmt.Errorf("compose service %q depends_on %q requires condition", service, dependency)
+			}
+			if !isComposeString(condition) || !composeDependsOnConditions[condition.Value] {
+				return fmt.Errorf("compose service %q depends_on %q condition must be service_started, service_healthy, or service_completed_successfully", service, dependency)
+			}
+			if defined[dependency] == nil {
+				return fmt.Errorf("compose service %q depends on undefined service %q", service, dependency)
+			}
 		}
+		return nil
+	default:
+		return fmt.Errorf("compose service %q depends_on must be a service list or mapping", service)
 	}
-	return nil
+}
+
+func isComposeHostPath(source string) bool {
+	return strings.HasPrefix(source, "/") || strings.HasPrefix(source, ".") || strings.HasPrefix(source, "~") || strings.ContainsAny(source, `\$`)
+}
+
+func isComposeString(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!str"
+}
+
+func isComposeBool(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!bool"
+}
+
+func isComposeNull(node *yaml.Node) bool {
+	return node != nil && node.Kind == yaml.ScalarNode && node.Tag == "!!null"
 }
 
 func validateServiceLabels(node *yaml.Node) error {

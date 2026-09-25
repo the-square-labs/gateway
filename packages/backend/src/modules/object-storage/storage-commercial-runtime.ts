@@ -20,6 +20,7 @@ import { isFileProtocolProvider, resolveFileProtocolPort } from './object-storag
 import {
   assertStorageBucketHasNoBackupReferences,
   assertStorageHasNoBackupReferences,
+  forgetStorageBackupHistory,
 } from './storage-backup-references.js';
 
 /** Shared schema and resource primitives retain the host's runtime identity. */
@@ -48,4 +49,5 @@ export const storageCommercialRuntime = {
   resolveFileProtocolPort,
   assertStorageHasNoBackupReferences,
   assertStorageBucketHasNoBackupReferences,
+  forgetStorageBackupHistory,
 };

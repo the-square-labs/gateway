@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   },
   licensePolicy: {
     requireFeature: vi.fn(),
+    requireFeatureForExistingRuntime: vi.fn(),
   },
   pageProfile: { requireEnabled: vi.fn() },
   folderService: { assertFolderExists: vi.fn() },
@@ -717,6 +718,41 @@ describe('proxy routes programmatic raw config handling', () => {
     expect(response.status).toBe(200);
     expect(mocks.licensePolicy.requireFeature).not.toHaveBeenCalled();
     expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
+  });
+
+  it('edits a host that keeps its existing Page target after the grace period, but not a new target', async () => {
+    const pageProjectId = '22222222-2222-4222-8222-222222222222';
+    const otherProjectId = '44444444-4444-4444-8444-444444444444';
+    const pageTagId = '33333333-3333-4333-8333-333333333333';
+    mocks.authType = 'session';
+    mocks.proxyService.getProxyHost.mockResolvedValue({
+      ...rawHost,
+      upstreamKind: 'pages',
+      pageTarget: { projectId: pageProjectId, tagId: pageTagId },
+    });
+    mocks.scopes = ['proxy:edit:host-1', `pages:view:${pageProjectId}`, `pages:view:${otherProjectId}`];
+    mocks.licensePolicy.requireFeature.mockRejectedValue(
+      new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required')
+    );
+    try {
+      const kept = await createApp().request('/host-1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upstreamKind: 'pages', pageProjectId, pageTagId, cacheEnabled: true }),
+      });
+      expect(kept.status).toBe(200);
+      expect(mocks.licensePolicy.requireFeatureForExistingRuntime).toHaveBeenCalledWith('pages');
+
+      const retargeted = await createApp().request('/host-1', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ upstreamKind: 'pages', pageProjectId: otherProjectId, pageTagId }),
+      });
+      expect(retargeted.status).toBe(403);
+      expect(mocks.proxyService.updateProxyHost).toHaveBeenCalledOnce();
+    } finally {
+      mocks.licensePolicy.requireFeature.mockReset();
+    }
   });
 
   it('passes resource-scoped raw bypass to service when updating raw config', async () => {

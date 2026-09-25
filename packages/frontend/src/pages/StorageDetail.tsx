@@ -20,6 +20,8 @@ import { useStableNavigate } from "@/hooks/use-stable-navigate";
 import { useUrlTab } from "@/hooks/use-url-tab";
 import { storageRoute } from "@/lib/resource-routes";
 import { api } from "@/services/api";
+import { ApiRequestError } from "@/services/api-base";
+import type { StorageDeleteOptions } from "@/services/api-object-storage";
 import { useAuthStore } from "@/stores/auth";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
@@ -83,6 +85,11 @@ function StorageDetailContent({
   const canWrite = !!(
     id &&
     (hasScope("storage:objects:write") || hasScope(`storage:objects:write:${id}`))
+  );
+  // Bucket create/delete is storage:objects:admin in the API, not object write.
+  const canAdminBuckets = !!(
+    id &&
+    (hasScope("storage:objects:admin") || hasScope(`storage:objects:admin:${id}`))
   );
   const canReveal = !!(
     id &&
@@ -220,11 +227,27 @@ function StorageDetailContent({
       variant: "destructive",
     });
     if (!ok) return;
+    const managedId = storage.managed?.id;
+    const deleteStorage = (options?: StorageDeleteOptions) =>
+      managedId
+        ? api.deleteManagedObjectStorage(managedId, options)
+        : api.deleteObjectStorage(id, options);
     try {
-      if (storage.managed) {
-        await api.deleteManagedObjectStorage(storage.managed.id);
-      } else {
-        await api.deleteObjectStorage(id);
+      try {
+        await deleteStorage();
+      } catch (error) {
+        const history = backupHistoryReference(error);
+        if (!history) throw error;
+        // Finished backup history only goes away with an explicit second confirmation.
+        const forget = await confirm({
+          title: "Forget backup history?",
+          description: forgetBackupHistoryDescription(history, Boolean(managedId)),
+          confirmLabel: "Forget history and delete",
+          cancelLabel: "Keep storage",
+          variant: "destructive",
+        });
+        if (!forget) return;
+        await deleteStorage({ backupHistory: "forget" });
       }
       usePinnedStorageStore.getState().removePin(id);
       toast.success("Storage deleted");
@@ -361,7 +384,11 @@ function StorageDetailContent({
                   Object browser is unavailable while the storage is offline.
                 </div>
               ) : (
-                <ObjectBrowser storage={storage} canWrite={canWrite} />
+                <ObjectBrowser
+                  storage={storage}
+                  canWrite={canWrite}
+                  canCreateBuckets={canAdminBuckets}
+                />
               )}
             </TabsContent>
           )}
@@ -472,6 +499,38 @@ function StorageDetailContent({
       )}
     </PageTransition>
   );
+}
+
+interface BackupHistoryReference {
+  historyRecords: number;
+  backupsWithFiles: number;
+}
+
+/** The 409 the storage API returns while only finished backup history references the storage. */
+function backupHistoryReference(error: unknown): BackupHistoryReference | null {
+  if (!(error instanceof ApiRequestError) || error.code !== "STORAGE_BACKUP_HISTORY_EXISTS") {
+    return null;
+  }
+  const details = (error.details ?? {}) as Partial<BackupHistoryReference>;
+  return {
+    historyRecords: Number(details.historyRecords) || 0,
+    backupsWithFiles: Number(details.backupsWithFiles) || 0,
+  };
+}
+
+function forgetBackupHistoryDescription(history: BackupHistoryReference, managed: boolean): string {
+  const entries =
+    history.historyRecords === 1
+      ? "1 backup history entry references"
+      : `${history.historyRecords} backup history entries reference`;
+  const withFiles =
+    history.backupsWithFiles > 0
+      ? `, ${history.backupsWithFiles} of them with backup files that still exist`
+      : "";
+  const files = managed
+    ? "Backup files stored in this managed storage are deleted with it."
+    : "Their backup files are not deleted and stay in the buckets.";
+  return `${entries} this storage${withFiles}. Forgetting removes this history from Gateway, so those backups can no longer be restored or deleted here. ${files}`;
 }
 
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

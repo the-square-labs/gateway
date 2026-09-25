@@ -151,6 +151,11 @@ export const DeleteObjectsSchema = z.object({
   keys: z.array(z.string().min(1).max(1024)).min(1).max(1000),
 });
 
+/** `backupHistory=forget` confirms removing the finished backup history that still references the storage. */
+export const DeleteStorageQuerySchema = z.object({
+  backupHistory: z.enum(['forget']).optional(),
+});
+
 export type StorageProvider = z.infer<typeof StorageProviderSchema>;
 export type ObjectStorageListQuery = z.infer<typeof ObjectStorageListQuerySchema>;
 export type CreateObjectStorageConnectionInput = z.infer<typeof CreateObjectStorageConnectionSchema>;

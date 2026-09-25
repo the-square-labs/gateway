@@ -8,7 +8,7 @@ The plan limits and feature availability below define the product access granted
 
 Gateway source published by Square Labs is available under the [PolyForm Perimeter License 1.0.1](../LICENSE.md). It permits use, modification, and redistribution for noncompeting purposes, including ordinary internal business use. A Personal, Business, or Enterprise key unlocks the corresponding paid-plan features and limits for one official Gateway installation under the [Good Gateway Paid Key Terms 1.2](../COMMERCIAL-LICENSE.md).
 
-An ordinary paid key does not waive Perimeter's restriction on providing a product marketed as a substitute for Gateway. Competing hosted/SaaS, OEM, white-label, and resale offerings require a separate written agreement with Square Labs. Key expiration follows the plan-specific technical grace period, after which the same installation may keep operating paid-plan resources configured before expiration; renewal is required to create new paid-plan resources or expand into additional paid-only features. Revocation for breach, fraud, chargeback, or refund ends paid-plan access and continuity immediately.
+An ordinary paid key does not waive Perimeter's restriction on providing a product marketed as a substitute for Gateway. Competing hosted/SaaS, OEM, white-label, and resale offerings require a separate written agreement with Square Labs. Key expiration follows the plan-specific technical grace period, after which the same installation may keep operating paid-plan resources configured before expiration; renewal is required to create new paid-plan resources or expand into additional paid-only features. Revocation for breach, fraud, chargeback, or refund ends paid-plan access immediately, without grace, and under the Paid Key Terms also ends the right to continue operating paid-plan resources. Gateway itself never stops or deletes running workloads because of a license change; see [Grace periods and entitlement loss](#grace-periods-and-entitlement-loss).
 
 Every official release includes the [Product Continuity MIT Grant](../CONTINUITY-MIT-GRANT.md), a source-continuity backstop for covered Square Labs code. The grant itself is the authoritative source for its scope, conditions, exclusions, and any MIT transition.
 
@@ -18,7 +18,7 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 
 | Plan | Best fit | Scale | Support |
 |---|---|---|---|
-| **Community** | Internal and other noncompeting use of the core platform, including evaluation, modification, and redistribution under PolyForm Perimeter | Up to 100 managed nodes, 10 users, and 5 custom permission groups | Community |
+| **Community** | Internal and other noncompeting use of the core platform, including evaluation, modification, and redistribution under PolyForm Perimeter | Up to 25 managed nodes, 3 users, and 1 custom permission group | Community |
 | **Personal** | Installations that need unlimited node/user/group quotas, single-node Compose deployment and lifecycle management, and current workload lifecycle features, without multi-node Workload Availability | Unlimited nodes, users, and custom permission groups | Standard |
 | **Business** | Teams that need multi-node Workload Availability (HA); Git push-to-deploy for containers, deployments, Compose, and Pages; isolated Build Workers; external access to the internal registry; Secure Runtime isolation; structured logging; audit export; and guided onboarding | Unlimited | Priority |
 | **Enterprise** | Organizations that need Internal PKI, SIEM export, dedicated technical ownership, or assisted migration | Unlimited | Priority + Dedicated |
@@ -35,7 +35,6 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Private Gateway-Managed Internal Docker Registry | Ready | ✅ | ✅ | ✅ | ✅ |
 | SSL/TLS Certificate Management | Ready | ✅ | ✅ | ✅ | ✅ |
 | Domain and DNS Management | Ready | ✅ | ✅ | ✅ | ✅ |
-| External Database Connections and Explorers | Ready | ✅ | ✅ | ✅ | ✅ |
 | Infrastructure Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
 | Physical GPU Discovery, Attachment, and Monitoring | Ready | ✅ | ✅ | ✅ | ✅ |
 | Alerts and Webhook Notifications | Ready | ✅ | ✅ | ✅ | ✅ |
@@ -44,16 +43,18 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Audit Log | Ready | ✅ | ✅ | ✅ | ✅ |
 | REST API, OAuth, and MCP Automation | Ready | ✅ | ✅ | ✅ | ✅ |
 | General Gateway CLI | Expected in 2.13 | ✅ | ✅ | ✅ | ✅ |
-| GitLab Integration | Ready | ✅ | ✅ | ✅ | ✅ |
-| AI Workspace, Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
+| AI Workspace Chat | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Gateway Inference | Ready, opt-in | ✅ | ✅ | ✅ | ✅ |
 | Automated Installation and Signed Updates | Ready | ✅ | ✅ | ✅ | ✅ |
-| Storage Connections: S3, R2, MinIO, FTP, FTPS, SFTP, and SMB | Expected in 2.11 | ✅ | ✅ | ✅ | ✅ |
 | Gateway Configuration Export for Transfer to Another Instance | Expected in 2.12 | ✅ | ✅ | ✅ | ✅ |
-| Managed Nodes | Plan limit | 100 | Unlimited | Unlimited | Unlimited |
-| Users | Plan limit | 10 | Unlimited | Unlimited | Unlimited |
-| Custom Permission Groups | Plan limit | 5 | Unlimited | Unlimited | Unlimited |
+| Managed Nodes | Plan limit | 25 | Unlimited | Unlimited | Unlimited |
+| Users | Plan limit | 3 | Unlimited | Unlimited | Unlimited |
+| Custom Permission Groups | Plan limit | 1 | Unlimited | Unlimited | Unlimited |
 | Support Level | Service level | Community | Standard | Priority | Priority + Dedicated |
+| External Database Connections and Explorers | Ready | — | ✅ | ✅ | ✅ |
+| Storage Connections: S3, R2, MinIO and Other S3-Compatible Services, FTP, FTPS, and SFTP | Ready | — | ✅ | ✅ | ✅ |
+| GitLab Integration | Ready | — | ✅ | ✅ | ✅ |
+| AI Workspace Plan Mode, Scenarios, and AI Sandboxes | Ready, opt-in | — | ✅ | ✅ | ✅ |
 | Container Export and Import | Ready | — | ✅ | ✅ | ✅ |
 | Blue/Green Deployments | Ready | — | ✅ | ✅ | ✅ |
 | Cross-Node Container and Deployment Migration | Ready | — | ✅ | ✅ | ✅ |
@@ -62,8 +63,8 @@ Entitlements schema version 4 keeps `pages` on Personal, Business, and Enterpris
 | Public Status Pages | Ready, opt-in | — | ✅ | ✅ | ✅ |
 | Pages | Ready | — | ✅ | ✅ | ✅ |
 | Automatic GitLab Container Registry Discovery | Ready | — | ✅ | ✅ | ✅ |
-| Managed Database Backup and Restore | Expected in 2.12 | — | ✅ | ✅ | ✅ |
-| Managed Storages with Secure Links | Expected in 2.11 | — | ✅ | ✅ | ✅ |
+| Database Backup and Restore for Managed and External Databases | Ready | — | ✅ | ✅ | ✅ |
+| Managed Object Storage (MinIO) with Private Bindings and Secure Links | Ready | — | ✅ | ✅ | ✅ |
 | Docker Secure Runtime (`runsc`/gVisor) | Ready | — | — | ✅ | ✅ |
 | Git Repository Push-To-Deploy for Containers, Deployments, Compose, and Pages; Isolated Build Workers | Ready | — | — | ✅ | ✅ |
 | External Docker-Client Access to the Internal Registry | Ready, opt-in | — | — | ✅ | ✅ |
@@ -88,9 +89,28 @@ Workload Availability (HA) is available for mount-free Containers, Deployments, 
 
 Runtime enforcement applies only to features marked ready. Community limits are enforced when creating a managed node, non-deleted user, or custom permission group; existing records are never deleted by a plan change. Database-node enrollment is available on every plan, while creating a managed database requires Personal or higher.
 
-After an ordinary key expiration—or when the license service remains unreachable beyond cached-validation grace—Gateway preserves existing premium resources, running services, data, and enabled runtime modules. It does not stop workloads, remove routes, unpublish Pages deployments, turn off Internal PKI, SIEM, or structured logging, or close an already configured registry entry point merely because the subscription lapsed. New premium resources and paid-only operations such as archive import/export, migration, audit export, source builds, and paid-feature expansion remain blocked until entitlement is restored. Operations that would create or materially expand paid state can return `LICENSE_ENTITLEMENT_REQUIRED`; this does not affect the data plane already applied to managed hosts.
+### Grace periods and entitlement loss
 
-Authoritative entitlement loss is different. Explicit deactivation, activation replacement, revocation, an invalid key, or a policy violation may disable protected entry points and switchable modules while preserving stored configuration and resource data. Gateway never deletes managed resources solely because a plan changed. Renewing an ordinarily expired key restores full paid operations without rebuilding the existing infrastructure.
+A paid plan can be lost by expiration, by a downgrade to a lower plan, by revocation, by moving the key to another installation (`replaced`), by explicit deactivation, or because Gateway cannot reach the license server. Until the matching grace period ends, everything keeps working exactly as before, including SIEM forwarding and external Docker-client access to the internal registry.
+
+| Cause | Grace | Counted from |
+|---|---|---|
+| Expiration | 24 hours on Personal, 3 days on Business, 7 days on Enterprise | `expiresAt` |
+| License server unreachable | 100 days, never beyond the expiration grace | The last valid signed state |
+| Downgrade to a lower paid plan | The higher plan's grace: 24 hours, 3 days, or 7 days | The last signed state that still reported the higher plan |
+| Revocation, replacement, explicit deactivation, invalid key | None | — |
+
+Revocation, replacement, and deactivation receive no grace because the [Paid Key Terms](../COMMERCIAL-LICENSE.md) end paid-plan access immediately in those cases. A downgrade that follows one of them receives no downgrade grace either.
+
+After the grace period ends, the installation uses Community entitlements for new actions and keeps a continuity entitlement for the highest paid plan it held, as proven by a stored signed license state:
+
+- **Keeps working:** all existing workloads and the data plane (containers, deployments, Compose projects, routes, secure links, managed database and storage bindings and tunnels, relays, Pages deployments, PKI CRL downloads, structured-log ingestion); existing scheduled backups, their retention, and restores into existing databases; failover healing, start, stop, and restart of existing Availability workloads; scheduled syncs of existing GitLab connectors. For existing paid resources Gateway keeps viewing, logs, monitoring, connection tests, credential reveal and rotation, certificate revocation and export, and deletion.
+- **Stops:** SIEM forwarding and external Docker-client access to the internal registry. SIEM keeps its configuration, delivery history, and already queued records, but new audit events are not queued while it is paused. The registry keeps its external entry point and settings, but its token endpoint issues no new tokens. Both resume on renewal without reconfiguration.
+- **Blocked:** creating paid resources, changing the configuration of existing paid resources, writing data through the database and object-storage explorers (deleting rows, keys, objects, and buckets remains available), and paid-only operations such as archive import/export, migration, audit export, and Git source builds. Creations above the Community node, user, and permission-group limits are refused. These return `LICENSE_ENTITLEMENT_REQUIRED` or `LICENSE_QUOTA_EXCEEDED`.
+
+Gateway never changes stored configuration, disables modules, or deletes managed resources because a plan changed. Renewing or reactivating a key restores full paid operations without rebuilding the existing infrastructure.
+
+An installation keeps receiving Gateway updates after its paid plan ends. An installation that holds or held a paid activation receives the matching private core with each update, so its existing paid resources keep running under the same rules; an installation that never held a paid plan updates as Community.
 
 The Operations Console shows plan badges on whole premium modules and uses one shared upgrade dialog for blocked actions. This UI is explanatory only; the backend independently enforces the same entitlements across REST, OAuth/MCP, AI tools, background workers, public PKI routes, and domain services. Missing features return `LICENSE_ENTITLEMENT_REQUIRED` (HTTP 403), reached plan limits return `LICENSE_QUOTA_EXCEEDED` (HTTP 409), and an internally inconsistent protected policy fails closed with a generic `SERVICE_UNAVAILABLE` response.
 
@@ -130,21 +150,53 @@ Registration and activation flow:
    installation. It can be moved after explicit deactivation, or after the previous installation has
    been offline for more than one hour.
 4. The server returns the effective plan, license metadata, expiration, activation details, and
-   versioned entitlements. Gateway stores credentials encrypted and caches the latest state.
+   versioned entitlements as a signed state. Gateway stores credentials encrypted and caches the
+   latest signed state.
 
 Issuance of a paid key activates the paid-plan access described in [COMMERCIAL-LICENSE.md](../COMMERCIAL-LICENSE.md). Activation binds that entitlement to one installation at a time. Rights independently granted by PolyForm Perimeter do not depend on key activation, while paid product features can end when the server reports an authoritative non-valid state.
 
 Gateway sends paid heartbeats every 15 minutes and Community heartbeats every 30 minutes. If the
-license server is unreachable, a previously valid paid installation uses its cached state for a
-100-day technical offline-validation grace period. This connectivity grace does not extend paid
-product access beyond a known expiration deadline.
+license server is unreachable, a previously valid paid installation uses its last signed state for a
+100-day technical offline-validation grace period counted from that state's signed issue time. This
+connectivity grace does not extend paid product access beyond a known expiration deadline.
 
 After `expiresAt`, paid product entitlements remain active for 24 hours on Personal, 3 days on
 Business, and 7 days on Enterprise. During this period the server and Gateway report
 `expired_grace`, retain the original paid plan, expose `graceUntil`, and show an authenticated
 critical Dashboard warning. Gateway evaluates the deadline locally for every protected operation;
 at or after `graceUntil` it uses Community entitlements for new protected actions without waiting for another heartbeat. Existing paid resources and runtime modules remain in place and continue operating; Gateway does not reconcile ordinary expiration into service shutdown.
-`revoked`, `replaced`, and `deactivated` remain immediate and receive no entitlement grace.
+`revoked`, `replaced`, and `deactivated` remain immediate and receive no entitlement grace; existing
+paid resources keep running afterward as described in
+[Grace periods and entitlement loss](#grace-periods-and-entitlement-loss).
+
+### Signed license states
+
+Every license state the server returns to Gateway is signed with Ed25519. The signed payload
+contains the installation ID, the request purpose (registration, heartbeat, activation,
+deactivation, or release authorization), a random nonce that Gateway sends with each request, the
+issue time, and the complete state: plan, paid license status, entitlements and their version,
+expiration, and `graceUntil`. Gateway release builds pin the license server's public keys by key ID
+and apply a state only after verifying all of the following:
+
+- the signature is valid for a pinned key;
+- the state was signed for this installation and for this request's purpose and nonce, so a
+  captured response cannot be replayed or reused by another installation;
+- the issue time is within 15 minutes of the local clock.
+
+Gateway applies only the signed copy of a state, never the unsigned fields beside it. An unsigned,
+forged, replayed, stale, or foreign response is rejected like an unreachable server: the last valid
+signed state stays in force and the offline grace continues from its issue time. Registration and
+activation fail instead of storing credentials from an unsigned response, and a private core
+download is authorized only by a signed state for that request.
+
+Gateway stores the signed states and verifies them again whenever it reads the license, so editing
+the cached license in the database cannot raise the plan. A cached state without a valid signature,
+such as one written by a release that predates signed states, grants only Community entitlements and
+continuity for existing paid resources, and is replaced at the next successful heartbeat.
+
+Each request names the key IDs the Gateway release pins. The license server signs with the first
+key it holds from that list, which lets its signing key rotate without breaking installations that
+have not updated yet: a release pins the next key before the server starts using it.
 
 Data sent to the license server:
 
@@ -152,6 +204,7 @@ Data sent to the license server:
 - Installation name.
 - Gateway version.
 - A locally generated registration nonce during registration.
+- A random request nonce and the pinned signing key IDs with every license request.
 - The installation token during heartbeats and license operations.
 - The paid license key only during activation.
 
@@ -162,21 +215,21 @@ The installation name is derived from Gateway's persisted canonical public URL w
 | Status | Meaning |
 |---|---|
 | `community` | No paid product key is installed; Gateway is using Community status. |
-| `valid` | The installed key is valid. |
+| `valid` | The installed key is valid. After a downgrade, `graceUntil` shows when the higher plan's entitlements end. |
 | `expired_grace` | The key expired, but its original paid entitlements remain active until the plan-specific `graceUntil` deadline. |
-| `valid_with_warning` | The key was previously valid, but the license server is unreachable and Gateway remains within grace. |
-| `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired. New paid-only actions are blocked, but existing configured services remain running. |
+| `valid_with_warning` | The key was previously valid, but the license server is unreachable or its response was rejected, and Gateway remains within the offline grace. |
+| `unreachable_grace_expired` | Gateway cannot validate the key and the offline grace period expired, or the cached state carries no valid signature. New paid-only actions are blocked, but existing configured services remain running. |
 | `invalid` | The license key is not valid. |
 | `expired` | The plan-specific expiration grace ended. Gateway uses Community entitlements for new protected actions while preserving existing configured services. |
-| `revoked` | The license key was revoked. |
-| `replaced` | The license activation moved to another installation. |
-| `deactivated` | The paid license was explicitly detached from this installation. |
+| `revoked` | The license key was revoked. Community entitlements apply immediately; existing configured services remain running. |
+| `replaced` | The license activation moved to another installation. Community entitlements apply immediately; existing configured services remain running. |
+| `deactivated` | The paid license was explicitly detached from this installation. Community entitlements apply immediately; existing configured services remain running. |
 
 ## Storage And Security
 
 Gateway stores a generated installation ID, an encrypted registration nonce, an encrypted
-installation token, the encrypted paid key when one is installed, and the cached state returned by
-the license server. Administrators can deactivate a paid license from **Settings > General >
+installation token, the encrypted paid key when one is installed, and the latest signed state
+returned by the license server together with the signed state of the highest paid plan it held. Administrators can deactivate a paid license from **Settings > General >
 License**; the server binding is released before the local key is removed.
 
 ## Legal-use boundary

@@ -9,6 +9,7 @@ import {
   type DatabaseConnectionDraft,
   DatabaseConnectionForm,
   draftFromConnection,
+  tlsVerificationWeakened,
 } from "./DatabaseConnectionForm";
 
 export function DatabaseSettingsTab({
@@ -20,6 +21,7 @@ export function DatabaseSettingsTab({
 }) {
   const [draft, setDraft] = useState<DatabaseConnectionDraft>(draftFromConnection(database));
   const [saving, setSaving] = useState(false);
+  const passwordConfirmationMissing = tlsVerificationWeakened(draft) && draft.password === "";
 
   useEffect(() => {
     setDraft(draftFromConnection(database));
@@ -50,7 +52,7 @@ export function DatabaseSettingsTab({
     <div className="space-y-4">
       <DatabaseConnectionForm draft={draft} onChange={setDraft} disableType mode="metadata" />
       <DialogFooter>
-        <Button onClick={() => void save()} disabled={saving}>
+        <Button onClick={() => void save()} disabled={saving || passwordConfirmationMissing}>
           {saving ? "Saving..." : "Save Changes"}
         </Button>
       </DialogFooter>

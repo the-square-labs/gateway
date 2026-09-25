@@ -18,7 +18,10 @@ import {
   LICENSE_ENTITLEMENTS_VERSION,
   LICENSE_OFFLINE_GRACE_DAYS,
   LICENSE_PAID_HEARTBEAT_INTERVAL_MS,
+  LICENSE_PLAN_GRACE_HOURS,
   LICENSE_SERVER_URL,
+  LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS,
+  type LicenseEntitlements,
   type LicensePlan,
   type LicenseServerEnvelope,
   type LicenseServerErrorEnvelope,
@@ -28,6 +31,13 @@ import {
   type LicenseStatusView,
   licensePlanEntitlementsForVersion,
 } from './license.types.js';
+import {
+  createLicenseRequestNonce,
+  type LicenseAttestationPurpose,
+  LicenseAttestationVerifier,
+  type LicenseRequestBinding,
+  type SignedLicenseState,
+} from './license-attestation.js';
 
 const logger = createChildLogger('LicenseService');
 
@@ -41,10 +51,34 @@ const SETTINGS_KEYS = {
 } as const;
 
 type Fetcher = typeof fetch;
+type PaidPlan = Exclude<LicensePlan, 'community'>;
+
+const PLAN_RANK: Record<LicensePlan, number> = { community: 0, personal: 1, business: 2, enterprise: 3 };
+const UNVERIFIED_STATE_MESSAGE = 'License state is not signed by the license server';
 
 interface RegistrationCredential {
   token: string;
   newlyRegistered: boolean;
+}
+
+interface VerifiedStoredState {
+  state: LicenseServerState;
+  issuedAt: string;
+}
+
+interface PlanContract {
+  plan: PaidPlan;
+  entitlementsVersion: number;
+}
+
+/** The cached state after its signatures were checked, plus what the signatures still prove. */
+interface ResolvedLicenseState {
+  cached: CachedLicenseState;
+  verified: boolean;
+  /** Highest paid plan this installation held, for existing paid resources after grace. */
+  continuity: PlanContract | null;
+  /** A higher plan that still has its plan-specific grace after a downgrade. */
+  downgrade: (PlanContract & { until: Date }) | null;
 }
 
 export class LicenseServerRequestError extends Error {
@@ -72,7 +106,8 @@ export class LicenseService {
     private readonly env: Env,
     private readonly fetcher: Fetcher = fetch,
     private readonly generalSettingsService?: GeneralSettingsService,
-    private readonly eventBus?: EventBusService
+    private readonly eventBus?: EventBusService,
+    private readonly attestations = new LicenseAttestationVerifier()
   ) {}
 
   async getStatus(): Promise<LicenseStatusView> {
@@ -84,17 +119,22 @@ export class LicenseService {
     ]);
     const registrationStatus = encryptedToken ? 'registered' : (cached?.registrationStatus ?? 'pending');
     const effectiveCached = cached ? { ...cached, registrationStatus } : this.communityState(registrationStatus);
-    const status = this.toStatusView(effectiveCached, encryptedKey, installationId, this.getInstallationName());
-    this.scheduleLifecycleRefresh(status, effectiveCached);
+    const resolved = this.resolveCachedState(effectiveCached, installationId);
+    const status = this.toStatusView(resolved, encryptedKey, installationId, this.getInstallationName());
+    this.scheduleLifecycleRefresh(status, resolved);
     this.publishStatusIfChanged(status);
     return status;
   }
 
+  /**
+   * Entitlements of the highest paid plan the installation held, proven by a stored
+   * signature. Existing paid resources keep operating with them after every grace.
+   */
   async getRuntimeContinuityEntitlements(): Promise<LicenseStatusView['entitlements'] | null> {
-    const cached = await this.getCachedState();
-    if (!cached?.paidPlan || !cached.lastValidAt) return null;
-    const contracts = licensePlanEntitlementsForVersion(cached.entitlementsVersion);
-    return contracts?.[cached.paidPlan] ?? null;
+    const [installationId, cached] = await Promise.all([this.getInstallationId(), this.getCachedState()]);
+    if (!cached) return null;
+    const continuity = this.resolveCachedState(cached, installationId).continuity;
+    return continuity ? (this.contractEntitlements(continuity) ?? null) : null;
   }
 
   async getOnboardingState(): Promise<{ completed: boolean; status: LicenseStatusView }> {
@@ -125,18 +165,18 @@ export class LicenseService {
 
     const credential = await this.ensureRegistered(true);
     if (!credential) throw new Error('Installation registration is required');
-    const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
+    const signed = await this.postSignedState('/api/v1/licenses/activate', 'activate', {
       installationToken: credential.token,
       licenseKey: key,
       entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
     });
-    this.assertServerState(state);
+    const state = signed.state;
     if (state.effectivePlan === 'community' || state.paidLicenseStatus !== 'valid') {
       throw new LicenseServerRequestError(409, 'LICENSE_NOT_ACTIVE', 'License server did not activate the paid plan');
     }
 
     await this.setSetting(SETTINGS_KEYS.keyEncrypted, this.cryptoService.encryptString(key));
-    await this.saveServerState(state);
+    await this.saveServerState(signed);
     await this.setSetting(SETTINGS_KEYS.onboardingCompleted, true);
     logger.info('License activated', { plan: state.effectivePlan });
     return this.getStatus();
@@ -149,12 +189,11 @@ export class LicenseService {
   private async clearKeyNow(): Promise<LicenseStatusView> {
     const credential = await this.ensureRegistered(true);
     if (!credential) throw new Error('Installation registration is required');
-    const state = await this.post<LicenseServerState>('/api/v1/licenses/deactivate', {
+    const signed = await this.postSignedState('/api/v1/licenses/deactivate', 'deactivate', {
       installationToken: credential.token,
       entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
     });
-    this.assertServerState(state);
-    await this.saveServerState(state);
+    await this.saveServerState(signed);
     await this.deleteSetting(SETTINGS_KEYS.keyEncrypted);
     logger.info('License deactivated');
     return this.getStatus();
@@ -179,21 +218,27 @@ export class LicenseService {
       if (credential.newlyRegistered && cached && !Object.hasOwn(cached, 'registrationStatus')) {
         const key = await this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null);
         if (key) {
-          const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
+          await this.postSignedState('/api/v1/licenses/activate', 'activate', {
             installationToken: credential.token,
             licenseKey: this.cryptoService.decryptString(key),
             entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
           });
-          this.assertServerState(state);
         }
       }
+      const binding = this.createBinding('release-authorize');
       const result = await this.post<{ state: LicenseServerState; signedManifest?: string }>(
         '/api/v1/releases/authorize',
-        { installationToken: credential.token, hostVersion, entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION }
+        {
+          installationToken: credential.token,
+          hostVersion,
+          entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+          ...this.bindingBody(binding),
+        }
       );
-      this.assertServerState(result.state);
-      if (result.state.effectivePlan === 'community') {
-        if (result.state.paidLicense || (await this.getSetting(SETTINGS_KEYS.keyEncrypted, null))) {
+      // LICENSE ENFORCEMENT: The private core is authorized only by a signed state for this request.
+      const state = (await this.verifyServerState(result?.state, binding)).state;
+      if (!state.paidLicense) {
+        if (await this.getSetting(SETTINGS_KEYS.keyEncrypted, null)) {
           throw new LicenseServerRequestError(
             409,
             'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
@@ -202,14 +247,14 @@ export class LicenseService {
         }
         return { edition: 'community' };
       }
-      if (
-        !['valid', 'expired_grace'].includes(result.state.paidLicenseStatus) ||
-        typeof result.signedManifest !== 'string'
-      )
+      // A valid plan, a plan in grace, and a plan lost after expiration, revocation,
+      // replacement, or deactivation all keep the private core: existing paid resources
+      // keep running under Community entitlements, so an update must not remove it.
+      if (typeof result.signedManifest !== 'string')
         throw new LicenseServerRequestError(
           403,
           'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
-          'A current paid entitlement and signed core release are required'
+          'A signed private core release is required for this installation'
         );
       // The target-image preparer shares the running version's database. Never
       // replace its cache with a newer entitlement format before activation.
@@ -254,12 +299,12 @@ export class LicenseService {
     if (legacyNeedsActivation && !encryptedToken && credential.newlyRegistered && encryptedKey) {
       try {
         const key = this.cryptoService.decryptString(encryptedKey);
-        const state = await this.post<LicenseServerState>('/api/v1/licenses/activate', {
+        const signed = await this.postSignedState('/api/v1/licenses/activate', 'activate', {
           installationToken: credential.token,
           licenseKey: key,
           entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
         });
-        await this.saveServerState(state);
+        await this.saveServerState(signed);
       } catch (error) {
         if (error instanceof LicenseServerRequestError) {
           await this.saveLegacyActivationFailure(error);
@@ -273,13 +318,13 @@ export class LicenseService {
     if (credential.newlyRegistered) return this.getStatus();
 
     try {
-      const state = await this.post<LicenseServerState>('/api/v1/installations/heartbeat', {
+      const signed = await this.postSignedState('/api/v1/installations/heartbeat', 'heartbeat', {
         installationToken: credential.token,
         installationName: this.getInstallationName(),
         gatewayVersion: this.env.APP_VERSION,
         entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
       });
-      await this.saveServerState(state);
+      await this.saveServerState(signed);
     } catch (error) {
       if (error instanceof LicenseServerRequestError && error.code === 'INVALID_INSTALLATION_TOKEN') {
         await this.deleteSetting(SETTINGS_KEYS.installationTokenEncrypted);
@@ -296,16 +341,21 @@ export class LicenseService {
   }
 
   private async heartbeatUnlocked(): Promise<void> {
-    const [cached, encryptedKey] = await Promise.all([
+    const [cached, encryptedKey, installationId] = await Promise.all([
       this.getCachedState(),
       this.getSetting<EncryptedLicenseCredential | null>(SETTINGS_KEYS.keyEncrypted, null),
+      this.getInstallationId(),
     ]);
     const interval =
       encryptedKey || (cached?.plan && cached.plan !== 'community')
         ? LICENSE_PAID_HEARTBEAT_INTERVAL_MS
         : LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS;
     const lastCheckedAt = cached?.lastCheckedAt ? Date.parse(cached.lastCheckedAt) : 0;
-    if (lastCheckedAt && Date.now() - lastCheckedAt < interval) return;
+    // A registered cache without a verifiable signature (e.g. written by an older
+    // release) is replaced by a signed state as soon as the server answers.
+    const unsigned =
+      cached?.registrationStatus === 'registered' && !this.resolveCachedState(cached, installationId).verified;
+    if (lastCheckedAt && Date.now() - lastCheckedAt < interval && !unsigned) return;
 
     const status = await this.checkNowUnlocked();
     logger.debug('License heartbeat completed', {
@@ -344,22 +394,25 @@ export class LicenseService {
 
   private async registerInstallation(persistState = true): Promise<RegistrationCredential> {
     const nonce = await this.getOrCreateRegistrationNonce();
+    const binding = this.createBinding('register');
     const result = await this.post<LicenseServerRegistration>('/api/v1/installations/register', {
       installationId: await this.getInstallationId(),
       registrationNonce: nonce,
       installationName: this.getInstallationName(),
       gatewayVersion: this.env.APP_VERSION,
       entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+      ...this.bindingBody(binding),
     });
     if (!result || typeof result.installationToken !== 'string' || !result.installationToken.trim()) {
       throw new LicenseServerRequestError(502, 'INVALID_LICENSE_STATE', 'License server returned an invalid state');
     }
-    this.assertServerState(result.state);
+    // A forged registration also forges its token: store neither unless the state is signed.
+    const signed = await this.verifyServerState(result.state, binding);
     await this.setSetting(
       SETTINGS_KEYS.installationTokenEncrypted,
       this.cryptoService.encryptString(result.installationToken)
     );
-    if (persistState) await this.saveServerState(result.state);
+    if (persistState) await this.saveServerState(signed);
     logger.info('Community installation registered');
     return { token: result.installationToken, newlyRegistered: true };
   }
@@ -429,13 +482,67 @@ export class LicenseService {
     return payload.data;
   }
 
-  private async saveServerState(state: LicenseServerState): Promise<void> {
+  private createBinding(purpose: LicenseAttestationPurpose): LicenseRequestBinding {
+    return { purpose, requestNonce: createLicenseRequestNonce() };
+  }
+
+  private bindingBody(binding: LicenseRequestBinding): { requestNonce: string; attestationKeyIds: string[] } {
+    return { requestNonce: binding.requestNonce, attestationKeyIds: this.attestations.keyIds };
+  }
+
+  private async postSignedState(
+    path: string,
+    purpose: LicenseAttestationPurpose,
+    body: Record<string, unknown>
+  ): Promise<SignedLicenseState> {
+    const binding = this.createBinding(purpose);
+    const state = await this.post<LicenseServerState>(path, { ...body, ...this.bindingBody(binding) });
+    return this.verifyServerState(state, binding);
+  }
+
+  /**
+   * LICENSE ENFORCEMENT: Gateway applies only the signed copy of a server state, and
+   * only when it is signed for this installation and this request. Unsigned, forged,
+   * replayed, stale, or foreign states are rejected; the last signed state stays in force.
+   */
+  private async verifyServerState(value: unknown, binding: LicenseRequestBinding): Promise<SignedLicenseState> {
+    const attestation = value && typeof value === 'object' ? (value as LicenseServerState).attestation : undefined;
+    let payload: ReturnType<LicenseAttestationVerifier['verifyResponse']>;
+    try {
+      payload = this.attestations.verifyResponse(attestation, await this.getInstallationId(), binding);
+    } catch (error) {
+      throw new LicenseServerRequestError(
+        502,
+        'INVALID_LICENSE_SIGNATURE',
+        error instanceof Error ? error.message : 'License state signature is invalid'
+      );
+    }
+    this.assertServerState(payload.state);
+    return {
+      state: payload.state,
+      attestation: attestation as SignedLicenseState['attestation'],
+      issuedAt: payload.issuedAt,
+    };
+  }
+
+  private async saveServerState(signed: SignedLicenseState): Promise<void> {
+    const state = signed.state;
     this.assertServerState(state);
-    const previous = await this.getCachedState();
+    const [previous, installationId] = await Promise.all([this.getCachedState(), this.getInstallationId()]);
     const now = new Date().toISOString();
     const status = this.statusFromState(state);
+    const paidEffective = status === 'valid' || status === 'expired_grace';
+    const retained = this.readStoredAttestation(previous?.retainedAttestation, installationId);
+    const retainedPaid = retained && this.isPaidEffective(retained.state) ? retained : null;
+    // Keep the highest paid plan's latest signature: it proves continuity after any
+    // loss and anchors the downgrade grace. A reported loss ends that downgrade grace.
+    const replaceRetained =
+      paidEffective && (!retainedPaid || PLAN_RANK[state.effectivePlan] >= PLAN_RANK[retainedPaid.state.effectivePlan]);
     await this.saveCachedState({
       registrationStatus: 'registered',
+      attestation: signed.attestation,
+      retainedAttestation: replaceRetained ? signed.attestation : (previous?.retainedAttestation ?? null),
+      retainedGraceEligible: paidEffective && (replaceRetained || previous?.retainedGraceEligible === true),
       status,
       plan: state.effectivePlan,
       paidPlan: state.paidLicense?.plan ?? null,
@@ -447,7 +554,7 @@ export class LicenseService {
       entitlementsVersion: state.entitlementsVersion,
       entitlements: state.entitlements,
       lastCheckedAt: now,
-      lastValidAt: status === 'valid' || status === 'expired_grace' ? now : (previous?.lastValidAt ?? null),
+      lastValidAt: paidEffective ? signed.issuedAt : (previous?.lastValidAt ?? null),
       activeInstallationId: state.activation?.installationId ?? null,
       activeInstallationName: state.activation?.installationName ?? null,
       errorMessage:
@@ -465,6 +572,8 @@ export class LicenseService {
     const previous = await this.getCachedState();
     await this.saveCachedState({
       ...this.communityState('registered'),
+      retainedAttestation: previous?.retainedAttestation ?? null,
+      retainedGraceEligible: false,
       status: statusByCode[error.code] ?? 'invalid',
       paidLicenseStatus: error.code.toLowerCase(),
       lastCheckedAt: new Date().toISOString(),
@@ -492,12 +601,124 @@ export class LicenseService {
     });
   }
 
+  /**
+   * LICENSE ENFORCEMENT: Server-derived fields come only from stored signatures. A cache
+   * whose signature is missing, forged, or for another installation never grants more
+   * than Community plus continuity for resources that already exist.
+   */
+  private resolveCachedState(cached: CachedLicenseState, installationId: string): ResolvedLicenseState {
+    const current = this.readStoredAttestation(cached.attestation, installationId);
+    const retained = this.readStoredAttestation(cached.retainedAttestation, installationId);
+    const retainedPaid = retained && this.isPaidEffective(retained.state) ? retained : null;
+    const retainedContract: PlanContract | null = retainedPaid
+      ? {
+          plan: retainedPaid.state.effectivePlan as PaidPlan,
+          entitlementsVersion: retainedPaid.state.entitlementsVersion,
+        }
+      : null;
+
+    if (!current) {
+      const unsignedPaid = cached.plan !== 'community' || cached.paidPlan !== null;
+      if (!unsignedPaid) return { cached, verified: false, continuity: retainedContract, downgrade: null };
+      const loss: LicenseStatus[] = ['expired', 'revoked', 'replaced', 'deactivated', 'invalid'];
+      const unsignedContract: PlanContract | null = cached.paidPlan
+        ? { plan: cached.paidPlan, entitlementsVersion: cached.entitlementsVersion }
+        : null;
+      return {
+        cached: {
+          ...cached,
+          status: loss.includes(cached.status) ? cached.status : 'unreachable_grace_expired',
+          plan: 'community',
+          entitlementsVersion: LICENSE_ENTITLEMENTS_VERSION,
+          entitlements: COMMUNITY_ENTITLEMENTS,
+          expiresAt: null,
+          graceUntil: null,
+          lastValidAt: null,
+          errorMessage: cached.errorMessage ?? UNVERIFIED_STATE_MESSAGE,
+        },
+        verified: false,
+        // An unsigned plan counts only for a cache written before signed states existed;
+        // once a signed state was stored, only signatures prove what the installation held.
+        continuity: retainedContract ?? (cached.attestation || cached.retainedAttestation ? null : unsignedContract),
+        downgrade: null,
+      };
+    }
+
+    const state = current.state;
+    const status = this.statusFromState(state);
+    const paidEffective = status === 'valid' || status === 'expired_grace';
+    const lostContract: PlanContract | null = state.paidLicense
+      ? { plan: state.paidLicense.plan, entitlementsVersion: state.entitlementsVersion }
+      : null;
+    const downgrade =
+      paidEffective &&
+      cached.retainedGraceEligible === true &&
+      retainedPaid &&
+      retainedContract &&
+      PLAN_RANK[retainedContract.plan] > PLAN_RANK[state.effectivePlan]
+        ? {
+            ...retainedContract,
+            until: new Date(
+              Date.parse(retainedPaid.issuedAt) + LICENSE_PLAN_GRACE_HOURS[retainedContract.plan] * 60 * 60 * 1000
+            ),
+          }
+        : null;
+    return {
+      cached: {
+        ...cached,
+        status,
+        plan: state.effectivePlan,
+        paidPlan: state.paidLicense?.plan ?? null,
+        paidLicenseStatus: state.paidLicenseStatus,
+        licenseName: state.paidLicense?.name ?? null,
+        licenseMetadata: state.paidLicense?.metadata ?? {},
+        expiresAt: state.paidLicense?.expiresAt ?? null,
+        graceUntil: state.graceUntil,
+        entitlementsVersion: state.entitlementsVersion,
+        entitlements: state.entitlements,
+        lastValidAt: paidEffective ? current.issuedAt : (retainedPaid?.issuedAt ?? null),
+        activeInstallationId: state.activation?.installationId ?? null,
+        activeInstallationName: state.activation?.installationName ?? null,
+      },
+      verified: true,
+      continuity: this.higherContract(retainedContract, lostContract),
+      downgrade,
+    };
+  }
+
+  private readStoredAttestation(value: unknown, installationId: string): VerifiedStoredState | null {
+    if (!value) return null;
+    try {
+      const payload = this.attestations.verifyStored(value, installationId);
+      this.assertServerState(payload.state, LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS);
+      return { state: payload.state, issuedAt: payload.issuedAt };
+    } catch {
+      return null;
+    }
+  }
+
+  private isPaidEffective(state: LicenseServerState): boolean {
+    const status = this.statusFromState(state);
+    return status === 'valid' || status === 'expired_grace';
+  }
+
+  private higherContract(left: PlanContract | null, right: PlanContract | null): PlanContract | null {
+    if (!left) return right;
+    if (!right) return left;
+    return PLAN_RANK[right.plan] > PLAN_RANK[left.plan] ? right : left;
+  }
+
+  private contractEntitlements(contract: PlanContract): LicenseEntitlements | undefined {
+    return licensePlanEntitlementsForVersion(contract.entitlementsVersion)?.[contract.plan];
+  }
+
   private toStatusView(
-    cached: CachedLicenseState,
+    resolved: ResolvedLicenseState,
     encrypted: EncryptedLicenseCredential | null,
     installationId: string,
     installationName: string
   ): LicenseStatusView {
+    const cached = resolved.cached;
     const lastValidAt = cached.lastValidAt;
     const now = Date.now();
     const expiryAt = cached.expiresAt ? Date.parse(cached.expiresAt) : Number.NaN;
@@ -509,6 +730,7 @@ export class LicenseService {
     let entitlements = cached.entitlements;
     let entitlementsVersion = cached.entitlementsVersion;
     let licensed = status === 'community' || status === 'valid' || status === 'expired_grace';
+    let downgradeGraceUntil: Date | null = null;
     const authoritativeLoss = ['revoked', 'replaced', 'deactivated', 'invalid'].includes(cached.status);
 
     if (!authoritativeLoss && cached.paidPlan && Number.isFinite(expiryAt) && now >= expiryAt) {
@@ -524,7 +746,14 @@ export class LicenseService {
       }
     }
 
-    if (!authoritativeLoss && cached.paidPlan && cached.errorMessage && offlineGraceUntil) {
+    // The offline deadline counts from the last signed paid state. It applies even
+    // without a recorded error, so a cleared error cannot stretch an old signature.
+    if (
+      !authoritativeLoss &&
+      cached.paidPlan &&
+      offlineGraceUntil &&
+      (cached.errorMessage || now >= offlineGraceUntil.getTime())
+    ) {
       const offlineDeadline = Math.min(
         offlineGraceUntil.getTime(),
         Number.isFinite(expirationGraceDeadline) ? expirationGraceDeadline : Number.POSITIVE_INFINITY
@@ -540,6 +769,24 @@ export class LicenseService {
         plan = 'community';
         entitlements = COMMUNITY_ENTITLEMENTS;
         licensed = false;
+      }
+    }
+
+    // A lower paid plan keeps the higher plan's entitlements for that plan's grace,
+    // counted from the last signed state that still reported the higher plan.
+    const downgrade = resolved.downgrade;
+    if (
+      downgrade &&
+      plan !== 'community' &&
+      (status === 'valid' || status === 'expired_grace' || status === 'valid_with_warning') &&
+      now < downgrade.until.getTime()
+    ) {
+      const retainedEntitlements = this.contractEntitlements(downgrade);
+      if (retainedEntitlements) {
+        plan = downgrade.plan;
+        entitlements = retainedEntitlements;
+        entitlementsVersion = downgrade.entitlementsVersion;
+        downgradeGraceUntil = downgrade.until;
       }
     }
 
@@ -567,7 +814,10 @@ export class LicenseService {
       entitlements,
       lastCheckedAt: cached.lastCheckedAt,
       lastValidAt,
-      graceUntil: status === 'expired_grace' ? (expirationGraceUntil?.toISOString() ?? null) : null,
+      graceUntil:
+        status === 'expired_grace'
+          ? (expirationGraceUntil?.toISOString() ?? null)
+          : (downgradeGraceUntil?.toISOString() ?? null),
       offlineGraceUntil:
         status === 'valid_with_warning' || status === 'unreachable_grace_expired'
           ? (offlineGraceUntil?.toISOString() ?? null)
@@ -637,6 +887,9 @@ export class LicenseService {
     const fallback = this.communityState(value.registrationStatus === 'registered' ? 'registered' : 'pending');
     return {
       registrationStatus: fallback.registrationStatus,
+      attestation: value.attestation ?? null,
+      retainedAttestation: value.retainedAttestation ?? null,
+      retainedGraceEligible: value.retainedGraceEligible === true,
       status,
       plan,
       paidPlan,
@@ -680,15 +933,17 @@ export class LicenseService {
     if (!cached.paidPlan || !cached.expiresAt) return null;
     const expiresAt = new Date(cached.expiresAt);
     if (!Number.isFinite(expiresAt.getTime())) return null;
-    const days = cached.paidPlan === 'personal' ? 1 : cached.paidPlan === 'business' ? 3 : 7;
-    expiresAt.setUTCDate(expiresAt.getUTCDate() + days);
+    expiresAt.setUTCHours(expiresAt.getUTCHours() + LICENSE_PLAN_GRACE_HOURS[cached.paidPlan]);
     if (!cached.graceUntil) return expiresAt;
     const declared = new Date(cached.graceUntil);
     if (!Number.isFinite(declared.getTime())) return expiresAt;
     return declared.getTime() < expiresAt.getTime() ? declared : expiresAt;
   }
 
-  private assertServerState(value: unknown): asserts value is LicenseServerState {
+  private assertServerState(
+    value: unknown,
+    versions: readonly number[] = [LICENSE_ENTITLEMENTS_VERSION]
+  ): asserts value is LicenseServerState {
     if (!value || typeof value !== 'object') this.invalidServerState();
     const state = value as Partial<LicenseServerState>;
     const plans: LicensePlan[] = ['community', 'personal', 'business', 'enterprise'];
@@ -698,9 +953,10 @@ export class LicenseService {
       !plans.includes(state.effectivePlan as LicensePlan) ||
       typeof state.paidLicenseStatus !== 'string' ||
       !statuses.includes(state.paidLicenseStatus) ||
-      state.entitlementsVersion !== LICENSE_ENTITLEMENTS_VERSION ||
+      typeof state.entitlementsVersion !== 'number' ||
+      !versions.includes(state.entitlementsVersion) ||
       !state.entitlements ||
-      !isCanonicalEntitlements(state.effectivePlan as LicensePlan, state.entitlements) ||
+      !isCanonicalEntitlements(state.effectivePlan as LicensePlan, state.entitlements, state.entitlementsVersion) ||
       typeof state.serverTime !== 'string' ||
       !Number.isFinite(Date.parse(state.serverTime))
     ) {
@@ -773,19 +1029,17 @@ export class LicenseService {
   private serverExpirationGraceUntil(plan: Exclude<LicensePlan, 'community'>, expiresAt: string | null): Date | null {
     if (!expiresAt) return null;
     const date = new Date(expiresAt);
-    const hours = plan === 'personal' ? 24 : plan === 'business' ? 72 : 168;
-    date.setUTCHours(date.getUTCHours() + hours);
+    date.setUTCHours(date.getUTCHours() + LICENSE_PLAN_GRACE_HOURS[plan]);
     return date;
   }
 
-  private scheduleLifecycleRefresh(status: LicenseStatusView, cached: CachedLicenseState): void {
+  private scheduleLifecycleRefresh(status: LicenseStatusView, resolved: ResolvedLicenseState): void {
     if (this.lifecycleTimer) clearTimeout(this.lifecycleTimer);
     this.lifecycleTimer = null;
+    const cached = resolved.cached;
     const now = Date.now();
     const offlineDeadline =
-      cached.errorMessage && cached.paidPlan && cached.lastValidAt
-        ? this.addOfflineGrace(cached.lastValidAt).toISOString()
-        : null;
+      cached.paidPlan && cached.lastValidAt ? this.addOfflineGrace(cached.lastValidAt).toISOString() : null;
     const expirationGraceDeadline = this.resolveExpirationGraceUntil(cached)?.toISOString() ?? null;
     const deadline = [
       status.expiresAt,
@@ -793,6 +1047,7 @@ export class LicenseService {
       status.offlineGraceUntil,
       offlineDeadline,
       expirationGraceDeadline,
+      resolved.downgrade?.until.toISOString() ?? null,
     ]
       .map((value) => (value ? Date.parse(value) : Number.NaN))
       .filter((value) => Number.isFinite(value) && value > now)

@@ -6,7 +6,7 @@ IFS=$'\n\t'
 # Downloads and runs the appropriate setup script for a daemon type.
 #
 # Usage:
-#   curl -sSL https://github.com/wiolett-industries/gateway/releases/latest/download/setup-daemon.sh | \
+#   curl -sSL https://github.com/the-square-labs/gateway/releases/latest/download/setup-daemon.sh | \
 #     sudo bash -s -- --type nginx --gateway gateway.example.com:9443 --token <TOKEN> --gateway-cert-sha256 sha256:<HEX>
 # ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +26,7 @@ ERROR_TAG='\033[48;2;96;61;43m\033[38;2;245;221;202m'
 DAEMON_TYPE=""
 LOCAL_SCRIPT_DIR="${GATEWAY_SETUP_SCRIPT_DIR:-}"
 SETUP_VERSION="${GATEWAY_SETUP_VERSION:-latest}"
-RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/wiolett-industries/gateway/releases}"
+RELEASE_DOWNLOAD_BASE="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/the-square-labs/gateway/releases}"
 PASSTHROUGH_ARGS=()
 
 # ── Helpers ─────────────────────────────────────────────────────────

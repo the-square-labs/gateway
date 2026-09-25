@@ -80,7 +80,8 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 |------|------|
 | Understand what Gateway can manage | [Capabilities](docs/capabilities.md) |
 | Install Gateway | [Installation guide](docs/installation.md) |
-| Add nginx, Docker, database, or monitoring nodes | [Nodes and daemons](docs/nodes.md) |
+| Add Ingress, Docker, Build Worker, Storage, Monitoring, or Relay nodes | [Nodes and daemons](docs/nodes.md) |
+| Run Storage nodes, storage connections, and database backups | [Storage and backups](docs/storage-and-backups.md) |
 | Export or import Docker containers with or without an embedded image | [GWCA container archives](docs/docker-container-archives.md) |
 | Configure tokens, OAuth, MCP, logging, updates, and AI | [Operations guide](docs/operations.md) |
 | Configure the multi-provider inference proxy | [Inference proxy](docs/inference.md) |
@@ -127,13 +128,14 @@ For flags, non-interactive installs, custom SSL, OIDC details, updates, and node
 | Docker | Container lifecycle, first-class single-node Compose Projects, Business+ direct Git repository/branch push-to-deploy for containers, blue/green deployments, and Compose projects, isolated Build Workers, a private-by-default Gateway-managed registry in every plan with optional Business+ external access, the Default (`runc`) runtime profile in every plan and the Secure (`runsc`/gVisor) profile in Business and Enterprise, Gateway-managed volumes, rollout/rollback, shared physical NVIDIA/AMD/Intel GPU attachment, eligible cross-node container and volume migrations, offline inventory snapshots, registries, images, networks, tasks, webhooks, logs, console, file browser, secrets, env vars, ports, and cleanup. Secure workloads cannot use GPU, migration, or export; GPU-attached workloads cannot migrate or export in v1. |
 | Certificates | ACME SSL, uploaded certificates, internal root/intermediate CAs, certificate templates, CRLs, exports, and route binding. |
 | Domains | Central hostname registry, nginx ingress placement, external or Cloudflare-managed DNS, validation, usage tracking, and explicit ingress migration. |
-| Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads through the Console, AI Workspace, or MCP. |
+| Databases | Saved PostgreSQL, Redis, and ClickHouse connections with encrypted credentials, health history, browsing, scoped query consoles, and capability-aware write operations; private-by-default managed Postgres, Redis, and ClickHouse instances can bind securely to Docker workloads through the Console, AI Workspace, or MCP. Scheduled native backups and restores run on a selected Storage node. Available on Personal and higher; since 2.11 this includes saved external connections. |
+| Storage | Storage connections to AWS S3, Cloudflare R2, MinIO and other S3-compatible endpoints, FTP, FTPS, and SFTP, plus private-by-default managed MinIO on Storage nodes with bucket-scoped application bindings. Available on Personal and higher. |
 | Monitoring | Node CPU, memory, disk, network, service status, capability-aware physical GPU telemetry, daemon runtime details, log streaming, and update checks. |
 | Logging | Optional ClickHouse-backed structured log ingestion with schemas, retention, ingest tokens, rate limits, search, storage caps, and health safeguards. |
 | Automation | API tokens, OAuth 2.0 PKCE, remote MCP endpoint with scoped Ingress, Pages, Databases, Docker/Compose, source-build, and Build Worker operations, readable internal Gateway documentation, CI/CD webhooks, webhook notifications, and status pages. |
-| Integrations | GitLab project, repository, CI/CD, variable, webhook, registry, and sandbox workflows; GitHub repository and Actions workflows; generic Git connectors; external SSH connectors; and Cloudflare DNS/ACME automation. Connector credentials are encrypted and access is scope-gated. |
-| Relay | A long-lived local relay owns public `9443/tcp` for daemon control and managed tunnel traffic. Relay Pool can add remote supervisor/worker pairs, explicit placement and rebalancing, draining, and rolling signed updates while preserving one logical Secure Link. |
-| AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. |
+| Integrations | GitLab project, repository, CI/CD, variable, webhook, registry, and sandbox workflows; GitHub repository and Actions workflows; generic Git connectors; external SSH connectors; and Cloudflare DNS/ACME automation. Connector credentials are encrypted and access is scope-gated. GitLab integration requires Personal or higher. |
+| Relay | A long-lived local relay owns public `9443/tcp` for daemon control and managed tunnel traffic. Relay Pool can add remote supervisor/worker pairs, explicit placement and rebalancing, draining, and rolling signed updates while preserving one logical Secure Link. Gateway, local relay, and remote relay certificates renew while running. |
+| AI Workspace | Opt-in intent-driven operations with guided Scenarios, Plan Mode, permission-aware tools, approvals, sandboxed execution, progress tracking, and final verification. Planning never performs mutations before explicit confirmation. Scenarios, Plan Mode, and sandboxed execution require Personal or higher. |
 | Inference | Optional multi-provider model gateway with dedicated tokens, usage controls, capability-compatible cross-provider fallback before output begins, OpenAI- and Anthropic-compatible APIs, and managed Codex or Claude Code setup with optional user-session auto-start through `@sqgateway/inference`. |
 | Administration | OIDC, password, email-code and passkey login, group-based and per-user additional permissions, scoped programmatic access, audit logs, setup state, updates, and license controls. |
 
@@ -144,7 +146,8 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
 ```text
                 Gateway server
         +-----------------------------+
-        | app + relay + redis         |
+        | app + relay + registry      |
+        | redis                       |
         | postgres local or remote    |
         | clickhouse local/remote/off |
         | relay gRPC :9443            |
@@ -154,13 +157,15 @@ Gateway runs as a Docker stack on the control-plane server. Managed hosts run sm
                       |
         +-------------+-------------------+
         |             |                   |
- nginx-daemon   docker-daemon     database profile     monitoring-daemon
- ingress route  container host    managed databases    metrics-only host
+ nginx-daemon   docker-daemon     storage profile      monitoring-daemon
+ ingress route  container host    databases, MinIO     metrics-only host
 ```
 
-The relay is a separate long-lived container and is the only public owner of `9443/tcp`. Ordinary app-only updates keep the relay container and established managed-database binding streams running; a relay update remains an explicit data-plane maintenance event.
+The relay is a separate long-lived container and is the only public owner of `9443/tcp`. Ordinary app-only updates keep the relay container and established managed-database binding streams running; a relay update remains an explicit data-plane maintenance event. Each Relay release names the minimum Gateway version it needs, and Gateway offers or applies a standalone relay update only once it runs that version.
 
-Gateway can extend that local relay into one logical Relay Pool from **Settings > Relay**. Additional relay nodes are enrolled with a dedicated supervisor, keep management outbound-only to Gateway, and expose only their configured relay data endpoint (TCP `9443` by default) to participating managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network. Adding a node does not move traffic until an administrator explicitly rebalances; new connections then spread across the workload's pre-verified active relay set while the UI continues to show one logical Secure Link.
+Gateway checks its gRPC, web, and local relay certificates hourly and renews each one within 30 days of expiry without a restart: existing daemon and relay connections keep their current certificate, and new handshakes receive the renewed one. While node enrollment tokens are outstanding, the gRPC certificate their setup commands pin is renewed only in its last week.
+
+Gateway can extend that local relay into one logical Relay Pool from **Settings > Relay**. Additional relay nodes are enrolled with a dedicated supervisor, keep management outbound-only to Gateway, and expose only their configured relay data endpoint (TCP `9443` by default) to participating managed hosts. Gateway does not open firewalls, provide NAT traversal, or create an overlay network. Adding a node does not move traffic until an administrator explicitly rebalances; new connections then spread across the workload's pre-verified active relay set while the UI continues to show one logical Secure Link. Remote relay certificates renew automatically before they expire; a remote relay that cannot recover can be re-enrolled from the same page, while Gateway repairs the local relay's policy trust on its own.
 
 Nodes do not need inbound management ports. Public traffic ports, such as `80` and `443` on nginx nodes, are still required for the services you expose.
 
@@ -240,10 +245,12 @@ Every official release also carries the [Product Continuity MIT Grant](CONTINUIT
 
 | Plan | Monthly | Annual | Scale and focus |
 |------|---------|--------|-----------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference for internal and other noncompeting use; up to 100 managed nodes, 10 users, and 5 custom permission groups; read-only Compose discovery, inventory, monitoring, and logs. Pages unavailable. |
-| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited managed-node/user/group plan quotas, Compose deployment and lifecycle management, container archive import/export, blue/green deployments, cross-node migration, managed databases, public status pages, Pages static-site hosting, and registry discovery. Multi-node Workload Availability requires Business or Enterprise. |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | Core platform, AI Workspace, and Gateway Inference for internal and other noncompeting use; up to 25 managed nodes, 3 users, and 1 custom permission group; read-only Compose discovery, inventory, monitoring, and logs. Pages, databases, storage, GitLab integration, and AI Workspace Scenarios, Plan Mode, and sandboxes unavailable. |
+| ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | Unlimited managed-node/user/group plan quotas, Compose deployment and lifecycle management, container archive import/export, blue/green deployments, cross-node migration, managed databases and external database connections with backups, storage connections and managed MinIO, GitLab integration, AI Workspace Scenarios, Plan Mode, and sandboxes, public status pages, Pages static-site hosting, and registry discovery. Multi-node Workload Availability requires Business or Enterprise. |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | Personal (including Compose management and Pages) plus Git push-to-deploy for containers, blue/green deployments, Compose Projects, and Pages with isolated Build Workers and build vulnerability policy, optional external access to the private internal registry, Docker Secure Runtime, structured logging, audit export, guided onboarding, multi-node Workload Availability (HA), and broader security scanning, metric autoscaling, and same-node replicas when released. |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | On request | On request | Business (including Pages) plus Internal PKI, SIEM export, a dedicated technical contact, and assisted deployment and migration. |
+
+These Community limits, and the features above that now need Personal or higher, apply from 2.11; 2.10 Community allowed 100 managed nodes, 10 users, and 5 custom permission groups. Plan limits are checked only when something is created, so an installation already above them keeps its existing nodes, users, and groups but cannot add more while it stays at or above a limit.
 
 See [Plans and licensing](docs/licensing.md) for the complete feature matrix, availability states, license verification, and source-license boundary.
 

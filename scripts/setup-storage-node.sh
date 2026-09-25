@@ -11,7 +11,7 @@ fi
 
 command -v curl >/dev/null || { echo 'curl is required to fetch the node installer.' >&2; exit 1; }
 version="${GATEWAY_SETUP_VERSION:-latest}"
-base="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/wiolett-industries/gateway/releases}"
+base="${GATEWAY_RELEASE_DOWNLOAD_BASE:-https://github.com/the-square-labs/gateway/releases}"
 if [[ "$version" == latest ]]; then
     release_url="${base%/}/latest/download"
 else

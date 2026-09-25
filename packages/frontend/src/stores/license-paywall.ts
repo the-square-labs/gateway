@@ -7,6 +7,9 @@ export const LICENSE_FEATURE_PLANS = {
   "storage-connections": "personal",
   "external-database-connections": "personal",
   gitlab: "personal",
+  "ai-plan-mode": "personal",
+  "ai-scenarios": "personal",
+  "ai-sandboxes": "personal",
   "container-export": "personal",
   "blue-green": "personal",
   "cross-node-migration": "personal",
@@ -63,6 +66,16 @@ function currentPlan(): LicensePlan {
   return useUIBootstrapStore.getState().snapshot?.license.plan ?? "community";
 }
 
+// Mirrors the backend policy: published paid v3/v4 grants predate these
+// capability names, and every one of them includes managed-databases.
+const PRE_V5_PERSONAL_CAPABILITIES = new Set<LicenseFeature>([
+  "storage-connections",
+  "external-database-connections",
+  "ai-plan-mode",
+  "ai-scenarios",
+  "ai-sandboxes",
+]);
+
 export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
   const license = useUIBootstrapStore.getState().snapshot?.license;
   if (!license) return null;
@@ -74,7 +87,7 @@ export function hasLicenseFeature(feature: LicenseFeature): boolean | null {
     return true;
   return (
     license.entitlementsVersion < 5 &&
-    (feature === "storage-connections" || feature === "external-database-connections") &&
+    PRE_V5_PERSONAL_CAPABILITIES.has(feature) &&
     license.entitlements.features.includes("managed-databases")
   );
 }
@@ -137,8 +150,31 @@ function isLicensePlan(value: unknown): value is LicensePlan {
   return value === "community" || isPaidPlan(value);
 }
 
+function licenseErrorDetails(details: unknown): LicenseErrorDetails | undefined {
+  return details && typeof details === "object" ? (details as LicenseErrorDetails) : undefined;
+}
+
+/** The known paid feature named by a structured license denial, if any. */
+export function licenseErrorFeature(details: unknown): LicenseFeature | undefined {
+  const feature = licenseErrorDetails(details)?.feature;
+  return typeof feature === "string" && feature in LICENSE_FEATURE_PLANS
+    ? (feature as LicenseFeature)
+    : undefined;
+}
+
+/** A structured license denial, from a REST error or an AI WebSocket command error. */
+export interface LicenseErrorPayload {
+  code?: string;
+  details?: unknown;
+}
+
 export function handleLicenseApiError(error: unknown, capability: string): boolean {
   if (!(error instanceof ApiRequestError)) return false;
+  return handleLicenseError(error, capability);
+}
+
+/** Opens the shared paywall for a license denial; returns false for any other error code. */
+export function handleLicenseError(error: LicenseErrorPayload, capability: string): boolean {
   if (error.code === "COMMERCIAL_MODULE_UNAVAILABLE") {
     const plan = currentPlan();
     useLicensePaywallStore.getState().open({
@@ -153,14 +189,8 @@ export function handleLicenseApiError(error: unknown, capability: string): boole
     return false;
   }
 
-  const details =
-    error.details && typeof error.details === "object"
-      ? (error.details as LicenseErrorDetails)
-      : undefined;
-  const feature =
-    typeof details?.feature === "string" && details.feature in LICENSE_FEATURE_PLANS
-      ? (details.feature as LicenseFeature)
-      : undefined;
+  const details = licenseErrorDetails(error.details);
+  const feature = licenseErrorFeature(error.details);
   const requiredPlan = isPaidPlan(details?.requiredPlan)
     ? details.requiredPlan
     : feature

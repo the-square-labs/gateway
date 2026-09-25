@@ -1,4 +1,5 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { AlertTriangle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -9,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
 import type {
   ClickHouseDatabaseConfig,
   DatabaseConnection,
@@ -41,7 +43,50 @@ export interface DatabaseConnectionDraft {
   sslEnabled: boolean;
   db: string;
   tlsEnabled: boolean;
+  tlsVerifyCertificate: boolean;
+  tlsCaCertificate: string;
   hasStoredPassword?: boolean;
+  /** Saved verification state of an existing connection. */
+  savedTlsVerifyCertificate?: boolean;
+  savedTlsCaCertificate?: string;
+}
+
+/** Whether the connection being edited negotiates TLS, from its fields or its URI. */
+export function draftUsesTls(draft: DatabaseConnectionDraft) {
+  if (draft.connectionMethod === "uri") {
+    try {
+      const url = new URL(draft.connectionString.trim());
+      if (draft.type === "postgres") {
+        return ["require", "verify-ca", "verify-full"].includes(
+          url.searchParams.get("sslmode") ?? ""
+        );
+      }
+      return url.protocol === (draft.type === "clickhouse" ? "https:" : "rediss:");
+    } catch {
+      return false;
+    }
+  }
+  return draft.type === "postgres" ? draft.sslEnabled : draft.tlsEnabled;
+}
+
+/**
+ * Turning verification off, or trusting a different CA, on a verified
+ * connection could send the saved password to an unverified server. The
+ * backend requires the password again for that change.
+ */
+export function tlsVerificationWeakened(draft: DatabaseConnectionDraft) {
+  if (!draft.hasStoredPassword || draft.savedTlsVerifyCertificate !== true) return false;
+  if (!draftUsesTls(draft)) return false;
+  if (!draft.tlsVerifyCertificate) return true;
+  const ca = draft.tlsCaCertificate.trim();
+  return ca !== "" && ca !== (draft.savedTlsCaCertificate ?? "").trim();
+}
+
+function tlsVerificationPayload(draft: DatabaseConnectionDraft) {
+  return {
+    tlsVerifyCertificate: draft.tlsVerifyCertificate,
+    tlsCaCertificate: draft.tlsCaCertificate.trim() || null,
+  };
 }
 
 function isValidPort(value: string) {
@@ -108,9 +153,18 @@ export function draftFromConnection(
       sslEnabled: false,
       db: "0",
       tlsEnabled: false,
+      tlsVerifyCertificate: true,
+      tlsCaCertificate: "",
       hasStoredPassword: false,
     };
   }
+
+  const tlsVerification = {
+    tlsVerifyCertificate: connection.tlsVerifyCertificate ?? true,
+    tlsCaCertificate: connection.tlsCaCertificate ?? "",
+    savedTlsVerifyCertificate: connection.tlsVerifyCertificate ?? true,
+    savedTlsCaCertificate: connection.tlsCaCertificate ?? "",
+  };
 
   if (connection.type === "postgres") {
     const config = connection.config as PostgresDatabaseConfig;
@@ -132,6 +186,7 @@ export function draftFromConnection(
       sslEnabled: config.sslEnabled,
       db: "0",
       tlsEnabled: false,
+      ...tlsVerification,
       hasStoredPassword: connection.hasStoredPassword,
     };
   }
@@ -155,6 +210,7 @@ export function draftFromConnection(
       sslEnabled: false,
       db: "0",
       tlsEnabled: config.tlsEnabled,
+      ...tlsVerification,
       hasStoredPassword: connection.hasStoredPassword,
     };
   }
@@ -177,6 +233,7 @@ export function draftFromConnection(
     sslEnabled: false,
     db: String(config.db),
     tlsEnabled: config.tlsEnabled,
+    ...tlsVerification,
     hasStoredPassword: connection.hasStoredPassword,
   };
 }
@@ -207,6 +264,7 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
               ...(draft.password !== "" ? { password: draft.password } : {}),
               sslEnabled: draft.sslEnabled,
             }),
+        ...tlsVerificationPayload(draft),
       },
     };
   }
@@ -229,6 +287,7 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
               ...(draft.password !== "" ? { password: draft.password } : {}),
               tlsEnabled: draft.tlsEnabled,
             }),
+        ...tlsVerificationPayload(draft),
       },
     };
   }
@@ -249,6 +308,7 @@ export function buildDatabasePayload(draft: DatabaseConnectionDraft): Record<str
             db: Number(draft.db || "0"),
             tlsEnabled: draft.tlsEnabled,
           }),
+      ...tlsVerificationPayload(draft),
     },
   };
 }
@@ -306,6 +366,8 @@ export function DatabaseConnectionForm({
                   manualSizeLimitMb: value === "postgres" ? draft.manualSizeLimitMb : "",
                   sslEnabled: false,
                   tlsEnabled: false,
+                  tlsVerifyCertificate: true,
+                  tlsCaCertificate: "",
                 })
               }
               disabled={disableType}
@@ -570,6 +632,89 @@ export function DatabaseConnectionForm({
             </AnimatePresence>
           </div>
         </>
+      )}
+
+      {draftUsesTls(draft) && (
+        <DatabaseTlsVerificationFields
+          draft={draft}
+          onChange={onChange}
+          confirmPassword={metadataOnly}
+        />
+      )}
+    </div>
+  );
+}
+
+function DatabaseTlsVerificationFields({
+  draft,
+  onChange,
+  confirmPassword,
+}: {
+  draft: DatabaseConnectionDraft;
+  onChange: (next: DatabaseConnectionDraft) => void;
+  confirmPassword: boolean;
+}) {
+  const set = <K extends keyof DatabaseConnectionDraft>(
+    key: K,
+    value: DatabaseConnectionDraft[K]
+  ) => onChange({ ...draft, [key]: value });
+
+  return (
+    <div className="space-y-3 border border-border bg-muted/30 p-3">
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <p className="text-sm font-medium">Verify server certificate</p>
+          <p className="text-xs text-muted-foreground">
+            Check the certificate chain and that it was issued for this host
+          </p>
+        </div>
+        <Switch
+          ariaLabel="Verify server certificate"
+          checked={draft.tlsVerifyCertificate}
+          onChange={(checked) => set("tlsVerifyCertificate", checked)}
+        />
+      </div>
+
+      {draft.tlsVerifyCertificate ? (
+        <div className="space-y-1.5">
+          <label htmlFor="database-tls-ca-certificate" className="text-sm font-medium">
+            CA certificate
+          </label>
+          <Textarea
+            id="database-tls-ca-certificate"
+            rows={4}
+            className="font-mono text-xs"
+            placeholder="-----BEGIN CERTIFICATE-----"
+            value={draft.tlsCaCertificate}
+            onChange={(event) => set("tlsCaCertificate", event.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            Optional. PEM certificates of a private CA, trusted instead of the public CA bundle.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
+          <p className="text-sm text-warning-foreground">
+            Traffic is encrypted, but the server identity is not checked. Anyone on the network path
+            can impersonate this database and capture its credentials.
+          </p>
+        </div>
+      )}
+
+      {confirmPassword && tlsVerificationWeakened(draft) && (
+        <div className="space-y-1.5">
+          <label htmlFor="database-tls-password-confirmation" className="text-sm font-medium">
+            Database password
+          </label>
+          <Input
+            id="database-tls-password-confirmation"
+            type="password"
+            placeholder="Re-enter the password to confirm this change"
+            value={draft.password}
+            onChange={(event) => set("password", event.target.value)}
+          />
+        </div>
       )}
     </div>
   );

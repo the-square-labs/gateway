@@ -261,8 +261,9 @@ proxyRoutes.openapi(
     const user = c.get('user')!;
     const scopes = c.get('effectiveScopes') || [];
     const existing = await container.resolve(AdditionalRouteService).get(c.req.param('id')!, c.req.param('routeId')!);
+    // Retrying an existing Pages route keeps it serving after the license grace period.
     if (existing.targetKind === 'pages') {
-      await container.resolve(LicensePolicyService).requireFeature('pages');
+      await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('pages');
     }
     const row = await container
       .resolve(AdditionalRouteService)
@@ -350,11 +351,19 @@ proxyRoutes.openapi(updateProxyHostRoute, async (c) => {
       await container.resolve(FolderService).assertFolderExists(input.folderId ?? undefined);
     }
   }
+  const existingPageTarget = existing.pageTarget as { projectId?: unknown; tagId?: unknown } | null | undefined;
   if (input.upstreamKind === 'pages' || input.pageProjectId != null || input.pageTagId != null) {
-    await container.resolve(LicensePolicyService).requireFeature('pages');
+    // Editing a host that keeps its existing Page target is not a new Pages route.
+    const keepsPageTarget =
+      existing.upstreamKind === 'pages' &&
+      (input.upstreamKind === undefined || input.upstreamKind === 'pages') &&
+      (input.pageProjectId == null || input.pageProjectId === existingPageTarget?.projectId) &&
+      (input.pageTagId == null || input.pageTagId === (existingPageTarget?.tagId ?? null));
+    const policy = container.resolve(LicensePolicyService);
+    if (keepsPageTarget) await policy.requireFeatureForExistingRuntime('pages');
+    else await policy.requireFeature('pages');
     await container.resolve(PageProfileService).requireEnabled();
   }
-  const existingPageTarget = existing.pageTarget as { projectId?: unknown } | null | undefined;
   if (
     existing.upstreamKind === 'pages' &&
     (typeof existingPageTarget?.projectId !== 'string' ||

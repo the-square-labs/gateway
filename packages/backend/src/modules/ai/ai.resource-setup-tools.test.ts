@@ -30,6 +30,7 @@ describe('resource setup AI tools', () => {
     const markDeploymentReady = vi.fn().mockResolvedValue(undefined);
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
     container.registerInstance(PageProfileService, {
       requireEnabled: vi.fn().mockResolvedValue(undefined),
@@ -86,6 +87,7 @@ describe('resource setup AI tools', () => {
     const appendChunk = vi.fn();
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
     container.registerInstance(PageProfileService, {
       requireEnabled: vi.fn().mockResolvedValue(undefined),
@@ -118,6 +120,7 @@ describe('resource setup AI tools', () => {
     const revoke = vi.fn().mockResolvedValue(undefined);
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
     container.registerInstance(PageProjectService, {} as PageProjectService);
     container.registerInstance(PageProfileService, {
@@ -157,6 +160,7 @@ describe('resource setup AI tools', () => {
     const upsert = vi.fn().mockResolvedValue({ id: 'source-1', target: { kind: 'pages_project' } });
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
     container.registerInstance(PageProfileService, {
       requireEnabled: vi.fn().mockResolvedValue(undefined),
@@ -275,6 +279,7 @@ describe('resource setup AI tools', () => {
     container.registerInstance(ManagedDatabaseBindingService, {} as ManagedDatabaseBindingService);
     container.registerInstance(LicensePolicyService, {
       requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
     } as unknown as LicensePolicyService);
 
     await executeResourceSetupTool(USER, 'manage_managed_database', {

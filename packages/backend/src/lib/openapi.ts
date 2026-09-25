@@ -538,7 +538,8 @@ export function appRoute(input: {
   responses?: RouteResponses;
   security?: RouteConfig['security'];
 }): RouteConfig {
-  const responses = addSuccessExamples({ ...(input.responses ?? okJson()), ...commonErrorResponses }, input);
+  // A route-specific error response replaces the shared default for that status.
+  const responses = addSuccessExamples({ ...commonErrorResponses, ...(input.responses ?? okJson()) }, input);
   return createRoute({
     method: input.method,
     path: input.path,

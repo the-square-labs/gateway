@@ -4,7 +4,7 @@ import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import { boundScopes } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getAuditRequestContext, setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
-import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
+import { type LicenseFeature, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { ACCESS_LIST_TOOL_NAMES, executeAccessListTool } from './ai.access-list-tools.js';
@@ -66,6 +66,38 @@ function mcpGitCredentialRequiredMessage(err: AppError): string {
   const connector = typeof details.connectorName === 'string' ? details.connectorName : 'this connector';
   const state = details.reason === 'invalid' ? 'was rejected' : 'is not set up';
   return `${err.code}: The personal ${label} credential for ${connector} ${state}, and remote MCP cannot start that sign-in. Grant this token integrations:${provider}:system, or set up the personal ${label} credential in AI Workspace, then retry.`;
+}
+
+/** Enterprise tools that read, revoke, export, or delete existing SIEM and PKI resources. */
+const PAID_EXISTING_TOOLS = new Set([
+  'list_siem_destinations',
+  'get_siem_destination',
+  'delete_siem_destination',
+  'list_siem_deliveries',
+  'get_siem_delivery',
+  'list_templates',
+  'delete_template',
+  'list_cas',
+  'get_ca',
+  'delete_ca',
+  'list_certificates',
+  'get_certificate',
+  'revoke_certificate',
+]);
+const PAID_EXISTING_OPERATIONS: Record<string, ReadonlySet<string>> = {
+  manage_template: new Set(['get']),
+  manage_ca: new Set(['revoke', 'export_key']),
+  manage_certificate: new Set(['chain', 'export']),
+};
+
+/**
+ * Same classes as the SIEM and PKI routes: existing resources keep working after the
+ * license grace period; creating, changing, issuing, testing, and requeueing (and any
+ * unknown operation) needs the current plan.
+ */
+function isExistingPaidToolCall(toolName: string, args: Record<string, unknown>): boolean {
+  if (PAID_EXISTING_TOOLS.has(toolName)) return true;
+  return PAID_EXISTING_OPERATIONS[toolName]?.has(String(args.operation ?? '')) ?? false;
 }
 
 export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
@@ -340,6 +372,16 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     }
   }
 
+  private async requirePaidToolFeature(
+    feature: LicenseFeature,
+    toolName: string,
+    args: Record<string, unknown>
+  ): Promise<void> {
+    const policy = requireConfiguredLicensePolicy(this.licensePolicyService);
+    if (isExistingPaidToolCall(toolName, args)) await policy.requireFeatureForExistingRuntime(feature);
+    else await policy.requireFeature(feature);
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   protected async executeToolInternal(
     user: User,
@@ -410,7 +452,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     if (NOTIFICATION_TOOL_NAMES.has(toolName)) {
       if (SIEM_NOTIFICATION_TOOL_NAMES.has(toolName)) {
         // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise SIEM entitlement.
-        await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('siem-export');
+        await this.requirePaidToolFeature('siem-export', toolName, args);
       }
       return executeNotificationTool(
         {
@@ -489,7 +531,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     }
     if (PKI_TEMPLATE_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
-      await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
+      await this.requirePaidToolFeature('internal-pki', toolName, args);
       return executePkiTemplateTool(
         {
           templatesService: this.templatesService,
@@ -504,7 +546,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     }
     if (PKI_CA_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
-      await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
+      await this.requirePaidToolFeature('internal-pki', toolName, args);
       if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
       container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).requireAvailable();
       return executePkiCaTool({ caService: this.caService, auditService: this.auditService }, user, toolName, args);
@@ -512,7 +554,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
     if (PKI_CERTIFICATE_TOOL_NAMES.has(toolName)) {
       // LICENSE ENFORCEMENT: AI/MCP callers cannot bypass the Enterprise PKI entitlement.
       if (toolName !== 'audit_system_pki_leaves') {
-        await requireConfiguredLicensePolicy(this.licensePolicyService).requireFeature('internal-pki');
+        await this.requirePaidToolFeature('internal-pki', toolName, args);
         if (!container.isRegistered(TOKENS.CommercialEdition)) return commercialModuleUnavailable();
         container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).requireAvailable();
       }

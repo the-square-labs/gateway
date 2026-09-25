@@ -2,6 +2,11 @@ import { toast } from "sonner";
 import type { AIConversationFolder, AIConversationSummary } from "@/services/ai-conversations";
 import { invalidateToolStore } from "@/services/tool-store-invalidation";
 import { applyAssistantResourcePinAction } from "@/stores/assistant-resource-pins";
+import {
+  handleLicenseError,
+  type LicenseFeature,
+  licenseErrorFeature,
+} from "@/stores/license-paywall";
 import type {
   AIConversationRuntimeSnapshot,
   AIConversationStatus,
@@ -39,6 +44,12 @@ import {
   updateToolCallById,
   upsertTimelinePlan,
 } from "./ai.store-shared";
+
+const AI_LICENSE_CAPABILITIES: Partial<Record<LicenseFeature, string>> = {
+  "ai-plan-mode": "AI Plan Mode",
+  "ai-scenarios": "AI scenarios",
+  "ai-sandboxes": "AI sandboxes",
+};
 
 export function handleWSMessage(
   msg: WSServerMessage,
@@ -181,6 +192,23 @@ export function handleWSMessage(
               error: msg.message,
             })),
             pendingApprovalToolCallId: pending.toolCallId,
+          }));
+          break;
+        }
+        // A license denial opens the shared upgrade dialog instead of an error bubble.
+        const licenseFeature = licenseErrorFeature(msg.details);
+        const capability =
+          (licenseFeature && AI_LICENSE_CAPABILITIES[licenseFeature]) ?? "This AI request";
+        if (handleLicenseError(msg, capability)) {
+          set((state) => ({
+            isStreaming: false,
+            isStartingConversation: false,
+            isCompactingContext: false,
+            messages: removeStartingAssistantMessage(state.messages, msg.clientCommandId),
+            ...(licenseFeature === "ai-plan-mode" ? { workMode: "normal" as const } : {}),
+            ...(msg.commandType === "conversation.continue"
+              ? { canContinueConversation: true }
+              : {}),
           }));
           break;
         }

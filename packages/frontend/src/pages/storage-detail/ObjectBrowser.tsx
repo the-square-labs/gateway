@@ -33,9 +33,12 @@ import { storageFileOperations } from "./storage-file-operations";
 export function ObjectBrowser({
   storage,
   canWrite,
+  canCreateBuckets,
 }: {
   storage: ObjectStorageConnection;
   canWrite: boolean;
+  /** storage:objects:admin: the API creates and deletes buckets only with it. */
+  canCreateBuckets: boolean;
 }) {
   const [buckets, setBuckets] = useState<ObjectStorageBucket[]>([]);
   const [bucket, setBucket] = useState(storage.defaultBucket ?? "");
@@ -108,7 +111,7 @@ export function ObjectBrowser({
         }}
         disabled={bucketsLoading}
       />
-      {canWrite && !isFileProtocolProvider(storage.provider) && (
+      {canCreateBuckets && !isFileProtocolProvider(storage.provider) && (
         <Button onClick={openNewBucket}>
           <Plus className="h-4 w-4" />
           New bucket
@@ -134,8 +137,10 @@ export function ObjectBrowser({
       ) : (
         <EmptyState
           message={loadError ?? "No buckets yet."}
-          actionLabel={loadError ? "Retry" : canWrite ? "Create bucket" : undefined}
-          onAction={loadError ? () => void loadBuckets() : canWrite ? openNewBucket : undefined}
+          actionLabel={loadError ? "Retry" : canCreateBuckets ? "Create bucket" : undefined}
+          onAction={
+            loadError ? () => void loadBuckets() : canCreateBuckets ? openNewBucket : undefined
+          }
         />
       )}
       <Dialog open={newBucketOpen} onOpenChange={setNewBucketOpen}>

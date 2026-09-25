@@ -24,6 +24,15 @@ import type {
 import { API_BASE } from "./api-base";
 import type { ApiClientBaseConstructor } from "./api-mixins";
 
+export interface StorageDeleteOptions {
+  /** Confirms removing finished backup history that still references the storage. */
+  backupHistory?: "forget";
+}
+
+function storageDeleteQuery(options: StorageDeleteOptions): string {
+  return options.backupHistory ? `?backupHistory=${options.backupHistory}` : "";
+}
+
 export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Base: TBase) {
   return class ObjectStorageApiClient extends Base {
     // ── Object Storage ─────────────────────────────────────────────
@@ -88,8 +97,11 @@ export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Bas
       );
     }
 
-    async deleteObjectStorage(id: string): Promise<void> {
-      await this.request<void>(`/object-storage/${id}`, { method: "DELETE" });
+    /** `backupHistory: "forget"` confirms removing the finished backup history that references it. */
+    async deleteObjectStorage(id: string, options: StorageDeleteOptions = {}): Promise<void> {
+      await this.request<void>(`/object-storage/${id}${storageDeleteQuery(options)}`, {
+        method: "DELETE",
+      });
     }
 
     async listObjectStorageFolders(): Promise<ResourceFolderTreeNode[]> {
@@ -210,10 +222,14 @@ export function withObjectStorageApi<TBase extends ApiClientBaseConstructor>(Bas
       );
     }
 
-    async deleteManagedObjectStorage(id: string): Promise<void> {
-      await this.request<void>(`/managed-storage/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+    async deleteManagedObjectStorage(
+      id: string,
+      options: StorageDeleteOptions = {}
+    ): Promise<void> {
+      await this.request<void>(
+        `/managed-storage/${encodeURIComponent(id)}${storageDeleteQuery(options)}`,
+        { method: "DELETE" }
+      );
     }
 
     async restartManagedObjectStorage(id: string): Promise<ManagedObjectStorage> {

@@ -37,7 +37,10 @@ function registerManagedDatabase(overrides: Record<string, unknown> = {}) {
     getRuntime: vi.fn().mockResolvedValue({ binding: { id: 'binding-1' }, runtime: {} }),
     revealCredentials: vi.fn().mockResolvedValue({ connectionUri: 'postgresql://x', password: 'secret' }),
   };
-  const license = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+  const license = {
+    requireFeature: vi.fn().mockResolvedValue(undefined),
+    requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+  };
   container.registerInstance(ManagedDatabaseService, service as unknown as ManagedDatabaseService);
   container.registerInstance(ManagedDatabaseBindingService, bindings as unknown as ManagedDatabaseBindingService);
   container.registerInstance(LicensePolicyService, license as unknown as LicensePolicyService);
@@ -58,7 +61,9 @@ describe('managed database credential, log and runtime tools', () => {
     ).resolves.toEqual({ username: 'direct', password: 'secret' });
     expect(service.getCanonicalScopeResourceId).toHaveBeenCalledWith(MANAGED_ID);
     expect(service.revealCredentials).toHaveBeenCalledWith(MANAGED_ID);
-    expect(license.requireFeature).toHaveBeenCalledWith('external-database-connections');
+    // Revealing credentials of an existing managed database keeps working after the grace period.
+    expect(license.requireFeatureForExistingRuntime).toHaveBeenCalledWith('external-database-connections');
+    expect(license.requireFeature).not.toHaveBeenCalled();
 
     // A grant on the managed instance id or view access alone is not the route's grant.
     for (const scopes of [[`databases:credentials:reveal:${MANAGED_ID}`], ['databases:view', 'databases:edit']]) {

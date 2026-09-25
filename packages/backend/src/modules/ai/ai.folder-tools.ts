@@ -25,7 +25,7 @@ import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { PermissionGroupFolderService } from '@/modules/groups/permission-group-folders.service.js';
-import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
+import { type LicenseFeature, LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import { LoggingEnvironmentFolderService } from '@/modules/logging/logging-environment-folders.service.js';
 import { LoggingSchemaFolderService } from '@/modules/logging/logging-schema-folders.service.js';
 import { NodeFolderService } from '@/modules/nodes/node-folders.service.js';
@@ -311,23 +311,25 @@ async function executeGenericFolderTool(
   resourceType: Exclude<ResourceType, 'routes' | 'docker'>,
   args: Record<string, unknown>
 ) {
-  if (resourceType === 'logging_environments' || resourceType === 'logging_schemas') {
-    // LICENSE ENFORCEMENT: Generic AI folder tools must not bypass the structured logging paywall.
-    await container.resolve(LicensePolicyService).requireFeature('structured-logging');
-  }
-  // Same license gates as the database and storage folder routes.
-  if (resourceType === 'databases') {
-    await container.resolve(LicensePolicyService).requireFeature('external-database-connections');
-  }
-  if (resourceType === 'storage') {
-    await container.resolve(LicensePolicyService).requireFeature('storage-connections');
-  }
-  if (resourceType === 'pages') {
-    // Same gates as the Pages routes: the license feature, and an enabled Pages profile for mutations.
-    await container.resolve(LicensePolicyService).requireFeature('pages');
+  const operation = operationArg(args.operation);
+  const feature: LicenseFeature | null =
+    resourceType === 'logging_environments' || resourceType === 'logging_schemas'
+      ? 'structured-logging'
+      : resourceType === 'databases'
+        ? 'external-database-connections'
+        : resourceType === 'storage'
+          ? 'storage-connections'
+          : resourceType === 'pages'
+            ? 'pages'
+            : null;
+  if (feature) {
+    // LICENSE ENFORCEMENT: Same classes as the folder routes. Listing and deleting folders
+    // keep working after the license grace period; creating or changing them does not.
+    const policy = container.resolve(LicensePolicyService);
+    if (operation === 'list' || operation === 'delete') await policy.requireFeatureForExistingRuntime(feature);
+    else await policy.requireFeature(feature);
   }
   const config = genericConfig(resourceType);
-  const operation = operationArg(args.operation);
   if (operation === 'list') return config.service.getFolderTree(genericListOptions(user, resourceType, config));
   if (resourceType === 'pages') await container.resolve(PageProfileService).requireEnabled();
 

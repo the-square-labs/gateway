@@ -10,7 +10,7 @@ import {
 import { hasScope } from '@/lib/permissions.js';
 import { buildWhere } from '@/lib/utils.js';
 import {
-  hasConfiguredLicenseFeature,
+  hasConfiguredLicenseFeatureForExistingRuntime,
   requireConfiguredLicensePolicy,
 } from '@/modules/license/license-policy.service.js';
 import {
@@ -34,7 +34,7 @@ export const integrationCommercialRuntime = {
   GITLAB_AUDIT_ACTIONS,
   redactGitLabAuditDetails,
   assertConnectorOperationAccess,
-  hasConfiguredLicenseFeature,
+  hasConfiguredLicenseFeatureForExistingRuntime,
   isNull,
   buildGitLabFileCommitAuditDetails,
   hashGitLabDiff,

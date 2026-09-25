@@ -168,6 +168,14 @@ describe('OpenAPI documentation', () => {
       code: 'VALIDATION_ERROR',
       message: 'Request validation failed',
     });
+    // A route-specific error response replaces the shared default for that status.
+    const containerArchiveExport = document.paths?.['/api/docker/nodes/{nodeId}/containers/{containerId}/archive']?.get;
+    expect(containerArchiveExport.responses['409'].content['application/json'].example).toMatchObject({
+      code: 'DOCKER_ARCHIVE_COMPOSE_CONTAINER',
+    });
+    expect(containerArchiveExport.responses['403'].content['application/json'].example).toMatchObject({
+      code: 'FORBIDDEN',
+    });
 
     const legacyResponse = await app.request('/openapi.json', {
       headers: { host: 'gateway.test', Authorization: 'Bearer gw_test' },

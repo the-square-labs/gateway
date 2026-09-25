@@ -57,6 +57,15 @@ export const databaseConnections = pgTable(
     databaseName: varchar('database_name', { length: 255 }),
     username: varchar('username', { length: 255 }),
     tlsEnabled: boolean('tls_enabled').notNull().default(false),
+    // Verify the server certificate chain and hostname whenever the connection
+    // uses TLS. False is an explicit, insecure opt-out: external rows that used
+    // TLS before this setting existed are backfilled to false so upgrades keep
+    // connecting. Managed connections verify against the Gateway Database CA
+    // independently of this column.
+    tlsVerifyCertificate: boolean('tls_verify_certificate').notNull().default(true),
+    // Optional PEM bundle trusted instead of the public CA bundle for this
+    // connection (private CAs). A CA certificate is public material.
+    tlsCaCertificate: text('tls_ca_certificate'),
     manualSizeLimitMb: integer('manual_size_limit_mb'),
     interactiveQueryBudgetSeconds: integer('interactive_query_budget_seconds').notNull().default(300),
     encryptedConfig: text('encrypted_config').notNull(),

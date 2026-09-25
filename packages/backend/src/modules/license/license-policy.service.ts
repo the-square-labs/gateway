@@ -64,7 +64,9 @@ function includesFeature(entitlements: LicenseEntitlements, feature: LicenseFeat
   return PRE_V5_PERSONAL_CAPABILITIES.has(feature) && entitlements.features.includes('managed-databases');
 }
 
-const LICENSE_RUNTIME_CONTINUITY_STATUSES = new Set<LicenseStatus>(['expired', 'unreachable_grace_expired']);
+// Statuses reached after a grace period ended. Their entitlements are Community,
+// so current-plan checks fail; existing paid resources use continuity instead.
+const LICENSE_POST_GRACE_STATUSES = new Set<LicenseStatus>(['expired', 'unreachable_grace_expired']);
 
 const LICENSE_PLAN_RANK: Record<LicensePlan, number> = {
   community: 0,
@@ -92,6 +94,19 @@ export function requireConfiguredLicensePolicy(service?: LicensePolicyService): 
   throw new AppError(503, 'SERVICE_UNAVAILABLE', 'The requested operation is temporarily unavailable');
 }
 
+/**
+ * License gate classes. Every paid gate uses one of two checks:
+ *
+ * - Current plan (`requireFeature`/`hasFeature`): creating paid resources, changing
+ *   their configuration, and the paid service features SIEM forwarding and external
+ *   Docker-client registry access. Passes during valid, expiration grace
+ *   (24h/3d/7d), offline grace (100 days), and downgrade grace; fails afterwards.
+ *   Revocation, replacement, and deactivation have no grace.
+ * - Existing runtime (`requireFeatureForExistingRuntime`/`hasFeatureForExistingRuntime`):
+ *   viewing, logs, monitoring, credential reveal, deletion, scheduled work, and the
+ *   runtime of resources that already exist. Also passes after every grace for the
+ *   highest paid plan the installation held, proven by a stored signed state.
+ */
 export async function hasConfiguredLicenseFeature(
   service: LicensePolicyService | undefined,
   feature: LicenseFeature
@@ -141,18 +156,20 @@ export class LicensePolicyService {
     return this.toSafeSummary(status);
   }
 
+  /** Current plan, including every grace period. See the gate classes above. */
   async hasFeature(feature: LicenseFeature): Promise<boolean> {
     const status = await this.licenses.getStatus();
     return (
       this.isPolicyStateValid(status) &&
-      !LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) &&
+      !LICENSE_POST_GRACE_STATUSES.has(status.status) &&
       includesFeature(status.entitlements, feature)
     );
   }
 
+  /** Current plan, including every grace period. See the gate classes above. */
   async requireFeature(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
-    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status) && includesFeature(status.entitlements, feature)) {
+    if (!LICENSE_POST_GRACE_STATUSES.has(status.status) && includesFeature(status.entitlements, feature)) {
       return;
     }
 
@@ -165,22 +182,25 @@ export class LicensePolicyService {
     });
   }
 
+  /**
+   * Existing paid resources: current plan, or continuity for the highest paid plan
+   * this installation held. Continuity survives expiry, offline grace, downgrade,
+   * revocation, replacement, and deactivation; it never admits new paid resources.
+   */
   async hasFeatureForExistingRuntime(feature: LicenseFeature): Promise<boolean> {
     const status = await this.licenses.getStatus();
     if (!this.isPolicyStateValid(status)) return false;
     if (includesFeature(status.entitlements, feature)) return true;
-    if (!LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) return false;
     const retained = await this.licenses.getRuntimeContinuityEntitlements();
     return retained ? includesFeature(retained, feature) : false;
   }
 
+  /** Existing paid resources; see {@link hasFeatureForExistingRuntime}. */
   async requireFeatureForExistingRuntime(feature: LicenseFeature): Promise<void> {
     const status = await this.requireValidPolicyState();
     if (includesFeature(status.entitlements, feature)) return;
-    if (LICENSE_RUNTIME_CONTINUITY_STATUSES.has(status.status)) {
-      const retained = await this.licenses.getRuntimeContinuityEntitlements();
-      if (retained && includesFeature(retained, feature)) return;
-    }
+    const retained = await this.licenses.getRuntimeContinuityEntitlements();
+    if (retained && includesFeature(retained, feature)) return;
 
     throw new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'A higher license plan is required', {
       feature,

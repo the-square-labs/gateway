@@ -4,6 +4,12 @@ export const LICENSE_PREVIOUS_ENTITLEMENTS_VERSION = 4;
 export const LICENSE_ENTITLEMENTS_VERSION = 5;
 export const LICENSE_SUPPORTED_ENTITLEMENTS_VERSIONS: readonly number[] = [3, 4, 5];
 export const LICENSE_OFFLINE_GRACE_DAYS = 100;
+/** Plan-specific grace after expiration or a plan downgrade, before paid entitlements drop. */
+export const LICENSE_PLAN_GRACE_HOURS: Record<'personal' | 'business' | 'enterprise', number> = {
+  personal: 24,
+  business: 72,
+  enterprise: 168,
+};
 export const LICENSE_PAID_HEARTBEAT_INTERVAL_MS = 15 * 60 * 1000;
 export const LICENSE_COMMUNITY_HEARTBEAT_INTERVAL_MS = 30 * 60 * 1000;
 export const LICENSE_SCHEDULER_INTERVAL_MS = LICENSE_PAID_HEARTBEAT_INTERVAL_MS;
@@ -38,6 +44,12 @@ export interface LicenseEntitlements {
 
 export interface CachedLicenseState {
   registrationStatus: LicenseRegistrationStatus;
+  /** Signature over the last accepted server state. Server fields below are only a display copy. */
+  attestation?: unknown;
+  /** Signature over the latest accepted state of the highest paid plan, kept for continuity. */
+  retainedAttestation?: unknown;
+  /** Whether no loss was reported since the retained state, so a plan downgrade still has grace. */
+  retainedGraceEligible?: boolean;
   status: LicenseStatus;
   plan: LicensePlan;
   paidPlan: Exclude<LicensePlan, 'community'> | null;
@@ -105,6 +117,8 @@ export interface LicenseServerState {
     lastHeartbeatAt: string | null;
   };
   serverTime: string;
+  /** Ed25519 signature bound to this installation and request; see license-attestation.ts. */
+  attestation?: unknown;
 }
 
 export interface LicenseServerRegistration {

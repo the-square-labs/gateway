@@ -4,28 +4,104 @@ import { backupPolicies, backupRuns } from '@/db/schema/index.js';
 import {
   assertStorageBucketHasNoBackupReferences,
   assertStorageHasNoBackupReferences,
+  forgetStorageBackupHistory,
 } from './storage-backup-references.js';
 
 function dbWith(policies: unknown[], runs: unknown[]) {
+  const result = (table: unknown) => (table === backupPolicies ? policies : runs);
   return {
     select: vi.fn(() => ({
       from: vi.fn((table) => ({
-        where: vi.fn(() => ({ limit: vi.fn().mockResolvedValue(table === backupPolicies ? policies : runs) })),
+        // Storage deletion awaits the where() result; bucket deletion adds limit(1).
+        where: vi.fn(() =>
+          Object.assign(Promise.resolve(result(table)), { limit: vi.fn().mockResolvedValue(result(table)) })
+        ),
       })),
     })),
   };
 }
+
+const finished = { status: 'completed', runtimeCleanupPending: false, hasFiles: false };
+
 describe('storage backup reference protection', () => {
-  it('allows deletion when no policy or retained history depends on credentials', async () => {
+  it('allows deletion when no policy or history references the storage', async () => {
     await expect(assertStorageHasNoBackupReferences(dbWith([], []) as never, 'storage')).resolves.toBeUndefined();
   });
+
   it.each([
-    [['policy'], []],
-    [[], ['run']],
-  ])('rejects before destructive teardown for policies or runs', async (policies, runs) => {
-    await expect(assertStorageHasNoBackupReferences(dbWith(policies, runs) as never, 'storage')).rejects.toMatchObject({
-      code: 'STORAGE_REFERENCED_BY_BACKUPS',
+    [[{ id: 'policy' }], [], { policies: 1, activeRuns: 0 }],
+    [[], [{ ...finished, status: 'running' }], { policies: 0, activeRuns: 1 }],
+    [[], [{ ...finished, runtimeCleanupPending: true }], { policies: 0, activeRuns: 1 }],
+  ])('always rejects policies and active runs, even when history may be forgotten', async (policies, runs, details) => {
+    for (const options of [{}, { backupHistory: 'forget' as const }]) {
+      await expect(
+        assertStorageHasNoBackupReferences(dbWith(policies, runs) as never, 'storage', options)
+      ).rejects.toMatchObject({ statusCode: 409, code: 'STORAGE_REFERENCED_BY_BACKUPS', details });
+    }
+  });
+
+  it('blocks on finished history until forgetting it is confirmed, reporting what would be forgotten', async () => {
+    const runs = [
+      { ...finished, hasFiles: true },
+      { ...finished, status: 'failed' },
+    ];
+    await expect(assertStorageHasNoBackupReferences(dbWith([], runs) as never, 'storage')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'STORAGE_BACKUP_HISTORY_EXISTS',
+      details: { historyRecords: 2, backupsWithFiles: 1 },
     });
+    await expect(
+      assertStorageHasNoBackupReferences(dbWith([], runs) as never, 'storage', { backupHistory: 'forget' })
+    ).resolves.toBeUndefined();
+  });
+
+  it('forgets only finished runs that use the storage as destination or staging, and reports kept files', async () => {
+    let condition: unknown;
+    const returning = vi.fn().mockResolvedValue([
+      {
+        id: 'with-files',
+        destinationId: 'storage',
+        destinationBucket: 'backups',
+        ownedPrefix: 'db/run',
+        artifactsDeletedAt: null,
+      },
+      {
+        id: 'retired',
+        destinationId: 'storage',
+        destinationBucket: 'backups',
+        ownedPrefix: 'db/old',
+        artifactsDeletedAt: new Date(),
+      },
+      {
+        id: 'failed',
+        destinationId: 'storage',
+        destinationBucket: 'backups',
+        ownedPrefix: null,
+        artifactsDeletedAt: null,
+      },
+    ]);
+    const db = {
+      delete: vi.fn((table) => {
+        expect(table).toBe(backupRuns);
+        return {
+          where: vi.fn((value) => {
+            condition = value;
+            return { returning };
+          }),
+        };
+      }),
+    };
+    await expect(forgetStorageBackupHistory(db as never, 'storage')).resolves.toEqual({
+      historyRecords: 3,
+      backupsWithFiles: 1,
+      keptFiles: [{ runId: 'with-files', storageId: 'storage', bucket: 'backups', prefix: 'db/run' }],
+    });
+    const query = new PgDialect().sqlToQuery(condition as never);
+    expect(query.sql).toContain('"destination_id"');
+    expect(query.sql).toContain('"staging_storage_connection_id"');
+    expect(query.sql).toContain('"runtime_cleanup_pending"');
+    expect(query.sql).toContain('"backup_runs"."status" not in');
+    expect(query.params).toEqual(expect.arrayContaining(['storage', 'queued', 'running', false]));
   });
 });
 

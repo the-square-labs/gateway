@@ -68,6 +68,7 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `storage:edit` | Resource-scopable storage or backup permission. |
 | `storage:delete` | Resource-scopable storage or backup permission. |
 | `storage:credentials:reveal` | Resource-scopable storage or backup permission. |
+| `storage:credentials:use` | Resource-scopable storage or backup permission. Lets backups use the saved credentials without revealing them; implied by `storage:credentials:reveal`. |
 | `storage:iam` | Manage storage access keys | Yes |
 | `storage:objects:read` | Resource-scopable storage or backup permission. |
 | `storage:objects:write` | Resource-scopable storage or backup permission. |

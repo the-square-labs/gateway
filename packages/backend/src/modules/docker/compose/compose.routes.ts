@@ -81,9 +81,19 @@ const requireComposeActionScope: MiddlewareHandler<AppEnv> = async (c, next) => 
   await next();
 };
 
-async function requireManagedComposeFeature() {
-  await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+/**
+ * Creating, adopting, revising, applying, and changing secrets of managed Compose
+ * projects needs the current plan. Deleting them and starting, stopping,
+ * restarting, taking down, or cancelling existing projects keeps working after the
+ * license grace period.
+ */
+async function requireManagedComposeFeature(gate: 'current' | 'existing' = 'current') {
+  const policy = container.resolve(LicensePolicyService);
+  if (gate === 'existing') await policy.requireFeatureForExistingRuntime('compose-applications');
+  else await policy.requireFeature('compose-applications');
 }
+
+const EXISTING_COMPOSE_ACTIONS = new Set<string>(['start', 'stop', 'restart', 'down', 'cancel', 'delete_volumes']);
 
 export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi({ ...listComposeProjectsRoute, middleware: requireScopeBase('docker:compose:view') }, async (c) => {
@@ -159,7 +169,7 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...deleteComposeProjectRoute, middleware: requireComposeProjectScope('docker:compose:delete') },
     async (c) => {
-      await requireManagedComposeFeature();
+      await requireManagedComposeFeature('existing');
       await container
         .resolve(DockerComposeService)
         .deleteProject(c.req.param('nodeId')!, c.req.param('projectId')!, c.get('user')!.id);
@@ -204,7 +214,7 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...deleteComposeRevisionRoute, middleware: requireComposeProjectScope('docker:compose:manage') },
     async (c) => {
-      await requireManagedComposeFeature();
+      await requireManagedComposeFeature('existing');
       await container
         .resolve(DockerComposeService)
         .deleteRevision(
@@ -232,8 +242,8 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   );
 
   router.openapi({ ...composeProjectActionRoute, middleware: requireComposeActionScope }, async (c) => {
-    await requireManagedComposeFeature();
     const action = ComposeOperationActionSchema.parse(c.req.param('action'));
+    await requireManagedComposeFeature(EXISTING_COMPOSE_ACTIONS.has(action) ? 'existing' : 'current');
     const data = await container
       .resolve(DockerComposeService)
       .startOperation(
@@ -289,7 +299,7 @@ export function registerDockerComposeRoutes(router: OpenAPIHono<AppEnv>) {
   router.openapi(
     { ...deleteComposeSecretRoute, middleware: requireComposeProjectScope('docker:compose:manage') },
     async (c) => {
-      await requireManagedComposeFeature();
+      await requireManagedComposeFeature('existing');
       await container
         .resolve(DockerComposeService)
         .deleteSecret(c.req.param('nodeId')!, c.req.param('projectId')!, c.req.param('secretId')!, c.get('user')!.id);

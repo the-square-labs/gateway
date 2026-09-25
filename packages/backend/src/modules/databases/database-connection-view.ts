@@ -2,7 +2,23 @@ import type { ManagedRedisConfig } from '@/db/schema/databases.js';
 import type { DatabaseHealthEntry } from '@/db/schema/index.js';
 import type { DatabaseType } from './database-error-mapping.js';
 export type DatabaseHealthStatus = 'online' | 'offline' | 'degraded' | 'unknown';
-export interface PostgresConnectionConfig {
+/**
+ * Server certificate verification for a TLS connection. The persisted source
+ * of truth is the connection row; absent fields mean the secure default.
+ */
+export interface DatabaseTlsVerificationConfig {
+  /** Verify the certificate chain and hostname. False is an explicit, insecure opt-out. */
+  tlsVerifyCertificate?: boolean;
+  /** PEM bundle trusted instead of the public CA bundle. */
+  tlsCaCertificate?: string | null;
+  /**
+   * Runtime-only leaf identity that replaces hostname verification for a
+   * managed database reached through a loopback tunnel. Never persisted and
+   * never accepted from API input.
+   */
+  tlsServerIdentity?: string;
+}
+export interface PostgresConnectionConfig extends DatabaseTlsVerificationConfig {
   type: 'postgres';
   host: string;
   port: number;
@@ -11,7 +27,7 @@ export interface PostgresConnectionConfig {
   password: string;
   sslEnabled: boolean;
 }
-export interface RedisConnectionConfig {
+export interface RedisConnectionConfig extends DatabaseTlsVerificationConfig {
   type: 'redis';
   host: string;
   port: number;
@@ -20,7 +36,7 @@ export interface RedisConnectionConfig {
   db: number;
   tlsEnabled: boolean;
 }
-export interface ClickHouseConnectionConfig {
+export interface ClickHouseConnectionConfig extends DatabaseTlsVerificationConfig {
   type: 'clickhouse';
   url: string;
   host: string;
@@ -78,6 +94,8 @@ export interface DatabaseConnectionView {
   databaseName: string | null;
   username: string | null;
   tlsEnabled: boolean;
+  tlsVerifyCertificate: boolean;
+  tlsCaCertificate: string | null;
   healthStatus: DatabaseHealthStatus;
   lastHealthCheckAt: string | null;
   lastError: string | null;

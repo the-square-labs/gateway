@@ -16,6 +16,7 @@ import type { ChangeEvent, KeyboardEvent, ReactNode, RefObject } from "react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { LicensePlanBadge } from "@/components/license/LicensePlanBadge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
@@ -34,6 +35,7 @@ import {
 import { cn } from "@/lib/utils";
 import { type AIContextUsage, getAIContextUsage, useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
+import { requireLicenseFeature } from "@/stores/license-paywall";
 import type {
   AIComposerAttachment,
   AIConversationInput,
@@ -783,9 +785,15 @@ export function AIComposer({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" side="top" className="w-60">
-                  <DropdownMenuItem onClick={() => setWorkMode("plan")}>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      if (!requireLicenseFeature("ai-plan-mode", "AI Plan Mode")) return;
+                      setWorkMode("plan");
+                    }}
+                  >
                     <ListChecks className="h-4 w-4 text-link" />
                     <span className="text-link">Plan</span>
+                    <LicensePlanBadge feature="ai-plan-mode" />
                     {planModeActive && <Check className="ml-auto h-4 w-4 text-link" />}
                   </DropdownMenuItem>
                   {AI_APPROVAL_MODES.map((mode) => {

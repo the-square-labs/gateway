@@ -14,7 +14,10 @@ import { createChildLogger } from '@/lib/logger.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { isGatewayInternalContainer } from '@/modules/docker/docker-internal-containers.js';
 import { requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
-import { assertStorageHasNoBackupReferences } from '@/modules/object-storage/storage-backup-references.js';
+import {
+  assertStorageHasNoBackupReferences,
+  forgetStorageBackupHistory,
+} from '@/modules/object-storage/storage-backup-references.js';
 
 const loggerManagedStorage = createChildLogger('ManagedStorage');
 const loggerManagedStorageTunnelProxy = createChildLogger('ManagedStorageTunnelProxy');
@@ -59,6 +62,7 @@ export const managedStorageRuntime = {
   writeWithAllocatedSlug,
   requireConfiguredLicensePolicy,
   assertStorageHasNoBackupReferences,
+  forgetStorageBackupHistory,
   loggerManagedStorage,
   loggerManagedStorageTunnelProxy,
   managedStorageClusterMembers,

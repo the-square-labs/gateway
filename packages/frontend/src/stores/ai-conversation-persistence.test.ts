@@ -8,6 +8,7 @@ import {
 import { api } from "@/services/api";
 import { getAIContextUsage, resetAIStateForAuthChange, useAIStore } from "@/stores/ai";
 import { useAuthStore } from "@/stores/auth";
+import { useLicensePaywallStore } from "@/stores/license-paywall";
 import { useUIStore } from "@/stores/ui";
 import type { AIPlanRuntimeSnapshot, WSServerMessage } from "@/types/ai";
 
@@ -160,6 +161,7 @@ describe("AI backend runtime store", () => {
     useUIStore.setState({
       aiApprovalMode: "normal",
     });
+    useLicensePaywallStore.setState({ request: null });
     MockWebSocket.instances = [];
     vi.unstubAllGlobals();
     vi.clearAllMocks();
@@ -574,6 +576,74 @@ describe("AI backend runtime store", () => {
       `conversation-1:${readyPlan.revisionId}`
     );
     expect(sentPayloads(socket).some((payload) => payload.type === "plan.decide")).toBe(false);
+  });
+
+  it("opens the license dialog and leaves Plan mode when the server denies Plan Mode", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ workMode: "plan" });
+
+    useAIStore.getState().sendMessage("plan the upgrade");
+    const command = sentPayloads(socket).find(
+      (payload) => payload.type === "conversation.send_message"
+    );
+    expect(command).toMatchObject({ workMode: "plan" });
+
+    socket.emit({
+      type: "command.error",
+      commandType: "conversation.send_message",
+      clientCommandId: String(command?.clientCommandId),
+      code: "LICENSE_ENTITLEMENT_REQUIRED",
+      message: "A higher license plan is required",
+      statusCode: 403,
+      details: {
+        feature: "ai-plan-mode",
+        requiredPlan: "personal",
+        currentPlan: "community",
+        licenseStatus: "community",
+      },
+    });
+
+    expect(useLicensePaywallStore.getState().request).toMatchObject({
+      capability: "AI Plan Mode",
+      requiredPlan: "personal",
+      currentPlan: "community",
+    });
+    expect(useAIStore.getState()).toMatchObject({
+      workMode: "normal",
+      isStreaming: false,
+      isStartingConversation: false,
+    });
+    expect(useAIStore.getState().messages).toEqual([
+      expect.objectContaining({ role: "user", content: "plan the upgrade" }),
+    ]);
+  });
+
+  it("keeps the inline error and Plan mode for a command error that is not a license denial", async () => {
+    const socket = await connectAI();
+    useAIStore.setState({ workMode: "plan" });
+
+    useAIStore.getState().sendMessage("plan the upgrade");
+    const command = sentPayloads(socket).find(
+      (payload) => payload.type === "conversation.send_message"
+    );
+    socket.emit({
+      type: "command.error",
+      commandType: "conversation.send_message",
+      clientCommandId: String(command?.clientCommandId),
+      code: "AI_PLAN_BUSY",
+      message: "The active plan is being verified",
+      statusCode: 409,
+    });
+
+    expect(useLicensePaywallStore.getState().request).toBeNull();
+    expect(useAIStore.getState().workMode).toBe("plan");
+    expect(useAIStore.getState().messages).toEqual([
+      expect.objectContaining({ role: "user", content: "plan the upgrade" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "**Error:** The active plan is being verified",
+      }),
+    ]);
   });
 
   it("persists a model change and applies the returned timeline delimiter", async () => {

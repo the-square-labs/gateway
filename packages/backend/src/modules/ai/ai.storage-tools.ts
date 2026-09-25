@@ -57,7 +57,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'manage_storage_connection',
     description:
-      'Create, update, test or delete an external storage connection, reveal its saved credentials (storage:credentials:reveal; refused while impersonating), or read its health_history and monitoring metrics. Config is validated by the storage API; create accepts config.folderId.',
+      'Create, update, test or delete an external storage connection, reveal its saved credentials (storage:credentials:reveal; refused while impersonating), or read its health_history and monitoring metrics. Config is validated by the storage API; create accepts config.folderId. delete is refused while backup policies or active backup runs use the storage; finished backup history also blocks it until config.backupHistory is "forget", which removes that history (the backups can no longer be restored or deleted through Gateway; their files stay in storage). Only pass it after the user confirms.',
     parameters: {
       type: 'object',
       properties: {
@@ -114,7 +114,7 @@ export const STORAGE_AI_TOOLS: AIToolDefinition[] = [
     name: 'manage_managed_storage',
     historyRetention: { mode: 'never_full' },
     description:
-      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating).',
+      'Provision and manage Gateway-managed MinIO, private workload links, and scoped IAM keys. Read the catalog before create, poll get until ready, then create a bucket-scoped link. create_access_key returns its generated secret once; access key secrets are never readable again. reveal_credentials returns the cluster root access and secret key (storage:credentials:reveal; refused while impersonating). delete follows the same backup-history rule as manage_storage_connection (config.backupHistory "forget" after the user confirms); backup files stored in the cluster are deleted with it.',
     parameters: {
       type: 'object',
       properties: {

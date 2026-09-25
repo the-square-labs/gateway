@@ -515,6 +515,50 @@ func TestBackupPayloadAcceptsOptionalDeadline(t *testing.T) {
 	}
 }
 
+func TestBackupRunnerConfigForwardsExplicitTLSVerification(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		field  string
+		expect string
+	}{
+		{name: "verify", field: `,"tls":true,"tlsVerifyCertificate":true`, expect: "true"},
+		{name: "opt-out", field: `,"tls":true,"tlsVerifyCertificate":false`, expect: "false"},
+		{name: "unset", field: `,"tls":true`, expect: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(validBackupPayloadJSON(), `"port":5432}`, `"port":5432`+tc.field+`}`, 1)
+			payload, _, err := parseBackupPayload(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := backupRunnerConfig(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				Source map[string]json.RawMessage `json:"source"`
+			}
+			if err := json.Unmarshal(data, &config); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(config.Source["tlsVerifyCertificate"]); got != tc.expect {
+				t.Fatalf("tlsVerifyCertificate = %q, want %q in %s", got, tc.expect, data)
+			}
+		})
+	}
+}
+
+func TestStorageProfileAdvertisesBackupTLSVerificationWithBackups(t *testing.T) {
+	if joined := strings.Join(storagePluginForTest().BuildRegisterMessage("node-1").Capabilities, ","); strings.Contains(joined, "database_backups_tls_verification_v1") {
+		t.Fatalf("backup TLS verification advertised without a backup handler: %s", joined)
+	}
+	plugin := storagePluginForTest()
+	plugin.RegisterBackupCommandHandler(fakeBackupCommandHandler{})
+	if joined := strings.Join(plugin.BuildRegisterMessage("node-1").Capabilities, ","); !strings.Contains(joined, "database_backups_tls_verification_v1") {
+		t.Fatalf("backup TLS verification not advertised: %s", joined)
+	}
+}
+
 func TestBackupRunnerConfigOmitsDaemonOnlyDeadline(t *testing.T) {
 	payload, _, err := parseBackupPayload(strings.TrimSuffix(validBackupPayloadJSON(), "}") + `,"deadlineAt":"2026-09-23T12:00:00Z"}`)
 	if err != nil {

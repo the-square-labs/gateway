@@ -718,6 +718,8 @@ export type WSServerMessage =
       code: string;
       message: string;
       statusCode?: number;
+      /** Structured details, sent only for license denials. */
+      details?: unknown;
     }
   | {
       type: "conversation.snapshot";

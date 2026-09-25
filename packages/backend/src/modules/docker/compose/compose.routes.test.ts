@@ -79,6 +79,42 @@ describe('Docker Compose routes', () => {
     expect(compose.validate).not.toHaveBeenCalled();
   });
 
+  it('keeps lifecycle and deletion of existing managed projects after the grace period', async () => {
+    const compose = {
+      startOperation: vi.fn().mockResolvedValue({ id: 'operation-1' }),
+      deleteProject: vi.fn().mockResolvedValue(undefined),
+    };
+    const error = new AppError(403, 'LICENSE_ENTITLEMENT_REQUIRED', 'Personal required');
+    const license = {
+      requireFeature: vi.fn().mockRejectedValue(error),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+    };
+    container.registerInstance(DockerComposeService, compose as never);
+    container.registerInstance(LicensePolicyService, license as never);
+    const app = appWithScopes([
+      `docker:compose:manage:${NODE_ID}:${PROJECT_ID}`,
+      `docker:compose:delete:${NODE_ID}:${PROJECT_ID}`,
+      'docker:compose:manage',
+      'docker:compose:delete',
+    ]);
+    registerDockerComposeRoutes(app);
+    const action = (name: string) =>
+      app.request(`/nodes/${NODE_ID}/compose-projects/${PROJECT_ID}/actions/${name}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ idempotencyKey: `key-${name}-0001` }),
+      });
+
+    for (const name of ['start', 'stop', 'restart', 'down', 'cancel']) expect((await action(name)).status).toBe(201);
+    for (const name of ['apply', 'pull_apply']) expect((await action(name)).status).toBe(403);
+    const removed = await app.request(`/nodes/${NODE_ID}/compose-projects/${PROJECT_ID}`, { method: 'DELETE' });
+
+    expect(removed.status).toBe(200);
+    expect(compose.startOperation).toHaveBeenCalledTimes(5);
+    expect(compose.deleteProject).toHaveBeenCalledOnce();
+    expect(license.requireFeatureForExistingRuntime).toHaveBeenCalledWith('compose-applications');
+  });
+
   it('requires both create and manage scopes before adopting an external project', async () => {
     const compose = { adopt: vi.fn() };
     const license = { requireFeature: vi.fn() };
@@ -125,7 +161,10 @@ describe('Docker Compose routes', () => {
 
   it('allows delete-volume operations with the delete scope without requiring manage', async () => {
     const compose = { startOperation: vi.fn().mockResolvedValue({ id: 'operation-1' }) };
-    const license = { requireFeature: vi.fn().mockResolvedValue(undefined) };
+    const license = {
+      requireFeature: vi.fn().mockResolvedValue(undefined),
+      requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined),
+    };
     container.registerInstance(DockerComposeService, compose as never);
     container.registerInstance(LicensePolicyService, license as never);
     const app = appWithScopes([`docker:compose:delete:${NODE_ID}/${PROJECT_ID}`]);

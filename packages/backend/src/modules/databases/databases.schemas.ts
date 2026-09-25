@@ -5,6 +5,29 @@ const optionalTextSchema = z.string().trim().max(10_000).optional().nullable();
 const tagsSchema = z.array(z.string().trim().min(1).max(64)).max(32).optional();
 const interactiveQueryBudgetSecondsSchema = z.number().int().min(30).max(600);
 
+const DATABASE_TLS_CA_CERTIFICATE_MAX_LENGTH = 65_536;
+
+// Server certificate verification applies whenever the connection uses TLS.
+// New connections verify by default; `tlsVerifyCertificate: false` is the
+// explicit, insecure opt-out.
+const tlsVerificationFields = {
+  tlsVerifyCertificate: z
+    .boolean()
+    .optional()
+    .describe(
+      'Verify the server TLS certificate chain and hostname. Defaults to true for new connections; false disables verification (insecure).'
+    ),
+  tlsCaCertificate: z
+    .string()
+    .trim()
+    .max(DATABASE_TLS_CA_CERTIFICATE_MAX_LENGTH)
+    .nullable()
+    .optional()
+    .describe(
+      'PEM CA certificate bundle trusted instead of the public CA bundle, for servers issued by a private CA. Empty or null clears it.'
+    ),
+};
+
 const postgresConnectionFields = z.object({
   connectionString: z.string().trim().min(1).max(4096).optional(),
   host: z.string().trim().min(1).max(255).optional(),
@@ -13,6 +36,7 @@ const postgresConnectionFields = z.object({
   username: z.string().trim().min(1).max(255).optional(),
   password: z.string().max(4096).optional(),
   sslEnabled: z.boolean().optional(),
+  ...tlsVerificationFields,
 });
 
 const redisConnectionFields = z.object({
@@ -23,6 +47,7 @@ const redisConnectionFields = z.object({
   password: z.string().max(4096).optional(),
   db: z.number().int().min(0).max(15).optional(),
   tlsEnabled: z.boolean().optional(),
+  ...tlsVerificationFields,
 });
 
 const clickHouseConnectionFields = z.object({
@@ -34,6 +59,7 @@ const clickHouseConnectionFields = z.object({
   username: z.string().trim().min(1).max(255).optional(),
   password: z.string().max(4096).optional(),
   tlsEnabled: z.boolean().optional(),
+  ...tlsVerificationFields,
 });
 
 export const DatabaseListQuerySchema = z.object({
@@ -307,6 +333,7 @@ export const UpdateDatabaseConnectionSchema = z
         sslEnabled: z.boolean().optional(),
         db: z.number().int().min(0).max(15).optional(),
         tlsEnabled: z.boolean().optional(),
+        ...tlsVerificationFields,
       })
       .optional(),
   })

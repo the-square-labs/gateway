@@ -18,6 +18,10 @@ describe('Gateway internal container filtering', () => {
     },
     { Labels: { 'com.wiolett.gateway.managed-service': 'relay' } },
     { Labels: { 'gateway.sandbox': 'true' } },
+    // Backup runners hold storage credentials in their config while a run is active.
+    { Labels: { 'wiolett.gateway.managed': 'backup-runner', 'wiolett.gateway.backup-run-id': 'run-1' } },
+    { Labels: { 'wiolett.gateway.managed': 'backup-redis-stage', 'wiolett.gateway.backup-run-id': 'run-1' } },
+    { Config: { Labels: { 'wiolett.gateway.backup-run-id': 'run-2' } } },
   ])('recognizes a Gateway-owned service container', (container) => {
     expect(isGatewayInternalContainer(container)).toBe(true);
   });

@@ -7,6 +7,8 @@ const LOCAL_SERVICE_OWNER_LABEL = 'net.wiolett.gateway.owner';
 const FOUNDATION_SERVICE_LABEL = 'com.wiolett.gateway.managed-service';
 const SANDBOX_LABEL = 'gateway.sandbox';
 const AVAILABILITY_PLACEMENT_LABEL = 'wiolett.gateway.availability.managed';
+// Backup runners carry storage credentials in their config while a run is active.
+const BACKUP_RUN_LABEL = 'wiolett.gateway.backup-run-id';
 
 function containerLabels(container: Record<string, any>): Record<string, unknown> {
   return container?.Config?.Labels ?? container?.Labels ?? container?.labels ?? {};
@@ -20,6 +22,9 @@ export function isGatewayInternalContainer(container: Record<string, any>): bool
   const labels = containerLabels(container);
   return (
     labels[SECURE_LINK_MANAGED_LABEL] === 'secure-link-connector' ||
+    labels[SECURE_LINK_MANAGED_LABEL] === 'backup-runner' ||
+    labels[SECURE_LINK_MANAGED_LABEL] === 'backup-redis-stage' ||
+    (typeof labels[BACKUP_RUN_LABEL] === 'string' && labels[BACKUP_RUN_LABEL] !== '') ||
     labels[MANAGED_DATABASE_CONNECTOR_LABEL] === 'true' ||
     labels[MANAGED_STORAGE_CONNECTOR_LABEL] === 'true' ||
     labels[INTERNAL_WORKLOAD_LABEL] === 'managed-storage-connector' ||

@@ -233,7 +233,7 @@ Gateway 源代码由 Square Labs 依据 [PolyForm Perimeter License 1.0.1](LICEN
 
 | 计划 | 月付 | 年付 | 规模与重点 |
 |------|------|------|------------|
-| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 100 个 managed nodes、10 个用户和 5 个 custom permission groups；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
+| ![Community](docs/assets/license/wiolett-gw-community-24.png)<br>Community | $0 | $0 | 核心平台、AI Workspace 和 Gateway Inference，可用于内部及其他非竞争性用途；最多 25 个 managed nodes、3 个用户和 1 个 custom permission group；提供只读 Compose 项目发现、inventory、monitoring 和 logs；Pages 不可用。 |
 | ![Personal](docs/assets/license/wiolett-gw-personal-24.png)<br>Personal | $29 | $290 | managed nodes/users/groups 的 plan quotas 不限，并包含 Compose deployment 与 lifecycle management、container archive import/export、blue/green deployments、cross-node migration、managed databases、public status pages、Pages 静态站点托管和 registry discovery；多节点 Workload Availability 需要 Business 或 Enterprise。 |
 | ![Business](docs/assets/license/wiolett-gw-business-24.png)<br>Business | $189 | $1,890 | 包含 Personal（包括 Compose management 和 Pages）的全部功能，并增加面向 containers、blue/green deployments、Compose Projects 与 Pages、带隔离 Build Workers 和 build vulnerability policy 的 Git push-to-deploy、private internal registry 的可选 external access、Docker Secure Runtime、structured logging、audit export、guided onboarding、已可用的多节点 Workload Availability (HA)，以及发布后的更广泛安全扫描、基于指标的自动扩缩容和 same-node multi-instance 功能。 |
 | ![Enterprise](docs/assets/license/wiolett-gw-enterprise-24.png)<br>Enterprise | 询价 | 询价 | 包含 Business（包括 Pages）的全部功能，并增加 Internal PKI、SIEM export、专属技术联系人，以及部署和迁移协助。 |

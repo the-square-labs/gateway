@@ -3,6 +3,8 @@ package docker
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -269,6 +271,48 @@ networks:
 	command.ComposeYaml = []byte("name: another\nservices:\n  web:\n    image: nginx:alpine\n")
 	if _, err := validateComposeCommand(command); err == nil || !strings.Contains(err.Error(), "project_name") {
 		t.Fatalf("mismatched document name error = %v", err)
+	}
+}
+
+// The backend Compose policy tests run the same fixtures, so a document the
+// backend accepts never fails daemon validation at apply, and vice versa.
+func TestComposePolicyMatchesBackendParityFixtures(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "compose-policy-parity.yaml"))
+	if err != nil {
+		t.Fatalf("read parity fixtures: %v", err)
+	}
+	var fixtures struct {
+		Cases []struct {
+			Name        string `yaml:"name"`
+			Valid       bool   `yaml:"valid"`
+			DaemonError string `yaml:"daemonError"`
+			YAML        string `yaml:"yaml"`
+		} `yaml:"cases"`
+	}
+	if err := yaml.Unmarshal(raw, &fixtures); err != nil {
+		t.Fatalf("parse parity fixtures: %v", err)
+	}
+	if len(fixtures.Cases) == 0 {
+		t.Fatal("parity fixtures are empty")
+	}
+	for _, fixture := range fixtures.Cases {
+		t.Run(fixture.Name, func(t *testing.T) {
+			command := validComposeCommand("apply", "operation-parity")
+			command.ComposeYaml = []byte(fixture.YAML)
+			_, err := validateComposeCommand(command)
+			if fixture.Valid {
+				if err != nil {
+					t.Fatalf("backend-valid compose rejected: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("backend-invalid compose accepted")
+			}
+			if fixture.DaemonError == "" || !strings.Contains(err.Error(), fixture.DaemonError) {
+				t.Fatalf("validation error = %q, want it to contain %q", err, fixture.DaemonError)
+			}
+		})
 	}
 }
 

@@ -350,6 +350,29 @@ describe('canonical scope definitions', () => {
     expect(hasScopeForResource(['docker:volumes:export:node-1'], 'docker:volumes:export', 'node-2')).toBe(false);
   });
 
+  it('lets the operator group run backups without revealing storage credentials or administering buckets', () => {
+    // What backup policy create/run and retention need on the storage side.
+    for (const scope of ['storage:objects:write', 'storage:credentials:use']) {
+      expect(hasScopeForResource([...OPERATOR_SCOPES], scope, 'storage-1'), scope).toBe(true);
+    }
+    for (const scope of ['databases:backups:manage', 'databases:backups:run', 'nodes:backups:execute']) {
+      expect(OPERATOR_SCOPES).toContain(scope);
+    }
+    expect(OPERATOR_SCOPES).not.toContain('storage:credentials:reveal');
+    expect(OPERATOR_SCOPES).not.toContain('storage:objects:admin');
+    expect(ADMIN_SCOPES).toContain('storage:credentials:use');
+    expect(MANUAL_APPROVAL_SCOPES).not.toContain('storage:credentials:use');
+    // Existing custom groups keep working: reveal implies use, globally and per resource.
+    expect(hasScopeForResource(['storage:credentials:reveal'], 'storage:credentials:use', 'storage-1')).toBe(true);
+    expect(hasScopeForResource(['storage:credentials:reveal:storage-1'], 'storage:credentials:use', 'storage-1')).toBe(
+      true
+    );
+    expect(hasScopeForResource(['storage:credentials:reveal:storage-1'], 'storage:credentials:use', 'storage-2')).toBe(
+      false
+    );
+    expect(hasScope(['storage:credentials:use'], 'storage:credentials:reveal')).toBe(false);
+  });
+
   it('requires explicit grants for high-risk host node consoles', () => {
     expect(ALL_SCOPES).toContain('nodes:console');
     expect(SYSTEM_ADMIN_SCOPES).toContain('nodes:console');

@@ -455,6 +455,8 @@ export type WSServerMessage =
       code: string;
       message: string;
       statusCode?: number;
+      /** Structured details, sent only for license denials so the client can show the paywall. */
+      details?: unknown;
     }
   | { type: 'conversation.snapshot'; conversationId: string; snapshot: AIConversationRuntimeSnapshot }
   | {

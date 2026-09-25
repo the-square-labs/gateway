@@ -2,117 +2,48 @@ import { describe, expect, it, vi } from 'vitest';
 import { EventBusService } from '@/services/event-bus.service.js';
 import { LicenseEntitlementReconcilerService } from './license-entitlement-reconciler.service.js';
 
-function makeServices(
-  features: string[],
-  plan: 'community' | 'business' | 'enterprise' = 'community',
-  status = 'community'
-) {
-  const policy = {
-    getSummary: vi.fn(async () => ({
-      status,
-      plan,
-      entitlements: { features },
-    })),
-  };
-  const config = {
-    features: { pkiEnabled: true, siemEnabled: true },
-  };
-  const settings = {
-    getConfig: vi.fn(async () => config),
-    updateConfig: vi.fn(async ({ features: updates }) => {
-      Object.assign(config.features, updates);
-      return config;
-    }),
-  };
-  const logging = {
-    snapshot: vi.fn(async () => ({ mode: 'external' })),
-    update: vi.fn(async () => undefined),
-  };
-  const pages = {
-    disableForEntitlementLoss: vi.fn(async () => undefined),
-  };
-  const internalRegistry = {
-    disableExternalAccessForEntitlementLoss: vi.fn(async () => true),
-  };
-  const eventBus = new EventBusService();
-  const reconciler = new LicenseEntitlementReconcilerService(
-    policy as never,
-    settings as never,
-    logging as never,
-    eventBus
-  );
-  reconciler.setPageProfileService(pages as never);
-  reconciler.setDockerInternalRegistryService(internalRegistry as never);
+function makePolicy(current: string[], existing: string[], status = 'expired') {
   return {
-    reconciler,
-    policy,
-    settings,
-    logging,
-    pages,
-    internalRegistry,
-    eventBus,
+    getSummary: vi.fn(async () => ({ status, plan: 'community', entitlements: { features: current } })),
+    hasFeature: vi.fn(async (feature: string) => current.includes(feature)),
+    hasFeatureForExistingRuntime: vi.fn(async (feature: string) => existing.includes(feature)),
+    // Configuration must never be changed by license transitions.
+    updateConfig: vi.fn(),
   };
 }
 
 describe('LicenseEntitlementReconcilerService', () => {
-  it('disables PKI, SIEM, and structured logging without clearing their stored configuration', async () => {
-    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([]);
-
-    await reconciler.reconcile();
-
-    expect(settings.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false, siemEnabled: false } });
-    expect(logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
-    expect(pages.disableForEntitlementLoss).toHaveBeenCalledOnce();
-    expect(internalRegistry.disableExternalAccessForEntitlementLoss).toHaveBeenCalledOnce();
-  });
-
-  it('never auto-enables switchable features when entitlements return', async () => {
-    const { reconciler, settings, logging, pages, internalRegistry } = makeServices(
-      ['internal-pki', 'siem-export', 'structured-logging', 'pages', 'git-push-to-deploy'],
-      'business'
-    );
-
-    await reconciler.reconcile();
-
-    expect(settings.updateConfig).not.toHaveBeenCalled();
-    expect(logging.update).not.toHaveBeenCalled();
-    expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
-    expect(internalRegistry.disableExternalAccessForEntitlementLoss).not.toHaveBeenCalled();
-  });
-
   it.each([
     'expired',
     'unreachable_grace_expired',
-  ])('preserves existing paid runtimes after %s while policy gates new paid actions', async (status) => {
-    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([], 'community', status);
+    'revoked',
+    'replaced',
+    'deactivated',
+  ])('never changes stored configuration after %s', async (status) => {
+    const policy = makePolicy([], ['siem-export', 'git-push-to-deploy', 'internal-pki', 'pages'], status);
+    const reconciler = new LicenseEntitlementReconcilerService(policy as never, new EventBusService());
 
-    await reconciler.reconcile();
-
-    expect(settings.getConfig).not.toHaveBeenCalled();
-    expect(settings.updateConfig).not.toHaveBeenCalled();
-    expect(logging.update).not.toHaveBeenCalled();
-    expect(pages.disableForEntitlementLoss).not.toHaveBeenCalled();
-    expect(internalRegistry.disableExternalAccessForEntitlementLoss).not.toHaveBeenCalled();
-  });
-
-  it('still disables paid runtimes after an authoritative revocation', async () => {
-    const { reconciler, settings, logging, pages, internalRegistry } = makeServices([], 'community', 'revoked');
-
-    await reconciler.reconcile();
-
-    expect(settings.updateConfig).toHaveBeenCalledWith({ features: { pkiEnabled: false, siemEnabled: false } });
-    expect(logging.update).toHaveBeenCalledWith({ mode: 'disabled' });
-    expect(pages.disableForEntitlementLoss).toHaveBeenCalledOnce();
-    expect(internalRegistry.disableExternalAccessForEntitlementLoss).toHaveBeenCalledOnce();
-  });
-
-  it('reconciles changes published through the existing notification event bus', async () => {
-    const { reconciler, policy, eventBus } = makeServices([]);
     await reconciler.start();
-    policy.getSummary.mockClear();
-
-    eventBus.publish('system.license.changed', { status: 'expired', plan: 'community' });
-    await vi.waitFor(() => expect(policy.getSummary).toHaveBeenCalledOnce());
     await reconciler.stop();
+
+    expect(policy.hasFeature).toHaveBeenCalledWith('siem-export');
+    expect(policy.hasFeature).toHaveBeenCalledWith('git-push-to-deploy');
+    expect(policy.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it('re-evaluates paid service features on every license change', async () => {
+    const eventBus = new EventBusService();
+    const policy = makePolicy(['siem-export', 'git-push-to-deploy'], ['siem-export', 'git-push-to-deploy'], 'valid');
+    const reconciler = new LicenseEntitlementReconcilerService(policy as never, eventBus);
+    await reconciler.start();
+    expect(policy.getSummary).toHaveBeenCalledTimes(1);
+
+    policy.hasFeature.mockResolvedValue(false);
+    eventBus.publish('system.license.changed', { status: 'expired' } as never);
+    await reconciler.reconcile();
+    await reconciler.stop();
+
+    expect(policy.getSummary.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(policy.hasFeatureForExistingRuntime).toHaveBeenCalledWith('siem-export');
   });
 });

@@ -12,7 +12,7 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
     destructive: true,
     invalidateStores: [],
     description:
-      'List native backup policies/history, manage policies (config: destinationId, bucket, prefix, optional staging target, executorNodeId, schedule, timezone, retentionCount, limits, enabled), run or cancel a backup or restore run (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target (config: executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId, optional targetDatabaseName and limits), and delete_run to remove retired backup history. Runtime addresses and credentials are resolved by Gateway.',
+      'List native backup policies/history, manage policies (config: destinationId, bucket, prefix, optional staging target, executorNodeId, schedule, timezone, retentionCount, limits, enabled), run or cancel a backup or restore run (config.force ends a run whose executor cannot confirm), restore a verified artifact into an empty target (config: executorNodeId plus newManagedDatabaseName or restoreTargetConnectionId, optional targetDatabaseName and limits), and delete_run to remove a finished run from history. When that backup still has files, delete_run needs config.artifacts: "delete" removes the files first (the entry is kept if that fails) and "forget" removes only the entry and leaves the files in storage; ask the user which one before calling. Runtime addresses and credentials are resolved by Gateway.',
     parameters: {
       type: 'object',
       properties: {
@@ -35,7 +35,8 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
         runId: { type: 'string' },
         config: {
           type: 'object',
-          description: 'Policy body for create/update_policy, restore body for restore, { force } for cancel.',
+          description:
+            'Policy body for create/update_policy, restore body for restore, { force } for cancel, { artifacts } for delete_run.',
           properties: {
             destinationId: { type: 'string' },
             bucket: { type: 'string' },
@@ -62,6 +63,11 @@ export const BACKUP_AI_TOOLS: AIToolDefinition[] = [
             restoreTargetConnectionId: { type: 'string' },
             overwrite: { type: 'boolean', enum: [false] },
             force: { type: 'boolean' },
+            artifacts: {
+              type: 'string',
+              enum: ['delete', 'forget'],
+              description: 'delete_run only: what to do with backup files that still exist.',
+            },
           },
           additionalProperties: false,
         },

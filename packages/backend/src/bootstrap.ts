@@ -1113,6 +1113,7 @@ export async function initializeContainer(): Promise<void> {
     [db, auditService, cryptoService, managedDatabaseTunnelProxy],
     databaseCommercialRuntime
   );
+  databaseConnectionService.setDatabaseCA(databaseCA);
   container.registerInstance(DatabaseConnectionService, databaseConnectionService);
 
   const managedDatabaseService = commercialEdition.createManagedDatabase(
@@ -1888,14 +1889,7 @@ export async function initializeContainer(): Promise<void> {
   );
   loggingRuntimeService.setLicensePolicyService(licensePolicyService);
   container.registerInstance(LoggingRuntimeService, loggingRuntimeService);
-  const licenseEntitlementReconciler = new LicenseEntitlementReconcilerService(
-    licensePolicyService,
-    generalSettingsService,
-    loggingRuntimeService,
-    eventBus
-  );
-  licenseEntitlementReconciler.setPageProfileService(pageProfileService);
-  licenseEntitlementReconciler.setDockerInternalRegistryService(dockerInternalRegistryService);
+  const licenseEntitlementReconciler = new LicenseEntitlementReconcilerService(licensePolicyService, eventBus);
   container.registerInstance(LicenseEntitlementReconcilerService, licenseEntitlementReconciler);
   const loggingMaintenanceService = commercialEdition.createLogging(
     'LoggingMaintenanceService',

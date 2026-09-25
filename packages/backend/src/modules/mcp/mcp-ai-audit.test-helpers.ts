@@ -75,7 +75,10 @@ export function createService({
       ...dockerService,
     } as never
   );
-  (service as any).licensePolicyService = { requireFeature: async () => undefined };
+  (service as any).licensePolicyService = {
+    requireFeature: async () => undefined,
+    requireFeatureForExistingRuntime: async () => undefined,
+  };
   return service;
 }
 

@@ -35,7 +35,7 @@ function createService() {
   );
 }
 
-const licensePolicyService = { requireFeature: vi.fn() };
+const licensePolicyService = { requireFeature: vi.fn(), requireFeatureForExistingRuntime: vi.fn() };
 const enabledLoggingFeature = { requireEnabled: vi.fn(), requireAvailableForStorage: vi.fn() };
 
 function mockContainerResolve(services: Record<string, unknown>) {
@@ -212,7 +212,8 @@ describe('AIService logging tool routing', () => {
       environmentId: 'env-1',
     });
     expect(result).toHaveProperty('error');
-    expect(licensePolicyService.requireFeature).toHaveBeenCalledWith('structured-logging');
+    // Reading an existing environment uses continuity after the license grace period.
+    expect(licensePolicyService.requireFeatureForExistingRuntime).toHaveBeenCalledWith('structured-logging');
     expect(loggingEnvironmentService.get).not.toHaveBeenCalled();
   });
 
@@ -251,6 +252,7 @@ describe('AIService logging tool routing', () => {
   it('reads logging health with housekeeping:view outside the logging license gate', async () => {
     const maintenance = { getSnapshot: vi.fn().mockReturnValue({ status: 'healthy' }) };
     licensePolicyService.requireFeature.mockClear();
+    licensePolicyService.requireFeatureForExistingRuntime.mockClear();
     mockContainerResolve({ LoggingMaintenanceService: maintenance });
     const service = createService();
 
@@ -267,5 +269,6 @@ describe('AIService logging tool routing', () => {
     expect(denied).toHaveProperty('error');
     expect(maintenance.getSnapshot).toHaveBeenCalledTimes(1);
     expect(licensePolicyService.requireFeature).not.toHaveBeenCalled();
+    expect(licensePolicyService.requireFeatureForExistingRuntime).not.toHaveBeenCalled();
   });
 });

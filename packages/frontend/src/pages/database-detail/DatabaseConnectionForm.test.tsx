@@ -1,11 +1,49 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { DatabaseConnection } from "@/types";
 import {
   buildDatabasePayload,
   canCreateDatabase,
   DatabaseConnectionForm,
   draftFromConnection,
+  tlsVerificationWeakened,
 } from "./DatabaseConnectionForm";
+
+function savedPostgres(overrides: Partial<DatabaseConnection> = {}): DatabaseConnection {
+  return {
+    id: "db-1",
+    slug: "primary",
+    name: "Primary",
+    type: "postgres",
+    description: null,
+    tags: [],
+    manualSizeLimitMb: null,
+    host: "db.example.com",
+    port: 5432,
+    databaseName: "app",
+    username: "gateway",
+    tlsEnabled: true,
+    tlsVerifyCertificate: true,
+    tlsCaCertificate: null,
+    healthStatus: "online",
+    lastHealthCheckAt: null,
+    lastError: null,
+    hasStoredPassword: true,
+    config: {
+      host: "db.example.com",
+      port: 5432,
+      database: "app",
+      username: "gateway",
+      password: "",
+      sslEnabled: true,
+    },
+    createdById: "user-1",
+    updatedById: null,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    updatedAt: "2026-09-01T00:00:00.000Z",
+    ...overrides,
+  } as DatabaseConnection;
+}
 
 describe("DatabaseConnectionForm", () => {
   it("shows credential fields without mixing in the URI field by default", () => {
@@ -102,7 +140,11 @@ describe("buildDatabasePayload", () => {
       tlsEnabled: true,
     });
 
-    expect(payload.config).toEqual({ connectionString });
+    expect(payload.config).toEqual({
+      connectionString,
+      tlsVerifyCertificate: true,
+      tlsCaCertificate: null,
+    });
   });
 
   it("sends only individual fields in credentials mode", () => {
@@ -126,7 +168,29 @@ describe("buildDatabasePayload", () => {
       username: "gateway",
       password: "secret",
       sslEnabled: true,
+      tlsVerifyCertificate: true,
+      tlsCaCertificate: null,
     });
+  });
+
+  it("verifies new TLS connections by default and sends a custom CA or an explicit opt-out", () => {
+    const base = { ...draftFromConnection(null), sslEnabled: true };
+    expect(buildDatabasePayload(base).config).toMatchObject({
+      tlsVerifyCertificate: true,
+      tlsCaCertificate: null,
+    });
+    expect(
+      buildDatabasePayload({ ...base, tlsCaCertificate: "  -----BEGIN CERTIFICATE-----\n  " })
+        .config
+    ).toMatchObject({ tlsCaCertificate: "-----BEGIN CERTIFICATE-----" });
+    expect(buildDatabasePayload({ ...base, tlsVerifyCertificate: false }).config).toMatchObject({
+      tlsVerifyCertificate: false,
+    });
+  });
+
+  it("keeps the saved verification state of an existing connection", () => {
+    const legacy = draftFromConnection(savedPostgres({ tlsVerifyCertificate: false }));
+    expect(buildDatabasePayload(legacy).config).toMatchObject({ tlsVerifyCertificate: false });
   });
 
   it("does not send a manual size limit for ClickHouse", () => {
@@ -146,6 +210,55 @@ describe("buildDatabasePayload", () => {
     });
 
     expect(payload).toHaveProperty("interactiveQueryBudgetSeconds", 450);
+  });
+});
+
+describe("TLS verification fields", () => {
+  it("shows verification for a TLS connection and warns when it is off", () => {
+    const onChange = vi.fn();
+    const draft = { ...draftFromConnection(null), sslEnabled: true };
+    const { rerender } = render(<DatabaseConnectionForm draft={draft} onChange={onChange} />);
+
+    expect(screen.getByLabelText("CA certificate")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Verify server certificate" }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ tlsVerifyCertificate: false }));
+
+    rerender(
+      <DatabaseConnectionForm
+        draft={{ ...draft, tlsVerifyCertificate: false }}
+        onChange={onChange}
+      />
+    );
+    expect(screen.queryByLabelText("CA certificate")).not.toBeInTheDocument();
+    expect(screen.getByText(/server identity is not checked/)).toBeInTheDocument();
+  });
+
+  it("hides verification for plaintext connections", () => {
+    render(<DatabaseConnectionForm draft={draftFromConnection(null)} onChange={vi.fn()} />);
+    expect(
+      screen.queryByRole("button", { name: "Verify server certificate" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("asks for the password when an edit weakens verification", () => {
+    const saved = draftFromConnection(savedPostgres());
+    expect(tlsVerificationWeakened(saved)).toBe(false);
+    expect(tlsVerificationWeakened({ ...saved, tlsVerifyCertificate: false })).toBe(true);
+    expect(
+      tlsVerificationWeakened({ ...saved, tlsCaCertificate: "-----BEGIN CERTIFICATE-----" })
+    ).toBe(true);
+    // Enabling verification on a legacy connection only strengthens it.
+    const legacy = draftFromConnection(savedPostgres({ tlsVerifyCertificate: false }));
+    expect(tlsVerificationWeakened({ ...legacy, tlsVerifyCertificate: true })).toBe(false);
+
+    render(
+      <DatabaseConnectionForm
+        draft={{ ...saved, tlsVerifyCertificate: false }}
+        onChange={vi.fn()}
+        mode="metadata"
+      />
+    );
+    expect(screen.getByLabelText("Database password")).toBeInTheDocument();
   });
 });
 

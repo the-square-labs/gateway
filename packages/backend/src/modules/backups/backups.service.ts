@@ -2,6 +2,8 @@ import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { BackupEngine, BackupManifest } from '../../db/schema/backups.js';
 import type {
   BackupDestination,
+  BackupHistoryArtifactsAction,
+  BackupHistoryDeleteResult,
   BackupPolicyInput,
   BackupRestoreInput,
   BackupRuntimeConnection,
@@ -209,10 +211,9 @@ export class BackupService {
   async deleteHistory(
     _databaseId: string,
     _runId: string,
-    _userId: string
-  ): Promise<{
-    success: boolean;
-  }> {
+    _userId: string,
+    _options?: { artifacts?: BackupHistoryArtifactsAction }
+  ): Promise<BackupHistoryDeleteResult> {
     return commercialModuleUnavailable();
   }
   async cancel(_databaseId: string, _runId: string, _userId: string, _options?: { force?: boolean }): Promise<void> {

@@ -20,7 +20,7 @@ import {
 } from '@/modules/docker/docker-build.schemas.js';
 import { DockerSourceService } from '@/modules/docker/docker-source.service.js';
 import { IntegrationsService } from '@/modules/integrations/integrations.service.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import {
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
@@ -79,6 +79,7 @@ export const pageProjectRouteRuntime = {
   DockerSourceService,
   IntegrationsService,
   requireLicenseFeature,
+  requireLicenseFeatureForRequest,
   CreateResourceFolderSchema,
   MoveResourceFolderSchema,
   MoveResourcesToFolderSchema,

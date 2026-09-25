@@ -1387,6 +1387,13 @@
       "when": 1790192371820,
       "tag": "0197_platform_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 198,
+      "version": "7",
+      "when": 1790296565684,
+      "tag": "0198_database_tls_verification",
+      "breakpoints": true
     }
   ]
 }

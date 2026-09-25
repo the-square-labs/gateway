@@ -32,6 +32,7 @@ import { DatabaseCredentialsDialog } from "./database-detail/DatabaseCredentials
 import { DatabaseHeader } from "./database-detail/DatabaseHeader";
 import { DatabaseOverviewTab } from "./database-detail/DatabaseOverviewTab";
 import { DatabaseSettingsTab } from "./database-detail/DatabaseSettingsTab";
+import { DatabaseTlsVerificationNotice } from "./database-detail/DatabaseTlsVerificationNotice";
 import {
   appendDatabaseMetricSnapshot,
   hasDatabaseScope,
@@ -142,9 +143,14 @@ function DatabaseDetailContent({
         if (!current) return;
         setBackupDestinations(
           storage.data
+            // Same storage checks as the backup API: write objects and let the
+            // runner use the saved credentials (storage:credentials:reveal implies it).
             .filter(
               (item) =>
-                hasScope("storage:objects:write") || hasScope(`storage:objects:write:${item.id}`)
+                (hasScope("storage:objects:write") ||
+                  hasScope(`storage:objects:write:${item.id}`)) &&
+                (hasScope("storage:credentials:use") ||
+                  hasScope(`storage:credentials:use:${item.id}`))
             )
             .map((item) => ({ id: item.id, label: item.name, provider: item.provider }))
         );
@@ -633,6 +639,16 @@ function DatabaseDetailContent({
               onRotateDirectCredentials={() => void rotateDirectCredentials()}
               onRotateCertificate={() => void rotateCertificate()}
               onRemove={() => void remove()}
+            />
+
+            <DatabaseTlsVerificationNotice
+              database={database}
+              canEdit={canManageSettings}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onVerified={(updated) => {
+                setDatabase(updated);
+                void load();
+              }}
             />
 
             {!isManagedPaused && (

@@ -8,10 +8,20 @@ import {
   LICENSE_PLAN_ENTITLEMENTS_V4,
   type LicenseServerState,
 } from './license.types.js';
+import {
+  createTestLicenseSigner,
+  createTestLicenseVerifier,
+  signedLicenseServer,
+  signTestLicenseState,
+  TEST_INSTALLATION_ID,
+} from './license-attestation.test-helpers.js';
 import { LicensePolicyService } from './license-policy.service.js';
 
+const signer = createTestLicenseSigner();
+const verifier = createTestLicenseVerifier(signer);
+
 function createDb() {
-  const rows = new Map<string, unknown>();
+  const rows = new Map<string, unknown>([['license:installation_id', TEST_INSTALLATION_ID]]);
   const keyFromCondition = (condition: unknown): string | undefined => {
     const chunks = (condition as { queryChunks?: Array<{ value?: unknown }> }).queryChunks ?? [];
     for (const chunk of chunks) {
@@ -65,6 +75,19 @@ const env = {
   APP_VERSION: 'v2.6.12',
 } as never;
 
+/** A service whose mocked license server signs every state like a current server. */
+function createService(db: unknown, fetcher: unknown, eventBus?: unknown) {
+  return new LicenseService(
+    db as never,
+    createCrypto() as never,
+    env,
+    signedLicenseServer(fetcher as never, signer) as never,
+    undefined,
+    eventBus as never,
+    verifier
+  );
+}
+
 const communityState = (): LicenseServerState => ({
   registrationStatus: 'registered',
   effectivePlan: 'community',
@@ -102,6 +125,17 @@ const paidState = (plan: 'personal' | 'business' | 'enterprise' = 'business'): L
     },
     serverTime: new Date().toISOString(),
   };
+};
+
+const expiredGraceState = (plan: 'personal' | 'business' | 'enterprise', expiresAt: Date): LicenseServerState => {
+  const state = paidState(plan);
+  state.paidLicenseStatus = 'expired_grace';
+  state.paidLicense!.status = 'expired';
+  state.paidLicense!.expiresAt = expiresAt.toISOString();
+  state.graceUntil = new Date(
+    expiresAt.getTime() + { personal: 24, business: 72, enterprise: 168 }[plan] * 60 * 60 * 1000
+  ).toISOString();
+  return state;
 };
 
 function dataResponse<T>(data: T, status = 200) {
@@ -153,7 +187,7 @@ describe('LicenseService', () => {
         })
       )
       .mockResolvedValueOnce(new Response('unavailable', { status: 503 }));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     const grant = await service.authorizeCommercialUpdate('v3.0.0-rc.1');
     if (grant.edition === 'commercial')
       expect((await grant.readFile('backend/index.cjs', 'a'.repeat(64))).status).toBe(503);
@@ -171,7 +205,7 @@ describe('LicenseService', () => {
             .fn()
             .mockImplementationOnce(() => registerResponse())
             .mockImplementationOnce(() => dataResponse({ state: communityState() }));
-      const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+      const service = createService(db, fetcher);
       if (fails) await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toThrow();
       else await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toEqual({ edition: 'community' });
       expect(db.rows.get('license:cached_state')).toBe(cache);
@@ -188,7 +222,7 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState()))
       .mockImplementationOnce(() => dataResponse({ state: paidState(), signedManifest: 'signed-release' }));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toMatchObject({ edition: 'commercial' });
     expect(fetcher.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
       '/api/v1/installations/register',
@@ -205,7 +239,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => dataResponse({ state: paidState('personal'), signedManifest: 'signed-release' }))
       .mockResolvedValueOnce(new Response('core-bytes'));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     const grant = await service.authorizeCommercialUpdate('v3.0.0-rc.1');
     expect(grant.edition).toBe('commercial');
     if (grant.edition !== 'commercial') throw new Error('Expected private grant');
@@ -227,7 +261,7 @@ describe('LicenseService', () => {
     const db = createDb();
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
     const fetcher = vi.fn().mockRejectedValue(new Error('offline'));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toMatchObject({
       code: 'LICENSE_SERVER_UNAVAILABLE',
     });
@@ -239,7 +273,49 @@ describe('LicenseService', () => {
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
     db.rows.set('license:key_encrypted', createCrypto().encryptString('paid-secret'));
     const fetcher = vi.fn().mockImplementation(() => dataResponse({ state: communityState() }));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
+    await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toMatchObject({
+      code: 'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
+    });
+  });
+
+  it.each([
+    ['expired_grace', 'personal'],
+    ['expired', 'community'],
+    ['revoked', 'community'],
+    ['replaced', 'community'],
+    ['deactivated', 'community'],
+  ] as const)('keeps the private core on update for a %s installation', async (paidLicenseStatus, effectivePlan) => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const expiresAt = new Date('2026-08-17T12:00:00.000Z');
+    const state = expiredGraceState('personal', expiresAt);
+    state.effectivePlan = effectivePlan;
+    state.paidLicenseStatus = paidLicenseStatus;
+    if (effectivePlan === 'community') state.entitlements = LICENSE_PLAN_ENTITLEMENTS.community;
+    if (paidLicenseStatus === 'revoked') state.paidLicense!.status = 'revoked';
+    if (paidLicenseStatus === 'replaced' || paidLicenseStatus === 'deactivated') delete state.activation;
+    const fetcher = vi.fn().mockImplementation(() => dataResponse({ state, signedManifest: 'signed-release' }));
+    const service = createService(db, fetcher);
+
+    await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toMatchObject({
+      edition: 'commercial',
+      signedManifest: 'signed-release',
+    });
+  });
+
+  it('refuses an update that would drop the private core of a lost paid installation', async () => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const state = expiredGraceState('business', new Date('2026-08-17T12:00:00.000Z'));
+    state.effectivePlan = 'community';
+    state.paidLicenseStatus = 'expired';
+    state.entitlements = LICENSE_PLAN_ENTITLEMENTS.community;
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse({ state }))
+    );
+
     await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toMatchObject({
       code: 'COMMERCIAL_UPDATE_NOT_AUTHORIZED',
     });
@@ -249,7 +325,7 @@ describe('LicenseService', () => {
     const db = createDb();
     db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
     const fetcher = vi.fn().mockImplementation(() => dataResponse({ state: communityState() }));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).resolves.toEqual({ edition: 'community' });
     expect(fetcher).toHaveBeenCalledOnce();
   });
@@ -259,7 +335,7 @@ describe('LicenseService', () => {
 
   it('returns usable Community with pending registration before the first heartbeat', async () => {
     const fetcher = vi.fn();
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
 
     const status = await service.getStatus();
 
@@ -276,7 +352,7 @@ describe('LicenseService', () => {
   it('registers Community with a client-held nonce and stores only encrypted credentials', async () => {
     const db = createDb();
     const fetcher = vi.fn().mockImplementation(() => registerResponse());
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     await service.heartbeat();
 
@@ -308,7 +384,7 @@ describe('LicenseService', () => {
 
   it('keeps Community usable and pending when automatic registration is unavailable', async () => {
     const fetcher = vi.fn().mockRejectedValue(new Error('network down'));
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
 
     await expect(service.heartbeat()).resolves.toBeUndefined();
 
@@ -323,7 +399,7 @@ describe('LicenseService', () => {
 
   it('serializes concurrent Community registration attempts', async () => {
     const fetcher = vi.fn().mockImplementation(() => registerResponse());
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
 
     await Promise.all([service.heartbeat(), service.heartbeat()]);
 
@@ -333,7 +409,7 @@ describe('LicenseService', () => {
   it('uses one stable installation ID across concurrent status and registration calls', async () => {
     const db = createDb();
     const fetcher = vi.fn().mockImplementation(() => registerResponse());
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     const [status] = await Promise.all([service.getStatus(), service.heartbeat()]);
 
@@ -354,7 +430,7 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => heartbeatResponse)
       .mockImplementationOnce(() => dataResponse(paidState('business')));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await service.heartbeat();
     db.rows.set('license:cached_state', {
       ...(db.rows.get('license:cached_state') as Record<string, unknown>),
@@ -380,7 +456,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState('business')));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     const status = await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
@@ -389,6 +465,8 @@ describe('LicenseService', () => {
       installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
       licenseKey: 'WLT-GW-AAAA-BBBB-CCCC-DDDD',
       entitlementsVersion: 5,
+      requestNonce: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/),
+      attestationKeyIds: ['gls-test'],
     });
     expect(status).toMatchObject({
       status: 'valid',
@@ -410,7 +488,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => errorResponse('LICENSE_IN_USE', 'License is in use'));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
       code: 'LICENSE_IN_USE',
@@ -424,15 +502,10 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState('enterprise')));
-    const service = new LicenseService(db as never, createCrypto() as never, env, activateFetcher as never);
+    const service = createService(db, activateFetcher);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
-    const failed = new LicenseService(
-      db as never,
-      createCrypto() as never,
-      env,
-      vi.fn().mockRejectedValue(new Error('network down')) as never
-    );
+    const failed = createService(db, vi.fn().mockRejectedValue(new Error('network down')));
     const status = await failed.checkNow();
 
     expect(status).toMatchObject({
@@ -445,31 +518,19 @@ describe('LicenseService', () => {
     expect(status.graceUntil).toBeNull();
   });
 
-  it('keeps paid entitlements for exactly 100 days after the last valid server check', async () => {
+  it('keeps paid entitlements for exactly 100 days after the last signed valid state', async () => {
     vi.useFakeTimers();
     const lastValidAt = new Date('2026-09-01T12:00:00.000Z');
+    vi.setSystemTime(lastValidAt);
     const offlineGraceUntil = new Date(lastValidAt.getTime() + LICENSE_OFFLINE_GRACE_DAYS * 24 * 60 * 60 * 1000);
     const db = createDb();
-    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
-    db.rows.set('license:cached_state', {
-      registrationStatus: 'registered',
-      status: 'valid',
-      plan: 'enterprise',
-      paidPlan: 'enterprise',
-      paidLicenseStatus: 'valid',
-      licenseName: 'Enterprise',
-      licenseMetadata: {},
-      expiresAt: '2030-01-01T00:00:00.000Z',
-      graceUntil: null,
-      entitlementsVersion: 5,
-      entitlements: LICENSE_PLAN_ENTITLEMENTS.enterprise,
-      lastCheckedAt: lastValidAt.toISOString(),
-      lastValidAt: lastValidAt.toISOString(),
-      activeInstallationId: null,
-      activeInstallationName: null,
-      errorMessage: 'License server is unavailable',
-    });
-    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+    const activation = vi
+      .fn()
+      .mockImplementationOnce(() => registerResponse())
+      .mockImplementationOnce(() => dataResponse(paidState('enterprise')));
+    await createService(db, activation).activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    const service = createService(db, vi.fn().mockRejectedValue(new Error('network down')));
+    await service.checkNow();
 
     vi.setSystemTime(new Date(offlineGraceUntil.getTime() - 1));
     await expect(service.getStatus()).resolves.toMatchObject({
@@ -486,12 +547,24 @@ describe('LicenseService', () => {
       licensed: false,
       offlineGraceUntil: offlineGraceUntil.toISOString(),
     });
+
+    // Clearing the recorded error in the database cannot stretch an old signature.
+    db.rows.set('license:cached_state', {
+      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
+      errorMessage: null,
+      lastValidAt: new Date().toISOString(),
+    });
+    await expect(service.getStatus()).resolves.toMatchObject({
+      status: 'unreachable_grace_expired',
+      plan: 'community',
+      licensed: false,
+    });
   });
 
   it.each([3, 4])('applies current Community limits to a valid cached v%s grant', async (version) => {
     const legacy = version === 3 ? LICENSE_PLAN_ENTITLEMENTS_V3 : LICENSE_PLAN_ENTITLEMENTS_V4;
     const db = createDb();
-    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+    const service = createService(db, vi.fn());
     const cached = {
       ...(await service.getStatus()),
       entitlementsVersion: version,
@@ -509,7 +582,7 @@ describe('LicenseService', () => {
 
   it.each(['unknown-version', 'altered-quota'])('does not normalize a corrupt Community cache: %s', async (kind) => {
     const db = createDb();
-    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+    const service = createService(db, vi.fn());
     db.rows.set('license:cached_state', {
       ...(await service.getStatus()),
       entitlementsVersion: kind === 'unknown-version' ? 999 : 4,
@@ -519,38 +592,51 @@ describe('LicenseService', () => {
     await expect(policy.requireQuota('users', 0)).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
   });
 
-  it.each([3, 4])('preserves a paid v%s cache and credentials during an offline upgrade', async (version) => {
+  it.each([3, 4])('never elevates an unsigned paid v%s cache from an older release', async (version) => {
     const legacy = version === 3 ? LICENSE_PLAN_ENTITLEMENTS_V3 : LICENSE_PLAN_ENTITLEMENTS_V4;
     const db = createDb();
-    const activateFetcher = vi
-      .fn()
-      .mockImplementationOnce(() => registerResponse())
-      .mockImplementationOnce(() => dataResponse(paidState('personal')));
-    const service = new LicenseService(db as never, createCrypto() as never, env, activateFetcher as never);
-    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
     db.rows.set('license:cached_state', {
-      ...(db.rows.get('license:cached_state') as Record<string, unknown>),
-      entitlementsVersion: version,
-      entitlements: legacy.personal,
-    });
-
-    const failed = new LicenseService(
-      db as never,
-      createCrypto() as never,
-      env,
-      vi.fn().mockRejectedValue(new Error('network down')) as never
-    );
-    const status = await failed.checkNow();
-
-    expect(status).toMatchObject({
-      status: 'valid_with_warning',
+      registrationStatus: 'registered',
+      status: 'valid',
       plan: 'personal',
-      licensed: true,
+      paidPlan: 'personal',
+      paidLicenseStatus: 'valid',
+      expiresAt: null,
+      graceUntil: null,
       entitlementsVersion: version,
       entitlements: legacy.personal,
+      lastCheckedAt: new Date().toISOString(),
+      lastValidAt: new Date().toISOString(),
+      errorMessage: null,
     });
+    const offline = vi.fn().mockRejectedValue(new Error('network down'));
+    const service = createService(db, offline);
+
+    await expect(service.getStatus()).resolves.toMatchObject({
+      status: 'unreachable_grace_expired',
+      plan: 'community',
+      licensed: false,
+      entitlements: COMMUNITY_ENTITLEMENTS,
+    });
+    const policy = new LicensePolicyService(service);
+    // Existing paid resources keep operating; new ones need a signed state.
+    await expect(policy.requireFeatureForExistingRuntime('pages')).resolves.toBeUndefined();
+    await expect(policy.requireFeature('pages')).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+
+    // The unsigned cache is replaced at the first heartbeat, even inside the interval.
+    await service.heartbeat();
+    expect(offline).toHaveBeenCalledOnce();
     expect(db.rows.has('license:installation_token_encrypted')).toBe(true);
     expect(db.rows.has('license:key_encrypted')).toBe(true);
+
+    const online = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(paidState('personal')))
+    );
+    await online.heartbeat();
+    await expect(online.getStatus()).resolves.toMatchObject({ status: 'valid', plan: 'personal', licensed: true });
   });
 
   it.each([
@@ -562,47 +648,29 @@ describe('LicenseService', () => {
     const expiresAt = new Date('2026-08-17T12:00:00.000Z');
     const graceUntil = new Date(expiresAt.getTime() + graceHours * 60 * 60 * 1000);
     vi.setSystemTime(new Date(expiresAt.getTime() + 60_000));
-    const state = paidState(plan);
-    state.paidLicenseStatus = 'expired_grace';
-    state.paidLicense!.status = 'expired';
-    state.paidLicense!.expiresAt = expiresAt.toISOString();
-    state.graceUntil = graceUntil.toISOString();
     const db = createDb();
-    const fetcher = vi
-      .fn()
-      .mockImplementationOnce(() => registerResponse())
-      .mockImplementationOnce(() => dataResponse(state));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(expiredGraceState(plan, expiresAt)))
+    );
 
-    await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD').catch(async () => {
-      db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
-      db.rows.set('license:cached_state', {
-        registrationStatus: 'registered',
-        status: 'expired_grace',
-        plan,
-        paidPlan: plan,
-        paidLicenseStatus: 'expired_grace',
-        licenseName: `Test ${plan}`,
-        licenseMetadata: {},
-        expiresAt: expiresAt.toISOString(),
-        graceUntil: graceUntil.toISOString(),
-        entitlementsVersion: 5,
-        entitlements: state.entitlements,
-        lastCheckedAt: new Date().toISOString(),
-        lastValidAt: new Date().toISOString(),
-        activeInstallationId: null,
-        activeInstallationName: null,
-        errorMessage: null,
-      });
-    });
+    await service.checkNow();
 
     expect(await service.getStatus()).toMatchObject({
       status: 'expired_grace',
       plan,
       licensed: true,
       graceUntil: graceUntil.toISOString(),
-      entitlements: state.entitlements,
+      entitlements: LICENSE_PLAN_ENTITLEMENTS[plan],
     });
+    const policy = new LicensePolicyService(service);
+    await expect(policy.hasFeature('compose-applications')).resolves.toBe(true);
+    vi.setSystemTime(new Date(graceUntil.getTime() - 1));
+    await expect(policy.hasFeature('compose-applications')).resolves.toBe(true);
+    vi.setSystemTime(graceUntil);
+    await expect(policy.hasFeature('compose-applications')).resolves.toBe(false);
+    await expect(policy.hasFeatureForExistingRuntime('compose-applications')).resolves.toBe(true);
   });
 
   it('downgrades locally when expiration grace ends without another heartbeat', async () => {
@@ -610,39 +678,13 @@ describe('LicenseService', () => {
     const expiresAt = new Date('2026-08-17T12:00:00.000Z');
     const graceUntil = new Date('2026-08-20T12:00:00.000Z');
     vi.setSystemTime(new Date('2026-08-17T12:01:00.000Z'));
-    const state = paidState('business');
-    state.paidLicenseStatus = 'expired_grace';
-    state.paidLicense!.status = 'expired';
-    state.paidLicense!.expiresAt = expiresAt.toISOString();
-    state.graceUntil = graceUntil.toISOString();
     const db = createDb();
-    const fetcher = vi
-      .fn()
-      .mockImplementationOnce(() => registerResponse())
-      .mockImplementationOnce(() => dataResponse(state));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
-    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
-      code: 'LICENSE_NOT_ACTIVE',
-    });
-    db.rows.set('license:key_encrypted', createCrypto().encryptString('WLT-GW-AAAA-BBBB-CCCC-DDDD'));
-    db.rows.set('license:cached_state', {
-      registrationStatus: 'registered',
-      status: 'expired_grace',
-      plan: 'business',
-      paidPlan: 'business',
-      paidLicenseStatus: 'expired_grace',
-      licenseName: 'Test business',
-      licenseMetadata: {},
-      expiresAt: expiresAt.toISOString(),
-      graceUntil: graceUntil.toISOString(),
-      entitlementsVersion: 5,
-      entitlements: state.entitlements,
-      lastCheckedAt: new Date().toISOString(),
-      lastValidAt: new Date().toISOString(),
-      activeInstallationId: null,
-      activeInstallationName: null,
-      errorMessage: null,
-    });
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(expiredGraceState('business', expiresAt)))
+    );
+    await service.checkNow();
 
     vi.setSystemTime(graceUntil);
     expect(await service.getStatus()).toMatchObject({
@@ -681,7 +723,7 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(valid))
       .mockImplementationOnce(() => dataResponse(expired));
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
     await service.checkNow();
 
@@ -710,7 +752,7 @@ describe('LicenseService', () => {
           activation: paidState('personal').activation,
         })
       );
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
     const status = await service.checkNow();
@@ -730,7 +772,7 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState()))
       .mockImplementationOnce(() => dataResponse(communityState()));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
     const status = await service.clearKey();
@@ -739,6 +781,8 @@ describe('LicenseService', () => {
     expect(JSON.parse(fetcher.mock.calls[2]![1].body)).toEqual({
       installationToken: 'WLT-GWI-INSTALLATION-TOKEN',
       entitlementsVersion: 5,
+      requestNonce: expect.stringMatching(/^[A-Za-z0-9_-]{32}$/),
+      attestationKeyIds: ['gls-test'],
     });
     expect(db.rows.has('license:key_encrypted')).toBe(false);
     expect(status).toMatchObject({ status: 'community', plan: 'community', hasKey: false });
@@ -751,7 +795,7 @@ describe('LicenseService', () => {
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState()))
       .mockImplementationOnce(() => errorResponse('LICENSE_SERVER_ERROR', 'Unavailable', 503));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
     await expect(service.clearKey()).rejects.toBeInstanceOf(LicenseServerRequestError);
@@ -765,7 +809,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementation(() => dataResponse(communityState()));
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
 
     await service.heartbeat();
     vi.setSystemTime(new Date('2026-08-16T12:15:00.000Z'));
@@ -782,7 +826,7 @@ describe('LicenseService', () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-16T12:00:00.000Z'));
     const fetcher = vi.fn().mockRejectedValue(new Error('network down'));
-    const service = new LicenseService(createDb() as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(createDb(), fetcher);
 
     await service.heartbeat();
     vi.setSystemTime(new Date('2026-08-16T12:15:00.000Z'));
@@ -810,7 +854,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(paidState('personal')));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     const status = await service.checkNow();
 
@@ -824,7 +868,7 @@ describe('LicenseService', () => {
     const malformed = communityState();
     malformed.entitlements = LICENSE_PLAN_ENTITLEMENTS.personal;
     const fetcher = vi.fn().mockImplementation(() => registerResponse(malformed));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     await service.heartbeat();
 
@@ -840,7 +884,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(malformed));
-    const service = new LicenseService(db as never, createCrypto() as never, env, fetcher as never);
+    const service = createService(db, fetcher);
 
     await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
       code: 'INVALID_LICENSE_STATE',
@@ -848,11 +892,11 @@ describe('LicenseService', () => {
     expect(db.rows.has('license:key_encrypted')).toBe(false);
   });
 
-  it('caps cached expiration grace at the local plan maximum', async () => {
+  it('ignores an unsigned cache that claims a longer expiration grace', async () => {
     vi.useFakeTimers();
     const db = createDb();
     const expiresAt = new Date('2026-08-17T12:00:00.000Z');
-    vi.setSystemTime(new Date('2026-08-20T12:00:00.001Z'));
+    vi.setSystemTime(new Date('2026-08-18T12:00:00.001Z'));
     db.rows.set('license:cached_state', {
       registrationStatus: 'registered',
       status: 'expired_grace',
@@ -871,9 +915,13 @@ describe('LicenseService', () => {
       activeInstallationName: null,
       errorMessage: null,
     });
-    const service = new LicenseService(db as never, createCrypto() as never, env, vi.fn() as never);
+    const service = createService(db, vi.fn());
 
-    expect(await service.getStatus()).toMatchObject({ status: 'expired', plan: 'community', licensed: false });
+    expect(await service.getStatus()).toMatchObject({
+      status: 'unreachable_grace_expired',
+      plan: 'community',
+      licensed: false,
+    });
   });
 
   it('publishes lifecycle transitions at expiry without waiting for heartbeat', async () => {
@@ -889,14 +937,7 @@ describe('LicenseService', () => {
       .fn()
       .mockImplementationOnce(() => registerResponse())
       .mockImplementationOnce(() => dataResponse(state));
-    const service = new LicenseService(
-      createDb() as never,
-      createCrypto() as never,
-      env,
-      fetcher as never,
-      undefined,
-      eventBus as never
-    );
+    const service = createService(createDb(), fetcher, eventBus);
     await service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
 
     await vi.advanceTimersByTimeAsync(10_000);
@@ -905,5 +946,290 @@ describe('LicenseService', () => {
       'system.license.changed',
       expect.objectContaining({ status: 'expired_grace', plan: 'business' })
     );
+  });
+});
+
+describe('LicenseService signed states', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** A registered installation that already applied a signed paid state. */
+  async function activatedService(plan: 'personal' | 'business' | 'enterprise' = 'business') {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    await createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(paidState(plan)))
+    ).activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD');
+    return db;
+  }
+
+  function rawServer(respond: (body: { requestNonce: string }) => unknown) {
+    return vi.fn(async (_url: string, init: RequestInit) => dataResponse(respond(JSON.parse(String(init.body)))));
+  }
+
+  function unsignedService(db: ReturnType<typeof createDb>, fetcher: unknown) {
+    return new LicenseService(
+      db as never,
+      createCrypto() as never,
+      env,
+      fetcher as never,
+      undefined,
+      undefined,
+      verifier
+    );
+  }
+
+  it('rejects an unsigned state and keeps the last signed state in offline grace', async () => {
+    const db = await activatedService('business');
+    const forged = paidState('enterprise');
+    const service = unsignedService(
+      db,
+      rawServer(() => forged)
+    );
+
+    const status = await service.checkNow();
+
+    expect(status).toMatchObject({ status: 'valid_with_warning', plan: 'business', licensed: true });
+    expect(status.errorMessage).toBe('License state is not signed');
+  });
+
+  it('applies only the signed copy of a state, never the unsigned fields beside it', async () => {
+    const db = await activatedService('personal');
+    const service = unsignedService(
+      db,
+      rawServer(({ requestNonce }) => {
+        const signed = communityState();
+        const attestation = signTestLicenseState(signer, signed, { purpose: 'heartbeat', requestNonce });
+        return { ...paidState('enterprise'), attestation };
+      })
+    );
+
+    const status = await service.checkNow();
+
+    expect(status).toMatchObject({ status: 'community', plan: 'community' });
+  });
+
+  it.each<
+    [
+      string,
+      Partial<{
+        keyId: string;
+        installationId: string;
+        purpose: 'register';
+        requestNonce: string;
+        issuedAt: string;
+        kind: string;
+      }>,
+    ]
+  >([
+    ['another key', { keyId: 'gls-retired' }],
+    ['another installation', { installationId: '22222222-2222-4222-8222-222222222222' }],
+    ['another purpose', { purpose: 'register' }],
+    ['another request (replay)', { requestNonce: 'captured-from-an-earlier-request' }],
+    ['a stale issue time', { issuedAt: new Date(Date.now() - 16 * 60 * 1000).toISOString() }],
+    ['another kind', { kind: 'gateway-commercial' }],
+  ])('rejects a state signed for %s', async (_label, override) => {
+    const db = await activatedService('business');
+    const other = createTestLicenseSigner(override.keyId ?? 'gls-test');
+    const service = unsignedService(
+      db,
+      rawServer(({ requestNonce }) => {
+        const state = paidState('enterprise');
+        return {
+          ...state,
+          attestation: signTestLicenseState(override.keyId ? other : signer, state, {
+            purpose: 'heartbeat',
+            requestNonce,
+            ...override,
+          }),
+        };
+      })
+    );
+
+    const status = await service.checkNow();
+
+    expect(status).toMatchObject({ status: 'valid_with_warning', plan: 'business' });
+  });
+
+  it('rejects a tampered signed payload', async () => {
+    const db = await activatedService('business');
+    const service = unsignedService(
+      db,
+      rawServer(({ requestNonce }) => {
+        const state = paidState('business');
+        const attestation = signTestLicenseState(signer, state, { purpose: 'heartbeat', requestNonce });
+        const payload = JSON.parse(Buffer.from(attestation.payload, 'base64url').toString('utf8'));
+        payload.state = paidState('enterprise');
+        return {
+          ...state,
+          attestation: { ...attestation, payload: Buffer.from(JSON.stringify(payload)).toString('base64url') },
+        };
+      })
+    );
+
+    await expect(service.checkNow()).resolves.toMatchObject({ status: 'valid_with_warning', plan: 'business' });
+  });
+
+  it('accepts a rotated key pinned by the release and names the pinned keys in requests', async () => {
+    const next = createTestLicenseSigner('gls-next');
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const fetcher = vi.fn().mockImplementation(() => dataResponse(paidState('enterprise')));
+    const service = new LicenseService(
+      db as never,
+      createCrypto() as never,
+      env,
+      signedLicenseServer(fetcher as never, next) as never,
+      undefined,
+      undefined,
+      createTestLicenseVerifier(signer, next)
+    );
+
+    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).resolves.toMatchObject({
+      status: 'valid',
+      plan: 'enterprise',
+    });
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body).attestationKeyIds).toEqual(['gls-test', 'gls-next']);
+
+    // A release that no longer pins the retired key treats its stored state as unsigned.
+    const retired = createService(db, vi.fn().mockRejectedValue(new Error('network down')));
+    await expect(retired.getStatus()).resolves.toMatchObject({ status: 'unreachable_grace_expired', licensed: false });
+  });
+
+  it('refuses a paid activation whose state is not signed', async () => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const service = unsignedService(
+      db,
+      rawServer(() => paidState('enterprise'))
+    );
+
+    await expect(service.activateKey('WLT-GW-AAAA-BBBB-CCCC-DDDD')).rejects.toMatchObject({
+      code: 'INVALID_LICENSE_SIGNATURE',
+    });
+    expect(db.rows.has('license:key_encrypted')).toBe(false);
+  });
+
+  it('does not store the token of an unsigned registration', async () => {
+    const db = createDb();
+    const service = unsignedService(
+      db,
+      vi.fn().mockImplementation(() => registerResponse())
+    );
+
+    await service.heartbeat();
+
+    expect(db.rows.has('license:installation_token_encrypted')).toBe(false);
+    await expect(service.getStatus()).resolves.toMatchObject({ status: 'community', registrationStatus: 'pending' });
+  });
+
+  it('authorizes a private core download only from a state signed for that request', async () => {
+    const db = createDb();
+    db.rows.set('license:installation_token_encrypted', createCrypto().encryptString('installation-secret'));
+    const service = unsignedService(
+      db,
+      rawServer(() => ({ state: paidState('personal'), signedManifest: 'signed-release' }))
+    );
+
+    await expect(service.authorizeCommercialUpdate('v3.0.0-rc.1')).rejects.toMatchObject({
+      code: 'INVALID_LICENSE_SIGNATURE',
+    });
+  });
+
+  it('clamps a forged cache in the database to Community with continuity', async () => {
+    const db = await activatedService('personal');
+    const cached = db.rows.get('license:cached_state') as Record<string, unknown>;
+    db.rows.set('license:cached_state', {
+      ...cached,
+      status: 'valid',
+      plan: 'enterprise',
+      paidPlan: 'enterprise',
+      entitlements: LICENSE_PLAN_ENTITLEMENTS.enterprise,
+      attestation: { ...(cached.attestation as object), signature: 'forged' },
+    });
+    const service = createService(db, vi.fn());
+    const policy = new LicensePolicyService(service);
+
+    await expect(service.getStatus()).resolves.toMatchObject({ plan: 'community', licensed: false });
+    await expect(policy.requireFeature('internal-pki')).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+    // The retained signed Personal state still proves continuity for existing resources.
+    await expect(policy.requireFeatureForExistingRuntime('pages')).resolves.toBeUndefined();
+    await expect(policy.requireFeatureForExistingRuntime('internal-pki')).rejects.toMatchObject({
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+  });
+
+  it('keeps a downgraded plan for its grace from the last signed higher state', async () => {
+    vi.useFakeTimers();
+    const downgradedAt = new Date('2026-09-10T12:00:00.000Z');
+    vi.setSystemTime(downgradedAt);
+    const db = await activatedService('enterprise');
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(paidState('business')))
+    );
+    const policy = new LicensePolicyService(service);
+    vi.setSystemTime(new Date(downgradedAt.getTime() + 60_000));
+    await service.checkNow();
+
+    await expect(service.getStatus()).resolves.toMatchObject({
+      status: 'valid',
+      plan: 'enterprise',
+      graceUntil: new Date(downgradedAt.getTime() + 168 * 60 * 60 * 1000).toISOString(),
+    });
+    await expect(policy.hasFeature('siem-export')).resolves.toBe(true);
+
+    vi.setSystemTime(new Date(downgradedAt.getTime() + 168 * 60 * 60 * 1000));
+    await expect(service.getStatus()).resolves.toMatchObject({ status: 'valid', plan: 'business', graceUntil: null });
+    await expect(policy.hasFeature('siem-export')).resolves.toBe(false);
+    await expect(policy.requireFeature('internal-pki')).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+    await expect(policy.requireFeatureForExistingRuntime('internal-pki')).resolves.toBeUndefined();
+  });
+
+  it('applies revocation at once without grace but keeps continuity for existing resources', async () => {
+    const db = await activatedService('enterprise');
+    const revoked = (): LicenseServerState => ({
+      ...communityState(),
+      paidLicenseStatus: 'revoked',
+      paidLicense: { ...paidState('enterprise').paidLicense!, status: 'revoked' },
+      graceUntil: paidState('enterprise').graceUntil,
+    });
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(revoked()))
+    );
+    const policy = new LicensePolicyService(service);
+
+    await expect(service.checkNow()).resolves.toMatchObject({ status: 'revoked', plan: 'community', licensed: false });
+    await expect(policy.hasFeature('siem-export')).resolves.toBe(false);
+    await expect(policy.hasFeature('git-push-to-deploy')).resolves.toBe(false);
+    await expect(policy.requireFeatureForExistingRuntime('internal-pki')).resolves.toBeUndefined();
+    await expect(policy.requireFeatureForExistingRuntime('siem-export')).resolves.toBeUndefined();
+  });
+
+  it('gives a replacement or re-activation no downgrade grace after a reported loss', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-10T12:00:00.000Z'));
+    const db = await activatedService('enterprise');
+    const responses = [
+      {
+        ...communityState(),
+        paidLicenseStatus: 'deactivated',
+        paidLicense: paidState('enterprise').paidLicense,
+        graceUntil: paidState('enterprise').graceUntil,
+      },
+      paidState('business'),
+    ];
+    const service = createService(
+      db,
+      vi.fn().mockImplementation(() => dataResponse(responses.shift()))
+    );
+    await service.checkNow();
+    vi.setSystemTime(new Date('2026-09-10T12:30:00.000Z'));
+    await service.checkNow();
+
+    await expect(service.getStatus()).resolves.toMatchObject({ status: 'valid', plan: 'business', graceUntil: null });
   });
 });

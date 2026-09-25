@@ -230,6 +230,10 @@ export interface DatabaseConnection {
   databaseName: string | null;
   username: string | null;
   tlsEnabled: boolean;
+  /** Server certificate verification when TLS is used. False is an explicit, insecure opt-out. */
+  tlsVerifyCertificate?: boolean;
+  /** PEM CA bundle trusted instead of the public CA bundle. */
+  tlsCaCertificate?: string | null;
   healthStatus: DatabaseHealthStatus;
   lastHealthCheckAt: string | null;
   lastError: string | null;

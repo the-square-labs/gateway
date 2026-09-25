@@ -13,7 +13,7 @@ import {
   requireScope,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import { CryptoService } from '@/services/crypto.service.js';
 import {
   createIntermediateCARoute,
@@ -51,6 +51,7 @@ export const caRouteRuntime = {
   requireScope,
   requireScopeForResource,
   requireLicenseFeature,
+  requireLicenseFeatureForRequest,
   CryptoService,
   createIntermediateCARoute,
   createOCSPResponderRoute,

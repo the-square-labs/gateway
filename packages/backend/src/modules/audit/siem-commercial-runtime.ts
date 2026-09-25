@@ -13,7 +13,7 @@ import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { SiemCustomHeaderNameSchema, SiemEndpointUrlSchema } from '@/modules/audit/siem.schemas.js';
 import {
-  hasConfiguredLicenseFeatureForExistingRuntime,
+  hasConfiguredLicenseFeature,
   requireConfiguredLicensePolicy,
 } from '@/modules/license/license-policy.service.js';
 import { checkOutboundWebhookTarget } from '@/modules/settings/outbound-webhook-policy.service.js';
@@ -28,7 +28,7 @@ export const siemCommercialRuntime = {
   isNull,
   siemDeliveries,
   siemDestinations,
-  hasConfiguredLicenseFeatureForExistingRuntime,
+  hasConfiguredLicenseFeature,
   AppError,
   checkOutboundWebhookTarget,
   fetchWithPinnedAddresses,

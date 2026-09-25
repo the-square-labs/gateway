@@ -131,17 +131,60 @@ describe('LicensePolicyService', () => {
     'replaced',
     'deactivated',
     'invalid',
-  ] as const)('keeps existing configured runtime features fail-closed after %s', async (licenseStatus) => {
+  ] as const)('keeps existing paid resources operating without grace after %s', async (licenseStatus) => {
     const status = baseStatus();
     status.status = licenseStatus;
     status.licensed = false;
-    const policy = new LicensePolicyService({ getStatus: vi.fn(async () => status) } as never);
+    const policy = new LicensePolicyService({
+      getStatus: vi.fn(async () => status),
+      getRuntimeContinuityEntitlements: vi.fn(async () => LICENSE_PLAN_ENTITLEMENTS.business),
+    } as never);
+
+    // No grace: new resources, changes, and paid service features stop at once.
+    await expect(policy.hasFeature('structured-logging')).resolves.toBe(false);
+    await expect(policy.requireFeature('structured-logging')).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'LICENSE_ENTITLEMENT_REQUIRED',
+    });
+    await expect(policy.hasFeature('git-push-to-deploy')).resolves.toBe(false);
+    // Existing workloads, reads, and deletion keep working through continuity.
+    await expect(policy.hasFeatureForExistingRuntime('structured-logging')).resolves.toBe(true);
+    await expect(policy.requireFeatureForExistingRuntime('structured-logging')).resolves.toBeUndefined();
+  });
+
+  it.each([
+    'revoked',
+    'invalid',
+  ] as const)('keeps existing runtime fail-closed after %s without a signed paid history', async (licenseStatus) => {
+    const status = baseStatus();
+    status.status = licenseStatus;
+    status.licensed = false;
+    const policy = new LicensePolicyService({
+      getStatus: vi.fn(async () => status),
+      getRuntimeContinuityEntitlements: vi.fn(async () => null),
+    } as never);
 
     await expect(policy.hasFeatureForExistingRuntime('structured-logging')).resolves.toBe(false);
     await expect(policy.requireFeatureForExistingRuntime('structured-logging')).rejects.toMatchObject({
       statusCode: 403,
       code: 'LICENSE_ENTITLEMENT_REQUIRED',
     });
+  });
+
+  it('keeps the retained higher plan for existing resources after a downgrade grace ends', async () => {
+    const status = baseStatus();
+    status.status = 'valid';
+    status.plan = 'business';
+    status.entitlements = LICENSE_PLAN_ENTITLEMENTS.business;
+    const policy = new LicensePolicyService({
+      getStatus: vi.fn(async () => status),
+      getRuntimeContinuityEntitlements: vi.fn(async () => LICENSE_PLAN_ENTITLEMENTS.enterprise),
+    } as never);
+
+    await expect(policy.hasFeature('siem-export')).resolves.toBe(false);
+    await expect(policy.requireFeature('internal-pki')).rejects.toMatchObject({ code: 'LICENSE_ENTITLEMENT_REQUIRED' });
+    await expect(policy.requireFeatureForExistingRuntime('internal-pki')).resolves.toBeUndefined();
+    await expect(policy.requireFeature('git-push-to-deploy')).resolves.toBeUndefined();
   });
 
   it('includes Pages in the canonical Personal entitlement set', async () => {

@@ -222,5 +222,66 @@ class RestoreHardeningTests(unittest.TestCase):
         self.assertEqual(env["REDISCLI_AUTH"], "owner-secret")
 
 
+CA_PEM = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+
+
+class DatabaseTlsVerificationTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.original_work = runner.WORK
+        runner.WORK = pathlib.Path(self.directory.name)
+
+    def tearDown(self):
+        runner.WORK = self.original_work
+        self.directory.cleanup()
+
+    def redis_args(self, endpoint):
+        with patch.object(runner, "run", return_value="PONG") as ran:
+            runner.redis_command(endpoint, ["PING"])
+        return ran.call_args.args[0]
+
+    def test_postgres_verifies_the_hostname_against_the_public_bundle_by_default(self):
+        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": True})
+        self.assertEqual(env["PGSSLMODE"], "verify-full")
+        self.assertEqual(env["PGSSLROOTCERT"], runner.SYSTEM_CA_BUNDLE)
+
+    def test_postgres_verifies_against_a_custom_ca(self):
+        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": True, "caPem": CA_PEM})
+        self.assertEqual(env["PGSSLMODE"], "verify-full")
+        self.assertEqual(pathlib.Path(env["PGSSLROOTCERT"]).read_text(), CA_PEM)
+
+    def test_postgres_opt_out_encrypts_without_verification(self):
+        env = runner.postgres_env({"host": "db.example.test", "tls": True, "tlsVerifyCertificate": False, "caPem": CA_PEM})
+        self.assertEqual(env["PGSSLMODE"], "require")
+        self.assertNotIn("PGSSLROOTCERT", env)
+
+    def test_postgres_without_the_setting_keeps_the_relay_behavior(self):
+        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "tls": True})["PGSSLMODE"], "require")
+        self.assertEqual(runner.postgres_env({"host": "127.0.0.1", "tls": True, "caPem": CA_PEM})["PGSSLMODE"], "verify-ca")
+
+    def test_redis_verifies_with_sni_and_custom_ca(self):
+        args = self.redis_args({"host": "redis.example.test", "port": 6380, "tls": True, "tlsVerifyCertificate": True, "caPem": CA_PEM})
+        self.assertIn("--tls", args)
+        self.assertNotIn("--insecure", args)
+        self.assertEqual(args[args.index("--sni") + 1], "redis.example.test")
+        self.assertEqual(pathlib.Path(args[args.index("--cacert") + 1]).read_text(), CA_PEM)
+
+    def test_redis_opt_out_skips_verification(self):
+        args = self.redis_args({"host": "10.0.0.5", "port": 6380, "tls": True, "tlsVerifyCertificate": False, "caPem": CA_PEM})
+        self.assertIn("--insecure", args)
+        self.assertNotIn("--cacert", args)
+        self.assertNotIn("--sni", args)
+
+    def test_clickhouse_opt_out_disables_verification_only_when_explicit(self):
+        insecure = runner.clickhouse_ssl_context({"tls": True, "tlsVerifyCertificate": False})
+        self.assertFalse(insecure.check_hostname)
+        self.assertEqual(insecure.verify_mode, runner.ssl.CERT_NONE)
+        for endpoint in ({"tls": True, "tlsVerifyCertificate": True}, {"tls": True}):
+            with self.subTest(endpoint=endpoint):
+                context = runner.clickhouse_ssl_context(endpoint)
+                self.assertTrue(context.check_hostname)
+                self.assertEqual(context.verify_mode, runner.ssl.CERT_REQUIRED)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,7 +7,7 @@ import { AppError } from '@/middleware/error-handler.js';
 import { requireGatewayFeature } from '@/middleware/feature-flags.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
-import { requireLicenseFeature } from '@/modules/license/license-policy.middleware.js';
+import { requireLicenseFeature, requireLicenseFeatureForRequest } from '@/modules/license/license-policy.middleware.js';
 import { CAService } from './ca.service.js';
 import {
   certificateChainRoute,
@@ -46,6 +46,7 @@ export const certRouteRuntime = {
   requireScopeBase,
   requireScopeForResource,
   requireLicenseFeature,
+  requireLicenseFeatureForRequest,
   CAService,
   certificateChainRoute,
   exportCertificateRoute,

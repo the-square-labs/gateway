@@ -660,7 +660,7 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
   }
   if (operation === 'delete') {
     context.ensureToolScopeForResource(user, 'docker:compose:delete', resourceId);
-    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('compose-applications');
     await service.deleteProject(nodeId, projectId, user.id);
     return { success: true };
   }
@@ -690,7 +690,7 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
   }
   if (operation === 'revision_delete') {
     context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
-    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('compose-applications');
     await service.deleteRevision(nodeId, projectId, String(a.revisionId || ''), user.id);
     return { success: true };
   }
@@ -709,7 +709,12 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
       action === 'delete_volumes' ? 'docker:compose:delete' : 'docker:compose:manage',
       resourceId
     );
-    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    // Lifecycle and delete actions on existing projects keep working after the grace period.
+    if (['start', 'stop', 'restart', 'down', 'cancel', 'delete_volumes'].includes(action)) {
+      await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('compose-applications');
+    } else {
+      await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    }
     return service.startOperation(
       nodeId,
       projectId,
@@ -741,7 +746,7 @@ async function manageDockerCompose(context: DockerToolContext, user: User, args:
   }
   if (operation === 'secret_delete') {
     context.ensureToolScopeForResource(user, 'docker:compose:manage', resourceId);
-    await container.resolve(LicensePolicyService).requireFeature('compose-applications');
+    await container.resolve(LicensePolicyService).requireFeatureForExistingRuntime('compose-applications');
     await service.deleteSecret(nodeId, projectId, String(a.secretId || ''), user.id);
     return { success: true };
   }

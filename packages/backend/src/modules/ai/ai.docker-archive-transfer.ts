@@ -19,6 +19,7 @@ import {
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import {
+  assertDockerContainerArchiveExportAllowed,
   importDockerContainerArchive,
   openDockerContainerArchiveExport,
 } from '@/modules/docker/docker-container-archive-operations.js';
@@ -381,6 +382,8 @@ export class DockerArchiveTransferStore {
         includeEnvironment: args.includeEnvironment,
         includeSecrets: args.includeSecrets,
       });
+      // Refused before a transfer slot or spool directory exists; the shared export re-checks it.
+      assertDockerContainerArchiveExportAllowed(nodeId, containerId, inspected);
       access = {
         kind: 'container',
         nodeId,
