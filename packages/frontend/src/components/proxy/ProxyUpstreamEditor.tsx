@@ -258,7 +258,13 @@ export function ProxyUpstreamFields({
     value.kind === "pages" && pagesEnabled && Boolean(value.pageProjectId)
   );
   const [pagesDisabledDialogOpen, setPagesDisabledDialogOpen] = useState(false);
-  useContentLoading(composeLoading || pageProjectsLoading || pageTagsLoading);
+  // Compose details load one project at a time; the gate waits for them only
+  // when the current target is a Compose service that needs them to display.
+  useContentLoading(
+    (composeLoading && selectedTargetKey(value).startsWith("compose:")) ||
+      pageProjectsLoading ||
+      pageTagsLoading
+  );
 
   useEffect(() => {
     if (value.kind !== "docker_container") {

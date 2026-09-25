@@ -115,7 +115,14 @@ const DialogContentPanel = React.forwardRef<
       staggerReveal(body, 4);
       // The body was hidden when the dialog opened, so its first field could
       // not take focus then; give it focus now unless the user moved on.
-      if (!body.contains(document.activeElement)) {
+      const active = document.activeElement;
+      const panel = body.closest("[data-reveal-phase]");
+      const focusUntouched =
+        !active ||
+        active === document.body ||
+        active === panel ||
+        (active instanceof HTMLElement && active.closest("[data-dialog-header-slot]") !== null);
+      if (focusUntouched) {
         body
           .querySelector<HTMLElement>(
             "input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])"

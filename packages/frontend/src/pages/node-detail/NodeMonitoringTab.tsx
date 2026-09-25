@@ -31,6 +31,9 @@ import {
 } from "@/types";
 import { ACTIVE_DOCKER_BUILD_STATUSES } from "../docker-detail/docker-build-status";
 
+/** How long the tab waits for the stream's first sample before showing without it. */
+const MONITORING_FIRST_SAMPLE_WAIT_MS = 8000;
+
 type Snapshot = NodeMonitoringSnapshot;
 
 function toRollingDelta(values: number[]): number[] {
@@ -207,6 +210,7 @@ export function NodeMonitoringTab({
     };
   }
   const [history, setHistory] = useState<Snapshot[]>(() => monitoringBootstrapRef.current.history);
+  const [streamStalled, setStreamStalled] = useState(false);
   const [latest, setLatest] = useState<Snapshot | null>(
     () => monitoringBootstrapRef.current.latest
   );
@@ -275,6 +279,13 @@ export function NodeMonitoringTab({
       );
     });
 
+    // A stream that errors or stays quiet must not keep the tab hidden.
+    es.addEventListener("error", () => setStreamStalled(true));
+    const stallTimer = window.setTimeout(
+      () => setStreamStalled(true),
+      MONITORING_FIRST_SAMPLE_WAIT_MS
+    );
+
     es.addEventListener("snapshot", (e: MessageEvent) => {
       const snapshot = mergeSeededDiskMounts(JSON.parse(e.data) as Snapshot, seededSnapshot);
       setHistory((prev) => {
@@ -283,12 +294,17 @@ export function NodeMonitoringTab({
       setLatest(snapshot);
     });
 
-    return () => es.close();
+    return () => {
+      window.clearTimeout(stallTimer);
+      es.close();
+    };
   }, [nodeId, nodeStatus]);
 
   // The first snapshot arrives with the stream; a Build Worker also waits for its job summary.
   useContentLoading(
-    nodeStatus === "online" && (!latest || (nodeType === "builder" && recentBuilds === null))
+    nodeStatus === "online" &&
+      !streamStalled &&
+      (!latest || (nodeType === "builder" && recentBuilds === null))
   );
 
   if (nodeStatus !== "online") {
@@ -299,7 +315,15 @@ export function NodeMonitoringTab({
     );
   }
 
-  if (!latest) return null;
+  if (!latest) {
+    return (
+      <div className="flex flex-col items-center gap-2 py-16 border border-border bg-card">
+        <p className="text-muted-foreground">
+          Waiting for the first monitoring sample from this node
+        </p>
+      </div>
+    );
+  }
 
   const health = latest.health;
   const stats = latest.stats;
