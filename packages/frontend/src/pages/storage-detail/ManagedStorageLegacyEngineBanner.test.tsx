@@ -37,6 +37,27 @@ describe("legacy MinIO engine banner", () => {
     expect(banner).not.toHaveTextContent("can no longer be downloaded");
   });
 
+  it("points to the built-in assistant for the migration without offering a migration button", () => {
+    renderBanner({ provider: "minio", managed: managed(), lastError: null });
+    const banner = screen.getByRole("note");
+    expect(banner).toHaveTextContent(
+      "To move this cluster to SeaweedFS, ask the built-in assistant to migrate it."
+    );
+    expect(within(banner).queryByRole("button")).toBeNull();
+    expect(banner).not.toHaveTextContent("Writes are paused");
+  });
+
+  it("says when writes are frozen for a migration", () => {
+    renderBanner({
+      provider: "minio",
+      managed: managed({ writesFrozenAt: "2026-09-25T10:00:00.000Z" }),
+      lastError: null,
+    });
+    expect(screen.getByRole("note")).toHaveTextContent(
+      "Writes are paused for a migration: every access key and workload link of this cluster is read-only"
+    );
+  });
+
   it("stays hidden for SeaweedFS clusters and external connections", () => {
     const { container, rerender } = renderBanner({
       provider: "seaweedfs",

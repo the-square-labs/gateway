@@ -1,6 +1,7 @@
 import importlib.util
 import hashlib
 import base64
+import io
 from unittest.mock import Mock, patch
 import pathlib
 import tempfile
@@ -281,6 +282,233 @@ class DatabaseTlsVerificationTests(unittest.TestCase):
                 context = runner.clickhouse_ssl_context(endpoint)
                 self.assertTrue(context.check_hostname)
                 self.assertEqual(context.verify_mode, runner.ssl.CERT_REQUIRED)
+
+
+COPY_JOB_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def copy_config(**overrides):
+    config = {
+        "kind": "storage_copy",
+        "jobId": COPY_JOB_ID,
+        "version": 1,
+        "mode": "copy",
+        "dryRun": False,
+        "allBuckets": False,
+        "buckets": ["assets"],
+        "createBuckets": True,
+        "source": {"connectionId": "minio", "endpoint": "https://127.0.0.1:41001", "region": "us-east-1", "accessKeyId": "root", "secretAccessKey": "source-secret", "forcePathStyle": True, "caPem": CA_PEM, "relayRouteId": COPY_JOB_ID},
+        "destination": {"connectionId": "seaweedfs", "endpoint": "https://127.0.0.1:41002", "accessKeyId": "root", "secretAccessKey": "destination-secret", "forcePathStyle": True},
+        "limits": {"timeoutSeconds": 3600, "cpuCores": 1, "memoryMb": 1024, "transfers": 4},
+    }
+    config.update(overrides)
+    return config
+
+
+class FakeProcess:
+    def __init__(self, stdout="", stderr="", code=0):
+        self.stdout = io.StringIO(stdout)
+        self.stderr = io.StringIO(stderr)
+        self.code = code
+
+    def wait(self):
+        return self.code
+
+
+class StorageCopyTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.original = (runner.WORK, runner.RESULT, runner.COPY_PROGRESS, runner.CONFIG, runner.SYSTEM_CA_BUNDLE)
+        work = pathlib.Path(self.directory.name) / "work"
+        work.mkdir()
+        runner.WORK, runner.RESULT, runner.COPY_PROGRESS = work, work / "result.json", work / "progress.json"
+        runner.CONFIG = pathlib.Path(self.directory.name) / "config.json"
+        system_bundle = pathlib.Path(self.directory.name) / "system.pem"
+        system_bundle.write_text("SYSTEM ROOTS\n")
+        runner.SYSTEM_CA_BUNDLE = str(system_bundle)
+
+    def tearDown(self):
+        runner.WORK, runner.RESULT, runner.COPY_PROGRESS, runner.CONFIG, runner.SYSTEM_CA_BUNDLE = self.original
+        self.directory.cleanup()
+
+    def write_config(self, config, mode=0o600):
+        runner.CONFIG.write_text(runner.json.dumps(config))
+        runner.os.chmod(runner.CONFIG, mode)
+
+    def result(self):
+        return runner.json.loads(runner.RESULT.read_text())
+
+    def test_config_accepts_only_the_typed_copy_program(self):
+        self.write_config(copy_config())
+        self.assertEqual(runner.load_copy_config()["buckets"], ["assets"])
+        for name, config in {
+            "command": {**copy_config(), "command": "sh -c id"},
+            "both selectors": copy_config(allBuckets=True),
+            "no selector": copy_config(buckets=[]),
+            "path bucket": copy_config(buckets=["assets/../etc"]),
+            "mode": copy_config(mode="move"),
+            "endpoint userinfo": copy_config(destination={"connectionId": "d", "endpoint": "https://u:p@example.test"}),
+            "endpoint field": copy_config(destination={"connectionId": "d", "endpoint": "https://example.test", "command": "id"}),
+            "newline secret": copy_config(destination={"connectionId": "d", "endpoint": "https://example.test", "secretAccessKey": "x\n[evil]"}),
+            "same storage": copy_config(destination={**copy_config()["source"]}),
+        }.items():
+            with self.subTest(name=name):
+                self.write_config(config)
+                with self.assertRaises(runner.BackupError):
+                    runner.load_copy_config()
+        self.write_config(copy_config(), mode=0o644)
+        with self.assertRaises(runner.BackupError):
+            runner.load_copy_config()
+
+    def test_invalid_config_still_writes_a_failed_result(self):
+        self.write_config({"kind": "storage_copy"})
+        self.assertEqual(runner.storage_copy_main(), 1)
+        result = self.result()
+        self.assertEqual((result["status"], result["phase"]), ("failed", "validation"))
+
+    def test_rclone_config_keeps_secrets_out_of_arguments_and_bucket_creation_explicit(self):
+        base = runner.copy_rclone_setup(copy_config())
+        joined = " ".join(base)
+        self.assertNotIn("source-secret", joined)
+        self.assertNotIn("destination-secret", joined)
+        conf = pathlib.Path(base[base.index("--config") + 1]).read_text()
+        self.assertIn("[source]", conf)
+        self.assertIn("[destination]", conf)
+        self.assertIn("endpoint = https://127.0.0.1:41001", conf)
+        # Copy remotes never create buckets; only the explicit create remote may.
+        create = conf.split("[destination_create]")[1]
+        self.assertEqual(conf.split("[destination_create]")[0].count("no_check_bucket = true"), 2)
+        self.assertNotIn("no_check_bucket", create)
+        bundle = pathlib.Path(base[base.index("--ca-cert") + 1]).read_text()
+        self.assertIn("SYSTEM ROOTS", bundle)
+        self.assertIn(CA_PEM.strip(), bundle)
+        no_create = runner.copy_rclone_setup(copy_config(createBuckets=False, source={**copy_config()["source"], "caPem": None}))
+        self.assertNotIn("[destination_create]", pathlib.Path(no_create[no_create.index("--config") + 1]).read_text())
+        self.assertNotIn("--ca-cert", no_create)
+
+    def test_progress_accumulates_across_buckets(self):
+        state = {"phase": "listing", "progress": None}
+        progress = runner.CopyProgress(state, 2)
+        progress.begin("a", "copying")
+        stats, error = runner.parse_rclone_log_line('{"level":"notice","msg":"stats","stats":{"bytes":100,"transfers":2,"checks":3,"errors":0,"totalBytes":200,"speed":50.5,"eta":2}}')
+        self.assertIsNone(error)
+        progress.stats(stats)
+        progress.finish_bucket()
+        progress.begin("b", "copying")
+        progress.stats({"bytes": 10, "transfers": 1, "checks": 0, "errors": 1, "eta": None})
+        written = runner.json.loads(runner.COPY_PROGRESS.read_text())
+        self.assertEqual((written["bytes"], written["objects"], written["errors"], written["bucket"], written["bucketsDone"]), (110, 3, 1, "b", 1))
+        self.assertIsNone(written["etaSeconds"])
+        self.assertEqual(progress.transferred(), {"objects": 3, "bytes": 110})
+        _, error = runner.parse_rclone_log_line('{"level":"error","msg":"Failed to copy: AccessDenied"}')
+        self.assertEqual(error, "Failed to copy: AccessDenied")
+        self.assertEqual(runner.parse_rclone_log_line("plain text"), (None, None))
+
+    def test_check_counts_outcomes_and_bounds_samples(self):
+        # rclone marks objects only on the source with "+" and only on the destination with "-".
+        combined = "= same\n" + "".join(f"+ missing-{index}\n" for index in range(30)) + "* changed\n- extra\n! broken\n"
+        with patch.object(runner.subprocess, "Popen", return_value=FakeProcess(combined, "", 1)) as popen:
+            checked = runner.check_bucket(["rclone"], copy_config(mode="sync"), "assets")
+        self.assertEqual((checked["matched"], checked["missing"], checked["differing"], checked["extra"], checked["errors"]), (1, 30, 1, 1, 1))
+        self.assertEqual(len(checked["missingKeys"]), runner.COPY_SAMPLE_KEYS)
+        self.assertEqual(checked["extraKeys"], ["extra"])
+        self.assertNotIn("--one-way", popen.call_args.args[0])
+        with patch.object(runner.subprocess, "Popen", return_value=FakeProcess("= same\n", "", 0)) as popen:
+            checked = runner.check_bucket(["rclone"], copy_config(), "assets")
+        self.assertIn("--one-way", popen.call_args.args[0])
+        self.assertIsNone(checked["extra"])
+        with patch.object(runner.subprocess, "Popen", return_value=FakeProcess("", '{"level":"error","msg":"directory not found"}\n', 3)):
+            with self.assertRaises(runner.BackupError):
+                runner.check_bucket(["rclone"], copy_config(), "assets")
+        with patch.object(runner.subprocess, "Popen", return_value=FakeProcess("", "", 1)):
+            with self.assertRaises(runner.BackupError):
+                runner.check_bucket(["rclone"], copy_config(), "assets")
+
+    def run_copy(self, config, source_buckets, destination_buckets, check=None, copy_error=None):
+        calls = []
+
+        def fake_rclone(base, *args):
+            calls.append(args)
+            if args[0] == "lsjson":
+                names = source_buckets if args[-1] == "source:" else destination_buckets
+                if names is None:
+                    return 1, "", '{"level":"error","msg":"AccessDenied"}'
+                return 0, runner.json.dumps([{"Name": name, "Path": name, "IsDir": True} for name in names]), ""
+            if args[0] == "size":
+                return 0, '{"count":3,"bytes":300}', ""
+            if args[0] == "mkdir":
+                return 0, "", ""
+            if args[0] == "version":
+                return 0, "rclone v1.60.1-DEV\n", ""
+            raise AssertionError(args)
+
+        copied = []
+
+        def fake_copy(base, cfg, bucket, progress, metadata):
+            copied.append((bucket, metadata))
+            progress.stats({"bytes": 300, "transfers": 3})
+            return copy_error
+
+        verdict = check or {"matched": 3, "missing": 0, "differing": 0, "extra": None, "errors": 0, "missingKeys": [], "differingKeys": [], "extraKeys": []}
+        self.write_config(config)
+        with patch.object(runner, "run_rclone", side_effect=fake_rclone), patch.object(runner, "copy_bucket", side_effect=fake_copy), patch.object(runner, "check_bucket", return_value=dict(verdict)):
+            code = runner.storage_copy_main()
+        return code, self.result(), calls, copied
+
+    def test_copies_all_buckets_creates_missing_ones_and_reports_a_clean_check(self):
+        code, result, calls, copied = self.run_copy(copy_config(allBuckets=True, buckets=[]), ["assets", "logs"], ["assets"])
+        self.assertEqual(code, 0)
+        self.assertEqual((result["status"], result["jobId"]), ("completed", COPY_JOB_ID))
+        report = result["report"]
+        self.assertTrue(report["clean"])
+        self.assertEqual([bucket["name"] for bucket in report["buckets"]], ["assets", "logs"])
+        self.assertEqual([bucket["created"] for bucket in report["buckets"]], [False, True])
+        self.assertEqual(report["totals"]["sourceObjects"], 6)
+        self.assertEqual(report["transferred"], {"objects": 6, "bytes": 600})
+        mkdirs = [args for args in calls if args[0] == "mkdir"]
+        self.assertEqual(mkdirs, [("mkdir", "--use-json-log", "--log-level", "ERROR", "destination_create:logs")])
+        self.assertEqual(copied, [("assets", True), ("logs", True)])
+        self.assertEqual(result["progress"]["bucketsDone"], 2)
+
+    def test_missing_destination_bucket_without_permission_fails_that_bucket(self):
+        code, result, calls, copied = self.run_copy(copy_config(createBuckets=False, buckets=["assets", "logs"]), ["assets", "logs"], ["assets"])
+        self.assertEqual(code, 1)
+        self.assertEqual((result["status"], result["phase"]), ("failed", "copy_failed"))
+        failed = [bucket for bucket in result["report"]["buckets"] if bucket.get("error")]
+        self.assertEqual([bucket["name"] for bucket in failed], ["logs"])
+        self.assertIn("storage:objects:admin", failed[0]["error"])
+        self.assertFalse(result["report"]["clean"])
+        self.assertFalse(any(args[0] == "mkdir" for args in calls))
+        self.assertEqual(copied, [("assets", True)])
+
+    def test_selected_bucket_missing_on_source_fails_before_copying(self):
+        code, result, _, copied = self.run_copy(copy_config(buckets=["ghost"]), ["assets"], ["assets"])
+        self.assertEqual((code, result["status"], result["phase"]), (1, "failed", "listing"))
+        self.assertIn("ghost", result["error"])
+        self.assertEqual(copied, [])
+
+    def test_dry_run_only_compares(self):
+        code, result, calls, copied = self.run_copy(copy_config(dryRun=True, buckets=["assets", "logs"]), ["assets", "logs"], ["assets"],
+                                                    check={"matched": 1, "missing": 2, "differing": 0, "extra": None, "errors": 0, "missingKeys": ["a", "b"], "differingKeys": [], "extraKeys": []})
+        self.assertEqual(code, 0)
+        self.assertEqual(copied, [])
+        self.assertFalse(any(args[0] in {"mkdir", "version"} for args in calls))
+        logs = result["report"]["buckets"][1]
+        self.assertTrue(logs["missingOnDestination"])
+        self.assertEqual(logs["missing"], 3)
+        self.assertFalse(result["report"]["clean"])
+        self.assertEqual(result["report"]["totals"]["missing"], 5)
+
+    def test_sync_is_clean_only_without_extra_destination_objects(self):
+        _, result, _, _ = self.run_copy(copy_config(mode="sync"), ["assets"], ["assets"],
+                                        check={"matched": 3, "missing": 0, "differing": 0, "extra": 1, "errors": 0, "missingKeys": [], "differingKeys": [], "extraKeys": ["old"]})
+        self.assertFalse(result["report"]["clean"])
+        self.assertEqual(result["report"]["totals"]["extra"], 1)
+
+    def test_rclone_copy_failure_is_reported_per_bucket(self):
+        code, result, _, _ = self.run_copy(copy_config(), ["assets"], None, copy_error="Failed to copy: AccessDenied")
+        self.assertEqual(code, 1)
+        self.assertEqual(result["report"]["buckets"][0]["error"], "Failed to copy: AccessDenied")
 
 
 if __name__ == "__main__":

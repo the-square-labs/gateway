@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/minio/madmin-go/v3"
@@ -22,7 +23,7 @@ func (m *managedStorageManager) handleIAM(ctx context.Context, action string, re
 	if input.IAM == nil || input.RootCredentials.AccessKey == "" || input.RootCredentials.SecretKey == "" {
 		return "", errors.New("managed storage IAM credentials are required")
 	}
-	if action == "iam_create_key" && input.IAM.Action != "create_key" || action == "iam_list_keys" && input.IAM.Action != "list_keys" || action == "iam_remove_key" && input.IAM.Action != "remove_key" {
+	if managedStorageIAMActions[action] != input.IAM.Action {
 		return "", errors.New("managed storage IAM action mismatch")
 	}
 	endpoint, err := m.privateEndpoint(ctx, record)
@@ -86,8 +87,43 @@ func (m *managedStorageManager) handleIAM(ctx context.Context, action string, re
 			return "", err
 		}
 		return `{"status":"deleted"}`, nil
+	case "iam_update_policy":
+		return updateMinIOServiceAccountPolicy(ctx, client, input.IAM)
 	}
 	return "", errors.New("unsupported managed storage IAM action")
+}
+
+// managedStorageIAMActions maps each daemon IAM action to the action its
+// payload must name, so a payload built for one action is never run as another.
+var managedStorageIAMActions = map[string]string{
+	"iam_create_key":    "create_key",
+	"iam_list_keys":     "list_keys",
+	"iam_remove_key":    "remove_key",
+	"iam_update_policy": "update_policy",
+}
+
+type minioServiceAccountUpdater interface {
+	UpdateServiceAccount(ctx context.Context, accessKey string, opts madmin.UpdateServiceAccountReq) error
+}
+
+// updateMinIOServiceAccountPolicy replaces the inline policy of one service
+// account of the root user: a Gateway access key or a workload-link key. The
+// migration write freeze uses it to make such keys read-only and to restore
+// them afterwards; the key keeps its id, secret and expiry. The root user has
+// no inline policy and cannot be addressed here, so it keeps full access.
+func updateMinIOServiceAccountPolicy(ctx context.Context, client minioServiceAccountUpdater, iam *managedStorageIAM) (string, error) {
+	if iam == nil || !managedStorageKeyPattern.MatchString(iam.TargetAccessKey) {
+		return "", errors.New("managed storage IAM access key is invalid")
+	}
+	// An empty policy would mean "inherit the root user's full access".
+	var policy json.RawMessage
+	if iam.Policy == "" || len(iam.Policy) > 64*1024 || json.Unmarshal([]byte(iam.Policy), &policy) != nil || !strings.HasPrefix(strings.TrimSpace(iam.Policy), "{") {
+		return "", errors.New("managed storage IAM policy is invalid")
+	}
+	if err := client.UpdateServiceAccount(ctx, iam.TargetAccessKey, madmin.UpdateServiceAccountReq{NewPolicy: policy}); err != nil {
+		return "", err
+	}
+	return `{"status":"updated"}`, nil
 }
 
 func (m *managedStorageManager) privateEndpoint(ctx context.Context, record managedStorageRecord) (string, error) {

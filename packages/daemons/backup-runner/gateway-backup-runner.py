@@ -9,13 +9,16 @@ import json
 import os
 import paramiko
 import pathlib
+import re
 import shutil
 import socket
 import ssl
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
 import urllib.parse
 import urllib.request
 
@@ -34,6 +37,8 @@ class BackupError(Exception):
 
 def main():
     operation = sys.argv[1] if len(sys.argv) == 2 else ""
+    if operation == "storage-copy":
+        return storage_copy_main()
     config = load_config()
     try:
         if operation == "preflight":
@@ -786,6 +791,414 @@ def sanitize(value):
         index = lowered.find(marker)
         if index >= 0: return value[:index] + marker + "[redacted]"
     return value.replace("\n", " ")[:2048]
+
+
+# ── Storage copy ────────────────────────────────────────────────────────────
+# A fixed program: copy or sync the selected buckets from one S3 connection to
+# another with rclone, then report `rclone check`. The daemon writes the
+# config (credentials and endpoints resolved by Gateway) and reads
+# /work/progress.json while it runs and /work/result.json at the end.
+
+COPY_PROGRESS = WORK / "progress.json"
+COPY_CONFIG_FIELDS = {"kind", "jobId", "version", "mode", "dryRun", "allBuckets", "buckets", "createBuckets", "source", "destination", "limits"}
+COPY_ENDPOINT_FIELDS = {"connectionId", "endpoint", "region", "accessKeyId", "secretAccessKey", "sessionToken", "forcePathStyle", "caPem", "relayRouteId"}
+COPY_LIMIT_FIELDS = {"timeoutSeconds", "cpuCores", "memoryMb", "transfers"}
+COPY_BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]$")
+COPY_SAMPLE_KEYS = 20
+COPY_MAX_BUCKETS = 500
+COPY_KEY_LENGTH = 1024
+COPY_STATS_SECONDS = 5
+
+
+def storage_copy_main():
+    state = {"phase": "validation", "report": None, "progress": None}
+    try:
+        config = load_copy_config()
+    except Exception as error:
+        copy_result({}, "failed", "validation", error=sanitize(str(error)))
+        return 1
+    try:
+        report = storage_copy(config, state)
+        failures = [bucket for bucket in report["buckets"] if bucket.get("error")]
+        if failures:
+            copy_result(config, "failed", "copy_failed", report=report, progress=state["progress"],
+                        error=f"{len(failures)} bucket(s) failed; first: {failures[0]['name']}: {failures[0]['error']}")
+            return 1
+        copy_result(config, "completed", "completed", report=report, progress=state["progress"])
+        return 0
+    except Exception as error:
+        copy_result(config, "failed", state["phase"], report=state["report"], progress=state["progress"], error=sanitize(str(error)))
+        return 1
+
+
+def load_copy_config():
+    st = CONFIG.stat()
+    if st.st_mode & 0o077:
+        raise BackupError("storage copy config permissions are unsafe")
+    config = json.loads(CONFIG.read_text())
+    if not isinstance(config, dict) or set(config) != COPY_CONFIG_FIELDS:
+        raise BackupError("storage copy config has missing or unrecognized fields")
+    if config["kind"] != "storage_copy" or config["version"] != 1 or config["mode"] not in {"copy", "sync"}:
+        raise BackupError("storage copy config kind, version or mode is invalid")
+    if not isinstance(config["jobId"], str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", config["jobId"]):
+        raise BackupError("storage copy job id is invalid")
+    for flag in ("dryRun", "allBuckets", "createBuckets"):
+        if not isinstance(config[flag], bool):
+            raise BackupError(f"storage copy {flag} must be a boolean")
+    buckets = config["buckets"]
+    if not isinstance(buckets, list) or config["allBuckets"] == bool(buckets) or len(buckets) > 200:
+        raise BackupError("select either all buckets or a list of buckets")
+    for bucket in buckets:
+        copy_bucket_name(bucket)
+    if len(set(buckets)) != len(buckets):
+        raise BackupError("bucket names must be unique")
+    limits = config["limits"]
+    if not isinstance(limits, dict) or set(limits) != COPY_LIMIT_FIELDS or not isinstance(limits["transfers"], int) or not 1 <= limits["transfers"] <= 32:
+        raise BackupError("storage copy limits are invalid")
+    for side in ("source", "destination"):
+        endpoint = config[side]
+        if not isinstance(endpoint, dict) or set(endpoint) - COPY_ENDPOINT_FIELDS or not endpoint.get("connectionId"):
+            raise BackupError(f"storage copy {side} is invalid")
+        parsed = urllib.parse.urlparse(endpoint.get("endpoint") or "")
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or "@" in parsed.netloc:
+            raise BackupError(f"storage copy {side} endpoint is invalid")
+        for field in ("region", "accessKeyId", "secretAccessKey", "sessionToken"):
+            value = endpoint.get(field, "")
+            if not isinstance(value, str) or any(character in value for character in "\r\n"):
+                raise BackupError(f"storage copy {side} {field} is invalid")
+    if config["source"]["connectionId"] == config["destination"]["connectionId"]:
+        raise BackupError("storage copy source and destination must differ")
+    return config
+
+
+def copy_bucket_name(value):
+    if not isinstance(value, str) or not 3 <= len(value) <= 255 or ".." in value or not COPY_BUCKET.fullmatch(value):
+        raise BackupError("storage copy bucket name is invalid")
+    return value
+
+
+def copy_result(config, status, phase, report=None, progress=None, error=None):
+    payload = {"jobId": config.get("jobId", ""), "status": status, "phase": phase}
+    if report is not None:
+        payload["report"] = report
+    if progress is not None:
+        payload["progress"] = progress
+    if error:
+        payload["error"] = error
+    write_work_json(RESULT, payload)
+
+
+def write_work_json(path, payload):
+    WORK.mkdir(mode=0o700, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(json.dumps(payload, separators=(",", ":")))
+    os.chmod(temp, 0o600)
+    temp.replace(path)
+
+
+def copy_remote_lines(name, endpoint, check_bucket=False):
+    parsed = urllib.parse.urlparse(endpoint["endpoint"])
+    lines = [f"[{name}]", "type = s3", "provider = Other", f"endpoint = {parsed.scheme}://{parsed.netloc}",
+             f"access_key_id = {endpoint.get('accessKeyId', '')}", f"secret_access_key = {endpoint.get('secretAccessKey', '')}"]
+    if endpoint.get("region"): lines.append(f"region = {endpoint['region']}")
+    if endpoint.get("sessionToken"): lines.append(f"session_token = {endpoint['sessionToken']}")
+    lines.append(f"force_path_style = {'true' if endpoint.get('forcePathStyle') else 'false'}")
+    # Copies never create buckets implicitly; bucket creation is an explicit, permitted step.
+    if not check_bucket: lines.append("no_check_bucket = true")
+    return lines
+
+
+def copy_rclone_setup(config):
+    """Writes the rclone config (and CA bundle) once; returns the global arguments."""
+    lines = copy_remote_lines("source", config["source"]) + [""] + copy_remote_lines("destination", config["destination"])
+    if config["createBuckets"]:
+        lines += [""] + copy_remote_lines("destination_create", config["destination"], check_bucket=True)
+    conf = WORK / "rclone-copy.conf"
+    conf.write_text("\n".join(lines) + "\n"); os.chmod(conf, 0o600)
+    args = ["rclone", "--config", str(conf), "--cache-dir", str(WORK / "cache"), "--retries", "3", "--low-level-retries", "10"]
+    authorities = [endpoint["caPem"] for endpoint in (config["source"], config["destination"]) if endpoint.get("caPem")]
+    if authorities:
+        # --ca-cert replaces the system roots, so an external endpoint keeps them in the same bundle.
+        bundle = []
+        try:
+            bundle.append(pathlib.Path(SYSTEM_CA_BUNDLE).read_text())
+        except OSError:
+            pass
+        bundle.extend(authorities)
+        ca_path = WORK / "copy-ca.pem"
+        ca_path.write_text("\n".join(part.strip() + "\n" for part in bundle)); os.chmod(ca_path, 0o600)
+        args += ["--ca-cert", str(ca_path)]
+    return args
+
+
+def run_rclone(base, *args):
+    completed = subprocess.run([*base, *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False, env=copy_env())
+    return completed.returncode, completed.stdout, completed.stderr
+
+
+def copy_env():
+    env = os.environ.copy()
+    env["TMPDIR"] = "/tmp"
+    return env
+
+
+def rclone_error(stderr, fallback):
+    for line in reversed((stderr or "").strip().splitlines()):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+            if isinstance(entry, dict) and entry.get("msg"):
+                return sanitize(str(entry["msg"]).strip())[:512]
+        except ValueError:
+            return sanitize(line)[:512]
+    return fallback
+
+
+def list_bucket_names(base, remote):
+    code, out, err = run_rclone(base, "lsjson", "--dirs-only", "--use-json-log", "--log-level", "ERROR", f"{remote}:")
+    if code != 0:
+        raise BackupError(f"could not list {remote} buckets: {rclone_error(err, 'listing failed')}")
+    names = []
+    for entry in json.loads(out or "[]"):
+        name = entry.get("Name") or entry.get("Path")
+        if entry.get("IsDir") and isinstance(name, str):
+            names.append(name)
+    return names
+
+
+def rclone_metadata_supported(base):
+    """rclone copies object metadata (content type, cache control, user metadata) with -M since 1.59."""
+    code, out, _ = run_rclone(base[:1], "version")
+    match = re.search(r"v(\d+)\.(\d+)", out or "") if code == 0 else None
+    return bool(match) and (int(match.group(1)), int(match.group(2))) >= (1, 59)
+
+
+def bucket_size(base, remote, bucket):
+    code, out, err = run_rclone(base, "size", "--json", "--use-json-log", "--log-level", "ERROR", f"{remote}:{bucket}")
+    if code != 0:
+        raise BackupError(f"could not size {remote}:{bucket}: {rclone_error(err, 'size failed')}")
+    value = json.loads(out)
+    return {"objects": int(value.get("count", 0)), "bytes": int(value.get("bytes", 0))}
+
+
+class CopyProgress:
+    def __init__(self, state, buckets_total):
+        self.state = state
+        self.done = {"bytes": 0, "objects": 0, "checks": 0, "errors": 0}
+        self.current = dict(self.done)
+        self.buckets_total = buckets_total
+        self.buckets_done = 0
+        self.bucket = None
+        self.extra = {}
+        self.write("listing")
+
+    def begin(self, bucket, phase):
+        self.bucket = bucket
+        self.current = {"bytes": 0, "objects": 0, "checks": 0, "errors": 0}
+        self.extra = {}
+        self.write(phase)
+
+    def stats(self, stats):
+        self.current = {
+            "bytes": int(stats.get("bytes") or 0),
+            "objects": int(stats.get("transfers") or 0),
+            "checks": int(stats.get("checks") or 0),
+            "errors": int(stats.get("errors") or 0),
+        }
+        self.extra = {"totalBytes": int(stats.get("totalBytes") or 0), "speedBytesPerSecond": int(stats.get("speed") or 0)}
+        eta = stats.get("eta")
+        self.extra["etaSeconds"] = int(eta) if isinstance(eta, (int, float)) else None
+        self.write("copying")
+
+    def finish_bucket(self):
+        for key in self.done:
+            self.done[key] += self.current[key]
+        self.current = {"bytes": 0, "objects": 0, "checks": 0, "errors": 0}
+        self.buckets_done += 1
+        self.extra = {}
+
+    def transferred(self):
+        return {"objects": self.done["objects"] + self.current["objects"], "bytes": self.done["bytes"] + self.current["bytes"]}
+
+    def write(self, phase):
+        self.state["phase"] = phase
+        progress = {"phase": phase, "bucketsDone": self.buckets_done, "bucketsTotal": self.buckets_total}
+        if self.bucket:
+            progress["bucket"] = self.bucket
+        for key in self.done:
+            progress[key] = self.done[key] + self.current[key]
+        progress.update(self.extra)
+        progress["updatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.state["progress"] = progress
+        try:
+            write_work_json(COPY_PROGRESS, progress)
+        except OSError:
+            pass
+
+
+def parse_rclone_log_line(line):
+    """Returns (stats, error message) from one rclone --use-json-log line."""
+    try:
+        entry = json.loads(line)
+    except ValueError:
+        return None, None
+    if not isinstance(entry, dict):
+        return None, None
+    stats = entry.get("stats") if isinstance(entry.get("stats"), dict) else None
+    error = str(entry.get("msg", "")).strip() if entry.get("level") in {"error", "critical"} else None
+    return stats, error
+
+
+def copy_bucket(base, config, bucket, progress, metadata):
+    transfers = config["limits"]["transfers"]
+    args = [*base, config["mode"], f"source:{bucket}", f"destination:{bucket}", "--transfers", str(transfers),
+            "--checkers", str(max(8, transfers * 2)), "--use-json-log", "--log-level", "NOTICE",
+            "--stats", f"{COPY_STATS_SECONDS}s", "--stats-log-level", "NOTICE"]
+    if metadata:
+        args.append("--metadata")
+    process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True, env=copy_env())
+    last_error = None
+    for line in process.stderr:
+        stats, error = parse_rclone_log_line(line)
+        if stats is not None:
+            progress.stats(stats)
+        if error:
+            last_error = error
+    code = process.wait()
+    if code != 0:
+        return sanitize(last_error or f"rclone {config['mode']} exited with status {code}")[:512]
+    return None
+
+
+def check_bucket(base, config, bucket):
+    """rclone check with a combined listing: counts per outcome and bounded key samples."""
+    args = [*base, "check", f"source:{bucket}", f"destination:{bucket}", "--combined", "-", "--use-json-log",
+            "--log-level", "ERROR", "--checkers", str(max(8, config["limits"]["transfers"] * 2))]
+    if config["mode"] == "copy":
+        # Copy never deletes, so objects that exist only on the destination are expected.
+        args.append("--one-way")
+    process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=copy_env())
+    # rclone logs every difference to stderr as well; drain it concurrently (keeping only the tail)
+    # so a full pipe never stalls the listing on stdout.
+    tail = deque(maxlen=20)
+    drain = threading.Thread(target=lambda: tail.extend(process.stderr), daemon=True)
+    drain.start()
+    # --combined markers: "=" identical, "+" only on the source (missing on the destination),
+    # "-" only on the destination, "*" different, "!" error.
+    counts = {"=": 0, "-": 0, "+": 0, "*": 0, "!": 0}
+    samples = {"-": [], "+": [], "*": []}
+    for line in process.stdout:
+        line = line.rstrip("\n")
+        if len(line) < 3 or line[1] != " " or line[0] not in counts:
+            continue
+        marker, key = line[0], line[2:]
+        counts[marker] += 1
+        if marker in samples and len(samples[marker]) < COPY_SAMPLE_KEYS:
+            samples[marker].append(key[:COPY_KEY_LENGTH])
+    code = process.wait()
+    drain.join(timeout=10)
+    stderr = "".join(tail)
+    # Exit status 1 only means differences were found.
+    if code not in (0, 1) or (code == 1 and not any(counts[marker] for marker in "-+*!")):
+        raise BackupError(f"rclone check failed for {bucket}: {rclone_error(stderr, 'check failed')}")
+    return {
+        "matched": counts["="],
+        "missing": counts["+"],
+        "differing": counts["*"],
+        "extra": None if config["mode"] == "copy" else counts["-"],
+        "errors": counts["!"],
+        "missingKeys": samples["+"],
+        "differingKeys": samples["*"],
+        "extraKeys": samples["-"] if config["mode"] == "sync" else [],
+    }
+
+
+def empty_bucket_report(bucket):
+    return {"name": bucket, "created": False, "source": None, "destination": None, "matched": 0, "missing": 0,
+            "differing": 0, "extra": None, "errors": 0, "missingKeys": [], "differingKeys": [], "extraKeys": []}
+
+
+def storage_copy(config, state):
+    base = copy_rclone_setup(config)
+    state["phase"] = "listing"
+    source_buckets = list_bucket_names(base, "source")
+    buckets = source_buckets if config["allBuckets"] else config["buckets"]
+    buckets = [copy_bucket_name(bucket) for bucket in buckets]
+    if not config["allBuckets"]:
+        missing_on_source = [bucket for bucket in buckets if bucket not in source_buckets]
+        if missing_on_source:
+            raise BackupError(f"source bucket(s) not found: {', '.join(missing_on_source[:10])}")
+    try:
+        destination_buckets = set(list_bucket_names(base, "destination"))
+    except BackupError:
+        # A bucket-scoped destination key may not list buckets; copying will tell.
+        destination_buckets = None
+    metadata = not config["dryRun"] and rclone_metadata_supported(base)
+    progress = CopyProgress(state, len(buckets))
+    report = {"mode": config["mode"], "dryRun": config["dryRun"], "clean": False, "buckets": [], "totals": {},
+              "transferred": {"objects": 0, "bytes": 0}}
+    state["report"] = report
+    entries = []
+    for bucket in buckets:
+        entry = empty_bucket_report(bucket)
+        entries.append(entry)
+        # The report lists a bounded number of buckets; totals cover all of them.
+        if len(report["buckets"]) < COPY_MAX_BUCKETS:
+            report["buckets"].append(entry)
+        else:
+            report["truncated"] = True
+        exists = None if destination_buckets is None else bucket in destination_buckets
+        try:
+            if config["dryRun"]:
+                progress.begin(bucket, "checking")
+                entry["source"] = bucket_size(base, "source", bucket)
+                if exists is False:
+                    entry["missingOnDestination"] = True
+                    entry["missing"] = entry["source"]["objects"]
+                    entry["destination"] = {"objects": 0, "bytes": 0}
+                    progress.finish_bucket()
+                    continue
+            else:
+                if exists is not True:
+                    if config["createBuckets"]:
+                        code, _, err = run_rclone(base, "mkdir", "--use-json-log", "--log-level", "ERROR", f"destination_create:{bucket}")
+                        if code != 0:
+                            raise BackupError(f"could not create destination bucket: {rclone_error(err, 'mkdir failed')}")
+                        entry["created"] = exists is False
+                    elif exists is False:
+                        raise BackupError("destination bucket does not exist; creating it needs storage:objects:admin on the destination")
+                progress.begin(bucket, "copying")
+                error = copy_bucket(base, config, bucket, progress, metadata)
+                if error:
+                    raise BackupError(error)
+                state["phase"] = "checking"
+                progress.write("checking")
+                entry["source"] = bucket_size(base, "source", bucket)
+            entry.update(check_bucket(base, config, bucket))
+            entry["destination"] = bucket_size(base, "destination", bucket)
+        except BackupError as error:
+            entry["error"] = sanitize(str(error))[:1024]
+        progress.finish_bucket()
+    progress.write("completed")
+    report["transferred"] = progress.transferred()
+    totals = {"buckets": len(buckets), "sourceObjects": 0, "sourceBytes": 0, "destinationObjects": 0, "destinationBytes": 0,
+              "missing": 0, "differing": 0, "extra": 0, "errors": 0}
+    for entry in entries:
+        for side, prefix in (("source", "source"), ("destination", "destination")):
+            if entry[side]:
+                totals[prefix + "Objects"] += entry[side]["objects"]
+                totals[prefix + "Bytes"] += entry[side]["bytes"]
+        totals["missing"] += entry["missing"]
+        totals["differing"] += entry["differing"]
+        totals["extra"] += entry["extra"] or 0
+        totals["errors"] += entry["errors"] + (1 if entry.get("error") else 0)
+    report["totals"] = totals
+    report["clean"] = (totals["missing"] == 0 and totals["differing"] == 0 and totals["errors"] == 0
+                       and (config["mode"] == "copy" or totals["extra"] == 0))
+    state["phase"] = "completed"
+    return report
 
 
 if __name__ == "__main__":

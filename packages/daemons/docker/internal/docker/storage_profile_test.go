@@ -22,7 +22,7 @@ func (fakeBackupCommandHandler) handleBackupCommand(_ *pb.DockerBackupCommand, _
 
 func TestStorageProfileAdvertisesOnlyTypedStorageCapabilities(t *testing.T) {
 	joined := strings.Join(storagePluginForTest().BuildRegisterMessage("node-1").Capabilities, ",")
-	for _, required := range []string{"managed_databases_v1", "managed_storage_v1", "managed_storage_ext4_quota_v1", "managed_storage_iam_v1", "managed_storage_seaweedfs_v1"} {
+	for _, required := range []string{"managed_databases_v1", "managed_storage_v1", "managed_storage_ext4_quota_v1", "managed_storage_iam_v1", "managed_storage_iam_policy_v1", "managed_storage_seaweedfs_v1"} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("missing storage capability %s: %s", required, joined)
 		}
