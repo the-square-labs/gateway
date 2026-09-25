@@ -203,7 +203,13 @@ func (m *managedStorageManager) createSeaweedFSContainer(ctx context.Context, re
 		User:       fmt.Sprintf("%d:%d", seaweedfsRuntimeUID, seaweedfsRuntimeGID),
 		Entrypoint: []string{"/usr/bin/weed"},
 		Cmd:        seaweedfsCommand(*record),
-		Env:        []string{"GOMEMLIMIT=" + strconv.FormatInt(max(int64(64), record.MemoryBytes*85/100/mebibyte), 10) + "MiB"},
+		Env: []string{
+			"GOMEMLIMIT=" + strconv.FormatInt(max(int64(64), record.MemoryBytes*85/100/mebibyte), 10) + "MiB",
+			// The S3 listener rereads its certificate files on this interval
+			// (upstream default 5h), so a renewed certificate is served
+			// without a restart (see reloadTLS).
+			"WEED_TLS_CERT_REFRESH_INTERVAL=" + seaweedfsTLSRefreshInterval,
+		},
 		Labels: map[string]string{
 			managedStorageLabel:       record.ID,
 			managedStorageMemberLabel: strconv.Itoa(record.MemberIndex),

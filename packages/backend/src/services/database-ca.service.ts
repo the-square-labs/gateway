@@ -1,7 +1,7 @@
 import { isIP } from 'node:net';
 import { eq } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleTransaction } from '@/db/client.js';
-import { certificateAuthorities, certificates } from '@/db/schema/index.js';
+import { certificateAuthorities, certificates, managedDatabaseInstances } from '@/db/schema/index.js';
 import { createChildLogger } from '@/lib/logger.js';
 import type { CAService } from '@/modules/pki/ca.service.js';
 import type { CertService } from '@/modules/pki/cert.service.js';
@@ -73,12 +73,74 @@ export class DatabaseCAService {
     serviceAddresses: readonly string[],
     bindCurrent?: SystemCertificateCurrentBinding
   ) {
+    return this.requireSystemCertificateLifecycle().issueCurrent(
+      await this.managedDatabaseIssueInput(managedDatabaseId, serviceAddresses),
+      SYSTEM_USER_ID,
+      { type: 'managed_database', id: managedDatabaseId },
+      bindCurrent
+    );
+  }
+
+  /**
+   * Stages a replacement leaf next to the current one (reused while it has
+   * 30 days or more left). It becomes current only through
+   * {@link promoteManagedDatabaseCertificate}, once the database serves it.
+   */
+  async issuePendingManagedDatabaseCertificate(managedDatabaseId: string, serviceAddresses: readonly string[]) {
+    return this.requireSystemCertificateLifecycle().issuePending(
+      await this.managedDatabaseIssueInput(managedDatabaseId, serviceAddresses),
+      SYSTEM_USER_ID,
+      { type: 'managed_database', id: managedDatabaseId }
+    );
+  }
+
+  async findPendingManagedDatabaseCertificate(managedDatabaseId: string) {
+    return this.requireSystemCertificateLifecycle().findPending({ type: 'managed_database', id: managedDatabaseId });
+  }
+
+  /**
+   * Makes the staged leaf with this serial current, retires the previous one
+   * and points the database at it, in one transaction.
+   */
+  async promoteManagedDatabaseCertificate(managedDatabaseId: string, serialNumber: string): Promise<boolean> {
+    return this.requireSystemCertificateLifecycle().promotePending(
+      { type: 'managed_database', id: managedDatabaseId },
+      serialNumber,
+      async (tx, certificate) => {
+        if (!certificate) return;
+        await tx
+          .update(managedDatabaseInstances)
+          .set({ certificateId: certificate.id, updatedAt: new Date() })
+          .where(eq(managedDatabaseInstances.id, managedDatabaseId));
+      }
+    );
+  }
+
+  /** Public details of a managed database leaf issued by the Database CA. */
+  async getManagedDatabaseCertificate(certificateId: string) {
+    const [certificate] = await this.db
+      .select({
+        id: certificates.id,
+        caId: certificates.caId,
+        serialNumber: certificates.serialNumber,
+        notBefore: certificates.notBefore,
+        notAfter: certificates.notAfter,
+        sans: certificates.sans,
+        certificatePem: certificates.certificatePem,
+      })
+      .from(certificates)
+      .where(eq(certificates.id, certificateId))
+      .limit(1);
+    return certificate ? { ...certificate, sans: certificate.sans ?? [] } : null;
+  }
+
+  private async managedDatabaseIssueInput(managedDatabaseId: string, serviceAddresses: readonly string[]) {
     const sans = [
       ...new Set(serviceAddresses.map((address) => address.trim()).filter((address) => isIP(address) !== 0)),
     ];
     if (sans.length === 0) throw new Error('Managed database node has no configured IP addresses for TLS');
     const ca = await this.getDatabaseCA();
-    const issueInput = {
+    return {
       caId: ca.id,
       type: 'tls-server' as const,
       commonName: `managed-db-${managedDatabaseId}`,
@@ -86,12 +148,6 @@ export class DatabaseCAService {
       keyAlgorithm: 'ecdsa-p256' as const,
       validityDays: 365,
     };
-    return this.requireSystemCertificateLifecycle().issueCurrent(
-      issueInput,
-      SYSTEM_USER_ID,
-      { type: 'managed_database', id: managedDatabaseId },
-      bindCurrent
-    );
   }
 
   async retireManagedDatabaseCertificates(managedDatabaseId: string, transaction?: DrizzleTransaction) {

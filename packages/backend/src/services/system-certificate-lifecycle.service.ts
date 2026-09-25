@@ -364,6 +364,24 @@ export class SystemCertificateLifecycleService {
     return promoted;
   }
 
+  /** The owner's newest staged (pending, still active) leaf, if any. */
+  async findPending(owner: SystemCertificateOwner) {
+    const [pending] = await this.db
+      .select()
+      .from(certificates)
+      .where(
+        and(
+          eq(certificates.systemOwnerType, owner.type),
+          eq(certificates.systemOwnerId, owner.id),
+          eq(certificates.systemLifecycleState, 'pending'),
+          eq(certificates.status, 'active')
+        )
+      )
+      .orderBy(desc(certificates.createdAt))
+      .limit(1);
+    return pending ?? null;
+  }
+
   private async findReusablePending(owner: SystemCertificateOwner, caId: string) {
     const [pending] = await this.db
       .select()

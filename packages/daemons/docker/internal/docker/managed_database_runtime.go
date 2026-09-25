@@ -377,6 +377,10 @@ func clickHouseNativePort(tlsEnabled bool) string {
 	return "9000/tcp"
 }
 
+// managedDatabaseChown assigns TLS material to the engine account; tests
+// running unprivileged replace it.
+var managedDatabaseChown = os.Chown
+
 func writeManagedDatabaseTLS(dir string, input managedDatabaseCommand) error {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return fmt.Errorf("create managed database TLS directory: %w", err)
@@ -385,23 +389,26 @@ func writeManagedDatabaseTLS(dir string, input managedDatabaseCommand) error {
 	if err != nil {
 		return err
 	}
-	if err := os.Chown(dir, uid, gid); err != nil {
+	if err := managedDatabaseChown(dir, uid, gid); err != nil {
 		return fmt.Errorf("restrict managed database TLS directory: %w", err)
 	}
+	// Each file is replaced through a temporary file and a rename inside the
+	// mounted directory, so a running engine rereading its certificate never
+	// sees a truncated file. The key is owned by the engine account (0600, as
+	// PostgreSQL requires) before it becomes visible.
+	ownKey := func(path string) error { return managedDatabaseChown(path, uid, gid) }
 	for _, file := range []struct {
 		name, value string
 		mode        os.FileMode
+		chown       func(string) error
 	}{
-		{"cert.pem", input.TLSCertificatePEM, 0644},
-		{"key.pem", input.TLSPrivateKeyPEM, 0600},
-		{"ca.pem", input.TLSCACertificatePEM, 0644},
+		{"ca.pem", input.TLSCACertificatePEM, 0644, nil},
+		{"key.pem", input.TLSPrivateKeyPEM, 0600, ownKey},
+		{"cert.pem", input.TLSCertificatePEM, 0644, nil},
 	} {
-		if err := os.WriteFile(filepath.Join(dir, file.name), []byte(file.value), file.mode); err != nil {
-			return fmt.Errorf("write managed database TLS material: %w", err)
+		if err := writeFileAtomically(filepath.Join(dir, file.name), []byte(file.value), file.mode, file.chown); err != nil {
+			return fmt.Errorf("write managed database TLS material %s: %w", file.name, err)
 		}
-	}
-	if err := os.Chown(filepath.Join(dir, "key.pem"), uid, gid); err != nil {
-		return fmt.Errorf("restrict managed database TLS key: %w", err)
 	}
 	return nil
 }

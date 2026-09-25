@@ -238,3 +238,55 @@ describe('StorageCAService', () => {
     });
   });
 });
+
+describe('StorageCAService renewal staging', () => {
+  it('stages a replacement leaf (never retiring the current one) with the loopback names', async () => {
+    const db = createDb([[{ id: 'ca-storage-1', certificatePem: 'CA_PEM' }]]);
+    const lifecycle = {
+      issuePending: vi.fn().mockResolvedValue({ certificate: { id: 'pending-1' }, privateKeyPem: 'KEY' }),
+      issueCurrent: vi.fn(),
+    };
+    const service = new StorageCAService(db as never, {} as CAService, {} as CertService);
+    service.setSystemCertificateLifecycleService(lifecycle as never);
+
+    await service.issuePendingManagedStorageCertificate('cluster-1', ['10.0.0.5', 'storage-1']);
+
+    expect(lifecycle.issueCurrent).not.toHaveBeenCalled();
+    expect(lifecycle.issuePending).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caId: 'ca-storage-1',
+        commonName: 'managed-storage-cluster-1',
+        sans: ['10.0.0.5', 'storage-1', 'localhost', '127.0.0.1'],
+        validityDays: 365,
+      }),
+      SYSTEM_USER_ID,
+      { type: 'managed_storage', id: 'cluster-1' }
+    );
+  });
+
+  it('points the cluster at the leaf in the promotion transaction', async () => {
+    const db = createDb([]);
+    const txWhere = vi.fn(() => Promise.resolve());
+    const txSet = vi.fn(() => ({ where: txWhere }));
+    const tx = { update: vi.fn(() => ({ set: txSet })) };
+    const lifecycle = {
+      promotePending: vi.fn(
+        async (_owner: unknown, _serial: string, bind: (tx: unknown, certificate: unknown) => Promise<void>) => {
+          await bind(tx, { id: 'pending-1', serialNumber: 'serial-1' });
+          return true;
+        }
+      ),
+    };
+    const service = new StorageCAService(db as never, {} as CAService, {} as CertService);
+    service.setSystemCertificateLifecycleService(lifecycle as never);
+
+    await expect(service.promoteManagedStorageCertificate('cluster-1', 'serial-1')).resolves.toBe(true);
+
+    expect(lifecycle.promotePending).toHaveBeenCalledWith(
+      { type: 'managed_storage', id: 'cluster-1' },
+      'serial-1',
+      expect.any(Function)
+    );
+    expect(txSet).toHaveBeenCalledWith(expect.objectContaining({ certificateId: 'pending-1' }));
+  });
+});

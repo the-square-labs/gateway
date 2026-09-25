@@ -76,8 +76,22 @@ func (m *managedDatabaseManager) update(ctx context.Context, record *managedData
 		if err := m.recreateContainer(ctx, record, input); err != nil {
 			return err
 		}
-	} else if err := m.client.LiveUpdateContainer(ctx, record.ContainerID, managedDatabaseRuntimeJSON(input)); err != nil {
-		return err
+	} else {
+		if err := m.client.LiveUpdateContainer(ctx, record.ContainerID, managedDatabaseRuntimeJSON(input)); err != nil {
+			return err
+		}
+		// A renewed certificate is loaded by the running engine (see
+		// reloadTLS) instead of recreating the container; a restart is the
+		// fallback only when the engine does not serve it.
+		if input.TLSEnabled && record.TLSEnabled && input.TLSCertificateID != record.TLSCertificateID {
+			leaf, err := leafCertificateFingerprint(input.TLSCertificatePEM, input.TLSPrivateKeyPEM)
+			if err != nil {
+				return err
+			}
+			if _, err := m.reloadTLS(ctx, record, input, leaf, true); err != nil {
+				return fmt.Errorf("apply renewed managed database certificate: %w", err)
+			}
+		}
 	}
 	applyManagedDatabaseOperationID(record, input)
 	return nil
@@ -178,12 +192,14 @@ func writeClickHouseOwnerOverride(path, config string) error {
 	return os.Chmod(path, 0644)
 }
 
+// managedDatabaseRequiresRecreate reports settings fixed at container
+// creation. A changed TLS certificate is not one of them: update applies it
+// to the running engine through reloadTLS.
 func managedDatabaseRequiresRecreate(record managedDatabaseRecord, input managedDatabaseCommand) bool {
 	return input.PublishedPort != record.PublishedPort ||
 		input.PublishedNativePort != record.PublishedNativePort ||
 		(input.PublishNativeTCP != (record.PublishedNativePort != 0)) ||
 		input.TLSEnabled != record.TLSEnabled ||
-		input.TLSCertificateID != record.TLSCertificateID ||
 		(input.PublishTCP != (record.PublishedPort != 0)) ||
 		(record.Type == "clickhouse" && (clickHouseConfigHash(input.ClickhouseConfig) != record.ClickhouseConfigHash ||
 			record.ClickhouseRuntimeProfileVersion != clickHouseRuntimeProfileVersion)) ||

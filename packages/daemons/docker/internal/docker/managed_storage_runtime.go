@@ -32,20 +32,29 @@ type managedStorageManager struct {
 	statFilesystem func(string, *unix.Statfs_t) error
 	// chown overrides runtime-user ownership changes (tests run unprivileged).
 	chown func(string, int, int) error
-	mu    sync.Mutex
+	// probeServed overrides the served-certificate probe (tests).
+	probeServed func(ctx context.Context, address, protocol string) (servedCertificate, error)
+	mu          sync.Mutex
+	// generations and tlsReloads let a certificate reload wait without mu
+	// (see handleTLSReload); generations is guarded by mu.
+	generations lifecycleGenerations
+	tlsReloads  resourceLocks
 }
 
+// stageTLS writes the legacy MinIO certs directory. Every file is replaced
+// through a temporary file and a rename: MinIO rereads the directory on
+// SIGHUP, and an in-place truncate could expose a half-written key.
 func (m *managedStorageManager) stageTLS(record managedStorageRecord, tlsConfig managedStorageTLS) (string, error) {
 	directory := filepath.Join(m.root, "storage", "tls", fmt.Sprintf("%s-%d", record.ID, record.MemberIndex))
 	if err := os.MkdirAll(filepath.Join(directory, "CAs"), 0700); err != nil {
 		return "", err
 	}
 	for _, file := range []struct{ name, content string }{
-		{"public.crt", tlsConfig.CertPEM},
-		{"private.key", tlsConfig.KeyPEM},
 		{"CAs/gateway-ca.crt", tlsConfig.CAPEM},
+		{"private.key", tlsConfig.KeyPEM},
+		{"public.crt", tlsConfig.CertPEM},
 	} {
-		if err := os.WriteFile(filepath.Join(directory, file.name), []byte(file.content), 0600); err != nil {
+		if err := writeFileAtomically(filepath.Join(directory, file.name), []byte(file.content), 0600, nil); err != nil {
 			return "", fmt.Errorf("stage managed storage TLS %s: %w", file.name, err)
 		}
 	}

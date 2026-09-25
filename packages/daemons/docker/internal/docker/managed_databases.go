@@ -260,7 +260,13 @@ type managedDatabaseManager struct {
 	logger  *slog.Logger
 	root    string
 	reserve int64
-	mu      sync.Mutex
+	// probeServed overrides the served-certificate probe (tests).
+	probeServed func(ctx context.Context, address, protocol string) (servedCertificate, error)
+	mu          sync.Mutex
+	// generations and tlsReloads let a certificate reload wait without mu
+	// (see handleTLSReload); generations is guarded by mu.
+	generations lifecycleGenerations
+	tlsReloads  resourceLocks
 }
 
 func newManagedDatabaseManager(cfg *config.Config, client *Client, logger *slog.Logger) (*managedDatabaseManager, error) {
@@ -369,8 +375,19 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 	if !managedDatabaseIDPattern.MatchString(id) {
 		return "", errors.New("invalid managed database id")
 	}
+	// Certificate reloads wait for the engine without the manager lock.
+	switch action {
+	case "reload_tls":
+		return m.handleTLSReload(ctx, id, configJSON)
+	case "probe_tls":
+		return m.handleTLSProbe(ctx, id)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	switch action {
+	case "create", "start", "restart", "update", "stop", "pause", "unpause", "remove":
+		m.generations.bump(id)
+	}
 
 	switch action {
 	case "create":

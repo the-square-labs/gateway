@@ -308,7 +308,7 @@ func TestSeaweedFSContainerRunsUnprivilegedWithHealthcheck(t *testing.T) {
 		if created.Labels[managedStorageEngineLabel] != managedStorageEngineSeaweedFS || created.Labels[managedStorageLabel] != record.ID {
 			t.Fatalf("labels = %v", created.Labels)
 		}
-		if !reflect.DeepEqual(created.Env, []string{"GOMEMLIMIT=435MiB"}) {
+		if !reflect.DeepEqual(created.Env, []string{"GOMEMLIMIT=435MiB", "WEED_TLS_CERT_REFRESH_INTERVAL=1m"}) {
 			t.Fatalf("env = %v (no secrets may be passed in the environment)", created.Env)
 		}
 		staging := manager.seaweedfsStagingDir(record)

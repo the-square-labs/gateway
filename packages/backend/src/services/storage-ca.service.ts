@@ -82,6 +82,68 @@ export class StorageCAService {
     serviceAddresses: readonly string[],
     bindCurrent?: SystemCertificateCurrentBinding
   ) {
+    return this.requireSystemCertificateLifecycle().issueCurrent(
+      await this.managedStorageIssueInput(managedStorageId, serviceAddresses),
+      SYSTEM_USER_ID,
+      { type: 'managed_storage', id: managedStorageId },
+      bindCurrent
+    );
+  }
+
+  /**
+   * Stages a replacement leaf next to the current one (reused while it has
+   * 30 days or more left). It becomes current only through
+   * {@link promoteManagedStorageCertificate}, once the cluster serves it.
+   */
+  async issuePendingManagedStorageCertificate(managedStorageId: string, serviceAddresses: readonly string[]) {
+    return this.requireSystemCertificateLifecycle().issuePending(
+      await this.managedStorageIssueInput(managedStorageId, serviceAddresses),
+      SYSTEM_USER_ID,
+      { type: 'managed_storage', id: managedStorageId }
+    );
+  }
+
+  async findPendingManagedStorageCertificate(managedStorageId: string) {
+    return this.requireSystemCertificateLifecycle().findPending({ type: 'managed_storage', id: managedStorageId });
+  }
+
+  /**
+   * Makes the staged leaf with this serial current, retires the previous one
+   * and points the cluster at it, in one transaction.
+   */
+  async promoteManagedStorageCertificate(managedStorageId: string, serialNumber: string): Promise<boolean> {
+    return this.requireSystemCertificateLifecycle().promotePending(
+      { type: 'managed_storage', id: managedStorageId },
+      serialNumber,
+      async (tx, certificate) => {
+        if (!certificate) return;
+        await tx
+          .update(managedStorageClusters)
+          .set({ certificateId: certificate.id, updatedAt: new Date() })
+          .where(eq(managedStorageClusters.id, managedStorageId));
+      }
+    );
+  }
+
+  /** Public details of a managed storage leaf issued by the Storage CA. */
+  async getManagedStorageCertificate(certificateId: string) {
+    const [certificate] = await this.db
+      .select({
+        id: certificates.id,
+        caId: certificates.caId,
+        serialNumber: certificates.serialNumber,
+        notBefore: certificates.notBefore,
+        notAfter: certificates.notAfter,
+        sans: certificates.sans,
+        certificatePem: certificates.certificatePem,
+      })
+      .from(certificates)
+      .where(eq(certificates.id, certificateId))
+      .limit(1);
+    return certificate ? { ...certificate, sans: certificate.sans ?? [] } : null;
+  }
+
+  private async managedStorageIssueInput(managedStorageId: string, serviceAddresses: readonly string[]) {
     const addressSans = serviceAddresses
       .map((address) => address.trim())
       .filter(
@@ -90,7 +152,7 @@ export class StorageCAService {
     if (addressSans.length === 0) throw new Error('Managed storage node has no addresses for TLS');
     const sans = [...new Set([...addressSans, ...MANAGED_STORAGE_LOOPBACK_SANS])];
     const ca = await this.getStorageCA();
-    const issueInput = {
+    return {
       caId: ca.id,
       type: 'tls-server' as const,
       commonName: `managed-storage-${managedStorageId}`,
@@ -98,12 +160,6 @@ export class StorageCAService {
       keyAlgorithm: 'ecdsa-p256' as const,
       validityDays: 365,
     };
-    return this.requireSystemCertificateLifecycle().issueCurrent(
-      issueInput,
-      SYSTEM_USER_ID,
-      { type: 'managed_storage', id: managedStorageId },
-      bindCurrent
-    );
   }
 
   /**
