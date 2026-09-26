@@ -369,7 +369,7 @@ describe("LoginPage email-first sign-in", () => {
     expect(forgotPassword).toHaveClass("h-auto", "p-0");
     expect(screen.getByRole("link", { name: "Square Labs" })).toBeInTheDocument();
     fireEvent.click(forgotPassword);
-    expect(await screen.findByRole("heading", { name: "Reset password?" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Reset Password?" })).toBeInTheDocument();
     expect(
       screen.getByText(/email a password-reset link to reset@example.com/i)
     ).toBeInTheDocument();

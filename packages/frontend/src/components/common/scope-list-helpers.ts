@@ -17,11 +17,21 @@ import {
   type Node,
   type ProxyHost,
 } from "@/types";
-import { FOLDER_CREATION_SCOPES } from "@/types/scope-resource-restrictions";
+import {
+  FOLDER_CREATION_SCOPES,
+  GIT_CONNECTOR_SCOPES,
+  GIT_TARGET_SCOPES,
+} from "@/types/scope-resource-restrictions";
 
 const FOLDER_TARGET_PREFIX = "folder/";
 const FOLDER_SCOPABLE_SET = new Set<string>(FOLDER_SCOPABLE_SCOPES);
 const CREATION_SCOPES = new Set<string>(FOLDER_CREATION_SCOPES);
+const GIT_TARGET_SCOPE_SET = new Set<string>(GIT_TARGET_SCOPES);
+const GIT_PROVIDER_NAMES: Record<string, string> = {
+  gitlab: "GitLab",
+  github: "GitHub",
+  git: "Git",
+};
 
 export interface ScopeItem {
   value: string;
@@ -688,6 +698,15 @@ export function getResourceOptions(
 }
 
 export function getResourceLabel(scope: string): string {
+  if (GIT_TARGET_SCOPE_SET.has(scope) && scope.startsWith("integrations:gitlab:"))
+    return "Restrict to GitLab connectors, or to groups and projects within a connector (leave unchecked for all):";
+  if (GIT_TARGET_SCOPE_SET.has(scope) && scope.startsWith("integrations:github:"))
+    return "Restrict to GitHub connectors, or to owners and repositories within a connector (leave unchecked for all):";
+  if (
+    GIT_TARGET_SCOPE_SET.has(scope) ||
+    (GIT_CONNECTOR_SCOPES as readonly string[]).includes(scope)
+  )
+    return `Restrict to specific ${GIT_PROVIDER_NAMES[scope.split(":")[1]!]} connectors (leave unchecked for all):`;
   if (scope === "admin:groups" || scope === "admin:users" || scope === "admin:users:impersonate")
     return "Restrict to folders or individual accounts/groups (creation requires a destination folder; leave unchecked for all):";
   if (scope.startsWith("hosting:") || scope.startsWith("integrations:hosting:")) {

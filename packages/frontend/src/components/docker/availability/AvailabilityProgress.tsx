@@ -82,7 +82,7 @@ export function AvailabilityProgress({
       role="status"
     >
       {operation?.status === "waiting" && operation.errorMessage ? (
-        <p className="px-4 py-3 text-sm text-warning">{operation.errorMessage}</p>
+        <p className="px-4 py-3 text-sm text-warning-text">{operation.errorMessage}</p>
       ) : null}
     </PanelShell>
   );

@@ -78,7 +78,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
 
   const revoke = async (token: InferenceToken) => {
     const accepted = await confirm({
-      title: "Revoke inference token",
+      title: "Revoke Inference Token",
       description: `Revoke “${token.name}”? Clients using it will lose access immediately.`,
       confirmLabel: "Revoke",
     });
@@ -162,7 +162,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Create inference token</DialogTitle>
+            <DialogTitle>Create Inference Token</DialogTitle>
             <DialogDescription>The token will be shown once after creation.</DialogDescription>
           </DialogHeader>
           <div className="space-y-1.5">
@@ -201,7 +201,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
           }}
         >
           <DialogHeader>
-            <DialogTitle>Inference token created</DialogTitle>
+            <DialogTitle>Inference Token Created</DialogTitle>
             <DialogDescription>Copy this token now. It will not be shown again.</DialogDescription>
           </DialogHeader>
           {secret && (

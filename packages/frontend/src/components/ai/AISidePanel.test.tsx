@@ -441,7 +441,7 @@ describe("AISidePanel autoscroll", () => {
     renderAISidePanel();
 
     expect(
-      await screen.findByRole("heading", { name: "Add GitHub connector" })
+      await screen.findByRole("heading", { name: "Add GitHub Connector" })
     ).toBeInTheDocument();
     expect(screen.getByText("GitHub connector")).toBeInTheDocument();
   });
@@ -483,7 +483,7 @@ describe("AISidePanel autoscroll", () => {
     renderAISidePanel();
 
     expect(
-      await screen.findByRole("heading", { name: "Connect your first node" })
+      await screen.findByRole("heading", { name: "Connect Your First Node" })
     ).toBeInTheDocument();
     expect(screen.getByText("Create enrollment")).toBeInTheDocument();
   });
@@ -789,7 +789,7 @@ describe("AISidePanel autoscroll", () => {
 
     renderAISidePanel();
 
-    expect(screen.getByRole("heading", { name: "Context usage" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Context Usage" })).toBeInTheDocument();
     expect(screen.getByText("207 / 1,000 (21%)")).toBeInTheDocument();
     expect(screen.getByText("~7 tokens · 1 message")).toBeInTheDocument();
     expect(screen.getByText("Base instructions")).toBeInTheDocument();
@@ -930,7 +930,7 @@ describe("AISidePanel autoscroll", () => {
 
     expect(useConfirmDialog.getState()).toMatchObject({
       open: true,
-      title: "Change model?",
+      title: "Change Model?",
       description:
         "Changing the model during a conversation may increase costs and reduce performance.",
     });

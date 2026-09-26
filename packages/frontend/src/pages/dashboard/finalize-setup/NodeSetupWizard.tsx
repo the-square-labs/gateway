@@ -162,7 +162,7 @@ export function NodeSetupWizard({
   const skipEnrollment = async () => {
     if (!enrollment) return;
     const approved = await confirm({
-      title: "Discard pending node?",
+      title: "Discard Pending Node?",
       description:
         "This removes the pending node and invalidates its one-time enrollment command. You can create a new enrollment later from Nodes.",
       confirmLabel: "Delete pending node",
@@ -193,7 +193,7 @@ export function NodeSetupWizard({
   return (
     <FinalizeSetupWizardDialog
       open={open}
-      title="Connect your first node"
+      title="Connect Your First Node"
       description={
         <>
           <p>

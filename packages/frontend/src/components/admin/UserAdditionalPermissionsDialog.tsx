@@ -237,7 +237,7 @@ export function UserAdditionalPermissionsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Additional permissions</DialogTitle>
+          <DialogTitle>Additional Permissions</DialogTitle>
           <p className="text-sm text-muted-foreground">
             {displayedUser?.name || displayedUser?.email} receives these permissions in addition to
             {displayedUser?.groupIds && displayedUser.groupIds.length > 1

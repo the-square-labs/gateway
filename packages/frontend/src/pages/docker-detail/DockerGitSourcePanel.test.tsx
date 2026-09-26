@@ -159,7 +159,7 @@ describe("DockerGitSourcePanel Build Secrets", () => {
     await user.click(screen.getByRole("button", { name: "Build now" }));
 
     expect(
-      await screen.findByRole("heading", { name: "Connect a Build Worker first" })
+      await screen.findByRole("heading", { name: "Connect a Build Worker First" })
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open Nodes/ })).toBeInTheDocument();
   });

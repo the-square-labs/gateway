@@ -564,7 +564,7 @@ export function HostingResourcesTab({
       <Dialog open={Boolean(retryTarget)} onOpenChange={(open) => !open && setRetryTarget(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Retry installation</DialogTitle>
+            <DialogTitle>Retry Installation</DialogTitle>
             <DialogDescription>
               Install the daemon again on {displayedRetry?.resource.name}. The existing node and VM
               are reused; no new VM is ordered.

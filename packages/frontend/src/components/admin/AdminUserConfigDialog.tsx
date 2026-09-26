@@ -154,7 +154,7 @@ export function AdminUserConfigDialog({
   const changeAuthMethod = async (nextMethod: LocalAuthMethod) => {
     if (nextMethod === authMethod) return;
     const accepted = await confirm({
-      title: "Change sign-in method",
+      title: "Change Sign-In Method",
       description:
         nextMethod === "password"
           ? "Existing browser sessions will be revoked and the user will receive a password-setup link."
@@ -267,7 +267,7 @@ export function AdminUserConfigDialog({
       >
         <DialogContent aria-describedby={undefined} className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Configure user</DialogTitle>
+            <DialogTitle>Configure User</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <PanelShell title="Account" bodyClassName="divide-y divide-border">
@@ -330,7 +330,7 @@ export function AdminUserConfigDialog({
                       disabled={saving || !name.trim() || name.trim() === user.name}
                       aria-label={nameSaved ? "Name saved" : "Save name"}
                       title={nameSaved ? "Saved" : "Save name"}
-                      className="relative shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                      className="relative shrink-0 rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                     >
                       <Check
                         className={`absolute h-4 w-4 transition-all duration-200 ${nameSaved ? "scale-100 opacity-100" : "scale-0 opacity-0"}`}
@@ -467,7 +467,7 @@ export function AdminUserConfigDialog({
       <Dialog open={sessionsDialogOpen} onOpenChange={setSessionsDialogOpen}>
         <DialogContent aria-describedby={undefined} className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Active sessions</DialogTitle>
+            <DialogTitle>Active Sessions</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Browser sessions currently authorized for this account.

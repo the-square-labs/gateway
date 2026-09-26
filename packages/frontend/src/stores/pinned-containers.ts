@@ -13,6 +13,17 @@ type PinnedContainerMeta = {
   scopeBase?: "docker:containers:view" | "docker:compose:view";
 };
 
+function sameMeta(current: PinnedContainerMeta | undefined, next: PinnedContainerMeta): boolean {
+  if (!current) return false;
+  const keys = new Set([...Object.keys(current), ...Object.keys(next)]) as Set<
+    keyof PinnedContainerMeta
+  >;
+  for (const key of keys) {
+    if (current[key] !== next[key]) return false;
+  }
+  return true;
+}
+
 interface PinnedContainersState {
   dashboardContainerIds: string[];
   sidebarContainerIds: string[];
@@ -85,9 +96,12 @@ export const usePinnedContainersStore = create<PinnedContainersState>()(
       isPinnedSidebar: (containerId) => get().sidebarContainerIds.includes(containerId),
 
       updateMeta: (containerId, meta) =>
-        set((s) => ({
-          containerMeta: { ...s.containerMeta, [containerId]: meta },
-        })),
+        set((s) => {
+          // Unchanged metadata keeps the same object, so subscribers (the
+          // dashboard bootstrap request among them) do not recompute.
+          if (sameMeta(s.containerMeta[containerId], meta)) return s;
+          return { containerMeta: { ...s.containerMeta, [containerId]: meta } };
+        }),
 
       migrateId: (oldId, newId) =>
         set((s) => {

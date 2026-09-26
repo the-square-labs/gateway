@@ -507,7 +507,7 @@ export function InferenceSetupWizard({
             </SettingsControlRow>
             {selectedSourceNeedsPricing && !selectedSourceHasPricing && (
               <div className="px-4 py-3">
-                <p className="text-xs text-warning">
+                <p className="text-xs text-warning-text">
                   Gateway could not discover pricing for this API model. Add its pricing in Settings
                   → Gateway Inference, or select another model.
                 </p>

@@ -557,7 +557,7 @@ export function DockerComposeProjects({
     >
       <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Adopt Compose project</DialogTitle>
+          <DialogTitle>Adopt Compose Project</DialogTitle>
           <DialogDescription>
             Review the configuration before adopting the project.
           </DialogDescription>

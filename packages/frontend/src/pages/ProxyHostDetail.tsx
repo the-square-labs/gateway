@@ -796,10 +796,11 @@ export function ProxyHostDetail({
   const handleDelete = async () => {
     if (!host) return;
     const deletingHostId = host.id;
+    const routeName = host.domainNames[0] || host.slug;
     const ok = await confirmAction(
       {
         title: "Delete Route",
-        description: "Are you sure you want to delete this route? This action cannot be undone.",
+        description: `Are you sure you want to delete the route "${routeName}"? This action cannot be undone.`,
         confirmLabel: "Delete",
       },
       async () => {
@@ -1382,7 +1383,7 @@ export function ProxyHostDetail({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Maintenance access code</DialogTitle>
+            <DialogTitle>Maintenance Access Code</DialogTitle>
             <DialogDescription>
               Share this one-time code only with the person who needs temporary access. It expires
               in 5 minutes.
@@ -1398,7 +1399,7 @@ export function ProxyHostDetail({
             <CopyButton
               value={displayedMaintenanceAccessCode ?? ""}
               label="maintenance access code"
-              className="border-l border-input"
+              className="border-l border-border"
             />
           </div>
         </DialogContent>

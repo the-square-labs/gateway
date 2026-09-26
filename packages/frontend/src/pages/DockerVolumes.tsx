@@ -279,6 +279,29 @@ export function DockerVolumes({
     }
   }, [createNodeId, createNodes, createOpen]);
 
+  // Same destination rules as POST /nodes/:nodeId/volumes. A folder-only creator is never offered the
+  // root, so preselect their only folder instead of leaving the picker empty.
+  const canCreateVolumeAtRoot = canCreateInFolder(
+    user?.scopes ?? [],
+    "docker:volumes:create",
+    null,
+    createNodeId
+  );
+  const createVolumeFolderOptions = useMemo(
+    () =>
+      folderList.filter(
+        (folder) =>
+          !folder.isSystem &&
+          canCreateInFolder(user?.scopes ?? [], "docker:volumes:create", folder.id, createNodeId)
+      ),
+    [createNodeId, folderList, user?.scopes]
+  );
+  useEffect(() => {
+    if (createOpen && !createFolderId && !canCreateVolumeAtRoot && createVolumeFolderOptions.length === 1) {
+      setCreateFolderId(createVolumeFolderOptions[0].id);
+    }
+  }, [canCreateVolumeAtRoot, createFolderId, createOpen, createVolumeFolderOptions]);
+
   useEffect(() => {
     if (createStorageKind === "disk-image" && !supportsDiskImages) {
       setCreateStorageKind("regular");
@@ -607,41 +630,15 @@ export function DockerVolumes({
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Destination folder</label>
                 <Select
-                  value={
-                    createFolderId ||
-                    (canCreateInFolder(
-                      user?.scopes ?? [],
-                      "docker:volumes:create",
-                      null,
-                      createNodeId
-                    )
-                      ? "__none__"
-                      : "")
-                  }
+                  value={createFolderId || (canCreateVolumeAtRoot ? "__none__" : "")}
                   onValueChange={(value) => setCreateFolderId(value === "__none__" ? "" : value)}
                 >
                   <SelectTrigger>
                     <SelectValue placeholder="Select a folder" />
                   </SelectTrigger>
                   <SelectContent>
-                    {canCreateInFolder(
-                      user?.scopes ?? [],
-                      "docker:volumes:create",
-                      null,
-                      createNodeId
-                    ) && <SelectItem value="__none__">No folder</SelectItem>}
-                    {folderList
-                      .filter(
-                        (folder) =>
-                          !folder.isSystem &&
-                          canCreateInFolder(
-                            user?.scopes ?? [],
-                            "docker:volumes:create",
-                            folder.id,
-                            createNodeId
-                          )
-                      )
-                      .map((folder) => (
+                    {canCreateVolumeAtRoot && <SelectItem value="__none__">No folder</SelectItem>}
+                    {createVolumeFolderOptions.map((folder) => (
                         <SelectItem key={folder.id} value={folder.id}>
                           {"— ".repeat(folder.depth)}
                           {folder.name}

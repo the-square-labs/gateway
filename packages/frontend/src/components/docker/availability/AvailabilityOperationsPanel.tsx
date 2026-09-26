@@ -317,7 +317,7 @@ export function AvailabilityOperationsPanel({
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[85dvh] sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Availability operations</DialogTitle>
+            <DialogTitle>Availability Operations</DialogTitle>
             <DialogDescription>Scroll the table to load older operations.</DialogDescription>
           </DialogHeader>
           <div

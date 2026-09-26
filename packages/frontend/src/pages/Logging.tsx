@@ -302,7 +302,7 @@ export function Logging({
   const deleteSchema = async (schema: LoggingSchema) => {
     if (
       !(await confirm({
-        title: "Delete logging schema",
+        title: "Delete Logging Schema",
         description: `Delete ${schema.name}? Environments using it will keep running without an attached schema.`,
         confirmLabel: "Delete",
         variant: "destructive",

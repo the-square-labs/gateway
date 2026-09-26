@@ -103,7 +103,7 @@ export function HostingAdoptDialog({
     >
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Adopt nodes</DialogTitle>
+          <DialogTitle>Adopt Nodes</DialogTitle>
           <DialogDescription>
             Associate an existing VM or container with a Gateway node. Gateway verifies that both
             are the same host before linking them.

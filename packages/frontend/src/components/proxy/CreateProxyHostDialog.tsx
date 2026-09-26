@@ -679,7 +679,7 @@ export function CreateProxyHostDialog({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               aria-label={`Remove domain ${i + 1}`}
                               onClick={() => setDomainNames(domainNames.filter((_, j) => j !== i))}
                             >
@@ -691,7 +691,7 @@ export function CreateProxyHostDialog({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               aria-label="Add domain"
                               onClick={() => setDomainNames([...domainNames, ""])}
                             >

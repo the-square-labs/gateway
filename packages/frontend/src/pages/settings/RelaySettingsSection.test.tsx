@@ -361,7 +361,7 @@ describe("RelaySettingsSection", () => {
     await waitFor(() =>
       expect(confirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Disconnect active streams on relay-eu-2?",
+          title: "Disconnect Active Streams on relay-eu-2?",
           variant: "destructive",
         })
       )
@@ -396,7 +396,7 @@ describe("RelaySettingsSection", () => {
     const button = await screen.findByRole("button", { name: "Abandon update" });
     await user.click(button);
     expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Abandon Relay Pool update?", variant: "destructive" })
+      expect.objectContaining({ title: "Abandon Relay Pool Update?", variant: "destructive" })
     );
     expect(abandon).not.toHaveBeenCalled();
 

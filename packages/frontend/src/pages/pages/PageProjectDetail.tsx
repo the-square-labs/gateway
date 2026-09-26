@@ -45,6 +45,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useUrlTab } from "@/hooks/use-url-tab";
+import { loadPageDeployments } from "@/lib/page-deployments";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageProject, PageProjectPlacementOption } from "@/types";
@@ -197,7 +198,7 @@ curl -X POST '${window.location.origin}/api/pages-deploy/uploads/<upload-id>/fin
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Deploy instructions</DialogTitle>
+          <DialogTitle>Deploy Instructions</DialogTitle>
           <DialogDescription>
             Upload a prebuilt static archive through the resumable webhook API.
           </DialogDescription>
@@ -244,17 +245,21 @@ curl -X POST '${window.location.origin}/api/pages-deploy/uploads/<upload-id>/fin
 export function PageProjectDetail({
   projectId,
   resolvedSlug,
+  initialProject,
 }: {
   projectId: string;
   resolvedSlug: string;
+  /** The Project the route already resolved; the page starts from it instead of fetching it again. */
+  initialProject?: PageProject;
 }) {
   const navigate = useNavigate();
   const canView = useAuthStore((state) => state.hasScopedAccess(`pages:view:${projectId}`));
   const canDeploy = useAuthStore((state) => state.hasScopedAccess(`pages:deploy:${projectId}`));
   const canEdit = useAuthStore((state) => state.hasScopedAccess(`pages:edit:${projectId}`));
   const canDelete = useAuthStore((state) => state.hasScopedAccess(`pages:delete:${projectId}`));
-  const [project, setProject] = useState<PageProject | null>(null);
-  const [loading, setLoading] = useState(true);
+  const initialProjectRef = useRef(initialProject?.id === projectId ? initialProject : undefined);
+  const [project, setProject] = useState<PageProject | null>(initialProjectRef.current ?? null);
+  const [loading, setLoading] = useState(!initialProjectRef.current);
   const [deployInstructionsOpen, setDeployInstructionsOpen] = useState(false);
   const [manualDeployOpen, setManualDeployOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -284,23 +289,28 @@ export function PageProjectDetail({
     }
   }, [projectId]);
 
-  const loadLatestPreview = useCallback(async () => {
-    const requestId = ++latestPreviewRequestRef.current;
-    try {
-      const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
-      if (requestId !== latestPreviewRequestRef.current) return;
-      setLatestPreviewHostname(
-        response.data?.find((deployment) => deployment.status === "ready")?.previewHostname ?? null
-      );
-    } catch {
-      if (requestId === latestPreviewRequestRef.current) setLatestPreviewHostname(null);
-    }
-  }, [projectId]);
+  const loadLatestPreview = useCallback(
+    async ({ fresh = true }: { fresh?: boolean } = {}) => {
+      const requestId = ++latestPreviewRequestRef.current;
+      try {
+        const response = await loadPageDeployments(projectId, { fresh });
+        if (requestId !== latestPreviewRequestRef.current) return;
+        setLatestPreviewHostname(
+          response.data?.find((deployment) => deployment.status === "ready")?.previewHostname ??
+            null
+        );
+      } catch {
+        if (requestId === latestPreviewRequestRef.current) setLatestPreviewHostname(null);
+      }
+    },
+    [projectId]
+  );
 
   useEffect(() => {
     if (!canView) return;
-    void load();
-    void loadLatestPreview();
+    if (!initialProjectRef.current) void load();
+    // Starts the Deployments request that the Deployments tab then shares.
+    void loadLatestPreview({ fresh: false });
   }, [canView, load, loadLatestPreview]);
   useRealtime("pages.project.changed", (payload) => {
     const event = payload as { projectId?: string };
@@ -311,8 +321,11 @@ export function PageProjectDetail({
     if (!event.projectId || event.projectId === projectId) void loadLatestPreview();
   });
 
+  // Realtime refreshes replace the Project object; only its node decides the answer.
+  const hasProject = project !== null;
+  const projectNodeId = project?.nodeId ?? null;
   useEffect(() => {
-    if (!canEdit || !project) {
+    if (!canEdit || !hasProject) {
       setMigrationAvailable(false);
       return;
     }
@@ -324,7 +337,7 @@ export function PageProjectDetail({
         if (!active) return;
         setMigrationAvailable(
           nodes.some(
-            (node) => node.id !== project.nodeId && node.status === "online" && node.pagesCapable
+            (node) => node.id !== projectNodeId && node.status === "online" && node.pagesCapable
           )
         );
       })
@@ -335,7 +348,7 @@ export function PageProjectDetail({
     return () => {
       active = false;
     };
-  }, [canEdit, project]);
+  }, [canEdit, hasProject, projectNodeId]);
 
   const previewsEnabled = project?.previewsEnabled ?? true;
   const publicHostname = project?.primaryDomain ?? (previewsEnabled ? latestPreviewHostname : null);

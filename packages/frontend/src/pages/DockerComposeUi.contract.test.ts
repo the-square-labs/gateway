@@ -185,7 +185,7 @@ describe("Compose UI contract", () => {
     expect(detail).not.toContain("Bring the project down before deleting it");
   });
 
-  it("retains Activity details through the close animation and matches failed badge text", () => {
+  it("retains Activity Details through the close animation and matches failed badge text", () => {
     const detail = source("pages/DockerComposeProjectDetail.tsx");
     expect(detail).toContain("open={activityDetailsOpen}");
     expect(detail).toContain("onAnimationEnd={(event) =>");

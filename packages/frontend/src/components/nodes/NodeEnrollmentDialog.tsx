@@ -27,6 +27,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
+import { allowedCreationFolderId, creationFolderChoices } from "@/lib/creation-folders";
 import { canCreateInFolder } from "@/lib/scope-utils";
 import { STEP_ANIMATION } from "@/pages/notifications/template-editor";
 import { api } from "@/services/api";
@@ -172,6 +173,18 @@ export function NodeEnrollmentDialog({
     setRelayAddress("");
     void fetchFolders("node");
   }, [fetchFolders, initialMode, initialType, open]);
+
+  // Same destination rule as POST /nodes. A folder-only creator is never offered the root: preselect
+  // their only folder instead of leaving the picker empty.
+  const creationChoices = useMemo(
+    () => creationFolderChoices(user?.scopes ?? [], "nodes:create", folderOptions),
+    [folderOptions, user?.scopes]
+  );
+  useEffect(() => {
+    if (!open) return;
+    const next = allowedCreationFolderId(creationChoices, folderId);
+    if (next !== folderId) setFolderId(next);
+  }, [creationChoices, folderId, open]);
 
   useEffect(() => {
     if (!open) setHostingModeLocked(false);

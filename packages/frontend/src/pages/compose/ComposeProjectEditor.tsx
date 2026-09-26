@@ -140,6 +140,22 @@ export function ComposeProjectEditor({
       cancelled = true;
     };
   }, [projectId, nodeId, user?.scopes]);
+  // A new project for a folder-only creator: the root is never offered, so preselect their only folder
+  // (from YAML or a Git source alike) and drop a folder the selected node no longer allows.
+  useEffect(() => {
+    if (projectId || !foldersLoaded) return;
+    const rootAllowed = canCreateInFolder(
+      user?.scopes ?? [],
+      "docker:compose:create",
+      null,
+      nodeId || undefined
+    );
+    if (folderId && !destinationFolders.some((folder) => folder.id === folderId)) {
+      setFolderId(!rootAllowed && destinationFolders.length === 1 ? destinationFolders[0]!.id : null);
+    } else if (!folderId && !rootAllowed && destinationFolders.length === 1) {
+      setFolderId(destinationFolders[0]!.id);
+    }
+  }, [destinationFolders, folderId, foldersLoaded, nodeId, projectId, user?.scopes]);
   const repositoryCreation = !projectId && sourceMode === "repository";
   const { connectorOptions: sourceConnectorOptions, repositories: sourceRepositories } =
     useDockerSourceRepositories(repositoryCreation, sourceConnectorId);

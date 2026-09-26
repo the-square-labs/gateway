@@ -76,7 +76,7 @@ export function StatCard({
         {subtitle && (
           <p
             className={cn(
-              appearance === "dashboard" ? "text-xs" : "text-[10px]",
+              appearance === "dashboard" ? "text-xs" : "text-2xs",
               "text-muted-foreground",
               subtitleClassName
             )}

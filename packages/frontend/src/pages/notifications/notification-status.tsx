@@ -49,13 +49,13 @@ export function DeliveryStatusIcon({
   return (
     <span className="flex h-8 w-8 items-center justify-center bg-muted">
       {state === "delivered" ? (
-        <CheckCircle2 className="h-4 w-4 text-success" />
+        <CheckCircle2 className="h-4 w-4 text-success-text" />
       ) : state === "failed" ? (
         <XCircle className="h-4 w-4 text-destructive" />
       ) : state === "pending" ? (
         <Clock className="h-4 w-4 text-muted-foreground" aria-label="Pending" />
       ) : (
-        <Clock className="h-4 w-4 text-warning" />
+        <Clock className="h-4 w-4 text-warning-text" />
       )}
     </span>
   );

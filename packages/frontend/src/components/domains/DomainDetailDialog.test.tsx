@@ -267,7 +267,7 @@ describe("DomainDetailDialog", () => {
     await user.click(resolveButton);
 
     expect(
-      screen.getByRole("heading", { name: "Resolve Cloudflare DNS conflict" })
+      screen.getByRole("heading", { name: "Resolve Cloudflare DNS Conflict" })
     ).toBeInTheDocument();
     expect(screen.getByText("Current DNS")).toBeInTheDocument();
     expect(screen.getByText("104.16.1.1, 104.16.2.1")).toBeInTheDocument();
@@ -371,7 +371,7 @@ describe("DomainDetailDialog", () => {
       </MemoryRouter>
     );
 
-    expect(await screen.findByRole("heading", { name: "Move ingress" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Move Ingress" })).toBeInTheDocument();
     expect(screen.getByText("Source node")).toBeInTheDocument();
     expect(screen.getByText("Target node")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "Type" })).toBeInTheDocument();

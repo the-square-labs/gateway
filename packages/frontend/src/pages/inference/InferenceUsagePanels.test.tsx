@@ -124,8 +124,8 @@ describe("InferenceUsage", () => {
       "text-xs"
     );
     expect(screen.queryByText(/Just now/)).not.toBeInTheDocument();
-    expect(screen.getByText("90%")).not.toHaveClass("text-warning");
-    expect(screen.getByText("96%")).not.toHaveClass("text-warning");
+    expect(screen.getByText("90%")).not.toHaveClass("text-warning-text");
+    expect(screen.getByText("96%")).not.toHaveClass("text-warning-text");
     expect(screen.getByText("Inference API usage")).toBeInTheDocument();
     expect(screen.getByText("$0.42")).toBeInTheDocument();
     expect(screen.getByText("24,000")).toBeInTheDocument();
@@ -160,8 +160,8 @@ describe("InferenceUsage", () => {
 
     const boundaryValue = await screen.findByText("20%");
     const lowValue = screen.getByText("17%");
-    expect(boundaryValue).not.toHaveClass("text-warning");
-    expect(lowValue).toHaveClass("text-warning");
+    expect(boundaryValue).not.toHaveClass("text-warning-text");
+    expect(lowValue).toHaveClass("text-warning-text");
     expect(
       boundaryValue.closest<HTMLElement>(".border-0")?.querySelector(".bg-primary")
     ).toHaveStyle({ backgroundColor: "var(--color-primary)" });
@@ -238,7 +238,7 @@ describe("InferenceUsage", () => {
       name: "Weekly inference quota warning",
     });
     expect(screen.getByText("Weekly inference quota is running low")).toBeInTheDocument();
-    expect(screen.getByText("17%")).toHaveClass("text-warning");
+    expect(screen.getByText("17%")).toHaveClass("text-warning-text");
     expect(warning.querySelector(".bg-warning")).toHaveStyle({ width: "17%" });
     expect(warning).toHaveClass("border-warning/60");
     expect(warning.parentElement).toHaveClass("grid-cols-1");

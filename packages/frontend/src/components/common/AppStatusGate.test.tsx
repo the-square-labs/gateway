@@ -106,7 +106,7 @@ describe("gateway update version matching", () => {
           gatewayStatus === "waiting_for_operations"
             ? [
                 { kind: "deployment", label: "Blue/green deployment operations", count: 2 },
-                { kind: "availability", label: "Availability operations", count: 1 },
+                { kind: "availability", label: "Availability Operations", count: 1 },
               ]
             : [],
       },
@@ -147,7 +147,7 @@ describe("gateway update version matching", () => {
       const operations = within(screen.getByRole("list", { name: "Running operations" }));
       expect(operations.getByText("Blue/green deployment operations")).toBeInTheDocument();
       expect(operations.getByText("2")).toBeInTheDocument();
-      expect(operations.getByText("Availability operations")).toBeInTheDocument();
+      expect(operations.getByText("Availability Operations")).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole("button", { name: "Update now" }));
       await waitFor(() => expect(proceedWithUpdate).toHaveBeenCalledOnce());

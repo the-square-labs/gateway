@@ -61,7 +61,7 @@ export function AIContextUsageDialog({ usage, onClose }: AIContextUsageDialogPro
     >
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Context usage</DialogTitle>
+          <DialogTitle>Context Usage</DialogTitle>
           <DialogDescription>Estimated context for the next assistant request.</DialogDescription>
         </DialogHeader>
 

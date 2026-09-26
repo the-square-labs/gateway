@@ -21,7 +21,7 @@ describe("intentionally stopped health history", () => {
     const bars = container.querySelectorAll("div[title]");
     expect(bars.length).toBeGreaterThan(1);
     expect(bars[bars.length - 1]).toHaveClass("bg-muted");
-    expect(container.querySelector(".bg-red-400")).not.toBeNull();
+    expect(container.querySelector(".bg-destructive")).not.toBeNull();
   });
 
   it("keeps historical stopped samples gray after the workload starts", () => {
@@ -36,7 +36,7 @@ describe("intentionally stopped health history", () => {
     );
     const bars = container.querySelectorAll("div[title]");
     expect(bars[bars.length - 3]).toHaveClass("bg-muted");
-    expect(bars[bars.length - 1]).toHaveClass("bg-emerald-500");
-    expect(container.querySelector(".bg-red-400, .bg-warning")).toBeNull();
+    expect(bars[bars.length - 1]).toHaveClass("bg-success");
+    expect(container.querySelector(".bg-destructive, .bg-warning")).toBeNull();
   });
 });

@@ -742,7 +742,7 @@ export function NodeSnapshotsTab({
       <Dialog open={!!selectedSnapshot} onOpenChange={(open) => !open && setDetailsId(null)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Snapshot details</DialogTitle>
+            <DialogTitle>Snapshot Details</DialogTitle>
             <DialogDescription>VM snapshot information.</DialogDescription>
           </DialogHeader>
           {details && (
@@ -812,7 +812,7 @@ export function NodeSnapshotsTab({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Create VM snapshot</DialogTitle>
+            <DialogTitle>Create VM Snapshot</DialogTitle>
             <DialogDescription>
               Save the VM disk state while it keeps running. Pause application writes for consistent
               data. Attached volumes may be excluded.

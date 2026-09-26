@@ -254,7 +254,7 @@ export function DomainDetailDialog({
   const handleKeepExternal = async () => {
     if (!domain) return;
     const approved = await confirm({
-      title: "Keep external DNS?",
+      title: "Keep External DNS?",
       description: `Stop trying to migrate ${domain.domain} to Cloudflare. Gateway will continue checking its external DNS health.`,
       confirmLabel: "Keep external DNS",
       variant: "default",
@@ -560,7 +560,7 @@ export function DomainDetailDialog({
       <Dialog open={resolutionOpen} onOpenChange={setResolutionOpen}>
         <DialogContent className="sm:max-w-xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Resolve Cloudflare DNS conflict</DialogTitle>
+            <DialogTitle>Resolve Cloudflare DNS Conflict</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -659,7 +659,7 @@ export function DomainDetailDialog({
       >
         <DialogContent className="sm:max-w-xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Move ingress</DialogTitle>
+            <DialogTitle>Move Ingress</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">

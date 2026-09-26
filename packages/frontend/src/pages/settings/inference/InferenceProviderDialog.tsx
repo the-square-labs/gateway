@@ -172,7 +172,7 @@ export function InferenceProviderDialog({
 
   const disconnect = async () => {
     const accepted = await confirm({
-      title: "Disconnect provider",
+      title: "Disconnect Provider",
       description: `Disconnect “${displayedConnection.name}” and destroy its stored credential?`,
       confirmLabel: "Disconnect",
     });

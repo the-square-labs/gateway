@@ -474,7 +474,7 @@ export function AdditionalRoutesPanel({
     if (!mutationAllowed) return;
     void confirmAction(
       {
-        title: "Delete additional route?",
+        title: "Delete Additional Route?",
         description: `The managed route ${route.path} will be removed from this proxy host.`,
         confirmLabel: "Delete",
         variant: "destructive",
@@ -679,7 +679,7 @@ export function AdditionalRoutesPanel({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Edit advanced config</DialogTitle>
+            <DialogTitle>Edit Advanced Config</DialogTitle>
             <DialogDescription>
               Additional Nginx directives inside {advancedRoute?.path ?? "this location"}.
             </DialogDescription>

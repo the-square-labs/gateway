@@ -20,7 +20,7 @@ export function PagesFeatureDisabledDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Pages is disabled</DialogTitle>
+          <DialogTitle>Pages Is Disabled</DialogTitle>
         </DialogHeader>
         <div>
           <p className="text-sm text-muted-foreground">

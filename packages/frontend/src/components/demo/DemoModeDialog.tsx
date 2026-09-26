@@ -17,7 +17,7 @@ export function DemoModeDialog() {
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && close()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>This action is unavailable in the demo</DialogTitle>
+          <DialogTitle>This Action Is Unavailable in the Demo</DialogTitle>
         </DialogHeader>
         <div className="py-4">
           <p className="text-sm text-muted-foreground">

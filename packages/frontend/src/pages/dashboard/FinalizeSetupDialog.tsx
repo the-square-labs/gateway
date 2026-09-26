@@ -162,7 +162,7 @@ export function FinalizeSetupDialog({
       return;
     }
     const confirmed = await confirm({
-      title: "Skip setup for now?",
+      title: "Skip Setup for Now?",
       description:
         "These steps introduce Gateway's core capabilities. If you are new to Gateway or want to understand its features in more detail, we recommend completing at least the items that apply to your installation. You can still configure every feature later from Settings.",
       cancelLabel: "Continue setup",
@@ -187,7 +187,7 @@ export function FinalizeSetupDialog({
         onInteractOutside={(event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>Finalize Gateway setup</DialogTitle>
+          <DialogTitle>Finalize Gateway Setup</DialogTitle>
         </DialogHeader>
         <DialogDescription asChild>
           <div className="space-y-2">

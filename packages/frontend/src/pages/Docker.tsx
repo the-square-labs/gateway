@@ -11,7 +11,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   canCreateDockerResourceOnNode,
   type DockerNodeScope,
+  fetchDockerNodeList,
   loadVisibleDockerNodes,
 } from "@/lib/docker-node-access";
 import { accessContextKey, useAuthStore } from "@/stores/auth";
@@ -140,6 +141,19 @@ export function Docker() {
   const nodeSelectionReady = resolvedNodeSelection === nodeSelectionKey;
   const nodeActionsDisabled = !nodeSelectionReady || !!nodeSelectionError;
   const appliedNodeQuery = useRef<string | undefined>(undefined);
+  // One Docker node list per node selection: the active tab and the preload of
+  // the other tabs filter the same list instead of fetching it once per tab.
+  const nodeListRef = useRef<{ key: string; request: Promise<GatewayNode[]> } | null>(null);
+  const listDockerNodes = useCallback(() => {
+    const current = nodeListRef.current;
+    if (current?.key === nodeSelectionKey) return current.request;
+    const request = fetchDockerNodeList();
+    nodeListRef.current = { key: nodeSelectionKey, request };
+    request.catch(() => {
+      if (nodeListRef.current?.request === request) nodeListRef.current = null;
+    });
+    return request;
+  }, [nodeSelectionKey]);
 
   // Fetch docker nodes on mount, store in zustand for multi-node fetching
   useEffect(() => {
@@ -151,7 +165,12 @@ export function Docker() {
       setNodeSelectionError(null);
       return;
     }
-    loadVisibleDockerNodes(user?.scopes ?? [], scopeBases, hasScopedAccess("nodes:details"))
+    loadVisibleDockerNodes(
+      user?.scopes ?? [],
+      scopeBases,
+      hasScopedAccess("nodes:details"),
+      listDockerNodes
+    )
       .then((nodes) => {
         if (cancelled) return;
         setDockerNodes(nodes);
@@ -181,6 +200,7 @@ export function Docker() {
   }, [
     activeTab,
     hasScopedAccess,
+    listDockerNodes,
     nodeSelectionKey,
     requestedNodeId,
     setDockerNodes,
@@ -204,7 +224,8 @@ export function Docker() {
             const nodes = await loadVisibleDockerNodes(
               user?.scopes ?? [],
               scopeBases,
-              hasScopedAccess("nodes:details")
+              hasScopedAccess("nodes:details"),
+              listDockerNodes
             );
             if (cancelled) return;
             const selectedNodeId = useDockerStore.getState().selectedNodeId;
@@ -239,6 +260,7 @@ export function Docker() {
     fetchTasks,
     fetchVolumes,
     hasScopedAccess,
+    listDockerNodes,
     user?.scopes,
     visibleTabKey,
     nodeSelectionReady,

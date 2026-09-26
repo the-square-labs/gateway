@@ -55,6 +55,7 @@ import { collectFolderTreeIds, findFolderTreeNode } from "@/lib/folder-tree";
 import { nodeBadgeClassName } from "@/lib/node-appearance";
 import { dockerContainerRoute, dockerDeploymentRoute } from "@/lib/resource-routes";
 import { createReturnNavigationState } from "@/lib/return-navigation";
+import { canCreateInFolder } from "@/lib/scope-utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
@@ -832,10 +833,14 @@ export function DockerContainers({
               const loadingAction = actionLoading[container.id];
               const transitioning = !!container._transition;
               const unavailable = container.availability === "unavailable";
-              const manage = canManageContainer(container);
+              const pending = !!container.pendingSourceBuild;
+              // A container waiting for its first build has no runtime to start or stop, but it can move
+              // between folders like any other container: it materializes where it sits.
+              const manage = !pending && canManageContainer(container);
               const reorganize = canReorganizeContainer(container);
-              const lifecycleActions = containerLifecycleActions(container.state);
-              if (container.pendingSourceBuild) return null;
+              const lifecycleActions = pending
+                ? { canStart: false, canStop: false, canRestart: false }
+                : containerLifecycleActions(container.state);
               if (!manage && !reorganize) return null;
 
               return (
@@ -1166,6 +1171,16 @@ export function DockerContainers({
         }}
         folders={folders}
         currentFolderId={moveDialogContainer?.folderId ?? null}
+        // Same destination rule as POST /docker/folders/move-containers: container edit access on the
+        // destination folder, or on the node (broadly) for the root.
+        canMoveTo={(folderId) =>
+          canCreateInFolder(
+            user?.scopes ?? [],
+            "docker:containers:edit",
+            folderId,
+            moveDialogContainer?._nodeId
+          )
+        }
         onMove={(folderId) => {
           if (moveDialogContainer) void moveContainer(moveDialogContainer, folderId);
         }}
@@ -1199,7 +1214,7 @@ export function DockerContainers({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>No Docker nodes</DialogTitle>
+            <DialogTitle>No Docker Nodes</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Containers must be deployed to a Docker node. Add and connect a Docker node first, then

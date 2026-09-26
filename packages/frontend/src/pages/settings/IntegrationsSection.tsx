@@ -690,7 +690,7 @@ function GitLabIntegrationsContent() {
                           />
                           <Button
                             variant="ghost"
-                            className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            className="shrink-0 rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() => void testConnectionForDialog({ advance: false })}
                             disabled={!canContinueFromConnection()}
                             pending={testingConnection}
@@ -726,7 +726,7 @@ function GitLabIntegrationsContent() {
                             />
                             <Button
                               variant="ghost"
-                              className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="shrink-0 rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                               onClick={() => void testConnectionForDialog({ advance: false })}
                               pending={testingConnection}
                             >

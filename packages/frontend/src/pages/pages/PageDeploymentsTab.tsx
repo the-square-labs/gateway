@@ -16,6 +16,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useRealtime } from "@/hooks/use-realtime";
+import { loadPageDeployments } from "@/lib/page-deployments";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageDeployment } from "@/types";
@@ -49,24 +50,28 @@ export function PageDeploymentsTab({
     setDetailsOpen(true);
   };
 
-  const load = useCallback(async () => {
-    const requestId = ++loadRequestRef.current;
-    try {
-      const response = await api.listPageDeployments(projectId, { page: 1, limit: 100 });
-      if (requestId !== loadRequestRef.current) return;
-      const next = response.data ?? [];
-      setDeployments(next);
-    } catch (error) {
-      if (requestId === loadRequestRef.current) {
-        toast.error(error instanceof Error ? error.message : "Failed to load Deployments");
+  const load = useCallback(
+    async ({ fresh = true }: { fresh?: boolean } = {}) => {
+      const requestId = ++loadRequestRef.current;
+      try {
+        const response = await loadPageDeployments(projectId, { fresh });
+        if (requestId !== loadRequestRef.current) return;
+        const next = response.data ?? [];
+        setDeployments(next);
+      } catch (error) {
+        if (requestId === loadRequestRef.current) {
+          toast.error(error instanceof Error ? error.message : "Failed to load Deployments");
+        }
+      } finally {
+        if (requestId === loadRequestRef.current) setLoading(false);
       }
-    } finally {
-      if (requestId === loadRequestRef.current) setLoading(false);
-    }
-  }, [projectId]);
+    },
+    [projectId]
+  );
 
   useEffect(() => {
-    void load();
+    // The first load shares the request the project header just started.
+    void load({ fresh: false });
   }, [load]);
   useRealtime("pages.deployment.changed", (payload) => {
     const event = payload as { projectId?: string };
@@ -238,7 +243,7 @@ export function PageDeploymentsTab({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Deployment details</DialogTitle>
+            <DialogTitle>Deployment Details</DialogTitle>
             <DialogDescription>{selectedDeployment?.publicSlug}</DialogDescription>
           </DialogHeader>
           {selectedDeployment && (

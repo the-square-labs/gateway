@@ -58,7 +58,7 @@ export function InterfaceChoiceDialog(props: InterfaceChoiceDialogProps) {
         onInteractOutside={onOpenChange ? undefined : (event) => event.preventDefault()}
       >
         <DialogHeader>
-          <DialogTitle>{props.title ?? "Choose your Gateway interface"}</DialogTitle>
+          <DialogTitle>{props.title ?? "Choose Your Gateway Interface"}</DialogTitle>
         </DialogHeader>
         <DialogDescription>
           {props.description ??

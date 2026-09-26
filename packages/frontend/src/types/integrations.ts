@@ -320,3 +320,27 @@ export interface GitLabConnectorUpdateRequest {
   settings?: Partial<GitLabConnectorSettings>;
   allowlistEntries?: GitLabAllowlistEntry[];
 }
+
+/** Providers whose connectors can qualify Git integration scopes. */
+export type GitScopeProvider = "gitlab" | "github" | "git";
+
+/** `GET /integrations/gitlab/{connectorId}/scope-targets`: groups and projects the caller may see. */
+export interface GitLabScopeTargets {
+  groups: { id: string; fullPath: string; name: string }[];
+  projects: { id: string; pathWithNamespace: string; name: string }[];
+}
+
+/** `GET /integrations/github/{connectorId}/scope-targets`: owners and repositories the caller may see. */
+export interface GitHubScopeTargets {
+  /** `type` is GitHub's account type: "Organization" or "User". */
+  owners: { id: string; login: string; type: string }[];
+  repos: { id: string; fullName: string }[];
+}
+
+/** One stored qualifier resolved by `GET /integrations/{provider}/{connectorId}/scope-targets/resolve`. */
+export interface GitScopeTargetResolution {
+  /** Qualifier relative to the connector, for example `group/123`. */
+  qualifier: string;
+  label: string;
+  missing: boolean;
+}

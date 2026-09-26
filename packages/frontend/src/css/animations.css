@@ -236,3 +236,22 @@
 [data-sonner-toast] [data-close-button]:hover {
   background: #3f3f46 !important; border-color: #52525b !important; color: #fafafa !important;
 }
+
+/* The button that opened a dialog whose data is still loading: a spinner takes
+   the place of its leading icon and repeated clicks are ignored. */
+[data-dialog-opening] {
+  pointer-events: none;
+}
+[data-dialog-opening] > svg:first-child {
+  display: none;
+}
+[data-dialog-opening]::before {
+  content: "";
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 9999px;
+  animation: spin 0.7s linear infinite;
+}

@@ -499,7 +499,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
         return;
       }
       const ok = await confirm({
-        title: "Replace existing variables?",
+        title: "Replace Existing Variables?",
         description: `${collisions.join(", ")} already ${collisions.length === 1 ? "exists" : "exist"} on “${containerName}”. The managed database credentials will replace ${collisions.length === 1 ? "it" : "them"} when you save and recreate.`,
         confirmLabel: "Add link",
       });
@@ -908,7 +908,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
       <Dialog open={noAvailableDatabasesOpen} onOpenChange={setNoAvailableDatabasesOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>No managed databases available</DialogTitle>
+            <DialogTitle>No Managed Databases Available</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             There are no unlinked ready managed databases on an online databases node for this

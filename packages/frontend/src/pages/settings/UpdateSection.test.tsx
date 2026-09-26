@@ -90,9 +90,9 @@ describe("UpdateSection", () => {
     expect(
       screen.getByRole("heading", { name: "Relay Pool Update Available" })
     ).toBeInTheDocument();
-    const updateIcons = container.querySelectorAll("svg.lucide-refresh-cw.text-warning");
+    const updateIcons = container.querySelectorAll("svg.lucide-refresh-cw.text-warning-text");
     expect(updateIcons).toHaveLength(2);
-    for (const icon of updateIcons) expect(icon).toHaveClass("text-warning");
+    for (const icon of updateIcons) expect(icon).toHaveClass("text-warning-text");
 
     fireEvent.click(gatewayButton);
     await waitFor(() => expect(api.triggerUpdate).toHaveBeenCalledWith("v2.6.13"));
@@ -215,7 +215,7 @@ describe("UpdateSection", () => {
 
     await waitFor(() => expect(api.abandonRelayUpdate).toHaveBeenCalledOnce());
     expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Abandon Relay Pool update?", variant: "destructive" })
+      expect.objectContaining({ title: "Abandon Relay Pool Update?", variant: "destructive" })
     );
   });
 

@@ -353,7 +353,7 @@ export function IntegrationsSetupWizard({
   const currentStatus =
     connector && isTrackedIntegration(connector) ? state?.steps[connector] : undefined;
   const directTitle =
-    directSetup === null ? null : `Add ${connectorLabel(directSetup.connector)} connector`;
+    directSetup === null ? null : `Add ${connectorLabel(directSetup.connector)} Connector`;
   const directDescription =
     directSetup === null
       ? null
@@ -416,7 +416,7 @@ export function IntegrationsSetupWizard({
   return (
     <FinalizeSetupWizardDialog
       open={open}
-      title={directTitle ?? "Connect integrations"}
+      title={directTitle ?? "Connect Integrations"}
       description={
         directDescription ?? (
           <>

@@ -552,7 +552,7 @@ export function AIChatSurface({ active = true, onClose, onEnterLiteMode }: AICha
       try {
         if (isCompactingContext) return;
         const ok = await confirm({
-          title: "Return to message?",
+          title: "Return to Message?",
           description:
             currentConversationStreaming || activeRunId
               ? "All history after this message will be deleted. Returning now will also cancel the current task."

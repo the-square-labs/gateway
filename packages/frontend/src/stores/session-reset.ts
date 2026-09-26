@@ -1,3 +1,4 @@
+import { clearPageDeploymentsCache } from "@/lib/page-deployments";
 import { api } from "@/services/api";
 import { useAccessListsStore } from "@/stores/access-lists";
 import { resetAIStateForAuthChange } from "@/stores/ai";
@@ -21,6 +22,7 @@ import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
 
 export function resetClientSessionState({ preserveShell = false }: AuthContextResetOptions = {}) {
   api.resetSessionState();
+  clearPageDeploymentsCache();
   resetAIStateForAuthChange();
   useDashboardBootstrapStore.getState().clear();
   useUIBootstrapStore.getState().clear();

@@ -50,7 +50,7 @@ describe("LicenseUpgradeDialog", () => {
       reason: "module-unavailable",
     });
     renderDialog();
-    expect(screen.getByRole("heading", { name: "Paid features unavailable" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Paid Features Unavailable" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Upgrade license key" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Open license settings" }));
     expect(screen.getByText(/\/settings\/general.*gateway-license/)).toBeInTheDocument();
@@ -64,7 +64,7 @@ describe("LicenseUpgradeDialog", () => {
     });
 
     renderDialog();
-    expect(screen.getByRole("heading", { name: "Business plan required" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Business Plan Required" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Upgrade license key" }));
 
     expect(screen.getByText(/\/settings\/general.*gateway-license/)).toBeInTheDocument();

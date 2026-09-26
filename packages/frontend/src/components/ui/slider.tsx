@@ -94,7 +94,7 @@ export const Slider = React.forwardRef<
         aria-valuenow={clampedValue}
         aria-disabled={disabled || undefined}
         className={cn(
-          "relative flex h-9 w-full touch-none select-none items-center outline-none",
+          "group relative flex h-9 w-full touch-none select-none items-center outline-none",
           disabled && "cursor-not-allowed opacity-50",
           !disabled && "cursor-pointer",
           className
@@ -114,7 +114,7 @@ export const Slider = React.forwardRef<
         </div>
         <div
           data-slider-thumb=""
-          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border border-primary bg-background shadow-sm"
+          className="pointer-events-none absolute top-1/2 h-4 w-4 -translate-x-1/2 -translate-y-1/2 border border-primary bg-background shadow-sm group-focus-visible:ring-1 group-focus-visible:ring-ring"
           style={{ left: `${percentage}%` }}
         />
       </div>

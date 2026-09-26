@@ -429,7 +429,7 @@ export function GwcaImportDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Import container archive</DialogTitle>
+          <DialogTitle>Import Container Archive</DialogTitle>
         </DialogHeader>
         <AnimatedHeight>
           <fieldset className="m-0 contents border-0 p-0" disabled={importing}>
@@ -475,7 +475,7 @@ export function GwcaImportDialog({
                   <Button
                     type="button"
                     variant="secondary"
-                    className="h-full shrink-0 rounded-none border-0 border-l border-input"
+                    className="h-full shrink-0 rounded-none border-0 border-l border-border"
                     disabled={importing}
                     onClick={() => {
                       if (!fileInputRef.current) return;

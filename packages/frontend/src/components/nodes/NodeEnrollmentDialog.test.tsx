@@ -255,6 +255,37 @@ describe("NodeEnrollmentDialog", () => {
     expect(onNodeEnrolled).toHaveBeenCalledWith("relay-node-1");
   });
 
+  it("creates into the only folder a folder-limited creator may use, never at the root", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["nodes:create:folder/folder-1"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listNodeFolders").mockResolvedValue([
+      { id: "folder-1", name: "Team", parentId: null, depth: 0, sortOrder: 0, children: [] },
+      { id: "folder-2", name: "Other", parentId: null, depth: 0, sortOrder: 1, children: [] },
+    ] as never);
+    const createNode = vi.spyOn(api, "createNode").mockResolvedValue({
+      node: makeNode({ id: "node-9", type: "docker", status: "pending" }),
+      enrollmentToken: "token",
+      gatewayCertSha256: `sha256:${"a".repeat(64)}`,
+      gatewayEnrollmentTargets: { public: { label: "Public node", gateway: "gateway.example.com:9443" } },
+    });
+
+    render(
+      <MemoryRouter>
+        <NodeEnrollmentDialog open onOpenChange={vi.fn()} initialType="docker" lockType />
+      </MemoryRouter>
+    );
+
+    await user.type(await screen.findByPlaceholderText("US-East Ingress"), "Team node");
+    const create = screen.getByRole("button", { name: "Create Node" });
+    await waitFor(() => expect(create).toBeEnabled());
+    await user.click(create);
+    expect(createNode).toHaveBeenCalledWith(expect.objectContaining({ folderId: "folder-1" }));
+  });
+
   it("issues a fresh token for a pending node and shows its setup command", async () => {
     const pendingNode = makeNode({ id: "docker-node-1", type: "docker", status: "pending" });
     vi.spyOn(api, "regenerateNodeEnrollmentToken").mockResolvedValue({

@@ -455,7 +455,7 @@ export function LoginPage({
                     type="button"
                     variant="ghost"
                     size="icon"
-                    className="relative shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                    className="relative shrink-0 rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                     onClick={() => setShowResetPassword((current) => !current)}
                     aria-label={showResetPassword ? "Hide password" : "Show password"}
                     title={showResetPassword ? "Hide password" : "Show password"}
@@ -926,7 +926,7 @@ export function LoginPage({
       <Dialog open={passwordResetConfirmOpen} onOpenChange={setPasswordResetConfirmOpen}>
         <DialogContent className="!max-w-md sm:!max-w-md">
           <DialogHeader>
-            <DialogTitle>Reset password?</DialogTitle>
+            <DialogTitle>Reset Password?</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             We&apos;ll email a password-reset link to {email}. Continue securely from that link.

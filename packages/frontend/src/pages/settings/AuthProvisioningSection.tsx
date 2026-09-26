@@ -1116,7 +1116,7 @@ export function AuthProvisioningSection({
       <Dialog open={smtpTestOpen} onOpenChange={setSmtpTestOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Send SMTP test</DialogTitle>
+            <DialogTitle>Send SMTP Test</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">

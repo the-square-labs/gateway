@@ -189,7 +189,7 @@ export function DockerBuildDetailsDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>Build details</DialogTitle>
+          <DialogTitle>Build Details</DialogTitle>
           <DialogDescription>{build?.repositoryFullPath}</DialogDescription>
         </DialogHeader>
         {build && (

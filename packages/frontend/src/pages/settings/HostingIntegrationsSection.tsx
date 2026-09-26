@@ -127,7 +127,7 @@ export function HostingIntegrationsSection({
 
   const deleteConnector = async (connector: HostingConnector) => {
     const confirmed = await confirm({
-      title: "Delete hosting connector",
+      title: "Delete Hosting Connector",
       description: `Disconnect “${connector.name}”? Provider VMs, Gateway nodes and their identity bindings are retained. No rental is cancelled.`,
       confirmLabel: "Delete connector",
     });

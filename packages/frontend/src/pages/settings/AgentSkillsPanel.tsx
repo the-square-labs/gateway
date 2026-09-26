@@ -102,7 +102,7 @@ export function AgentSkillsPanel() {
 
   const remove = async (skill: AIAgentSkill) => {
     const confirmed = await confirm({
-      title: "Delete skill?",
+      title: "Delete Skill?",
       description: `Delete “${skill.name}”? This removes it from every AI Workspace user.`,
       confirmLabel: "Delete skill",
       variant: "destructive",

@@ -91,7 +91,7 @@ export function LoggingTokenPanel({
   const revoke = async (token: LoggingIngestToken) => {
     if (
       !(await confirm({
-        title: "Revoke ingest token",
+        title: "Revoke Ingest Token",
         description: `Revoke ${token.name}? Services using this token will stop ingesting logs.`,
         confirmLabel: "Revoke",
       }))

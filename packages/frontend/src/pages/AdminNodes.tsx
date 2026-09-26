@@ -540,7 +540,7 @@ export function AdminNodes() {
       <Dialog open={hostingUnavailable} onOpenChange={setHostingUnavailable}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Connect a hosting provider</DialogTitle>
+            <DialogTitle>Connect a Hosting Provider</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             To create a hosted VM, connect or enable a hosting provider in Integrations first. You

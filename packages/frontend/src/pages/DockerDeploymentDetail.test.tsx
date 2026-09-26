@@ -228,7 +228,7 @@ describe("DockerDeploymentDetail", () => {
     fireEvent.keyDown(screen.getByRole("button", { name: "Page actions" }), { key: "Enter" });
     fireEvent.click(await screen.findByRole("menuitem", { name: "View config" }));
     expect(
-      await screen.findByRole("dialog", { name: "Deployment configuration" })
+      await screen.findByRole("dialog", { name: "Deployment Configuration" })
     ).toBeInTheDocument();
     const editor = screen.getByRole("textbox", { name: "Configuration JSON" });
     expect(editor).toHaveAttribute("data-editor-height", "min(60dvh, 640px)");
@@ -271,7 +271,7 @@ describe("DockerDeploymentDetail", () => {
       route: "/docker/deployments/node-1/deployment-1/config",
     });
     expect(
-      await screen.findByRole("dialog", { name: "Deployment configuration" })
+      await screen.findByRole("dialog", { name: "Deployment Configuration" })
     ).toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: "Config", hidden: true })).not.toBeInTheDocument();
   });
@@ -897,7 +897,7 @@ describe("DockerDeploymentDetail", () => {
     const healthRow = within(card).getByText("Health").parentElement!;
     const healthBadge = within(healthRow).getByText(expected).parentElement!;
     expect(healthBadge).toHaveClass(
-      expected === "stopped" ? "text-muted-foreground" : "text-red-600"
+      expected === "stopped" ? "text-muted-foreground" : "text-destructive"
     );
     if (state === "stopping") expect(within(card).getByText("stopping")).toBeInTheDocument();
   });

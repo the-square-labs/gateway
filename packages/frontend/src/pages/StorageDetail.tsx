@@ -245,7 +245,7 @@ function StorageDetailContent({
         if (!history) throw error;
         // Finished backup history only goes away with an explicit second confirmation.
         const forget = await confirm({
-          title: "Forget backup history?",
+          title: "Forget Backup History?",
           description: forgetBackupHistoryDescription(history, Boolean(managedId)),
           confirmLabel: "Forget history and delete",
           cancelLabel: "Keep storage",
@@ -285,7 +285,7 @@ function StorageDetailContent({
   const renewManagedCertificate = async () => {
     if (!managedId || !canEdit) return false;
     const ok = await confirm({
-      title: "Renew TLS certificate",
+      title: "Renew TLS Certificate",
       description:
         "Gateway issues a new certificate from the Storage CA and the running storage loads it without a restart. S3 clients keep trusting the same Storage CA.",
       confirmLabel: "Renew certificate",

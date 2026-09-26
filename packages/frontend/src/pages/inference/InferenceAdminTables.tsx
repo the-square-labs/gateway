@@ -225,7 +225,7 @@ export function InferenceUsersTable({
     if (!editing) return;
     if (
       !(await confirm({
-        title: "Reset usage limits?",
+        title: "Reset Usage Limits?",
         description: `Reset all active inference usage windows for ${editing.email}? Current usage will become zero. New subscription windows will start with the user's next inference request.`,
         confirmLabel: "Reset limits",
         variant: "default",
@@ -399,7 +399,7 @@ export function InferenceUsersTable({
       <Dialog open={limitsOpen} onOpenChange={setLimitsOpen}>
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Configure inference limits</DialogTitle>
+            <DialogTitle>Configure Inference Limits</DialogTitle>
             <DialogDescription>Control inference access and usage budgets.</DialogDescription>
           </DialogHeader>
           <PanelShell

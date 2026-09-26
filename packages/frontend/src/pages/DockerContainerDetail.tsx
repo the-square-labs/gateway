@@ -1950,7 +1950,7 @@ export function DockerContainerDetail({
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>
         <DialogContent className="sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>Container configuration</DialogTitle>
+            <DialogTitle>Container Configuration</DialogTitle>
           </DialogHeader>
           <ConfigTab data={container} editorHeight="min(60dvh, 640px)" />
         </DialogContent>
@@ -2043,7 +2043,7 @@ export function DockerContainerDetail({
           }}
         >
           <DialogHeader>
-            <DialogTitle>Export container archive</DialogTitle>
+            <DialogTitle>Export Container Archive</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 text-sm">
             <p className="text-muted-foreground">

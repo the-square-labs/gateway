@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* The design-system and screen exporters are not product code. */
+@source not "../scripts";
 @import "./css/base.css" layer(base);
 @plugin "@tailwindcss/typography";
 @custom-variant dark (&:where(.dark, .dark *));
@@ -8,9 +10,9 @@
   --color-background: #f5f5f5;
   --color-foreground: #1a1a1a;
   --color-muted: #ebebeb;
-  --color-muted-foreground: #737373;
+  --color-muted-foreground: #666666;
   --color-border: #d4d4d4;
-  --color-input: #d4d4d4;
+  --color-input: #8e8e8e;
   --color-ring: #1a1a1a;
   --color-primary: #1a1a1a;
   --color-primary-foreground: #ffffff;
@@ -24,12 +26,18 @@
   --color-card-foreground: #1a1a1a;
   --color-popover: #ffffff;
   --color-popover-foreground: #1a1a1a;
-  --color-link: #1974CF;
+  --color-link: #176bc0;
 
   /* Status colors */
   --color-success: #16a34a;
   --color-warning: #eab308;
   --color-warning-foreground: #854d0e;
+  --color-warning-text: #856605;
+  --color-success-text: #107535;
+  --color-info: #2563eb;
+  --color-info-text: #1556e4;
+  --color-code-variable: #9333ea;
+  --color-destructive-solid: #991b1b;
   --color-error: #dc2626;
 
   /* Sidebar colors */
@@ -41,6 +49,10 @@
   --color-sidebar-primary: #1a1a1a;
   --color-sidebar-primary-foreground: #ffffff;
   --color-sidebar-ring: #1a1a1a;
+
+  /* A step below text-xs for dense labels (badges, chart axes, stat captions). */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: calc(1 / 0.6875);
 
   /* Border radius */
   --radius-sm: 0;
@@ -76,15 +88,16 @@
   }
 }
 
-/* Dark theme (system preference) */
+/* Dark theme (system preference). Plain custom properties, not @theme: Tailwind hoists
+   @theme blocks to the top level, which put the dark values on :root for everyone. */
 @media (prefers-color-scheme: dark) {
-  @theme {
+  :root:not(.light) {
     --color-background: #0e0e0e;
     --color-foreground: #e5e5e5;
     --color-muted: #1a1a1a;
     --color-muted-foreground: #a3a3a3;
     --color-border: #2a2a2a;
-    --color-input: #2a2a2a;
+    --color-input: #5f5f5f;
     --color-ring: #e5e5e5;
     --color-primary: #ffffff;
     --color-primary-foreground: #0e0e0e;
@@ -92,7 +105,7 @@
     --color-secondary-foreground: #e5e5e5;
     --color-accent: #1f1f1f;
     --color-accent-foreground: #e5e5e5;
-    --color-destructive: #dc2626;
+    --color-destructive: #e45555;
     --color-destructive-foreground: #ffffff;
     --color-card: #141414;
     --color-card-foreground: #e5e5e5;
@@ -102,6 +115,12 @@
     --color-success: #22c55e;
     --color-warning: #eab308;
     --color-warning-foreground: #fde047;
+    --color-warning-text: #eab308;
+    --color-success-text: #22c55e;
+    --color-info: #3b82f6;
+    --color-info-text: #60a5fa;
+    --color-code-variable: #c084fc;
+    --color-destructive-solid: #dc2626;
     --color-error: #ef4444;
     --color-sidebar-background: #111111;
     --color-sidebar-foreground: #e5e5e5;
@@ -119,9 +138,9 @@
   --color-background: #f5f5f5;
   --color-foreground: #1a1a1a;
   --color-muted: #ebebeb;
-  --color-muted-foreground: #737373;
+  --color-muted-foreground: #666666;
   --color-border: #d4d4d4;
-  --color-input: #d4d4d4;
+  --color-input: #8e8e8e;
   --color-ring: #1a1a1a;
   --color-primary: #1a1a1a;
   --color-primary-foreground: #ffffff;
@@ -135,10 +154,16 @@
   --color-card-foreground: #1a1a1a;
   --color-popover: #ffffff;
   --color-popover-foreground: #1a1a1a;
-  --color-link: #1974CF;
+  --color-link: #176bc0;
   --color-success: #16a34a;
   --color-warning: #eab308;
   --color-warning-foreground: #854d0e;
+  --color-warning-text: #856605;
+  --color-success-text: #107535;
+  --color-info: #2563eb;
+  --color-info-text: #1556e4;
+  --color-code-variable: #9333ea;
+  --color-destructive-solid: #991b1b;
   --color-error: #dc2626;
   --color-sidebar-background: #f0f0f0;
   --color-sidebar-foreground: #1a1a1a;
@@ -156,7 +181,7 @@
   --color-muted: #1a1a1a;
   --color-muted-foreground: #a3a3a3;
   --color-border: #2a2a2a;
-  --color-input: #2a2a2a;
+  --color-input: #5f5f5f;
   --color-ring: #e5e5e5;
   --color-primary: #ffffff;
   --color-primary-foreground: #0e0e0e;
@@ -164,7 +189,7 @@
   --color-secondary-foreground: #e5e5e5;
   --color-accent: #1f1f1f;
   --color-accent-foreground: #e5e5e5;
-  --color-destructive: #dc2626;
+  --color-destructive: #e45555;
   --color-destructive-foreground: #ffffff;
   --color-card: #141414;
   --color-card-foreground: #e5e5e5;
@@ -174,6 +199,12 @@
   --color-success: #22c55e;
   --color-warning: #eab308;
   --color-warning-foreground: #fde047;
+  --color-warning-text: #eab308;
+  --color-success-text: #22c55e;
+  --color-info: #3b82f6;
+  --color-info-text: #60a5fa;
+  --color-code-variable: #c084fc;
+  --color-destructive-solid: #dc2626;
   --color-error: #ef4444;
   --color-sidebar-background: #111111;
   --color-sidebar-foreground: #e5e5e5;

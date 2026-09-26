@@ -586,7 +586,7 @@ export function DockerGitSourcePanel({
     if (!canEdit) return;
     if (!target || !source) return;
     const accepted = await confirm({
-      title: "Disconnect repository",
+      title: "Disconnect Repository",
       description: pendingContainer
         ? "This container has not been deployed yet. Disconnecting removes the pending container and its creation settings. To change the Dockerfile or build settings, cancel and edit Source instead."
         : "Stop repository polling, webhooks, builds, and automatic deployment for this resource? Existing runtime state and build history are preserved.",
@@ -781,7 +781,7 @@ export function DockerGitSourcePanel({
         >
           <DialogContent className={pagesTarget ? "sm:max-w-lg" : "sm:max-w-2xl"}>
             <DialogHeader>
-              <DialogTitle>Connect repository</DialogTitle>
+              <DialogTitle>Connect Repository</DialogTitle>
               <DialogDescription>
                 {pagesTarget
                   ? connectStep === 1
@@ -1515,7 +1515,7 @@ export function DockerGitSourcePanel({
       <Dialog open={buildWorkerRequiredOpen} onOpenChange={setBuildWorkerRequiredOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Connect a Build Worker first</DialogTitle>
+            <DialogTitle>Connect a Build Worker First</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Repository builds run on a connected Build Worker. Add a Build Worker node first, then

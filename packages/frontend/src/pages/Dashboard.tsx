@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowUpCircle, Info, RotateCw } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -14,6 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { useLoadDashboardBootstrap } from "@/hooks/use-dashboard-bootstrap";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -95,6 +96,7 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
   if (relay.state === "critical") {
     return {
       title: "Gateway relay is unavailable",
+      dialogTitle: "Gateway Relay Is Unavailable",
       summary: "Managed nodes and secure database connections are disconnected.",
       description: "Automatic recovery failed. Immediate administrator action is required.",
     };
@@ -102,6 +104,7 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
   if (relay.state === "recovering") {
     return {
       title: "Gateway relay recovery in progress",
+      dialogTitle: "Gateway Relay Recovery in Progress",
       summary: `Recovery attempt ${relay.attempt} of ${relay.maxAttempts} is in progress.`,
       description:
         "Secure database connections are temporarily unavailable while Gateway recovers the relay.",
@@ -110,6 +113,7 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
   if (relay.state === "degraded") {
     return {
       title: "Gateway relay management needs attention",
+      dialogTitle: "Gateway Relay Management Needs Attention",
       summary: "Relay runtime ownership could not be verified.",
       description: "Traffic may continue, but automatic container recovery is unavailable.",
     };
@@ -117,6 +121,7 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
   if (relay.state === "maintenance") {
     return {
       title: "Gateway relay maintenance in progress",
+      dialogTitle: "Gateway Relay Maintenance in Progress",
       summary: "Secure database connections are temporarily unavailable.",
       description:
         "Gateway is updating the relay and will restore connections when maintenance completes.",
@@ -124,6 +129,7 @@ function relayNoticeContent(relay: DashboardRelaySnapshot) {
   }
   return {
     title: "Gateway relay activation in progress",
+    dialogTitle: "Gateway Relay Activation in Progress",
     summary: "Secure database connections may be temporarily unavailable.",
     description:
       "Gateway is activating the standalone relay required for managed database connections.",
@@ -206,7 +212,7 @@ export function RelayHealthNotice({
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent className={isAdmin ? "sm:max-w-lg" : "sm:max-w-md"}>
           <DialogHeader>
-            <DialogTitle>{copy.title}</DialogTitle>
+            <DialogTitle>{copy.dialogTitle}</DialogTitle>
           </DialogHeader>
 
           {isAdmin ? <DialogDescription>{copy.description}</DialogDescription> : null}
@@ -354,110 +360,17 @@ export function Dashboard() {
   const navigate = useNavigate();
   const { user, hasScope, hasScopedAccess, logout } = useAuthStore();
   const dashboardPinnedIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
-  const sidebarPinnedNodeIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
   const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
-  const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
   const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
-  const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
   const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
-  const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
-  const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
   const dashboardBootstrapLoading = useDashboardBootstrapStore((s) => s.loading);
   const dashboardBootstrapError = useDashboardBootstrapStore((s) => s.error);
-  const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
   const invalidateDashboardBootstrap = useDashboardBootstrapStore((s) => s.invalidate);
   const pkiEnabled = useSystemConfigStore((s) => s.config.features.pkiEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
-  const canViewSystemCertificates = useAuthStore((s) => s.hasScope("admin:details:certificates"));
-  const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
-  const showSystemCertificates = canViewSystemCertificates && showSystemCertificatePreference;
-  const dashboardBootstrapKey = useMemo(
-    () =>
-      JSON.stringify({
-        userId: user?.id ?? null,
-        scopes: [...(user?.scopes ?? [])].sort(),
-        showSystemCertificates,
-        showUpdateNotifications,
-        dashboard: {
-          nodeIds: dashboardPinnedIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerIds: dashboardPinnedContainerIds,
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedNodeIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          dockerIds: sidebarPinnedContainerIds,
-        },
-      }),
-    [
-      dashboardPinnedContainerIds,
-      dashboardPinnedDatabaseIds,
-      dashboardPinnedIds,
-      dashboardPinnedProxyIds,
-      showSystemCertificates,
-      showUpdateNotifications,
-      sidebarPinnedContainerIds,
-      sidebarPinnedDatabaseIds,
-      sidebarPinnedNodeIds,
-      sidebarPinnedProxyIds,
-      user?.id,
-      user?.scopes,
-    ]
-  );
-  useEffect(() => {
-    if (!user?.id) return;
-    const dockerResources = (ids: string[]) =>
-      ids
-        .map((id) => {
-          const meta = pinnedContainerMeta[id];
-          return meta
-            ? {
-                id,
-                nodeId: meta.nodeId,
-                kind: meta.kind ?? "container",
-                scopeResourceId: meta.scopeResourceId,
-              }
-            : null;
-        })
-        .filter((value): value is NonNullable<typeof value> => value !== null);
-    void loadDashboardBootstrap(dashboardBootstrapKey, {
-      showSystemCertificates,
-      showUpdateNotifications,
-      pins: {
-        dashboard: {
-          nodeIds: dashboardPinnedIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerResources: dockerResources(dashboardPinnedContainerIds),
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedNodeIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          dockerResources: dockerResources(sidebarPinnedContainerIds),
-        },
-      },
-    });
-  }, [
-    dashboardBootstrapKey,
-    dashboardPinnedContainerIds,
-    dashboardPinnedDatabaseIds,
-    dashboardPinnedIds,
-    dashboardPinnedProxyIds,
-    loadDashboardBootstrap,
-    pinnedContainerMeta,
-    showSystemCertificates,
-    showUpdateNotifications,
-    sidebarPinnedContainerIds,
-    sidebarPinnedDatabaseIds,
-    sidebarPinnedNodeIds,
-    sidebarPinnedProxyIds,
-    user?.id,
-  ]);
+  useLoadDashboardBootstrap();
   const [activity, setActivity] = useState<AuditLogEntry[]>([]);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [healthHosts, setHealthHosts] = useState<ProxyHost[]>([]);

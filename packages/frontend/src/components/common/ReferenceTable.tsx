@@ -44,7 +44,7 @@ export function ReferenceTable({
             {rows.map((row) => (
               <tr key={row.term} className="border-b border-border last:border-b-0">
                 {/* Syntax highlighting: the colour template editors give variables. */}
-                <td className="px-3 py-1.5 font-mono text-purple-400">{row.term}</td>
+                <td className="px-3 py-1.5 font-mono text-code-variable">{row.term}</td>
                 <td className="px-3 py-1.5 text-muted-foreground">{row.description}</td>
               </tr>
             ))}

@@ -397,7 +397,7 @@ export function StatusPage() {
   const deleteService = async (service: StatusPageServiceItem) => {
     if (!canManage) return;
     const ok = await confirm({
-      title: "Remove exposed service",
+      title: "Remove Exposed Service",
       description: `Remove "${service.publicName}" from the public status page?`,
       confirmLabel: "Remove",
     });
@@ -462,7 +462,7 @@ export function StatusPage() {
   const deleteIncident = async (incident: StatusPageIncident) => {
     if (!canDeleteIncidents) return;
     const ok = await confirm({
-      title: "Delete past incident",
+      title: "Delete Past Incident",
       description: `Delete "${incident.title}" and its timeline from the status page?`,
       confirmLabel: "Delete",
       variant: "destructive",

@@ -814,7 +814,7 @@ export function AdminNodeDetail({
             }
           | undefined;
         const approved = await confirm({
-          title: "Update domain DNS targets",
+          title: "Update Domain DNS Targets",
           description: `This Ingress node is used by ${details?.domainCount ?? "one or more"} domain${details?.domainCount === 1 ? "" : "s"}. Their tracked DNS target must be updated to one of: ${details?.nextAddresses?.join(", ") || details?.nextAddress || "unavailable"}.${details?.domains?.length ? ` Affected: ${details.domains.join(", ")}.` : ""}`,
           confirmLabel: "Update DNS targets",
         });
@@ -1401,7 +1401,7 @@ export function AdminNodeDetail({
                     aria-label="Default color"
                     disabled={!canRenameNode}
                     className={cn(
-                      "aspect-square w-full border border-input bg-muted",
+                      "aspect-square w-full border border-border bg-muted",
                       appearanceColor === null && "border-foreground"
                     )}
                     onClick={() => setAppearanceColor(null)}
@@ -1413,7 +1413,7 @@ export function AdminNodeDetail({
                       aria-label={`${option.label} color`}
                       disabled={!canRenameNode}
                       className={cn(
-                        "aspect-square w-full border border-input",
+                        "aspect-square w-full border border-border",
                         option.swatchClassName,
                         appearanceColor === option.value && "border-foreground"
                       )}
@@ -1450,7 +1450,7 @@ export function AdminNodeDetail({
                             opacity: { duration: 0.12 },
                             y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
                           }}
-                          className="flex min-w-0 border-b border-input last:border-b-0"
+                          className="flex min-w-0 border-b border-border last:border-b-0"
                         >
                           <Combobox
                             freeText
@@ -1497,7 +1497,7 @@ export function AdminNodeDetail({
                               variant="ghost"
                               size="icon"
                               aria-label={`Remove service address ${index + 1}`}
-                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               disabled={!canEditNodeServiceAddress}
                               onClick={() =>
                                 setServiceAddressRows((rows) =>
@@ -1515,7 +1515,7 @@ export function AdminNodeDetail({
                               variant="ghost"
                               size="icon"
                               aria-label="Add service address"
-                              className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                              className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                               disabled={!canEditNodeServiceAddress}
                               onClick={() =>
                                 setServiceAddressRows((rows) => [

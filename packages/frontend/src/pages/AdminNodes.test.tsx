@@ -132,7 +132,7 @@ describe("AdminNodes", () => {
     expect(screen.getByRole("button", { name: /Hosted VM/ })).toBeEnabled();
     expect(screen.queryByRole("combobox", { name: "Node Type" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Hosted VM/ }));
-    await screen.findByRole("heading", { name: "Connect a hosting provider" });
+    await screen.findByRole("heading", { name: "Connect a Hosting Provider" });
     await user.click(screen.getByRole("button", { name: "Open integrations" }));
     expect(
       await screen.findByText("/settings/integrations:hosting-integrations")
@@ -163,7 +163,7 @@ describe("AdminNodes", () => {
     await user.click(screen.getByRole("button", { name: /Hosted VM/ }));
     await waitFor(() => expect(error).toHaveBeenCalledWith("Hosting access denied"));
     expect(
-      screen.queryByRole("heading", { name: "Connect a hosting provider" })
+      screen.queryByRole("heading", { name: "Connect a Hosting Provider" })
     ).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Hosted VM/ })).toBeEnabled();
   });

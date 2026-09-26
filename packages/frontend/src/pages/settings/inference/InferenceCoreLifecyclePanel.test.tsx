@@ -196,7 +196,7 @@ describe("InferenceCoreLifecyclePanel", () => {
     expect(screen.getByText(/2\.26\.0-wiolett\.1 → 2\.27\.0-wiolett\.1/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /Update to 2\.27\.0-wiolett\.1/ }));
 
-    expect(await screen.findByText("Update inference core")).toBeInTheDocument();
+    expect(await screen.findByText("Update Inference Core")).toBeInTheDocument();
     expect(screen.getByText(/briefly interrupted/)).toBeInTheDocument();
     expect(screen.getByText(/automatically restores the previous version/)).toBeInTheDocument();
     expect(update).not.toHaveBeenCalled();

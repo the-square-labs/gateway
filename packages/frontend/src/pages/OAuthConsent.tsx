@@ -130,6 +130,9 @@ export function OAuthConsent() {
   const [resourceListsReady, setResourceListsReady] = useState(false);
   // null until the scope list reports the folders it offers for restrictions.
   const [folderOptions, setFolderOptions] = useState<FolderOption[] | null>(null);
+  // The scope list's own option lists and restriction labels (Git connectors, groups, …).
+  const [scopeListLoaded, setScopeListLoaded] = useState(false);
+  const markScopeListLoaded = useCallback(() => setScopeListLoaded(true), []);
   const { cas, fetchCAs } = useCAStore();
   // Consent is outside the dashboard shell, so the signed-in account is loaded here: the
   // restriction pickers only offer folders and resources that account can see.
@@ -403,7 +406,8 @@ export function OAuthConsent() {
 
   // Resource and folder pickers change the card's size, so it stays hidden behind the loader
   // until their first load ends.
-  const cardReady = (!accountScopes || resourceListsReady) && folderOptions !== null;
+  const cardReady =
+    (!accountScopes || resourceListsReady) && folderOptions !== null && scopeListLoaded;
 
   return (
     <>
@@ -566,6 +570,7 @@ export function OAuthConsent() {
                     viewportClassName="max-h-[24rem] overflow-y-auto overscroll-contain"
                     collapsedRestrictions
                     onFolderOptionsChange={setFolderOptions}
+                    onInitialLoadComplete={markScopeListLoaded}
                   />
                   <div className="border-t border-border px-3 py-2">
                     <p className="text-xs text-muted-foreground" data-oauth-consent-scope-count="">

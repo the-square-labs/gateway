@@ -104,7 +104,7 @@ describe("DatabaseBackupsTab history removal", () => {
     const remove = vi
       .spyOn(api, "deleteBackupHistory")
       .mockRejectedValueOnce(
-        new ApiRequestError("Backup files could not be deleted: bucket is gone.", {
+        new ApiRequestError("Backup Files Could Not Be Deleted: bucket is gone.", {
           status: 502,
           code: "BACKUP_ARTIFACT_DELETE_FAILED",
         })
@@ -116,7 +116,7 @@ describe("DatabaseBackupsTab history removal", () => {
     );
     expect(confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Backup files could not be deleted",
+        title: "Backup Files Could Not Be Deleted",
         description: expect.stringContaining("bucket is gone"),
         confirmLabel: "Forget entry",
       })
@@ -127,7 +127,7 @@ describe("DatabaseBackupsTab history removal", () => {
     renderTab([run()]);
     vi.mocked(confirm).mockResolvedValueOnce(false);
     const remove = vi.spyOn(api, "deleteBackupHistory").mockRejectedValue(
-      new ApiRequestError("Backup files could not be deleted: denied.", {
+      new ApiRequestError("Backup Files Could Not Be Deleted: denied.", {
         status: 502,
         code: "BACKUP_ARTIFACT_DELETE_FAILED",
       })

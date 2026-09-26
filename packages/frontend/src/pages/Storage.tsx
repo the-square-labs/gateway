@@ -1053,7 +1053,7 @@ function StorageContent() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>Deploy managed storage</DialogTitle>
+            <DialogTitle>Deploy Managed Storage</DialogTitle>
             <DialogDescription>
               Step {managedCreateStep} of 3 — {managedCreateStepLabel}
             </DialogDescription>
@@ -1134,7 +1134,7 @@ function StorageContent() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Storage provisioning failed</DialogTitle>
+            <DialogTitle>Storage Provisioning Failed</DialogTitle>
             <DialogDescription>
               What the node reported, and the options for recovering this cluster.
             </DialogDescription>

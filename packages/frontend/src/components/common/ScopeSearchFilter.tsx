@@ -49,7 +49,7 @@ export function ScopeSearchFilter({
           <Button
             variant="ghost"
             size="icon"
-            className="border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label={`Filter scopes: ${FILTER_LABELS[filter]}`}
             title={`Filter scopes: ${FILTER_LABELS[filter]}`}
             disabled={disabled}

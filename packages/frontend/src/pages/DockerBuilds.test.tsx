@@ -112,7 +112,7 @@ describe("DockerBuilds", () => {
     renderWithRouter(<DockerBuilds />, { route: "/docker/builds?build=pinned-build" });
 
     await waitFor(() => expect(api.getDockerBuild).toHaveBeenCalledWith("pinned-build"));
-    expect(await screen.findByRole("heading", { name: "Build details" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Build Details" })).toBeInTheDocument();
     expect(screen.getByText(pinned.repositoryFullPath)).toBeInTheDocument();
   });
 

@@ -224,7 +224,7 @@ export function AdditionalSecureLinkBindings({
   const remove = (binding: ProxyAdditionalSecureLink) => {
     void confirmAction(
       {
-        title: "Remove additional Secure Link?",
+        title: "Remove Additional Secure Link?",
         description: `The binding ${binding.name} will be de-provisioned from both nodes.`,
         confirmLabel: "Remove",
         variant: "destructive",
@@ -405,7 +405,7 @@ export function AdditionalSecureLinkBindings({
       >
         <DialogContent className="sm:max-w-xl">
           <DialogHeader>
-            <DialogTitle>Add binding</DialogTitle>
+            <DialogTitle>Add Binding</DialogTitle>
             <DialogDescription>
               Connect a Docker workload or managed S3 storage through Relay for use in this Route's
               Advanced config.

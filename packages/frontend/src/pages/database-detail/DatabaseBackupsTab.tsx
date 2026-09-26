@@ -154,7 +154,7 @@ export function DatabaseBackupsTab({
       const outcome: { failure?: string } = {};
       const confirmed = await confirmAction(
         {
-          title: "Delete backup",
+          title: "Delete Backup",
           description: `This deletes the backup files in ${location} and removes the entry from history. The backup can no longer be restored.`,
           confirmLabel: "Delete backup and files",
           variant: "destructive",
@@ -182,7 +182,7 @@ export function DatabaseBackupsTab({
         return;
       }
       const forget = await confirm({
-        title: "Backup files could not be deleted",
+        title: "Backup Files Could Not Be Deleted",
         description: `${outcome.failure} Forgetting removes the entry from history and leaves the files in ${location}.`,
         confirmLabel: "Forget entry",
         cancelLabel: "Keep entry",
@@ -315,7 +315,7 @@ export function DatabaseBackupsTab({
   };
   const removePolicy = async (policy: BackupPolicy) => {
     const ok = await confirm({
-      title: "Delete backup policy",
+      title: "Delete Backup Policy",
       description:
         "Scheduled backups for this policy will stop. Completed backups stay in the destination storage.",
       confirmLabel: "Delete",
@@ -532,7 +532,7 @@ function PolicyDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !saving && onOpenChange(nextOpen)}>
       <DialogContent className="flex max-h-[88dvh] flex-col sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Add backup policy</DialogTitle>
+          <DialogTitle>Add Backup Policy</DialogTitle>
           <DialogDescription>
             Backups run on the selected Storage node and are uploaded to the destination storage.
           </DialogDescription>
@@ -802,7 +802,7 @@ export function RestoreDialog({
     <Dialog open={Boolean(run)} onOpenChange={(nextOpen) => !restoring && onOpenChange(nextOpen)}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Restore backup</DialogTitle>
+          <DialogTitle>Restore Backup</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <ContentLoading loading={foldersLoading} />

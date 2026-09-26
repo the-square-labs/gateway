@@ -88,7 +88,7 @@ export function ResizeManagedDatabaseDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Resize database</DialogTitle>
+          <DialogTitle>Resize Database</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <ContentLoading loading={open && !capacityLoaded} />

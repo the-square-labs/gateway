@@ -179,7 +179,7 @@ describe("InferenceProvidersPanel", () => {
 
     render(<InferenceProvidersPanel />);
     await user.click(await screen.findByRole("button", { name: "Connect provider" }));
-    const dialog = screen.getByRole("dialog", { name: "Connect inference provider" });
+    const dialog = screen.getByRole("dialog", { name: "Connect Inference Provider" });
     await user.type(within(dialog).getByPlaceholderText("Team account"), "Router key");
     const apiKey = dialog.querySelector<HTMLInputElement>('input[type="password"]');
     expect(apiKey).not.toBeNull();
@@ -188,7 +188,7 @@ describe("InferenceProvidersPanel", () => {
 
     await waitFor(() => expect(create).toHaveBeenCalledOnce());
     expect(
-      screen.queryByRole("dialog", { name: "Connect inference provider" })
+      screen.queryByRole("dialog", { name: "Connect Inference Provider" })
     ).not.toBeInTheDocument();
     await act(async () => resolveRefresh?.([connection("router-key", "openrouter")]));
   });

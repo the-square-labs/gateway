@@ -38,7 +38,7 @@ export function EditableStringList({
               opacity: { duration: 0.12 },
               y: { duration: 0.12, ease: [0.25, 0.1, 0.25, 1] },
             }}
-            className="flex min-w-0 border-b border-input last:border-b-0"
+            className="flex min-w-0 border-b border-border last:border-b-0"
           >
             <Input
               value={value}
@@ -59,7 +59,7 @@ export function EditableStringList({
                 variant="ghost"
                 size="icon"
                 aria-label={`Remove ${itemLabel.toLowerCase()} ${index + 1}`}
-                className="border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                 onClick={() => remove(index)}
               >
                 <Minus className="h-4 w-4" />
@@ -71,7 +71,7 @@ export function EditableStringList({
                 variant="ghost"
                 size="icon"
                 aria-label={`Add ${itemLabel.toLowerCase()}`}
-                className="border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                className="border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                 onClick={add}
               >
                 <Plus className="h-4 w-4" />

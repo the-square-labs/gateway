@@ -59,8 +59,8 @@ export function LicenseUpgradeDialog() {
             <DialogHeader>
               <DialogTitle>
                 {renderedRequest.reason === "module-unavailable"
-                  ? "Paid features unavailable"
-                  : `${planLabel(renderedRequest.requiredPlan)} plan required`}
+                  ? "Paid Features Unavailable"
+                  : `${planLabel(renderedRequest.requiredPlan)} Plan Required`}
               </DialogTitle>
             </DialogHeader>
             <div className="space-y-3 py-4">

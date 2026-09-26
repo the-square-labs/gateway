@@ -46,7 +46,7 @@ function CredentialField({
           <Button
             variant="ghost"
             size="icon"
-            className="relative shrink-0 rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="relative shrink-0 rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
             onClick={() => setRevealed((current) => !current)}
             aria-label={revealed ? `Hide ${label}` : `Show ${label}`}
             title={revealed ? `Hide ${label}` : `Show ${label}`}
@@ -62,7 +62,7 @@ function CredentialField({
         {downloadFilename && (
           <DownloadButton value={value} label={label} filename={downloadFilename} />
         )}
-        <CopyButton value={value} label={label} className="border-l border-input" />
+        <CopyButton value={value} label={label} className="border-l border-border" />
       </div>
     </div>
   );

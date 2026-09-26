@@ -172,11 +172,11 @@ export function HealthBars({
               "flex-1",
               barHeight,
               status === "ok"
-                ? "bg-emerald-500"
+                ? "bg-success"
                 : status === "warn"
                   ? "bg-warning"
                   : status === "error"
-                    ? "bg-red-400"
+                    ? "bg-destructive"
                     : "bg-muted"
             )}
             title={new Date(now - (barCount - 1 - i) * bucketMs).toLocaleString(undefined, {
@@ -187,7 +187,7 @@ export function HealthBars({
         ))}
       </div>
       {showLabels && barCount > 0 && (
-        <div className="flex items-center justify-between text-[10px] text-muted-foreground mt-1">
+        <div className="flex items-center justify-between text-2xs text-muted-foreground mt-1">
           <span>{totalLabel}</span>
           <span>Now</span>
         </div>

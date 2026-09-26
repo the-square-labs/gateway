@@ -290,7 +290,7 @@ it("opens snapshot details using the shared interactive row and read-only detail
   const name = await screen.findByText("before");
   expect(name.closest("tr")).toHaveClass("cursor-pointer", "hover:bg-accent");
   await userEvent.click(name);
-  const dialog = screen.getByRole("dialog", { name: "Snapshot details" });
+  const dialog = screen.getByRole("dialog", { name: "Snapshot Details" });
   expect(within(dialog).getByText("100")).toBeInTheDocument();
   expect(within(dialog).getByText("2 GB")).toBeInTheDocument();
   expect(within(dialog).getByText("20 GB")).toBeInTheDocument();
@@ -326,7 +326,7 @@ it("retains snapshot details throughout the dialog exit animation", async ({ onT
   vi.spyOn(api, "getHostingSnapshots").mockResolvedValue(view);
   render(<NodeSnapshotsTab resourceId="vm" />);
   await userEvent.click(await screen.findByText("before"));
-  const dialog = screen.getByRole("dialog", { name: "Snapshot details" });
+  const dialog = screen.getByRole("dialog", { name: "Snapshot Details" });
   await userEvent.click(within(dialog).getAllByRole("button", { name: "Close" }).at(-1)!);
   expect(dialog).toBeInTheDocument();
   expect(dialog).toHaveAttribute("data-state", "closed");
@@ -348,7 +348,7 @@ it("updates open snapshot details from realtime without refetching and closes on
     .mockResolvedValue({ ...view, snapshots: [source] });
   render(<NodeSnapshotsTab resourceId="vm" />);
   await userEvent.click(await screen.findByText("before"));
-  const dialog = screen.getByRole("dialog", { name: "Snapshot details" });
+  const dialog = screen.getByRole("dialog", { name: "Snapshot Details" });
   expect(within(dialog).getByText("Pending")).toBeInTheDocument();
   expect(within(dialog).queryByText("Unavailable")).not.toBeInTheDocument();
   expect(within(dialog).queryByText("RAM included")).not.toBeInTheDocument();
@@ -392,7 +392,7 @@ it.each([
   render(<NodeSnapshotsTab resourceId="vm" />);
   await screen.findByText("before");
   await userEvent.click(screen.getByRole("button", { name }));
-  expect(screen.queryByRole("dialog", { name: "Snapshot details" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Snapshot Details" })).not.toBeInTheDocument();
 });
 
 it("clears snapshot details when switching VM", async () => {
@@ -402,7 +402,7 @@ it("clears snapshot details when switching VM", async () => {
   }));
   const { rerender } = render(<NodeSnapshotsTab resourceId="vm" />);
   await userEvent.click(await screen.findByText("before"));
-  expect(screen.getByRole("dialog", { name: "Snapshot details" })).toBeInTheDocument();
+  expect(screen.getByRole("dialog", { name: "Snapshot Details" })).toBeInTheDocument();
   rerender(<NodeSnapshotsTab resourceId="other-vm" />);
   await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 });
@@ -434,7 +434,9 @@ it.each([
     expect(content.closest(".overflow-x-auto")).toHaveClass("text-sm");
     expect(screen.queryByText("100")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restore" })).toHaveClass("h-9", "w-9");
-    expect(screen.getByRole("button", { name: "Delete before" })).not.toHaveClass("bg-destructive");
+    expect(screen.getByRole("button", { name: "Delete before" })).not.toHaveClass(
+      "bg-destructive-solid"
+    );
   }
   let borders = 0;
   for (let parent = content.parentElement; parent; parent = parent.parentElement) {
@@ -532,7 +534,7 @@ it("opens snapshot creation for a running Proxmox VM without a shutdown", async 
   await screen.findByText("before");
   expect(screen.getByRole("button", { name: "Create snapshot" })).toBeEnabled();
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
-  const dialog = screen.getByRole("dialog", { name: "Create VM snapshot" });
+  const dialog = screen.getByRole("dialog", { name: "Create VM Snapshot" });
   expect(dialog).toHaveClass("sm:max-w-md");
   const input = within(dialog).getByPlaceholderText("Snapshot name");
   expect(input).toBeEnabled();
@@ -676,7 +678,7 @@ it("renders an optimistic pending entity before create returns and closes the di
   await userEvent.type(screen.getByPlaceholderText("Snapshot name"), "optimistic");
   await userEvent.click(screen.getByRole("button", { name: "Create snapshot" }));
 
-  expect(screen.queryByRole("dialog", { name: "Create VM snapshot" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("dialog", { name: "Create VM Snapshot" })).not.toBeInTheDocument();
   expect(screen.getByText("optimistic")).toBeInTheDocument();
   expect(screen.getByText("Pending")).toBeInTheDocument();
   expect(action).toHaveBeenCalledWith(

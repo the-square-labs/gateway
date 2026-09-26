@@ -99,7 +99,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
   const revoke = async (token: PageDeployToken) => {
     if (
       !(await confirm({
-        title: "Revoke deploy token",
+        title: "Revoke Deploy Token",
         description: `Revoke ${token.name}? New uploads using ${token.tokenPrefix} will stop authenticating.`,
         confirmLabel: "Revoke",
         variant: "destructive",
@@ -186,7 +186,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Create deploy token</DialogTitle>
+            <DialogTitle>Create Deploy Token</DialogTitle>
             <DialogDescription>The token will be shown once after creation.</DialogDescription>
           </DialogHeader>
           <PanelShell

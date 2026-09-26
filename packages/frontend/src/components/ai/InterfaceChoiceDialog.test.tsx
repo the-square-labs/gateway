@@ -17,7 +17,7 @@ it("preserves the original non-dismissible interface selection", async () => {
   );
   const user = userEvent.setup();
   expect(
-    screen.getByRole("heading", { name: "Choose your Gateway interface" })
+    screen.getByRole("heading", { name: "Choose Your Gateway Interface" })
   ).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
   await user.keyboard("{Escape}");

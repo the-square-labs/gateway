@@ -1127,7 +1127,7 @@ export function AILiteSidebar({
             className="flex max-h-[80dvh] w-full flex-col gap-0 rounded-t-xl p-0"
           >
             <SheetHeader className="border-b border-border px-4 py-3 text-left">
-              <SheetTitle>All sections</SheetTitle>
+              <SheetTitle>All Sections</SheetTitle>
             </SheetHeader>
             <nav className="min-h-0 flex-1 overflow-y-auto dashboard-scrollbar">
               {navigateToGroups.map((group, groupIndex) => (

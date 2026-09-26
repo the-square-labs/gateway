@@ -42,7 +42,7 @@ describe("AdminUserConfigDialog", () => {
     );
 
     await waitForReveal();
-    expect(screen.getByRole("heading", { name: "Configure user" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Configure User" })).toBeInTheDocument();
     expect(screen.getByText("Password email")).toBeInTheDocument();
     expect(screen.getByText("Active sessions")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Block user" })).toBeInTheDocument();

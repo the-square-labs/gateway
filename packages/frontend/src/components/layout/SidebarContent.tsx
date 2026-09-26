@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpCircle, PanelLeft, PanelLeftClose, Search, UserRoundX, X } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { AIButton } from "@/components/ai/AIButton";
@@ -17,6 +17,7 @@ import { ResizeHandle } from "@/components/ui/resize-handle";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useLoadDashboardBootstrap } from "@/hooks/use-dashboard-bootstrap";
 import { visibleNavigationGroups } from "@/lib/app-navigation";
 import { hasLowInferenceUsage } from "@/lib/inference-self-usage";
 import { isSidebarNavigationActive } from "@/lib/sidebar-navigation";
@@ -25,11 +26,6 @@ import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
-import { usePinnedContainersStore } from "@/stores/pinned-containers";
-import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
-import { usePinnedNodesStore } from "@/stores/pinned-nodes";
-import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
-import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import { useSystemConfigStore } from "@/stores/system-config";
 import { useUIStore } from "@/stores/ui";
 import { useUIBootstrapStore } from "@/stores/ui-bootstrap";
@@ -85,10 +81,6 @@ export function SidebarContent({
     ? "Relay update available"
     : "Gateway update available";
   const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
-  const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
-  const showSystemCertificates =
-    hasScope("admin:details:certificates") && showSystemCertificatePreference;
-  const sidebarPinnedIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
   const statusPageEnabled = useUIBootstrapStore(
     (state) => state.snapshot?.navigation.statusPageEnabled ?? false
   );
@@ -103,119 +95,9 @@ export function SidebarContent({
   const loggingEnabled = useSystemConfigStore((s) => s.config.features.loggingEnabled);
   const inferenceEnabled = useSystemConfigStore((s) => s.config.features.inferenceEnabled);
 
-  const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
-
-  const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
-  const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dockerNodes = useDockerStore((s) => s.dockerNodes);
-  const sidebarPinnedStorageIds = usePinnedStorageStore((s) => s.sidebarStorageIds);
-  const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
-  const dashboardPinnedNodeIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
-  const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
-  const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
-  const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
-  const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
-  const dashboardBootstrapKey = useMemo(
-    () =>
-      JSON.stringify({
-        userId: user?.id ?? null,
-        scopes: [...(user?.scopes ?? [])].sort(),
-        showSystemCertificates,
-        showUpdateNotifications,
-        dashboard: {
-          nodeIds: dashboardPinnedNodeIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerIds: dashboardPinnedContainerIds,
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          storageIds: sidebarPinnedStorageIds,
-          dockerIds: sidebarPinnedContainerIds,
-        },
-      }),
-    [
-      dashboardPinnedContainerIds,
-      dashboardPinnedDatabaseIds,
-      dashboardPinnedNodeIds,
-      dashboardPinnedProxyIds,
-      showSystemCertificates,
-      showUpdateNotifications,
-      sidebarPinnedDatabaseIds,
-      sidebarPinnedStorageIds,
-      sidebarPinnedIds,
-      sidebarPinnedProxyIds,
-      sidebarPinnedContainerIds,
-      user?.id,
-      user?.scopes,
-    ]
-  );
-
-  useEffect(() => {
-    if (!user?.id) return;
-    void loadDashboardBootstrap(dashboardBootstrapKey, {
-      showSystemCertificates,
-      showUpdateNotifications,
-      pins: {
-        dashboard: {
-          nodeIds: dashboardPinnedNodeIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerResources: dashboardPinnedContainerIds
-            .map((id) => {
-              const meta = pinnedContainerMeta[id];
-              return meta
-                ? {
-                    id,
-                    nodeId: meta.nodeId,
-                    kind: meta.kind ?? "container",
-                    scopeResourceId: meta.scopeResourceId,
-                  }
-                : null;
-            })
-            .filter((value): value is NonNullable<typeof value> => value !== null),
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          storageIds: sidebarPinnedStorageIds,
-          dockerResources: sidebarPinnedContainerIds
-            .map((id) => {
-              const meta = pinnedContainerMeta[id];
-              return meta
-                ? {
-                    id,
-                    nodeId: meta.nodeId,
-                    kind: meta.kind ?? "container",
-                    scopeResourceId: meta.scopeResourceId,
-                  }
-                : null;
-            })
-            .filter((value): value is NonNullable<typeof value> => value !== null),
-        },
-      },
-    });
-  }, [
-    dashboardBootstrapKey,
-    dashboardPinnedContainerIds,
-    dashboardPinnedDatabaseIds,
-    dashboardPinnedNodeIds,
-    dashboardPinnedProxyIds,
-    loadDashboardBootstrap,
-    pinnedContainerMeta,
-    showSystemCertificates,
-    showUpdateNotifications,
-    sidebarPinnedDatabaseIds,
-    sidebarPinnedStorageIds,
-    sidebarPinnedIds,
-    sidebarPinnedProxyIds,
-    sidebarPinnedContainerIds,
-    user?.id,
-  ]);
+  useLoadDashboardBootstrap();
 
   const handleLogout = async () => {
     try {

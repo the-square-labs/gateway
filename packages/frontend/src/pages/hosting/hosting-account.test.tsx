@@ -499,7 +499,7 @@ it("embeds the standard empty state and gives the header add button a plus icon"
   const [add] = screen.getAllByRole("button", { name: "Add connector" });
   expect(add.querySelector("svg")).not.toBeNull();
   fireEvent.click(add);
-  expect(screen.getByRole("heading", { name: "Add hosting connector" })).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Add Hosting Connector" })).toBeInTheDocument();
 });
 
 it("strips provider read-model fields and never silently certifies a clean template", () => {

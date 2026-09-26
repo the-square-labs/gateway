@@ -188,7 +188,7 @@ describe("Logging detail views", () => {
     await user.click(screen.getByRole("button", { name: "Connect" }));
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
-    expect(screen.getByText("Connect to this environment")).toBeInTheDocument();
+    expect(screen.getByText("Connect to This Environment")).toBeInTheDocument();
     expect(screen.getByText("pnpm add @sqgateway/logger")).toBeInTheDocument();
 
     await user.click(screen.getByRole("tab", { name: "API" }));

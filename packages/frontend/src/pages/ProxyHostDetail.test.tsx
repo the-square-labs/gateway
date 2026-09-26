@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Route } from "react-router-dom";
 import { vi } from "vitest";
-import { confirm } from "@/components/common/ConfirmDialog";
+import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ProxyHostDetail } from "@/pages/ProxyHostDetail";
 import { api } from "@/services/api";
@@ -573,7 +573,7 @@ describe("ProxyHostDetail", () => {
     });
 
     expect(await screen.findByText("application")).toBeInTheDocument();
-    expect(screen.getByText("Secure Link").parentElement).toHaveClass("bg-emerald-500/15");
+    expect(screen.getByText("Secure Link").parentElement).toHaveClass("bg-success/15");
   });
 
   it("shows the Secure Link Offline badge when the active link is offline", async () => {
@@ -593,7 +593,7 @@ describe("ProxyHostDetail", () => {
     });
 
     expect(await screen.findByText("application")).toBeInTheDocument();
-    expect(screen.getByText("Secure Link Offline").parentElement).toHaveClass("bg-red-500/15");
+    expect(screen.getByText("Secure Link Offline").parentElement).toHaveClass("bg-destructive/15");
   });
 
   it("does not show the Secure Link badge before cutover is active", async () => {
@@ -714,6 +714,34 @@ describe("ProxyHostDetail", () => {
     expect(await screen.findByRole("button", { name: /Enable Maintenance/ })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Page actions" }));
     expect(await screen.findByRole("menuitem", { name: "Delete" })).toBeInTheDocument();
+  });
+
+  it("names the route in the delete confirmation", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: makeUser({ scopes: ["proxy:edit", "proxy:delete"] }),
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.mocked(confirmAction).mockResolvedValue(false);
+    vi.spyOn(api, "getProxyHost").mockResolvedValue(makeProxyHost());
+
+    renderWithRouter(<ProxyHostDetail />, {
+      path: "/proxy-hosts/:id/:tab",
+      route: "/proxy-hosts/host-1/details",
+    });
+
+    await screen.findByRole("button", { name: /Enable Maintenance/ });
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Delete" }));
+
+    expect(confirmAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Delete Route",
+        description: expect.stringContaining('"example.com"'),
+      }),
+      expect.any(Function)
+    );
   });
 
   it("issues a maintenance access code from the responsive header actions", async () => {

@@ -205,7 +205,7 @@ export function PageManualDeployDialog({
                   </p>
                 )}
               </div>
-              <div className="flex shrink-0 items-stretch border-l border-input max-sm:flex-col">
+              <div className="flex shrink-0 items-stretch border-l border-border max-sm:flex-col">
                 <Button
                   type="button"
                   variant="secondary"
@@ -222,7 +222,7 @@ export function PageManualDeployDialog({
                 <Button
                   type="button"
                   variant="secondary"
-                  className="h-full rounded-none border-0 border-l border-input max-sm:border-l-0 max-sm:border-t"
+                  className="h-full rounded-none border-0 border-l border-border max-sm:border-l-0 max-sm:border-t"
                   onClick={() => {
                     if (!folderInputRef.current) return;
                     folderInputRef.current.value = "";

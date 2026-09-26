@@ -126,7 +126,7 @@ export function GitHubDeviceFlow({
             <Button
               type="button"
               variant="ghost"
-              className="rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
               onClick={() => window.open(session.verificationUri, "_blank", "noopener,noreferrer")}
             >
               <ExternalLink />

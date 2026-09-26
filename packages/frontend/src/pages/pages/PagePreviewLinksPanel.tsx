@@ -69,7 +69,7 @@ export function PagePreviewLinksPanel({
   const rotate = async () => {
     if (
       !(await confirm({
-        title: "Rotate preview links",
+        title: "Rotate Preview Links",
         description:
           "Every current Deployment and Tag preview link of this Project stops working at once and new links are published. Custom-domain Routes are not affected.",
         confirmLabel: "Rotate links",

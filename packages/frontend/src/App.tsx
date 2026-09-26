@@ -546,7 +546,14 @@ function PageProjectDetailGuard() {
   if (resolved.loading) return <DetailRouteLoading />;
   if (resolved.error) return <DetailRouteFailure error={resolved.error} fallbackPath="/pages" />;
   if (!resolved.data) return <Navigate to="/pages" replace />;
-  return <PageProjectDetail projectId={resolved.data.id} resolvedSlug={resolved.data.slug} />;
+  return (
+    <PageProjectDetail
+      key={resolved.data.id}
+      projectId={resolved.data.id}
+      resolvedSlug={resolved.data.slug}
+      initialProject={resolved.data}
+    />
+  );
 }
 
 function CAsPageGuard() {

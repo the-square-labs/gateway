@@ -1468,7 +1468,7 @@ export function DockerDeploymentDetail({
       <Dialog open={configOpen} onOpenChange={setConfigOpen}>
         <DialogContent className="sm:max-w-4xl" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Deployment configuration</DialogTitle>
+            <DialogTitle>Deployment Configuration</DialogTitle>
           </DialogHeader>
           <DeploymentConfig deployment={deployment} editorHeight="min(60dvh, 640px)" />
         </DialogContent>

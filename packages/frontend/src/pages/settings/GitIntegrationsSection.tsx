@@ -487,7 +487,7 @@ function GitConnectorPanel({
                   : provider === "github"
                     ? authMode === "oauth"
                       ? "Connect GitHub with OAuth"
-                      : "Connect GitHub with a token"
+                      : "Connect GitHub with a Token"
                     : "Add Git Connector"}
             </DialogTitle>
             <DialogDescription>
@@ -662,7 +662,7 @@ function GitConnectorPanel({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          className="shrink-0 rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                           disabled={!form.baseUrl.trim() || !form.token.trim()}
                           pending={testing}
                           onClick={() => void testGitHubConnection()}
@@ -718,7 +718,7 @@ function GitConnectorPanel({
                         <Button
                           type="button"
                           variant="ghost"
-                          className="shrink-0 rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                          className="shrink-0 rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                           disabled={
                             !form.baseUrl.trim() ||
                             !repositoryUrls.some((url) => url.trim()) ||

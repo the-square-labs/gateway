@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import type { ScopeSelectionFilter } from "@/components/common/ScopeSearchFilter";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -14,6 +15,22 @@ import type {
   Node,
   ProxyHost,
 } from "@/types";
+import { GitScopeRestriction } from "./GitScopeRestriction";
+import {
+  canLoadGitScopeTargets,
+  GIT_PROVIDER_LABELS,
+  type GitScopeConnectorCatalog,
+  type GitScopeProvider,
+  type GitTargetLabel,
+  type GitTargetLabels,
+  gitLabelKey,
+  gitQualifierLabel,
+  gitScopeProvider,
+  gitScopeTargetKinds,
+  loadGitScopeConnectors,
+  parseGitQualifier,
+  resolveGitTargetLabels,
+} from "./git-scope-targets";
 import {
   allResourcePages,
   canLoadScopeResource,
@@ -63,6 +80,11 @@ interface ScopeListProps {
   collapsedRestrictions?: boolean;
   /** Receives the folders loaded for the selected scopes' folder families. */
   onFolderOptionsChange?: (options: FolderOption[]) => void;
+  /**
+   * Called once, when the option lists and labels the first render depends on have loaded.
+   * For screens outside a reveal gate (OAuth consent); gated screens use `useContentLoading`.
+   */
+  onInitialLoadComplete?: () => void;
 }
 
 export function ScopeList({
@@ -86,6 +108,7 @@ export function ScopeList({
   selectionFilter = "all",
   collapsedRestrictions = false,
   onFolderOptionsChange,
+  onInitialLoadComplete,
 }: ScopeListProps) {
   const actorScopes = useAuthStore((state) => state.user?.scopes);
   const [expandedScopes, setExpandedScopes] = useState<ReadonlySet<string>>(() => new Set());
@@ -106,7 +129,7 @@ export function ScopeList({
   const [foldersReady, setFoldersReady] = useState(false);
   const [dockerReady, setDockerReady] = useState(false);
   const [registriesReady, setRegistriesReady] = useState(false);
-  useContentLoading(!(catalogReady && foldersReady && dockerReady && registriesReady));
+  const [gitConnectorsReady, setGitConnectorsReady] = useState(false);
   // biome-ignore lint/correctness/useExhaustiveDependencies: Lookup helpers read current auth/features from stores; rerun and cancel old loads when either changes.
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +152,110 @@ export function ScopeList({
   const q = search.toLowerCase().trim();
   const inheritedParsed = parseScopedSelections(inheritedScopes ?? [], restrictableScopes ?? []);
   const inheritedBaseSet = new Set(inheritedParsed.baseScopes);
+
+  // Git scopes: connectors per provider, and labels for stored group/project/owner/repo
+  // qualifiers (selected, inherited, or held by the granting user).
+  const [gitConnectors, setGitConnectors] = useState<GitScopeConnectorCatalog>({});
+  const [gitLabels, setGitLabels] = useState<GitTargetLabels>({});
+  const [gitLabelFailures, setGitLabelFailures] = useState<ReadonlySet<string>>(() => new Set());
+  const gitLabelsInFlight = useRef(new Set<string>());
+  const gitScopes = scopes.flatMap((scope) => {
+    const provider = restrictableScopes?.includes(scope.value)
+      ? gitScopeProvider(scope.value)
+      : null;
+    return provider ? [{ scope: scope.value, provider }] : [];
+  });
+  const gitProvidersKey = [...new Set(gitScopes.map(({ provider }) => provider))].sort().join(",");
+  const pendingGitLabelKeys = [
+    ...new Set(
+      gitScopes.flatMap(({ scope, provider }) =>
+        gitScopeTargetKinds(scope).length === 0 || !canLoadGitScopeTargets(provider)
+          ? []
+          : [
+              ...(resources?.[scope] ?? []),
+              ...(inheritedParsed.resources[scope] ?? []),
+              ...(allowedResourceIds?.[scope] ?? []),
+            ].flatMap((qualifier) =>
+              parseGitQualifier(qualifier)?.kind ? [gitLabelKey(provider, qualifier)] : []
+            )
+      )
+    ),
+  ]
+    .filter((key) => !(key in gitLabels) && !gitLabelFailures.has(key))
+    .sort();
+  const pendingGitLabelsKey = pendingGitLabelKeys.join("\n");
+  const rememberGitLabels = useCallback((labels: Record<string, GitTargetLabel>) => {
+    setGitLabels((current) => ({ ...current, ...labels }));
+  }, []);
+
+  // A label lookup still pending holds the first reveal, like the option lists do.
+  const initialLoading =
+    !(catalogReady && foldersReady && dockerReady && registriesReady && gitConnectorsReady) ||
+    pendingGitLabelKeys.length > 0;
+  useContentLoading(initialLoading);
+  const initialLoadReported = useRef(false);
+  useEffect(() => {
+    if (initialLoading || initialLoadReported.current) return;
+    initialLoadReported.current = true;
+    onInitialLoadComplete?.();
+  }, [initialLoading, onInitialLoadComplete]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: The lookup permission helper reads the actor's current scopes from the store.
+  useEffect(() => {
+    const providers = gitProvidersKey
+      .split(",")
+      .filter((provider): provider is GitScopeProvider => provider.length > 0);
+    if (providers.length === 0) {
+      setGitConnectors({});
+      setGitConnectorsReady(true);
+      return;
+    }
+    let cancelled = false;
+    void loadGitScopeConnectors(providers)
+      .then((catalog) => {
+        if (!cancelled) setGitConnectors(catalog);
+      })
+      .finally(() => {
+        if (!cancelled) setGitConnectorsReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [gitProvidersKey, actorScopes]);
+
+  useEffect(() => {
+    const keys = pendingGitLabelsKey
+      .split("\n")
+      .filter((key) => key.length > 0 && !gitLabelsInFlight.current.has(key));
+    if (keys.length === 0) return;
+    const byProvider = new Map<GitScopeProvider, string[]>();
+    for (const key of keys) {
+      gitLabelsInFlight.current.add(key);
+      const separator = key.indexOf(":");
+      const provider = key.slice(0, separator) as GitScopeProvider;
+      byProvider.set(provider, [...(byProvider.get(provider) ?? []), key.slice(separator + 1)]);
+    }
+    // Results are kept even if the list changed meanwhile: labels do not depend on the row.
+    for (const [provider, qualifiers] of byProvider) {
+      const providerKeys = qualifiers.map((qualifier) => gitLabelKey(provider, qualifier));
+      void resolveGitTargetLabels(provider, qualifiers)
+        .then(({ labels, errors }) => {
+          rememberGitLabels(labels);
+          // Anything left unanswered counts as failed, so the first reveal never waits forever.
+          const unresolved = providerKeys.filter((key) => !(key in labels));
+          if (unresolved.length > 0) {
+            setGitLabelFailures((current) => new Set([...current, ...unresolved]));
+          }
+          for (const error of errors) {
+            reportScopeLoadError(`${GIT_PROVIDER_LABELS[provider]} permission targets`, error);
+          }
+        })
+        .finally(() => {
+          for (const key of providerKeys) gitLabelsInFlight.current.delete(key);
+        });
+    }
+  }, [pendingGitLabelsKey, rememberGitLabels]);
+
   const isSelected = (scope: ScopeItem) =>
     selected.includes(scope.value) || inheritedBaseSet.has(scope.value);
   const selectionFilteredScopes = scopes.filter((scope) => {
@@ -348,6 +475,9 @@ export function ScopeList({
                 collapsible={collapsedRestrictions}
                 expanded={expandedScopes.has(scope.value)}
                 onToggleExpanded={() => toggleExpanded(scope.value)}
+                gitConnectors={gitConnectors}
+                gitLabels={gitLabels}
+                onRememberGitLabels={rememberGitLabels}
               />
             ))}
           </div>
@@ -385,6 +515,9 @@ function ScopeRow({
   collapsible = false,
   expanded = false,
   onToggleExpanded,
+  gitConnectors,
+  gitLabels,
+  onRememberGitLabels,
 }: {
   scope: ScopeItem;
   isSelected: boolean;
@@ -413,8 +546,12 @@ function ScopeRow({
   collapsible?: boolean;
   expanded?: boolean;
   onToggleExpanded?: () => void;
+  gitConnectors: GitScopeConnectorCatalog;
+  gitLabels: GitTargetLabels;
+  onRememberGitLabels: (labels: Record<string, GitTargetLabel>) => void;
 }) {
   const isRestrictable = restrictableScopes?.includes(scope.value) ?? false;
+  const gitProvider = isRestrictable ? gitScopeProvider(scope.value) : null;
   const selectedIds = resources?.[scope.value] || [];
   const inheritedSelectedIds = inheritedResources?.[scope.value] || [];
   const inheritedSet = new Set(inheritedSelectedIds);
@@ -525,13 +662,22 @@ function ScopeRow({
       restrictionRows.push({ type: "resource", key: resource.id, resource, depth: 0 });
     }
   }
+  // Git scopes render their own connector and target rows.
+  const listedRestrictionRows = gitProvider ? [] : restrictionRows;
+  const hasRestrictionOptions = gitProvider
+    ? (gitConnectors[gitProvider]?.length ?? 0) > 0 ||
+      combinedSelectedIds.length > 0 ||
+      (allowedIds?.length ?? 0) > 0
+    : resourceOptions.length > 0 || visibleFolderOptions.length > 0;
   const showRestrictions =
     isRestrictable &&
-    (resourceOptions.length > 0 || visibleFolderOptions.length > 0) &&
+    hasRestrictionOptions &&
     (isSelected || combinedSelectedIds.length > 0) &&
     (!disabled || combinedSelectedIds.length > 0);
   const collapsed = collapsible && !expanded;
   const restrictionLabel = (id: string) => {
+    if (gitProvider)
+      return gitQualifierLabel(gitProvider, id, gitConnectors[gitProvider], gitLabels);
     if (isFolderTarget(id)) {
       const folder = availableFolderOptions.find((option) => folderTarget(option.id) === id);
       return `${folder?.label ?? id.slice("folder/".length)} (folder)`;
@@ -542,8 +688,12 @@ function ScopeRow({
   const restrictionSummary =
     combinedSelectedIds.length === 0
       ? allowedIds
-        ? "No resources selected"
-        : "All resources"
+        ? gitProvider
+          ? "No connectors selected"
+          : "No resources selected"
+        : gitProvider
+          ? "All connectors"
+          : "All resources"
       : [
           ...combinedSelectedIds.slice(0, 3).map(restrictionLabel),
           ...(combinedSelectedIds.length > 3 ? [`+${combinedSelectedIds.length - 3} more`] : []),
@@ -587,33 +737,56 @@ function ScopeRow({
         <div className="flex flex-wrap items-center gap-x-1.5 px-3 pb-2 pl-10 text-xs text-muted-foreground">
           <span>{restrictionSummary}</span>
           <span aria-hidden="true">·</span>
-          <button
+          <Button
             type="button"
+            variant="quiet"
+            size="inline"
             onClick={onToggleExpanded}
             disabled={disabled}
             aria-label={`Restrict ${scope.label}`}
-            className="font-medium text-foreground underline-offset-2 hover:underline disabled:cursor-default disabled:opacity-60 disabled:hover:no-underline"
           >
             {combinedSelectedIds.length === 0 ? "Restrict…" : "Change…"}
-          </button>
+          </Button>
         </div>
       )}
       {showRestrictions && !collapsed && (
         <div className="px-3 pb-2 pl-10">
-          <div className="mb-1 flex items-start justify-between gap-2">
-            <p className="text-xs text-muted-foreground">{getResourceLabel(scope.value)}</p>
+          <div className="mb-1 flex items-start justify-between gap-2 text-xs">
+            <p className="text-muted-foreground">{getResourceLabel(scope.value)}</p>
             {collapsible && (
-              <button
+              <Button
                 type="button"
+                variant="quiet"
+                size="inline"
                 onClick={onToggleExpanded}
                 aria-label={`Done restricting ${scope.label}`}
-                className="shrink-0 text-xs font-medium text-foreground underline-offset-2 hover:underline"
+                className="shrink-0"
               >
                 Done
-              </button>
+              </Button>
             )}
           </div>
-          {restrictionRows.map((row) => {
+          {gitProvider && (
+            <GitScopeRestriction
+              scopeLabel={scope.label}
+              provider={gitProvider}
+              targetKinds={gitScopeTargetKinds(scope.value)}
+              connectors={gitConnectors[gitProvider]}
+              labels={gitLabels}
+              selectedIds={selectedIds}
+              inheritedIds={inheritedSelectedIds}
+              allowedIds={allowedIds}
+              disabled={disabled}
+              showInherited={!!inheritedFromName}
+              onToggle={
+                onToggleResource
+                  ? (qualifier) => onToggleResource(scope.value, qualifier)
+                  : undefined
+              }
+              onRememberLabels={onRememberGitLabels}
+            />
+          )}
+          {listedRestrictionRows.map((row) => {
             if (row.type === "resource") {
               const opt = row.resource;
               const parentSelected = !!opt.parentId && combinedSelectedIds.includes(opt.parentId);

@@ -585,7 +585,7 @@ export function DockerBuilds({ embedded = false }: DockerBuildsProps) {
       >
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Pin build</DialogTitle>
+            <DialogTitle>Pin Build</DialogTitle>
             <DialogDescription>
               Keep{" "}
               {displayedPinBuild

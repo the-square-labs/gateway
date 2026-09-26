@@ -75,7 +75,11 @@ export function FolderCreateDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             Cancel
           </Button>
-          <Button onClick={() => void handleSubmit()} disabled={isSubmitting || !name.trim()}>
+          <Button
+            onClick={() => void handleSubmit()}
+            pending={isSubmitting}
+            disabled={!name.trim()}
+          >
             Create
           </Button>
         </DialogFooter>

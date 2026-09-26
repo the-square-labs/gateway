@@ -30,7 +30,7 @@ export function DNSChallengeVerification({
       <PanelShell
         title={
           <span className="flex items-center gap-2">
-            <CheckCircle className="h-4 w-4 text-warning" />
+            <CheckCircle className="h-4 w-4 text-warning-text" />
             {title}
           </span>
         }

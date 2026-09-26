@@ -24,6 +24,20 @@ export function formatDateTime(date: string | Date) {
   });
 }
 
+/**
+ * The time of day for a moment today, otherwise the date and time
+ * (`formatDateTime`). For activity lists that mostly show recent entries.
+ */
+export function formatTimeOrDateTime(date: string | Date, now: Date = new Date()) {
+  const value = new Date(date);
+  const isToday =
+    value.getFullYear() === now.getFullYear() &&
+    value.getMonth() === now.getMonth() &&
+    value.getDate() === now.getDate();
+  if (!isToday) return formatDateTime(value);
+  return value.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 export function formatRelativeDate(date: string | Date) {
   const now = new Date();
   const then = new Date(date);

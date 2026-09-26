@@ -223,7 +223,7 @@ export function InferenceModelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{editing ? "Edit inference model" : "Add inference model"}</DialogTitle>
+          <DialogTitle>{editing ? "Edit Inference Model" : "Add Inference Model"}</DialogTitle>
           <DialogDescription>
             Choose one provider model. Gateway routes requests only across its eligible accounts.
           </DialogDescription>

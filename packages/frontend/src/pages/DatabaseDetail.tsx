@@ -551,7 +551,7 @@ function DatabaseDetailContent({
   const pause = async () => {
     if (!database?.managed || !canPause) return;
     const ok = await confirm({
-      title: "Pause database",
+      title: "Pause Database",
       description:
         "This pauses the database container and disconnects active clients. Health checks, metrics, Explorer, and Console will be disabled until you unpause it.",
       confirmLabel: "Pause database",
@@ -815,7 +815,7 @@ function DatabaseDetailContent({
       <Dialog open={privateManagedInfoOpen} onOpenChange={setPrivateManagedInfoOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Private managed database</DialogTitle>
+            <DialogTitle>Private Managed Database</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm text-muted-foreground">
             <p>

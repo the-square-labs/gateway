@@ -250,7 +250,7 @@ describe("DockerDeployDialog runtime section", () => {
     fireEvent.keyDown(runtimeSelect, { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: /Secure/ }));
 
-    expect(await screen.findByText("Secure Runtime setup required")).toBeInTheDocument();
+    expect(await screen.findByText("Secure Runtime Setup Required")).toBeInTheDocument();
     expect(useLicensePaywallStore.getState().request).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Open node settings" }));

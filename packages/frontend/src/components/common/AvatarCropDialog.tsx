@@ -319,7 +319,7 @@ export function AvatarCropDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !busy && onOpenChange(nextOpen)}>
       <DialogContent className="sm:max-w-[26rem]">
         <DialogHeader>
-          <DialogTitle>Adjust avatar</DialogTitle>
+          <DialogTitle>Adjust Avatar</DialogTitle>
           <DialogDescription>
             Drag the image to reposition it, then adjust the zoom.
           </DialogDescription>

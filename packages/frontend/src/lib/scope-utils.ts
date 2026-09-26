@@ -1,5 +1,6 @@
 import { RESOURCE_SCOPABLE_SCOPES, TOKEN_SCOPES } from "@/types";
 import { IMPLIED_SCOPES_BY_REQUIRED_SCOPE } from "@/types/scope-implications";
+import { GIT_TARGET_SCOPES } from "@/types/scope-resource-restrictions";
 
 const RESOURCE_SCOPABLE_BY_LENGTH = [...RESOURCE_SCOPABLE_SCOPES].sort(
   (a, b) => b.length - a.length
@@ -15,9 +16,17 @@ const DOCKER_CHILD_SCOPE_PREFIXES = [
   "docker:availability:",
 ] as const;
 
+const GIT_TARGET_SCOPE_SET = new Set<string>(GIT_TARGET_SCOPES);
+
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (!resourceId) return null;
+  // A Git connector qualifier covers its groups, projects, owners and repositories
+  // (`<connectorId>/group/<id>`). Group and owner ancestry is resolved by the API.
+  if (GIT_TARGET_SCOPE_SET.has(baseScope)) {
+    const separator = resourceId.indexOf("/");
+    return separator > 0 ? resourceId.slice(0, separator) : null;
+  }
+  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (resourceId.startsWith("folder/") || resourceId.startsWith("node/")) return null;
   const separator = resourceId.indexOf("/");
   return separator > 0 ? resourceId.slice(0, separator) : null;

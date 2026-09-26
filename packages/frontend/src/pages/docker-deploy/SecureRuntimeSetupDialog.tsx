@@ -23,7 +23,7 @@ export function SecureRuntimeSetupDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Secure Runtime setup required</DialogTitle>
+          <DialogTitle>Secure Runtime Setup Required</DialogTitle>
         </DialogHeader>
         <div>
           <p className="text-sm text-muted-foreground">

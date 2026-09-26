@@ -53,7 +53,7 @@ await logger.flush();`;
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent clipOverflow className="sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Connect to this environment</DialogTitle>
+          <DialogTitle>Connect to This Environment</DialogTitle>
           <DialogDescription>
             Create an ingest token in the Tokens tab, store it as a server-side secret, then send
             logs with the SDK or ingest API.

@@ -197,7 +197,7 @@ describe("proxy detail SettingsTab", () => {
     expect(panel).toHaveClass("border-border", "bg-card");
     expect(panel).not.toHaveClass("bg-success/10", "border-success/40");
     expect(panel?.querySelector(".border-t")).toBeNull();
-    expect(screen.getByText("failed").parentElement).toHaveClass("bg-red-500/15");
+    expect(screen.getByText("failed").parentElement).toHaveClass("bg-destructive/15");
     expect(screen.getByRole("button", { name: /retry tls sync/i })).toHaveClass("h-9", "px-4");
     expect(screen.getByRole("button", { name: /retry tls sync/i })).not.toHaveClass(
       "h-8",

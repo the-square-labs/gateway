@@ -1,3 +1,4 @@
+import { clearPageDeploymentsCache } from "@/lib/page-deployments";
 import { useAppStatusStore } from "@/stores/app-status";
 import { useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
@@ -17,6 +18,7 @@ export function resetTestStores() {
     isLoading: true,
   });
   useDashboardBootstrapStore.getState().clear();
+  clearPageDeploymentsCache();
 
   useAppStatusStore.setState({
     maintenanceActive: false,

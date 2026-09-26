@@ -63,8 +63,8 @@ describe("IntegrationsSetupWizard", () => {
       />
     );
 
-    expect(screen.getByRole("dialog", { name: "Add Git connector" })).toBeInTheDocument();
-    expect(screen.queryByText("Connect integrations")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add Git Connector" })).toBeInTheDocument();
+    expect(screen.queryByText("Connect Integrations")).not.toBeInTheDocument();
     expect(screen.getByDisplayValue("https://git.example.test")).toBeInTheDocument();
     expect(screen.getByDisplayValue("https://git.example.test/team/api")).toBeInTheDocument();
 
@@ -122,7 +122,7 @@ describe("IntegrationsSetupWizard", () => {
       />
     );
 
-    expect(screen.getByRole("dialog", { name: "Add GitHub connector" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Add GitHub Connector" })).toBeInTheDocument();
     await waitFor(() =>
       expect(screen.getByRole("tab", { name: "OAuth" })).toHaveAttribute("data-state", "active")
     );

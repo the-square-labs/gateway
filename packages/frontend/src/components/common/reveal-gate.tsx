@@ -91,12 +91,15 @@ interface RevealGateOptions {
   loaderMinMs?: number;
   /** Ignore the enclosing gate: a dialog neither holds nor waits for the page behind it. */
   isolated?: boolean;
+  /** Reveal anyway after this long, so a stuck request never keeps content away. */
+  maxWaitMs?: number;
 }
 
 export function useRevealGate({
   loaderDelayMs = PAGE_LOADER_DELAY_MS,
   loaderMinMs = PAGE_LOADER_MIN_MS,
   isolated = false,
+  maxWaitMs,
 }: RevealGateOptions = {}) {
   const inheritedRegister = useContext(InitialPageLoadContext);
   const inheritedReady = useContext(InitialPageReadyContext);
@@ -207,6 +210,12 @@ export function useRevealGate({
     const timer = setTimeout(reveal, Math.max(SETTLE_MS, loaderRemaining));
     return () => clearTimeout(timer);
   }, [pending, phase, revealed, loaderMinMs, reveal]);
+
+  useEffect(() => {
+    if (revealed || maxWaitMs === undefined) return;
+    const timer = setTimeout(reveal, maxWaitMs);
+    return () => clearTimeout(timer);
+  }, [revealed, maxWaitMs, reveal]);
 
   // A page gate that unmounts while its loader shows (a route guard handing
   // over to the resolved page) leaves the loader to the next page for a moment.

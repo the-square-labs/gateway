@@ -94,14 +94,14 @@ const DOMAIN_CREATION_BLOCKER_COPY: Record<
   { title: string; description: string; actionLabel: string; href: string }
 > = {
   no_nodes: {
-    title: "No Ingress nodes",
+    title: "No Ingress Nodes",
     description:
       "A domain must be assigned to an Ingress node that accepts incoming traffic. Add and connect an Ingress node first; Gateway will use its detected public service address as the DNS target. You can review or change that address in the node's Settings before returning here.",
     actionLabel: "Open Nodes",
     href: "/nodes",
   },
   no_public_address: {
-    title: "No public Ingress addresses",
+    title: "No Public Ingress Addresses",
     description:
       "Gateway found Ingress nodes, but none currently reports a public service address that can be used as the DNS target. Open a node's Settings and choose Automatic or one of the detected public addresses. Nodes that expose only private addresses cannot be assigned to a domain.",
     actionLabel: "Open Nodes",
@@ -329,7 +329,7 @@ export function Domains() {
       if (err instanceof ApiRequestError && err.code === "DOMAIN_DNS_DELETE_CHOICE_REQUIRED") {
         const details = err.details as DomainDnsConflictDetails | undefined;
         const ok = await confirm({
-          title: "Delete Cloudflare DNS too?",
+          title: "Delete Cloudflare DNS Too?",
           description: `This domain was adopted from existing Cloudflare records. Delete those DNS records as well?${details?.recordIds?.length ? ` Records: ${details.recordIds.join(", ")}` : ""}`,
           confirmLabel: "Delete DNS",
           cancelLabel: "Keep DNS",

@@ -66,7 +66,7 @@ describe("InferenceModelDialog", () => {
     const dropdown = screen
       .getByRole("button", { name: "K3" })
       .closest<HTMLElement>(".dropdown-content")!;
-    const dialog = screen.getByRole("dialog", { name: "Add inference model" });
+    const dialog = screen.getByRole("dialog", { name: "Add Inference Model" });
     const body = dialog.querySelector<HTMLElement>("[data-dialog-body]")!;
     body.scrollTop = 240;
     dropdown.scrollTop = 80;
@@ -88,7 +88,7 @@ describe("InferenceModelDialog", () => {
     );
 
     expect(displayName).toHaveValue("Unsaved model name");
-    expect(screen.getByRole("dialog", { name: "Add inference model" })).toBe(dialog);
+    expect(screen.getByRole("dialog", { name: "Add Inference Model" })).toBe(dialog);
     expect(screen.getByRole("combobox", { name: "Upstream model" })).toBe(modelSelector);
     expect(modelSelector).toHaveFocus();
     expect(modelSelector).toHaveAttribute("aria-expanded", "true");
@@ -327,7 +327,7 @@ describe("InferenceModelDialog", () => {
     const modelDropdown = modelOption.closest<HTMLElement>(".dropdown-content");
     expect(modelDropdown).toHaveClass("overflow-y-auto");
     expect(modelDropdown?.className).toContain("max-h-[min(16rem");
-    const dialog = screen.getByRole("dialog", { name: "Add inference model" });
+    const dialog = screen.getByRole("dialog", { name: "Add Inference Model" });
     expect(dialog).toHaveClass("sm:overflow-clip");
     expect(dialog.className).not.toContain("overflow-y-auto");
     expect(dialog).not.toContainElement(modelDropdown);

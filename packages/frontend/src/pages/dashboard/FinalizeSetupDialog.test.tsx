@@ -40,7 +40,7 @@ describe("FinalizeSetupDialog", () => {
       />
     );
 
-    expect(screen.getByRole("dialog", { name: "Finalize Gateway setup" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Finalize Gateway Setup" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Close" })).not.toBeInTheDocument();
     expect(
       screen.getByText(/Gateway is ready to use/i).closest("[data-dialog-header-slot]")
@@ -54,7 +54,7 @@ describe("FinalizeSetupDialog", () => {
     await waitFor(() =>
       expect(confirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Skip setup for now?",
+          title: "Skip Setup for Now?",
           cancelLabel: "Continue setup",
           confirmLabel: "Skip for now",
           locked: true,

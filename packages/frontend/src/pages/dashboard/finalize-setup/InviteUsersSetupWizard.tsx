@@ -116,7 +116,7 @@ export function InviteUsersSetupWizard({
   return (
     <FinalizeSetupWizardDialog
       open={open}
-      title="Invite users"
+      title="Invite Users"
       description={
         <>
           <p>

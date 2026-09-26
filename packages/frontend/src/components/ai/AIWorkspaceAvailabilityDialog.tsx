@@ -24,8 +24,8 @@ export function AIWorkspaceAvailabilityDialog({
   const canConfigure = visibleState === "needs_configuration";
   const title =
     visibleState === "no_access"
-      ? "AI Workspace access required"
-      : "AI Workspace is not configured";
+      ? "AI Workspace Access Required"
+      : "AI Workspace Is Not Configured";
   const description =
     visibleState === "no_access"
       ? "Your account does not have access to AI Workspace. Ask an administrator to grant the AI Workspace permission."

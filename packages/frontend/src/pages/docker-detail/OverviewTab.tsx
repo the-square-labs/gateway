@@ -8,6 +8,7 @@ import { AvailabilitySummary } from "@/components/docker/availability/Availabili
 import { Badge } from "@/components/ui/badge";
 import { useRealtime } from "@/hooks/use-realtime";
 import { formatDisplayImageRef, resolveContainerImageReference } from "@/lib/docker-image-ref";
+import { formatTimeOrDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy } from "@/types";
 import { copyToClipboard, formatDate, type InspectData, STATUS_BADGE } from "./helpers";
@@ -319,7 +320,7 @@ export function OverviewTab({
                 </Badge>
                 {task.createdAt && (
                   <span className="text-sm text-muted-foreground">
-                    {new Date(task.createdAt).toLocaleTimeString()}
+                    {formatTimeOrDateTime(task.createdAt)}
                   </span>
                 )}
               </div>

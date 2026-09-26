@@ -37,7 +37,7 @@ function WarningList({ issues }: { issues: DockerMigrationIssue[] }) {
   return (
     <section className="space-y-2">
       <div className="flex items-center gap-2">
-        <AlertTriangle className="h-4 w-4 text-warning" />
+        <AlertTriangle className="h-4 w-4 text-warning-text" />
         <h3 className="text-sm font-semibold">Warnings</h3>
         <Badge variant="warning" size="inline">
           {issues.length}
@@ -80,7 +80,7 @@ function VerificationSection({ preflight }: { preflight: DockerMigrationPrefligh
         {blocked ? (
           <AlertTriangle className="h-4 w-4 text-destructive" />
         ) : (
-          <CheckCircle2 className="h-4 w-4 text-success" />
+          <CheckCircle2 className="h-4 w-4 text-success-text" />
         )}
         <h3 className="text-sm font-semibold">Verification</h3>
       </div>
@@ -191,7 +191,7 @@ function MigrationProgress({ migration }: { migration: DockerMigration }) {
           className="flex items-start gap-2 border bg-success/15 px-4 py-3 text-sm"
           style={{ borderColor: "var(--color-success)" }}
         >
-          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success-text" />
           <span>
             Migration completed.{" "}
             {migration.keepSource
@@ -300,7 +300,7 @@ export function DockerMigrationReviewDialog({
     <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{migration ? "Migration progress" : "Migration preflight"}</DialogTitle>
+          <DialogTitle>{migration ? "Migration Progress" : "Migration Preflight"}</DialogTitle>
           <DialogDescription>
             {resource.displayName} → {targetLabel}
           </DialogDescription>

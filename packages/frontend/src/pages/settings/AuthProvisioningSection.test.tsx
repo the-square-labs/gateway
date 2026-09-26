@@ -588,7 +588,7 @@ describe("AuthProvisioningSection inference setting", () => {
 
     expect(screen.queryByLabelText("Test recipient")).not.toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "Send test" }));
-    expect(screen.getByRole("heading", { name: "Send SMTP test" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Send SMTP Test" })).toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "SMTP test email type" })).toHaveTextContent(
       "SMTP configuration"
     );

@@ -160,14 +160,14 @@ describe("SetupWizardPage", () => {
 
     act(() => {
       useConfirmDialog.getState().show({
-        title: "Review provider terms",
+        title: "Review Provider Terms",
         description: "Review the provider terms before continuing.",
         confirmLabel: "Continue to authorization",
         onConfirm: vi.fn(),
       });
     });
 
-    expect(screen.getByRole("dialog", { name: "Review provider terms" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Review Provider Terms" })).toBeInTheDocument();
   });
 
   it("restores an incomplete license choice before AI Workspace", async () => {

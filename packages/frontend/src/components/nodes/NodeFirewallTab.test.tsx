@@ -238,7 +238,7 @@ describe("NodeFirewallTab", () => {
 
     expect(mocks.confirm).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "Confirm firewall change",
+        title: "Confirm Firewall Change",
         description: expect.stringContaining("new connections"),
       })
     );
@@ -497,7 +497,7 @@ describe("NodeFirewallTab", () => {
     await userEvent.click(screen.getByRole("button", { name: "Delete inbound firewall rule" }));
 
     expect(mocks.confirm).toHaveBeenCalledWith(
-      expect.objectContaining({ title: "Remove firewall rule" })
+      expect.objectContaining({ title: "Remove Firewall Rule" })
     );
     expect(screen.queryByText("HTTPS")).not.toBeInTheDocument();
   });

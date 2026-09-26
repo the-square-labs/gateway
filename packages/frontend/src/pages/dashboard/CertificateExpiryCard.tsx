@@ -40,7 +40,7 @@ export function CertificateExpiryCard({
       <SectionHeader
         title="Expiring Soon"
         actions={<Badge variant="warning-solid">{visible.length}</Badge>}
-        className="text-warning"
+        className="text-warning-text"
       />
       <div className="divide-y">
         {[...visible]

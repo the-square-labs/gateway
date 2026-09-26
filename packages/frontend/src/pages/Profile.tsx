@@ -1096,7 +1096,7 @@ function LocalAccountSecurityPanel() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Set up authenticator app</DialogTitle>
+            <DialogTitle>Set Up Authenticator App</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             Scan this QR code with your authenticator app, then enter the generated code to activate
@@ -1145,7 +1145,7 @@ function LocalAccountSecurityPanel() {
       <Dialog open={totpResetOpen} onOpenChange={setTotpResetOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>TOTP is already configured</DialogTitle>
+            <DialogTitle>TOTP Is Already Configured</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             Resetting it removes the current authenticator app and recovery codes. Your passkeys
@@ -1179,7 +1179,7 @@ function LocalAccountSecurityPanel() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Confirm it&apos;s you</DialogTitle>
+            <DialogTitle>Confirm It&apos;s You</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             Changing passkeys or your authenticator app requires a current second factor.
@@ -1257,7 +1257,7 @@ function LocalAccountSecurityPanel() {
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Save recovery codes</DialogTitle>
+            <DialogTitle>Save Recovery Codes</DialogTitle>
           </DialogHeader>
           <DialogDescription>
             Keep these ten codes somewhere safe. Each can be used once if you lose access to your
@@ -1280,7 +1280,7 @@ function LocalAccountSecurityPanel() {
             <CopyButton
               value={recoveryCodes?.join("\n") ?? ""}
               label="recovery codes"
-              className="border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+              className="border border-border bg-background hover:bg-accent hover:text-accent-foreground"
             />
             <Button
               variant="outline"

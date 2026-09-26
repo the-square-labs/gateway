@@ -84,7 +84,7 @@ describe("Profile", () => {
     expect(openInferenceHarnessModal).toBeTypeOf("function");
     act(() => openInferenceHarnessModal?.());
     expect(
-      await screen.findByRole("dialog", { name: "Set up an inference harness" })
+      await screen.findByRole("dialog", { name: "Set Up an Inference Harness" })
     ).toBeInTheDocument();
   });
 
@@ -171,7 +171,7 @@ describe("Profile", () => {
     const file = new File(["png"], "avatar.png", { type: "image/png" });
     await userEvent.upload(screen.getByLabelText("Choose avatar image"), file);
 
-    expect(await screen.findByRole("dialog", { name: "Adjust avatar" })).toBeInTheDocument();
+    expect(await screen.findByRole("dialog", { name: "Adjust Avatar" })).toBeInTheDocument();
     expect(screen.getByRole("slider", { name: "Zoom" })).toBeInTheDocument();
     const preview = screen.getByAltText("Avatar crop preview");
     Object.defineProperties(preview, {
@@ -484,7 +484,7 @@ describe("Profile", () => {
     await user.type(screen.getByPlaceholderText("6-digit code"), "123456");
     await user.click(screen.getByRole("button", { name: "Activate TOTP" }));
 
-    expect(await screen.findByRole("heading", { name: "Save recovery codes" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Save Recovery Codes" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Copy recovery codes" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Print" })).toBeInTheDocument();
     expect(screen.getAllByRole("textbox", { name: /Recovery code \d+/ })).toHaveLength(10);
@@ -513,7 +513,7 @@ describe("Profile", () => {
     renderProfile("/profile");
 
     await user.click(await screen.findByRole("button", { name: "Manage TOTP" }));
-    expect(screen.getByRole("heading", { name: "TOTP is already configured" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "TOTP Is Already Configured" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Reset & reconfigure" }));
 
     expect(api.resetCurrentUserTotp).toHaveBeenCalledOnce();
@@ -549,7 +549,7 @@ describe("Profile", () => {
 
     await user.click(await screen.findByRole("button", { name: "Manage TOTP" }));
     await user.click(screen.getByRole("button", { name: "Reset & reconfigure" }));
-    expect(await screen.findByRole("heading", { name: "Confirm it's you" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Confirm It's You" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Use a passkey" })).not.toBeInTheDocument();
 
     await user.type(screen.getByRole("textbox", { name: "Authentication code" }), "654321");

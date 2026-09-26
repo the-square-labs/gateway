@@ -447,7 +447,7 @@ export function NodeDetailsTab({
 
       {!nodeUpdating && daemonUpdate.available && !pendingUpdateTarget && (
         <PanelShell
-          title={<span className="text-warning">Update Available</span>}
+          title={<span className="text-warning-text">Update Available</span>}
           description={`${daemonUpdate.latestVersion} is ready to install`}
           dirty
           actions={

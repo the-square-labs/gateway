@@ -258,7 +258,7 @@ export function OAuthApplicationsSection({
 
   const disconnect = async (authorization: OAuthAuthorization) => {
     const ok = await confirm({
-      title: "Disconnect OAuth application",
+      title: "Disconnect OAuth Application",
       description: `Revoke OAuth access for "${authorization.clientName}"? Existing OAuth tokens for this application will stop working.`,
       confirmLabel: "Disconnect",
       variant: "destructive",

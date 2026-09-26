@@ -1,12 +1,9 @@
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import * as React from "react";
 import {
-  ContentLoader,
-  growToNaturalHeight,
   InitialPageLoadContext,
   InitialPageReadyContext,
-  staggerReveal,
   useRevealGate,
 } from "@/components/common/reveal-gate";
 import { cn } from "@/lib/utils";
@@ -78,11 +75,42 @@ export function assertNoNestedDialogVerticalScroll(children: React.ReactNode[]) 
   }
 }
 
-// Dialog content waits briefly for its data so it opens at its final size; a
-// slower load opens it with a compact loader that grows once into the content.
-const DIALOG_LOADER_DELAY_MS = 250;
-const DIALOG_LOADER_MIN_MS = 400;
-const DIALOG_LOADER_HEIGHT_PX = 128;
+// A dialog whose content is loading stays hidden, overlay included, and opens
+// complete once its data is in. Meanwhile the button that opened it shows a
+// spinner; without such a button the screen dims with a spinner after a moment.
+const DIALOG_WAIT_INDICATOR_DELAY_MS = 250;
+const DIALOG_WAIT_INDICATOR_MIN_MS = 300;
+const DIALOG_MAX_WAIT_MS = 10_000;
+const DIALOG_OPENER_ATTRIBUTE = "data-dialog-opening";
+const OPENER_CLICK_WINDOW_MS = 1000;
+
+let lastPointerTarget: { element: HTMLElement; at: number } | null = null;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      const target =
+        event.target instanceof Element
+          ? event.target.closest<HTMLElement>("button, a, [role='button']")
+          : null;
+      lastPointerTarget = target ? { element: target, at: Date.now() } : null;
+    },
+    true
+  );
+}
+
+/** The control that opened this dialog: the one just clicked, or the one focused (keyboard). */
+function findDialogOpener(panel: HTMLElement | null): HTMLElement | null {
+  const clicked = lastPointerTarget;
+  if (clicked && Date.now() - clicked.at < OPENER_CLICK_WINDOW_MS && clicked.element.isConnected) {
+    if (!panel?.contains(clicked.element)) return clicked.element;
+  }
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active !== document.body && !panel?.contains(active)) {
+    if (active.matches("button, a, [role='button']")) return active;
+  }
+  return null;
+}
 
 type DialogContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
   hideCloseButton?: boolean;
@@ -101,37 +129,46 @@ const DialogContentPanel = React.forwardRef<
   }
 >(({ className, children, hideCloseButton, unstyled, clipOverflow, ...props }, ref) => {
   const [bodyScrolled, setBodyScrolled] = React.useState(false);
+  // With an opener its spinner shows from the click, so there is no screen
+  // indicator to delay or hold; the dialog opens as soon as the data is in.
+  const [opener, setOpener] = React.useState<HTMLElement | null | undefined>(undefined);
   const gate = useRevealGate({
-    loaderDelayMs: DIALOG_LOADER_DELAY_MS,
-    loaderMinMs: DIALOG_LOADER_MIN_MS,
+    loaderDelayMs: opener ? DIALOG_MAX_WAIT_MS * 2 : DIALOG_WAIT_INDICATOR_DELAY_MS,
+    loaderMinMs: DIALOG_WAIT_INDICATOR_MIN_MS,
+    maxWaitMs: DIALOG_MAX_WAIT_MS,
     isolated: true,
   });
-  const bodyRef = React.useRef<HTMLDivElement>(null);
-  const previousPhase = React.useRef(gate.phase);
+  const panelRef = React.useRef<HTMLDivElement | null>(null);
+  const setPanelRef = React.useCallback(
+    (element: HTMLDivElement | null) => {
+      panelRef.current = element;
+      if (typeof ref === "function") ref(element);
+      else if (ref) ref.current = element;
+    },
+    [ref]
+  );
   React.useLayoutEffect(() => {
-    if (previousPhase.current === "loading" && gate.phase === "revealed" && bodyRef.current) {
-      const body = bodyRef.current;
-      growToNaturalHeight(body, DIALOG_LOADER_HEIGHT_PX);
-      staggerReveal(body, 4);
-      // The body was hidden when the dialog opened, so its first field could
-      // not take focus then; give it focus now unless the user moved on.
-      const active = document.activeElement;
-      const panel = body.closest("[data-reveal-phase]");
-      const focusUntouched =
-        !active ||
-        active === document.body ||
-        active === panel ||
-        (active instanceof HTMLElement && active.closest("[data-dialog-header-slot]") !== null);
-      if (focusUntouched) {
-        body
-          .querySelector<HTMLElement>(
-            "input:not([type=hidden]):not([disabled]), textarea:not([disabled]), select:not([disabled])"
-          )
-          ?.focus();
-      }
-    }
-    previousPhase.current = gate.phase;
-  }, [gate.phase]);
+    setOpener(findDialogOpener(panelRef.current));
+  }, []);
+  const waiting = !gate.revealed;
+  React.useLayoutEffect(() => {
+    if (!waiting || !opener) return;
+    opener.setAttribute(DIALOG_OPENER_ATTRIBUTE, "");
+    opener.setAttribute("aria-busy", "true");
+    return () => {
+      opener.removeAttribute(DIALOG_OPENER_ATTRIBUTE);
+      opener.removeAttribute("aria-busy");
+    };
+  }, [waiting, opener]);
+  // The overlay dims only once the dialog shows, or, without an opener to spin,
+  // when the wait indicator appears.
+  const overlayHeld = waiting && (Boolean(opener) || gate.phase === "pending");
+  React.useLayoutEffect(() => {
+    const overlay = panelRef.current?.parentElement;
+    if (!overlay) return;
+    overlay.style.animationPlayState = overlayHeld ? "paused" : "";
+  }, [overlayHeld]);
+  const showScreenIndicator = waiting && opener === null && gate.phase === "loading";
   const contentClassName = stripOuterOverflowClasses(className);
   const childArray = React.Children.toArray(children);
   const headerChildren: React.ReactNode[] = [];
@@ -177,82 +214,78 @@ const DialogContentPanel = React.forwardRef<
   }
 
   return (
-    <DialogPrimitive.Content
-      ref={ref}
-      className={cn(
-        "dialog-content relative z-50 flex w-full max-w-none flex-col border bg-background p-0 shadow-lg outline-none",
-        "max-h-[85dvh]",
-        "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
-        contentClassName,
-        clipOverflow && "sm:overflow-clip",
-        "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
-      )}
-      {...props}
-      // While the content is still settling the open animation holds its
-      // first, transparent frame; the panel stays focusable for autofocus.
-      style={
-        gate.phase === "pending" ? { ...props.style, animationPlayState: "paused" } : props.style
-      }
-      data-reveal-phase={gate.phase}
-    >
-      <InitialPageLoadContext.Provider value={gate.register}>
-        <InitialPageReadyContext.Provider value={gate.revealed}>
-          {hasHeader ? (
-            <div
-              data-dialog-header-slot=""
-              className={cn(
-                "flex shrink-0 items-start justify-between gap-4 px-4 pb-4 pt-4 transition-shadow duration-200 ease-out sm:px-6 sm:pt-6",
-                bodyScrolled ? "max-sm:shadow-[inset_0_-1px_0_var(--color-border)]" : ""
-              )}
-            >
-              <div className="min-w-0 flex-1">{headerChildren}</div>
-              {!hideCloseButton && (
-                <DialogPrimitive.Close className="shrink-0 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-                  <X className="h-4 w-4" />
-                  <span className="sr-only">Close</span>
-                </DialogPrimitive.Close>
-              )}
-            </div>
-          ) : null}
-          {bodyChildren.length > 0 ? (
-            <div
-              ref={bodyRef}
-              data-dialog-body=""
-              style={
-                gate.phase === "loading"
-                  ? {
-                      height: DIALOG_LOADER_HEIGHT_PX,
-                      overflow: "hidden",
-                      visibility: "hidden",
-                    }
-                  : undefined
-              }
-              className={cn(
-                "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
-                bodyChildren.length > 1 && "grid gap-4",
-                hasHeader ? "pt-0" : "pt-4 sm:pt-6",
-                hasFooter ? "pb-0" : "pb-4 sm:pb-6"
-              )}
-              onScroll={(event) => setBodyScrolled(event.currentTarget.scrollTop > 0)}
-            >
-              {bodyChildren}
-              {gate.phase === "loading" ? (
-                <ContentLoader className="pointer-events-none absolute inset-0 flex items-center justify-center" />
-              ) : null}
-            </div>
-          ) : null}
-          {hasFooter ? (
-            <div className="shrink-0 px-4 pb-4 pt-4 sm:px-6 sm:pb-6">{footerChildren}</div>
-          ) : null}
-          {!hideCloseButton && !hasHeader && (
-            <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
-              <X className="h-4 w-4" />
-              <span className="sr-only">Close</span>
-            </DialogPrimitive.Close>
-          )}
-        </InitialPageReadyContext.Provider>
-      </InitialPageLoadContext.Provider>
-    </DialogPrimitive.Content>
+    <>
+      {showScreenIndicator ? (
+        <div
+          role="status"
+          aria-label="Loading"
+          className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center"
+        >
+          <Loader2 className="h-6 w-6 animate-spin text-white/80" />
+        </div>
+      ) : null}
+      <DialogPrimitive.Content
+        ref={setPanelRef}
+        className={cn(
+          "dialog-content relative z-50 flex w-full max-w-none flex-col border bg-background p-0 shadow-lg outline-none",
+          "max-h-[85dvh]",
+          "sm:mx-auto sm:my-auto sm:max-h-none sm:max-w-lg",
+          contentClassName,
+          clipOverflow && "sm:overflow-clip",
+          "max-sm:flex max-sm:max-h-[85dvh] max-sm:flex-col max-sm:gap-0 max-sm:overflow-hidden max-sm:p-0"
+        )}
+        {...props}
+        // While the content loads the open animation holds its first, transparent
+        // frame; the panel stays focusable, so autofocus works as usual.
+        style={waiting ? { ...props.style, animationPlayState: "paused" } : props.style}
+        data-reveal-phase={gate.phase}
+      >
+        <InitialPageLoadContext.Provider value={gate.register}>
+          <InitialPageReadyContext.Provider value={gate.revealed}>
+            {hasHeader ? (
+              <div
+                data-dialog-header-slot=""
+                className={cn(
+                  "flex shrink-0 items-start justify-between gap-4 px-4 pb-4 pt-4 transition-shadow duration-200 ease-out sm:px-6 sm:pt-6",
+                  bodyScrolled ? "max-sm:shadow-[inset_0_-1px_0_var(--color-border)]" : ""
+                )}
+              >
+                <div className="min-w-0 flex-1">{headerChildren}</div>
+                {!hideCloseButton && (
+                  <DialogPrimitive.Close className="shrink-0 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close</span>
+                  </DialogPrimitive.Close>
+                )}
+              </div>
+            ) : null}
+            {bodyChildren.length > 0 ? (
+              <div
+                data-dialog-body=""
+                className={cn(
+                  "relative min-h-0 min-w-0 px-4 max-sm:flex-1 max-sm:overflow-y-auto max-sm:overscroll-contain sm:px-6",
+                  bodyChildren.length > 1 && "grid gap-4",
+                  hasHeader ? "pt-0" : "pt-4 sm:pt-6",
+                  hasFooter ? "pb-0" : "pb-4 sm:pb-6"
+                )}
+                onScroll={(event) => setBodyScrolled(event.currentTarget.scrollTop > 0)}
+              >
+                {bodyChildren}
+              </div>
+            ) : null}
+            {hasFooter ? (
+              <div className="shrink-0 px-4 pb-4 pt-4 sm:px-6 sm:pb-6">{footerChildren}</div>
+            ) : null}
+            {!hideCloseButton && !hasHeader && (
+              <DialogPrimitive.Close className="absolute right-4 top-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 disabled:pointer-events-none">
+                <X className="h-4 w-4" />
+                <span className="sr-only">Close</span>
+              </DialogPrimitive.Close>
+            )}
+          </InitialPageReadyContext.Provider>
+        </InitialPageLoadContext.Provider>
+      </DialogPrimitive.Content>
+    </>
   );
 });
 DialogContentPanel.displayName = "DialogContentPanel";

@@ -19,6 +19,7 @@ import type {
   GitHubConnectorPreviewTestResult,
   GitHubOAuthSession,
   GitHubOAuthStartRequest,
+  GitHubScopeTargets,
   GitLabAllowlistEntry,
   GitLabAllowlistPreviewSearchRequest,
   GitLabConnector,
@@ -27,7 +28,10 @@ import type {
   GitLabConnectorPreviewTestResult,
   GitLabConnectorSyncResult,
   GitLabConnectorUpdateRequest,
+  GitLabScopeTargets,
   GitLabUserCredentialStatus,
+  GitScopeProvider,
+  GitScopeTargetResolution,
   GitUserCredentialStatus,
 } from "@/types/integrations";
 import type { ApiClientBaseConstructor } from "./api-mixins";
@@ -495,5 +499,73 @@ export function withIntegrationsApi<TBase extends ApiClientBaseConstructor>(Base
         )
       );
     }
+
+    /** Groups and projects of a GitLab connector that a permission can be limited to. */
+    async searchGitLabScopeTargets(
+      connectorId: string,
+      search: string,
+      limit = SCOPE_TARGET_SEARCH_LIMIT
+    ): Promise<GitLabScopeTargets> {
+      const payload = unwrapScopeTargetPayload(
+        await this.request<ScopeTargetPayload<GitLabScopeTargets>>(
+          scopeTargetSearchPath("gitlab", connectorId, search, limit)
+        )
+      );
+      return { groups: payload?.groups ?? [], projects: payload?.projects ?? [] };
+    }
+
+    /** Owners and repositories of a GitHub connector that a permission can be limited to. */
+    async searchGitHubScopeTargets(
+      connectorId: string,
+      search: string,
+      limit = SCOPE_TARGET_SEARCH_LIMIT
+    ): Promise<GitHubScopeTargets> {
+      const payload = unwrapScopeTargetPayload(
+        await this.request<ScopeTargetPayload<GitHubScopeTargets>>(
+          scopeTargetSearchPath("github", connectorId, search, limit)
+        )
+      );
+      return { owners: payload?.owners ?? [], repos: payload?.repos ?? [] };
+    }
+
+    /** Labels for stored qualifiers of one connector (`group/123`, `repo/456`, …). */
+    async resolveGitScopeTargets(
+      provider: GitScopeProvider,
+      connectorId: string,
+      qualifiers: readonly string[]
+    ): Promise<GitScopeTargetResolution[]> {
+      const params = new URLSearchParams({ ids: qualifiers.join(",") });
+      const payload = unwrapScopeTargetPayload(
+        await this.request<
+          ScopeTargetPayload<{ items: GitScopeTargetResolution[] } | GitScopeTargetResolution[]>
+        >(
+          `/integrations/${provider}/${encodeURIComponent(connectorId)}/scope-targets/resolve?${params}`
+        )
+      );
+      return (Array.isArray(payload) ? payload : payload?.items) ?? [];
+    }
   };
+}
+
+const SCOPE_TARGET_SEARCH_LIMIT = 50;
+
+type ScopeTargetPayload<T> = T | { data: T };
+
+// The contract describes the payload itself; accept it bare or in the usual `{ data }` envelope.
+function unwrapScopeTargetPayload<T extends object>(
+  response: ScopeTargetPayload<T> | null | undefined
+): T | undefined {
+  if (!response) return undefined;
+  if (!Array.isArray(response) && "data" in response) return response.data;
+  return response as T;
+}
+
+function scopeTargetSearchPath(
+  provider: "gitlab" | "github",
+  connectorId: string,
+  search: string,
+  limit: number
+) {
+  const params = new URLSearchParams({ search, limit: String(limit) });
+  return `/integrations/${provider}/${encodeURIComponent(connectorId)}/scope-targets?${params}`;
 }

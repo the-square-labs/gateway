@@ -787,7 +787,7 @@ export function ProxyHosts({
       >
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>No Ingress nodes</DialogTitle>
+            <DialogTitle>No Ingress Nodes</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Routes must be deployed to an Ingress node. Add and connect an Ingress node first, then

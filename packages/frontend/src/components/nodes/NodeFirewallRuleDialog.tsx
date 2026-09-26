@@ -131,7 +131,7 @@ export function NodeFirewallRuleDialog({
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            {displayedDialog?.rule ? "Edit firewall rule" : "Add firewall rule"}
+            {displayedDialog?.rule ? "Edit Firewall Rule" : "Add Firewall Rule"}
           </DialogTitle>
           <DialogDescription>
             This edits the local draft only. The provider is unchanged until you save the firewall

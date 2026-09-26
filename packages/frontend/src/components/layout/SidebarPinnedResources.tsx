@@ -1,5 +1,5 @@
 import { Box, Boxes, Database, GitBranch, Globe, Hammer, Server } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   databaseHealthTone,
@@ -11,6 +11,7 @@ import {
   statusDotClass,
 } from "@/components/common/resource-status";
 import { Separator } from "@/components/ui/separator";
+import { useLoadDashboardBootstrap } from "@/hooks/use-dashboard-bootstrap";
 import {
   databaseRoute,
   dockerComposeProjectRoute,
@@ -28,7 +29,6 @@ import { usePinnedDatabasesStore } from "@/stores/pinned-databases";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
-import { useUIStore } from "@/stores/ui";
 import { effectiveNodeStatus } from "@/types";
 
 /**
@@ -51,24 +51,15 @@ export function SidebarPinnedResources({
   loadBootstrap = false,
 }: SidebarPinnedResourcesProps) {
   const location = useLocation();
-  const { user, hasScope } = useAuthStore();
-  const showUpdateNotifications = useUIStore((s) => s.showUpdateNotifications);
-  const showSystemCertificatePreference = useUIStore((s) => s.showSystemCertificates);
-  const showSystemCertificates =
-    hasScope("admin:details:certificates") && showSystemCertificatePreference;
-  const dashboardPinnedNodeIds = usePinnedNodesStore((s) => s.dashboardNodeIds);
+  const { hasScope } = useAuthStore();
   const sidebarPinnedNodeIds = usePinnedNodesStore((s) => s.sidebarNodeIds);
-  const dashboardPinnedProxyIds = usePinnedProxiesStore((s) => s.dashboardProxyIds);
   const sidebarPinnedProxyIds = usePinnedProxiesStore((s) => s.sidebarProxyIds);
-  const dashboardPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.dashboardDatabaseIds);
   const sidebarPinnedDatabaseIds = usePinnedDatabasesStore((s) => s.sidebarDatabaseIds);
   const sidebarPinnedStorageIds = usePinnedStorageStore((s) => s.sidebarStorageIds);
   const pinnedDatabaseMeta = usePinnedDatabasesStore((s) => s.databaseMeta);
-  const dashboardPinnedContainerIds = usePinnedContainersStore((s) => s.dashboardContainerIds);
   const sidebarPinnedContainerIds = usePinnedContainersStore((s) => s.sidebarContainerIds);
   const pinnedContainerMeta = usePinnedContainersStore((s) => s.containerMeta);
   const dashboardBootstrap = useDashboardBootstrapStore((s) => s.snapshot);
-  const loadDashboardBootstrap = useDashboardBootstrapStore((s) => s.load);
   const canViewDockerResource = useCallback(
     (
       nodeId: string,
@@ -83,97 +74,7 @@ export function SidebarPinnedResources({
     (databaseId: string) => hasScope("databases:view") || hasScope(`databases:view:${databaseId}`),
     [hasScope]
   );
-  const bootstrapKey = useMemo(
-    () =>
-      JSON.stringify({
-        userId: user?.id ?? null,
-        scopes: [...(user?.scopes ?? [])].sort(),
-        showSystemCertificates,
-        showUpdateNotifications,
-        dashboard: {
-          nodeIds: dashboardPinnedNodeIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerIds: dashboardPinnedContainerIds,
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedNodeIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          storageIds: sidebarPinnedStorageIds,
-          dockerIds: sidebarPinnedContainerIds,
-        },
-      }),
-    [
-      dashboardPinnedContainerIds,
-      dashboardPinnedDatabaseIds,
-      dashboardPinnedNodeIds,
-      dashboardPinnedProxyIds,
-      showSystemCertificates,
-      showUpdateNotifications,
-      sidebarPinnedContainerIds,
-      sidebarPinnedDatabaseIds,
-      sidebarPinnedStorageIds,
-      sidebarPinnedNodeIds,
-      sidebarPinnedProxyIds,
-      user?.id,
-      user?.scopes,
-    ]
-  );
-
-  useEffect(() => {
-    if (!loadBootstrap || !user?.id) return;
-    const dockerResources = (ids: string[]) =>
-      ids
-        .map((id) => {
-          const meta = pinnedContainerMeta[id];
-          return meta
-            ? {
-                id,
-                nodeId: meta.nodeId,
-                kind: meta.kind ?? "container",
-                scopeResourceId: meta.scopeResourceId,
-              }
-            : null;
-        })
-        .filter((value): value is NonNullable<typeof value> => value !== null);
-    void loadDashboardBootstrap(bootstrapKey, {
-      showSystemCertificates,
-      showUpdateNotifications,
-      pins: {
-        dashboard: {
-          nodeIds: dashboardPinnedNodeIds,
-          proxyHostIds: dashboardPinnedProxyIds,
-          databaseIds: dashboardPinnedDatabaseIds,
-          dockerResources: dockerResources(dashboardPinnedContainerIds),
-        },
-        sidebar: {
-          nodeIds: sidebarPinnedNodeIds,
-          proxyHostIds: sidebarPinnedProxyIds,
-          databaseIds: sidebarPinnedDatabaseIds,
-          storageIds: sidebarPinnedStorageIds,
-          dockerResources: dockerResources(sidebarPinnedContainerIds),
-        },
-      },
-    });
-  }, [
-    bootstrapKey,
-    dashboardPinnedContainerIds,
-    dashboardPinnedDatabaseIds,
-    dashboardPinnedNodeIds,
-    dashboardPinnedProxyIds,
-    loadBootstrap,
-    loadDashboardBootstrap,
-    pinnedContainerMeta,
-    showSystemCertificates,
-    showUpdateNotifications,
-    sidebarPinnedContainerIds,
-    sidebarPinnedDatabaseIds,
-    sidebarPinnedStorageIds,
-    sidebarPinnedNodeIds,
-    sidebarPinnedProxyIds,
-    user?.id,
-  ]);
+  useLoadDashboardBootstrap(loadBootstrap);
 
   useEffect(() => {
     for (const database of dashboardBootstrap?.pinned.sidebar.databases ?? []) {

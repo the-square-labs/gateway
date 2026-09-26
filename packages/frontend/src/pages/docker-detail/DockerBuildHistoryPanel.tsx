@@ -517,7 +517,7 @@ export function DockerBuildHistoryPanel({
       <Dialog open={!inlineHistory && allOpen} onOpenChange={closeAll}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[85dvh] sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Build history</DialogTitle>
+            <DialogTitle>Build History</DialogTitle>
             <DialogDescription>Scroll the table to load older builds.</DialogDescription>
           </DialogHeader>
           {historyTable(false)}

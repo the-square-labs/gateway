@@ -73,7 +73,7 @@ describe("Storage deletion with backup history", () => {
     expect(remove).toHaveBeenNthCalledWith(2, "s1", { backupHistory: "forget" });
     expect(confirm).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        title: "Forget backup history?",
+        title: "Forget Backup History?",
         description: expect.stringContaining(
           "2 backup history entries reference this storage, 1 of them with backup files"
         ),

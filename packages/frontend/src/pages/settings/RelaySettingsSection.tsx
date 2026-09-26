@@ -272,7 +272,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
 
   const handleAbandonUpdate = async () => {
     const ok = await confirm({
-      title: "Abandon Relay Pool update?",
+      title: "Abandon Relay Pool Update?",
       description:
         "Gateway fails this update run and returns the relays it drained to service. Relays that already updated keep the new version.",
       confirmLabel: "Abandon update",
@@ -396,7 +396,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
   const forceDisconnect = async (instance: DashboardRelayInstance) => {
     if (
       !(await confirm({
-        title: `Disconnect active streams on ${instance.displayName}?`,
+        title: `Disconnect Active Streams on ${instance.displayName}?`,
         description:
           "This immediately terminates every active tunnel on this relay. Clients may reconnect through another ready instance.",
         confirmLabel: "Force disconnect",
@@ -564,7 +564,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 role={row.policyTrust.state === "recovered" ? undefined : "alert"}
                 className={`max-w-md text-xs ${
                   row.policyTrust.state === "recovered" || row.policyTrust.state === "locked_out"
-                    ? "text-warning"
+                    ? "text-warning-text"
                     : "text-destructive"
                 }`}
               >
@@ -763,7 +763,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         {status?.rebalanceAvailable &&
           !status?.automaticRebalancePaused &&
           !status?.blockers?.length && (
-            <p className="border-t border-border p-3 text-sm text-warning">
+            <p className="border-t border-border p-3 text-sm text-warning-text">
               Relay capacity or workload spread changed. Automatic rebalance starts after the new
               placement stays stable for 30 seconds. Existing connections drain without
               interruption.
@@ -786,7 +786,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
           </p>
         ))}
         {status?.staging && status.staging.length > 0 && (
-          <p className="border-t border-border p-3 text-sm text-warning">
+          <p className="border-t border-border p-3 text-sm text-warning-text">
             Rebalance is verifying {status.staging.length} staged assignment generation
             {status.staging.length === 1 ? "" : "s"} before activation.
           </p>

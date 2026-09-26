@@ -133,7 +133,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
 
   const remove = async (model: InferenceModel) => {
     const accepted = await confirm({
-      title: "Delete inference model",
+      title: "Delete Inference Model",
       description: `Delete “${model.displayName}” and its provider configuration?`,
       confirmLabel: "Delete",
     });

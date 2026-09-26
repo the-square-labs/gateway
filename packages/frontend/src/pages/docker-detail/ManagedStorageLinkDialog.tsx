@@ -88,7 +88,7 @@ export function ManagedStorageLinkDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Add managed storage link</DialogTitle>
+          <DialogTitle>Add Managed Storage Link</DialogTitle>
           <DialogDescription>
             {containerName} will reach this cluster through a private connector. Credentials are
             stored as managed Docker secrets.

@@ -158,7 +158,7 @@ describe("InferenceUsersTable", () => {
     await user.click(screen.getByRole("button", { name: "Reset limits" }));
     expect(useConfirmDialog.getState()).toMatchObject({
       open: true,
-      title: "Reset usage limits?",
+      title: "Reset Usage Limits?",
       confirmLabel: "Reset limits",
     });
     await act(async () => useConfirmDialog.getState().onConfirm?.());

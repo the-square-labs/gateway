@@ -18,6 +18,34 @@ export const FOLDER_CREATION_SCOPES = [
   "docker:images:pull",
 ] as const;
 
+/**
+ * Git integration scopes a qualifier can limit: `<connectorId>` for every repository of a
+ * connector, and for GitLab `<connectorId>/group/<id>` or `<connectorId>/project/<id>`, for
+ * GitHub `<connectorId>/owner/<id>` or `<connectorId>/repo/<id>`. Generic Git takes connectors only.
+ */
+export const GIT_TARGET_SCOPES = [
+  "integrations:gitlab:view",
+  "integrations:gitlab:use",
+  "integrations:gitlab:repo:read",
+  "integrations:gitlab:repo:write",
+  "integrations:gitlab:sandbox:clone",
+  "integrations:github:view",
+  "integrations:github:use",
+  "integrations:github:repo:read",
+  "integrations:github:repo:write",
+  "integrations:git:view",
+  "integrations:git:use",
+  "integrations:git:repo:read",
+  "integrations:git:repo:write",
+] as const;
+
+/** Git connector administration: unqualified, or limited to one connector (`<connectorId>`). */
+export const GIT_CONNECTOR_SCOPES = [
+  "integrations:gitlab:manage",
+  "integrations:github:manage",
+  "integrations:git:manage",
+] as const;
+
 export const RESOURCE_SCOPABLE_SCOPES = [
   "admin:users",
   "admin:groups",
@@ -25,6 +53,8 @@ export const RESOURCE_SCOPABLE_SCOPES = [
   ...FOLDER_CREATION_SCOPES,
   "integrations:hosting:view",
   "integrations:hosting:manage",
+  ...GIT_TARGET_SCOPES,
+  ...GIT_CONNECTOR_SCOPES,
   "hosting:resources:view",
   "hosting:resources:create",
   "hosting:resources:power",

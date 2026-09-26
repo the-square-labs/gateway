@@ -125,7 +125,7 @@ export function PageProjectSettingsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Project settings</DialogTitle>
+          <DialogTitle>Project Settings</DialogTitle>
           <DialogDescription>
             Update project details, retention, storage quota, and preview links.
           </DialogDescription>
@@ -159,7 +159,7 @@ export function PageProjectSettingsDialog({
                   type="button"
                   aria-label="Default color"
                   className={cn(
-                    "aspect-square w-full border border-input bg-muted",
+                    "aspect-square w-full border border-border bg-muted",
                     appearanceColor === null && "border-white"
                   )}
                   style={appearanceColor === null ? { borderColor: "#fff" } : undefined}
@@ -171,7 +171,7 @@ export function PageProjectSettingsDialog({
                     type="button"
                     aria-label={`${option.label} color`}
                     className={cn(
-                      "aspect-square w-full border border-input",
+                      "aspect-square w-full border border-border",
                       option.swatchClassName,
                       appearanceColor === option.value && "border-white"
                     )}

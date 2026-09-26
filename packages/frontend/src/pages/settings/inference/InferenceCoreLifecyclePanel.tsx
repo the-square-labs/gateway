@@ -153,9 +153,11 @@ function requestLimitsStatus(capability: InferenceCoreStatus["health"]["requestL
     case "negotiated-v1":
       return <Badge variant="success">Supported</Badge>;
     case "legacy":
-      return <span className="text-warning">Gateway request limits require a core update</span>;
+      return (
+        <span className="text-warning-text">Gateway request limits require a core update</span>
+      );
     default:
-      return <span className="text-warning">Gateway request limits are unverified</span>;
+      return <span className="text-warning-text">Gateway request limits are unverified</span>;
   }
 }
 
@@ -396,7 +398,7 @@ export function InferenceCoreLifecyclePanel({
     }
     const target = version;
     const confirmed = await confirm({
-      title: "Update inference core",
+      title: "Update Inference Core",
       description: `Update the inference core from ${status.installed?.version ?? "the current version"} to ${target}? Inference is briefly interrupted during the update. If the update fails, Gateway automatically restores the previous version.`,
       confirmLabel: "Update",
     });
@@ -534,7 +536,7 @@ export function InferenceCoreLifecyclePanel({
             <DetailRow
               label="Update"
               value={
-                <span className="text-warning">
+                <span className="text-warning-text">
                   {status.installed?.version ?? "current"} → {status.latest.version}
                 </span>
               }
@@ -552,7 +554,7 @@ export function InferenceCoreLifecyclePanel({
             <div aria-live="polite" className="px-4 py-3">
               <p
                 className={`text-sm break-words [overflow-wrap:anywhere] max-h-32 overflow-y-auto ${
-                  failed ? "text-destructive" : "text-warning"
+                  failed ? "text-destructive" : "text-warning-text"
                 }`}
               >
                 {status.lastError}
@@ -571,7 +573,7 @@ export function InferenceCoreLifecyclePanel({
         <Dialog open={releaseNotesOpen} onOpenChange={setReleaseNotesOpen}>
           <DialogContent className="sm:max-w-lg">
             <DialogHeader>
-              <DialogTitle>Release notes</DialogTitle>
+              <DialogTitle>Release Notes</DialogTitle>
             </DialogHeader>
             <p className="text-sm text-muted-foreground break-words [overflow-wrap:anywhere]">
               Release notes for inference core {status.latest.version} are published at{" "}

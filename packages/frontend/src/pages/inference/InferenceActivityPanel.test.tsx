@@ -158,19 +158,20 @@ describe("InferenceActivityPanel", () => {
     render(<InferenceActivityPanel />);
     await screen.findByText("User recent");
 
-    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    const viewAll = screen.getByRole("button", { name: "View all" });
+    fireEvent.pointerDown(viewAll);
+    fireEvent.click(viewAll);
 
-    const dialog = screen.getByRole("dialog", { name: "Inference activity" });
+    const dialog = screen.getByRole("dialog", { name: "Inference Activity" });
     expect(dialog).not.toHaveAttribute("data-reveal-phase", "revealed");
-    expect(await within(dialog).findByRole("status", { name: "Loading" })).toBeInTheDocument();
-    expect(dialog).not.toHaveAttribute("data-reveal-phase", "revealed");
+    expect(viewAll).toHaveAttribute("data-dialog-opening");
 
     await act(async () => {
       resolveFullPage?.({ data: [activity("full")], nextPage: null });
     });
 
     await waitForReveal();
-    expect(within(dialog).queryByRole("status", { name: "Loading" })).not.toBeInTheDocument();
+    expect(viewAll).not.toHaveAttribute("data-dialog-opening");
     expect(within(dialog).getByText("End of activity")).toBeVisible();
     expect(within(dialog).getByRole("combobox", { name: "Activity user" })).toBeVisible();
   });
@@ -186,7 +187,7 @@ describe("InferenceActivityPanel", () => {
     await screen.findByText("User recent");
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
     await waitForReveal();
-    const dialog = screen.getByRole("dialog", { name: "Inference activity" });
+    const dialog = screen.getByRole("dialog", { name: "Inference Activity" });
     const search = within(dialog).getByPlaceholderText("Search user, model, status, or error...");
 
     fireEvent.change(search, { target: { value: "nothing" } });

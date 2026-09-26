@@ -295,7 +295,7 @@ export function AIPlanProgress({
   const canPause = plan.status === "executing" || plan.status === "verifying";
   const cancel = async () => {
     const accepted = await confirm({
-      title: "Cancel plan?",
+      title: "Cancel Plan?",
       description: "Execution will stop. Changes already made will not be rolled back.",
       confirmLabel: "Cancel plan",
       cancelLabel: "Keep running",
@@ -596,7 +596,7 @@ export function AIComposer({
     if (!onModelChange || model === selectedModel || updatingProvider) return;
     if (conversationId && messages.length > 0) {
       const accepted = await confirm({
-        title: "Change model?",
+        title: "Change Model?",
         description:
           "Changing the model during a conversation may increase costs and reduce performance.",
         confirmLabel: "Change model",
@@ -778,7 +778,7 @@ export function AIComposer({
                       planModeActive
                         ? "text-link hover:text-link focus-visible:text-link"
                         : approvalMode === "bypass-everything"
-                          ? "text-warning-foreground hover:text-warning focus-visible:text-warning"
+                          ? "text-warning-foreground hover:text-warning-text focus-visible:text-warning-text"
                           : AI_TOOLBAR_TRIGGER_MUTED
                     )}
                     title={planModeActive ? "Plan" : approvalModeLabel}

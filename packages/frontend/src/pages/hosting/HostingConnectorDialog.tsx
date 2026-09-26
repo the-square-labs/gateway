@@ -444,7 +444,7 @@ export function HostingConnectorDialog({
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            {connector ? `Configure ${connector.name}` : "Add hosting connector"}
+            {connector ? `Configure ${connector.name}` : "Add Hosting Connector"}
           </DialogTitle>
           <DialogDescription>
             Step {step} of {steps.length} — {steps[step - 1]}

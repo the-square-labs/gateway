@@ -239,7 +239,7 @@ export function InferenceProviderConnectDialog({
     if (authType === "oauth" && selected.subscription) {
       await confirmAction(
         {
-          title: "Review provider terms",
+          title: "Review Provider Terms",
           description:
             "The provider may not permit third-party subscription connectors and may restrict or block your account. Review the provider's current Terms of Service before continuing. Continue only if you accept this risk.",
           confirmLabel: "Continue to authorization",
@@ -293,7 +293,7 @@ export function InferenceProviderConnectDialog({
         onInteractOutside={locked ? (event) => event.preventDefault() : undefined}
       >
         <DialogHeader>
-          <DialogTitle>Connect inference provider</DialogTitle>
+          <DialogTitle>Connect Inference Provider</DialogTitle>
         </DialogHeader>
         <DialogDescription asChild>
           <div className="space-y-2">
@@ -405,7 +405,7 @@ export function InferenceProviderConnectDialog({
                         actions={
                           <Button
                             variant="ghost"
-                            className="rounded-none border-l border-input bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
+                            className="rounded-none border-l border-border bg-muted px-3 text-muted-foreground hover:bg-muted hover:text-foreground"
                             onClick={() =>
                               window.open(oauth.authorizationUrl, "_blank", "noopener,noreferrer")
                             }
@@ -460,7 +460,7 @@ export function InferenceProviderConnectDialog({
                         type="submit"
                         variant="ghost"
                         size="icon"
-                        className="relative rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                        className="relative rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                         disabled={!isCompleteCallback(callback.trim(), oauth.providerId)}
                         pending={saving}
                         aria-label={`Complete ${authorizationProviderLabel} authorization`}

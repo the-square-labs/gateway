@@ -80,7 +80,7 @@ export function InferenceHarnessDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Set up an inference harness</DialogTitle>
+          <DialogTitle>Set Up an Inference Harness</DialogTitle>
         </DialogHeader>
         <DialogDescription>
           Run the companion CLI on the device where the harness is installed.

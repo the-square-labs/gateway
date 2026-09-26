@@ -116,7 +116,7 @@ export function HostingResizeDialog({
     try {
       if (
         !(await confirm({
-          title: "Confirm resource resize",
+          title: "Confirm Resource Resize",
           description: `Resize “${target.name}”? All Gateway roles on this VM are affected.${price ? ` Selected quote: ${formatHostingAmount(price.amount)} ${price.currency}.` : ""}`,
           confirmLabel: "Resize resource",
         }))
@@ -149,7 +149,7 @@ export function HostingResizeDialog({
     >
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Resize provider resource</DialogTitle>
+          <DialogTitle>Resize Provider Resource</DialogTitle>
           <DialogDescription>
             Configure the VM resources. Shut down the VM before resizing; disks can only grow.
           </DialogDescription>

@@ -124,7 +124,7 @@ describe("DockerBuildHistoryPanel", () => {
     expect(screen.getAllByRole("row")).toHaveLength(6);
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
 
-    const dialog = screen.getByRole("dialog", { name: "Build history" });
+    const dialog = screen.getByRole("dialog", { name: "Build History" });
     expect(dialog).toBeInTheDocument();
     // The dialog waits for the first history page before it reveals its body.
     expect(dialog).toHaveAttribute("data-reveal-phase", "pending");

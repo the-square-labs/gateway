@@ -129,7 +129,7 @@ function UsageStatCard({
       className="border-0"
       label={label}
       value={`${remaining}%`}
-      valueClassName={isLow ? "text-warning" : undefined}
+      valueClassName={isLow ? "text-warning-text" : undefined}
       icon={icon}
       progress={{
         percent: remaining,
@@ -226,7 +226,7 @@ export function DashboardInferenceUsage({
           >
             <div className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex min-w-0 items-center gap-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-warning/10 text-warning">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center bg-warning/10 text-warning-text">
                   <TriangleAlert className="h-4 w-4" aria-hidden="true" />
                 </div>
                 <div className="min-w-0">
@@ -241,7 +241,7 @@ export function DashboardInferenceUsage({
               <div className="w-full shrink-0 sm:w-48">
                 <div className="mb-1.5 flex items-center justify-between gap-3 text-xs">
                   <span className="text-muted-foreground">Remaining</span>
-                  <span className="font-semibold text-warning">{remaining}%</span>
+                  <span className="font-semibold text-warning-text">{remaining}%</span>
                 </div>
                 <ProgressBar value={remaining} className="h-2" indicatorClassName="bg-warning" />
               </div>

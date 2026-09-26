@@ -368,7 +368,7 @@ export function DockerComposeProjectDetail() {
     if (
       nextAction === "down" &&
       !(await confirm({
-        title: "Bring project down",
+        title: "Bring Project Down",
         description:
           "Stop and remove project containers and non-external networks? Named volumes are preserved.",
         confirmLabel: "Down",
@@ -399,7 +399,7 @@ export function DockerComposeProjectDetail() {
     if (
       !project ||
       !(await confirm({
-        title: "Delete Compose project",
+        title: "Delete Compose Project",
         description:
           "Permanently remove this project, its containers, non-external networks, project-owned volumes, revisions, and secrets? External resources are not deleted.",
         confirmLabel: "Delete everything",
@@ -424,7 +424,7 @@ export function DockerComposeProjectDetail() {
       !project ||
       revision.id === project.activeRevisionId ||
       !(await confirm({
-        title: `Delete revision ${revision.revisionNumber}`,
+        title: `Delete Revision ${revision.revisionNumber}`,
         description:
           "Delete this inactive immutable revision? Existing operation history remains, but this configuration can no longer be reapplied.",
         confirmLabel: "Delete revision",
@@ -1434,7 +1434,7 @@ export function DockerComposeProjectDetail() {
       <Dialog open={adoptOpen} onOpenChange={setAdoptOpen}>
         <DialogContent clipOverflow className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Adopt Compose project</DialogTitle>
+            <DialogTitle>Adopt Compose Project</DialogTitle>
             <DialogDescription>
               Review the complete configuration before adopting {project.name}.
             </DialogDescription>
@@ -1452,7 +1452,7 @@ export function DockerComposeProjectDetail() {
       <Dialog open={revisionOpen} onOpenChange={setRevisionOpen}>
         <DialogContent clipOverflow className="sm:max-w-4xl">
           <DialogHeader>
-            <DialogTitle>New revision for {project.name}</DialogTitle>
+            <DialogTitle>New Revision for {project.name}</DialogTitle>
             <DialogDescription>
               Edit the Compose YAML. Applying creates a new immutable revision.
             </DialogDescription>
@@ -1470,7 +1470,7 @@ export function DockerComposeProjectDetail() {
       <Dialog open={revisionsOpen} onOpenChange={setRevisionsOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Change revision</DialogTitle>
+            <DialogTitle>Change Revision</DialogTitle>
             <DialogDescription>
               Reapply an immutable revision or remove an inactive revision.
             </DialogDescription>
@@ -1503,7 +1503,7 @@ export function DockerComposeProjectDetail() {
       <Dialog open={activityOpen} onOpenChange={setActivityOpen}>
         <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-h-[92dvh] sm:max-w-5xl">
           <DialogHeader>
-            <DialogTitle>Compose activity</DialogTitle>
+            <DialogTitle>Compose Activity</DialogTitle>
             <DialogDescription>
               Lifecycle operation history. Scroll the table to load older operations.
             </DialogDescription>
@@ -1555,7 +1555,7 @@ export function DockerComposeProjectDetail() {
           }}
         >
           <DialogHeader>
-            <DialogTitle>Activity details</DialogTitle>
+            <DialogTitle>Activity Details</DialogTitle>
             <DialogDescription>
               Compose lifecycle operation and immutable revision reference.
             </DialogDescription>
@@ -1605,7 +1605,7 @@ export function DockerComposeProjectDetail() {
       <Dialog open={pinOpen} onOpenChange={setPinOpen}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
-            <DialogTitle>Pin Compose project</DialogTitle>
+            <DialogTitle>Pin Compose Project</DialogTitle>
             <DialogDescription>Choose where {project.name} should stay visible.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

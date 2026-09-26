@@ -941,7 +941,7 @@ export function DockerVolumeDetail({
       <Dialog open={resizeOpen} onOpenChange={setResizeOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Resize volume</DialogTitle>
+            <DialogTitle>Resize Volume</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">

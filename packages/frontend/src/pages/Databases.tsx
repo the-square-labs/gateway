@@ -1292,7 +1292,7 @@ function DatabasesContent({
             }}
           >
             <DialogHeader>
-              <DialogTitle>Deploy managed database</DialogTitle>
+              <DialogTitle>Deploy Managed Database</DialogTitle>
               <DialogDescription>
                 Step {managedCreateStep} of {managedCreateStepCount} — {managedCreateStepLabel}
               </DialogDescription>
@@ -1361,7 +1361,7 @@ function DatabasesContent({
         <Dialog open={managedNodeRequiredOpen} onOpenChange={setManagedNodeRequiredOpen}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Connect a node first</DialogTitle>
+              <DialogTitle>Connect a Node First</DialogTitle>
             </DialogHeader>
             <p className="text-sm text-muted-foreground">
               Managed databases run on a connected node. Add a node first, then return here to
@@ -1394,7 +1394,7 @@ function DatabasesContent({
         >
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
-              <DialogTitle>Database provisioning failed</DialogTitle>
+              <DialogTitle>Database Provisioning Failed</DialogTitle>
             </DialogHeader>
             <p className="text-sm text-muted-foreground">{managedProvisioningError?.error}</p>
             <DialogFooter>

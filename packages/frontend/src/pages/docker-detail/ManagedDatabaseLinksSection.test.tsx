@@ -162,7 +162,7 @@ describe("ManagedDatabaseLinksSection", () => {
     await waitFor(() =>
       expect(confirm).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Replace existing variables?",
+          title: "Replace Existing Variables?",
           description: expect.stringContaining("DATABASE_URL"),
         })
       )
@@ -176,7 +176,7 @@ describe("ManagedDatabaseLinksSection", () => {
     renderLinks();
     fireEvent.click(await screen.findByRole("button", { name: "Add" }));
 
-    expect(await screen.findByText("No managed databases available")).toBeInTheDocument();
+    expect(await screen.findByText("No Managed Databases Available")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create database" })).toBeInTheDocument();
     expect(screen.queryByText("Add Managed Database Link")).not.toBeInTheDocument();
   });
@@ -289,7 +289,7 @@ describe("ManagedDatabaseLinksSection", () => {
     expect(screen.getByText("Database Blue")).toBeInTheDocument();
     expect(screen.getByText("Unavailable")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Add" }));
-    expect(await screen.findByText("No managed databases available")).toBeInTheDocument();
+    expect(await screen.findByText("No Managed Databases Available")).toBeInTheDocument();
   });
 
   it("unlocks link controls without waiting for the background container refresh", async () => {

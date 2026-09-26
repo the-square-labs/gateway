@@ -282,6 +282,19 @@ export function DockerDeployDialog({
     if (!selectedNode || selectedNode.serviceCreationLocked) setDeployNodeId("");
   }, [availableNodes, deployNodeId, open]);
 
+  // A folder-only creator is never offered the root: preselect their only folder, for image and Git
+  // source deployments alike, and drop a choice the selected node no longer allows.
+  useEffect(() => {
+    if (!open || !folderOptionsLoaded) return;
+    const folders = folderOptions.filter((option) => option.value !== "__root__");
+    const rootAllowed = folderOptions.some((option) => option.value === "__root__");
+    if (deployFolderId && !folders.some((option) => option.value === deployFolderId)) {
+      setDeployFolderId(!rootAllowed && folders.length === 1 ? folders[0]!.value : null);
+    } else if (!deployFolderId && !rootAllowed && folders.length === 1) {
+      setDeployFolderId(folders[0]!.value);
+    }
+  }, [deployFolderId, folderOptions, folderOptionsLoaded, open]);
+
   const closeDeploy = () => {
     onOpenChange(false);
     setSecureRuntimeSetupOpen(false);

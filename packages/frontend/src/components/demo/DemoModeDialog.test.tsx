@@ -14,7 +14,7 @@ describe("DemoModeDialog", () => {
     render(<DemoModeDialog />);
 
     expect(
-      screen.getByRole("heading", { name: "This action is unavailable in the demo" })
+      screen.getByRole("heading", { name: "This Action Is Unavailable in the Demo" })
     ).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Get your own Gateway" })).toHaveAttribute(
       "href",

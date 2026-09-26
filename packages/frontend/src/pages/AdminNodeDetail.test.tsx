@@ -457,7 +457,7 @@ describe("AdminNodeDetail", () => {
     expect(screen.getAllByRole("menuitem")[0]).toHaveTextContent("Pin");
     expect(screen.getAllByRole("separator").length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("menuitem", { name: "Resize VM" }));
-    expect(await screen.findByRole("dialog")).toHaveTextContent("Resize provider resource");
+    expect(await screen.findByRole("dialog")).toHaveTextContent("Resize Provider Resource");
     expect(screen.getByText("Node details content")).toBeInTheDocument();
   });
 

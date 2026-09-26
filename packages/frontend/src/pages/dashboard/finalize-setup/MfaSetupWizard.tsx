@@ -101,7 +101,7 @@ export function MfaSetupWizard({
   return (
     <FinalizeSetupWizardDialog
       open={open}
-      title="Set up MFA"
+      title="Set Up MFA"
       description={
         <>
           <p>
@@ -137,7 +137,7 @@ export function MfaSetupWizard({
             <CopyButton
               value={recoveryCodes.join("\n")}
               label="recovery codes"
-              className="border border-input bg-background hover:bg-accent hover:text-accent-foreground"
+              className="border border-border bg-background hover:bg-accent hover:text-accent-foreground"
             />
             <Button onClick={() => setScreen("complete")} disabled={saving}>
               <Check /> I saved these codes
@@ -199,9 +199,9 @@ export function MfaSetupWizard({
       ) : screen === "recovery" ? (
         <div className="space-y-4">
           <div className="flex items-center gap-3 border border-warning p-4">
-            <ShieldCheck className="h-5 w-5 shrink-0 text-warning" />
+            <ShieldCheck className="h-5 w-5 shrink-0 text-warning-text" />
             <div className="min-w-0 space-y-1">
-              <p className="text-sm font-semibold text-warning">Store your recovery codes</p>
+              <p className="text-sm font-semibold text-warning-text">Store your recovery codes</p>
               <p className="text-sm text-muted-foreground">
                 Each code works once if you lose access to your authenticator app. You must
                 acknowledge this step before setup is complete.

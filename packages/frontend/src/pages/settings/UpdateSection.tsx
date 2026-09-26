@@ -106,7 +106,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
   const handleAbandonRelayUpdate = async () => {
     const ok = await confirm({
-      title: "Abandon Relay Pool update?",
+      title: "Abandon Relay Pool Update?",
       description:
         "Gateway fails this update run and returns the relays it drained to service. Relays that already updated keep the new version.",
       confirmLabel: "Abandon update",
@@ -143,9 +143,9 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
     <>
       {gatewayUpdateAvailable && (
         <PanelShell
-          icon={<RefreshCw className="h-4 w-4 text-warning" />}
+          icon={<RefreshCw className="h-4 w-4 text-warning-text" />}
           id="system-updates"
-          title={<span className="text-warning">Gateway Update Available</span>}
+          title={<span className="text-warning-text">Gateway Update Available</span>}
           description="A Gateway update is ready to install"
           className={cn("xl:col-span-2", navigationHighlighted && "navigation-target-ripple")}
           dirty
@@ -197,10 +197,10 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
 
       {showRelayPanel && (
         <PanelShell
-          icon={<RefreshCw className="h-4 w-4 text-warning" />}
+          icon={<RefreshCw className="h-4 w-4 text-warning-text" />}
           id={gatewayUpdateAvailable ? undefined : "system-updates"}
           title={
-            <span className="text-warning">
+            <span className="text-warning-text">
               {relayUpdateAvailable ? "Relay Pool Update Available" : "Relay Pool Update"}
             </span>
           }

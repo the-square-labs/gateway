@@ -266,7 +266,7 @@ export function NodeFirewallTab({
     const lifecycle = lifecycleRef.current;
     if (
       !(await confirm({
-        title: "Remove firewall rule",
+        title: "Remove Firewall Rule",
         description: `Remove the ${rule.direction === "in" ? "inbound" : "outbound"} ${rule.action} rule from this unsaved draft? The provider is unchanged until you save the firewall configuration.`,
         confirmLabel: "Remove rule",
         variant: "destructive",
@@ -292,7 +292,7 @@ export function NodeFirewallTab({
     try {
       if (draft.enabled) {
         const approved = await confirm({
-          title: "Confirm firewall change",
+          title: "Confirm Firewall Change",
           description:
             "These rules may block new connections, including the node’s connection to Gateway. An existing connection staying open does not prove that new connections will work.",
           confirmLabel: "Apply firewall changes",

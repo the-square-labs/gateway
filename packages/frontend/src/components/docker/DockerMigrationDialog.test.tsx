@@ -87,7 +87,7 @@ describe("DockerMigrationDialog", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Target" }));
     fireEvent.click(screen.getByRole("button", { name: "Run preflight" }));
 
-    expect(await screen.findByRole("heading", { name: "Migration preflight" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Migration Preflight" })).toBeInTheDocument();
     expect(screen.queryByLabelText("Target node")).not.toBeInTheDocument();
     expect(screen.getByText("Removed from source after verification")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start migration" }));
@@ -207,7 +207,7 @@ describe("DockerMigrationDialog", () => {
       />
     );
 
-    expect(await screen.findByRole("heading", { name: "Migration progress" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Migration Progress" })).toBeInTheDocument();
     expect(screen.getByText(/migration completed/i)).toBeInTheDocument();
     expect(api.listNodes).not.toHaveBeenCalled();
     expect(onCutover).not.toHaveBeenCalled();

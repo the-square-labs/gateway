@@ -7,7 +7,7 @@ export type DashboardNoticeTone = "destructive" | "warning" | "info";
 
 const TONE_CLASSES: Record<DashboardNoticeTone, { border: string; text: string }> = {
   destructive: { border: "border-destructive/60", text: "text-destructive" },
-  warning: { border: "border-warning/60", text: "text-warning" },
+  warning: { border: "border-warning/60", text: "text-warning-text" },
   info: { border: "border-link/55", text: "text-link" },
 };
 

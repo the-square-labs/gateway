@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useRealtime } from "@/hooks/use-realtime";
+import { loadPageDeployments } from "@/lib/page-deployments";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
 import type { PageDeployment, PageTag } from "@/types";
@@ -46,24 +47,27 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
   const [deploymentId, setDeploymentId] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoading((current) => current || tags.length === 0);
-    try {
-      const [nextTags, nextDeployments] = await Promise.all([
-        api.listPageTags(projectId),
-        api.listPageDeployments(projectId, { page: 1, limit: 100 }),
-      ]);
-      setTags(nextTags);
-      setDeployments(nextDeployments.data ?? []);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load Tags");
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId, tags.length]);
+  const load = useCallback(
+    async ({ fresh = true }: { fresh?: boolean } = {}) => {
+      setLoading((current) => current || tags.length === 0);
+      try {
+        const [nextTags, nextDeployments] = await Promise.all([
+          api.listPageTags(projectId),
+          loadPageDeployments(projectId, { fresh }),
+        ]);
+        setTags(nextTags);
+        setDeployments(nextDeployments.data ?? []);
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "Failed to load Tags");
+      } finally {
+        setLoading(false);
+      }
+    },
+    [projectId, tags.length]
+  );
 
   useEffect(() => {
-    void load();
+    void load({ fresh: false });
   }, [load]);
   useRealtime("pages.tag.changed", (payload) => {
     const event = payload as { projectId?: string };
@@ -249,7 +253,7 @@ export function PageTagsTab({ projectId }: { projectId: string }) {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Create or move Tag</DialogTitle>
+            <DialogTitle>Create or Move Tag</DialogTitle>
             <DialogDescription>Point a Tag at a ready Deployment.</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

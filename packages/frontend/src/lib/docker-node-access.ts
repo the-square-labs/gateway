@@ -64,10 +64,22 @@ function dockerNodeIdFromScopeResourceId(resourceId: string): string {
   return separator > 0 ? resourceId.slice(0, separator) : resourceId;
 }
 
+/** Every Docker node, before access filtering. */
+export async function fetchDockerNodeList(): Promise<Node[]> {
+  const response = await api.listNodes({ type: "docker", limit: 100 });
+  return response.data;
+}
+
+/**
+ * The online, compatible Docker nodes the caller can use for these scopes.
+ * `listNodes` supplies the unfiltered list; pass a shared one when several
+ * scope sets are resolved at once, so the list is fetched a single time.
+ */
 export async function loadVisibleDockerNodes(
   scopes: readonly string[],
   scopeBases: readonly DockerNodeScope[],
-  canListNodes: boolean
+  canListNodes: boolean,
+  listNodes: () => Promise<Node[]> = fetchDockerNodeList
 ): Promise<Node[]> {
   const shouldListNodes =
     canListNodes ||
@@ -75,7 +87,7 @@ export async function loadVisibleDockerNodes(
     hasScopedDockerNodes(scopes, scopeBases);
   if (!shouldListNodes) return [];
 
-  const response = await api.listNodes({ type: "docker", limit: 100 });
+  const nodes = await listNodes();
   const hasBroadAccess = hasBroadDockerNodeAccess(scopes, scopeBases);
   const allowedIdsByScope = deriveAllowedResourceIdsByScope(scopes);
   const allowedNodeIds = new Set(
@@ -83,7 +95,7 @@ export async function loadVisibleDockerNodes(
       .flatMap((scopeBase) => allowedIdsByScope[scopeBase] ?? [])
       .map(dockerNodeIdFromScopeResourceId)
   );
-  return response.data.filter(
+  return nodes.filter(
     (node) =>
       node.status === "online" &&
       node.isConnected &&

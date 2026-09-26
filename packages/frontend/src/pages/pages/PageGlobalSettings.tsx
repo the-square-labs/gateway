@@ -343,7 +343,7 @@ export function PagesSettingsSection() {
           <Dialog open={warningOpen} onOpenChange={setWarningOpen}>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
-                <DialogTitle>Confirm same-domain Pages previews</DialogTitle>
+                <DialogTitle>Confirm Same-Domain Pages Previews</DialogTitle>
                 <DialogDescription>
                   This override requires explicit acknowledgement.
                 </DialogDescription>

@@ -332,7 +332,7 @@ export function HostingIntegrationDetail({
             onClick: async () => {
               if (
                 !(await confirm({
-                  title: "Delete hosting connector?",
+                  title: "Delete Hosting Connector?",
                   description:
                     "Provider VMs and Gateway nodes will not be deleted. Reconnecting this account can restore their hosting associations.",
                   confirmLabel: "Delete connector",

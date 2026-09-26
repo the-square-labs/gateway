@@ -321,7 +321,7 @@ export function SSLCertificateCreateDialog({
     if (!pendingCertId || pendingCertId === DEV_PREVIEW_CERT_ID || isCancellingACME) return;
 
     const confirmed = await confirm({
-      title: "Cancel certificate request?",
+      title: "Cancel Certificate Request?",
       description:
         "The pending certificate request will be deleted. You can start a new request later.",
       confirmLabel: "Cancel request",
@@ -529,7 +529,7 @@ export function SSLCertificateCreateDialog({
                                       type="button"
                                       variant="ghost"
                                       size="icon"
-                                      className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                                       aria-label={`Remove domain ${i + 1}`}
                                       onClick={() => {
                                         setAcmeDomains(acmeDomains.filter((_, j) => j !== i));
@@ -546,7 +546,7 @@ export function SSLCertificateCreateDialog({
                                       type="button"
                                       variant="ghost"
                                       size="icon"
-                                      className="rounded-none border-l border-input bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
+                                      className="rounded-none border-l border-border bg-muted text-muted-foreground hover:bg-muted hover:text-foreground"
                                       aria-label="Add domain"
                                       onClick={() => {
                                         setAcmeDomains([...acmeDomains, ""]);

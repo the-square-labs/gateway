@@ -256,7 +256,7 @@ describe("SSLCertificateCreateDialog domain selection", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(useConfirmDialog.getState()).toMatchObject({
       open: true,
-      title: "Cancel certificate request?",
+      title: "Cancel Certificate Request?",
     });
 
     await act(async () => {

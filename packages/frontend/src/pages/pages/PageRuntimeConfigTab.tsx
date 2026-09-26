@@ -283,7 +283,7 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
     if (target === selectedTarget) return;
     if (dirty) {
       const discard = await confirm({
-        title: "Discard unsaved configuration?",
+        title: "Discard Unsaved Configuration?",
         description: "Your edits will be discarded when you switch the configuration target.",
         confirmLabel: "Discard edits",
         variant: "destructive",
@@ -336,7 +336,7 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
   const reset = async () => {
     if (!canEdit || !override || saving) return;
     const confirmed = await confirm({
-      title: "Reset Tag configuration?",
+      title: "Reset Tag Configuration?",
       description: "This removes the Tag override and republishes the Default configuration.",
       confirmLabel: "Reset to default",
       variant: "destructive",

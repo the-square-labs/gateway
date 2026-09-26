@@ -121,7 +121,7 @@ describe("Docker Git delivery UI structure", () => {
     expect(pageDetail).not.toMatch(/from ["'].+Page(?:Git|Build)Source/);
   });
 
-  it("uses the shared inline copy action in Pages Deployment details", () => {
+  it("uses the shared inline copy action in Pages Deployment Details", () => {
     const deployments = source("./pages/PageDeploymentsTab.tsx");
     const pageDetail = source("./pages/PageProjectDetail.tsx");
 

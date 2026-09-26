@@ -4,18 +4,18 @@ import { Children } from "react";
 import { cn } from "@/lib/utils";
 
 const badgeVariants = cva(
-  "inline-flex max-w-full min-w-0 shrink items-center justify-center overflow-hidden text-ellipsis whitespace-nowrap py-0 text-[11px] font-semibold uppercase tracking-wider leading-none [&>*]:max-w-full [&>*]:min-w-0 [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:whitespace-nowrap",
+  "inline-flex max-w-full min-w-0 shrink items-center justify-center overflow-hidden text-ellipsis whitespace-nowrap py-0 text-2xs font-semibold uppercase tracking-wider leading-none [&>*]:max-w-full [&>*]:min-w-0 [&>*]:overflow-hidden [&>*]:text-ellipsis [&>*]:whitespace-nowrap",
   {
     variants: {
       variant: {
         default: "bg-primary text-primary-foreground",
         secondary: "bg-muted dark:bg-white/5 text-muted-foreground",
-        destructive: "bg-red-500/15 text-red-600 dark:text-red-400",
+        destructive: "bg-destructive/15 text-destructive",
         outline: "border border-border text-muted-foreground",
-        success: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+        success: "bg-success/15 text-success-text",
         warning: "bg-warning/15 text-warning-foreground",
         "warning-solid": "bg-warning text-black",
-        info: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+        info: "bg-info/15 text-info-text",
       },
       // AI: Use `inline` ONLY when the badge shares a row with regular text. Never use it for standalone badges.
       size: {

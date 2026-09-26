@@ -25,15 +25,15 @@ describe("AIWorkspaceAvailabilityDialog", () => {
     const { rerender } = render(<AIWorkspaceAvailabilityDialog state="no_access" {...props} />);
 
     expect(
-      screen.getByRole("heading", { name: "AI Workspace access required" })
+      screen.getByRole("heading", { name: "AI Workspace Access Required" })
     ).toBeInTheDocument();
 
     rerender(<AIWorkspaceAvailabilityDialog state={null} {...props} />);
 
     expect(screen.getByTestId("dialog")).toHaveAttribute("data-open", "false");
     expect(
-      screen.getByRole("heading", { name: "AI Workspace access required" })
+      screen.getByRole("heading", { name: "AI Workspace Access Required" })
     ).toBeInTheDocument();
-    expect(screen.queryByText("AI Workspace is not configured")).not.toBeInTheDocument();
+    expect(screen.queryByText("AI Workspace Is Not Configured")).not.toBeInTheDocument();
   });
 });

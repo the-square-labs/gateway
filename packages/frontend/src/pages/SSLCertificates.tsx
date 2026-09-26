@@ -905,7 +905,7 @@ export function SSLCertificates() {
       <Dialog open={domainRequiredOpen} onOpenChange={setDomainRequiredOpen}>
         <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
           <DialogHeader>
-            <DialogTitle>Add a domain first</DialogTitle>
+            <DialogTitle>Add a Domain First</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground">
             Public certificates require a registered domain. Add the domain first, then return here

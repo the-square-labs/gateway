@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, vi } from "vitest";
 import { OAuthConsent } from "@/pages/OAuthConsent";
@@ -443,6 +443,98 @@ describe("OAuthConsent", () => {
     await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
 
     expect(approve).toHaveBeenCalledWith("request-1", ["nodes:details"]);
+  });
+
+  describe("Git integration restrictions", () => {
+    const heldScope = "integrations:gitlab:use:gl-1/group/123";
+
+    beforeEach(() => {
+      useAuthStore.setState({ user: { id: "user-1", scopes: [heldScope] } as never });
+      vi.spyOn(api, "getOAuthConsent").mockResolvedValue({
+        ...preview,
+        requestedScopes: ["integrations:gitlab:use"],
+        grantableScopes: [heldScope],
+        unavailableScopes: [],
+      });
+      vi.spyOn(api, "listGitLabConnectors").mockResolvedValue([
+        { id: "gl-1", name: "Company GitLab" },
+        { id: "gl-2", name: "Partner GitLab" },
+      ] as never);
+      vi.spyOn(api, "searchGitLabScopeTargets").mockResolvedValue({
+        groups: [
+          { id: "123", fullPath: "acme/platform", name: "Platform" },
+          { id: "200", fullPath: "acme/tools", name: "Tools" },
+        ],
+        projects: [
+          { id: "456", pathWithNamespace: "acme/platform/api", name: "api" },
+          { id: "789", pathWithNamespace: "acme/tools/cli", name: "cli" },
+        ],
+      });
+    });
+
+    it("keeps the card behind the loader until held Git targets have labels", async () => {
+      let resolveLabels!: (value: { qualifier: string; label: string; missing: boolean }[]) => void;
+      vi.spyOn(api, "resolveGitScopeTargets").mockReturnValue(
+        new Promise((resolve) => {
+          resolveLabels = resolve;
+        })
+      );
+
+      renderWithRouter(<OAuthConsent />, {
+        path: "/oauth/consent",
+        route: "/oauth/consent?request=request-1",
+      });
+
+      await screen.findByText("Authorize Gateway API access");
+      await waitFor(() =>
+        expect(api.resolveGitScopeTargets).toHaveBeenCalledWith("gitlab", "gl-1", ["group/123"])
+      );
+      expect(
+        screen.getByRole("status", { name: "Loading authorization request..." })
+      ).toBeVisible();
+
+      resolveLabels([{ qualifier: "group/123", label: "acme/platform", missing: false }]);
+      await waitForReveal();
+      expect(screen.getByText("acme/platform")).toBeVisible();
+      expect(screen.getByRole("button", { name: /Authorize/i })).toBeEnabled();
+    });
+
+    it("bounds the restriction to what the signed-in account holds", async () => {
+      vi.spyOn(api, "resolveGitScopeTargets").mockResolvedValue([
+        { qualifier: "group/123", label: "acme/platform", missing: false },
+      ]);
+      const approve = vi
+        .spyOn(api, "approveOAuthConsent")
+        .mockRejectedValue(new Error("stop before navigation"));
+
+      renderWithRouter(<OAuthConsent />, {
+        path: "/oauth/consent",
+        route: "/oauth/consent?request=request-1",
+      });
+
+      await screen.findByText("acme/platform");
+      await waitForReveal();
+      await userEvent.click(
+        screen.getByRole("button", { name: /Restrict Use GitLab System Credential/i })
+      );
+      expect(screen.getByRole("checkbox", { name: /Company GitLab/ })).toBeDisabled();
+      expect(screen.queryByRole("checkbox", { name: /Partner GitLab/ })).not.toBeInTheDocument();
+
+      // Narrow the held group to one of its projects; nothing outside it is offered.
+      await userEvent.click(screen.getByRole("checkbox", { name: /acme\/platform group/ }));
+      expect(screen.getByRole("button", { name: /Authorize/i })).toBeDisabled();
+      await userEvent.click(
+        screen.getByRole("button", { name: /Add groups or projects from Company GitLab/ })
+      );
+      await userEvent.click(await screen.findByRole("button", { name: /acme\/platform\/api/ }));
+      expect(screen.queryByRole("button", { name: /acme\/tools/ })).not.toBeInTheDocument();
+      await userEvent.keyboard("{Escape}");
+
+      await userEvent.click(screen.getByRole("button", { name: /Authorize/i }));
+      expect(approve).toHaveBeenCalledWith("request-1", [
+        "integrations:gitlab:use:gl-1/project/456",
+      ]);
+    });
   });
 
   describe("folder and resource restrictions", () => {

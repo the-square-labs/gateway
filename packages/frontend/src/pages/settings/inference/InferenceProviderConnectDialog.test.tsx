@@ -76,7 +76,7 @@ describe("InferenceProviderConnectDialog", () => {
     });
     expect(screen.queryByText("Connector terms")).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
-    expect(screen.getByRole("dialog", { name: "Review provider terms" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Review Provider Terms" })).toBeInTheDocument();
     expect(api.startInferenceOAuth).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
 
@@ -207,7 +207,7 @@ describe("InferenceProviderConnectDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Start authorization" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue to authorization" }));
 
-    const terms = screen.getByRole("dialog", { name: "Review provider terms" });
+    const terms = screen.getByRole("dialog", { name: "Review Provider Terms" });
     const confirmButton = within(terms).getByRole("button", { name: "Continue to authorization" });
     expect(confirmButton).toBeDisabled();
     expect(confirmButton.querySelector(".animate-spin")).not.toBeNull();
@@ -302,7 +302,7 @@ describe("InferenceProviderConnectDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go back" }));
 
     expect(api.startInferenceOAuth).not.toHaveBeenCalled();
-    expect(screen.getByRole("dialog", { name: "Connect inference provider" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Connect Inference Provider" })).toBeInTheDocument();
   });
 
   it("keeps the setup form mounted while switching providers", () => {

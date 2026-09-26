@@ -302,7 +302,7 @@ export function AssistantSetupWizard({
       ) : inferenceModels.length === 0 ? (
         <div className="space-y-3 border border-warning/60 p-4">
           <div>
-            <p className="text-sm font-semibold text-warning">Gateway Inference needs setup</p>
+            <p className="text-sm font-semibold text-warning-text">Gateway Inference needs setup</p>
             <p className="mt-1 text-sm text-muted-foreground">
               Connect a provider and make at least one model available before AI Workspace can use
               Gateway Inference.
@@ -310,7 +310,7 @@ export function AssistantSetupWizard({
           </div>
           <button
             type="button"
-            className="flex items-center gap-1 text-sm font-medium text-warning hover:underline"
+            className="flex items-center gap-1 text-sm font-medium text-warning-text hover:underline"
             onClick={onNeedInference}
           >
             Configure Gateway Inference

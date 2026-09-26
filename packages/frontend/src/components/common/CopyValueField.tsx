@@ -40,7 +40,7 @@ export function CopyValueField({
           <CopyButton
             value={copyValue}
             label={label}
-            className="border-l border-input"
+            className="border-l border-border"
             iconClassName="h-3.5 w-3.5"
           />
         )}
