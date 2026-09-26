@@ -1130,7 +1130,7 @@ export function ProxyHostDetail({
                   disabled={!maintenanceActionAvailable}
                   pending={isMaintenanceToggling}
                 >
-                  {isMaintenanceToggling ? null : <Wrench className="h-4 w-4" />}
+                  <Wrench className="h-4 w-4" />
                   {host.maintenanceEnabled ? "Disable Maintenance" : "Enable Maintenance"}
                 </Button>
               )}
@@ -1140,13 +1140,13 @@ export function ProxyHostDetail({
                   onClick={handleCreateMaintenanceAccessCode}
                   pending={isCreatingMaintenanceAccessCode}
                 >
-                  {isCreatingMaintenanceAccessCode ? null : <KeyRound className="h-4 w-4" />}
+                  <KeyRound className="h-4 w-4" />
                   Create Maintenance Access Code
                 </Button>
               )}
               {canResyncTls && (
                 <Button variant="outline" onClick={handleTlsResync} pending={isTlsResyncing}>
-                  {isTlsResyncing ? null : <RefreshCw className="h-4 w-4" />}
+                  <RefreshCw className="h-4 w-4" />
                   Retry TLS Sync
                 </Button>
               )}

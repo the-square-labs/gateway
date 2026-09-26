@@ -94,7 +94,7 @@ describe("SiemDeliveryLogTab", () => {
     });
     const dialog = screen.getByRole("dialog");
     expect(dialog).toHaveClass("sm:max-w-3xl");
-    expect(within(dialog).getByText("Status").parentElement).toHaveClass("rounded-md", "border");
+    expect(within(dialog).getByText("Status").closest('[data-slot="value-tile"]')).not.toBeNull();
     expect(within(dialog).getByText("Exported event").closest(".border")).toHaveClass("bg-card");
     expect(within(dialog).getByRole("button", { name: "Requeue delivery" })).toBeInTheDocument();
     expect(screen.queryByText("collector-secret-response")).not.toBeInTheDocument();

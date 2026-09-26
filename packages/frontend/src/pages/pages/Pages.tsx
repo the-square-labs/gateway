@@ -2,6 +2,7 @@ import { FolderPlus, Globe2, Plus, Settings } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import {
   CreateFolderSelect,
   getCreateFolderChoices,
@@ -30,7 +31,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { api } from "@/services/api";
@@ -308,7 +308,7 @@ export function Pages() {
 
   return (
     <PageTransition>
-      {loading && <Skeleton />}
+      <ContentLoading loading={loading} />
       <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3">

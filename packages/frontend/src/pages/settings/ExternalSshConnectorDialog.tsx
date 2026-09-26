@@ -3,6 +3,7 @@ import { ArrowLeft, KeyRound, Plus, Server, ShieldCheck } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -23,7 +24,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { ExternalSshConnector, ExternalSshConnectorRequest } from "@/types/integrations";
 
@@ -548,7 +548,7 @@ export function ExternalSshConnectorDialog({
             }
             pending={checking}
           >
-            {checking ? null : <KeyRound />}
+            <KeyRound />
             Check host key
           </Button>
         )}
@@ -637,7 +637,7 @@ export function ExternalSshConnectorDialog({
         </DialogHeader>
 
         <AnimatedHeight>
-          {connectorsLoading ? <Skeleton /> : null}
+          <ContentLoading loading={connectorsLoading} />
           <AnimatePresence initial={false} mode="popLayout">
             <motion.div key={generatedPublicKey ? "generated-key" : step} {...STEP_ANIMATION}>
               {generatedPublicKey ? (
@@ -752,7 +752,7 @@ export function ExternalSshConnectorDialog({
                   disabled={!jumpForm.hostFingerprint.trim()}
                   pending={saving === "jump"}
                 >
-                  {saving === "jump" ? null : <KeyRound />}
+                  <KeyRound />
                   Create jump and verify target
                 </Button>
               ) : (
@@ -761,7 +761,7 @@ export function ExternalSshConnectorDialog({
                   disabled={!form.hostFingerprint.trim()}
                   pending={saving === "target"}
                 >
-                  {saving === "target" ? null : <KeyRound />}
+                  <KeyRound />
                   Create connector
                 </Button>
               )}

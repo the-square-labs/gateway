@@ -3,6 +3,7 @@ import { ArrowLeft, Check, KeyRound, Network, RefreshCw, Server, Settings2 } fro
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -15,7 +16,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { AnimatedHeight, STEP_ANIMATION } from "@/pages/notifications/template-editor";
@@ -450,8 +450,9 @@ export function HostingConnectorDialog({
             Step {step} of {steps.length} — {steps[step - 1]}
           </DialogDescription>
         </DialogHeader>
+        {/* One body child either way, so the dialog body keeps its layout. */}
         {loading ? (
-          <Skeleton />
+          <ContentLoading loading />
         ) : (
           <AnimatedHeight>
             <AnimatePresence initial={false} mode="wait">

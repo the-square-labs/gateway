@@ -15,6 +15,16 @@ export function registerAuthContextReset(callback: AuthContextResetCallback) {
   authContextResetCallback = callback;
 }
 
+/**
+ * Identifies what the signed-in person may see for UI that must restart when it changes: the
+ * page outlet and stale-response checks. It changes when the user changes or a grant is lost, but
+ * not when live scopes only widen, so a folder grant resolving a new resource never remounts the
+ * page the person is looking at.
+ */
+export function accessContextKey(state: { user: User | null; accessEpoch: number }): string {
+  return state.user ? `${state.user.id}:${state.accessEpoch}` : "anonymous";
+}
+
 export function authContextKey(user: User | null): string {
   if (!user) return "anonymous";
   return `${user.id}:${[...user.scopes].sort().join(",")}:${user.isBlocked ? "blocked" : "active"}`;
@@ -48,6 +58,8 @@ interface AuthState {
   user: User | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  /** Bumped when the user changes or loses a grant; see accessContextKey. */
+  accessEpoch: number;
 
   setUser: (user: User | null) => void;
   /** Apply live effective scopes pushed by the events socket (`{ type: "permissions" }`). */
@@ -64,6 +76,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   user: null,
   isAuthenticated: false,
   isLoading: true,
+  accessEpoch: 0,
 
   setUser: (user) => {
     const currentUser = get().user;
@@ -84,9 +97,15 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       setStoredAuthContextKey(nextKey);
       if (user.aiApprovalMode) useUIStore.getState().hydrateAIApprovalMode(user.aiApprovalMode);
     }
+    const accessChanged =
+      !user ||
+      !currentUser ||
+      currentUser.id !== user.id ||
+      authContextKey(currentUser) !== authContextKey(user);
     set({
       user,
       isAuthenticated: !!user,
+      accessEpoch: accessChanged ? get().accessEpoch + 1 : get().accessEpoch,
     });
   },
 
@@ -125,6 +144,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
       user,
       isAuthenticated: true,
       isLoading: false,
+      accessEpoch: get().accessEpoch + 1,
     });
   },
 

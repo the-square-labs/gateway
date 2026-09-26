@@ -777,7 +777,7 @@ export function SSLCertificates() {
               )}
               {canCreateCertificate && (
                 <Button onClick={() => void openCreateCertificate()} pending={isCheckingDomains}>
-                  {isCheckingDomains ? null : <Plus className="h-4 w-4" />}
+                  <Plus className="h-4 w-4" />
                   Add Certificate
                 </Button>
               )}

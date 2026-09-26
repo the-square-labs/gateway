@@ -748,7 +748,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 Boolean(status?.blockers?.length)
               }
             >
-              {poolAction === "rebalance" ? null : <RefreshCw className="h-4 w-4" />}
+              <RefreshCw className="h-4 w-4" />
               Rebalance
             </Button>
           </>
@@ -804,7 +804,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 onClick={() => void handleAbandonUpdate()}
                 pending={abandoningUpdate}
               >
-                {abandoningUpdate ? null : <Ban className="h-4 w-4" />}
+                <Ban className="h-4 w-4" />
                 Abandon update
               </Button>
             )}
@@ -1003,7 +1003,7 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
         description="Persisted Gateway settings distributed to the relay data plane"
         actions={
           <Button onClick={save} pending={saving} disabled={!canEdit || !hasChanges}>
-            {saving ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         }

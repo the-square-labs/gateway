@@ -34,7 +34,7 @@ import {
 import { formatDateTime } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import type {
   HostingOperation,
   HostingSnapshotAction,
@@ -156,7 +156,7 @@ export function NodeSnapshotsTab({
   mutationLocked?: boolean;
   onOperationChange?: (operation: Pick<HostingOperation, "action" | "phase"> | null) => void;
 }) {
-  const authKey = useAuthStore((state) => authContextKey(state.user));
+  const authKey = useAuthStore(accessContextKey);
   const [view, setView] = useState<HostingSnapshotsView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -198,7 +198,7 @@ export function NodeSnapshotsTab({
       if (
         current !== generation.current ||
         beforeEvents !== eventGeneration.current ||
-        authKey !== authContextKey(useAuthStore.getState().user)
+        authKey !== accessContextKey(useAuthStore.getState())
       )
         return;
       if (next.resourceId !== resourceId)
@@ -278,7 +278,7 @@ export function NodeSnapshotsTab({
     resourceId ? "hosting.snapshot.changed" : null,
     (payload) => {
       const event = payload as Partial<HostingSnapshotChangedEvent>;
-      const currentAuthKey = authContextKey(useAuthStore.getState().user);
+      const currentAuthKey = accessContextKey(useAuthStore.getState());
       if (
         currentAuthKey !== authKey ||
         event.resourceId !== resourceId ||
@@ -395,7 +395,7 @@ export function NodeSnapshotsTab({
       mounted.current &&
       context.current.resourceId === resourceId &&
       context.current.authKey === authKey &&
-      authContextKey(useAuthStore.getState().user) === authKey &&
+      accessContextKey(useAuthStore.getState()) === authKey &&
       (restoreSubmitted || !context.current.mutationLocked);
     sending.current = true;
     setBusy(true);

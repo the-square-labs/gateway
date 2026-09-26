@@ -195,7 +195,7 @@ function EnvironmentPanel({
               Restore defaults
             </Button>
             <Button onClick={onSave} pending={saving} disabled={!dirty}>
-              {saving ? null : <Save className="h-4 w-4" />}
+              <Save className="h-4 w-4" />
               Save
             </Button>
           </div>

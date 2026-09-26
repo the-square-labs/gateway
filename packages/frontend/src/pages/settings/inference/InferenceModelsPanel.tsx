@@ -268,7 +268,7 @@ export function InferenceModelsPanel({ refreshToken = 0 }: { refreshToken?: numb
                 void remove(model);
               }}
             >
-              {deletingId === model.id ? null : <Trash2 />}
+              <Trash2 />
             </Button>
           </div>
         ) : null,

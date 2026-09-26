@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -12,7 +13,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { HostingAdoptionCandidates } from "@/types/hosting";
 
@@ -110,7 +110,7 @@ export function HostingAdoptDialog({
           </DialogDescription>
         </DialogHeader>
         <PanelShell title="Node association">
-          {open && !candidatesSettled && <Skeleton />}
+          <ContentLoading loading={open && !candidatesSettled} />
           <SettingsControlRow
             title="VM or container"
             description="Discovered resources without a Gateway association."

@@ -96,7 +96,7 @@ export function LicenseStep({
             Continue with Community
           </Button>
           <Button type="submit" pending={busy} disabled={!trimmedKey}>
-            {busy ? null : <KeyRound />}
+            <KeyRound />
             Activate license
           </Button>
         </div>
@@ -282,7 +282,7 @@ export function AdminDetailsStep({
             disabled={!isAdminDraftValid(admin)}
           >
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>
@@ -413,7 +413,7 @@ export function LoggingStep({
             disabled={!isLoggingDraftValid(logging, hasSavedPassword)}
           >
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>
@@ -542,7 +542,7 @@ export function FinishStep({
           Back
         </Button>
         <Button type="button" className="w-max flex-none" onClick={onContinue} pending={busy}>
-          {busy ? null : <Check className="h-4 w-4" />}
+          <Check className="h-4 w-4" />
           Apply configuration
         </Button>
       </div>

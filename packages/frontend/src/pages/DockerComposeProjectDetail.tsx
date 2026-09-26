@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -64,7 +65,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -1095,7 +1095,7 @@ export function DockerComposeProjectDetail() {
           usesInternalScroll ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
-        {!availabilityLoaded && <Skeleton />}
+        <ContentLoading loading={!availabilityLoaded} />
         <PageHeader
           className="shrink-0"
           leading={<PageBackButton onClick={() => navigate(backTarget)} />}
@@ -1276,7 +1276,12 @@ export function DockerComposeProjectDetail() {
                 icon={<History className="h-4 w-4" />}
                 description="The six latest Compose lifecycle operations."
                 actions={
-                  <Button variant="ghost" size="sm" onClick={openActivity}>
+                  <Button
+                    variant="quiet"
+                    size="inline"
+                    className="text-sm font-normal"
+                    onClick={openActivity}
+                  >
                     View all
                   </Button>
                 }

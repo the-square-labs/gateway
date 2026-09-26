@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -369,6 +369,8 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
     </div>
   );
 
+  useContentLoading(loading && !snapshot);
+
   return (
     <PanelShell
       icon={<Code2 className="h-4 w-4" />}
@@ -408,17 +410,7 @@ export function PageRuntimeConfigTab({ projectId }: { projectId: string }) {
         </div>
       </SettingsControlRow>
 
-      {loading && !snapshot ? (
-        <div
-          className="flex min-h-0 flex-1 flex-col gap-3 p-4"
-          aria-label="Loading runtime configuration"
-        >
-          <Skeleton className="h-4 w-1/3" />
-          <Skeleton className="h-4 w-5/6" />
-          <Skeleton className="h-4 w-2/3" />
-          <Skeleton className="h-4 w-4/5" />
-        </div>
-      ) : loadError ? (
+      {loading && !snapshot ? null : loadError ? (
         <p className="flex-1 p-4 text-sm text-destructive" role="alert">
           {loadError}
         </p>

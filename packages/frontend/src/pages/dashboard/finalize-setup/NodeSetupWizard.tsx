@@ -232,7 +232,7 @@ export function NodeSetupWizard({
           </Button>
         ) : !enrollment ? (
           <Button onClick={() => void create()} pending={saving} disabled={!name.trim()}>
-            {saving ? null : <Server />}
+            <Server />
             Create enrollment
           </Button>
         ) : null

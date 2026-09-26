@@ -1,5 +1,5 @@
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PageTransition } from "@/components/common/PageTransition";
-import { Skeleton } from "@/components/ui/skeleton";
 
 interface DetailPageSkeletonProps {
   label: string;
@@ -16,7 +16,7 @@ export function DetailPageSkeleton({ label }: DetailPageSkeletonProps) {
   return (
     <PageTransition>
       <div className="h-full" aria-busy="true" aria-label={label}>
-        <Skeleton />
+        <ContentLoading loading />
       </div>
     </PageTransition>
   );

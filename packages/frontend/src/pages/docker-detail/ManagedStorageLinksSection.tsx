@@ -3,10 +3,10 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useSt
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { api } from "@/services/api";
 import type {
@@ -356,6 +356,8 @@ export const ManagedStorageLinksSection = forwardRef<
     }
   };
 
+  useContentLoading(initialLoading);
+
   return (
     <>
       <PanelShell
@@ -378,7 +380,7 @@ export const ManagedStorageLinksSection = forwardRef<
                 disabled={disabled || loading || !hasChanges}
                 onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
               >
-                {!saving && <RotateCcw className="h-3.5 w-3.5" />}
+                <RotateCcw className="h-3.5 w-3.5" />
                 {recreatesRunningWorkload ? "Save & Recreate" : "Save"}
               </Button>
             )}
@@ -395,9 +397,7 @@ export const ManagedStorageLinksSection = forwardRef<
           </div>
         }
       >
-        {initialLoading ? (
-          <Skeleton />
-        ) : displayBindings.length === 0 ? (
+        {initialLoading ? null : displayBindings.length === 0 ? (
           <EmptyState message="No managed storage links" embedded />
         ) : (
           displayBindings.map((entry) => {

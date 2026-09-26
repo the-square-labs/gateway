@@ -316,7 +316,7 @@ export function SettingsTab({
                 pending={isTlsResyncing}
                 aria-label={`Retry TLS sync for ${host.domainNames[0] || "proxy host"}`}
               >
-                {isTlsResyncing ? null : <RefreshCw />}
+                <RefreshCw />
                 Retry TLS Sync
               </Button>
             ) : null
@@ -402,7 +402,7 @@ export function SettingsTab({
               disabled={!hasTemplateSettingsChanged}
               pending={isSavingTemplate}
             >
-              {isSavingTemplate ? null : <Save />}
+              <Save />
               Save
             </Button>
           ) : null
@@ -512,7 +512,7 @@ export function SettingsTab({
         actions={
           canManage ? (
             <Button onClick={onSaveSsl} disabled={!hasSslSettingsChanged} pending={isSavingSsl}>
-              {isSavingSsl ? null : <Save />}
+              <Save />
               Save
             </Button>
           ) : null
@@ -589,7 +589,7 @@ export function SettingsTab({
                 disabled={!hasHealthCheckSettingsChanged}
                 pending={isSavingHealthCheck}
               >
-                {isSavingHealthCheck ? null : <Save />}
+                <Save />
                 Save
               </Button>
             ) : null
@@ -711,7 +711,7 @@ export function SettingsTab({
                   disabled={!hasHeadersChanged}
                   pending={isSavingCustom}
                 >
-                  {isSavingCustom ? null : <Save />}
+                  <Save />
                   Save
                 </Button>
               </div>
@@ -802,7 +802,7 @@ export function SettingsTab({
                   disabled={!hasRewritesChanged}
                   pending={isSavingCustom}
                 >
-                  {isSavingCustom ? null : <Save />}
+                  <Save />
                   Save
                 </Button>
               </div>

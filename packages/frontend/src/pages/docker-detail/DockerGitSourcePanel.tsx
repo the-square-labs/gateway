@@ -939,13 +939,13 @@ export function DockerGitSourcePanel({
                       : !dockerfilePath.trim() || !contextPath.trim())
                 }
               >
-                {!saving && <Save className="h-4 w-4" />}
+                <Save className="h-4 w-4" />
                 Save
               </Button>
             )}
             {canBuild && (
               <Button onClick={() => void triggerBuild()} pending={building} disabled={dirty}>
-                {!building && <Play className="h-4 w-4" />}
+                <Play className="h-4 w-4" />
                 Build now
               </Button>
             )}
@@ -958,7 +958,7 @@ export function DockerGitSourcePanel({
                 pending={disconnecting}
                 onClick={() => void disconnectSource()}
               >
-                {!disconnecting && <Trash2 className="h-4 w-4" />}
+                <Trash2 className="h-4 w-4" />
               </Button>
             )}
           </div>

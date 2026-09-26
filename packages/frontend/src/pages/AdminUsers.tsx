@@ -16,6 +16,7 @@ import { AdminUserConfigDialog } from "@/components/admin/AdminUserConfigDialog"
 import { UserAdditionalPermissionsDialog } from "@/components/admin/UserAdditionalPermissionsDialog";
 import { groupSelectionLabel, UserGroupSelect } from "@/components/admin/UserGroupSelect";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -50,7 +51,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { canCreateInFolder, scopeMatches } from "@/lib/scope-utils";
@@ -712,7 +712,7 @@ function AdminUsersContent({
             <DialogTitle>Create User</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {destinationFolders === null && <Skeleton />}
+            <ContentLoading loading={destinationFolders === null} />
             {((destinationFolders?.length ?? 0) > 0 || !hasScope("admin:users")) && (
               <div className="space-y-1.5">
                 <label className="text-sm font-medium">Folder</label>
@@ -859,7 +859,7 @@ function AdminUsersContent({
             Restoring an account keeps it blocked. Its old sessions and tokens are not restored.
           </p>
           <div className="border border-border">
-            {!deletedUsersLoaded && <Skeleton />}
+            <ContentLoading loading={!deletedUsersLoaded} />
             <Input
               value={deletedUsersSearch}
               onChange={(event) => setDeletedUsersSearch(event.target.value)}

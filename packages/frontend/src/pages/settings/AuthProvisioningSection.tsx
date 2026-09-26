@@ -526,7 +526,7 @@ export function AuthProvisioningSection({
             pending={isSavingOidc}
             disabled={!canEditIdentityTrust || !oidcHasChanges}
           >
-            {isSavingOidc ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         }
@@ -626,7 +626,7 @@ export function AuthProvisioningSection({
             pending={isSavingLogging}
             disabled={!canEdit || !loggingHasChanges}
           >
-            {isSavingLogging ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         }
@@ -906,7 +906,7 @@ export function AuthProvisioningSection({
             pending={isSavingMfaGracePeriod}
             disabled={!canEdit || !mfaHasChanges || !mfaGracePeriodIsValid}
           >
-            {isSavingMfaGracePeriod ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         }
@@ -968,7 +968,7 @@ export function AuthProvisioningSection({
               pending={isSavingLocalAuth}
               disabled={!canEditIdentityTrust || !smtpHasChanges}
             >
-              {isSavingLocalAuth ? null : <Save className="h-4 w-4" />}
+              <Save className="h-4 w-4" />
               Save
             </Button>
           </div>

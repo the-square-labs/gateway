@@ -16,6 +16,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -32,7 +33,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -661,7 +661,7 @@ export function DockerVolumeDetail({
     <PageTransition>
       <div className="h-full overflow-y-auto p-6">
         <div className="space-y-6">
-          {isLoading || composeOwnerPending ? <Skeleton /> : null}
+          <ContentLoading loading={isLoading || composeOwnerPending} />
           <PageHeader
             leading={<PageBackButton onClick={() => navigate(backTarget)} />}
             title={decodedVolumeName}
@@ -781,7 +781,7 @@ export function DockerVolumeDetail({
             </TabsContent>
             <TabsContent value="settings" className="pb-0">
               <div className="space-y-6">
-                {settingsTabLoading ? <Skeleton /> : null}
+                <ContentLoading loading={settingsTabLoading} />
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
                   <StatCard
                     label="Space"
@@ -885,7 +885,7 @@ export function DockerVolumeDetail({
                         aria-label="Save labels"
                         title="Save labels"
                       >
-                        {!labelsSaving && <Save className="h-3.5 w-3.5" />}
+                        <Save className="h-3.5 w-3.5" />
                       </Button>
                     ) : null
                   }
@@ -898,7 +898,7 @@ export function DockerVolumeDetail({
                     headerBorder={false}
                     actions={
                       <Button onClick={handleExport} pending={exporting} disabled={unavailable}>
-                        {!exporting && <Download className="h-3.5 w-3.5" />}
+                        <Download className="h-3.5 w-3.5" />
                         Export
                       </Button>
                     }

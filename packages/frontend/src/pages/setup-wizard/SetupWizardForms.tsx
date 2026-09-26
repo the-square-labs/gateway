@@ -80,7 +80,7 @@ export function PublicUrlStep({
         />
         <div className="flex justify-center">
           <Button type="submit" pending={busy} disabled={!isPublicUrlValid(publicUrl)}>
-            {busy ? null : <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
             Continue
           </Button>
         </div>
@@ -151,7 +151,7 @@ export function AuthMethodsStep({
           </Button>
           <Button type="submit" className="w-max flex-none" pending={busy} disabled={!canContinue}>
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>
@@ -237,7 +237,7 @@ export function OidcConfigStep({
             disabled={!isOidcDraftValid(oidc, alreadyConfigured)}
           >
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>
@@ -386,7 +386,7 @@ export function SmtpConfigStep({
             disabled={!isSmtpDraftValid(smtp, preset, alreadyConfigured)}
           >
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>

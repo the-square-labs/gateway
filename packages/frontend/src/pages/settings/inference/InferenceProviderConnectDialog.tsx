@@ -466,7 +466,7 @@ export function InferenceProviderConnectDialog({
                         aria-label={`Complete ${authorizationProviderLabel} authorization`}
                         title="Complete authorization"
                       >
-                        {saving ? null : <Check />}
+                        <Check />
                       </Button>
                     </form>
                     {saving && (

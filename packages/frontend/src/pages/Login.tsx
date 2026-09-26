@@ -475,7 +475,7 @@ export function LoginPage({
                     pending={busy}
                     disabled={resetPassword.length < 8}
                   >
-                    {busy ? null : <Save className="h-4 w-4" />}
+                    <Save className="h-4 w-4" />
                     Save new password
                   </Button>
                 </div>
@@ -621,7 +621,7 @@ export function LoginPage({
                     pending={preparingTotp}
                     disabled={busy}
                   >
-                    {preparingTotp ? null : <ShieldCheck className="h-4 w-4" />}
+                    <ShieldCheck className="h-4 w-4" />
                     Set up authenticator app
                   </Button>
                   <Button
@@ -681,7 +681,7 @@ export function LoginPage({
                         pending={busy}
                         disabled={code.length !== 6}
                       >
-                        {busy ? null : <Check />}
+                        <Check />
                         Activate TOTP
                       </Button>
                     </div>
@@ -791,7 +791,7 @@ export function LoginPage({
                   />
                   <Button type="submit" className="shrink-0" pending={busy} disabled={!validEmail}>
                     Continue
-                    {busy ? null : <ArrowRight className="h-4 w-4" />}
+                    <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
                 <div className="flex justify-center">
@@ -830,7 +830,7 @@ export function LoginPage({
                     onChange={(event) => setPassword(event.target.value)}
                   />
                   <Button type="submit" className="shrink-0" pending={busy} disabled={!password}>
-                    {busy ? null : <KeyRound className="h-4 w-4" />}
+                    <KeyRound className="h-4 w-4" />
                     Sign in
                   </Button>
                 </div>

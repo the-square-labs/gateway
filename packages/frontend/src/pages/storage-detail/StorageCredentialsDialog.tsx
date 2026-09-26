@@ -1,13 +1,13 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { DownloadButton } from "@/components/common/DownloadButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import type { ManagedObjectStorageCaCertificate, ManagedStorageEngine } from "@/types";
@@ -244,9 +244,8 @@ export function StorageCredentialsDialog({
           <DialogTitle>Managed Storage Credentials</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {open && (loading || !settled) ? (
-            <Skeleton />
-          ) : error ? (
+          <ContentLoading loading={open && (loading || !settled)} />
+          {open && (loading || !settled) ? null : error ? (
             <div className="border border-destructive/50 bg-destructive/5 p-6 text-sm text-destructive">
               {error}
             </div>

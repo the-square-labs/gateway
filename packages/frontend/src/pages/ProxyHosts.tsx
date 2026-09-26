@@ -615,7 +615,7 @@ export function ProxyHosts({
               )}
               {canCreateProxyHost && (
                 <Button onClick={() => void openCreateProxyHost()} pending={checkingCreateNodes}>
-                  {checkingCreateNodes ? null : <Plus className="h-4 w-4" />}
+                  <Plus className="h-4 w-4" />
                   Add Route
                 </Button>
               )}

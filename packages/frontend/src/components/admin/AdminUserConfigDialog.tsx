@@ -301,7 +301,7 @@ export function AdminUserConfigDialog({
                   pending={isBusy("avatar")}
                   disabled={saving || !user.avatarUrl}
                 >
-                  {isBusy("avatar") ? null : <RotateCcw className="h-4 w-4" />}
+                  <RotateCcw className="h-4 w-4" />
                   Reset avatar
                 </Button>
               </section>
@@ -379,7 +379,7 @@ export function AdminUserConfigDialog({
                     pending={isBusy("password-link")}
                     disabled={saving || passwordLinkCoolingDown}
                   >
-                    {isBusy("password-link") ? null : <Mail />} Send link
+                    <Mail /> Send link
                   </Button>
                 </section>
               )}
@@ -414,7 +414,7 @@ export function AdminUserConfigDialog({
                     pending={isBusy("mfa")}
                     disabled={saving}
                   >
-                    {isBusy("mfa") ? null : <ShieldAlert />} Reset MFA
+                    <ShieldAlert /> Reset MFA
                   </Button>
                 </section>
               )}
@@ -455,7 +455,7 @@ export function AdminUserConfigDialog({
                   pending={isBusy("delete")}
                   disabled={saving}
                 >
-                  {isBusy("delete") ? null : <Trash2 />}
+                  <Trash2 />
                   Delete user
                 </Button>
               </section>
@@ -490,6 +490,7 @@ export function AdminUserConfigDialog({
                   </div>
                   <Button
                     variant="outline"
+                    size="sm"
                     onClick={() => revokeSession(session.id)}
                     pending={isBusy(`session:${session.id}`)}
                     disabled={saving}

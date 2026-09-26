@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { HostingNodeWizard } from "@/components/nodes/HostingNodeWizard";
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -400,7 +400,7 @@ export function NodeEnrollmentDialog({
                     {effectiveMode === "external" ? (
                       <div className="space-y-4">
                         {/* The folder list loads when the dialog opens. */}
-                        {foldersLoading && <Skeleton />}
+                        <ContentLoading loading={foldersLoading} />
                         <div className="space-y-1.5">
                           <label className="text-sm font-medium">Node Type</label>
                           <Select

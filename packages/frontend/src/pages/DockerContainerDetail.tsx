@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -57,7 +58,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -1624,7 +1624,7 @@ export function DockerContainerDetail({
           isTerminalTab ? "overflow-hidden" : "overflow-y-auto"
         }`}
       >
-        {headerDataLoading && <Skeleton />}
+        <ContentLoading loading={headerDataLoading} />
         <PageHeader
           className="shrink-0"
           leading={<PageBackButton onClick={() => navigate(backTarget)} />}
@@ -1717,9 +1717,9 @@ export function DockerContainerDetail({
             </div>
             {(composeProjectId || composeOwnerProjectId) && (
               <Button
-                variant="outline"
-                size="sm"
-                className="shrink-0"
+                variant="quiet"
+                size="inline"
+                className="shrink-0 text-sm text-foreground hover:underline [&_svg]:size-3.5"
                 onClick={() =>
                   navigate(dockerComposeProjectRoute(composeProjectId || composeOwnerProjectId!))
                 }

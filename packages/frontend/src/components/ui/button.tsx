@@ -16,6 +16,8 @@ const buttonVariants = cva(
         secondary: "bg-secondary text-secondary-foreground hover:bg-secondary/80",
         ghost: "hover:bg-accent hover:text-accent-foreground",
         link: "text-[color:var(--color-link)] underline-offset-4 hover:underline",
+        // Text-only action inside a sentence, footer or caption.
+        quiet: "text-muted-foreground hover:text-foreground",
       },
       size: {
         default: "h-9 px-4 py-2",
@@ -26,6 +28,8 @@ const buttonVariants = cva(
         "icon-lg": "h-10 w-10 shrink-0 aspect-square",
         "icon-sm": "h-8 w-8 shrink-0 aspect-square",
         "icon-xs": "h-7 w-7 shrink-0 aspect-square",
+        // No box of its own: sits in running text at the surrounding font size.
+        inline: "h-auto gap-1 p-0 text-[length:inherit]",
       },
     },
     defaultVariants: {

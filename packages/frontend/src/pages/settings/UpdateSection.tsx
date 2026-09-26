@@ -277,7 +277,7 @@ export function UpdateSection({ canUpdate }: UpdateSectionProps) {
         actions={
           canUpdate ? (
             <Button onClick={handleCheckUpdate} pending={isChecking}>
-              {isChecking ? null : <RefreshCw className="h-4 w-4" />}
+              <RefreshCw className="h-4 w-4" />
               Check for updates
             </Button>
           ) : null

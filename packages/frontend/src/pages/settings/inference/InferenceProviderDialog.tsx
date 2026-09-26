@@ -362,7 +362,7 @@ export function InferenceProviderDialog({
               disabled={saving || syncing}
               pending={disconnecting}
             >
-              {disconnecting ? null : <Trash2 />}
+              <Trash2 />
               Disconnect
             </Button>
             <div className="flex flex-col-reverse gap-2 sm:flex-row">
@@ -372,7 +372,7 @@ export function InferenceProviderDialog({
                 disabled={saving || disconnecting}
                 pending={syncing}
               >
-                {syncing ? null : <RefreshCw />}
+                <RefreshCw />
                 Sync now
               </Button>
               <Button

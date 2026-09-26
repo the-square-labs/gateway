@@ -587,7 +587,7 @@ export function AdditionalRoutesPanel({
                         pending={pending}
                         aria-label={`Actions for ${route.path}`}
                       >
-                        {pending ? null : <MoreVertical className="h-4 w-4" />}
+                        <MoreVertical className="h-4 w-4" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
@@ -703,7 +703,7 @@ export function AdditionalRoutesPanel({
               Cancel
             </Button>
             <Button onClick={() => void saveAdvancedConfig()} pending={savingAdvanced}>
-              {savingAdvanced ? null : <Save className="h-4 w-4" />}
+              <Save className="h-4 w-4" />
               Save
             </Button>
           </DialogFooter>
@@ -955,7 +955,7 @@ function AdditionalRouteWizard({
             disabled={!targetValid || Boolean(pathError)}
             pending={saving}
           >
-            {saving ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         </DialogFooter>

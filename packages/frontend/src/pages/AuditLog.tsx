@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { PanelShell } from "@/components/common/PanelShell";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
+import { ValueTile } from "@/components/common/ValueTile";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { DataTable, type DataTableColumn } from "@/components/ui/data-table";
@@ -995,48 +996,31 @@ export function AuditLog({
           {selectedEntry ? (
             <div className="min-w-0 space-y-4 pr-1">
               <div className="grid gap-3 text-sm sm:grid-cols-6">
-                <AuditDetail
-                  className="sm:col-span-2"
-                  label="Action"
-                  value={selectedEntry.action}
-                />
-                <AuditDetail
-                  className="sm:col-span-2"
-                  label="Time"
-                  value={new Date(selectedEntry.createdAt).toLocaleString()}
-                />
-                <AuditDetail
-                  className="sm:col-span-2"
-                  label="Resource Type"
-                  value={selectedEntry.resourceType}
-                />
-                <AuditDetail
-                  className="sm:col-span-3"
-                  label="Resource ID"
-                  value={selectedEntry.resourceId}
-                />
-                <AuditDetail
-                  className="sm:col-span-3"
-                  label="User ID"
-                  value={selectedEntry.userId}
-                />
-                <AuditDetail
-                  className="sm:col-span-3"
-                  label="User"
-                  value={selectedEntry.userName || selectedEntry.userEmail || "System"}
-                />
-                <AuditDetail
-                  className="sm:col-span-3"
-                  label="IP Address"
-                  value={selectedEntry.ipAddress}
-                />
+                <ValueTile className="sm:col-span-2" label="Action">
+                  {selectedEntry.action}
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Time">
+                  {new Date(selectedEntry.createdAt).toLocaleString()}
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Resource Type">
+                  {selectedEntry.resourceType}
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="Resource ID">
+                  {selectedEntry.resourceId}
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="User ID">
+                  {selectedEntry.userId}
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="User">
+                  {selectedEntry.userName || selectedEntry.userEmail || "System"}
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="IP Address">
+                  {selectedEntry.ipAddress}
+                </ValueTile>
                 {selectedEntry.userAgent && (
-                  <AuditDetail
-                    className="sm:col-span-6"
-                    label="User Agent"
-                    value={selectedEntry.userAgent}
-                    wrap
-                  />
+                  <ValueTile className="sm:col-span-6" label="User Agent" wrap>
+                    {selectedEntry.userAgent}
+                  </ValueTile>
                 )}
               </div>
               <div className="border border-border bg-card">
@@ -1055,28 +1039,6 @@ export function AuditLog({
   );
 
   return embedded ? content : <PageTransition>{content}</PageTransition>;
-}
-
-function AuditDetail({
-  label,
-  value,
-  className = "",
-  wrap = false,
-}: {
-  label: string;
-  value?: string | null;
-  className?: string;
-  wrap?: boolean;
-}) {
-  const displayValue = value || "-";
-  return (
-    <div className={`min-w-0 rounded-md border border-border p-3 ${className}`}>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className={`font-mono text-xs ${wrap ? "break-all" : "truncate"}`} title={displayValue}>
-        {displayValue}
-      </p>
-    </div>
-  );
 }
 
 function AuditOptionChecklist({

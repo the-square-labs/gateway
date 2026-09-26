@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { api } from "@/services/api";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import type { ResourceFolder, ResourceFolderTreeNode, ResourceFolderType } from "@/types";
 
 type FolderResourceMap<T> = Record<ResourceFolderType, T>;
@@ -115,7 +115,7 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
     savedExpandedFolderIdsByType: initialExpanded,
 
     fetchFolders: async (type) => {
-      const authKey = authContextKey(useAuthStore.getState().user);
+      const authKey = accessContextKey(useAuthStore.getState());
       if (folderAuthKeys[type] !== authKey) {
         folderAuthKeys[type] = authKey;
         set((state) => ({ foldersByType: { ...state.foldersByType, [type]: [] } }));
@@ -132,7 +132,7 @@ export const useResourceFolderStore = create<ResourceFolderState>()((set, get) =
         const folders = await listFolders(type);
         if (
           requestId !== fetchRequestIds[type] ||
-          authKey !== authContextKey(useAuthStore.getState().user)
+          authKey !== accessContextKey(useAuthStore.getState())
         )
           return;
         set((state) => ({

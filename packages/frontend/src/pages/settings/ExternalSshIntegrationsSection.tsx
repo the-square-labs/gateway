@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { cn, formatRelativeDate } from "@/lib/utils";
@@ -131,8 +131,9 @@ export function ExternalSshIntegrationsSection() {
     }
   };
 
-  if (!canView) return null;
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(canView && !initialLoadComplete);
+
+  if (!canView || !initialLoadComplete) return null;
 
   const connectorNames = new Map(connectors.map((connector) => [connector.id, connector.name]));
 
@@ -325,7 +326,7 @@ function SshConnectorRow({
             pending={testing}
             title="Test connector"
           >
-            {testing ? null : <Check className="h-4 w-4" />}
+            <Check className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -338,7 +339,7 @@ function SshConnectorRow({
             pending={syncing}
             title="Sync connector"
           >
-            {syncing ? null : <RefreshCw className="h-4 w-4" />}
+            <RefreshCw className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -350,7 +351,7 @@ function SshConnectorRow({
             pending={deleting}
             title="Delete connector"
           >
-            {deleting ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       ) : null}

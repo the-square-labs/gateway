@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,7 +11,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { api } from "@/services/api";
 import type { DatabaseConnection } from "@/types";
 import { type ManagedDatabaseCapacity, managedDatabaseCapacity } from "./managed-database-capacity";
@@ -91,7 +91,7 @@ export function ResizeManagedDatabaseDialog({
           <DialogTitle>Resize database</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {open && !capacityLoaded && <Skeleton />}
+          <ContentLoading loading={open && !capacityLoaded} />
           <DialogDescription>
             Database storage can only be increased. This change expands the managed storage image
             without recreating the database.

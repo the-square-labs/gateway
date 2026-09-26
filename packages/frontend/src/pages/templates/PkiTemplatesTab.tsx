@@ -2,6 +2,7 @@ import { FileText, MoreVertical, Pencil, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -22,7 +23,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -378,9 +378,8 @@ export function PkiTemplatesTab({
         )}
 
         {/* Template grid */}
-        {initialLoading && templates.length === 0 ? (
-          <Skeleton />
-        ) : templates.length > 0 ? (
+        <ContentLoading loading={initialLoading && templates.length === 0} />
+        {initialLoading && templates.length === 0 ? null : templates.length > 0 ? (
           <div className="border border-border bg-card">
             <SimpleTable
               columns={templateColumns}

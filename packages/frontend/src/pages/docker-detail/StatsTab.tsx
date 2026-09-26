@@ -9,8 +9,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { GpuMonitoringSection } from "@/components/docker/GpuMonitoringSection";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { api } from "@/services/api";
 import { hasGpuMetric, hasGpuMonitoringMetrics, type NodeGpuDevice } from "@/types";
@@ -406,6 +406,7 @@ export function StatsTab({
   const memoryAvailable = hasMemoryStats(current);
   const sharedGpuDevices = attachedGpuDevices(data, gpuDevices);
   const initialStatsPending = !showProcesses && statsBootstrapLoading && current === null;
+  useContentLoading(initialStatsPending || (showProcesses && processStatus === "loading"));
 
   // Filter out TTY column from process list
   const ttIdx = processes?.Titles?.findIndex((t) => t === "TTY" || t === "TT") ?? -1;
@@ -415,7 +416,6 @@ export function StatsTab({
 
   return (
     <div className={`space-y-6 ${className}`}>
-      {(initialStatsPending || (showProcesses && processStatus === "loading")) && <Skeleton />}
       {!isRunning && (
         <div className="py-8 text-center text-muted-foreground">
           Container is not running. Start it to see monitoring data.

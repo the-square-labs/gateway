@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { type FolderOption, flattenFolderTree } from "@/components/common/scope-list-helpers";
@@ -15,7 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { createClientUuid } from "@/lib/client-id";
 import { formatHostingAmount } from "@/lib/hosting-money";
 import { nodeTypeLabel } from "@/lib/node-appearance";
@@ -415,7 +415,7 @@ export function HostingNodeWizard({
   const body = (
     <AnimatePresence initial={false} mode="wait">
       <motion.div key={step} {...STEP_ANIMATION} className="space-y-4">
-        {optionsLoading && <Skeleton />}
+        <ContentLoading loading={optionsLoading} />
         {step === "role" && (
           <div className="space-y-4">
             {(folders.length > 0 ||

@@ -294,7 +294,7 @@ export function AvailabilityOperationsPanel({
         title="Operations"
         description="Enable, scaling, failover, rollout, and cleanup history."
         actions={
-          <Button variant="ghost" size="sm" onClick={openAll}>
+          <Button variant="quiet" size="inline" className="text-sm font-normal" onClick={openAll}>
             View all
           </Button>
         }

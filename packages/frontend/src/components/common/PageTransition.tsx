@@ -4,6 +4,7 @@ import {
   ContentLoader,
   InitialPageLoadContext,
   InitialPageReadyContext,
+  RevealedAtContext,
   staggerReveal,
   useRevealGate,
 } from "./reveal-gate";
@@ -23,7 +24,7 @@ export function PageTransition({
   className?: string;
   offsetY?: number;
 }) {
-  const { phase, revealed, register, animateReveal } = useRevealGate();
+  const { phase, revealed, register, animateReveal, revealedAt } = useRevealGate();
   const rootRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
@@ -34,17 +35,19 @@ export function PageTransition({
   return (
     <InitialPageLoadContext.Provider value={register}>
       <InitialPageReadyContext.Provider value={revealed}>
-        <div
-          ref={rootRef}
-          className={cn("relative h-full", className)}
-          style={{ visibility: revealed ? "visible" : "hidden" }}
-          aria-busy={revealed ? undefined : true}
-          data-page-transition=""
-          data-reveal-phase={phase}
-        >
-          {children}
-          {phase === "loading" ? <ContentLoader /> : null}
-        </div>
+        <RevealedAtContext.Provider value={revealedAt}>
+          <div
+            ref={rootRef}
+            className={cn("relative h-full", className)}
+            style={{ visibility: revealed ? "visible" : "hidden" }}
+            aria-busy={revealed ? undefined : true}
+            data-page-transition=""
+            data-reveal-phase={phase}
+          >
+            {children}
+            {phase === "loading" ? <ContentLoader /> : null}
+          </div>
+        </RevealedAtContext.Provider>
       </InitialPageReadyContext.Provider>
     </InitialPageLoadContext.Provider>
   );

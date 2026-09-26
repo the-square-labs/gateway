@@ -12,10 +12,13 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EditableStringList } from "@/components/common/EditableStringList";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,7 +38,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useDeferredDialogState } from "@/hooks/use-deferred-dialog-state";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -388,8 +390,9 @@ function GitConnectorPanel({
     }
   };
 
-  if (!canView) return null;
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(canView && !initialLoadComplete);
+
+  if (!canView || !initialLoadComplete) return null;
 
   return (
     <>
@@ -444,45 +447,25 @@ function GitConnectorPanel({
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-3">
-              {githubOAuthAvailable === null ? <Skeleton /> : null}
-              <Button
-                type="button"
-                variant="outline"
-                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
-                disabled={!githubOAuthAvailable}
-                onClick={() => chooseGitHubMethod("oauth")}
-              >
-                <span className="flex w-full items-center gap-3">
-                  <ShieldCheck className="h-5 w-5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-base font-medium text-foreground">OAuth</span>
-                    <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
-                      Authorize your GitHub account without copying a token into Gateway.
-                    </span>
-                  </span>
+              <ContentLoading loading={githubOAuthAvailable === null} />
+              <ChoiceCard
+                icon={ShieldCheck}
+                title="OAuth"
+                description="Authorize your GitHub account without copying a token into Gateway."
+                trailing={
                   <Badge variant={githubOAuthAvailable ? "secondary" : "outline"}>
                     {githubOAuthAvailable ? "Recommended" : "Unavailable"}
                   </Badge>
-                </span>
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+                }
+                disabled={!githubOAuthAvailable}
+                onClick={() => chooseGitHubMethod("oauth")}
+              />
+              <ChoiceCard
+                icon={KeyRound}
+                title="Personal access token"
+                description="Connect GitHub.com or a GitHub Enterprise instance with a PAT."
                 onClick={() => chooseGitHubMethod("token")}
-              >
-                <span className="flex w-full items-center gap-3">
-                  <KeyRound className="h-5 w-5 shrink-0 text-muted-foreground" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-base font-medium text-foreground">
-                      Personal access token
-                    </span>
-                    <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
-                      Connect GitHub.com or a GitHub Enterprise instance with a PAT.
-                    </span>
-                  </span>
-                </span>
-              </Button>
+              />
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setMethodOpen(false)}>
@@ -888,7 +871,7 @@ function GitConnectorRow({
             pending={testing}
             title="Test connector"
           >
-            {testing ? null : <Check className="h-4 w-4" />}
+            <Check className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -901,7 +884,7 @@ function GitConnectorRow({
             pending={syncing}
             title="Sync connector"
           >
-            {syncing ? null : <RefreshCw className="h-4 w-4" />}
+            <RefreshCw className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -913,7 +896,7 @@ function GitConnectorRow({
             pending={deleting}
             title="Delete connector"
           >
-            {deleting ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       ) : null}

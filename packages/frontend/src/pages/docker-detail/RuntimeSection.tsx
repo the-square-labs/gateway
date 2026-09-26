@@ -104,7 +104,7 @@ export function RuntimeSection({
             pending={liveLoading}
             disabled={applyDisabled || !hasRuntimeChanges || !!runtimeValidationError}
           >
-            {!liveLoading && <Save className="h-3.5 w-3.5" />}
+            <Save className="h-3.5 w-3.5" />
             {appliesLive ? "Apply" : "Save"}
           </Button>
         ) : null

@@ -584,7 +584,7 @@ export function OAuthConsent() {
                 pending={submitting === "deny"}
                 disabled={isSubmitting}
               >
-                {submitting === "deny" ? null : <X className="h-4 w-4" />}
+                <X className="h-4 w-4" />
                 Deny
               </Button>
               <Button
@@ -594,7 +594,7 @@ export function OAuthConsent() {
                   isSubmitting || finalSelectedScopes.length === 0 || hasMissingResourceSelection
                 }
               >
-                {submitting === "approve" ? null : <Check className="h-4 w-4" />}
+                <Check className="h-4 w-4" />
                 Authorize
               </Button>
             </div>

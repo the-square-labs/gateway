@@ -230,7 +230,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               !internalRegistryRetentionValid
             }
           >
-            {hkSaving ? null : <Save className="h-4 w-4" />}
+            <Save className="h-4 w-4" />
             Save
           </Button>
         }
@@ -282,7 +282,7 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
                     hkHasChanges ? "Save housekeeping settings before running cleanup" : undefined
                   }
                 >
-                  {hkRunning ? null : <Play className="h-4 w-4" />}
+                  <Play className="h-4 w-4" />
                   Run Now
                 </Button>
               </div>
@@ -681,8 +681,9 @@ export function HousekeepingSection({ canRun, canConfigure }: HousekeepingSectio
               )}
             </div>
             <Button
-              variant="ghost"
-              size="sm"
+              variant="quiet"
+              size="inline"
+              className="text-sm font-normal"
               onClick={() => void handleViewHistory()}
               pending={hkHistoryLoading}
             >

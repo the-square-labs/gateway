@@ -5,10 +5,10 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsHelpTitle } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -218,10 +218,10 @@ export function WebhookSection(props: WebhookSectionProps) {
     }
   };
 
-  if (!allowWebhook && !allowCleanup) return null;
-
   // The enclosing tab waits for the first answer; there is no separate placeholder.
-  if (loading) return <Skeleton />;
+  useContentLoading((allowWebhook || allowCleanup) && loading);
+
+  if ((!allowWebhook && !allowCleanup) || loading) return null;
 
   const handleToggle = async (enabled: boolean) => {
     if (enabled) {

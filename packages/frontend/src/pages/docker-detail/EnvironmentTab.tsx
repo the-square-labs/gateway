@@ -924,7 +924,7 @@ export function EnvironmentTab({
                     pending={isSaving}
                     disabled={!hasCombinedChanges || hasErrors}
                   >
-                    {!isSaving && <RotateCcw className="h-3.5 w-3.5" />}
+                    <RotateCcw className="h-3.5 w-3.5" />
                     {onSaveServiceEnv
                       ? resolvedServiceSaveLabel
                       : databaseLinkDraft.hasChanges ||

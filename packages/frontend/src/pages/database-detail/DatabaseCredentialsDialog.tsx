@@ -1,11 +1,11 @@
 import { Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { CopyButton } from "@/components/common/CopyButton";
 import { DownloadButton } from "@/components/common/DownloadButton";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import type { DatabaseConnection } from "@/types";
 
 type RevealedCredentials = Record<string, unknown>;
@@ -131,9 +131,8 @@ export function DatabaseCredentialsDialog({
           <DialogTitle>{managed ? "Direct-Access Credentials" : "Stored Credentials"}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {loading ? (
-            <Skeleton />
-          ) : credentials ? (
+          <ContentLoading loading={loading} />
+          {loading ? null : credentials ? (
             <>
               {connectionUri && <CredentialField label="Connection URI" value={connectionUri} />}
               {host && <CredentialField label="Host" value={host} />}

@@ -412,7 +412,7 @@ export function DockerFilePopout() {
             </Button>
             {canSaveFile && !isImage && (
               <Button onClick={handleSave} pending={isSaving} disabled={!hasChanges}>
-                {!isSaving && <Save className="h-3.5 w-3.5" />}
+                <Save className="h-3.5 w-3.5" />
                 Save
               </Button>
             )}

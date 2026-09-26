@@ -2,6 +2,7 @@ import { CornerDownRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CACreateDialog } from "@/components/ca/CACreateDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -20,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
@@ -249,9 +249,8 @@ export function CAs() {
         />
 
         {/* Table */}
-        {initialLoading && visibleCAs.length === 0 ? (
-          <Skeleton />
-        ) : visibleCAs.length > 0 ? (
+        <ContentLoading loading={initialLoading && visibleCAs.length === 0} />
+        {initialLoading && visibleCAs.length === 0 ? null : visibleCAs.length > 0 ? (
           <div className="min-h-0 shrink overflow-auto border border-border bg-card">
             <SimpleTable
               columns={caColumns}

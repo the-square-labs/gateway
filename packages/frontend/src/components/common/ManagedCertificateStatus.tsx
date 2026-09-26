@@ -130,7 +130,7 @@ export function ManagedCertificateStatus({
           onClick={() => void renew()}
           pending={renewing}
         >
-          {renewing ? null : <RefreshCw />}
+          <RefreshCw />
           {renewLabel}
         </Button>
       )}

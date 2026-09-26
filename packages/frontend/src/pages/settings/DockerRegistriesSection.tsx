@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -289,7 +289,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
               pending={regTesting === r.id}
               onClick={() => handleRegTest(r)}
             >
-              {regTesting === r.id ? null : <Play />}
+              <Play />
               Test
             </Button>
           )}
@@ -301,7 +301,7 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
               pending={regDeleting === r.id}
               onClick={() => handleRegDelete(r)}
             >
-              {regDeleting === r.id ? null : <Trash2 className="h-4 w-4" />}
+              <Trash2 className="h-4 w-4" />
             </Button>
           )}
         </div>
@@ -309,7 +309,8 @@ export function DockerRegistriesSection({ nodesList }: DockerRegistriesSectionPr
     );
   };
 
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   return (
     <>

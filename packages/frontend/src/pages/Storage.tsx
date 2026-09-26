@@ -46,7 +46,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
@@ -57,6 +56,12 @@ import {
 } from "@/lib/managed-database-nodes";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { storageRoute } from "@/lib/resource-routes";
+import {
+  estimateMoreTagsWidth,
+  estimateResourceTagWidth,
+  parseResourceTag,
+  resourceTagBadgeProps,
+} from "@/lib/resource-tags";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -71,12 +76,6 @@ import type {
   ObjectStorageConnection,
   ObjectStorageProvider,
 } from "@/types";
-import {
-  estimateMoreTagsWidth,
-  estimateResourceTagWidth,
-  parseResourceTag,
-  resourceTagBadgeProps,
-} from "./database-detail/resource-tags";
 import {
   canDeployManagedStorage,
   type ManagedStorageCapacity,
@@ -1012,7 +1011,7 @@ function StorageContent() {
               Connect an existing S3-compatible, FTP, FTPS, or SFTP endpoint.
             </DialogDescription>
           </DialogHeader>
-          {foldersLoading && <Skeleton />}
+          <ContentLoading loading={foldersLoading} />
           <SettingsControlRow title="Folder" description="Organization folder">
             <CreateFolderSelect
               choices={connectionFolderChoices}
@@ -1060,7 +1059,7 @@ function StorageContent() {
             </DialogDescription>
           </DialogHeader>
           <AnimatedHeight>
-            {foldersLoading && <Skeleton />}
+            <ContentLoading loading={foldersLoading} />
             {managedCreateStep === 1 && (
               <div className="mb-4 space-y-1.5">
                 <label className="text-sm font-medium" htmlFor="managed-storage-folder">
@@ -1159,4 +1158,5 @@ function StorageContent() {
   );
 }
 
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

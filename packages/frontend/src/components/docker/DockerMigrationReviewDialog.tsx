@@ -326,19 +326,19 @@ export function DockerMigrationReviewDialog({
           ) : null}
           {migration?.status === "cleanup_pending" ? (
             <Button variant="outline" onClick={onRetryCleanup} pending={loading}>
-              {!loading && <RotateCcw className="h-4 w-4" />}
+              <RotateCcw className="h-4 w-4" />
               Retry cleanup
             </Button>
           ) : null}
           {migration?.status === "needs_attention" && onResolve ? (
             <Button variant="outline" onClick={onResolve} pending={loading}>
-              {!loading && <ShieldCheck className="h-4 w-4" />}
+              <ShieldCheck className="h-4 w-4" />
               Resolve
             </Button>
           ) : null}
           {!migration && preflight ? (
             <Button onClick={onStart} pending={loading} disabled={preflight.blockers.length > 0}>
-              {!loading && <Truck className="h-4 w-4" />}
+              <Truck className="h-4 w-4" />
               Start migration
             </Button>
           ) : null}

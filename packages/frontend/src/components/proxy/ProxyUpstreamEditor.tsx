@@ -765,7 +765,7 @@ export function ProxyUpstreamPanel({
             disabled={!changed || !isProxyUpstreamValid(selection) || !relaySpreadValid}
             pending={saving}
           >
-            {saving ? null : <Save />}
+            <Save />
             Save
           </Button>
         ) : null

@@ -226,4 +226,64 @@ describe("PageTransition", () => {
       expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
     });
   });
+
+  describe("entrance animation", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+      delete (HTMLElement.prototype as { animate?: unknown }).animate;
+    });
+
+    function recordAnimations() {
+      const animated: string[] = [];
+      (HTMLElement.prototype as { animate?: unknown }).animate = function (this: HTMLElement) {
+        animated.push(this.textContent ?? "");
+        return {} as Animation;
+      };
+      return animated;
+    }
+
+    it("does not replay a tab panel's entrance right after the page appeared", async () => {
+      vi.useFakeTimers();
+      const animated = recordAnimations();
+      const page = (tabLoading: boolean) => (
+        <PageTransition>
+          <h1>Header</h1>
+          <PageTransition>{tabLoading ? <Skeleton /> : <p>Tab body</p>}</PageTransition>
+        </PageTransition>
+      );
+      const { rerender } = render(
+        <PageTransition>
+          <h1>Header</h1>
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      rerender(page(true));
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      rerender(page(false));
+      await act(() => vi.advanceTimersByTimeAsync(200));
+      expect(animated.filter((text) => text.includes("Tab body"))).toHaveLength(0);
+    });
+
+    it("does not animate a page again when it remounts at the same address", async () => {
+      vi.useFakeTimers();
+      const animated = recordAnimations();
+      const { rerender } = render(
+        <PageTransition key="a">
+          <h1>Routes</h1>
+          <p>List</p>
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      const first = animated.length;
+      expect(first).toBeGreaterThan(0);
+      rerender(
+        <PageTransition key="b">
+          <h1>Routes</h1>
+          <p>List</p>
+        </PageTransition>
+      );
+      await act(() => vi.advanceTimersByTimeAsync(10));
+      expect(animated.length).toBe(first);
+    });
+  });
 });

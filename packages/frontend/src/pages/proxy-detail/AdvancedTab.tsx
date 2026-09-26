@@ -38,7 +38,7 @@ export function AdvancedTab({
               Validate
             </Button>
             <Button onClick={onSaveAdvanced} pending={isSavingAdvanced}>
-              {isSavingAdvanced ? null : <Save className="h-4 w-4" />}
+              <Save className="h-4 w-4" />
               Save
             </Button>
           </div>

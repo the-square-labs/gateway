@@ -124,7 +124,7 @@ export function SetupNetworkStep({
           </Button>
           <Button type="submit" className="w-max flex-none" pending={busy} disabled={!canContinue}>
             Continue
-            {!busy && <ArrowRight className="h-4 w-4" />}
+            <ArrowRight className="h-4 w-4" />
           </Button>
         </div>
       </form>

@@ -14,7 +14,7 @@ export function SaveSettingsButton({
 }) {
   return (
     <Button onClick={onClick} disabled={disabled} pending={pending}>
-      {pending ? null : <Save className="h-4 w-4" />}
+      <Save className="h-4 w-4" />
       Save
     </Button>
   );

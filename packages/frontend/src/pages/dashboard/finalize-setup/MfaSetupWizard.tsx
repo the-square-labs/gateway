@@ -3,6 +3,7 @@ import { Check, KeyRound, ShieldCheck, Smartphone } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { CopyButton } from "@/components/common/CopyButton";
 import { CopyValueField } from "@/components/common/CopyValueField";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,6 @@ import { Input } from "@/components/ui/input";
 import { api } from "@/services/api";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
-import { SetupChoiceButton } from "./SetupChoiceButton";
 
 type MfaScreen = "method" | "totp" | "recovery" | "complete";
 type MfaSetupMode = "onboarding" | "standalone";
@@ -129,7 +129,7 @@ export function MfaSetupWizard({
       footer={
         screen === "totp" ? (
           <Button onClick={() => void confirmTotp()} pending={saving} disabled={code.length !== 6}>
-            {saving ? null : <Check />}
+            <Check />
             Activate TOTP
           </Button>
         ) : screen === "recovery" ? (
@@ -152,7 +152,7 @@ export function MfaSetupWizard({
     >
       {screen === "method" ? (
         <div className="space-y-3">
-          <SetupChoiceButton
+          <ChoiceCard
             icon={KeyRound}
             title="Add a passkey"
             description="Use this device, a password manager, or a security key."
@@ -160,7 +160,7 @@ export function MfaSetupWizard({
             disabled={saving}
             onClick={() => void registerPasskey()}
           />
-          <SetupChoiceButton
+          <ChoiceCard
             icon={Smartphone}
             title="Authenticator app"
             description="Scan a QR code with any compatible TOTP app."

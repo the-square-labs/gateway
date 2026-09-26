@@ -5,6 +5,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { OneTimeTokenDialog } from "@/components/common/OneTimeTokenDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -116,6 +116,8 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
     }
   };
 
+  useContentLoading(initialLoading);
+
   return (
     <div className="flex flex-col gap-4">
       <PanelShell
@@ -131,9 +133,7 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
           ) : undefined
         }
       >
-        {initialLoading ? (
-          <DeployTokenRowsSkeleton />
-        ) : tokens.length === 0 ? (
+        {initialLoading ? null : tokens.length === 0 ? (
           <EmptyState
             message="No deploy tokens have been created."
             {...(canManage ? { actionLabel: "Create one", onAction: openCreate } : {})}
@@ -261,25 +261,6 @@ export function PageTokensTab({ projectId }: { projectId: string }) {
         tokenLabel="Deploy token"
         onClosed={() => setCreatedToken(null)}
       />
-    </div>
-  );
-}
-
-function DeployTokenRowsSkeleton() {
-  return (
-    <div className="divide-y divide-border" aria-label="Loading deploy tokens">
-      {Array.from({ length: 3 }, (_, index) => (
-        <div key={index} className="flex items-center justify-between gap-3 p-4 sm:gap-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <Skeleton className="h-10 w-10 shrink-0" />
-            <div className="space-y-2">
-              <Skeleton className="h-4 w-36" />
-              <Skeleton className="h-3 w-56 max-w-[60vw]" />
-            </div>
-          </div>
-          <Skeleton className="h-9 w-9 shrink-0" />
-        </div>
-      ))}
     </div>
   );
 }

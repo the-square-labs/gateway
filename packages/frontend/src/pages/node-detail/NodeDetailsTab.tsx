@@ -19,7 +19,7 @@ import { dockerNodeListRoute, proxyHostRoute } from "@/lib/resource-routes";
 import { deriveAllowedResourceIdsByScope, scopeMatches } from "@/lib/scope-utils";
 import { cn, formatBytes, formatUptime } from "@/lib/utils";
 import { api } from "@/services/api";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { handleLicenseApiError, requireLicenseFeature } from "@/stores/license-paywall";
 import {
   type DockerRuntimeStatus,
@@ -106,7 +106,7 @@ export function NodeDetailsTab({
     node.type === "nginx" && node.status === "online" && node.isConnected
   );
   const user = useAuthStore((state) => state.user);
-  const authKey = authContextKey(user);
+  const authKey = accessContextKey(useAuthStore.getState());
   const dockerResources = useMemo(() => {
     const scopes = user?.scopes ?? [];
     const allowed = deriveAllowedResourceIdsByScope(scopes);
@@ -147,7 +147,7 @@ export function NodeDetailsTab({
                 generation !== dockerReadGeneration.current ||
                 request !== dockerCountRequests.current[resource.tab] ||
                 dockerCountIdentity.current.nodeId !== node.id ||
-                authKey !== authContextKey(useAuthStore.getState().user)
+                authKey !== accessContextKey(useAuthStore.getState())
               )
                 return;
               const total =
@@ -462,7 +462,7 @@ export function NodeDetailsTab({
                   : "Daemon update requires a connected compatible node"
               }
             >
-              {isUpdating ? null : <ArrowUpCircle />}
+              <ArrowUpCircle />
               Update to {daemonUpdate.latestVersion}
             </Button>
           }

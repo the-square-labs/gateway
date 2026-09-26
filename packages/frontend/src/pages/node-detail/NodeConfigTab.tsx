@@ -129,7 +129,7 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
             pending={isTesting}
             disabled={loading || isSaving || actionLocked}
           >
-            {isTesting ? null : <RefreshCw />}
+            <RefreshCw />
             Validate
           </Button>
           {canManage && (
@@ -138,7 +138,7 @@ export function NodeConfigTab({ nodeId, nodeStatus, actionLocked = false }: Node
               pending={isSaving}
               disabled={loading || isTesting || !hasChanges || actionLocked}
             >
-              {isSaving ? null : <Save />}
+              <Save />
               Save
             </Button>
           )}

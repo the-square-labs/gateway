@@ -4,10 +4,11 @@ import { Button, type ButtonProps } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 /**
- * A full-width choice in the setup checklist and wizards: an icon, a title,
- * a description and an optional status on the right.
+ * A full-width choice: an icon, a title, a description and an optional
+ * trailing element (a status badge or an arrow). Used by the setup checklist,
+ * the setup wizards and choice dialogs.
  */
-export function SetupChoiceButton({
+export function ChoiceCard({
   icon: Icon,
   title,
   description,

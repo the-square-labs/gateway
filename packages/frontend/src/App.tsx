@@ -93,7 +93,7 @@ import {
   syncGatewayOperationStatus,
   useAppStatusStore,
 } from "@/stores/app-status";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useDashboardBootstrapStore } from "@/stores/dashboard-bootstrap";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
@@ -895,7 +895,7 @@ function AdministrationPageGuard() {
 export function RealtimeBridge() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const user = useAuthStore((s) => s.user);
-  const preferenceContextKey = authContextKey(user);
+  const preferenceContextKey = accessContextKey(useAuthStore.getState());
   const setUser = useAuthStore((s) => s.setUser);
   const logout = useAuthStore((s) => s.logout);
   const canListNodes = useAuthStore((s) => s.hasScopedAccess("nodes:details"));
@@ -1024,7 +1024,7 @@ export function RealtimeBridge() {
     if (!user?.id) return;
     let cancelled = false;
     const isCurrentContext = () =>
-      !cancelled && authContextKey(useAuthStore.getState().user) === preferenceContextKey;
+      !cancelled && accessContextKey(useAuthStore.getState()) === preferenceContextKey;
     if (!useUIStore.getState().interfacePreferenceLoaded) beginInterfacePreferenceLoad();
     void api
       .getUserPreferences()

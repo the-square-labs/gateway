@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { InterfaceChoiceDialog } from "@/components/ai/InterfaceChoiceDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -28,7 +29,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
 import { hostingNodeLabel } from "@/lib/hosting-status";
@@ -37,7 +37,7 @@ import { confirmAndDeleteNode } from "@/lib/remove-node";
 import { nodeRoute } from "@/lib/resource-routes";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useNodesStore } from "@/stores/nodes";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
@@ -76,7 +76,7 @@ function formatDaemonVersion(version: string | null | undefined): string {
 export function AdminNodes() {
   const navigate = useNavigate();
   const { hasScope, hasScopedAccess } = useAuthStore();
-  const authKey = useAuthStore((state) => authContextKey(state.user));
+  const authKey = useAuthStore(accessContextKey);
   const canViewHosting = hasScopedAccess("integrations:hosting:view");
   const [selectedTab, setSelectedTab] = useState("nodes");
   const { nodes, isLoading, filters, total, fetchNodes, setFilters, resetFilters } =
@@ -167,7 +167,7 @@ export function AdminNodes() {
     });
   }, [authKey, canViewHosting, updateHostingAccounts]);
   useEffect(() => {
-    if (authKey !== authContextKey(useAuthStore.getState().user)) return;
+    if (authKey !== accessContextKey(useAuthStore.getState())) return;
     setHostingAccounts([]);
     setHostingBindings({});
     setSelectedTab("nodes");
@@ -324,7 +324,7 @@ export function AdminNodes() {
           const typeStatus = daemonUpdates.find((s) => s.daemonType === daemonType);
           const nodeStatus = typeStatus?.nodes.find((n) => n.nodeId === node.id);
           if (eStatus === "online" && nodeStatus?.updateAvailable && typeStatus?.latestVersion) {
-            return <Badge variant="warning">{typeStatus.latestVersion}</Badge>;
+            return <Badge variant="warning-solid">{typeStatus.latestVersion}</Badge>;
           }
           return <Badge variant={STATUS_BADGE[eStatus] || "secondary"}>{eStatus}</Badge>;
         },
@@ -365,7 +365,7 @@ export function AdminNodes() {
 
   return (
     <PageTransition>
-      {(hostingSettledAuthKey !== authKey || daemonUpdatesLoading) && <Skeleton />}
+      <ContentLoading loading={hostingSettledAuthKey !== authKey || daemonUpdatesLoading} />
       <div className="h-full overflow-y-auto p-6 space-y-4">
         <PageHeader
           leading={<LiteModeBackButton />}

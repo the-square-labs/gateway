@@ -377,7 +377,7 @@ export function SidebarContent({
                       pending={stoppingImpersonation}
                       aria-label="Stop impersonating"
                     >
-                      {stoppingImpersonation ? null : <UserRoundX className="h-4 w-4" />}
+                      <UserRoundX className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent side="right">Stop impersonating</TooltipContent>
@@ -565,7 +565,7 @@ export function SidebarContent({
                     onClick={() => void handleStopImpersonating()}
                     pending={stoppingImpersonation}
                   >
-                    {stoppingImpersonation ? null : <UserRoundX className="h-4 w-4 shrink-0" />}
+                    <UserRoundX className="h-4 w-4 shrink-0" />
                     <span className="truncate">Stop impersonating</span>
                   </Button>
                 </div>

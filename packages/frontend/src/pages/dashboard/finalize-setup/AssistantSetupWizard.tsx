@@ -1,6 +1,7 @@
 import { ArrowRight, Bot, Cpu, ExternalLink, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
@@ -17,7 +18,6 @@ import { useAIStore } from "@/stores/ai";
 import type { InferenceLimitInput } from "@/types/inference";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
-import { SetupChoiceButton } from "./SetupChoiceButton";
 
 export interface AssistantSetupDraft {
   source: "external" | "inference" | null;
@@ -223,7 +223,7 @@ export function AssistantSetupWizard({
               (draft.source === "external" && (!draft.baseUrl.trim() || !draft.apiKey.trim()))
             }
           >
-            {saving ? null : <Bot />}
+            <Bot />
             Save AI Workspace
           </Button>
         ) : null
@@ -239,14 +239,14 @@ export function AssistantSetupWizard({
         </FinalizeSetupCompletion>
       ) : draft.source === null ? (
         <div className="space-y-3">
-          <SetupChoiceButton
+          <ChoiceCard
             icon={ExternalLink}
             title="OAI-compatible provider"
             description="Connect OpenAI or any compatible endpoint with your own API key and model."
             onClick={() => setSource("external")}
           />
           {allowGatewayInference && (
-            <SetupChoiceButton
+            <ChoiceCard
               icon={Cpu}
               title="Gateway Inference"
               description="Use centrally managed providers and models that Gateway makes available."

@@ -1,5 +1,5 @@
 import { ArrowRight, Bot, LayoutDashboard, type LucideIcon } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import {
   Dialog,
   DialogContent,
@@ -65,26 +65,16 @@ export function InterfaceChoiceDialog(props: InterfaceChoiceDialogProps) {
             "AI Workspace is the recommended intent-driven interface for understanding and operating Gateway. Operations Console remains a complete interface and does not depend on AI."}
         </DialogDescription>
         <div className="grid gap-3">
-          {choices.map(({ label, description, icon: Icon, onSelect }) => (
-            <Button
+          {choices.map(({ label, description, icon, onSelect }) => (
+            <ChoiceCard
               key={label}
-              type="button"
-              variant="outline"
-              className="h-auto w-full justify-start whitespace-normal px-4 py-3 text-left"
+              icon={icon}
+              title={label}
+              description={description}
+              trailing={<ArrowRight className="text-muted-foreground" />}
               disabled={busy}
               onClick={onSelect}
-            >
-              <span className="flex w-full items-center gap-3">
-                <Icon className="!h-5 !w-5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1">
-                  <span className="block text-base font-medium text-foreground">{label}</span>
-                  <span className="mt-0.5 block text-sm font-normal text-muted-foreground">
-                    {description}
-                  </span>
-                </span>
-                <ArrowRight className="shrink-0 text-muted-foreground" />
-              </span>
-            </Button>
+            />
           ))}
         </div>
       </DialogContent>

@@ -410,7 +410,7 @@ export function InferenceSetupWizard({
             />
           ) : !inferenceEnabled ? (
             <Button onClick={() => void enable()} pending={saving}>
-              {saving ? null : <Cpu />} Enable Inference
+              <Cpu /> Enable Inference
             </Button>
           ) : sources.length > 0 && !ready ? (
             <Button
@@ -420,11 +420,11 @@ export function InferenceSetupWizard({
                 !selectedSource || (selectedSourceNeedsPricing && !selectedSourceHasPricing)
               }
             >
-              {saving ? null : <Plus />} Add model
+              <Plus /> Add model
             </Button>
           ) : ready ? (
             <Button onClick={() => void completeSetup()} pending={saving}>
-              {saving ? null : <Check />} Complete Inference setup
+              <Check /> Complete Inference setup
             </Button>
           ) : null
         }

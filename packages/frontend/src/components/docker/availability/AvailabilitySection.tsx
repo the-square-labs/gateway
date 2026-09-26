@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow, SettingsInlineControl } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,7 +23,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -398,9 +398,8 @@ export function AvailabilitySection({
     }
   }
 
-  if (loading) {
-    return <Skeleton className="h-48 w-full" />;
-  }
+  useContentLoading(loading);
+  if (loading) return null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -450,7 +449,7 @@ export function AvailabilitySection({
               disabled={!canManage || checking || !dirty}
               onClick={() => void save()}
             >
-              {!saving && <Save />}
+              <Save />
               Save
             </Button>
           </div>

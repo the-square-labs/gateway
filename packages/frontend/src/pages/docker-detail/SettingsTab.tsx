@@ -1012,7 +1012,7 @@ export function SettingsTab({
                   (hasRuntimeChanges && !!runtimeValidationError)
                 }
               >
-                {!recreateLoading && <RotateCcw className="h-3.5 w-3.5" />}
+                <RotateCcw className="h-3.5 w-3.5" />
                 {saveRequiresRecreate ? "Save & Recreate" : "Save"}
               </Button>
             ) : null

@@ -1,7 +1,7 @@
 import type * as React from "react";
 import { Fragment } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { cn } from "@/lib/utils";
 
@@ -65,10 +65,10 @@ export function SimpleTable<TRow>({
   rowRenderer,
 }: SimpleTableProps<TRow>) {
   const initialLoading = useInitialLoading(Boolean(loading));
+  const showLoading = initialLoading && rows.length === 0;
+  useContentLoading(showLoading);
 
-  if (initialLoading && rows.length === 0) {
-    return <Skeleton />;
-  }
+  if (showLoading) return null;
 
   if (rows.length === 0) {
     return <EmptyState message={emptyMessage} embedded />;

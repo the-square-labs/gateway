@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -20,14 +21,13 @@ import { PageTransition } from "@/components/common/PageTransition";
 import { ResponsiveHeaderActions } from "@/components/common/ResponsiveHeaderActions";
 import { Button } from "@/components/ui/button";
 import { RefreshButton } from "@/components/ui/refresh-button";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   canCreateDockerResourceOnNode,
   type DockerNodeScope,
   loadVisibleDockerNodes,
 } from "@/lib/docker-node-access";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useDockerStore } from "@/stores/docker";
 import { requireLicenseFeature } from "@/stores/license-paywall";
 import type { Node as GatewayNode } from "@/types";
@@ -134,7 +134,7 @@ export function Docker() {
               : activeTab === "tasks"
                 ? loading.tasks
                 : false;
-  const nodeSelectionKey = `${authContextKey(user)}:${activeTab}:${requestedNodeId ?? ""}`;
+  const nodeSelectionKey = `${accessContextKey(useAuthStore.getState())}:${activeTab}:${requestedNodeId ?? ""}`;
   const [resolvedNodeSelection, setResolvedNodeSelection] = useState("");
   const [nodeSelectionError, setNodeSelectionError] = useState<string | null>(null);
   const nodeSelectionReady = resolvedNodeSelection === nodeSelectionKey;
@@ -526,7 +526,7 @@ export function Docker() {
   ];
 
   const renderTabContent = (children: ReactNode) => {
-    if (!nodeSelectionReady) return <Skeleton />;
+    if (!nodeSelectionReady) return <ContentLoading loading />;
     if (nodeSelectionError)
       return (
         <EmptyState

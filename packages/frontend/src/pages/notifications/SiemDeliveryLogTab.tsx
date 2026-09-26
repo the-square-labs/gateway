@@ -13,6 +13,7 @@ import {
   ResourceListTable,
 } from "@/components/common/ResourceListLayout";
 import { SearchFilterBar } from "@/components/common/SearchFilterBar";
+import { ValueTile } from "@/components/common/ValueTile";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -426,18 +427,18 @@ export function SiemDeliveryLogTab({
               {/* The dialog opens once the complete event details arrive. */}
               <ContentLoading loading={detailLoading} />
               <div className="grid gap-3 text-sm sm:grid-cols-6">
-                <DeliveryDetail className="sm:col-span-2" label="Status">
+                <ValueTile className="sm:col-span-2" label="Status">
                   <Badge variant={siemDeliveryVariant(detail.status)} size="inline">
                     {detail.status}
                   </Badge>
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-2" label="Destination">
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Destination">
                   {detail.destinationName ?? detail.destinationId}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-2" label="Audit action">
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Audit action">
                   {detail.payload?.data.action ?? detail.action ?? "—"}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-2" label="HTTP">
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="HTTP">
                   {detail.responseStatus ? (
                     <Badge variant={httpStatusVariant(detail.responseStatus)} size="inline">
                       {detail.responseStatus}
@@ -445,19 +446,19 @@ export function SiemDeliveryLogTab({
                   ) : (
                     "—"
                   )}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-2" label="Response time">
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Response time">
                   {detail.responseTimeMs != null ? `${detail.responseTimeMs}ms` : "—"}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-2" label="Attempt">
+                </ValueTile>
+                <ValueTile className="sm:col-span-2" label="Attempt">
                   {detail.attempt}/{detail.maxAttempts}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-3" label="Created">
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="Created">
                   {new Date(detail.createdAt).toLocaleString()}
-                </DeliveryDetail>
-                <DeliveryDetail className="sm:col-span-3" label="Next retry">
+                </ValueTile>
+                <ValueTile className="sm:col-span-3" label="Next retry">
                   {detail.nextRetryAt ? new Date(detail.nextRetryAt).toLocaleString() : "—"}
-                </DeliveryDetail>
+                </ValueTile>
               </div>
               {detail.payload && (
                 <div className="border border-border bg-card">
@@ -487,7 +488,7 @@ export function SiemDeliveryLogTab({
             {canManage && detail.status === "failed" && (
               <DialogFooter>
                 <Button variant="outline" onClick={() => void requeue()} pending={requeueing}>
-                  {requeueing ? null : <RotateCcw />}
+                  <RotateCcw />
                   Requeue delivery
                 </Button>
               </DialogFooter>
@@ -495,27 +496,6 @@ export function SiemDeliveryLogTab({
           </DialogContent>
         </Dialog>
       )}
-    </div>
-  );
-}
-
-function DeliveryDetail({
-  label,
-  children,
-  className = "",
-}: {
-  label: string;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  const textValue = typeof children === "string" ? children : undefined;
-
-  return (
-    <div className={`min-w-0 rounded-md border border-border p-3 ${className}`}>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="truncate font-mono text-xs" title={textValue}>
-        {children}
-      </div>
     </div>
   );
 }

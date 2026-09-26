@@ -161,7 +161,7 @@ export function AgentSkillsPanel() {
                 void remove(skill);
               }}
             >
-              {deletingId === skill.id ? null : <Trash2 className="h-4 w-4" />}
+              <Trash2 className="h-4 w-4" />
             </Button>
           ) : null}
         </div>

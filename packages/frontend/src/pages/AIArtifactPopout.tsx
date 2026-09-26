@@ -9,9 +9,9 @@ import {
 } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Button } from "@/components/ui/button";
 import { CodeEditor } from "@/components/ui/code-editor";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Toaster } from "@/components/ui/sonner";
 import { imageMimeForFile } from "@/lib/file-types";
 
@@ -138,6 +138,7 @@ export function AIArtifactPopout() {
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  useContentLoading(isLoading);
   const [copied, setCopied] = useState(false);
   const [imageTransform, setImageTransform] = useState<ImageTransform>({ scale: 1, x: 0, y: 0 });
   const [isImageDragging, setIsImageDragging] = useState(false);
@@ -378,10 +379,7 @@ export function AIArtifactPopout() {
           className="flex min-h-0 flex-1 flex-col gap-4 p-4"
           aria-busy="true"
           aria-label="Reading artifact"
-        >
-          <Skeleton className="h-5 w-48" />
-          <Skeleton className="min-h-0 flex-1 w-full" />
-        </div>
+        ></div>
       ) : error ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center text-sm text-muted-foreground">
           <p>{error}</p>

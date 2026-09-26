@@ -150,7 +150,7 @@ export function InviteUsersSetupWizard({
             pending={saving}
             disabled={loading || !email.trim() || !name.trim() || !groupId}
           >
-            {saving ? null : <UserPlus />} Invite user
+            <UserPlus /> Invite user
           </Button>
         )
       }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -34,7 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -358,9 +358,8 @@ export function AccessLists() {
         />
 
         {/* Table */}
-        {initialLoading && accessLists.length === 0 ? (
-          <Skeleton />
-        ) : accessLists.length > 0 ? (
+        <ContentLoading loading={initialLoading && accessLists.length === 0} />
+        {initialLoading && accessLists.length === 0 ? null : accessLists.length > 0 ? (
           <div className="border border-border bg-card">
             <SimpleTable
               columns={accessListColumns}

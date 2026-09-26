@@ -1,7 +1,7 @@
 import { ChevronDown } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PanelShell } from "@/components/common/PanelShell";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { api } from "@/services/api";
 import type { InspectData } from "./helpers";
 import { StatsTab } from "./StatsTab";
@@ -171,6 +171,19 @@ export function MultiContainerMonitoring({
     };
   }, [identity]);
 
+  // Keep the initial page-load registration alive across inspect -> stats.
+  // StatsTab mounts after inspect, too late to register with PageTransition itself.
+  const initialLoadPending = instances.some(
+    (instance) =>
+      readyStats[instance.id] !== identity ||
+      !processesById[instance.id] ||
+      processesById[instance.id].status === "loading"
+  );
+  const inspectPending = groups.some((group) =>
+    group.instances.some((instance) => !(instance.data ?? inspectById[instance.id]))
+  );
+  useContentLoading(initialLoadPending || inspectPending);
+
   if (instances.length === 0) {
     return (
       <PanelShell title="Monitoring">
@@ -184,18 +197,8 @@ export function MultiContainerMonitoring({
   const processTitles = instances
     .map((instance) => processesById[instance.id]?.titles)
     .find((titles) => titles && titles.length > 0) ?? ["COMMAND"];
-  // Keep the initial page-load registration alive across inspect -> stats.
-  // StatsTab mounts after inspect, too late to register with PageTransition itself.
-  const initialLoadPending = instances.some(
-    (instance) =>
-      readyStats[instance.id] !== identity ||
-      !processesById[instance.id] ||
-      processesById[instance.id].status === "loading"
-  );
-
   return (
     <div className="space-y-4 pb-6">
-      {initialLoadPending && <Skeleton />}
       {groups.map((group) => (
         <section key={group.id} className="space-y-4">
           {group.title && (
@@ -227,9 +230,7 @@ export function MultiContainerMonitoring({
                       );
                     }}
                   />
-                ) : (
-                  <Skeleton />
-                )}
+                ) : null}
               </div>
             );
           })}

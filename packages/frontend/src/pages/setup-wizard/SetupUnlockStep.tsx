@@ -38,7 +38,7 @@ export function SetupUnlockStep({
         onChange={(event) => setCode(event.target.value)}
       />
       <Button type="submit" className="w-full" pending={busy} disabled={!code.trim()}>
-        {busy ? null : <KeyRound className="h-4 w-4" />}
+        <KeyRound className="h-4 w-4" />
         Start setup
       </Button>
     </form>

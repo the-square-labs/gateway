@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { FolderedResourceList } from "@/components/common/FolderedResourceList";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
@@ -57,7 +58,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
@@ -754,7 +754,9 @@ function AdminGroupsContent({
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {(!scopeListsReady || (!editingGroup && destinationFolders === null)) && <Skeleton />}
+            <ContentLoading
+              loading={!scopeListsReady || (!editingGroup && destinationFolders === null)}
+            />
             {!editingGroup &&
               ((destinationFolders?.length ?? 0) > 0 || !hasScope("admin:groups")) && (
                 <div className="space-y-1.5">

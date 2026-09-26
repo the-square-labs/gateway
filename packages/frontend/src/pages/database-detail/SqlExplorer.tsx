@@ -222,7 +222,7 @@ export function SqlExplorer({
                     pending={saving}
                     disabled={!canSaveChanges}
                   >
-                    {saving ? null : <Save />}
+                    <Save />
                     {`Save${dirtyCount > 0 ? ` (${dirtyCount})` : ""}`}
                   </Button>
                 )}

@@ -444,7 +444,7 @@ export function DomainDetailDialog({
                 }
                 actions={
                   <Button onClick={handleCheckDns} pending={isCheckingDns}>
-                    {isCheckingDns ? null : <RefreshCw />}
+                    <RefreshCw />
                     Check
                   </Button>
                 }
@@ -779,9 +779,7 @@ export function DomainDetailDialog({
               disabled={!ingressMigrationImpact || ingressMigrationDnsBlocked}
               pending={isMigratingIngress || isLoadingIngressMigration}
             >
-              {isMigratingIngress || isLoadingIngressMigration ? null : (
-                <Truck className="h-4 w-4" />
-              )}
+              <Truck className="h-4 w-4" />
               {ingressMigrationImpact?.status === "waiting_dns"
                 ? "Check DNS and complete"
                 : ingressMigrationImpact?.status === "cleanup_pending"

@@ -431,7 +431,7 @@ export function InferenceProvidersPanel({
               aria-label={`Sync ${row.connection.name}`}
               title={`Sync ${row.connection.name}`}
             >
-              {syncingId === row.connection.id ? null : <RefreshCw />}
+              <RefreshCw />
             </Button>
           </div>
         ) : null,

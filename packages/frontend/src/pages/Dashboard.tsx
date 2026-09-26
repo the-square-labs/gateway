@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowUpCircle, Info, RotateCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -13,7 +14,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { formatRelativeDate } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -253,7 +253,7 @@ export function RelayHealthNotice({
                 disabled={relay.canRetry !== true}
                 onClick={onRetry}
               >
-                {retryPending ? null : <RotateCw />}
+                <RotateCw />
                 {retryPending ? "Retrying recovery" : "Retry recovery"}
               </Button>
             </DialogFooter>
@@ -344,7 +344,7 @@ function DashboardSkeleton() {
   return (
     <PageTransition>
       <div className="h-full" aria-busy="true" aria-label="Loading dashboard">
-        <Skeleton />
+        <ContentLoading loading />
       </div>
     </PageTransition>
   );

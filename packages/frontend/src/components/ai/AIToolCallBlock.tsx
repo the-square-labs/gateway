@@ -268,7 +268,12 @@ export function AIToolCallBlock({ toolCall, compactSummary }: AIToolCallBlockPro
                     {toolOutputArtifact.estimatedTokens.toLocaleString()} tokens
                   </div>
                 </div>
-                <Button asChild variant="outline" size="sm">
+                <Button
+                  asChild
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 text-xs [&_svg]:size-3.5"
+                >
                   <a href={toolOutputArtifact.downloadUrl} download>
                     <Download aria-hidden="true" />
                     Download

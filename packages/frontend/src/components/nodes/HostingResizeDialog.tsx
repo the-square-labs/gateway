@@ -24,7 +24,7 @@ import {
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { performHostingAction } from "@/lib/hosting-intents";
 import { formatHostingAmount } from "@/lib/hosting-money";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import type {
   HostingActionInput,
   HostingCatalog,
@@ -83,11 +83,11 @@ export function HostingResizeDialog({
   const submit = async () => {
     if (!resource?.incarnation || sending.current || shrink) return;
     const target = resource;
-    const authKey = authContextKey(useAuthStore.getState().user);
+    const authKey = accessContextKey(useAuthStore.getState());
     const isCurrent = () =>
       currentTarget.current?.id === target.id &&
       currentTarget.current.incarnation === target.incarnation &&
-      authContextKey(useAuthStore.getState().user) === authKey;
+      accessContextKey(useAuthStore.getState()) === authKey;
     const extra: Partial<HostingActionInput> = {};
     if (provider === "proxmox") {
       for (const key of ["cpu", "memoryMb", "diskGb"] as const) {

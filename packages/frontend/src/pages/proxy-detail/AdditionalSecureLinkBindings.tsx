@@ -367,7 +367,7 @@ export function AdditionalSecureLinkBindings({
                       aria-label={`Retry ${binding.name}`}
                       title="Retry"
                     >
-                      {retryingId === binding.id ? null : <RefreshCw className="h-4 w-4" />}
+                      <RefreshCw className="h-4 w-4" />
                     </Button>
                   ) : (
                     <div className="h-9 w-9 border-l border-border" />
@@ -481,7 +481,7 @@ export function AdditionalSecureLinkBindings({
               Cancel
             </Button>
             <Button onClick={provision} disabled={!canProvision} pending={pending}>
-              {pending ? null : <Plus />}
+              <Plus />
               Provision
             </Button>
           </DialogFooter>

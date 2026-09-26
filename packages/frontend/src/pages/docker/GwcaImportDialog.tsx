@@ -3,6 +3,7 @@ import { Upload } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   type GwcaImportMetadata,
   type GwcaPortMappingInput,
@@ -435,7 +435,7 @@ export function GwcaImportDialog({
           <fieldset className="m-0 contents border-0 p-0" disabled={importing}>
             <div className="space-y-4">
               {/* The dialog opens once the destination folders are known. */}
-              {foldersLoading ? <Skeleton /> : null}
+              <ContentLoading loading={foldersLoading} />
               <div className="space-y-1.5">
                 <span className="text-sm font-medium">Archive</span>
                 <input

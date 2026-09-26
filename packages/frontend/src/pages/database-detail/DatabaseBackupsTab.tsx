@@ -2,6 +2,7 @@ import { DatabaseBackup, History, Pause, Play, RotateCcw, Trash2, X } from "luci
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import {
   CreateFolderSelect,
   getCreateFolderChoices,
@@ -29,7 +30,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import {
   MANAGED_DATABASE_NAME_PATTERN,
   normalizeManagedDatabaseName,
@@ -357,6 +357,7 @@ export function DatabaseBackupsTab({
                 {canManage && policy.schedule ? (
                   <Button
                     variant="ghost"
+                    size="sm"
                     onClick={() => void setScheduleEnabled(policy, !policy.enabled)}
                   >
                     {policy.enabled ? <Pause /> : <Play />}
@@ -373,7 +374,7 @@ export function DatabaseBackupsTab({
                     <Trash2 />
                   </Button>
                 ) : null}
-                <Button disabled={!canRun} onClick={() => void start(policy)}>
+                <Button size="sm" disabled={!canRun} onClick={() => void start(policy)}>
                   <Play />
                   Run now
                 </Button>
@@ -804,7 +805,7 @@ export function RestoreDialog({
           <DialogTitle>Restore backup</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
-          {foldersLoading && <Skeleton />}
+          <ContentLoading loading={foldersLoading} />
           <DialogDescription>
             Restores the backup from {run ? formatDateTime(run.startedAt ?? run.createdAt) : ""}{" "}
             into a new managed database. Existing databases are never overwritten.

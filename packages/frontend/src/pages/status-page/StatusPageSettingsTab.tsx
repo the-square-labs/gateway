@@ -98,7 +98,7 @@ export function StatusPageSettingsTab({
               pending={savingSection === "general"}
               disabled={disabled || !generalDirty}
             >
-              {savingSection === "general" ? null : <Save />}
+              <Save />
               Save
             </Button>
           ) : null
@@ -195,7 +195,7 @@ export function StatusPageSettingsTab({
               pending={savingSection === "auto"}
               disabled={disabled || !autoIncidentDirty}
             >
-              {savingSection === "auto" ? null : <Save />}
+              <Save />
               Save
             </Button>
           ) : null

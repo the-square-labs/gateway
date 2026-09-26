@@ -514,7 +514,7 @@ export function NginxTemplateEdit() {
                 disabled={!content.trim()}
                 pending={isTesting}
               >
-                {isTesting ? null : <FlaskConical className="h-4 w-4" />}
+                <FlaskConical className="h-4 w-4" />
                 Test
               </Button>
               {!isBuiltin && (
@@ -524,7 +524,7 @@ export function NginxTemplateEdit() {
                   disabled={!name.trim() || !content.trim()}
                   pending={isSaving}
                 >
-                  {isSaving ? null : <Save className="h-4 w-4" />}
+                  <Save className="h-4 w-4" />
                   Save
                 </Button>
               )}

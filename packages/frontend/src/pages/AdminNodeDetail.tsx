@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { Combobox, type ComboboxOption } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PageBackButton } from "@/components/common/PageBackButton";
@@ -49,7 +50,6 @@ import {
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -76,7 +76,7 @@ import { canCreateInFolder } from "@/lib/scope-utils";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useDaemonUpdatesStore } from "@/stores/daemon-updates";
 import { useDockerStore } from "@/stores/docker";
 import { usePinnedNodesStore } from "@/stores/pinned-nodes";
@@ -164,7 +164,7 @@ export function AdminNodeDetail({
   const [hostingLoadState, setHostingLoadState] = useState<"loading" | "ready" | "error">(
     "loading"
   );
-  const hostingAuthKey = authContextKey(user);
+  const hostingAuthKey = accessContextKey(useAuthStore.getState());
   const [resizeContext, setResizeContext] = useState<{
     resource: HostingResource;
     catalog: HostingCatalog;
@@ -185,7 +185,7 @@ export function AdminNodeDetail({
     if (!hosting?.connectorId || !hosting.resourceId || resizeLoading) return;
     const target = hosting;
     const generation = ++resizeReadGeneration.current;
-    const authKey = authContextKey(user);
+    const authKey = accessContextKey(useAuthStore.getState());
     setResizeLoading(true);
     try {
       const [resources, catalog] = await Promise.all([
@@ -194,7 +194,7 @@ export function AdminNodeDetail({
       ]);
       if (
         generation !== resizeReadGeneration.current ||
-        authKey !== authContextKey(useAuthStore.getState().user)
+        authKey !== accessContextKey(useAuthStore.getState())
       )
         return;
       const resource = resources.find((r) => r.id === target.resourceId);
@@ -218,7 +218,7 @@ export function AdminNodeDetail({
       .then((value) => {
         if (
           generation !== hostingReadGeneration.current ||
-          hostingAuthKey !== authContextKey(useAuthStore.getState().user)
+          hostingAuthKey !== accessContextKey(useAuthStore.getState())
         )
           return;
         setHosting(value);
@@ -227,7 +227,7 @@ export function AdminNodeDetail({
       .catch((error) => {
         if (
           generation !== hostingReadGeneration.current ||
-          hostingAuthKey !== authContextKey(useAuthStore.getState().user)
+          hostingAuthKey !== accessContextKey(useAuthStore.getState())
         )
           return;
         if (error instanceof ApiRequestError && [403, 404].includes(error.status)) {
@@ -927,7 +927,7 @@ export function AdminNodeDetail({
 
   return (
     <PageTransition>
-      {initialLoadPending && <Skeleton />}
+      <ContentLoading loading={initialLoadPending} />
       <div
         className={
           usesFillLayout
@@ -1089,7 +1089,7 @@ export function AdminNodeDetail({
                   disabled={nodeActionsLocked}
                   pending={checkingUpdates}
                 >
-                  {checkingUpdates ? null : <ArrowUpCircle className="h-4 w-4" />}
+                  <ArrowUpCircle className="h-4 w-4" />
                   Check for updates
                 </Button>
               )}

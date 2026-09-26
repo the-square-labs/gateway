@@ -7,6 +7,7 @@ import {
   isDockerStateTransitional,
   nodeStatusTone,
   proxyHealthTone,
+  type StatusTone,
   statusDotClass,
 } from "@/components/common/resource-status";
 import { Separator } from "@/components/ui/separator";
@@ -29,6 +30,15 @@ import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import { useUIStore } from "@/stores/ui";
 import { effectiveNodeStatus } from "@/types";
+
+/**
+ * A pinned node's dot: any state that is not settled (pending, enrolling,
+ * updating and so on) shows the solid warning colour, as it always did here.
+ */
+function pinnedNodeTone(status: string | null | undefined): StatusTone {
+  const tone = nodeStatusTone(status);
+  return tone === "secondary" ? "warning" : tone;
+}
 
 interface SidebarPinnedResourcesProps {
   onNavigate?: () => void;
@@ -249,7 +259,7 @@ export function SidebarPinnedResources({
       kind === "proxy"
         ? proxyHealthTone(status)
         : kind === "node"
-          ? nodeStatusTone(status)
+          ? pinnedNodeTone(status)
           : kind === "database"
             ? databaseHealthTone(status)
             : dockerStateTone(status);

@@ -150,7 +150,7 @@ export function InferenceTokensSection({ canManage }: { canManage: boolean }) {
                     pending={revokingId === token.id}
                     onClick={() => void revoke(token)}
                   >
-                    {revokingId === token.id ? null : <Trash2 className="h-4 w-4" />}
+                    <Trash2 className="h-4 w-4" />
                   </Button>
                 )}
               </div>

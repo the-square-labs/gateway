@@ -2,8 +2,10 @@ import { Check, Cloud, Globe2, Plus, RefreshCw, SlidersHorizontal, Trash2 } from
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +25,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { CLOUDFLARE_API_TOKEN_URL } from "@/lib/cloudflare";
@@ -268,7 +269,8 @@ export function CloudflareIntegrationsSection() {
     }
   };
 
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(!initialLoadComplete);
+  if (!initialLoadComplete) return null;
 
   return (
     <>
@@ -328,7 +330,8 @@ export function CloudflareIntegrationsSection() {
 
           {loadingDetail ? (
             // Reports the connector detail load to the dialog, which opens once it is ready.
-            <Skeleton />
+            // One body child either way, so the dialog body keeps its layout.
+            <ContentLoading loading />
           ) : (
             <div className="space-y-4">
               <div className="space-y-4">
@@ -585,7 +588,7 @@ function CloudflareConnectorRow({
             pending={testing}
             title="Test connector"
           >
-            {testing ? null : <Check className="h-4 w-4" />}
+            <Check className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -598,7 +601,7 @@ function CloudflareConnectorRow({
             pending={syncing}
             title="Sync zones"
           >
-            {syncing ? null : <RefreshCw className="h-4 w-4" />}
+            <RefreshCw className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -610,7 +613,7 @@ function CloudflareConnectorRow({
             pending={deleting}
             title="Delete connector"
           >
-            {deleting ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       )}

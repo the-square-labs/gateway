@@ -18,7 +18,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import type {
   HostingFirewallConfig,
   HostingFirewallDirection,
@@ -63,7 +63,7 @@ export function NodeFirewallTab({
   provider,
   mutationLocked = false,
 }: NodeFirewallTabProps) {
-  const authKey = useAuthStore((state) => authContextKey(state.user));
+  const authKey = useAuthStore(accessContextKey);
   const [view, setView] = useState<HostingFirewallView | null>(null);
   const [draft, setDraftState] = useState<HostingFirewallConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,7 +110,7 @@ export function NodeFirewallTab({
   const isCurrentRequest = useCallback((generation: number, requestAuthKey: string) => {
     return (
       generationRef.current === generation &&
-      authContextKey(useAuthStore.getState().user) === requestAuthKey
+      accessContextKey(useAuthStore.getState()) === requestAuthKey
     );
   }, []);
 
@@ -287,7 +287,7 @@ export function NodeFirewallTab({
     const requestAuthKey = authKey;
     const currentMutation = () =>
       lifecycleRef.current === lifecycle &&
-      authContextKey(useAuthStore.getState().user) === requestAuthKey;
+      accessContextKey(useAuthStore.getState()) === requestAuthKey;
     setSaving(true);
     try {
       if (draft.enabled) {
@@ -380,7 +380,7 @@ export function NodeFirewallTab({
               disabled={saveDisabled}
               onClick={() => void saveFirewall()}
             >
-              {saving ? null : <Save />}
+              <Save />
               Save
             </Button>
           </>

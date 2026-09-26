@@ -553,7 +553,7 @@ export function DockerImages({
                   {(hasScope("docker:images:delete") ||
                     hasScope(`docker:images:delete:${selectedNodeId}`)) && (
                     <Button variant="outline" onClick={handlePrune} pending={pruning}>
-                      {!pruning && <Trash2 className="h-4 w-4 mr-1" />}
+                      <Trash2 className="h-4 w-4 mr-1" />
                       Prune Dangling
                     </Button>
                   )}

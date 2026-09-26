@@ -15,6 +15,7 @@ import { AnimatedHeight } from "@/components/common/AnimatedHeight";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -750,6 +750,8 @@ export const ManagedDatabaseLinksSection = forwardRef<
     setAddOpen(true);
   };
 
+  useContentLoading(initialLoading);
+
   return (
     <>
       <PanelShell
@@ -773,7 +775,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
               disabled={disabled || loading || !hasChanges}
               onClick={() => (onSaveRequested ? onSaveRequested() : void save())}
             >
-              {!saving && <RotateCcw className="h-3.5 w-3.5" />}
+              <RotateCcw className="h-3.5 w-3.5" />
               {recreatesRunningWorkload ? "Save & Recreate" : "Save"}
             </Button>
             <Button type="button" disabled={disabled || loading || saving} onClick={openAddDialog}>
@@ -783,9 +785,7 @@ export const ManagedDatabaseLinksSection = forwardRef<
           </div>
         }
       >
-        {initialLoading ? (
-          <Skeleton />
-        ) : displayBindings.length === 0 ? (
+        {initialLoading ? null : displayBindings.length === 0 ? (
           <EmptyState message="No managed database links" embedded />
         ) : (
           displayBindings.map((entry) => {

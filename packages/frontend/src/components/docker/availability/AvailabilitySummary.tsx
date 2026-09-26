@@ -3,8 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DetailRow } from "@/components/common/DetailRow";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
@@ -98,7 +98,8 @@ export function AvailabilitySummary({
   useRealtime("docker.availability.changed", load);
   useRealtime("docker.availability.operation.changed", load);
 
-  if (loading) return <Skeleton className="h-36 w-full" />;
+  useContentLoading(loading);
+  if (loading) return null;
   const mode = policy?.mode ?? "single";
   // Single-node lifecycle actions do not update the HA policy's desired state.
   const stopped =

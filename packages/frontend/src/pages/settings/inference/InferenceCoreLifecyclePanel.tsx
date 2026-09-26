@@ -236,7 +236,7 @@ export function InferenceCoreSetupFooterAction({
   if (!status) {
     return canManage ? (
       <Button onClick={() => void run(async () => {})} pending={acting}>
-        {acting ? null : <RefreshCw />} Retry status
+        <RefreshCw /> Retry status
       </Button>
     ) : null;
   }
@@ -262,7 +262,7 @@ export function InferenceCoreSetupFooterAction({
   if (status.state === "not_installed") {
     return (
       <Button onClick={() => void run(() => api.installInferenceCore())} pending={acting}>
-        {acting ? null : <Download />} Install inference core
+        <Download /> Install inference core
       </Button>
     );
   }
@@ -276,7 +276,7 @@ export function InferenceCoreSetupFooterAction({
         }
         pending={acting}
       >
-        {acting ? null : <Wrench />}
+        <Wrench />
         {installed ? "Repair" : "Retry install"}
       </Button>
     );
@@ -295,7 +295,7 @@ export function InferenceCoreSetupFooterAction({
         }
         pending={acting}
       >
-        {acting ? null : <Download />} Update inference core
+        <Download /> Update inference core
       </Button>
     );
   }
@@ -342,7 +342,7 @@ export function InferenceCoreLifecyclePanel({
         actions={
           mode === "settings" ? (
             <Button variant="outline" onClick={() => void retry()} pending={acting === "retry"}>
-              {acting === "retry" ? null : <RefreshCw />} Retry
+              <RefreshCw /> Retry
             </Button>
           ) : undefined
         }
@@ -450,7 +450,7 @@ export function InferenceCoreLifecyclePanel({
               disabled={operationActive || acting !== null}
               pending={acting === "update" || acting === "check"}
             >
-              {acting === "update" || acting === "check" ? null : <Download />}
+              <Download />
               {status.latest ? ` Update to ${status.latest.version}` : " Update inference core"}
             </Button>
           </>
@@ -461,8 +461,7 @@ export function InferenceCoreLifecyclePanel({
             disabled={acting !== null}
             pending={acting === "repair" || acting === "install"}
           >
-            {acting === "repair" || acting === "install" ? null : <Wrench />}{" "}
-            {status.installed ? "Repair" : "Retry install"}
+            <Wrench /> {status.installed ? "Repair" : "Retry install"}
           </Button>
         )}
         {status.state === "ready" && !incompatible && (

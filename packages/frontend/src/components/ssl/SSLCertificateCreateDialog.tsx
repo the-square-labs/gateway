@@ -750,7 +750,7 @@ export function SSLCertificateCreateDialog({
               disabled={!canUploadCertificate || !canCreateInSelectedFolder}
               pending={isUploading}
             >
-              {isUploading ? null : <Upload className="h-4 w-4" />}
+              <Upload className="h-4 w-4" />
               Upload Certificate
             </Button>
           )}

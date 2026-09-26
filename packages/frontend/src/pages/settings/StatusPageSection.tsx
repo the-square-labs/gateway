@@ -234,7 +234,7 @@ export function StatusPageSection({ nodesList }: StatusPageSectionProps) {
           pending={savingSettings}
           disabled={!canManage || !hasSettingsChanges}
         >
-          {savingSettings ? null : <Save className="h-4 w-4" />}
+          <Save className="h-4 w-4" />
           Save
         </Button>
       }

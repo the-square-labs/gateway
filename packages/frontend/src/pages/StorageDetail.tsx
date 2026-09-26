@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -460,9 +459,8 @@ function StorageDetailContent({
             </DialogDescription>
           </DialogHeader>
           <div className="border border-border bg-card overflow-hidden">
-            {loadingCredentials ? (
-              <Skeleton />
-            ) : (
+            <ContentLoading loading={loadingCredentials} />
+            {loadingCredentials ? null : (
               <pre className="overflow-x-auto p-4 text-sm whitespace-pre-wrap">
                 {revealedCredentials
                   ? JSON.stringify(revealedCredentials, null, 2)
@@ -587,4 +585,5 @@ function forgetBackupHistoryDescription(history: BackupHistoryReference, managed
   return `${entries} this storage${withFiles}. Forgetting removes this history from Gateway, so those backups can no longer be restored or deleted here. ${files}`;
 }
 
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
+import { resetRevealGateHistory } from "@/components/common/reveal-gate";
 import { server } from "./msw/server";
 import { resetTestStores } from "./reset-stores";
 
@@ -148,6 +149,7 @@ beforeAll(() => {
 });
 
 afterEach(async () => {
+  resetRevealGateHistory();
   cleanup();
   // Radix FocusScope restores focus in a zero-delay timer. Let that cleanup
   // finish before Vitest replaces this test file's jsdom realm.

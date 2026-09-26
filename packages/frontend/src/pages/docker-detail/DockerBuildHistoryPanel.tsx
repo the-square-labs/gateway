@@ -497,7 +497,7 @@ export function DockerBuildHistoryPanel({
           title="Builds"
           description="The 5 most recent builds, security decisions, and deployment results."
           actions={
-            <Button variant="ghost" size="sm" onClick={openAll}>
+            <Button variant="quiet" size="inline" className="text-sm font-normal" onClick={openAll}>
               View all
             </Button>
           }

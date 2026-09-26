@@ -273,8 +273,9 @@ export function AIWorkspaceScenarioStart({
                   <Button
                     type="button"
                     variant="link"
+                    size="inline"
                     onClick={onInvestigateOperationalIssue}
-                    className="h-auto shrink-0 justify-start gap-1 p-0 text-destructive"
+                    className="shrink-0 justify-start text-sm text-destructive [&_svg]:size-3.5"
                   >
                     Investigate
                     <ArrowRight />
@@ -299,8 +300,9 @@ export function AIWorkspaceScenarioStart({
                   <Button
                     type="button"
                     variant="link"
+                    size="inline"
                     onClick={() => setFinalizeSetupOpen(true)}
-                    className="h-auto shrink-0 justify-start gap-1 p-0"
+                    className="shrink-0 justify-start text-sm [&_svg]:size-3.5"
                   >
                     Open checklist
                     <ArrowRight />
@@ -325,7 +327,8 @@ export function AIWorkspaceScenarioStart({
             <Button
               type="button"
               variant="link"
-              className="h-auto justify-self-center gap-1 p-0"
+              size="inline"
+              className="justify-self-center text-sm"
               disabled={scenarios.length === 0}
               onClick={() => setCatalogOpen(true)}
             >

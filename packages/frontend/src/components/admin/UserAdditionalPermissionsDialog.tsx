@@ -1,6 +1,7 @@
 import { RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { ScopeList } from "@/components/common/ScopeList";
 import {
   ScopeSearchFilter,
@@ -20,7 +21,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import {
@@ -248,7 +248,7 @@ export function UserAdditionalPermissionsDialog({
         </DialogHeader>
 
         <Tabs defaultValue="additional">
-          {!resourceListsReady && <Skeleton />}
+          <ContentLoading loading={!resourceListsReady} />
           <TabsList>
             <TabsTrigger value="additional">
               Additional <TabCount>{additionalScopes.length}</TabCount>

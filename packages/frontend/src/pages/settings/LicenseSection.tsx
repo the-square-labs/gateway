@@ -342,11 +342,11 @@ export function LicenseSection({ canManage }: LicenseSectionProps) {
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={handleCheck} pending={checking}>
-                  {checking ? null : <RefreshCw className="h-4 w-4" />}
+                  <RefreshCw className="h-4 w-4" />
                   Check
                 </Button>
                 <Button variant="destructive" onClick={handleDeactivate} pending={deactivating}>
-                  {deactivating ? null : <Trash2 className="h-4 w-4" />}
+                  <Trash2 className="h-4 w-4" />
                   Deactivate
                 </Button>
               </div>

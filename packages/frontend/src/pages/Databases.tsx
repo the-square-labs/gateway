@@ -49,7 +49,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -57,6 +56,12 @@ import { refreshDynamicScopes } from "@/lib/live-scopes";
 import { listManagedDatabaseCandidateNodes } from "@/lib/managed-database-nodes";
 import { nodeIconClassNames } from "@/lib/node-appearance";
 import { databaseRoute } from "@/lib/resource-routes";
+import {
+  estimateMoreTagsWidth,
+  estimateResourceTagWidth,
+  parseResourceTag,
+  resourceTagBadgeProps,
+} from "@/lib/resource-tags";
 import { cn } from "@/lib/utils";
 import { api } from "@/services/api";
 import { useAuthStore } from "@/stores/auth";
@@ -83,12 +88,6 @@ import {
   managedDatabaseCapacity,
   minimumManagedDatabaseMemoryMb,
 } from "./database-detail/managed-database-capacity";
-import {
-  estimateMoreTagsWidth,
-  estimateResourceTagWidth,
-  parseResourceTag,
-  resourceTagBadgeProps,
-} from "./database-detail/resource-tags";
 
 const HEALTH_BADGE: Record<string, "success" | "secondary" | "warning" | "destructive"> = {
   online: "success",
@@ -1245,7 +1244,7 @@ function DatabasesContent({
               <DialogTitle>Add Database</DialogTitle>
             </DialogHeader>
             <AnimatedHeight>
-              {foldersLoading && <Skeleton />}
+              <ContentLoading loading={foldersLoading} />
               <SettingsControlRow title="Folder" description="Optional organization folder">
                 <CreateFolderSelect
                   choices={connectionFolderChoices}
@@ -1418,4 +1417,5 @@ function DatabasesContent({
   );
 }
 
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";

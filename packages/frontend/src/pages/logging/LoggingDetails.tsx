@@ -149,7 +149,7 @@ export function LoggingSchemaDetail({
             <ResponsiveHeaderActions actions={headerActions}>
               {canEdit && (
                 <Button pending={saving} disabled={!dirty} onClick={() => void save()}>
-                  {saving ? null : <Save />}
+                  <Save />
                   Save Changes
                 </Button>
               )}
@@ -390,7 +390,7 @@ export function LoggingEnvironmentDetail({
                   disabled={!settingsDirty}
                   onClick={() => void saveSettings()}
                 >
-                  {settingsSaving ? null : <Save />}
+                  <Save />
                   Save Changes
                 </Button>
               )}

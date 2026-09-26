@@ -25,6 +25,8 @@ type RegisterLoad = () => () => void;
 
 export const InitialPageLoadContext = createContext<RegisterLoad | null>(null);
 export const InitialPageReadyContext = createContext(true);
+/** When the enclosing gate revealed; null outside any gate or before it revealed. */
+export const RevealedAtContext = createContext<number | null>(null);
 
 /** Pages wait this long before showing a loader. */
 export const PAGE_LOADER_DELAY_MS = 500;
@@ -34,6 +36,25 @@ export const PAGE_LOADER_MIN_MS = 500;
 const SETTLE_MS = 50;
 /** A route guard's loader is continued by the page mounted right after it. */
 const HANDOFF_WINDOW_MS = 150;
+/**
+ * A nested gate (a tab panel) that reveals this soon after its parent does not play its own
+ * entrance, so the page never animates twice in a row.
+ */
+const NESTED_ANIMATION_QUIET_MS = 700;
+/** A page remounted at the same address this soon after revealing appears without animating again. */
+const REMOUNT_ANIMATION_QUIET_MS = 1000;
+
+let lastPageReveal: { path: string; at: number } | null = null;
+
+/** Forgets the page loader and reveal history kept across gates. For tests only. */
+export function resetRevealGateHistory() {
+  lastPageReveal = null;
+  visibleLoader = null;
+}
+
+function currentPath() {
+  return typeof window === "undefined" ? "" : window.location.pathname;
+}
 
 const noop = () => undefined;
 
@@ -79,6 +100,7 @@ export function useRevealGate({
 }: RevealGateOptions = {}) {
   const inheritedRegister = useContext(InitialPageLoadContext);
   const inheritedReady = useContext(InitialPageReadyContext);
+  const inheritedRevealedAt = useContext(RevealedAtContext);
   const parentRegister = isolated ? null : inheritedRegister;
   const parentReady = isolated ? true : inheritedReady;
   const topLevel = parentRegister === null;
@@ -111,11 +133,34 @@ export function useRevealGate({
   }, []);
 
   const revealed = phase === "revealed";
+  const [revealedAt, setRevealedAt] = useState<number | null>(null);
   const reveal = useCallback(() => {
+    const now = Date.now();
+    let animate = parentReady;
+    if (
+      animate &&
+      !isolated &&
+      inheritedRevealedAt !== null &&
+      now - inheritedRevealedAt < NESTED_ANIMATION_QUIET_MS
+    ) {
+      animate = false;
+    }
+    if (tracksPageLoader) {
+      const path = currentPath();
+      if (
+        lastPageReveal &&
+        lastPageReveal.path === path &&
+        now - lastPageReveal.at < REMOUNT_ANIMATION_QUIET_MS
+      ) {
+        animate = false;
+      }
+      lastPageReveal = { path, at: now };
+    }
     revealedRef.current = true;
-    setAnimateReveal(parentReady);
+    setAnimateReveal(animate);
+    setRevealedAt(now);
     setPhase("revealed");
-  }, [parentReady]);
+  }, [parentReady, isolated, inheritedRevealedAt, tracksPageLoader]);
 
   useLayoutEffect(() => {
     if (!tracksPageLoader) return;
@@ -171,7 +216,7 @@ export function useRevealGate({
     };
   }, [owner]);
 
-  return { phase, revealed, register, animateReveal };
+  return { phase, revealed, register, animateReveal, revealedAt };
 }
 
 const REVEAL_EASING = "cubic-bezier(0.25, 0.1, 0.25, 1)";
@@ -242,7 +287,7 @@ export function ContentLoader({ className }: { className?: string }) {
       aria-label="Loading"
       className={
         className ??
-        "content-loader pointer-events-none absolute inset-x-0 top-0 flex h-full max-h-[60vh] min-h-32 items-center justify-center"
+        "content-loader pointer-events-none absolute inset-0 flex min-h-32 items-center justify-center"
       }
       style={{ visibility: "visible" }}
     >

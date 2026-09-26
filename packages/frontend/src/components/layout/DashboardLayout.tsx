@@ -29,7 +29,7 @@ import { api } from "@/services/api";
 import { ApiRequestError } from "@/services/api-base";
 import type { BackgroundPrewarmTask } from "@/services/background-prewarm";
 import { useAIStore } from "@/stores/ai";
-import { authContextKey, useAuthStore } from "@/stores/auth";
+import { accessContextKey, useAuthStore } from "@/stores/auth";
 import { useCAStore } from "@/stores/ca";
 import { useDockerStore } from "@/stores/docker";
 import { useDockerFolderStore } from "@/stores/docker-folders";
@@ -56,7 +56,8 @@ export function DashboardLayout() {
   const loginRedirectUrl = useRef(getLoginRedirectUrl()).current;
   const { isAuthenticated, isLoading, setUser, setLoading, logout } = useAuthStore();
   const currentUser = useAuthStore((state) => state.user);
-  const contentAccessKey = authContextKey(currentUser);
+  // Remount page content when access narrows or the user changes, not when live scopes widen.
+  const contentAccessKey = useAuthStore(accessContextKey);
   const authAccessKey = currentUser
     ? `${currentUser.id}\u0000${[...currentUser.scopes].sort().join("\u0000")}`
     : null;

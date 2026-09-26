@@ -558,7 +558,7 @@ export function Domains() {
               )}
               {canCreateDomain && (
                 <Button onClick={() => void handleAddDomain()} pending={checkingNginxNodes}>
-                  {checkingNginxNodes ? null : <Plus className="h-4 w-4" />}
+                  <Plus className="h-4 w-4" />
                   Add Domain
                 </Button>
               )}

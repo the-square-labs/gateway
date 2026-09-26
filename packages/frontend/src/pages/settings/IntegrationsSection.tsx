@@ -39,7 +39,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn, formatRelativeDate } from "@/lib/utils";
@@ -580,8 +579,9 @@ function GitLabIntegrationsContent() {
     }
   };
 
-  if (!canView) return null;
-  if (!initialLoadComplete) return <Skeleton />;
+  useContentLoading(canView && !initialLoadComplete);
+
+  if (!canView || !initialLoadComplete) return null;
 
   return (
     <>
@@ -641,7 +641,8 @@ function GitLabIntegrationsContent() {
 
           {loadingDetail ? (
             // Reports the connector detail load to the dialog, which opens once it is ready.
-            <Skeleton />
+            // One body child either way, so the dialog body keeps its layout.
+            <ContentLoading loading />
           ) : (
             <div>
               <ConnectorStepHeight>
@@ -760,7 +761,7 @@ function GitLabIntegrationsContent() {
                               pending={refreshingAllowlist}
                               onClick={() => void refreshAllowlistOptions()}
                             >
-                              {refreshingAllowlist ? null : <RefreshCw className="h-4 w-4" />}
+                              <RefreshCw className="h-4 w-4" />
                               Update
                             </Button>
                           )}
@@ -1118,7 +1119,7 @@ function ConnectorRow({
             pending={testing}
             title="Test connector"
           >
-            {testing ? null : <Check className="h-4 w-4" />}
+            <Check className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -1131,7 +1132,7 @@ function ConnectorRow({
             pending={syncing}
             title="Sync connector"
           >
-            {syncing ? null : <RefreshCw className="h-4 w-4" />}
+            <RefreshCw className="h-4 w-4" />
           </Button>
           <Button
             variant="outline"
@@ -1143,7 +1144,7 @@ function ConnectorRow({
             pending={deleting}
             title="Delete connector"
           >
-            {deleting ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       )}
@@ -1203,5 +1204,7 @@ function CapabilityBadges({
   );
 }
 
+import { ContentLoading } from "@/components/common/ContentLoading";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { LicenseFeatureBoundary } from "@/components/license/LicenseFeatureBoundary";
 import { requireLicenseFeature } from "@/stores/license-paywall";

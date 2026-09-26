@@ -342,7 +342,7 @@ export function DatabaseConsoleTab({ database }: { database: DatabaseConnection 
             }}
             pending={running && database.type === "redis"}
           >
-            {running ? database.type === "redis" ? null : <Square /> : <Play />}
+            {running && database.type !== "redis" ? <Square /> : <Play />}
             {running && database.type !== "redis" ? "Cancel" : "Run"}
           </Button>
         </div>

@@ -9,8 +9,8 @@ import {
   Zap,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatCard } from "@/components/ui/stat-card";
 import { formatBytes } from "@/lib/utils";
 import { api } from "@/services/api";
@@ -300,6 +300,13 @@ export function LinkRuntimeTab({
   }, [linkIds]);
 
   const hasDownLink = orderedLinks.some(({ binding }) => binding.status === "error");
+  useContentLoading(
+    orderedLinks.some(({ binding }) => {
+      if (binding.status === "error") return false;
+      const state = states[binding.id];
+      return !state || state.loading;
+    })
+  );
   useEffect(() => {
     onHealthChange?.(hasDownLink);
   }, [hasDownLink, onHealthChange]);
@@ -327,13 +334,7 @@ export function LinkRuntimeTab({
               </Badge>
             </div>
 
-            {state?.loading || !state ? (
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {Array.from({ length: 8 }, (_, index) => (
-                  <Skeleton key={index} className="h-32" />
-                ))}
-              </div>
-            ) : state.runtime ? (
+            {state?.loading || !state ? null : state.runtime ? (
               <>
                 {runtimeCards(state.runtime, state.history)}
                 {state.telemetryUnavailable && (

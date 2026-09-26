@@ -1,3 +1,4 @@
+import { ValueTile } from "@/components/common/ValueTile";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
@@ -43,9 +44,9 @@ export function LoggingEventDetailsDialog({
               {displayedEvent.message}
             </pre>
             <div className="grid gap-3 text-sm md:grid-cols-3">
-              <Detail label="Trace ID" value={displayedEvent.traceId} />
-              <Detail label="Span ID" value={displayedEvent.spanId} />
-              <Detail label="Request ID" value={displayedEvent.requestId} />
+              <ValueTile label="Trace ID">{displayedEvent.traceId}</ValueTile>
+              <ValueTile label="Span ID">{displayedEvent.spanId}</ValueTile>
+              <ValueTile label="Request ID">{displayedEvent.requestId}</ValueTile>
             </div>
             <JsonBlock title="Labels" value={displayedEvent.labels} />
             <JsonBlock title="Fields" value={displayedEvent.fields} />
@@ -53,15 +54,6 @@ export function LoggingEventDetailsDialog({
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0 rounded-md border border-border p-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="truncate font-mono text-xs">{value || "-"}</p>
-    </div>
   );
 }
 

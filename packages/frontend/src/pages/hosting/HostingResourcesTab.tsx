@@ -11,6 +11,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
@@ -32,7 +33,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useRetainedDialogValue } from "@/hooks/use-retained-dialog-value";
 import { createClientUuid } from "@/lib/client-id";
 import { performHostingAction } from "@/lib/hosting-intents";
@@ -575,7 +575,7 @@ export function HostingResourcesTab({
               title="Trusted SSH connection"
               description="Choose a connection to this VM."
             >
-              {sshOptionsLoading && <Skeleton />}
+              <ContentLoading loading={sshOptionsLoading} />
               <Combobox
                 ariaLabel="Retry SSH connection"
                 value={retrySsh}

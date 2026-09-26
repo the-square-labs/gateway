@@ -1,4 +1,5 @@
 import { Truck } from "lucide-react";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import {
@@ -16,7 +17,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import type { Node } from "@/types";
 import type { MigrationResource } from "./DockerMigrationDialog";
@@ -58,7 +58,7 @@ export function DockerMigrationSetupDialog({
 
         <div className="space-y-5">
           {/* The dialog opens once the target nodes are known. */}
-          {loadingTargets ? <Skeleton /> : null}
+          <ContentLoading loading={loadingTargets} />
           <div className="space-y-1.5">
             <label htmlFor="migration-target" className="text-sm font-medium">
               Target node
@@ -104,7 +104,7 @@ export function DockerMigrationSetupDialog({
             pending={loadingPreflight}
             disabled={!targetNodeId || loadingTargets}
           >
-            {!loadingPreflight && <Truck className="h-4 w-4" />}
+            <Truck className="h-4 w-4" />
             Run preflight
           </Button>
         </DialogFooter>

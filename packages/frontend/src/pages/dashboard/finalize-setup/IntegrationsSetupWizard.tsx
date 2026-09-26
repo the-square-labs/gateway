@@ -1,6 +1,7 @@
 import { Check, Cloud, GitBranch, Github } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { EditableStringList } from "@/components/common/EditableStringList";
 import { LoadingSpinner } from "@/components/common/LoadingSpinner";
@@ -17,7 +18,6 @@ import type { FinalizeSetupState, FinalizeSetupStepStatus } from "@/types";
 import type { GitConnectorProvider } from "@/types/integrations";
 import { FinalizeSetupCompletion } from "./FinalizeSetupCompletion";
 import { FinalizeSetupWizardDialog } from "./FinalizeSetupWizardDialog";
-import { SetupChoiceButton } from "./SetupChoiceButton";
 
 export type ConnectorSetupKind = "cloudflare" | "gitlab" | "github" | "git";
 type TrackedIntegration = Extract<ConnectorSetupKind, "cloudflare" | "gitlab">;
@@ -375,7 +375,7 @@ export function IntegrationsSetupWizard({
         pending={saving}
         disabled={!cloudflareName.trim() || !cloudflareToken.trim()}
       >
-        {saving ? null : <Cloud />}
+        <Cloud />
         Save Cloudflare
       </Button>
     ) : screen === "gitlab" ? (
@@ -384,7 +384,7 @@ export function IntegrationsSetupWizard({
         pending={saving}
         disabled={!gitlabName.trim() || !gitlabUrl.trim() || !gitlabToken.trim()}
       >
-        {saving ? null : <GitBranch />}
+        <GitBranch />
         Save GitLab
       </Button>
     ) : screen === "github" && githubAuthMode === "token" ? (
@@ -393,7 +393,7 @@ export function IntegrationsSetupWizard({
         pending={saving}
         disabled={!githubName.trim() || !githubUrl.trim() || !githubToken.trim()}
       >
-        {saving ? null : <Github />}
+        <Github />
         Save GitHub
       </Button>
     ) : screen === "git" ? (
@@ -408,7 +408,7 @@ export function IntegrationsSetupWizard({
           !gitToken.trim()
         }
       >
-        {saving ? null : <GitBranch />}
+        <GitBranch />
         Save Git connector
       </Button>
     ) : null;
@@ -515,7 +515,7 @@ export function IntegrationsSetupWizard({
               status === "configured" ||
               (!isTrackedIntegration(id) && configuredOptionalConnectors.has(id));
             return (
-              <SetupChoiceButton
+              <ChoiceCard
                 key={id}
                 icon={Icon}
                 title={title}

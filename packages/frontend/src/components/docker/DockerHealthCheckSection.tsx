@@ -186,7 +186,7 @@ export function DockerHealthCheckSection({
             pending={testing}
             disabled={disabled || loading || !draft.enabled || routeRequired}
           >
-            {!testing && <Play className="h-3.5 w-3.5" />}
+            <Play className="h-3.5 w-3.5" />
             Test
           </Button>
           <Button
@@ -194,7 +194,7 @@ export function DockerHealthCheckSection({
             pending={saving}
             disabled={disabled || loading || !changed || routeRequired}
           >
-            {!saving && <Save className="h-3.5 w-3.5" />}
+            <Save className="h-3.5 w-3.5" />
             Save
           </Button>
         </>

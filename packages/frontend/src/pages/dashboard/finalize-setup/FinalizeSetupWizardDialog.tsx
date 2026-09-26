@@ -122,7 +122,7 @@ export function FinalizeSetupWizardDialog({
                   pending={skipping}
                   disabled={skipDisabled}
                 >
-                  {skipping ? null : <MoreHorizontal />}
+                  <MoreHorizontal />
                   Skip
                 </Button>
               )}

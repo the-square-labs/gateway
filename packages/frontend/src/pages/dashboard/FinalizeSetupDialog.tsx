@@ -1,6 +1,7 @@
 import { ArrowRight, Bot, Check, Cloud, KeyRound, Server, Sparkles, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { ChoiceCard } from "@/components/common/ChoiceCard";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { FinalizeSetupState, FinalizeSetupStep, FinalizeSetupStepStatus } from "@/types";
-import { SetupChoiceButton } from "./finalize-setup/SetupChoiceButton";
 
 export type FinalizeSetupRootStep =
   | Exclude<FinalizeSetupStep, "cloudflare" | "gitlab">
@@ -213,7 +213,7 @@ export function FinalizeSetupDialog({
             const status = stepStatus(state, step.id);
             const canOpen = !isComplete && status !== "configured";
             return (
-              <SetupChoiceButton
+              <ChoiceCard
                 key={step.id}
                 icon={step.icon}
                 title={step.title}

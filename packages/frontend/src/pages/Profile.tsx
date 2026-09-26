@@ -659,7 +659,7 @@ function BrowserSessionsPanel() {
                   aria-label={`Revoke session from ${session.userAgent ? sessionBrowserLabel(session.userAgent) : session.ipAddress || "unknown browser"}`}
                   title="Revoke session"
                 >
-                  {revokingId === session.id ? null : <Trash2 className="h-4 w-4" />}
+                  <Trash2 className="h-4 w-4" />
                 </Button>
               )}
             </div>
@@ -1071,7 +1071,7 @@ function LocalAccountSecurityPanel() {
                       aria-label={`Remove ${passkey.name}`}
                       title="Remove passkey"
                     >
-                      {removingPasskeyId === passkey.id ? null : <Trash2 />}
+                      <Trash2 />
                     </Button>
                   </div>
                 ))}
@@ -1080,7 +1080,7 @@ function LocalAccountSecurityPanel() {
           </div>
           <DialogFooter>
             <Button onClick={() => void registerPasskey()} pending={addingPasskey}>
-              {addingPasskey ? null : <Plus />}
+              <Plus />
               Add passkey
             </Button>
           </DialogFooter>
@@ -1130,7 +1130,7 @@ function LocalAccountSecurityPanel() {
                   pending={totpSaving}
                   disabled={totpCode.length !== 6}
                 >
-                  {totpSaving ? null : <Check />}
+                  <Check />
                   Activate TOTP
                 </Button>
               </div>
@@ -1216,14 +1216,15 @@ function LocalAccountSecurityPanel() {
                     (stepUpUseRecoveryCode ? stepUpCode.trim().length < 6 : stepUpCode.length !== 6)
                   }
                 >
-                  {stepUpBusy === "code" ? null : <Check />}
+                  <Check />
                   Verify
                 </Button>
               </div>
               <Button
                 type="button"
                 variant="link"
-                className="h-auto self-start p-0"
+                size="inline"
+                className="self-start text-xs"
                 onClick={() => {
                   setStepUpUseRecoveryCode((current) => !current);
                   setStepUpCode("");
@@ -1240,7 +1241,7 @@ function LocalAccountSecurityPanel() {
               pending={stepUpBusy === "passkey"}
               disabled={stepUpBusy !== null}
             >
-              {stepUpBusy === "passkey" ? null : <KeyRound />}
+              <KeyRound />
               Use a passkey
             </Button>
           )}

@@ -241,7 +241,7 @@ export function HostingIntegrationsSection({
                         void testConnector(connector);
                       }}
                     >
-                      {testingId === connector.id ? null : <Check />}
+                      <Check />
                     </Button>
                     <Button
                       variant="outline"
@@ -254,7 +254,7 @@ export function HostingIntegrationsSection({
                         void syncConnector(connector);
                       }}
                     >
-                      {syncingId === connector.id ? null : <RefreshCw />}
+                      <RefreshCw />
                     </Button>
                     <Button
                       variant="outline"
@@ -266,7 +266,7 @@ export function HostingIntegrationsSection({
                         void deleteConnector(connector);
                       }}
                     >
-                      {deletingId === connector.id ? null : <Trash2 />}
+                      <Trash2 />
                     </Button>
                   </div>
                 )}

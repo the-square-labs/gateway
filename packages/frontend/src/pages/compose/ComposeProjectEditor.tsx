@@ -376,11 +376,11 @@ export function ComposeProjectEditor({
             pending={validating}
             disabled={saving}
           >
-            {!validating && <CheckCircle2 className="mr-1 h-4 w-4" />}
+            <CheckCircle2 className="mr-1 h-4 w-4" />
             Validate
           </Button>
           <Button onClick={() => void save()} pending={saving} disabled={validating || !canSubmit}>
-            {!saving && <Save className="mr-1 h-4 w-4" />}
+            <Save className="mr-1 h-4 w-4" />
             Apply
           </Button>
         </DialogFooter>
@@ -562,11 +562,11 @@ export function ComposeProjectEditor({
             pending={validating}
             disabled={saving || repositoryCreation}
           >
-            {!validating && <CheckCircle2 className="mr-1 h-4 w-4" />}
+            <CheckCircle2 className="mr-1 h-4 w-4" />
             Validate
           </Button>
           <Button onClick={() => void save()} pending={saving} disabled={validating || !canSubmit}>
-            {!saving && <Save className="mr-1 h-4 w-4" />}
+            <Save className="mr-1 h-4 w-4" />
             {repositoryCreation
               ? "Create and build"
               : adoption

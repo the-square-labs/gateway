@@ -1,7 +1,7 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Fragment, type ReactNode, useEffect, useMemo, useRef } from "react";
 import { EmptyState } from "@/components/common/EmptyState";
-import { Skeleton } from "@/components/ui/skeleton";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { cn } from "@/lib/utils";
 
@@ -88,6 +88,8 @@ export function DataTable<T>({
   const internalRef = useRef<HTMLDivElement>(null);
   const containerRef = scrollRef ?? internalRef;
   const initialLoading = useInitialLoading(loading);
+  const showLoading = initialLoading && data.length === 0;
+  useContentLoading(showLoading);
 
   // Build the flat row model: walk data once and synthesize group headers
   // whenever the group key changes. This becomes the index space the
@@ -129,7 +131,7 @@ export function DataTable<T>({
     virtualizer.measure();
   }, [virtualizer]);
 
-  if (initialLoading && data.length === 0) return <Skeleton />;
+  if (showLoading) return null;
 
   if (data.length === 0) {
     return emptyContent ?? <EmptyState message={emptyMessage} embedded={embedded} />;

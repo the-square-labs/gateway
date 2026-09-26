@@ -279,7 +279,7 @@ function SandboxJobsPanel() {
               }}
               pending={killingId === job.id}
             >
-              {killingId === job.id ? null : <Trash2 className="h-4 w-4" />}
+              <Trash2 className="h-4 w-4" />
             </Button>
           ) : null}
         </div>
@@ -563,7 +563,7 @@ function SandboxArtifactsPanel() {
             pending={deletingId === artifact.id}
             aria-label={`Delete ${artifact.filename}`}
           >
-            {deletingId === artifact.id ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       ),
@@ -657,7 +657,7 @@ function SandboxArtifactsPanel() {
             pending={deletingId === artifact.id}
             aria-label={`Delete ${artifact.filename}`}
           >
-            {deletingId === artifact.id ? null : <Trash2 className="h-4 w-4" />}
+            <Trash2 className="h-4 w-4" />
           </Button>
         </div>
       ),
@@ -676,7 +676,7 @@ function SandboxArtifactsPanel() {
         icon={<Archive className="h-4 w-4" />}
         actions={
           <div className="flex items-center gap-3">
-            <Button variant="ghost" onClick={openAll}>
+            <Button variant="quiet" size="inline" className="text-sm font-normal" onClick={openAll}>
               View all
             </Button>
             <RefreshButton minDurationMs={1400} onClick={() => loadArtifacts({ silent: true })} />

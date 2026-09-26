@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { EmptyState } from "@/components/common/EmptyState";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SimpleTable, type SimpleTableColumn } from "@/components/common/SimpleTable";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,7 +14,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -243,11 +243,11 @@ export function AlertsTab({
     },
   ];
 
+  useContentLoading(initialLoading && visibleRules.length === 0);
+
   return (
     <div className="space-y-4">
-      {initialLoading && visibleRules.length === 0 ? (
-        <Skeleton />
-      ) : visibleRules.length > 0 ? (
+      {initialLoading && visibleRules.length === 0 ? null : visibleRules.length > 0 ? (
         <div className="border border-border bg-card">
           <SimpleTable
             columns={columns}

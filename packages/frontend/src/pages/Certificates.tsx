@@ -2,6 +2,7 @@ import { Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { CertificateIssueDialog } from "@/components/certificates/CertificateIssueDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { EmptyState } from "@/components/common/EmptyState";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
@@ -20,7 +21,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
 import { useInitialLoading } from "@/hooks/use-initial-loading";
 import { useRealtime } from "@/hooks/use-realtime";
 import { daysUntil, formatDate } from "@/lib/utils";
@@ -279,9 +279,9 @@ export function Certificates() {
         />
 
         {/* Table */}
-        {initialLoading && (certificates || []).length === 0 ? (
-          <Skeleton />
-        ) : (certificates || []).length > 0 ? (
+        <ContentLoading loading={initialLoading && (certificates || []).length === 0} />
+        {initialLoading && (certificates || []).length === 0 ? null : (certificates || []).length >
+          0 ? (
           <div className="min-h-0 shrink">
             <DataTable
               columns={certificateColumns}
