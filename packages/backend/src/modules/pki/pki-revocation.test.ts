@@ -30,10 +30,13 @@ function selectChain(rows: unknown[]) {
 
 type RevokedRow = { serialNumber: string; revokedAt: Date };
 
-/** In-memory CA row for CRL generation, behind fake transaction-scoped advisory locks. */
+/**
+ * In-memory CA row for CRL generation, behind fake transaction-scoped advisory
+ * locks. `events` records transaction boundaries and cache writes in order.
+ */
 function crlStore(
   initial: { revoked?: RevokedRow[]; childCAs?: RevokedRow[] },
-  options: { onRequest?: (key: string) => void } = {}
+  options: { failStoringCrl?: boolean } = {}
 ) {
   const state = {
     crlNumber: 0,
@@ -41,32 +44,74 @@ function crlStore(
     revoked: [...(initial.revoked ?? [])],
     childCAs: [...(initial.childCAs ?? [])],
   };
+  const events: string[] = [];
   const findRevoked = vi.fn(async () => [...state.revoked]);
-  const apply = (values: Record<string, unknown>) => {
-    if ('crlNumber' in values) state.crlNumber += 1;
-    if ('lastCrlDer' in values) state.lastCrlDer = values.lastCrlDer as string;
+  const makeTx = () => {
+    // Writes become visible at commit, as in Postgres.
+    const pending: Array<() => void> = [];
+    let numbered = state.crlNumber;
+    const tx = {
+      pending,
+      update: vi.fn(() => ({
+        set: (values: Record<string, unknown>) => ({
+          where: () => {
+            if ('lastCrlDer' in values) {
+              if (options.failStoringCrl) return Promise.reject(new Error('database went away'));
+              pending.push(() => {
+                state.lastCrlDer = values.lastCrlDer as string;
+              });
+            }
+            return Object.assign(Promise.resolve(undefined), {
+              returning: async () => {
+                numbered = state.crlNumber + 1;
+                pending.push(() => {
+                  state.crlNumber = numbered;
+                });
+                return [{ crlNumber: numbered, status: 'active', notAfter: new Date('2099-01-01T00:00:00Z') }];
+              },
+            });
+          },
+        }),
+      })),
+      query: {
+        certificates: { findMany: findRevoked },
+        certificateAuthorities: { findMany: vi.fn(async () => [...state.childCAs]) },
+      },
+    };
+    return tx;
   };
-  const makeTx = () => ({
-    update: vi.fn(() => ({
-      set: (values: Record<string, unknown>) => ({
-        where: () => {
-          if (!('crlNumber' in values)) apply(values);
-          return Object.assign(Promise.resolve(undefined), {
-            returning: async () => {
-              apply(values);
-              return [{ crlNumber: state.crlNumber, status: 'active', notAfter: new Date('2099-01-01T00:00:00Z') }];
-            },
-          });
-        },
-      }),
+  const locks = createFakeAdvisoryLockDb(makeTx);
+  const db = {
+    transaction: vi.fn(async (fn: (tx: any) => Promise<unknown>) => {
+      events.push('begin');
+      try {
+        const result = await locks.transaction(async (tx) => {
+          const value = await fn(tx);
+          for (const apply of tx.pending) apply();
+          return value;
+        });
+        events.push('commit');
+        return result;
+      } catch (error) {
+        events.push('rollback');
+        throw error;
+      }
+    }),
+    // Re-read of the stored CRL after the cache write.
+    select: vi.fn(() => ({
+      from: () => ({ where: () => ({ limit: async () => [{ lastCrlDer: state.lastCrlDer }] }) }),
     })),
-    query: {
-      certificates: { findMany: findRevoked },
-      certificateAuthorities: { findMany: vi.fn(async () => [...state.childCAs]) },
-    },
-  });
-  const locks = createFakeAdvisoryLockDb(makeTx, options);
-  return { state, findRevoked, locks, db: { transaction: locks.transaction } };
+  };
+  const cached = new Map<string, string>();
+  const cache = {
+    get: vi.fn(async (key: string) => cached.get(key) ?? null),
+    set: vi.fn(async (key: string, value: string) => {
+      events.push('cache');
+      cached.set(key, value);
+    }),
+    delete: vi.fn(async (key: string) => void cached.delete(key)),
+  };
+  return { state, events, findRevoked, locks, db, cache, cached };
 }
 
 async function createRoot() {
@@ -164,20 +209,7 @@ describe('CRL publication on revocation', () => {
     const { row, privateKeyPem } = await createRoot();
     const caService = new CAService({} as never, cryptoService, audit as never);
     vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
-    let secondAtLock!: () => void;
-    const secondWaitsForLock = new Promise<void>((resolve) => {
-      secondAtLock = resolve;
-    });
-    let lockRequests = 0;
-    const store = crlStore(
-      { revoked: [{ serialNumber: '0a01', revokedAt: new Date() }] },
-      {
-        onRequest: () => {
-          lockRequests += 1;
-          if (lockRequests === 2) secondAtLock();
-        },
-      }
-    );
+    const store = crlStore({ revoked: [{ serialNumber: '0a01', revokedAt: new Date() }] });
     let firstReadStarted!: () => void;
     const firstReading = new Promise<void>((resolve) => {
       firstReadStarted = resolve;
@@ -196,22 +228,14 @@ describe('CRL publication on revocation', () => {
       }
       return snapshot;
     });
-    const cached = new Map<string, string>();
-    const cache = {
-      get: vi.fn(async (key: string) => cached.get(key) ?? null),
-      set: vi.fn(async (key: string, value: string) => void cached.set(key, value)),
-      delete: vi.fn(async (key: string) => void cached.delete(key)),
-    };
-    const crlService = new CRLService(store.db as never, caService, cache as never);
+    const crlService = new CRLService(store.db as never, caService, store.cache as never);
 
     const first = crlService.generateCRL('root-1');
     await firstReading;
     // A second certificate is revoked and republishes while the first
-    // generation still holds its revoked set.
+    // generation still holds its revoked set: it must not reuse that CRL.
     store.state.revoked.push({ serialNumber: '0b02', revokedAt: new Date() });
     const second = crlService.generateCRL('root-1');
-    await secondWaitsForLock;
-    expect(reads).toBe(1);
 
     releaseFirstRead();
     const [firstCrl, secondCrl] = await Promise.all([first, second]);
@@ -221,7 +245,65 @@ describe('CRL publication on revocation', () => {
     expect(serials(secondCrl).sort()).toEqual(['0a01', '0b02']);
     expect(store.state.crlNumber).toBe(2);
     expect(store.state.lastCrlDer).toBe(secondCrl.toString('base64'));
-    expect(cached.get('crl:root-1')).toBe(secondCrl.toString('base64'));
+    expect(store.cached.get('crl:root-1')).toBe(secondCrl.toString('base64'));
+    // The second waited in process, without a transaction, and cached after its commit.
+    expect(store.events).toEqual(['begin', 'commit', 'cache', 'begin', 'commit', 'cache']);
+  });
+
+  // Review follow-up: a burst of public cache misses each held a pool
+  // connection at the lock, then re-signed and bumped the CRL number.
+  it('signs once for a burst of concurrent requests and hands the others that CRL', async () => {
+    const { row, privateKeyPem } = await createRoot();
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
+    const store = crlStore({ revoked: [{ serialNumber: '0a01', revokedAt: new Date() }] });
+    const crlService = new CRLService(store.db as never, caService, store.cache as never);
+
+    const crls = await Promise.all([
+      crlService.generateCRL('root-1'),
+      crlService.generateCRL('root-1'),
+      crlService.generateCRL('root-1'),
+    ]);
+
+    expect(crls[1]).toBe(crls[0]);
+    expect(crls[2]).toBe(crls[0]);
+    expect(store.db.transaction).toHaveBeenCalledTimes(1);
+    expect(store.findRevoked).toHaveBeenCalledTimes(1);
+    expect(store.state.crlNumber).toBe(1);
+
+    // A later call started after that snapshot, so it signs a fresh CRL.
+    await crlService.generateCRL('root-1');
+    expect(store.state.crlNumber).toBe(2);
+  });
+
+  it('never caches a CRL whose transaction rolled back', async () => {
+    const { row, privateKeyPem } = await createRoot();
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
+    const store = crlStore({ revoked: [{ serialNumber: '0a01', revokedAt: new Date() }] }, { failStoringCrl: true });
+    const crlService = new CRLService(store.db as never, caService, store.cache as never);
+
+    await expect(crlService.generateCRL('root-1')).rejects.toThrow('database went away');
+
+    expect(store.cache.set).not.toHaveBeenCalled();
+    expect(store.events).toEqual(['begin', 'rollback']);
+    expect(store.state.crlNumber).toBe(0);
+  });
+
+  it('caches the stored CRL when another process committed a newer one meanwhile', async () => {
+    const { row, privateKeyPem } = await createRoot();
+    const caService = new CAService({} as never, cryptoService, audit as never);
+    vi.spyOn(caService, 'getCASigningMaterials').mockResolvedValue({ ca: row, privateKeyPem });
+    const store = crlStore({});
+    const crlService = new CRLService(store.db as never, caService, store.cache as never);
+    store.cache.set.mockImplementationOnce(async (key: string, value: string) => {
+      store.cached.set(key, value);
+      store.state.lastCrlDer = 'newer-crl-from-another-process';
+    });
+
+    await crlService.generateCRL('root-1');
+
+    expect(store.cached.get('crl:root-1')).toBe('newer-crl-from-another-process');
   });
 
   it('keeps serving a revoked CA its final CRL instead of failing', async () => {

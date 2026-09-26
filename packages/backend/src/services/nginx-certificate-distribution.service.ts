@@ -1,6 +1,6 @@
 import { createHash, createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto';
 import { and, asc, eq, inArray, isNull, like, lte } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import {
   certificateAuthorities,
   certificates,
@@ -895,23 +895,34 @@ export class NginxCertificateDistributionService {
     }
   }
 
-  async removeSslCertificateAsset(certId: string): Promise<void> {
-    const asset = await this.findAsset({ type: 'ssl', id: certId });
+  /**
+   * Retire an SSL certificate's asset: replicas enter their cleanup grace
+   * period, or the asset is dropped when nothing was deployed. Pass the
+   * caller's transaction (certificate delete) so a rollback leaves the
+   * surviving certificate's replicas untouched.
+   */
+  async removeSslCertificateAsset(certId: string, executor: DrizzleExecutor = this.db): Promise<void> {
+    const asset = await this.findAsset({ type: 'ssl', id: certId }, executor);
     if (!asset) return;
-    const replicas = await this.db.query.nginxCertificateReplicas.findMany({
+    const replicas = await executor.query.nginxCertificateReplicas.findMany({
       where: eq(nginxCertificateReplicas.assetId, asset.id),
     });
     if (replicas.length === 0) {
-      await this.db.delete(nginxCertificateAssets).where(eq(nginxCertificateAssets.id, asset.id));
+      await executor.delete(nginxCertificateAssets).where(eq(nginxCertificateAssets.id, asset.id));
       return;
     }
     for (const replica of replicas) {
-      await this.markReplicaById(asset.id, replica.nodeId, {
-        status: 'cleanup_pending',
-        cleanupAfter: new Date(Date.now() + NGINX_CERTIFICATE_REPLICA_GRACE_MS),
-        incrementGeneration: true,
-        lastError: null,
-      });
+      await this.markReplicaById(
+        asset.id,
+        replica.nodeId,
+        {
+          status: 'cleanup_pending',
+          cleanupAfter: new Date(Date.now() + NGINX_CERTIFICATE_REPLICA_GRACE_MS),
+          incrementGeneration: true,
+          lastError: null,
+        },
+        executor
+      );
     }
   }
 
@@ -1128,8 +1139,11 @@ export class NginxCertificateDistributionService {
     return this.db.query.nodes.findFirst({ where: eq(nodes.id, nodeId) });
   }
 
-  private async findAsset(reference: CertificateReference): Promise<AssetRow | undefined> {
-    return this.db.query.nginxCertificateAssets.findFirst({
+  private async findAsset(
+    reference: CertificateReference,
+    executor: DrizzleExecutor = this.db
+  ): Promise<AssetRow | undefined> {
+    return executor.query.nginxCertificateAssets.findFirst({
       where: and(
         eq(nginxCertificateAssets.referenceType, reference.type),
         eq(nginxCertificateAssets.referenceId, reference.id)
@@ -1282,15 +1296,20 @@ export class NginxCertificateDistributionService {
     });
   }
 
-  private async markReplicaById(assetId: string, nodeId: string, changes: ReplicaChanges): Promise<number> {
+  private async markReplicaById(
+    assetId: string,
+    nodeId: string,
+    changes: ReplicaChanges,
+    executor: DrizzleExecutor = this.db
+  ): Promise<number> {
     const { incrementGeneration, incrementRepairAttempts, ...update } = changes;
     // A replica that becomes ready starts a fresh backoff sequence.
     if (update.status === 'ready' && update.repairAttempts === undefined) update.repairAttempts = 0;
-    const existing = await this.db.query.nginxCertificateReplicas.findFirst({
+    const existing = await executor.query.nginxCertificateReplicas.findFirst({
       where: and(eq(nginxCertificateReplicas.assetId, assetId), eq(nginxCertificateReplicas.nodeId, nodeId)),
     });
     if (!existing) {
-      await this.db.insert(nginxCertificateReplicas).values({
+      await executor.insert(nginxCertificateReplicas).values({
         assetId,
         nodeId,
         generation: incrementGeneration ? 1 : 0,
@@ -1300,7 +1319,7 @@ export class NginxCertificateDistributionService {
       return incrementGeneration ? 1 : 0;
     }
     const nextGeneration = incrementGeneration ? existing.generation + 1 : existing.generation;
-    await this.db
+    await executor
       .update(nginxCertificateReplicas)
       .set({
         ...update,

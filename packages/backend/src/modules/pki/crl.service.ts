@@ -17,6 +17,13 @@ const CRL_LOCK_PREFIX = 'pki-crl:';
 
 @injectable()
 export class CRLService {
+  /** Per CA: tail of the in-process generation queue. */
+  private readonly generationQueues = new Map<string, Promise<void>>();
+  /** Per CA: revocation snapshots taken by generations in this process. */
+  private readonly snapshotsTaken = new Map<string, number>();
+  /** Per CA: the last CRL this process committed and the snapshot it lists. */
+  private readonly lastPublished = new Map<string, { snapshot: number; crlDer: Buffer }>();
+
   constructor(
     @inject(TOKENS.DrizzleClient) private readonly db: DrizzleClient,
     private readonly caService: CAService,
@@ -66,20 +73,39 @@ export class CRLService {
   }
 
   /**
-   * Sign and publish a new CRL. Generations for one CA run one at a time under a
-   * transaction-scoped advisory lock: the CRL number is taken with
+   * Sign and publish a new CRL, or return one that already lists everything
+   * this call must list.
+   *
+   * Generations for one CA queue in process first, so waiting callers hold no
+   * pool connection, and then run under a transaction-scoped advisory lock
+   * (which also fences other processes): the CRL number is taken with
    * `UPDATE ... RETURNING` and the revoked set is read inside the lock, so a
    * later CRL never lists fewer revocations than an earlier one and no two CRLs
-   * share a number. The cache is written before the lock is released, so a
-   * slower generation cannot overwrite a newer CRL there either.
+   * share a number.
+   *
+   * A caller reuses the last CRL this process committed when that CRL's
+   * revocation snapshot was taken after the caller started: every revocation
+   * committed before the call is then in it. A burst of cache misses on the
+   * public endpoint therefore signs once instead of once per request. (An
+   * in-process snapshot counter decides this rather than `lastCrlAt`: a
+   * millisecond timestamp cannot order a snapshot against a request that
+   * started in the same millisecond.)
+   *
+   * The cache is written after commit, never with a CRL that rolled back.
    */
   async generateCRL(caId: string, options?: { allowSystem?: boolean; allowInactive?: boolean }): Promise<Buffer> {
+    // Taken before any await: revocations committed before this call must be listed.
+    const startedAfterSnapshot = this.snapshotsTaken.get(caId) ?? 0;
     const validityHours = getEnvironmentSettingsSnapshot().pkiDefaults.crlValidityHours;
     const { ca, privateKeyPem } = await this.caService.getCASigningMaterials(caId, options);
-    const algorithm = this.caService.getAlgorithm(ca.keyAlgorithm);
-    const caKeys = await this.caService.importKeyPair(ca.certificatePem, privateKeyPem, algorithm, true);
 
-    try {
+    return this.inGenerationQueue(caId, async () => {
+      const latest = this.lastPublished.get(caId);
+      if (latest && latest.snapshot > startedAfterSnapshot) return latest.crlDer;
+
+      const algorithm = this.caService.getAlgorithm(ca.keyAlgorithm);
+      const caKeys = await this.caService.importKeyPair(ca.certificatePem, privateKeyPem, algorithm, true);
+
       const published = await this.db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${`${CRL_LOCK_PREFIX}${caId}`}))`);
         const [numbered] = await tx
@@ -92,6 +118,8 @@ export class CRLService {
             notAfter: certificateAuthorities.notAfter,
           });
         if (!numbered) throw new AppError(404, 'CA_NOT_FOUND', 'CA not found');
+        const snapshot = (this.snapshotsTaken.get(caId) ?? 0) + 1;
+        this.snapshotsTaken.set(caId, snapshot);
 
         // Read inside the lock: every revocation committed before this CRL's
         // number was taken is listed.
@@ -146,18 +174,47 @@ export class CRLService {
           .set({ lastCrlAt: new Date(), lastCrlDer: crlBase64, updatedAt: new Date() })
           .where(eq(certificateAuthorities.id, caId));
 
-        await this.cacheCrl(caId, crlBase64);
-        return { crlDer, crlNumber: numbered.crlNumber, entries: entries.length };
+        return { crlDer, crlBase64, snapshot, crlNumber: numbered.crlNumber, entries: entries.length };
       });
 
+      this.lastPublished.set(caId, { snapshot: published.snapshot, crlDer: published.crlDer });
+      await this.cacheCommittedCrl(caId, published.crlBase64);
       logger.info('Generated CRL', { caId, entries: published.entries, crlNumber: published.crlNumber });
       return published.crlDer;
-    } catch (error) {
-      // The cache may hold a CRL whose transaction did not commit; the next
-      // request regenerates it.
-      await this.invalidateCache(caId).catch(() => undefined);
-      throw error;
-    }
+    });
+  }
+
+  /** Run CRL generations for one CA one after another in this process. */
+  private inGenerationQueue<T>(caId: string, task: () => Promise<T>): Promise<T> {
+    const previous = this.generationQueues.get(caId) ?? Promise.resolve();
+    const run = previous.then(
+      () => task(),
+      () => task()
+    );
+    const tail = run.then(
+      () => undefined,
+      () => undefined
+    );
+    this.generationQueues.set(caId, tail);
+    void tail.then(() => {
+      if (this.generationQueues.get(caId) === tail) this.generationQueues.delete(caId);
+    });
+    return run;
+  }
+
+  /**
+   * Cache a committed CRL. Generations in this process are already ordered by
+   * the queue; if another process committed a newer CRL in the meantime, the
+   * cache follows the stored one instead.
+   */
+  private async cacheCommittedCrl(caId: string, crlBase64: string): Promise<void> {
+    await this.cacheCrl(caId, crlBase64);
+    const [stored] = await this.db
+      .select({ lastCrlDer: certificateAuthorities.lastCrlDer })
+      .from(certificateAuthorities)
+      .where(eq(certificateAuthorities.id, caId))
+      .limit(1);
+    if (stored?.lastCrlDer && stored.lastCrlDer !== crlBase64) await this.cacheCrl(caId, stored.lastCrlDer);
   }
 
   async invalidateCache(caId: string): Promise<void> {

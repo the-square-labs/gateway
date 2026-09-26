@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { AppError } from '@/middleware/error-handler.js';
 import { ACMERenewalJob } from './acme-renewal.job.js';
 
 function createDb(certs: unknown[]) {
@@ -233,5 +234,57 @@ describe('ACMERenewalJob recovery', () => {
         message: expect.stringContaining('was renewed, but not every proxy host received it'),
       })
     );
+  });
+
+  it.each([
+    ['ACME_OPERATION_IN_PROGRESS', 'An ACME renew is already running for this certificate'],
+    ['ACME_ORDER_SUPERSEDED', 'The certificate or its ACME order changed while the renewal was starting'],
+    ['SSL_CERT_DELETED', 'The certificate was deleted while it was being renewed'],
+  ])('skips a certificate another operation owns (%s) without a failure alert', async (code, message) => {
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      type: 'acme',
+      status: 'active',
+      autoRenew: true,
+      acmeChallengeType: 'http-01',
+      domainNames: ['example.com'],
+      notAfter: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+    };
+    const sslService = { renewCert: vi.fn().mockRejectedValue(new AppError(409, code, message)) };
+    const alertService = { createAlert: vi.fn() };
+    const eventBus = { publish: vi.fn() };
+    const job = new ACMERenewalJob(createDb([cert]) as never, sslService as never, alertService as never);
+    job.setEventBus(eventBus as never);
+
+    await job.run();
+
+    expect(sslService.renewCert).toHaveBeenCalledOnce();
+    expect(alertService.createAlert).not.toHaveBeenCalled();
+    expect(eventBus.publish).not.toHaveBeenCalled();
+  });
+
+  it('still alerts on a real renewal failure', async () => {
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      type: 'acme',
+      status: 'active',
+      autoRenew: true,
+      acmeChallengeType: 'http-01',
+      domainNames: ['example.com'],
+      notAfter: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+    };
+    const sslService = {
+      renewCert: vi
+        .fn()
+        .mockRejectedValue(new AppError(500, 'RENEWAL_FAILED', 'Certificate renewal failed: rate limited')),
+    };
+    const alertService = { createAlert: vi.fn() };
+    const job = new ACMERenewalJob(createDb([cert]) as never, sslService as never, alertService as never);
+
+    await job.run();
+
+    expect(alertService.createAlert).toHaveBeenCalledWith(expect.objectContaining({ type: 'expiry_critical' }));
   });
 });

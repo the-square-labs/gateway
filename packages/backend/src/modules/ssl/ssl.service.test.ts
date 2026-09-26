@@ -1,6 +1,7 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '@/middleware/error-handler.js';
+import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { RequestACMECertSchema } from './ssl.schemas.js';
 import { SSLService } from './ssl.service.js';
 
@@ -515,6 +516,67 @@ describe('SSLService pending ACME cancellation', () => {
     await service.deleteCert('cert-1', 'user-1');
 
     expect(events).toEqual(['lock', 'references', 'pages', 'remove-asset', 'delete', 'commit']);
+    // The asset is retired through the delete's own transaction, not the pool.
+    expect(removeSslCertificateAsset).toHaveBeenCalledWith('cert-1', db.lastTx);
+  });
+
+  // Review follow-up: the asset removal wrote on a separate pooled connection,
+  // so a delete that rolled back still left the surviving certificate's
+  // replicas queued for cleanup.
+  it('leaves the certificate replicas untouched when the delete rolls back', async () => {
+    const committed = { id: 'replica-1', assetId: 'asset-1', nodeId: 'node-1', generation: 3, status: 'ready' };
+    const pool = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error('asset removal used a pooled connection outside the delete transaction');
+        },
+      }
+    );
+    const distribution = new NginxCertificateDistributionService(pool as never, {} as never, {} as never, {} as never);
+    const pending: Array<() => void> = [];
+    const tx = {
+      select: vi.fn((fields?: Record<string, unknown>) => ({
+        from: () => ({
+          where: () =>
+            fields
+              ? { limit: async () => [] }
+              : { for: async () => [{ id: 'cert-1', name: 'example.com', domainNames: [], isSystem: false }] },
+        }),
+      })),
+      query: {
+        proxyHosts: { findMany: async () => [] },
+        nginxCertificateAssets: { findFirst: async () => ({ id: 'asset-1' }) },
+        nginxCertificateReplicas: {
+          findMany: async () => [{ ...committed }],
+          findFirst: async () => ({ ...committed }),
+        },
+      },
+      // Writes become visible only if the transaction commits.
+      update: () => ({
+        set: (values: Record<string, unknown>) => ({
+          where: async () => void pending.push(() => Object.assign(committed, values)),
+        }),
+      }),
+      delete: () => ({
+        where: async () => {
+          throw new Error('delete failed');
+        },
+      }),
+    };
+    const db = {
+      transaction: async (fn: (transaction: unknown) => Promise<unknown>) => {
+        const result = await fn(tx);
+        for (const apply of pending) apply();
+        return result;
+      },
+    } as any;
+    const service = new SSLService(db, {} as any, {} as any, { log: vi.fn() } as any, distribution);
+
+    await expect(service.deleteCert('cert-1', 'user-1')).rejects.toThrow('delete failed');
+
+    expect(pending).toHaveLength(1);
+    expect(committed).toMatchObject({ status: 'ready', generation: 3 });
   });
 
   it('deletes an unfinished initial ACME request', async () => {
@@ -577,7 +639,9 @@ function certificateDeleteDb(options: { pagesProfileId?: string }) {
   const referencingHosts: Array<{ id: string; domainNames: string[] }> = [];
   const db: any = {
     lockGranted: () => undefined,
+    lastTx: undefined as unknown,
     transaction: vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
+      db.lastTx = tx;
       const result = await fn(tx);
       events.push('commit');
       return result;

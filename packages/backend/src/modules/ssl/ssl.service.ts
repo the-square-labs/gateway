@@ -1558,7 +1558,9 @@ export class SSLService {
         });
       }
 
-      await this.certificateDistribution.removeSslCertificateAsset(certId);
+      // In this transaction: if the delete rolls back, the certificate's
+      // replicas must not be left queued for cleanup.
+      await this.certificateDistribution.removeSslCertificateAsset(certId, tx);
 
       // Delete from DB
       await tx.delete(sslCertificates).where(eq(sslCertificates.id, certId));

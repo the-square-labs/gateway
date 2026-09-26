@@ -11,6 +11,11 @@ const logger = createChildLogger('ACMERenewalJob');
 
 const RENEWAL_WINDOW_DAYS = 30;
 const SYSTEM_USER_ID = '00000000-0000-0000-0000-000000000000';
+const SKIPPED_RENEWAL_CODES: ReadonlySet<string> = new Set([
+  'ACME_OPERATION_IN_PROGRESS',
+  'ACME_ORDER_SUPERSEDED',
+  'SSL_CERT_DELETED',
+]);
 
 export class ACMERenewalJob {
   private eventBus?: EventBusService;
@@ -126,11 +131,15 @@ export class ACMERenewalJob {
           }
         }
       } catch (error) {
-        // A renewal or verify started by hand is still running; the next pass
-        // looks at the certificate again.
-        if (error instanceof AppError && error.code === 'ACME_OPERATION_IN_PROGRESS') {
+        // Another operation owns the certificate: a renewal or verify started
+        // by hand is still running, replaced the order, or the certificate was
+        // deleted. None of these is a failed renewal; the next pass looks again.
+        if (error instanceof AppError && SKIPPED_RENEWAL_CODES.has(error.code)) {
           busy++;
-          logger.info(`Skipping certificate with an ACME operation in progress: ${cert.name}`, { certId: cert.id });
+          logger.info(`Skipping certificate owned by another ACME operation: ${cert.name}`, {
+            certId: cert.id,
+            code: error.code,
+          });
           continue;
         }
         failed++;
