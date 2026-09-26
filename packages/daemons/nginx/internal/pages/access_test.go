@@ -44,6 +44,7 @@ func TestPreviewAccessRendersProxyHostDirectivesAtServerLevel(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"    server_name abc-main.pages.example;",
+		"    satisfy all;",
 		"    allow 10.0.0.0/8;",
 		"    deny 192.0.2.7;",
 		"    deny all;",
@@ -68,7 +69,7 @@ func TestPreviewAccessIPOnlyAndPublicPreviewsStayUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	config, _ := os.ReadFile(runtime.previewConfigPath("ip.pages.example"))
-	if !strings.Contains(string(config), "    allow 2001:db8::/32;\n    deny all;\n") || strings.Contains(string(config), "auth_basic") {
+	if !strings.Contains(string(config), "    satisfy all;\n    allow 2001:db8::/32;\n    deny all;\n") || strings.Contains(string(config), "auth_basic") {
 		t.Fatalf("IP-only access list rendered incorrectly:\n%s", config)
 	}
 
@@ -76,7 +77,7 @@ func TestPreviewAccessIPOnlyAndPublicPreviewsStayUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	public, _ := os.ReadFile(runtime.previewConfigPath("public.pages.example"))
-	if strings.Contains(string(public), "deny all;\n    root") || strings.Contains(string(public), "auth_basic") {
+	if strings.Contains(string(public), "deny all;\n    root") || strings.Contains(string(public), "auth_basic") || strings.Contains(string(public), "satisfy") {
 		t.Fatalf("public preview must not render access directives:\n%s", public)
 	}
 }
@@ -123,5 +124,70 @@ func TestBindingInspectionComparesPreviewAccess(t *testing.T) {
 	encoded, err := json.Marshal(protected)
 	if err != nil || !strings.Contains(string(encoded), `"access":{"accessListId":"`+accessListID+`"`) {
 		t.Fatalf("expectation JSON shape changed: %s %v", encoded, err)
+	}
+}
+
+func TestPreviewAccessAcceptsTheAllKeyword(t *testing.T) {
+	runtime, _ := accessRuntime(t)
+	access := &PreviewAccess{
+		AccessListID: accessListID,
+		IPRules:      []PreviewIPRule{{Type: "allow", Value: "10.0.0.0/8"}, {Type: "deny", Value: "all"}},
+	}
+	if err := runtime.MaterializePreview(profileID, deploymentID, "all.pages.example", "", "", PreviewFallback{Access: access}); err != nil {
+		t.Fatalf("the access-list schema accepts `all`; the daemon must too: %v", err)
+	}
+	config, _ := os.ReadFile(runtime.previewConfigPath("all.pages.example"))
+	want := "    satisfy all;\n    allow 10.0.0.0/8;\n    deny all;\n    deny all;\n"
+	if !strings.Contains(string(config), want) {
+		t.Fatalf("`deny all` rule rendered incorrectly:\n%s", config)
+	}
+	for _, value := range []string{"allx", "ALL", "all;"} {
+		if validAccessAddress(value) {
+			t.Fatalf("%q must not be accepted", value)
+		}
+	}
+}
+
+func TestProtectedPreviewRedirectsPlainHTTP(t *testing.T) {
+	runtime, _ := accessRuntime(t)
+	certificateID := "55555555-5555-4555-8555-555555555555"
+	version := strings.Repeat("b", 64)
+	access := &PreviewAccess{AccessListID: accessListID, IPRules: []PreviewIPRule{{Type: "allow", Value: "10.0.0.1"}}}
+	if err := runtime.MaterializePreview(profileID, deploymentID, "tls.pages.example", certificateID, version, PreviewFallback{Access: access}); err != nil {
+		t.Fatal(err)
+	}
+	config, _ := os.ReadFile(runtime.previewConfigPath("tls.pages.example"))
+	redirect := "server {\n    listen 80;\n    server_name tls.pages.example;\n    return 301 https://tls.pages.example$request_uri;\n}\nserver {\n    listen 443 ssl;\n"
+	if !strings.Contains(string(config), redirect) {
+		t.Fatalf("a protected TLS preview must answer port 80 only with a redirect:\n%s", config)
+	}
+	plain := string(config)[:strings.Index(string(config), "listen 443 ssl;")]
+	if strings.Count(string(config), "listen 80;") != 1 || strings.Contains(plain, "root ") || strings.Contains(plain, "allow ") {
+		t.Fatalf("plain HTTP server block must carry no content:\n%s", config)
+	}
+
+	if err := runtime.MaterializePreview(profileID, deploymentID, "open.pages.example", certificateID, version); err != nil {
+		t.Fatal(err)
+	}
+	open, _ := os.ReadFile(runtime.previewConfigPath("open.pages.example"))
+	if strings.Contains(string(open), "return 301") || !strings.Contains(string(open), "    listen 80;\n    listen 443 ssl;") {
+		t.Fatalf("unprotected previews keep serving both ports:\n%s", open)
+	}
+}
+
+func TestUsesAccessListFindsProtectedPreviews(t *testing.T) {
+	runtime, htpasswd := accessRuntime(t)
+	if err := os.WriteFile(filepath.Join(htpasswd, "access-list-"+accessListID), []byte("ops:hash\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.UsesAccessList(accessListID) {
+		t.Fatal("no preview references the list yet")
+	}
+	access := &PreviewAccess{AccessListID: accessListID, BasicAuth: true}
+	if err := runtime.MaterializePreview(profileID, deploymentID, "auth.pages.example", "", "", PreviewFallback{Access: access}); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.UsesAccessList(accessListID) || runtime.UsesAccessList("66666666-6666-4666-8666-666666666666") || runtime.UsesAccessList("../x") {
+		t.Fatal("UsesAccessList must match exactly the referenced list")
 	}
 }

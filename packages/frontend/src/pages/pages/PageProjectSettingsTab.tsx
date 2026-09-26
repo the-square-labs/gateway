@@ -1,5 +1,5 @@
 import { Settings } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { PanelShell } from "@/components/common/PanelShell";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
@@ -47,8 +47,16 @@ export function PageProjectSettingsDialog({
   const [accessListId, setAccessListId] = useState(project.accessListId ?? "");
   const [saving, setSaving] = useState(false);
 
+  // Seed the form when the dialog opens (or shows another Project) only. A
+  // refreshed Project while open, e.g. after a link rotation, keeps the edits.
+  const seededProjectId = useRef<string | null>(null);
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      seededProjectId.current = null;
+      return;
+    }
+    if (seededProjectId.current === project.id) return;
+    seededProjectId.current = project.id;
     setName(project.name);
     setDescription(project.description ?? "");
     setAppearanceColor(project.appearanceColor);

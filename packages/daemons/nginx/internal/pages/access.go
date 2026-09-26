@@ -76,6 +76,10 @@ func validAccessAddress(value string) bool {
 	if value == "" || strings.ContainsAny(value, " \t\r\n;{}'\"\\$#`") {
 		return false
 	}
+	// The access-list schema accepts `all` (e.g. `deny all`), as nginx does.
+	if value == "all" {
+		return true
+	}
 	if strings.Contains(value, "/") {
 		_, _, err := net.ParseCIDR(value)
 		return err == nil
@@ -107,7 +111,9 @@ func (r *Runtime) previewAccessDirectives(access *PreviewAccess) []string {
 	if !access.Enabled() {
 		return nil
 	}
-	lines := make([]string, 0, len(access.IPRules)+3)
+	// Explicit, like nginx's default: IP rules and basic auth must both pass.
+	lines := make([]string, 0, len(access.IPRules)+4)
+	lines = append(lines, "    satisfy all;")
 	for _, rule := range access.IPRules {
 		lines = append(lines, "    "+rule.Type+" "+rule.Value+";")
 	}
@@ -118,4 +124,20 @@ func (r *Runtime) previewAccessDirectives(access *PreviewAccess) []string {
 		lines = append(lines, "    auth_basic \"Restricted Access\";", "    auth_basic_user_file "+r.htpasswdPath(access.AccessListID)+";")
 	}
 	return lines
+}
+
+// UsesAccessList reports whether a materialized preview references the access
+// list's htpasswd file, so a proxy-side removal or rollback must keep it.
+func (r *Runtime) UsesAccessList(accessListID string) bool {
+	if !uuidPattern.MatchString(accessListID) {
+		return false
+	}
+	needle := "auth_basic_user_file " + r.htpasswdPath(accessListID) + ";"
+	paths, _ := filepath.Glob(filepath.Join(r.configDir, "pages-preview-*.conf"))
+	for _, path := range paths {
+		if content, err := os.ReadFile(path); err == nil && strings.Contains(string(content), needle) {
+			return true
+		}
+	}
+	return false
 }

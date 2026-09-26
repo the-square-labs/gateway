@@ -33,6 +33,7 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	// Track deployed items for rollback
 	var deployedCerts []string
 	var deployedHtpasswd []string
+	preExistingHtpasswd := make(map[string][]byte)
 	deletedStaleConfigs := make(map[string][]byte)
 	ownershipRollback := make(map[string]bool)
 
@@ -56,9 +57,19 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 		for _, certId := range deployedCerts {
 			nginx.RemoveCert(h.cfg.Nginx.CertsDir, certId)
 		}
-		// Remove newly deployed htpasswd
+		// Restore or remove newly deployed htpasswd. A file a Pages preview
+		// references keeps its previous content: removing it would break the
+		// protected preview.
 		for _, alId := range deployedHtpasswd {
-			nginx.RemoveFile(filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", alId)))
+			path := filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", alId))
+			if previous, existed := preExistingHtpasswd[alId]; existed {
+				_ = nginx.WriteAtomic(path, previous)
+				continue
+			}
+			if h.pagesUsesAccessList(alId) {
+				continue
+			}
+			nginx.RemoveFile(path)
 		}
 		for hostID, previous := range ownershipRollback {
 			_, _, _ = h.secureLinkState.SetSourceConfigManaged(hostID, previous)
@@ -79,6 +90,9 @@ func (h *Handler) handleFullSync(cmd *pb.FullSyncCommand, result *pb.CommandResu
 	// Phase 2: Deploy htpasswd files
 	for _, hp := range cmd.HtpasswdFiles {
 		path := filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", hp.AccessListId))
+		if previous, readErr := os.ReadFile(path); readErr == nil {
+			preExistingHtpasswd[hp.AccessListId] = previous
+		}
 		if err := nginx.WriteAtomic(path, []byte(hp.Content)); err != nil {
 			rollback()
 			result.Success = false
@@ -230,7 +244,16 @@ func (h *Handler) handleDeployHtpasswd(cmd *pb.DeployHtpasswdCommand, result *pb
 	h.logger.Info("htpasswd deployed", "access_list_id", cmd.AccessListId)
 }
 
+// pagesUsesAccessList keeps credentials a protected Pages preview still references.
+func (h *Handler) pagesUsesAccessList(accessListID string) bool {
+	return h.pagesRuntime != nil && h.pagesRuntime.UsesAccessList(accessListID)
+}
+
 func (h *Handler) handleRemoveHtpasswd(cmd *pb.RemoveHtpasswdCommand, result *pb.CommandResult) {
+	if h.pagesUsesAccessList(cmd.AccessListId) {
+		h.logger.Info("htpasswd kept for Pages previews", "access_list_id", cmd.AccessListId)
+		return
+	}
 	path := filepath.Join(h.cfg.Nginx.HtpasswdDir, fmt.Sprintf("access-list-%s", cmd.AccessListId))
 	if err := nginx.RemoveFile(path); err != nil {
 		result.Success = false

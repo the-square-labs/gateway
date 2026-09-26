@@ -41,6 +41,10 @@ describe('Pages Deployment expiry', () => {
     });
     expect(begin).toMatchObject({ format: 'html', expiresInHours: 12 });
     expect(() => CreatePageDeploymentSchema.parse({ ...begin, format: 'zip' })).toThrow();
+    // Tag names are validated at begin, before any byte is uploaded.
+    for (const tag of ['Bad_Tag', 'trailing-', 'latest', 'a'.repeat(64)]) {
+      expect(() => CreatePageDeploymentSchema.parse({ ...begin, tag })).toThrow();
+    }
     expect(FinalizePageUploadSchema.parse({})).toEqual({});
     expect(FinalizePageUploadSchema.parse({ expiresAt: null })).toEqual({ expiresAt: null });
   });

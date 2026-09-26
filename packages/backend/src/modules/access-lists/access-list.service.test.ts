@@ -69,6 +69,7 @@ describe('AccessListService update', () => {
       query: {
         accessLists: { findFirst: vi.fn().mockResolvedValue(existingList) },
         proxyHosts: { findMany: vi.fn().mockResolvedValue(hosts) },
+        pageProjects: { findMany: vi.fn().mockResolvedValue([]) },
       },
       update: vi.fn(() => ({
         set: (values: Record<string, unknown>) => {
@@ -246,5 +247,31 @@ describe('access list schemas', () => {
         basicAuthUsers: [{ username: 'alice', password: 'secret' }],
       }).success
     ).toBe(true);
+  });
+});
+
+describe('AccessListService htpasswd removal', () => {
+  it('keeps the credentials on nodes where a Pages Project still protects its previews with the list', async () => {
+    const removeHtpasswd = vi.fn().mockResolvedValue({ success: true });
+    const db = {
+      select: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([{ nodeId: 'proxy-node' }, { nodeId: 'pages-node' }, { nodeId: null }]),
+        }),
+      }),
+      query: {
+        pageProjects: {
+          findMany: vi.fn().mockResolvedValue([
+            { nodeId: 'pages-node', migrationTargetNodeId: null },
+            { nodeId: 'other-node', migrationTargetNodeId: 'target-node' },
+          ]),
+        },
+      },
+    } as any;
+    const service = new AccessListService(db, {} as any, {} as any, {} as any, { removeHtpasswd } as any, {} as any);
+
+    await (service as any).removeHtpasswd('access-list-1');
+
+    expect(removeHtpasswd.mock.calls).toEqual([['proxy-node', 'access-list-1']]);
   });
 });

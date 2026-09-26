@@ -465,7 +465,19 @@ export class AccessListService {
       .from(proxyHosts)
       .where(eq(proxyHosts.accessListId, accessListId));
 
-    const nodeIds = [...new Set(hostsUsingList.map((h) => h.nodeId).filter(Boolean))] as string[];
+    // Pages previews render the same htpasswd file on their Project's node(s);
+    // removing it there would break a protected preview.
+    const pagesUsingList = await this.db.query.pageProjects.findMany({
+      where: (projects, { eq: equals }) => equals(projects.accessListId, accessListId),
+      columns: { nodeId: true, migrationTargetNodeId: true },
+    });
+    const pagesNodeIds = new Set(
+      pagesUsingList.flatMap((project) => [project.nodeId, project.migrationTargetNodeId]).filter(Boolean)
+    );
+
+    const nodeIds = [...new Set(hostsUsingList.map((h) => h.nodeId).filter(Boolean))].filter(
+      (nodeId) => !pagesNodeIds.has(nodeId)
+    ) as string[];
 
     for (const nodeId of nodeIds) {
       try {

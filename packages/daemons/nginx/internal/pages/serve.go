@@ -87,7 +87,14 @@ func (r *Runtime) isReferenced(deploymentID string) bool {
 }
 
 func (r *Runtime) previewConfig(hostname, deploymentID, certificateID, certificateVersion, runtimeConfigPath string, fallback PreviewFallback) string {
-	lines := []string{"# gateway-pages immutable preview", "server {", "    listen 80;"}
+	lines := []string{"# gateway-pages immutable preview"}
+	if certificateID != "" && fallback.Access.Enabled() {
+		// Never ask for basic-auth credentials over plain HTTP: a protected
+		// preview with a certificate only answers port 80 with a redirect.
+		lines = append(lines, "server {", "    listen 80;", "    server_name "+hostname+";", "    return 301 https://"+hostname+"$request_uri;", "}", "server {")
+	} else {
+		lines = append(lines, "server {", "    listen 80;")
+	}
 	if certificateID != "" {
 		certRoot := filepath.Join(r.certsDir, certificateID, "versions", certificateVersion)
 		lines = append(lines, "    listen 443 ssl;", "    ssl_certificate "+filepath.Join(certRoot, "fullchain.pem")+";", "    ssl_certificate_key "+filepath.Join(certRoot, "privkey.pem")+";")

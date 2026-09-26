@@ -4,6 +4,7 @@ import { toast } from "sonner";
 import { Combobox } from "@/components/common/Combobox";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { PanelShell } from "@/components/common/PanelShell";
+import { useContentLoading } from "@/components/common/reveal-gate";
 import { SettingsControlRow } from "@/components/common/SettingsControlRow";
 import { Button } from "@/components/ui/button";
 import { api } from "@/services/api";
@@ -27,17 +28,30 @@ export function PagePreviewLinksPanel({
   disabled?: boolean;
 }) {
   const [accessLists, setAccessLists] = useState<AccessList[]>([]);
+  // Reported from the first render so the selector never relabels after the dialog appears.
+  const [accessListsLoading, setAccessListsLoading] = useState(true);
   const [rotating, setRotating] = useState(false);
+  useContentLoading(accessListsLoading);
 
   useEffect(() => {
     let cancelled = false;
-    api
-      .listAccessLists({ limit: 100 })
-      .then((response) => {
-        if (!cancelled) setAccessLists(response.data ?? []);
+    const loadAll = async () => {
+      const lists: AccessList[] = [];
+      for (let page = 1; ; page += 1) {
+        const response = await api.listAccessLists({ page, limit: 100 });
+        lists.push(...(response.data ?? []));
+        if (page >= (response.pagination?.totalPages ?? 1)) return lists;
+      }
+    };
+    loadAll()
+      .then((lists) => {
+        if (!cancelled) setAccessLists(lists);
       })
       .catch(() => {
         // Without acl:view the selector keeps the current value only.
+      })
+      .finally(() => {
+        if (!cancelled) setAccessListsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -114,11 +128,12 @@ export function PagePreviewLinksPanel({
         <Button
           variant="outline"
           onClick={() => void rotate()}
-          disabled={disabled || rotating}
+          disabled={disabled}
+          pending={rotating}
           aria-label="Rotate preview links"
         >
           <RefreshCw className="h-4 w-4" />
-          {rotating ? "Rotating…" : "Rotate links"}
+          Rotate links
         </Button>
       </SettingsControlRow>
     </PanelShell>
