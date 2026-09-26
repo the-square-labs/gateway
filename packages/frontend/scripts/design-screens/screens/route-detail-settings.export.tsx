@@ -7,7 +7,7 @@ it("route-detail-settings", async () => {
   await exportScreen({
     id: "route-detail-settings",
     title: "Route detail · Settings",
-    group: "Screens",
+    group: "Ingress",
     route: "/proxy-hosts/app/settings",
     handlers: routeHandlers(),
     height: 1400,

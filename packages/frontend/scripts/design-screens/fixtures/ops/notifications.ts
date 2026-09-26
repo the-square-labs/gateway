@@ -60,6 +60,20 @@ export const webhooks: NotificationWebhook[] = [
     createdAt: ago(96, "d"),
     updatedAt: ago(96, "d"),
   },
+  {
+    id: uuid(64004),
+    name: "Legacy email relay",
+    url: "https://mail-relay.example.net/hooks/gateway",
+    method: "POST",
+    enabled: false,
+    signingSecret: null,
+    signingHeader: null,
+    templatePreset: "json",
+    bodyTemplate: null,
+    headers: {},
+    createdAt: ago(320, "d"),
+    updatedAt: ago(58, "d"),
+  },
 ];
 
 function rule(seed: number, overrides: Partial<AlertRule> & Pick<AlertRule, "name">): AlertRule {
@@ -227,10 +241,32 @@ function delivery(
 }
 
 export const deliveries: WebhookDelivery[] = [
-  delivery(1, { webhookId: opsWebhook, eventType: "certificate.days_until_expiry", severity: "warning", createdAt: ago(18, "m") }),
-  delivery(2, { webhookId: opsWebhook, eventType: "proxy.health.degraded", severity: "warning", createdAt: ago(52, "m") }),
-  delivery(3, { webhookId: oncallWebhook, eventType: "proxy.health.offline", severity: "critical", createdAt: ago(3, "h"), responseStatus: 202, responseBody: '{"status":"accepted"}' }),
-  delivery(4, { webhookId: opsWebhook, eventType: "proxy.health.offline", severity: "critical", createdAt: ago(3, "h") }),
+  delivery(1, {
+    webhookId: opsWebhook,
+    eventType: "certificate.days_until_expiry",
+    severity: "warning",
+    createdAt: ago(18, "m"),
+  }),
+  delivery(2, {
+    webhookId: opsWebhook,
+    eventType: "proxy.health.degraded",
+    severity: "warning",
+    createdAt: ago(52, "m"),
+  }),
+  delivery(3, {
+    webhookId: oncallWebhook,
+    eventType: "proxy.health.offline",
+    severity: "critical",
+    createdAt: ago(3, "h"),
+    responseStatus: 202,
+    responseBody: '{"status":"accepted"}',
+  }),
+  delivery(4, {
+    webhookId: opsWebhook,
+    eventType: "proxy.health.offline",
+    severity: "critical",
+    createdAt: ago(3, "h"),
+  }),
   delivery(5, {
     webhookId: platformWebhook,
     eventType: "container.exited",
@@ -244,11 +280,38 @@ export const deliveries: WebhookDelivery[] = [
     error: "HTTP 503",
     completedAt: null,
   }),
-  delivery(6, { webhookId: opsWebhook, eventType: "container.exited", severity: "critical", createdAt: ago(5, "h") }),
-  delivery(7, { webhookId: opsWebhook, eventType: "node.cpu", severity: "warning", createdAt: ago(9, "h") }),
-  delivery(8, { webhookId: oncallWebhook, eventType: "logging.error_fatal_ratio_percent", severity: "critical", createdAt: ago(21, "h"), responseStatus: 202, responseBody: '{"status":"accepted"}' }),
-  delivery(9, { webhookId: opsWebhook, eventType: "certificate.renewed", severity: "info", createdAt: ago(1, "d") }),
-  delivery(10, { webhookId: opsWebhook, eventType: "node.online", severity: "info", createdAt: ago(2, "d") }),
+  delivery(6, {
+    webhookId: opsWebhook,
+    eventType: "container.exited",
+    severity: "critical",
+    createdAt: ago(5, "h"),
+  }),
+  delivery(7, {
+    webhookId: opsWebhook,
+    eventType: "node.cpu",
+    severity: "warning",
+    createdAt: ago(9, "h"),
+  }),
+  delivery(8, {
+    webhookId: oncallWebhook,
+    eventType: "logging.error_fatal_ratio_percent",
+    severity: "critical",
+    createdAt: ago(21, "h"),
+    responseStatus: 202,
+    responseBody: '{"status":"accepted"}',
+  }),
+  delivery(9, {
+    webhookId: opsWebhook,
+    eventType: "certificate.renewed",
+    severity: "info",
+    createdAt: ago(1, "d"),
+  }),
+  delivery(10, {
+    webhookId: opsWebhook,
+    eventType: "node.online",
+    severity: "info",
+    createdAt: ago(2, "d"),
+  }),
 ];
 
 export const siemDestinations: SiemDestination[] = [
@@ -266,30 +329,80 @@ export const siemDestinations: SiemDestination[] = [
     createdAt: ago(120, "d"),
     updatedAt: ago(40, "d"),
   },
+  {
+    id: uuid(64151),
+    name: "Compliance archive",
+    url: "https://archive.example.net/v1/events",
+    authType: "bearer",
+    customHeaderName: null,
+    secretConfigured: true,
+    enabled: true,
+    pendingDeliveries: 3,
+    lastDeliveryStatus: "retrying",
+    lastDeliveryAt: ago(9, "m"),
+    createdAt: ago(75, "d"),
+    updatedAt: ago(75, "d"),
+  },
+  {
+    id: uuid(64152),
+    name: "Partner audit feed",
+    url: "https://audit.partner.example.org/gateway",
+    authType: "custom_header",
+    customHeaderName: "X-Audit-Key",
+    secretConfigured: true,
+    enabled: false,
+    pendingDeliveries: 0,
+    lastDeliveryStatus: "delivered",
+    lastDeliveryAt: ago(12, "d"),
+    createdAt: ago(60, "d"),
+    updatedAt: ago(12, "d"),
+  },
 ];
 
-export const siemDeliveries: SiemDelivery[] = [
-  ["auth.login", 4],
-  ["proxy.update", 26],
-  ["docker.container.restart", 71],
-  ["ssl.cert.renew", 160],
-].map(([action, minutes], index) => ({
-  id: uuid(64160 + index),
-  destinationId: siemDestinations[0].id,
-  destinationName: siemDestinations[0].name,
-  destinationUrl: siemDestinations[0].url,
-  auditLogId: uuid(64170 + index),
-  action: String(action),
-  status: "delivered" as const,
-  attempt: 1,
-  maxAttempts: 8,
-  nextRetryAt: null,
-  responseStatus: 204,
-  responseTimeMs: 90 + index * 17,
-  error: null,
-  createdAt: ago(Number(minutes), "m"),
-  completedAt: ago(Number(minutes), "m"),
-}));
+type SiemSpec = [
+  action: string,
+  minutes: number,
+  destination: number,
+  status: SiemDelivery["status"],
+  responseStatus: number | null,
+];
+
+const SIEM_DELIVERIES: SiemSpec[] = [
+  ["auth.login", 4, 0, "delivered", 204],
+  ["auth.login", 4, 1, "delivered", 202],
+  ["proxy.update", 9, 1, "retrying", 503],
+  ["proxy.update", 9, 0, "delivered", 204],
+  ["docker.container.restart", 26, 0, "delivered", 204],
+  ["docker.container.restart", 26, 1, "delivered", 202],
+  ["database.backup.run", 71, 0, "delivered", 204],
+  ["admin.user.update", 118, 0, "delivered", 204],
+  ["ssl.cert.renew", 160, 0, "delivered", 204],
+  ["ssl.cert.renew", 160, 1, "delivered", 202],
+];
+
+export const siemDeliveries: SiemDelivery[] = SIEM_DELIVERIES.map(
+  ([action, minutes, destinationIndex, status, responseStatus], index) => {
+    const destination = siemDestinations[destinationIndex];
+    const retrying = status === "retrying";
+    return {
+      id: uuid(64160 + index),
+      destinationId: destination.id,
+      destinationName: destination.name,
+      destinationUrl: destination.url,
+      auditLogId: uuid(64180 + index),
+      action,
+      status,
+      attempt: retrying ? 3 : 1,
+      maxAttempts: 8,
+      nextRetryAt: retrying ? ago(-2, "m") : null,
+      responseStatus,
+      responseTimeMs: retrying ? 10_000 : 90 + index * 17,
+      error: retrying ? "HTTP 503 Service Unavailable" : null,
+      createdAt: ago(minutes, "m"),
+      completedAt: retrying ? null : ago(minutes, "m"),
+    };
+  }
+);
 
 export function page<T>(data: T[], limit = 100) {
   return { data, total: data.length, page: 1, limit, totalPages: 1 };

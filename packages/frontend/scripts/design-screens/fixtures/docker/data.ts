@@ -478,8 +478,8 @@ export const tasks: DockerTask[] = [
     type: "deploy",
     status: "succeeded",
     progress: "Switched traffic to green",
-    createdAt: ago(3, "h"),
-    completedAt: ago(3, "h"),
+    createdAt: ago(182, "m"),
+    completedAt: ago(180, "m"),
   },
   {
     id: uuid(7503),
@@ -487,8 +487,8 @@ export const tasks: DockerTask[] = [
     type: "pull",
     status: "succeeded",
     progress: "registry.example.com/northwind/checkout:1.14.0",
-    createdAt: ago(3, "h"),
-    completedAt: ago(3, "h"),
+    createdAt: ago(184, "m"),
+    completedAt: ago(183, "m"),
   },
   {
     id: uuid(7506),
@@ -496,8 +496,8 @@ export const tasks: DockerTask[] = [
     containerName: "web",
     type: "restart",
     status: "succeeded",
-    createdAt: ago(20, "h"),
-    completedAt: ago(20, "h"),
+    createdAt: ago(20 * 3600, "s"),
+    completedAt: ago(20 * 3600 - 11, "s"),
   },
   {
     id: uuid(7507),
@@ -506,8 +506,8 @@ export const tasks: DockerTask[] = [
     type: "pull",
     status: "succeeded",
     progress: "registry.example.com/northwind/web:2.8.1",
-    createdAt: ago(6, "d"),
-    completedAt: ago(6, "d"),
+    createdAt: ago(6 * 1440 + 3, "m"),
+    completedAt: ago(6 * 1440 + 2, "m"),
   },
   {
     id: uuid(7504),
@@ -515,8 +515,8 @@ export const tasks: DockerTask[] = [
     containerName: "web",
     type: "update",
     status: "succeeded",
-    createdAt: ago(6, "d"),
-    completedAt: ago(6, "d"),
+    createdAt: ago(6 * 1440 + 1, "m"),
+    completedAt: ago(6 * 1440, "m"),
   },
   {
     id: uuid(7505),
@@ -524,8 +524,8 @@ export const tasks: DockerTask[] = [
     containerName: "mailer",
     type: "stop",
     status: "succeeded",
-    createdAt: ago(2, "d"),
-    completedAt: ago(2, "d"),
+    createdAt: ago(2 * 86400, "s"),
+    completedAt: ago(2 * 86400 - 9, "s"),
   },
 ];
 

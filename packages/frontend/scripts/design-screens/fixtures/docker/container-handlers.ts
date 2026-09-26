@@ -1,13 +1,16 @@
 import { HttpResponse, http } from "msw";
 import { wrapped } from "../../handlers";
-import { apps1 } from "./data";
+import { webSource } from "./builds";
 import { webContainerId, webHealthCheck, webInspect } from "./container-detail";
+import { apps1 } from "./data";
 
 export function dockerContainerDetailHandlers() {
   const notFound = () => HttpResponse.json({ message: "Not found" }, { status: 404 });
   return [
-    // An image-based container: no Git source binding.
-    http.get("*/api/docker/nodes/:nodeId/containers/:name/source", () => wrapped(null)),
+    // Built from Git (northwind/web on the Northwind GitLab connector).
+    http.get("*/api/docker/nodes/:nodeId/containers/:name/source", ({ params }) =>
+      params.nodeId === apps1.id && params.name === "web" ? wrapped(webSource) : wrapped(null)
+    ),
     http.get("*/api/docker/nodes/:nodeId/containers/:name/health-check", ({ params }) =>
       params.nodeId === apps1.id && params.name === "web" ? wrapped(webHealthCheck) : notFound()
     ),

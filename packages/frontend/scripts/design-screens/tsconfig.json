@@ -3,7 +3,7 @@
   "compilerOptions": {
     "baseUrl": "../..",
     "paths": { "@/*": ["./src/*"] },
-    "types": ["vite/client", "vitest/globals", "node"],
+    "types": ["vite/client", "vitest/globals", "node", "@testing-library/jest-dom/vitest"],
     "noEmit": true
   },
   "include": ["./**/*.ts", "./**/*.tsx", "../../src/vite-env.d.ts"],

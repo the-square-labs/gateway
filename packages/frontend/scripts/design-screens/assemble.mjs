@@ -48,9 +48,18 @@ const GAP_PAIR = 80;
 const GAP_COLUMN = 240;
 const GAP_ROW = 160;
 const PAIRS_PER_ROW = 2;
+/** Canvas pages in order; `group` is ScreenSpec.group, `subject` completes the page title. */
 const PAGES = [
-  { id: "screens", name: "Screens", group: "Screens" },
-  { id: "states", name: "States", group: "States" },
+  { id: "overview", name: "Overview", group: "Overview", subject: "dashboard and assistant" },
+  { id: "ingress", name: "Routes & Pages", group: "Ingress", subject: "routes, domains, access lists, templates and Pages" },
+  { id: "certificates", name: "Certificates", group: "Certificates", subject: "SSL certificates, CAs and issued certificates" },
+  { id: "docker", name: "Docker", group: "Docker", subject: "containers, deployments, Compose, images, volumes and networks" },
+  { id: "nodes", name: "Nodes", group: "Nodes", subject: "nodes and hosting" },
+  { id: "data", name: "Databases & Storage", group: "Data", subject: "databases and object storage" },
+  { id: "observability", name: "Logs & Alerts", group: "Observability", subject: "logging, notifications, status page and audit" },
+  { id: "administration", name: "Administration", group: "Administration", subject: "settings, users, groups and profile" },
+  { id: "sign-in", name: "Sign-in", group: "Sign-in", subject: "sign-in, OAuth and error pages" },
+  { id: "states", name: "States", group: "States", subject: "dialogs, loading, empty and pending states" },
 ];
 
 const escapeAttr = (value) =>
@@ -185,10 +194,7 @@ export function assemble({ css: requestedMode } = {}) {
     notes[`${page.id}-title`] = {
       x: 0,
       y: -320,
-      text:
-        page.id === "screens"
-          ? "Good Gateway console: key screens, light and dark"
-          : "Good Gateway console: key states, light and dark",
+      text: `Good Gateway console: ${page.subject}, light and dark`,
       kind: "title1",
       maxW: rowWidth,
       page: page.id,
@@ -216,7 +222,7 @@ export function assemble({ css: requestedMode } = {}) {
     v: 3,
     createdOnFiles: config.createdOnFiles,
     title: config.title,
-    launch: { view: "canvas", page: "screens" },
+    launch: { view: "canvas", page: PAGES.find((page) => screens.some((screen) => screen.group === page.group))?.id },
     pages: PAGES.filter((page) => screens.some((screen) => screen.group === page.group)).map(
       ({ id, name }) => ({ id, name })
     ),

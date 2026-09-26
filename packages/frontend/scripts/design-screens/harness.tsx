@@ -16,6 +16,7 @@ import { waitForReveal } from "@/test/reveal";
 import { databases } from "./fixtures/catalog";
 import { adminUser } from "./fixtures/identity";
 import { edgeNode } from "./fixtures/nodes";
+import { backgroundPrewarmHandlers } from "./fixtures/prewarm";
 import { shellHandlers } from "./handlers";
 import { defaultHealthBarsWidth, installLayoutShims } from "./layout-shims";
 import { serializeDocument } from "./serialize";
@@ -25,13 +26,25 @@ export const OUT_DIR = path.resolve(__dirname, "out/dom");
 
 export type UserEventApi = ReturnType<typeof userEvent.setup>;
 
+export type ScreenGroup =
+  | "Overview"
+  | "Ingress"
+  | "Certificates"
+  | "Docker"
+  | "Nodes"
+  | "Data"
+  | "Observability"
+  | "Administration"
+  | "Sign-in"
+  | "States";
+
 export interface ScreenSpec {
   /** Artboard file stem, e.g. `routes-list`. */
   id: string;
   /** Name shown on the artboard's strip. */
   title: string;
-  /** Canvas group the artboard belongs to. */
-  group: "Screens" | "States";
+  /** Canvas page the artboard belongs to (PAGES in assemble.mjs). */
+  group: ScreenGroup;
   /** Location the app opens at. */
   route: string;
   /** Screen-specific API handlers, checked before the shared ones. */
@@ -96,6 +109,7 @@ export async function exportScreen(spec: ScreenSpec) {
   server.use(
     ...(spec.handlers ?? []),
     ...shellHandlers(),
+    ...backgroundPrewarmHandlers(),
     // Anything not covered answers 404 and is listed in the manifest.
     http.all("*", ({ request }) => {
       const url = new URL(request.url);

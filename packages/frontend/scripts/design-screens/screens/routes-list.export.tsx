@@ -7,7 +7,7 @@ it("routes-list", async () => {
   await exportScreen({
     id: "routes-list",
     title: "Routes",
-    group: "Screens",
+    group: "Ingress",
     route: "/proxy-hosts",
     handlers: routeHandlers(),
     before: expandRouteFolders,

@@ -6,7 +6,7 @@ it("domains", async () => {
   await exportScreen({
     id: "domains",
     title: "Domains",
-    group: "Screens",
+    group: "Ingress",
     route: "/domains",
     handlers: domainsHandlers(),
     ready: async () => {

@@ -7,7 +7,7 @@ it("docker-containers", async () => {
   await exportScreen({
     id: "docker-containers",
     title: "Docker · Containers",
-    group: "Screens",
+    group: "Docker",
     route: "/docker/containers",
     handlers: dockerListHandlers(),
     height: 1000,

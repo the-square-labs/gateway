@@ -6,7 +6,7 @@ it("dashboard", async () => {
   await exportScreen({
     id: "dashboard",
     title: "Dashboard",
-    group: "Screens",
+    group: "Overview",
     route: "/",
     // Pinned node cards sit in a four-column grid; the bars share the first column with a badge.
     healthBarsWidth: 180,

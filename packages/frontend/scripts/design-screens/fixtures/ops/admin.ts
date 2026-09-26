@@ -19,7 +19,9 @@ import { ago, uuid } from "../time";
 
 // ── Scopes per group ────────────────────────────────────────────────
 
-const ALL_SCOPES = Array.from(new Set([...TOKEN_SCOPES.map((scope) => scope.value), "admin:system"]));
+const ALL_SCOPES = Array.from(
+  new Set([...TOKEN_SCOPES.map((scope) => scope.value), "admin:system"])
+);
 
 const ADMIN_SCOPES = ALL_SCOPES.filter(
   (scope) => scope !== "admin:system" && scope !== "admin:users:impersonate"
@@ -318,6 +320,15 @@ export const auditEntries: AuditLogEntry[] = [
   ["ssl.cert.renew", "ssl_certificate", uuid(8001), "grafana.example.com", null, 410],
   ["user.block", "user", "user-alex", "Alex Morgan", omar, 1_520],
   ["docker.container.restart", "docker_container", "c0ffee03a1b2", "worker", lena, 2_210],
+  ["database.backup.run", "database", databases[0].id, databases[0].name, maya, 2_880],
+  [
+    "notification.alert_rule.update",
+    "alert_rule",
+    uuid(64013),
+    "Container restart loop",
+    lena,
+    3_950,
+  ],
 ].map(([action, resourceType, resourceId, resourceName, actor, minutes], index) => {
   const person = actor as (typeof people)[number] | null;
   return {

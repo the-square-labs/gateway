@@ -6,7 +6,7 @@ it("notifications-alerts", async () => {
   await exportScreen({
     id: "notifications-alerts",
     title: "Notifications · Alerts",
-    group: "Screens",
+    group: "Observability",
     route: "/notifications/alerts",
     handlers: notificationsHandlers(),
     ready: async () => {

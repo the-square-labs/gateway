@@ -7,7 +7,7 @@ it("ssl-certificates", async () => {
   await exportScreen({
     id: "ssl-certificates",
     title: "SSL certificates",
-    group: "Screens",
+    group: "Certificates",
     route: "/ssl-certificates",
     handlers: [...sslHandlers(), ...domainsHandlers()],
     ready: async () => {

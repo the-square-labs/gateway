@@ -1,14 +1,15 @@
 import { screen } from "@testing-library/react";
+import { nodeScreenHandlers, nodeScreenSetup } from "../fixtures/nodes/sets";
 import { exportScreen } from "../harness";
-import { nodeDetailHandlers } from "../fixtures/edge/node-detail";
 
 it("node-detail", async () => {
   await exportScreen({
     id: "node-detail",
     title: "Node detail",
-    group: "Screens",
+    group: "Nodes",
     route: "/nodes/edge-fra-1",
-    handlers: nodeDetailHandlers(),
+    handlers: nodeScreenHandlers(),
+    before: nodeScreenSetup,
     height: 1300,
     ready: async () => {
       await screen.findByText("Assigned Routes");

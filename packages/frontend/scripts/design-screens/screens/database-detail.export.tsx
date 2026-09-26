@@ -1,15 +1,15 @@
 import { screen } from "@testing-library/react";
-import { exportScreen } from "../harness";
 import { databaseHandlers } from "../fixtures/data/database-handlers";
 import { ordersDb, ordersMonitoringHistory } from "../fixtures/data/databases";
 import { installFixtureEventSource } from "../fixtures/data/event-source";
 import { giveHealthBarsDesktopWidth } from "../fixtures/data/layout";
+import { exportScreen } from "../harness";
 
 it("database-detail", async () => {
   await exportScreen({
     id: "database-detail",
-    title: "Database detail",
-    group: "Screens",
+    title: "Database · Overview",
+    group: "Data",
     route: "/databases/orders-db",
     height: 1100,
     handlers: databaseHandlers(),
@@ -27,7 +27,8 @@ it("database-detail", async () => {
     },
     ready: async () => {
       await screen.findByText("Transaction Rate");
-      await screen.findByText(/TLS certificate expires/);
+      // A healthy certificate shows as a quiet detail row; a notice appears only when it needs attention.
+      await screen.findByText("TLS Certificate");
     },
     notes: [
       "Overview tab of a managed Postgres: metric history arrives through a fixture monitoring stream.",

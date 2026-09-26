@@ -1,8 +1,8 @@
 /**
  * Maya's own account: MFA factors, browser sessions and AI usage. Seeds 64700–64799.
  */
-import type { BrowserSession, User } from "@/types";
-import type { InferenceSelfUsage, InferenceUsageOverview } from "@/types/inference";
+import type { ApiToken, BrowserSession, OAuthAuthorization, User } from "@/types";
+import type { InferenceSelfUsage, InferenceToken, InferenceUsageOverview } from "@/types/inference";
 import { adminUser } from "../identity";
 import { ago, agoMs, ahead, uuid } from "../time";
 
@@ -125,3 +125,107 @@ export const inferenceUsageOverview: InferenceUsageOverview = {
   ],
   dailyUsage,
 };
+
+// ── Authorizations: API tokens, OAuth grants and inference tokens (seeds 65300–65399) ─
+
+const tokenScopes = {
+  deploy: ["docker:containers:view", "docker:containers:manage", "docker:images:pull"],
+  readOnly: ["proxy:view", "nodes:details", "databases:view", "storage:view"],
+  logs: ["logs:read"],
+};
+
+export const apiTokens: ApiToken[] = [
+  {
+    id: uuid(65301),
+    name: "CI deploys (storefront)",
+    tokenPrefix: "gw_9c1e",
+    scopes: tokenScopes.deploy,
+    lastUsedAt: ago(34, "m"),
+    createdAt: ago(120, "d"),
+  },
+  {
+    id: uuid(65302),
+    name: "Grafana data source",
+    tokenPrefix: "gw_41ab",
+    scopes: tokenScopes.readOnly,
+    lastUsedAt: ago(2, "m"),
+    createdAt: ago(88, "d"),
+  },
+  {
+    id: uuid(65303),
+    name: "Log shipper",
+    tokenPrefix: "gw_7f20",
+    scopes: tokenScopes.logs,
+    lastUsedAt: ago(40, "s"),
+    createdAt: ago(61, "d"),
+  },
+  {
+    id: uuid(65304),
+    name: "Old backup script",
+    tokenPrefix: "gw_0d93",
+    scopes: tokenScopes.readOnly,
+    lastUsedAt: ago(74, "d"),
+    createdAt: ago(300, "d"),
+  },
+];
+
+export const oauthAuthorizations: OAuthAuthorization[] = [
+  {
+    clientId: "gateway-cli",
+    clientName: "Gateway CLI",
+    clientUri: "https://gateway.example.com/docs/cli",
+    logoUri: null,
+    scopes: ["nodes:details", "proxy:view", "docker:containers:view"],
+    resource: "https://gateway.example.com/api",
+    resources: ["https://gateway.example.com/api"],
+    activeAccessTokens: 1,
+    activeRefreshTokens: 1,
+    createdAt: ago(21, "d"),
+    lastUsedAt: ago(3, "h"),
+    expiresAt: ahead(9, "d"),
+  },
+  {
+    clientId: "mcp-desktop",
+    clientName: "Desktop assistant (MCP)",
+    clientUri: null,
+    logoUri: null,
+    scopes: ["mcp:use", "proxy:view", "logs:read"],
+    resource: "https://gateway.example.com/mcp",
+    resources: ["https://gateway.example.com/mcp"],
+    activeAccessTokens: 2,
+    activeRefreshTokens: 1,
+    createdAt: ago(6, "d"),
+    lastUsedAt: ago(25, "m"),
+    expiresAt: ahead(24, "d"),
+  },
+];
+
+export const inferenceTokens: InferenceToken[] = [
+  {
+    id: uuid(65311),
+    name: "Laptop (Codex)",
+    tokenPrefix: "gwi_5b0e",
+    status: "active",
+    lastUsedAt: ago(12, "m"),
+    revokedAt: null,
+    createdAt: ago(30, "d"),
+  },
+  {
+    id: uuid(65312),
+    name: "Build agent",
+    tokenPrefix: "gwi_c3a7",
+    status: "active",
+    lastUsedAt: ago(2, "d"),
+    revokedAt: null,
+    createdAt: ago(58, "d"),
+  },
+  {
+    id: uuid(65313),
+    name: "Old workstation",
+    tokenPrefix: "gwi_1f64",
+    status: "revoked",
+    lastUsedAt: ago(40, "d"),
+    revokedAt: ago(33, "d"),
+    createdAt: ago(140, "d"),
+  },
+];

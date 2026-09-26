@@ -1,14 +1,14 @@
 import { screen } from "@testing-library/react";
 import { useAuthStore } from "@/stores/auth";
-import { exportScreen } from "../harness";
 import { profileHandlers } from "../fixtures/ops/handlers";
 import { localAccountUser } from "../fixtures/ops/profile";
+import { exportScreen } from "../harness";
 
 it("profile", async () => {
   await exportScreen({
     id: "profile",
-    title: "Profile",
-    group: "Screens",
+    title: "Profile · Preferences",
+    group: "Administration",
     route: "/profile",
     handlers: profileHandlers(),
     height: 1300,

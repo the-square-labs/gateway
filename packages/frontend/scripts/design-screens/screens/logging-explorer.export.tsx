@@ -1,15 +1,15 @@
 import { screen } from "@testing-library/react";
-import { exportScreen } from "../harness";
 import { loggingHandlers } from "../fixtures/ops/handlers";
 import { installVirtualTableLayout } from "../fixtures/ops/virtual-layout";
+import { exportScreen } from "../harness";
 
 it("logging-explorer", async () => {
   const restoreLayout = installVirtualTableLayout();
   try {
     await exportScreen({
       id: "logging-explorer",
-      title: "Logging explorer",
-      group: "Screens",
+      title: "Logging environment · Logs",
+      group: "Observability",
       route: "/logging/environments/production/logs",
       handlers: loggingHandlers(),
       ready: async () => {

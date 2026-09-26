@@ -8,7 +8,7 @@ it("docker-compose-project", async () => {
   await exportScreen({
     id: "docker-compose-project",
     title: "Compose project",
-    group: "Screens",
+    group: "Docker",
     route: `/docker/compose/${composeIds.stack}`,
     handlers: [...dockerComposeDetailHandlers(), ...dockerListHandlers()],
     height: 1100,

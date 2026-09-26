@@ -6,7 +6,7 @@ it("pages-project", async () => {
   await exportScreen({
     id: "pages-project",
     title: "Pages project · Deployments",
-    group: "Screens",
+    group: "Ingress",
     route: "/pages/marketing-site/deployments",
     handlers: pagesHandlers(),
     ready: async () => {

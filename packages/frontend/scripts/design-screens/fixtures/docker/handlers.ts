@@ -1,6 +1,6 @@
 import { HttpResponse, http } from "msw";
 import { ok, wrapped } from "../../handlers";
-import { dockerNodes } from "../nodes";
+import { dockerNodes, nodes } from "../nodes";
 import {
   composeSummaries,
   containerFolders,
@@ -94,6 +94,26 @@ export function dockerListHandlers() {
     http.get("*/api/docker/nodes/:nodeId/images", ({ params }) => {
       const data = imageRows.filter((row) => row.nodeId === params.nodeId);
       return ok({ data, total: data.length, limit: 1000, truncated: false });
+    }),
+  ];
+}
+
+/**
+ * The Docker nodes advertise the Compose capability (both run Compose projects), so
+ * the Compose create dialog offers them as targets.
+ */
+export function composeCapableNodeHandlers() {
+  return [
+    http.get("*/api/nodes", ({ request }) => {
+      const type = new URL(request.url).searchParams.get("type");
+      const data = nodes
+        .filter((node) => !type || type === "all" || node.type === type)
+        .map((node) =>
+          node.type === "docker"
+            ? { ...node, capabilities: { ...node.capabilities, dockerComposeV1: true } }
+            : node
+        );
+      return ok({ data, total: data.length, page: 1, limit: 50, totalPages: 1 });
     }),
   ];
 }

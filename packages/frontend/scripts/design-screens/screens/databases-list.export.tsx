@@ -8,7 +8,7 @@ it("databases-list", async () => {
   await exportScreen({
     id: "databases-list",
     title: "Databases",
-    group: "Screens",
+    group: "Data",
     route: "/databases",
     handlers: databaseHandlers(),
     before: () => {

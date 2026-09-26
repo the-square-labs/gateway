@@ -3,6 +3,9 @@ import { defineConfig } from "vitest/config";
 
 const frontendRoot = path.resolve(__dirname, "../..");
 
+// Clock times and the browser time zone must not depend on the machine that renders the screens.
+process.env.TZ = "UTC";
+
 /**
  * Design screen exporter: mounts real pages in the jsdom test environment,
  * waits for their reveal and writes the settled DOM to `out/dom/`.

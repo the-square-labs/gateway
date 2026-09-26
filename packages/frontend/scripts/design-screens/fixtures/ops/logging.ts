@@ -5,15 +5,22 @@
 import type {
   LoggingEnvironment,
   LoggingFieldDefinition,
+  LoggingIngestToken,
   LoggingMetadata,
   LoggingSchema,
   LoggingSearchResult,
   LoggingSeverity,
 } from "@/types";
-import { agoMs, ago, uuid } from "../time";
+import { ago, agoMs, uuid } from "../time";
 
 const serviceFields: LoggingFieldDefinition[] = [
-  { key: "region", location: "label", type: "string", required: true, description: "Deployment region" },
+  {
+    key: "region",
+    location: "label",
+    type: "string",
+    required: true,
+    description: "Deployment region",
+  },
   { key: "version", location: "label", type: "string", required: true, description: "Release tag" },
   { key: "statusCode", location: "field", type: "number", required: false },
   { key: "durationMs", location: "field", type: "number", required: false },
@@ -51,6 +58,49 @@ export const loggingSchemas: LoggingSchema[] = [
     createdById: "user-omar",
     createdAt: ago(98, "d"),
     updatedAt: ago(98, "d"),
+  },
+  {
+    id: uuid(64203),
+    name: "Payment audit",
+    slug: "payment-audit",
+    description: "Strict shape for payment and refund audit events",
+    schemaMode: "reject",
+    fieldSchema: [
+      {
+        key: "region",
+        location: "label",
+        type: "string",
+        required: true,
+        description: "Deployment region",
+      },
+      {
+        key: "orderId",
+        location: "field",
+        type: "string",
+        required: true,
+        description: "Storefront order number",
+      },
+      {
+        key: "amount",
+        location: "field",
+        type: "number",
+        required: true,
+        description: "Charged amount in minor units",
+      },
+      { key: "currency", location: "field", type: "string", required: true },
+      {
+        key: "provider",
+        location: "field",
+        type: "string",
+        required: false,
+        description: "Payment provider",
+      },
+    ],
+    folderId: null,
+    sortOrder: 2,
+    createdById: "user-lena",
+    createdAt: ago(44, "d"),
+    updatedAt: ago(6, "d"),
   },
 ];
 
@@ -103,6 +153,16 @@ export const loggingEnvironments: LoggingEnvironment[] = [
     fieldSchema: loggingSchemas[1].fieldSchema,
     retentionDays: 14,
   }),
+  environment(3, {
+    name: "Payments sandbox",
+    slug: "payments-sandbox",
+    description: "Provider test traffic; paused until the next integration run",
+    enabled: false,
+    schemaId: uuid(64203),
+    schemaName: "Payment audit",
+    schemaMode: "reject",
+    retentionDays: 3,
+  }),
 ];
 
 export const productionEnvironment = loggingEnvironments[0];
@@ -128,21 +188,99 @@ type EventSpec = [
 
 // Newest first, as the search endpoint returns them.
 const EVENTS: EventSpec[] = [
-  [8, "info", "api", "POST /v1/orders 201 in 84 ms", { route: "/v1/orders", statusCode: 201, durationMs: 84 }],
-  [14, "info", "web", "GET /checkout 200 in 41 ms", { route: "/checkout", statusCode: 200, durationMs: 41 }],
-  [22, "debug", "worker", "Picked job invoices.render (queue=default, attempt 1)", { jobId: "job_7f3a91", queue: "default" }],
-  [37, "warn", "api", "Slow query orders_by_customer took 1840 ms", { route: "/v1/customers/:id/orders", durationMs: 1840 }],
-  [51, "info", "worker", "Sent order confirmation to customer 48213", { jobId: "job_7f3a8c", orderId: "ord_48213" }],
-  [66, "error", "worker", "Payment capture failed for ord_48207: card_declined", { jobId: "job_7f3a77", orderId: "ord_48207", statusCode: 402 }],
-  [79, "info", "api", "GET /v1/catalog/items 200 in 23 ms", { route: "/v1/catalog/items", statusCode: 200, durationMs: 23 }],
+  [
+    8,
+    "info",
+    "api",
+    "POST /v1/orders 201 in 84 ms",
+    { route: "/v1/orders", statusCode: 201, durationMs: 84 },
+  ],
+  [
+    14,
+    "info",
+    "web",
+    "GET /checkout 200 in 41 ms",
+    { route: "/checkout", statusCode: 200, durationMs: 41 },
+  ],
+  [
+    22,
+    "debug",
+    "worker",
+    "Picked job invoices.render (queue=default, attempt 1)",
+    { jobId: "job_7f3a91", queue: "default" },
+  ],
+  [
+    37,
+    "warn",
+    "api",
+    "Slow query orders_by_customer took 1840 ms",
+    { route: "/v1/customers/:id/orders", durationMs: 1840 },
+  ],
+  [
+    51,
+    "info",
+    "worker",
+    "Sent order confirmation to customer 48213",
+    { jobId: "job_7f3a8c", orderId: "ord_48213" },
+  ],
+  [
+    66,
+    "error",
+    "worker",
+    "Payment capture failed for ord_48207: card_declined",
+    { jobId: "job_7f3a77", orderId: "ord_48207", statusCode: 402 },
+  ],
+  [
+    79,
+    "info",
+    "api",
+    "GET /v1/catalog/items 200 in 23 ms",
+    { route: "/v1/catalog/items", statusCode: 200, durationMs: 23 },
+  ],
   [95, "info", "web", "GET / 200 in 12 ms", { route: "/", statusCode: 200, durationMs: 12 }],
-  [118, "warn", "web", "Upstream api answered 429, retrying in 250 ms", { route: "/cart", statusCode: 429 }],
-  [142, "info", "api", "Session refreshed for customer 48213", { route: "/v1/auth/refresh", statusCode: 200, durationMs: 18 }],
+  [
+    118,
+    "warn",
+    "web",
+    "Upstream api answered 429, retrying in 250 ms",
+    { route: "/cart", statusCode: 429 },
+  ],
+  [
+    142,
+    "info",
+    "api",
+    "Session refreshed for customer 48213",
+    { route: "/v1/auth/refresh", statusCode: 200, durationMs: 18 },
+  ],
   [171, "debug", "api", "Cache miss catalog:featured, rebuilt in 96 ms", { durationMs: 96 }],
-  [204, "info", "worker", "Nightly export orders-2026-09 uploaded to assets", { jobId: "job_7f3a02", queue: "exports" }],
-  [236, "error", "api", "Unhandled TimeoutError on POST /v1/payments after 10000 ms", { route: "/v1/payments", statusCode: 504, durationMs: 10_000 }],
-  [263, "info", "web", "GET /account/orders 200 in 58 ms", { route: "/account/orders", statusCode: 200, durationMs: 58 }],
-  [301, "warn", "worker", "Retrying webhook delivery to fulfillment (attempt 2 of 5)", { jobId: "job_7f39e5", statusCode: 503 }],
+  [
+    204,
+    "info",
+    "worker",
+    "Nightly export orders-2026-09 uploaded to assets",
+    { jobId: "job_7f3a02", queue: "exports" },
+  ],
+  [
+    236,
+    "error",
+    "api",
+    "Unhandled TimeoutError on POST /v1/payments after 10000 ms",
+    { route: "/v1/payments", statusCode: 504, durationMs: 10_000 },
+  ],
+  [
+    263,
+    "info",
+    "web",
+    "GET /account/orders 200 in 58 ms",
+    { route: "/account/orders", statusCode: 200, durationMs: 58 },
+  ],
+  [
+    301,
+    "warn",
+    "worker",
+    "Retrying webhook delivery to fulfillment (attempt 2 of 5)",
+    { jobId: "job_7f39e5", statusCode: 503 },
+  ],
 ];
 
 const hex = (seed: number, length: number) => uuid(seed).replace(/-/g, "").slice(0, length);
@@ -164,3 +302,20 @@ export const loggingEvents: LoggingSearchResult[] = EVENTS.map(
     fields,
   })
 );
+
+export const productionTokens: LoggingIngestToken[] = [
+  ["web", "gwlog_web_", 1, 190],
+  ["api", "gwlog_api_", 0.2, 190],
+  ["worker", "gwlog_wrk_", 3, 120],
+  ["edge-forwarder", "gwlog_edg_", 60 * 24 * 9, 60],
+].map(([name, prefix, lastUsedMinutes, createdDays], index) => ({
+  id: uuid(64250 + index),
+  environmentId: productionEnvironment.id,
+  name: String(name),
+  tokenPrefix: `${prefix}${uuid(64260 + index).slice(0, 4)}`,
+  enabled: index !== 3,
+  lastUsedAt: ago(Number(lastUsedMinutes), "m"),
+  expiresAt: null,
+  createdById: index === 2 ? "user-omar" : "user-maya",
+  createdAt: ago(Number(createdDays), "d"),
+}));

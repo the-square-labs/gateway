@@ -8,7 +8,7 @@ it("storage", async () => {
   await exportScreen({
     id: "storage",
     title: "Storage",
-    group: "Screens",
+    group: "Data",
     route: "/storage",
     handlers: storageHandlers(),
     before: () => {

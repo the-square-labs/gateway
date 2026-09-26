@@ -7,7 +7,7 @@ it("admin-groups", async () => {
   await exportScreen({
     id: "admin-groups",
     title: "Groups",
-    group: "Screens",
+    group: "Administration",
     route: "/admin/groups",
     handlers: adminHandlers(),
     before: () => {
