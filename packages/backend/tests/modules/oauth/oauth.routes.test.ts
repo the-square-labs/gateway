@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
+import { API_TOKEN_SCOPES } from '@/lib/scopes.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
@@ -412,6 +413,24 @@ describe('OAuth client and token routes', () => {
     expect(body.client_id).toBe('goc_client');
     expect(body.client_secret).toBeUndefined();
     expect(body.token_endpoint_auth_method).toBe('none');
+  });
+
+  it('registers clients that request the full advertised scope catalog', async () => {
+    const scope = API_TOKEN_SCOPES.join(' ');
+    expect(scope.length).toBeGreaterThan(4096);
+
+    const response = await createApp().request('/api/oauth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        client_name: 'Claude Code',
+        redirect_uris: ['http://localhost:39231/callback'],
+        token_endpoint_auth_method: 'none',
+        scope,
+      }),
+    });
+
+    expect(response.status).toBe(201);
   });
 
   it('rejects unsafe OAuth client metadata URL schemes', async () => {

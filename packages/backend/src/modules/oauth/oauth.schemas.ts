@@ -23,7 +23,7 @@ export const OAuthClientRegistrationSchema = z.object({
   client_name: z.string().min(1).max(255).optional(),
   client_uri: HttpUrlSchema.optional(),
   logo_uri: OptionalHttpUrlSchema.optional(),
-  scope: z.string().max(4096).optional(),
+  scope: z.string().max(MAX_OAUTH_SCOPE_PARAMETER_LENGTH).optional(),
   contacts: z.array(z.string().max(320)).max(5).optional(),
   tos_uri: OptionalHttpUrlSchema.optional(),
   policy_uri: HttpUrlSchema.optional(),
