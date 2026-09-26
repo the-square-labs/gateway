@@ -13,7 +13,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	mobyclient "github.com/moby/moby/client"
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/lifecycle"
 	"github.com/wiolett-industries/gateway/daemon-shared/relaybridge"
@@ -322,7 +321,9 @@ func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.R
 		if r.plugin.databaseManager == nil {
 			return
 		}
-		connection, err = r.plugin.databaseManager.dial(ctx, assignment.OwnerId)
+		// Links and the Gateway's database tools: TLS-enabled PostgreSQL gets
+		// TLS from this daemon unless the client negotiates it itself.
+		connection, err = r.plugin.databaseManager.dialLink(ctx, assignment.OwnerId, stream, cancel)
 	case "database_backup_source", "database_backup_restore":
 		if r.plugin.databaseManager == nil || !managedDatabaseIDPattern.MatchString(assignment.GetRouteId()) {
 			return
@@ -702,8 +703,9 @@ func bridgeRelayConnection(connection net.Conn, stream relayFrameStream, maxFram
 				}
 				_ = connection.SetDeadline(time.Now().Add(databaseTunnelIdleTimeout))
 			case frame.GetHalfClose() != nil:
-				if tcp, ok := connection.(*net.TCPConn); ok {
-					_ = tcp.CloseWrite()
+				// *net.TCPConn, or *tls.Conn for a TLS-enabled PostgreSQL link.
+				if half, ok := connection.(interface{ CloseWrite() error }); ok {
+					_ = half.CloseWrite()
 				}
 				result <- relayBridgeResult{}
 				return
@@ -771,35 +773,6 @@ func (r *relayTunnelRouter) stop() {
 	}
 	r.registrations = map[string]*relayEndpointRegistration{}
 	r.mu.Unlock()
-}
-
-func (m *managedDatabaseManager) dial(ctx context.Context, managedDatabaseID string) (net.Conn, error) {
-	if !managedDatabaseIDPattern.MatchString(managedDatabaseID) {
-		return nil, errors.New("invalid managed database id")
-	}
-	m.mu.Lock()
-	record, err := m.loadRecord(managedDatabaseID)
-	m.mu.Unlock()
-	if err != nil || record.ID != managedDatabaseID {
-		return nil, errors.New("managed database record not found")
-	}
-	inspect, err := m.client.cli.ContainerInspect(ctx, record.ContainerID, mobyclient.ContainerInspectOptions{})
-	if err != nil || inspect.Container.Config == nil || inspect.Container.State == nil || !inspect.Container.State.Running {
-		return nil, errors.New("managed database container is unavailable")
-	}
-	labels := inspect.Container.Config.Labels
-	if labels[managedDatabaseLabel] != record.ID || labels[managedDatabaseTypeTag] != record.Type || inspect.Container.NetworkSettings == nil {
-		return nil, errors.New("managed database container identity is invalid")
-	}
-	endpoint := inspect.Container.NetworkSettings.Networks[record.NetworkName]
-	if endpoint == nil || !endpoint.IPAddress.IsValid() {
-		return nil, errors.New("managed database private network is unavailable")
-	}
-	port, err := managedDatabaseEnginePort(record.Type)
-	if err != nil {
-		return nil, err
-	}
-	return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(endpoint.IPAddress.String(), port))
 }
 
 func managedDatabaseEnginePort(engine string) (string, error) {
