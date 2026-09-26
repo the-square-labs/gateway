@@ -146,6 +146,13 @@ type managedDatabaseCommand struct {
 	// Internal runtime preparation must not replace the durable lifecycle
 	// operation ID used by controller reconciliation after a lost response.
 	PreserveLifecycleOperationID bool `json:"preserveLifecycleOperationId,omitempty"`
+	// Host ports other Gateway workloads on this node reserve. When Docker
+	// picks a published port (PublishedPort or PublishedNativePort is 0), a
+	// pick among them is discarded and Docker picks again: the port is free
+	// only while that workload is stopped.
+	ExcludedHostPorts []uint16 `json:"excludedHostPorts,omitempty"`
+	// Picks discarded so far for ExcludedHostPorts; never sent by the controller.
+	pickedPortAttempts int
 }
 
 type managedRedisConfig struct {

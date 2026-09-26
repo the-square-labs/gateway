@@ -1,5 +1,8 @@
+import { vi } from 'vitest';
 import { container } from '@/container.js';
+import { AuditService } from '@/modules/audit/audit.service.js';
 import { CacheService } from '@/services/cache.service.js';
+import { CryptoService } from '@/services/crypto.service.js';
 import { IDEMPOTENCY_REDIS_SCRIPTS } from './idempotency.js';
 
 interface Entry {
@@ -56,6 +59,11 @@ export class MemoryIdempotencyRedis {
   records(): unknown[] {
     return [...this.entries.keys()].map((key) => JSON.parse(this.read(key) ?? 'null'));
   }
+
+  /** Everything Redis holds, as one string, to prove plaintext never lands there. */
+  dump(): string {
+    return [...this.entries.values()].map((entry) => entry.value).join('\n');
+  }
 }
 
 /** Redis that is down: every command fails. */
@@ -80,4 +88,12 @@ export class FailingIdempotencyRedis {
 
 export function registerIdempotencyRedis(redis: MemoryIdempotencyRedis | FailingIdempotencyRedis): void {
   container.registerInstance(CacheService, { getClient: () => redis } as unknown as CacheService);
+}
+
+/** The master-key encryption idempotency results are sealed with, plus a recording audit log. */
+export function registerIdempotencyRuntime(): { auditLog: ReturnType<typeof vi.fn> } {
+  container.registerInstance(CryptoService, new CryptoService('11'.repeat(32)));
+  const auditLog = vi.fn().mockResolvedValue(true);
+  container.registerInstance(AuditService, { log: auditLog } as unknown as AuditService);
+  return { auditLog };
 }

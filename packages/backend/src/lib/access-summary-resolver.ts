@@ -50,13 +50,34 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export type AccessCredential = 'session' | 'api-token' | 'oauth-token' | 'mcp' | 'assistant';
 
 export interface AccessSummaryPrincipal {
-  userId: string;
-  name: string | null;
-  email: string;
-  group: string;
   credential: AccessCredential;
   /** Tokens and OAuth/MCP grants never reach more than their owner currently can. */
   boundedByOwner: boolean;
+  /** Account identity: present only for browser sessions (REST session or the in-product assistant). */
+  userId?: string;
+  name?: string | null;
+  email?: string;
+  group?: string;
+}
+
+/** Credentials acting in the account holder's own browser session. */
+const SESSION_CREDENTIALS = new Set<AccessCredential>(['session', 'assistant']);
+
+/**
+ * The principal block of an access summary. Gateway has no identity or profile scope, so the owner's
+ * id, name, email and group are returned only to browser sessions; API tokens and OAuth/MCP clients get
+ * the access itself, never who owns it.
+ */
+export function accessSummaryPrincipal(
+  user: { id: string; name: string | null; email: string; groupName: string },
+  credential: AccessCredential
+): AccessSummaryPrincipal {
+  const session = SESSION_CREDENTIALS.has(credential);
+  return {
+    credential,
+    boundedByOwner: !session,
+    ...(session ? { userId: user.id, name: user.name, email: user.email, group: user.groupName } : {}),
+  };
 }
 
 export interface AccessSummaryTarget {

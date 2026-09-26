@@ -33,13 +33,15 @@ function pgError(error: unknown): { code?: string; constraint?: string; detail?:
   return (candidate?.code ? candidate : candidate?.cause) as { code?: string; constraint?: string; detail?: string };
 }
 
-async function expectViolation(promise: Promise<unknown>, code: string, constraint: string) {
+async function expectViolation(promise: Promise<unknown>, code: string | string[], constraint: string) {
   const error = await promise.then(
     () => undefined,
     (reason: unknown) => reason
   );
   expect(error, `expected ${code} on ${constraint}`).toBeDefined();
-  expect(pgError(error)).toMatchObject({ code, constraint });
+  const actual = pgError(error);
+  expect(actual).toMatchObject({ constraint });
+  expect([code].flat()).toContain(actual.code);
 }
 
 /**
@@ -315,10 +317,11 @@ describe.skipIf(!url)('migration 0207 uniqueness guarantees on disposable Postgr
       ]);
     });
 
-    it('keeps the newest active backup and restore and fails the older ones with a clear message', async () => {
+    it('keeps the running (else newest) active backup and restore and fails the others with a clear message', async () => {
       const runs = await q('select id, status, phase, sanitized_error, runtime_cleanup_pending from backup_runs');
       const run = (runId: string) => runs.rows.find((row) => row.id === runId);
-      for (const superseded of [id.run1, id.run2, id.restore1]) {
+      // run2 is running: it is kept over the newer queued run3, whose runner never started.
+      for (const superseded of [id.run1, id.run3, id.restore1]) {
         expect(run(superseded)).toMatchObject({
           status: 'failed',
           phase: 'superseded',
@@ -326,10 +329,11 @@ describe.skipIf(!url)('migration 0207 uniqueness guarantees on disposable Postgr
           runtime_cleanup_pending: true,
         });
       }
-      expect(run(id.run3)).toMatchObject({ status: 'queued' });
+      expect(run(id.run2)).toMatchObject({ status: 'running' });
       expect(run(id.restore2)).toMatchObject({ status: 'running' });
       expect(run(id.restore3)).toMatchObject({ status: 'queued' });
-      expect((await q('select run_id from backup_run_node_leases')).rows).toEqual([]);
+      // The kept running run keeps its executor lease.
+      expect((await q('select run_id from backup_run_node_leases')).rows).toEqual([{ run_id: id.run2 }]);
       expect(
         (await q("select count(*)::int as count from audit_log where action = 'database.backup.superseded'")).rows[0]
       ).toEqual({ count: 3 });
@@ -574,8 +578,8 @@ describe.skipIf(!url)('migration 0207 uniqueness guarantees on disposable Postgr
     it('refuses to delete a certificate a proxy host still references', async () => {
       await expectViolation(
         q('delete from ssl_certificates where id = $1', [id.cert]),
-        // ON DELETE RESTRICT reports restrict_violation.
-        '23001',
+        // ON DELETE RESTRICT: restrict_violation on PostgreSQL 18, foreign_key_violation before.
+        ['23001', '23503'],
         'proxy_hosts_ssl_certificate_id_ssl_certificates_id_fk'
       );
     });

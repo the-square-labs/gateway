@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { OperationLeaseStore } from '@/db/operation-lease.js';
+import { OperationLeaseStore, operationLeaseKey } from '@/db/operation-lease.js';
 import { createFakeOperationLeaseDb } from '@/db/operation-lease.test-helpers.js';
 import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
@@ -335,6 +335,65 @@ describe('duplicateContainer compensation', () => {
     expect(runtimeSettingsService.delete).toHaveBeenCalledWith('node-1', 'copy');
     expect(secretService.deleteImported).toHaveBeenCalledWith('node-1', 'copy');
     expect(accessResourceService.removeContainer).toHaveBeenCalledWith('node-1', 'copy');
+  });
+});
+
+describe('duplicateContainer reserved labels', () => {
+  function duplicateCtx(capabilities: string[], labels: Record<string, string>) {
+    const sendDockerContainerCommand = vi
+      .fn()
+      .mockResolvedValue({ success: true, detail: JSON.stringify({ id: 'container-2' }) });
+    return {
+      sendDockerContainerCommand,
+      ctx: {
+        db: unlockedDockerNodeDb(),
+        auditService: { log: vi.fn().mockResolvedValue(undefined) },
+        nodeDispatch: { sendDockerContainerCommand },
+        accessResourceService: { ensureContainer: vi.fn().mockResolvedValue('scope-2') },
+        validateDockerNode: vi.fn().mockResolvedValue({ id: 'node-1', capabilities: { capabilities } }),
+        assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+        resolveContainerName: vi.fn().mockResolvedValue('source'),
+        inspectContainer: vi
+          .fn()
+          .mockResolvedValue({ Id: 'container-1', HostConfig: { Binds: [] }, Config: { Labels: labels } }),
+        requireNoTransition: vi.fn(),
+        assertNameAvailable: vi.fn().mockResolvedValue(undefined),
+        setTransition: vi.fn(),
+        clearTransition: vi.fn(),
+        emitContainer: vi.fn(),
+        translateNameConflict: (error: unknown) => {
+          throw error;
+        },
+        parseResult: (result: { success: boolean; detail?: string }) => JSON.parse(result.detail || '{}'),
+      },
+    };
+  }
+
+  it('refuses to copy Compose or Gateway labels through a daemon that would keep them', async () => {
+    // The copy would join the Compose project (and its root-level folder) outside the caller's folder.
+    const { ctx, sendDockerContainerCommand } = duplicateCtx([], {
+      'com.docker.compose.project': 'payments',
+      team: 'a',
+    });
+    await expect(duplicateContainer(ctx as never, 'node-1', 'container-1', 'copy', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'UNSUPPORTED_DAEMON',
+    });
+    expect(sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
+  it('duplicates through a daemon that drops reserved labels, and any container without them', async () => {
+    const filtering = duplicateCtx(['docker_duplicate_label_filter_v1'], { 'com.docker.compose.project': 'payments' });
+    await duplicateContainer(filtering.ctx as never, 'node-1', 'container-1', 'copy', 'user-1');
+    expect(filtering.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'duplicate', {
+      containerId: 'container-1',
+      newName: 'copy',
+    });
+
+    // Daemon-owned data describing the copied configuration is not a reason to refuse.
+    const plain = duplicateCtx([], { team: 'a', 'wiolett.gateway.archive.image.reference': 'app:1' });
+    await duplicateContainer(plain.ctx as never, 'node-1', 'container-1', 'copy', 'user-1');
+    expect(plain.sendDockerContainerCommand).toHaveBeenCalledWith('node-1', 'duplicate', expect.anything());
   });
 });
 
@@ -1195,6 +1254,98 @@ describe('container rename and update claims across backend processes', () => {
     });
     b.transitions.clear('node-1', 'orders-v2');
     await vi.waitFor(() => expect(leaseDb.rows.size).toBe(0));
+  });
+
+  // rc.11 data review F6: a rename or update whose lease lapsed, and was taken
+  // over by another process, kept acting as the container's owner.
+  it('stops a rename before it changes anything once another process took its lease over', async () => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const a = backendProcess(leaseDb);
+    const renaming = renameContext(a.transitions, { 'container-1': 'orders-api' });
+    const renamed = renameContainer(
+      { ...renaming.ctx, ...a.holds } as never,
+      'node-1',
+      'container-1',
+      'orders-v2',
+      'user-1'
+    );
+    await renaming.firstRenameChecking;
+    // The lease on the old name lapses during the permission check, and another process claims it.
+    const oldKey = operationLeaseKey('docker-container', 'node-1:orders-api');
+    leaseDb.rows.set(oldKey, { ...leaseDb.rows.get(oldKey)!, token: 'replica-2-token' });
+    renaming.releaseRenameCheck();
+
+    await expect(renamed).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'CONTAINER_BUSY',
+      details: { name: 'orders-api', leaseLost: true },
+    });
+    expect(renaming.environmentService.deleteImported).not.toHaveBeenCalled();
+    expect(renaming.renameRuntime).not.toHaveBeenCalled();
+    expect(a.transitions.get('node-1', 'orders-api')).toBeUndefined();
+    // Its lease on the new name is given back; the other process's lease stays.
+    await vi.waitFor(() => expect(leaseDb.rows.size).toBe(1));
+    expect(leaseDb.rows.get(oldKey)).toMatchObject({ token: 'replica-2-token' });
+  });
+
+  it('stops an update before dispatch once another process took its lease over', async () => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const a = backendProcess(leaseDb);
+    const leaseKey = operationLeaseKey('docker-container', 'node-1:orders-api');
+    const update = {
+      ...updateContext('orders-api', a.holds),
+      // The lease lapses while the task is recorded, and another process claims the container.
+      createTask: vi.fn(async () => {
+        leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token' });
+        return { id: 'task-1' };
+      }),
+      failTask: vi.fn(async (_taskId: string, _error: string, nodeId: string, name: string) =>
+        a.transitions.clear(nodeId, name)
+      ),
+    };
+
+    await expect(
+      updateContainer(update as never, 'node-1', 'container-1', { tag: '2' }, 'user-1')
+    ).rejects.toMatchObject({ statusCode: 409, code: 'CONTAINER_BUSY', details: { leaseLost: true } });
+    expect(update.nodeDispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+    expect(update.failTask).toHaveBeenCalledWith(
+      'task-1',
+      expect.stringContaining('no longer held'),
+      'node-1',
+      'orders-api'
+    );
+    expect(leaseDb.rows.get(leaseKey)).toMatchObject({ token: 'replica-2-token' });
+  });
+
+  it('skips the late env restore of an update whose lease was lost before the daemon task failed', async () => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const a = backendProcess(leaseDb);
+    const environmentService = {
+      getDecryptedMap: vi.fn().mockResolvedValue({ APP_MODE: 'prod' }),
+      replace: vi.fn().mockResolvedValue(undefined),
+    };
+    const update = {
+      ...updateContext('app', a.holds),
+      environmentService,
+      inspectContainer: vi.fn().mockResolvedValue({ Config: { Image: 'app:1', Env: ['APP_MODE=prod'], Labels: {} } }),
+      nodeDispatch: {
+        sendDockerContainerCommand: vi.fn().mockResolvedValue({
+          success: true,
+          detail: JSON.stringify({ id: 'daemon-task-1', type: 'update', status: 'running' }),
+        }),
+      },
+    };
+    await updateContainer(update as never, 'node-1', 'container-1', { env: { APP_MODE: 'staging' } }, 'user-1');
+    expect(environmentService.replace).toHaveBeenCalledTimes(1);
+
+    // The update's lease lapses while the daemon works, and another process claims the container.
+    const leaseKey = operationLeaseKey('docker-container', 'node-1:app');
+    leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token' });
+    const onDaemonTaskFailed = update.watchRecreateByName.mock.calls[0]![9] as () => Promise<void>;
+    await onDaemonTaskFailed();
+
+    // The stored env is left to the new owner.
+    expect(environmentService.replace).toHaveBeenCalledTimes(1);
   });
 });
 

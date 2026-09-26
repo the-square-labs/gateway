@@ -1,6 +1,7 @@
 import 'reflect-metadata';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
+import { dockerContainerFolders } from '@/db/schema/index.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { DockerManagementService } from './docker.service.js';
 import { canImportArchiveContent, importDockerContainerArchive } from './docker-container-archive-operations.js';
@@ -14,10 +15,17 @@ const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
 const OTHER_FOLDER_ID = '33333333-3333-4333-8333-333333333333';
 
 function setup(archive: { environment?: Record<string, string>; secrets?: Record<string, string> } = {}) {
-  // Destination folder lookup of assertDockerCreationAccess: an ordinary container folder.
+  // Destination folder lookup of assertDockerCreationAccess: an ordinary container folder. No Git source reserves
+  // the imported name.
   const db = {
     select: () => ({
-      from: () => ({ where: () => ({ limit: vi.fn().mockResolvedValue([{ id: FOLDER_ID, isSystem: false }]) }) }),
+      from: (table: unknown) => ({
+        where: () => ({
+          limit: vi
+            .fn()
+            .mockResolvedValue(table === dockerContainerFolders ? [{ id: FOLDER_ID, isSystem: false }] : []),
+        }),
+      }),
     }),
   };
   const executeDockerArchive = vi.fn(

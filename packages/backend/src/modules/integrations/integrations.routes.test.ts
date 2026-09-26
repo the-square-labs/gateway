@@ -8,6 +8,7 @@ import { errorHandler } from '@/middleware/error-handler.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
+import { SCOPE_TARGET_LOOKUP_BUDGET, SCOPE_TARGET_RATE_LIMIT, scopeTargetRateLimiter } from './git-scope-targets.js';
 import { integrationsRoutes } from './integrations.routes.js';
 import { clearGitHubScopeTargetCache } from './integrations.service.git-repositories.js';
 import { IntegrationsService } from './integrations.service.js';
@@ -783,7 +784,7 @@ describe('Git scope picker endpoints', () => {
   const CONNECTOR = '33333333-3333-4333-8333-333333333333';
   const OTHER = '55555555-5555-4555-8555-555555555555';
 
-  function githubService() {
+  function githubService(allowlist: string[] | null = null) {
     const request = vi.fn(async (_connector: unknown, _token: string, path: string) => {
       if (path.startsWith('/user/repos')) {
         return new Response(
@@ -801,6 +802,12 @@ describe('Git scope picker endpoints', () => {
       if (path === '/repositories/123') {
         return new Response(JSON.stringify({ full_name: 'acme/app', owner: { id: 7 } }), { status: 200 });
       }
+      if (/^\/repositories\/\d+$/.test(path)) {
+        const id = Number(path.split('/')[2]);
+        if (id >= 2000) {
+          return new Response(JSON.stringify({ id, full_name: `bulk/repo-${id}`, owner: { id: 7 } }), { status: 200 });
+        }
+      }
       return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
     });
     const service = Object.assign(Object.create(IntegrationsService.prototype), {
@@ -811,7 +818,11 @@ describe('Git scope picker endpoints', () => {
         enabled: true,
         baseUrl: 'https://github.com',
         encryptedToken: 'encrypted',
+        allowlistMode: allowlist ? 'selected' : 'all_visible',
       })),
+      listAllowlistRows: vi.fn(async () =>
+        (allowlist ?? []).map((fullPath) => ({ entryType: 'project', remoteId: fullPath, fullPath }))
+      ),
       resolveGitHubConnectorToken: vi.fn().mockResolvedValue('connector-token'),
       githubConnectorRequest: request,
     });
@@ -822,7 +833,10 @@ describe('Git scope picker endpoints', () => {
     return createApp().request(`/api/integrations/${path}`, { headers: authHeaders() });
   }
 
-  afterEach(() => clearGitHubScopeTargetCache());
+  afterEach(() => {
+    clearGitHubScopeTargetCache();
+    scopeTargetRateLimiter.reset();
+  });
 
   it('searches GitHub owners and repositories the caller may view, with a cached catalog', async () => {
     const { service, request } = githubService();
@@ -916,6 +930,45 @@ describe('Git scope picker endpoints', () => {
     const missing = await get(`github/${CONNECTOR}/scope-targets/resolve?ids=repo/999`);
     expect(await missing.json()).toEqual({ items: [{ qualifier: 'repo/999', label: 'repo/999', missing: true }] });
     expect((await get(`github/${CONNECTOR}/scope-targets/resolve?ids=group/1`)).status).toBe(400);
+  });
+
+  it('offers only repositories and owners the connector allowlist includes', async () => {
+    const { service } = githubService(['https://github.com/globex/other']);
+    registerServices(['integrations:github:view'], service);
+
+    const body = (await (await get(`github/${CONNECTOR}/scope-targets`)).json()) as {
+      owners: { id: string }[];
+      repos: { id: string }[];
+    };
+    expect(body.repos.map((repo) => repo.id)).toEqual(['124']);
+    expect(body.owners.map((owner) => owner.id)).toEqual(['8']);
+  });
+
+  it('caps uncached provider lookups per resolve request', async () => {
+    const { service, request } = githubService();
+    registerServices(['integrations:github:view'], service);
+    const ids = Array.from({ length: 100 }, (_, index) => `repo/${2000 + index}`).join(',');
+
+    const body = (await (await get(`github/${CONNECTOR}/scope-targets/resolve?ids=${ids}`)).json()) as {
+      items: { qualifier: string; label: string; missing: boolean }[];
+    };
+    const lookups = request.mock.calls.filter(([, , path]) => String(path).startsWith('/repositories/'));
+    expect(lookups).toHaveLength(SCOPE_TARGET_LOOKUP_BUDGET);
+    expect(body.items).toHaveLength(100);
+    expect(body.items.filter((item) => item.label.startsWith('bulk/'))).toHaveLength(SCOPE_TARGET_LOOKUP_BUDGET);
+    expect(body.items.at(-1)).toEqual({ qualifier: 'repo/2099', label: 'repo/2099', missing: false });
+  });
+
+  it('rate-limits the picker per account', async () => {
+    const { service } = githubService();
+    registerServices(['integrations:github:view'], service);
+    for (let index = 0; index < SCOPE_TARGET_RATE_LIMIT.maxRequests; index += 1)
+      scopeTargetRateLimiter.consume(USER.id);
+
+    const response = await get(`github/${CONNECTOR}/scope-targets`);
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBeTruthy();
+    await expect(response.json()).resolves.toMatchObject({ code: 'SCOPE_TARGET_RATE_LIMITED' });
   });
 
   it('documents both picker endpoints in OpenAPI', () => {

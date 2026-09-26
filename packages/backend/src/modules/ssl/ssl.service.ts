@@ -2,7 +2,12 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
 import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { type OperationLeaseStore, operationLeaseKey } from '@/db/operation-lease.js';
+import {
+  type OperationLeaseHold,
+  type OperationLeaseStore,
+  operationLeaseHeld,
+  operationLeaseKey,
+} from '@/db/operation-lease.js';
 import {
   certificateAuthorities,
   certificates,
@@ -72,6 +77,25 @@ type AcmeOperationKind = 'issue' | 'renew' | 'verify';
 
 /** ACME operation keys held by the current async call chain (see SSLService.runAcmeOperation). */
 const heldAcmeOperations = new AsyncLocalStorage<ReadonlySet<string>>();
+
+/** The lease an ACME operation runs under, which fences its steps and order-state writes. */
+type AcmeLeaseFence = { leaseKey: string; token: string; hold: OperationLeaseHold };
+/** Leases of the ACME operations the current async call chain runs under (see SSLService.runLeasedAcmeOperation). */
+const acmeLeaseFences = new AsyncLocalStorage<readonly AcmeLeaseFence[]>();
+
+/**
+ * An ACME step or write refused because its operation lost its lease: another
+ * process may own the certificate now. ACME_ORDER_SUPERSEDED, so no caller
+ * records it as this operation's failure over the new owner's work.
+ */
+function acmeLeaseLost(): AppError {
+  return new AppError(
+    409,
+    'ACME_ORDER_SUPERSEDED',
+    'The ACME operation lost its lease to another backend process, or could not renew it, and stopped',
+    { leaseLost: true }
+  );
+}
 
 /** How long a finished operation's outcome stays readable for callers in other processes that joined it. */
 const ACME_OUTCOME_RETAIN_MS = 60_000;
@@ -291,6 +315,13 @@ export class SSLService {
    * lapsed from overwriting a newer order.
    */
   private runAcmeOperation<T>(key: string, kind: AcmeOperationKind, actor: string, task: () => Promise<T>): Promise<T> {
+    // A further step (the verify a Cloudflare DNS-01 issue or renewal runs) of
+    // an operation that lost its lease is not taken (acmeLeaseLost).
+    const lostFence = acmeLeaseFences.getStore()?.find((fence) => fence.hold.lost);
+    if (lostFence) {
+      logger.error('ACME operation lost its lease; its next step is skipped', { leaseKey: lostFence.leaseKey, key });
+      return Promise.reject(acmeLeaseLost());
+    }
     const held = heldAcmeOperations.getStore();
     if (held?.has(key)) return task();
     const running = this.acmeOperations.get(key);
@@ -332,7 +363,7 @@ export class SSLService {
         // A finished operation only keeps its outcome for callers that joined it.
         { replaceable: (lease) => lease.data.outcome !== undefined }
       );
-      if (claim.acquired) return this.runLeasedAcmeOperation(leases, leaseKey, claim.token, { kind, actor }, task);
+      if (claim.acquired) return this.runLeasedAcmeOperation(leases, leaseKey, claim, { kind, actor }, task);
       const running = claim.lease.data;
       if (running.kind !== kind || running.actor !== actor) throw acmeOperationInProgress(kind, running.kind);
       const outcome = await this.waitForAcmeOutcome(leases, leaseKey, claim.lease.token);
@@ -340,27 +371,44 @@ export class SSLService {
     }
   }
 
+  /**
+   * Runs `task` as the owner of the lease `claim` took, renewing it meanwhile.
+   * Once the lease is lost (another process took it over, or it could not be
+   * renewed for its TTL), the task stops acting as the owner: its order-state
+   * writes (acmeOrderGuard) match nothing, and a further ACME step it would
+   * start (runAcmeOperation) is refused. The ACME call already in flight
+   * cannot be recalled; what it returns is not stored over the new owner's.
+   */
   private async runLeasedAcmeOperation<T>(
     leases: OperationLeaseStore,
     leaseKey: string,
-    token: string,
+    claim: { token: string; claimedAt: number },
     lease: AcmeOperationLease,
     task: () => Promise<T>
   ): Promise<T> {
+    const { token } = claim;
     const heartbeat = leases.hold(
       () => [leaseKey],
       token,
-      () => logger.warn('ACME operation lease lapsed while the operation was running', { leaseKey })
+      () =>
+        logger.error('ACME operation lost its lease; its remaining steps and order-state writes are skipped', {
+          leaseKey,
+        }),
+      { since: claim.claimedAt }
     );
+    const fences = [...(acmeLeaseFences.getStore() ?? []), { leaseKey, token, hold: heartbeat }];
     let outcome: AcmeOperationOutcome = { status: 'rejected', error: { message: 'ACME operation did not finish' } };
     try {
-      const value = await task();
+      const value = await acmeLeaseFences.run(fences, task);
       outcome = { status: 'fulfilled', value: acmeOutcomeValue(value) };
       return value;
     } catch (error) {
       outcome = { status: 'rejected', error: acmeOutcomeError(error) };
       throw error;
     } finally {
+      if (heartbeat.lost) {
+        logger.error('ACME operation finished after losing its lease', { leaseKey, status: outcome.status });
+      }
       heartbeat.stop();
       await leases
         .release([leaseKey], token, { data: { ...lease, outcome }, retainMs: ACME_OUTCOME_RETAIN_MS })
@@ -388,21 +436,56 @@ export class SSLService {
       const lease = await leases.read<AcmeOperationLease>(leaseKey);
       if (!lease || lease.token !== token) return null;
       if (lease.data.outcome) return lease.data.outcome;
-      if (lease.expiresAt.getTime() <= Date.now()) return null;
+      // Lapsed by the database clock: its process stopped. Never compared
+      // with this process's clock, which may be off by more than the TTL.
+      if (!lease.live) return null;
     }
   }
 
-  /** Matches the certificate row only while it still holds the ACME order an operation started from. */
+  /**
+   * Matches the certificate row only while it still holds the ACME order an
+   * operation started from and, for an operation running under leases (across
+   * backend processes), only while it still owns them by the database clock:
+   * a write made after its lease was lost or taken over matches nothing.
+   */
   private acmeOrderGuard(
     cert: Pick<typeof sslCertificates.$inferSelect, 'id' | 'acmeOrderUrl' | 'acmePendingOperation'>
   ): SQL {
-    return and(
-      eq(sslCertificates.id, cert.id),
-      cert.acmeOrderUrl ? eq(sslCertificates.acmeOrderUrl, cert.acmeOrderUrl) : isNull(sslCertificates.acmeOrderUrl),
-      cert.acmePendingOperation
-        ? eq(sslCertificates.acmePendingOperation, cert.acmePendingOperation)
-        : isNull(sslCertificates.acmePendingOperation)
-    )!;
+    return this.acmeLeaseGuard(
+      and(
+        eq(sslCertificates.id, cert.id),
+        cert.acmeOrderUrl ? eq(sslCertificates.acmeOrderUrl, cert.acmeOrderUrl) : isNull(sslCertificates.acmeOrderUrl),
+        cert.acmePendingOperation
+          ? eq(sslCertificates.acmePendingOperation, cert.acmePendingOperation)
+          : isNull(sslCertificates.acmePendingOperation)
+      )!
+    );
+  }
+
+  /**
+   * `condition`, and, while the current call chain runs an ACME operation
+   * under leases, only while that operation still owns them by the database
+   * clock (checked in the write's own statement).
+   */
+  private acmeLeaseGuard(condition: SQL): SQL {
+    const fences = acmeLeaseFences.getStore() ?? [];
+    if (fences.length === 0) return condition;
+    return and(condition, ...fences.map((fence) => operationLeaseHeld(fence.leaseKey, fence.token)))!;
+  }
+
+  /**
+   * Run right before an ACME write that cannot carry acmeLeaseGuard (an
+   * insert), or before recording a failure: renews the leases the current
+   * operation runs under, so no other process can take them for a full TTL
+   * from here. Throws acmeLeaseLost once one was lost. Outside a leased
+   * operation it does nothing.
+   */
+  private async confirmAcmeLeases(): Promise<void> {
+    for (const fence of acmeLeaseFences.getStore() ?? []) {
+      if (await fence.hold.confirm()) continue;
+      logger.error('ACME operation lost its lease; its write is skipped', { leaseKey: fence.leaseKey });
+      throw acmeLeaseLost();
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -436,6 +519,9 @@ export class SSLService {
         contactEmail,
       });
 
+      // Only while this request still owns its lease: another process may be
+      // issuing for the same domains now.
+      await this.confirmAcmeLeases();
       const [cert] = await this.db
         .insert(sslCertificates)
         .values({
@@ -471,7 +557,7 @@ export class SSLService {
             renewalError: `Certificate deploy failed: ${deployMessage}`,
             updatedAt: new Date(),
           })
-          .where(eq(sslCertificates.id, cert.id));
+          .where(this.acmeLeaseGuard(eq(sslCertificates.id, cert.id)));
         throw deployError;
       }
 
@@ -508,7 +594,8 @@ export class SSLService {
       contactEmail,
     });
 
-    // Save pending cert with ACME state
+    // Save pending cert with ACME state, only while this request still owns its lease.
+    await this.confirmAcmeLeases();
     const [cert] = await this.db
       .insert(sslCertificates)
       .values({
@@ -1072,7 +1159,14 @@ export class SSLService {
         throw error;
       }
       const message = error instanceof Error ? error.message : 'Unknown renewal error';
-      await this.recordRenewalFailure(cert, `Renewal failed: ${message}`);
+      // A renewal that lost its lease records no failure over the new owner's work.
+      await this.confirmAcmeLeases();
+      await this.recordRenewalFailure(
+        cert,
+        `Renewal failed: ${message}`,
+        {},
+        this.acmeLeaseGuard(eq(sslCertificates.id, cert.id))
+      );
       if (error instanceof AppError) throw error;
       throw new AppError(500, 'RENEWAL_FAILED', `Certificate renewal failed: ${message}`);
     }
@@ -1110,14 +1204,16 @@ export class SSLService {
       });
     }
 
-    // Update cert data in DB. A certificate deleted meanwhile is not
-    // redistributed.
+    // Update cert data in DB, only while this renewal still owns its lease.
+    // A certificate deleted meanwhile is not redistributed.
+    await this.confirmAcmeLeases();
     const renewed = await this.db
       .update(sslCertificates)
       .set(renewUpdateData)
-      .where(eq(sslCertificates.id, certId))
+      .where(this.acmeLeaseGuard(eq(sslCertificates.id, certId)))
       .returning({ id: sslCertificates.id });
     if (renewed.length === 0) {
+      await this.confirmAcmeLeases();
       throw new AppError(409, 'SSL_CERT_DELETED', 'The certificate was deleted while it was being renewed');
     }
 
@@ -1133,7 +1229,7 @@ export class SSLService {
       await this.db
         .update(sslCertificates)
         .set({ renewalError: `Deploy failed: ${deployMsg}`, updatedAt: new Date() })
-        .where(eq(sslCertificates.id, certId));
+        .where(this.acmeLeaseGuard(eq(sslCertificates.id, certId)));
       throw new AppError(500, 'DEPLOY_FAILED', `Certificate renewed but deploy failed: ${deployMsg}`);
     }
 

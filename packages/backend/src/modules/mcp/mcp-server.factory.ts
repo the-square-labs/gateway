@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { accessSummaryPrincipal } from '@/lib/access-summary-resolver.js';
 import type { User } from '@/types.js';
 import { registerMcpAccessResource } from './mcp-access.js';
 import { registerMcpPrompts } from './mcp-prompts.js';
@@ -55,14 +56,7 @@ export function createMcpServer(options: CreateMcpServerOptions) {
     options.user
   );
   registerMcpResources(server, options.scopes);
-  registerMcpAccessResource(server, options.scopes, {
-    userId: options.user.id,
-    name: options.user.name,
-    email: options.user.email,
-    group: options.user.groupName,
-    credential: 'mcp',
-    boundedByOwner: true,
-  });
+  registerMcpAccessResource(server, options.scopes, accessSummaryPrincipal(options.user, 'mcp'));
   registerMcpPrompts(server, options.scopes);
   registerMcpSkills(server);
 

@@ -1,15 +1,18 @@
+import { randomUUID } from 'node:crypto';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { PgDialect } from 'drizzle-orm/pg-core';
 import pg from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as schema from '@/db/schema/index.js';
 import { cleanOperationHistory, EXPIRED_OPERATION_LEASE_GRACE_MS } from '@/services/operation-history-retention.js';
 import type { DrizzleClient } from './client.js';
-import { OperationLeaseStore } from './operation-lease.js';
+import { OperationLeaseStore, operationLeaseHeld } from './operation-lease.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
 const migrationsFolder = fileURLToPath(new URL('./migrations', import.meta.url));
@@ -103,18 +106,92 @@ describe.skipIf(!url)('operation leases on disposable PostgreSQL', () => {
     await expect(processA.read('acme:cert:2')).resolves.toBeNull();
   });
 
+  // rc.11 data review F6: expiry was computed and compared on each process's
+  // clock, so a process whose clock ran ahead by more than the TTL took over a
+  // live lease, and one running behind wrote leases that had already expired.
+  it('writes and compares lease expiry on the database clock, whatever the process clock says', async () => {
+    const pool = pools[0]!;
+    const processA = new OperationLeaseStore(db(pool), { ttlMs: 60_000 });
+    const processB = new OperationLeaseStore(db(pool), { ttlMs: 60_000 });
+    const secondsLeft = async (key: string) => {
+      const { rows } = await pool.query<{ left: string }>(
+        'select extract(epoch from expires_at - statement_timestamp()) as left from operation_leases where key = $1',
+        [key]
+      );
+      return Number(rows[0]!.left);
+    };
+    const expire = (key: string) =>
+      pool.query(
+        `update operation_leases set expires_at = statement_timestamp() - interval '1 second' where key = $1`,
+        [key]
+      );
+    const realNow = Date.now();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      // A's clock runs ten minutes behind the database's: its lease still lasts a full TTL.
+      vi.setSystemTime(realNow - 10 * 60_000);
+      const claim = await processA.claim(['clock:1'], { by: 'a' });
+      expect(claim.acquired).toBe(true);
+      expect(await secondsLeft('clock:1')).toBeGreaterThan(50);
+      expect(await secondsLeft('clock:1')).toBeLessThanOrEqual(60);
+
+      // B's clock runs ten minutes ahead: A's lease is live to it all the same.
+      vi.setSystemTime(realNow + 10 * 60_000);
+      await expect(processB.claim(['clock:1'], { by: 'b' })).resolves.toMatchObject({
+        acquired: false,
+        lease: { live: true, data: { by: 'a' } },
+      });
+
+      // Past its expiry by the database clock it has lapsed, also to a process whose clock is behind.
+      await expire('clock:1');
+      vi.setSystemTime(realNow - 10 * 60_000);
+      await expect(processB.read('clock:1')).resolves.toMatchObject({ live: false });
+      const taken = await processB.claim(['clock:1'], { by: 'b' });
+      if (!taken.acquired) throw new Error('lapsed lease not taken over');
+
+      // A finished outcome is retained for its time on the database clock too.
+      await processB.release(['clock:1'], taken.token, { data: { outcome: 'done' }, retainMs: 30_000 });
+      expect(await secondsLeft('clock:1')).toBeGreaterThan(20);
+      expect(await secondsLeft('clock:1')).toBeLessThanOrEqual(30);
+    } finally {
+      vi.useRealTimers();
+      await pool.query(`delete from operation_leases where key = 'clock:1'`);
+    }
+  });
+
+  it('lets a write fenced by operationLeaseHeld land only while its token holds a live lease', async () => {
+    const pool = pools[0]!;
+    const store = new OperationLeaseStore(db(pool));
+    const claim = await store.claim(['fence:1'], {});
+    if (!claim.acquired) throw new Error('not claimed');
+    const held = async (token: string) => {
+      const query = new PgDialect().sqlToQuery(sql`select ${operationLeaseHeld('fence:1', token)} as held`);
+      const { rows } = await pool.query<{ held: boolean }>(query.sql, query.params);
+      return rows[0]!.held;
+    };
+
+    expect(await held(claim.token)).toBe(true);
+    expect(await held(randomUUID())).toBe(false);
+    await pool.query(
+      `update operation_leases set expires_at = statement_timestamp() - interval '1 second' where key = 'fence:1'`
+    );
+    expect(await held(claim.token)).toBe(false);
+    await pool.query(`delete from operation_leases where key = 'fence:1'`);
+  });
+
   it('removes lease rows long past their expiry with the operation history retention', async () => {
     const pool = pools[0]!;
-    const now = new Date();
-    const stale = new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS - 60_000);
-    const recent = new Date(now.getTime() - 60_000);
+    const graceSeconds = EXPIRED_OPERATION_LEASE_GRACE_MS / 1000;
     await pool.query(
       `insert into operation_leases (key, token, holder, data, expires_at)
-       values ('stale', gen_random_uuid(), 'gone', '{}', $1), ('recent', gen_random_uuid(), 'gone', '{}', $2)`,
-      [stale, recent]
+       values ('stale', gen_random_uuid(), 'gone', '{}', statement_timestamp() - make_interval(secs => $1)),
+              ('recent', gen_random_uuid(), 'gone', '{}', statement_timestamp() - interval '1 minute')`,
+      [graceSeconds + 60]
     );
 
-    const result = await cleanOperationHistory(db(pool), 90, now);
+    // The age of a lease is judged by the database clock: a process clock a
+    // day ahead does not remove the recently expired one.
+    const result = await cleanOperationHistory(db(pool), 90, new Date(Date.now() + 24 * 60 * 60_000));
 
     expect(result.removed['expired operation leases']).toBe(1);
     const { rows } = await pool.query<{ key: string }>('select key from operation_leases order by key');

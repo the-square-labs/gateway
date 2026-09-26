@@ -23,6 +23,7 @@ import {
   DATABASE_CHANNEL_SCOPE_BASES,
   hasChannelAccess,
   hasHostingSnapshotEventAccess,
+  hasIntegrationConnectorEventAccess,
   projectHostingSnapshotEvent,
   requiredScopeFor,
 } from './events-channel-access.js';
@@ -140,6 +141,7 @@ function canReceiveChannelPayload(scopes: string[], channel: string, payload: un
   }
   if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
     return hasHostingSnapshotEventAccess(scopes, payload);
+  if (channel === 'integration.connector.changed') return hasIntegrationConnectorEventAccess(scopes, payload);
   const resourceChannelUserId = userResourceChannelUserId(channel);
   if (resourceChannelUserId) return resourceChannelUserId === userId;
   if (channel === 'system.update.changed') return true;

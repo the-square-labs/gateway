@@ -16,7 +16,12 @@ import { hasAIToolCallScope, hasAIToolVisibilityScope } from '@/modules/ai/ai-to
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import type { User } from '@/types.js';
-import { extractMcpIdempotencyKey, mcpToolListing, runMcpToolIdempotently } from './mcp-idempotency.js';
+import {
+  extractMcpIdempotencyKey,
+  MCP_IDEMPOTENCY_WITHHELD_ERROR,
+  mcpToolListing,
+  runMcpToolIdempotently,
+} from './mcp-idempotency.js';
 import type { McpAuthContext } from './mcp-types.js';
 
 /**
@@ -431,6 +436,45 @@ async function auditDeniedMcpTool(
   });
 }
 
+/** Every idempotent replay is audited like the call it stands in for, marked as a replay. */
+async function auditReplayedMcpTool(
+  tool: AIToolDefinition,
+  auth: McpAuthContext,
+  user: User,
+  args: Record<string, unknown>,
+  withheld: boolean
+): Promise<void> {
+  const redactedArgs = redactArgsForTool(tool.name, args) as Record<string, unknown>;
+  setAuditMcpContext({
+    toolName: tool.name,
+    category: tool.category,
+    arguments: redactedArgs,
+    tokenId: auth.tokenId,
+    tokenPrefix: auth.tokenPrefix,
+    authType: auth.authType,
+    clientId: auth.clientId,
+  });
+  await container.resolve(AuditService).log({
+    userId: user.id,
+    action: `mcp.${tool.name}`,
+    resourceType: tool.category.toLowerCase().replace(/\s+/g, '_'),
+    resourceId: getAIToolResourceId(tool, args),
+    details: {
+      source: 'mcp',
+      success: true,
+      idempotencyReplayed: true,
+      withheld,
+      tokenId: auth.tokenId,
+      tokenPrefix: auth.tokenPrefix,
+      authType: auth.authType,
+      clientId: auth.clientId,
+      toolName: tool.name,
+      category: tool.category,
+      arguments: redactedArgs,
+    },
+  });
+}
+
 export function listAvailableMcpTools(scopes: string[], visibleToolNames?: Set<string>): AIToolDefinition[] {
   const tools = AI_TOOLS.filter(
     (tool) =>
@@ -568,11 +612,16 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
     if (!idempotencyKey) return executionResult(await execute());
 
     const outcome = await runMcpToolIdempotently(
-      { auth, toolName, key: idempotencyKey, args: validation.arguments },
+      { auth, user, toolName, key: idempotencyKey, args: validation.arguments },
       execute
     );
     if (outcome.kind === 'rejected') return toolError(outcome.error);
-    if (outcome.kind === 'replayed') return toolResult(outcome.result, { idempotencyReplayed: true });
+    if (outcome.kind === 'replayed' || outcome.kind === 'withheld') {
+      await auditReplayedMcpTool(tool, auth, user, validation.arguments, outcome.kind === 'withheld');
+      return outcome.kind === 'replayed'
+        ? toolResult(outcome.result, { idempotencyReplayed: true })
+        : toolError(MCP_IDEMPOTENCY_WITHHELD_ERROR);
+    }
     return executionResult(outcome.execution);
   });
 }

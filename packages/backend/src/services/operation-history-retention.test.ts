@@ -45,10 +45,12 @@ describe('operation history retention', () => {
     expect(result.removed['expired operation leases']).toBe(RETENTION_DELETE_BATCH + 2);
     expect(result.total).toBe(0);
     const lease = statements.find((query) => query.sql.startsWith('DELETE FROM "operation_leases"'))!;
+    // Judged by the database clock, which lease expiry is written on, not by `now`.
     expect(compact(lease.sql)).toContain(
-      'WHERE "key" IN (SELECT "key" FROM "operation_leases" WHERE "expires_at" < $1'
+      'WHERE "key" IN (SELECT "key" FROM "operation_leases" WHERE "expires_at" < statement_timestamp() - ($1::double precision * interval \'1 millisecond\')'
     );
-    expect(lease.params).toContainEqual(new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS));
+    expect(lease.params).toContainEqual(EXPIRED_OPERATION_LEASE_GRACE_MS);
+    expect(lease.params).not.toContainEqual(new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS));
   });
 
   it('deletes each kind of finished history in batches', async () => {

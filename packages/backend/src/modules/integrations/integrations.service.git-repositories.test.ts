@@ -210,8 +210,8 @@ describe('Repository-qualified GitHub and generic Git scopes', () => {
     });
     const exact = [`integrations:github:repo:read:${CONNECTOR}/repo/123`, 'integrations:github:use'];
     await expect(read(service, exact, 'https://github.com/acme/app')).resolves.toMatchObject({ path: 'README.md' });
-    // The repository identity is cached per connector.
-    expect(request.mock.calls.filter(([, , path]) => path === '/repos/acme/app')).toHaveLength(1);
+    // A path can point at another repository after a rename: lookups by URL always ask GitHub.
+    expect(request.mock.calls.filter(([, , path]) => path === '/repos/acme/app')).toHaveLength(2);
   });
 
   it('refuses writes that a read-only qualifier does not cover', async () => {
@@ -303,6 +303,50 @@ describe('Repository-qualified GitHub and generic Git scopes', () => {
     await expect(readAs('https://github.com/acme/tools')).rejects.toMatchObject({ code: 'CONNECTOR_SCOPE_DENIED' });
     await expect(readAs('https://github.com/globex/other')).rejects.toMatchObject({ code: 'CONNECTOR_SCOPE_DENIED' });
     delete identities['/repos/acme/tools'];
+  });
+
+  it('never authorizes a repository recreated at a renamed repository path with the old repository grant', async () => {
+    const { service } = createService('github');
+    const scopes = [`integrations:github:repo:read:${CONNECTOR}/repo/123`, 'integrations:github:use'];
+    await expect(read(service, scopes, 'https://github.com/acme/app')).resolves.toMatchObject({ path: 'README.md' });
+    // acme/app was renamed and a new repository now answers at the old path.
+    const original = identities['/repos/acme/app'];
+    identities['/repos/acme/app'] = { id: 999, owner: { id: 7 } };
+    try {
+      await expect(read(service, scopes, 'https://github.com/acme/app')).rejects.toMatchObject({
+        code: 'CONNECTOR_SCOPE_DENIED',
+      });
+    } finally {
+      identities['/repos/acme/app'] = original;
+    }
+  });
+
+  it('caches owners by repository ID, re-reads them for credential decisions and forgets them on sync', async () => {
+    clearGitHubRepositoryIdentityCache();
+    const { service, request } = createService('github');
+    request.mockImplementation(
+      async () => new Response(JSON.stringify({ id: 123, owner: { id: 7 } }), { status: 200 })
+    );
+    const connector = { id: CONNECTOR, baseUrl: 'https://github.com' };
+    const internals = service as unknown as {
+      githubRepositoryScopeTargetById(
+        c: unknown,
+        token: string,
+        id: string,
+        options?: { fresh?: boolean }
+      ): Promise<{ containerIds?: string[] }>;
+    };
+    const byId = (options?: { fresh?: boolean }) =>
+      internals.githubRepositoryScopeTargetById(connector, 'system-token', '123', options);
+    await expect(byId()).resolves.toMatchObject({ containerIds: ['7'] });
+    await byId();
+    expect(request).toHaveBeenCalledTimes(1);
+    await byId({ fresh: true });
+    expect(request).toHaveBeenCalledTimes(2);
+    service.invalidateRepositoryScopeCache('github', CONNECTOR);
+    await byId();
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenLastCalledWith(connector, 'system-token', '/repositories/123');
   });
 
   it('limits generic Git to connector qualifiers', async () => {

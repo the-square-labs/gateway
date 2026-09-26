@@ -8,10 +8,10 @@ import {
   FailingIdempotencyRedis,
   MemoryIdempotencyRedis,
   registerIdempotencyRedis,
+  registerIdempotencyRuntime,
 } from '@/middleware/idempotency.test-helpers.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { AI_TOOLS } from '@/modules/ai/ai.tools.js';
-import { AuditService } from '@/modules/audit/audit.service.js';
 import { OAuthService } from '@/modules/oauth/oauth.service.js';
 import type { AppEnv, User } from '@/types.js';
 import { mcpRoutes } from './mcp.routes.js';
@@ -21,7 +21,14 @@ import { resetMcpDiscoveryStateForTests } from './mcp-tools.js';
 
 type JsonRecord = Record<string, any>;
 
-const SCOPES = ['mcp:use', 'acl:create', 'acl:view', 'docker:compose:view', 'docker:compose:manage', 'nodes:create'];
+const SCOPES = [
+  'mcp:use',
+  'proxy:folders:manage',
+  'proxy:view',
+  'docker:compose:view',
+  'docker:compose:manage',
+  'nodes:create',
+];
 
 const USER: User = {
   id: '11111111-1111-4111-8111-111111111111',
@@ -45,7 +52,7 @@ function createApp() {
   return app;
 }
 
-function registerOAuth(tokens: Record<string, string>) {
+function registerOAuth(tokens: Record<string, string>, owner: User = USER) {
   container.registerInstance(OAuthService, {
     getMcpResourceUrl: vi.fn().mockReturnValue('https://gateway.example.com/api/mcp'),
     getApiResourceUrl: vi.fn().mockReturnValue('https://gateway.example.com/api'),
@@ -54,7 +61,7 @@ function registerOAuth(tokens: Record<string, string>) {
       .mockReturnValue('https://gateway.example.com/.well-known/oauth-protected-resource/api/mcp'),
     validateAccessToken: vi.fn(async (raw: string) =>
       tokens[raw]
-        ? { user: USER, scopes: SCOPES, tokenId: tokens[raw], tokenPrefix: raw.slice(0, 10), clientId: 'goc_client' }
+        ? { user: owner, scopes: SCOPES, tokenId: tokens[raw], tokenPrefix: raw.slice(0, 10), clientId: 'goc_client' }
         : null
     ),
   } as unknown as OAuthService);
@@ -89,6 +96,7 @@ function callTool(name: string, args: Record<string, unknown>, token?: string) {
 
 let redis: MemoryIdempotencyRedis;
 let executeTool: ReturnType<typeof vi.fn>;
+let auditLog: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   resetIdempotencyStateForTests();
@@ -98,11 +106,11 @@ beforeEach(() => {
     getConfig: vi.fn().mockResolvedValue({ serverEnabled: true, extendedCompatibility: true }),
   } as unknown as McpSettingsService);
   registerOAuth({ gwo_agent_one: 'oauth-token-1', gwo_agent_two: 'oauth-token-2' });
-  container.registerInstance(AuditService, { log: vi.fn().mockResolvedValue(undefined) } as unknown as AuditService);
+  ({ auditLog } = registerIdempotencyRuntime());
   let created = 0;
   executeTool = vi.fn(async (_user: User, _toolName: string, args: Record<string, unknown>) => {
     created += 1;
-    return { result: { id: `acl-${created}`, name: args.name }, invalidateStores: [] };
+    return { result: { id: `folder-${created}`, name: args.name }, invalidateStores: [] };
   });
   container.registerInstance(AIService, { executeTool } as unknown as AIService);
 });
@@ -122,34 +130,106 @@ describe('MCP idempotencyKey', () => {
     const { tools } = await mcpRequest('tools/list');
     const byName = new Map((tools as JsonRecord[]).map((tool) => [tool.name, tool]));
 
-    const create = byName.get('create_access_list');
+    const create = byName.get('create_route_folder');
     expect(create?.inputSchema.properties.idempotencyKey).toMatchObject({ type: 'string', maxLength: 255 });
     expect(create?.description).toContain('IDEMPOTENCY_KEY_REUSED');
-    expect(byName.get('create_node')?.inputSchema.properties).toHaveProperty('idempotencyKey');
     expect(byName.get('manage_docker_compose')?.description).toContain('with operation "create"');
-    expect(byName.get('list_access_lists')?.inputSchema.properties ?? {}).not.toHaveProperty('idempotencyKey');
+    expect(byName.get('list_routes')?.inputSchema.properties ?? {}).not.toHaveProperty('idempotencyKey');
+    // create_node returns a one-time enrollment token, so it never takes an idempotency key.
+    expect(byName.get('create_node')).toBeDefined();
+    expect(byName.get('create_node')?.inputSchema.properties).not.toHaveProperty('idempotencyKey');
+  });
+
+  it('keeps every secret-returning tool and operation off the idempotent list', () => {
+    const secretTools = [
+      'create_node',
+      'create_access_list',
+      'create_webhook',
+      'issue_certificate',
+      'manage_api_token',
+      'manage_inference_token',
+      'manage_oauth_authorization',
+    ];
+    for (const name of secretTools) expect(MCP_IDEMPOTENT_CREATE_TOOLS, name).not.toHaveProperty(name);
+    const secretOperations = [
+      'token_create',
+      'create_access_key',
+      'import_access_keys',
+      'create_binding',
+      'reveal_credentials',
+      'rotate_credentials',
+      'regenerate_enrollment_token',
+    ];
+    for (const [name, rule] of Object.entries(MCP_IDEMPOTENT_CREATE_TOOLS)) {
+      for (const operation of rule.operations ?? []) {
+        expect(secretOperations, `${name}.${operation}`).not.toContain(operation);
+      }
+    }
+  });
+
+  it('withholds a secret-looking result: the retry learns only that the call completed', async () => {
+    executeTool.mockResolvedValueOnce({
+      result: { id: 'folder-secret', enrollmentToken: 'enroll-secret-value' },
+      invalidateStores: [],
+    });
+
+    const first = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-secret' });
+    const retry = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-secret' });
+
+    expect(first.isError).not.toBe(true);
+    expect(retry.isError).toBe(true);
+    expect(retry.content[0].text).toContain('IDEMPOTENCY_RESULT_WITHHELD');
+    expect(retry.content[0].text).not.toContain('enroll-secret-value');
+    expect(redis.dump()).not.toContain('enroll-secret-value');
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'mcp.create_route_folder',
+        details: expect.objectContaining({ idempotencyReplayed: true, withheld: true }),
+      })
+    );
+  });
+
+  it('never replays a result after the owner loses a scope', async () => {
+    await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-owner' });
+    registerOAuth(
+      { gwo_agent_one: 'oauth-token-1' },
+      { ...USER, scopes: SCOPES.filter((scope) => scope !== 'nodes:create') }
+    );
+    const retry = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-owner' });
+
+    expect(retry._meta).toBeUndefined();
+    expect(executeTool).toHaveBeenCalledTimes(2);
   });
 
   it('replays the original result for a retry instead of creating twice', async () => {
-    const first = await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-1' });
-    const retry = await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-1' });
+    const first = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-1' });
+    const retry = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-1' });
 
     expect(first.isError).not.toBe(true);
-    expect(JSON.parse(first.content[0].text)).toEqual({ id: 'acl-1', name: 'office' });
+    expect(JSON.parse(first.content[0].text)).toEqual({ id: 'folder-1', name: 'office' });
     expect(first._meta?.idempotencyReplayed).toBeUndefined();
     expect(retry.content).toEqual(first.content);
     expect(retry._meta).toEqual({ idempotencyReplayed: true });
     expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(redis.dump()).not.toContain('office');
+    expect(auditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: USER.id,
+        action: 'mcp.create_route_folder',
+        details: expect.objectContaining({ idempotencyReplayed: true, withheld: false, tokenId: 'oauth-token-1' }),
+      })
+    );
     // The key is MCP plumbing: the tool executor never sees it.
     expect(executeTool.mock.calls[0]?.[2]).toEqual({ name: 'office' });
   });
 
   it('rejects different arguments under the same key and isolates tokens', async () => {
-    await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-2' });
-    const reused = await callTool('create_access_list', { name: 'lab', idempotencyKey: 'agent-acl-2' });
+    await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-2' });
+    const reused = await callTool('create_route_folder', { name: 'lab', idempotencyKey: 'agent-folder-2' });
     const otherToken = await callTool(
-      'create_access_list',
-      { name: 'office', idempotencyKey: 'agent-acl-2' },
+      'create_route_folder',
+      { name: 'office', idempotencyKey: 'agent-folder-2' },
       'gwo_agent_two'
     );
 
@@ -165,28 +245,28 @@ describe('MCP idempotencyKey', () => {
     executeTool.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          finish = () => resolve({ result: { id: 'acl-slow' }, invalidateStores: [] });
+          finish = () => resolve({ result: { id: 'folder-slow' }, invalidateStores: [] });
         })
     );
 
-    const first = callTool('create_access_list', { name: 'slow', idempotencyKey: 'agent-acl-3' });
+    const first = callTool('create_route_folder', { name: 'slow', idempotencyKey: 'agent-folder-3' });
     await vi.waitFor(() => expect(executeTool).toHaveBeenCalledTimes(1));
-    const concurrent = await callTool('create_access_list', { name: 'slow', idempotencyKey: 'agent-acl-3' });
+    const concurrent = await callTool('create_route_folder', { name: 'slow', idempotencyKey: 'agent-folder-3' });
     finish();
     await first;
-    const retry = await callTool('create_access_list', { name: 'slow', idempotencyKey: 'agent-acl-3' });
+    const retry = await callTool('create_route_folder', { name: 'slow', idempotencyKey: 'agent-folder-3' });
 
     expect(concurrent.isError).toBe(true);
     expect(concurrent.content[0].text).toContain('IDEMPOTENCY_KEY_IN_PROGRESS');
-    expect(JSON.parse(retry.content[0].text)).toEqual({ id: 'acl-slow' });
+    expect(JSON.parse(retry.content[0].text)).toEqual({ id: 'folder-slow' });
     expect(executeTool).toHaveBeenCalledTimes(1);
   });
 
   it('releases the key when the tool fails so a retry runs again', async () => {
     executeTool.mockResolvedValueOnce({ error: 'node unreachable', invalidateStores: [] });
 
-    const failed = await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-4' });
-    const retry = await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-4' });
+    const failed = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-4' });
+    const retry = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-4' });
 
     expect(failed.isError).toBe(true);
     expect(retry.isError).not.toBe(true);
@@ -197,15 +277,15 @@ describe('MCP idempotencyKey', () => {
   it('runs normally when Redis is down', async () => {
     registerIdempotencyRedis(new FailingIdempotencyRedis());
 
-    await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-5' });
-    const second = await callTool('create_access_list', { name: 'office', idempotencyKey: 'agent-acl-5' });
+    await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-5' });
+    const second = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'agent-folder-5' });
 
     expect(second.isError).not.toBe(true);
     expect(executeTool).toHaveBeenCalledTimes(2);
   });
 
   it('rejects malformed keys before executing', async () => {
-    const result = await callTool('create_access_list', { name: 'office', idempotencyKey: 'x'.repeat(256) });
+    const result = await callTool('create_route_folder', { name: 'office', idempotencyKey: 'x'.repeat(256) });
 
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain('IDEMPOTENCY_KEY_INVALID');

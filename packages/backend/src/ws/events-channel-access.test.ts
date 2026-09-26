@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   hasChannelAccess,
   hasHostingSnapshotEventAccess,
+  hasIntegrationConnectorEventAccess,
   projectHostingSnapshotEvent,
 } from './events-channel-access.js';
 
@@ -107,5 +108,40 @@ describe('perm-data event channel access', () => {
     expect(hasChannelAccess(['pages:view:folder/f1'], 'pages.folder.changed')).toBe(true);
     expect(hasChannelAccess(['pages:create:folder/f1'], 'pages.folder.changed')).toBe(true);
     expect(hasChannelAccess(['domains:view'], 'pages.folder.changed')).toBe(false);
+  });
+});
+
+describe('integration connector events', () => {
+  const C = '11111111-1111-4111-8111-111111111111';
+  const OTHER = '22222222-2222-4222-8222-222222222222';
+
+  it('delivers a connector event only to callers who may see that connector', () => {
+    const narrow = [`integrations:gitlab:repo:read:${C}/project/42`];
+    // The narrow grant still subscribes to the channel...
+    expect(hasChannelAccess(narrow, 'integration.connector.changed')).toBe(true);
+    // ...but only receives its own connector.
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: C, provider: 'gitlab', name: 'Main' })).toBe(true);
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: OTHER, provider: 'gitlab', name: 'Secret' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: C, provider: 'github', name: 'GitHub' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: 'cf-1', provider: 'cloudflare' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: 'ssh-1', provider: 'ssh' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(narrow, { id: 'host-1', provider: 'hosting' })).toBe(false);
+  });
+
+  it('keeps provider-wide viewers on every connector of their providers', () => {
+    const scopes = [
+      'integrations:github:view',
+      'integrations:cloudflare:view',
+      'integrations:ssh:manage',
+      'integrations:hosting:view:host-1',
+    ];
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: OTHER, provider: 'github' })).toBe(true);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: 'cf-1', provider: 'cloudflare' })).toBe(true);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: 'ssh-1', provider: 'ssh' })).toBe(true);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: 'host-1', provider: 'hosting' })).toBe(true);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: 'host-2', provider: 'hosting' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: C, provider: 'gitlab' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(scopes, { provider: 'github' })).toBe(false);
+    expect(hasIntegrationConnectorEventAccess(scopes, { id: 'x', provider: 'unknown' })).toBe(false);
   });
 });

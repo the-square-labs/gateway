@@ -185,9 +185,12 @@ describe('OpenAPI documentation', () => {
       required: false,
     });
     expect((document as any).info.description).toContain('Idempotency-Key');
-    expect(document.paths?.['/api/nodes']?.post.parameters).toContainEqual(idempotencyRef);
     expect(document.paths?.['/api/domains']?.post.parameters).toContainEqual(idempotencyRef);
+    expect(document.paths?.['/api/docker/nodes/{nodeId}/containers']?.post.parameters).toContainEqual(idempotencyRef);
     expect(document.paths?.['/api/nodes']?.get.parameters ?? []).not.toContainEqual(idempotencyRef);
+    // Opt-in only: node creation returns a one-time enrollment token, and other mutations are not listed.
+    expect(document.paths?.['/api/nodes']?.post.parameters ?? []).not.toContainEqual(idempotencyRef);
+    expect(document.paths?.['/api/proxy-hosts/{id}']?.put.parameters ?? []).not.toContainEqual(idempotencyRef);
     const publicWebhook = Object.entries(document.paths ?? {}).find(([path]) =>
       path.startsWith('/api/webhooks/docker/')
     );

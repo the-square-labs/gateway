@@ -175,6 +175,14 @@ func (m *managedDatabaseManager) createContainer(ctx context.Context, record *ma
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", fmt.Errorf("start managed database container: %w", err)
 	}
+	if retry, err := m.discardExcludedPickedPort(ctx, created.ID, input, port); err != nil || retry {
+		if err != nil {
+			return "", err
+		}
+		next := input
+		next.pickedPortAttempts++
+		return m.createContainer(ctx, record, next)
+	}
 	if err := m.waitForDatabaseReady(ctx, created.ID, input); err != nil {
 		_ = m.client.RemoveContainer(ctx, created.ID, true)
 		return "", err
@@ -712,4 +720,72 @@ func marshalManagedDatabaseDetail(record managedDatabaseRecord, status string) (
 		return "", err
 	}
 	return string(value), nil
+}
+
+// maxExcludedPortPicks bounds how often a Docker-picked published port that
+// another Gateway workload reserves is discarded before the create fails.
+const maxExcludedPortPicks = 16
+
+// discardExcludedPickedPort removes the just-started container when Docker
+// picked one of input.ExcludedHostPorts for a published port the controller
+// left to Docker, so the caller creates it again and Docker picks another
+// port. It reports whether to retry.
+func (m *managedDatabaseManager) discardExcludedPickedPort(ctx context.Context, containerID string, input managedDatabaseCommand, primaryPort string) (bool, error) {
+	if len(input.ExcludedHostPorts) == 0 || !input.PublishTCP {
+		return false, nil
+	}
+	var pickedPorts []string
+	if input.PublishedPort == 0 {
+		pickedPorts = append(pickedPorts, primaryPort)
+	}
+	if input.Type == "clickhouse" && input.PublishNativeTCP && input.PublishedNativePort == 0 {
+		pickedPorts = append(pickedPorts, clickHouseNativePort(input.TLSEnabled))
+	}
+	if len(pickedPorts) == 0 {
+		return false, nil
+	}
+	inspect, err := m.client.cli.ContainerInspect(ctx, containerID, mobyclient.ContainerInspectOptions{})
+	if err != nil {
+		_ = m.client.RemoveContainer(ctx, containerID, true)
+		return false, fmt.Errorf("inspect picked managed database port: %w", err)
+	}
+	var hostPorts []string
+	for _, name := range pickedPorts {
+		containerPort, parseErr := network.ParsePort(name)
+		if parseErr != nil {
+			continue
+		}
+		for _, binding := range inspect.Container.NetworkSettings.Ports[containerPort] {
+			hostPorts = append(hostPorts, binding.HostPort)
+		}
+	}
+	excluded, found := excludedHostPort(hostPorts, input.ExcludedHostPorts)
+	if !found {
+		return false, nil
+	}
+	if err := m.client.RemoveContainer(ctx, containerID, true); err != nil && !cerrdefs.IsNotFound(err) {
+		return false, fmt.Errorf("discard managed database container on a reserved host port: %w", err)
+	}
+	if input.pickedPortAttempts+1 >= maxExcludedPortPicks {
+		return false, fmt.Errorf("Docker kept picking host ports other Gateway workloads reserve (last %d); publish a chosen port instead", excluded)
+	}
+	m.logger.Info("Docker picked a reserved host port for a managed database; picking again", "port", excluded)
+	return true, nil
+}
+
+// excludedHostPort returns the first of hostPorts (as Docker reports them)
+// that is in excluded.
+func excludedHostPort(hostPorts []string, excluded []uint16) (uint16, bool) {
+	for _, value := range hostPorts {
+		port, err := strconv.ParseUint(value, 10, 16)
+		if err != nil {
+			continue
+		}
+		for _, candidate := range excluded {
+			if uint16(port) == candidate {
+				return candidate, true
+			}
+		}
+	}
+	return 0, false
 }

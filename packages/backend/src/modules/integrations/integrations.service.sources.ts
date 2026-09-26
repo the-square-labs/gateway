@@ -14,6 +14,7 @@ import {
   principalGitGrantNeedsLookup,
 } from '@/lib/git-scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { resolveLiveUser } from '@/modules/auth/live-session-user.js';
 import type { User } from '@/types.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
@@ -351,8 +352,9 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     project: ProjectRow,
     requiredScopes: readonly string[]
   ): Promise<GitRepositoryScopeTarget> {
+    // A source decides which repository builds run with the connector credential: provider data is read fresh.
     if (provider === 'gitlab') {
-      return this.gitLabRepositoryScopeTarget(user, connector, project, requiredScopes);
+      return this.gitLabRepositoryScopeTarget(user, connector, project, requiredScopes, { fresh: true });
     }
     if (provider === 'git') return { connectorId: connector.id };
     // GitHub source rows store the repository ID; owner grants need the owner ID from the API.
@@ -361,13 +363,41 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       return target;
     }
     if (!connector.encryptedToken) return target;
-    const repositoryUrl = this.normalizeRepositoryUrl(project.webUrl || `${connector.baseUrl}/${project.fullPath}`);
-    const resolved = await this.githubRepositoryScopeTarget(
+    return this.githubRepositoryScopeTargetById(
       connector,
       await this.resolveGitHubConnectorToken(connector),
-      repositoryUrl
+      project.remoteId,
+      { fresh: true }
     );
-    return { ...resolved, repositoryId: resolved.repositoryId ?? project.remoteId };
+  }
+
+  /**
+   * Automatic builds (polling, webhooks, deferred builds) of a source saved under the rc.11 rules keep running
+   * only while the account that saved it still holds integrations:<provider>:use on the repository. Refusals
+   * read "Build paused: <user> no longer has use on <repo>" for the source's build history.
+   */
+  async assertBuildSourceOwnerAccess(
+    ownerUserId: string,
+    input: { connectorId: string; projectId: string; repositoryFullPath?: string | null }
+  ): Promise<void> {
+    const owner = await resolveLiveUser(this.db, ownerUserId);
+    const paused = (who: string, repository: string | null | undefined) =>
+      new AppError(
+        403,
+        'SOURCE_OWNER_ACCESS_REVOKED',
+        `Build paused: ${who} no longer has use on ${repository || 'the repository'}`,
+        { ownerUserId, repository: repository ?? null }
+      );
+    if (!owner || owner.isBlocked) throw paused('the account that saved this source', input.repositoryFullPath);
+    try {
+      await this.assertBuildSourceRepositoryAccess(owner, input);
+    } catch (error) {
+      if (error instanceof AppError && error.code === 'CONNECTOR_SCOPE_DENIED') {
+        const details = error.details as { repository?: string } | undefined;
+        throw paused(owner.name || owner.email, details?.repository ?? input.repositoryFullPath);
+      }
+      throw error;
+    }
   }
 
   async resolveDockerBuildSource(

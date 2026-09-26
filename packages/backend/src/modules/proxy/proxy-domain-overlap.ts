@@ -1,5 +1,5 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
-import type { DrizzleClient } from '@/db/client.js';
+import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { proxyHostDomains, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
 
@@ -100,4 +100,20 @@ export async function rethrowProxyHostDomainConflict(db: DrizzleClient, error: u
     `Another enabled proxy host on this node already serves ${domain ?? 'these domains'}`,
     { ...(proxyHostId ? { proxyHostId } : {}), nodeId, domains: domain ? [domain] : [] }
   );
+}
+
+/**
+ * Runs `write` in a transaction in which the domain trigger records a name another enabled host serves as a legacy
+ * conflict (`proxy_host_domains.legacy_conflict`) instead of refusing it (migration 0209). Only for writes that put a
+ * host back into the state nginx still serves after a failed apply: refusing them would leave the database and nginx
+ * out of step. The overlap check still reports the duplicate on the host's next edit.
+ */
+export async function restoringProxyHostState<T>(
+  db: DrizzleClient,
+  write: (executor: DrizzleExecutor) => Promise<T>
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select set_config('gateway.proxy_domain_conflicts', 'record', true)`);
+    return write(tx);
+  });
 }

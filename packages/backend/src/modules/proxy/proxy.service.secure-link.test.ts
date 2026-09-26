@@ -1117,6 +1117,9 @@ describe('ProxyService legacy Docker link compatibility', () => {
         }),
       })),
     } as any;
+    // A rollback restores the previous state in a transaction (record mode for domain rows).
+    db.execute = vi.fn();
+    db.transaction = vi.fn((callback: (tx: unknown) => unknown) => callback(db));
     const dockerUpstreams = {
       resolve: vi.fn().mockResolvedValue({
         upstreamKind: 'docker_container',
@@ -1189,6 +1192,9 @@ describe('ProxyService legacy Docker link compatibility', () => {
         set: vi.fn(() => ({ where: vi.fn(() => ({ returning: vi.fn().mockResolvedValue([updated]) })) })),
       })),
     } as any;
+    // A rollback restores the previous state in a transaction (record mode for domain rows).
+    db.execute = vi.fn();
+    db.transaction = vi.fn((callback: (tx: unknown) => unknown) => callback(db));
     const secureLinks = {
       cleanup: vi.fn().mockResolvedValue(undefined),
       reconcileExisting: vi.fn().mockResolvedValue(existing),

@@ -21,7 +21,7 @@ import {
   principalHasGitRepositoryScope,
 } from '@/lib/git-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
-import { TtlCache } from '@/lib/ttl-cache.js';
+import { LookupBudget, LookupBudgetExceededError, TtlCache } from '@/lib/ttl-cache.js';
 import { buildWhere } from '@/lib/utils.js';
 import {
   hasConfiguredLicenseFeatureForExistingRuntime,
@@ -31,6 +31,7 @@ import {
   isUnderGitLabPath,
   matchesScopeTargetSearch,
   parseScopeTargetIds,
+  SCOPE_TARGET_LOOKUP_BUDGET,
   SCOPE_TARGET_LOOKUP_TTL_MS,
   SCOPE_TARGET_SEARCH_TTL_MS,
   unresolvedScopeTarget,
@@ -75,6 +76,9 @@ export const integrationCommercialRuntime = {
   gitGrantsCover,
   hasGitGrants,
   TtlCache,
+  LookupBudget,
+  LookupBudgetExceededError,
+  SCOPE_TARGET_LOOKUP_BUDGET,
   isUnderGitLabPath,
   matchesScopeTargetSearch,
   parseScopeTargetIds,

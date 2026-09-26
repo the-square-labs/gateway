@@ -1,12 +1,18 @@
+import { createChildLogger } from '@/lib/logger.js';
 import {
   beginIdempotentOperation,
+  findSecretMaterial,
   IDEMPOTENCY_KEY_MAX_LENGTH,
   IDEMPOTENCY_STORED_RESPONSE_MAX_BYTES,
   idempotencyFingerprint,
+  idempotencyScopeHash,
   isValidIdempotencyKey,
 } from '@/middleware/idempotency.js';
 import type { AIToolDefinition, ToolExecutionResult } from '@/modules/ai/ai.types.js';
+import type { User } from '@/types.js';
 import type { McpAuthContext } from './mcp-types.js';
+
+const logger = createChildLogger('McpIdempotency');
 
 export const MCP_IDEMPOTENCY_KEY_ARGUMENT = 'idempotencyKey';
 
@@ -20,8 +26,9 @@ interface McpIdempotentToolRule {
 /**
  * Create-type MCP tools that accept an `idempotencyKey` argument. The key maps onto the same
  * Redis-backed mechanism as the REST `Idempotency-Key` header, scoped to the MCP token and tool.
- * Tools that mint secrets (API/inference/Pages tokens, access keys, PKI private keys) are left out
- * so their plaintext secrets are never stored for replay.
+ * Tools whose results carry secret material are left out: node enrollment tokens, API/inference/
+ * Pages tokens, access keys, binding credentials, PKI private keys, access-list password hashes and
+ * webhook auth headers. The shared secret guard withholds any stored result that still looks secret.
  */
 export const MCP_IDEMPOTENT_CREATE_TOOLS: Readonly<Record<string, McpIdempotentToolRule>> = {
   create_docker_container: {},
@@ -35,18 +42,15 @@ export const MCP_IDEMPOTENT_CREATE_TOOLS: Readonly<Record<string, McpIdempotentT
   create_route: {},
   create_route_folder: {},
   create_domain: {},
-  create_access_list: {},
   request_acme_cert: {},
   manage_ssl_certificate: { operationField: 'operation', operations: ['upload'] },
   create_root_ca: {},
   create_intermediate_ca: {},
   manage_database_connection: { operationField: 'operation', operations: ['create'] },
-  manage_managed_database: { operationField: 'operation', operations: ['create', 'create_binding'] },
+  manage_managed_database: { operationField: 'operation', operations: ['create'] },
   manage_storage_connection: { operationField: 'action', operations: ['create'] },
-  manage_managed_storage: { operationField: 'action', operations: ['create', 'create_binding'] },
+  manage_managed_storage: { operationField: 'action', operations: ['create'] },
   manage_pages: { operationField: 'operation', operations: ['project_create'] },
-  create_node: {},
-  create_webhook: {},
   create_alert_rule: {},
   create_siem_destination: {},
 };
@@ -133,21 +137,28 @@ interface StoredMcpToolResult {
   result: unknown;
 }
 
+export const MCP_IDEMPOTENCY_WITHHELD_ERROR =
+  'IDEMPOTENCY_RESULT_WITHHELD: the original call with this idempotencyKey already completed, but its result is not stored for replay. Look up the created resource instead of retrying.';
+
 export type McpIdempotentOutcome =
   | { kind: 'executed'; execution: ToolExecutionResult }
   | { kind: 'replayed'; result: unknown }
+  | { kind: 'withheld' }
   | { kind: 'rejected'; error: string };
 
 /**
- * Run a create tool once per (MCP token, tool, idempotencyKey). Successful results are stored for
- * 24 hours and replayed; a failed call releases the key so a retry runs again.
+ * Run a create tool once per (MCP token, token scopes, owner's live scopes, tool, idempotencyKey).
+ * Successful results are stored encrypted for 24 hours and replayed; a secret-looking or oversized
+ * result is recorded as completed without its content; a failed call releases the key.
  */
 export async function runMcpToolIdempotently(
-  input: { auth: McpAuthContext; toolName: string; key: string; args: Record<string, unknown> },
+  input: { auth: McpAuthContext; user: User; toolName: string; key: string; args: Record<string, unknown> },
   execute: () => Promise<ToolExecutionResult>
 ): Promise<McpIdempotentOutcome> {
   const { [MCP_IDEMPOTENCY_KEY_ARGUMENT]: _key, ...fingerprintArgs } = input.args;
-  const principal = `mcp-${input.auth.authType ?? 'token'}:${input.auth.tokenId || input.auth.tokenPrefix}`;
+  // Any change to the token's scopes or the owner's live scopes starts a new key space.
+  const scopeHash = idempotencyScopeHash(input.auth.scopes, input.user.scopes, input.user.accountScopes);
+  const principal = `mcp-${input.auth.authType ?? 'token'}:${input.auth.tokenId || input.auth.tokenPrefix}:scopes:${scopeHash}`;
   const begin = await beginIdempotentOperation<StoredMcpToolResult>(
     { principal, method: 'MCP', path: `tools/${input.toolName}`, key: input.key },
     idempotencyFingerprint({ arguments: fingerprintArgs })
@@ -169,6 +180,8 @@ export async function runMcpToolIdempotently(
       };
     case 'replay':
       return { kind: 'replayed', result: begin.payload.result };
+    case 'withheld':
+      return { kind: 'withheld' };
     case 'proceed': {
       let execution: ToolExecutionResult;
       try {
@@ -177,13 +190,15 @@ export async function runMcpToolIdempotently(
         await begin.lease.release();
         throw error;
       }
-      const stored: StoredMcpToolResult = { result: execution.result ?? null };
-      if (
-        execution.error ||
-        execution.credentialChallenge ||
-        storedSize(stored) > IDEMPOTENCY_STORED_RESPONSE_MAX_BYTES
-      ) {
+      if (execution.error || execution.credentialChallenge) {
         await begin.lease.release();
+        return { kind: 'executed', execution };
+      }
+      const stored: StoredMcpToolResult = { result: execution.result ?? null };
+      const secret = findSecretMaterial(stored.result);
+      if (secret || storedSize(stored) > IDEMPOTENCY_STORED_RESPONSE_MAX_BYTES) {
+        if (secret) logger.warn('Tool result looks secret; storing completion only', { tool: input.toolName, secret });
+        await begin.lease.withhold({});
       } else {
         await begin.lease.complete(stored);
       }

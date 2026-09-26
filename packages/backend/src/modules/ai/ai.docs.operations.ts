@@ -186,7 +186,7 @@ OAuth access tokens use the \`gwo_\` prefix and the same Bearer header. Browser-
 All endpoints are under \`/api/\`. Example: \`https://gateway.example.com/api/cas\`
 
 ## Safe Retries (Idempotency-Key)
-Authenticated \`POST\`, \`PUT\` and \`PATCH\` requests accept an optional \`Idempotency-Key\` header (1-255 printable ASCII characters, for example a UUID). Send a new key per logical operation and reuse it only when retrying that same request after a timeout or dropped connection:
+Selected create endpoints accept an optional \`Idempotency-Key\` header (1-255 printable ASCII characters, for example a UUID): Docker containers (create and duplicate), deployments, Compose projects, source resources, volumes, networks and registries; routes (\`/api/proxy-hosts\`) and route folders; domains; ACME certificates; certificate authorities; database connections and managed databases; storage connections and managed storage; Page Projects; alert rules; and SIEM destinations. The OpenAPI document lists the header on exactly these operations. Send a new key per logical operation and reuse it only when retrying that same request after a timeout or dropped connection:
 
 \`\`\`bash
 curl -X POST -H "Authorization: Bearer gw_your_token_here" -H "Content-Type: application/json" \\
@@ -194,12 +194,13 @@ curl -X POST -H "Authorization: Bearer gw_your_token_here" -H "Content-Type: app
   -d '{"domain":"app.example.com"}' https://gateway.example.com/api/domains
 \`\`\`
 
-- Keys are scoped to the authenticated user or API/OAuth token, the method and the path, and results are kept for 24 hours.
+- Keys are bound to the API/OAuth token or browser session, its current effective scopes, the method and the path. After a scope change a key starts fresh. Results are kept encrypted for 24 hours, and every replay is written to the audit log.
 - Same key and same request (query and JSON body): the original response is replayed with \`Idempotency-Replayed: true\`; nothing is created twice.
 - Same key with a different request: \`422 IDEMPOTENCY_KEY_REUSED\`. Same key while the first request still runs: \`409 IDEMPOTENCY_KEY_IN_PROGRESS\` with \`Retry-After\`.
-- Only 2xx and deterministic 400/404/409/422 JSON responses are stored. 401, 403, 5xx, streamed and non-JSON responses are not, so a retry runs again.
-- Not covered: bodies over 1 MiB and non-JSON uploads, the Pages deploy upload API (its upload session has its own idempotency key), WebSocket routes, and the \`/api/mcp\` endpoint itself. If the idempotency store (Redis) is unavailable, requests run normally without it.
-- MCP create tools (containers, deployments, Compose projects, routes, domains, ACME certificates, databases, storage, Page Projects, nodes and similar) take an optional \`idempotencyKey\` argument with the same semantics, scoped to the MCP token and tool; a replayed result carries \`_meta.idempotencyReplayed: true\`.
+- A completed request whose response was not stored (it looked like it carried a secret, or was over 1 MiB) answers \`409 IDEMPOTENCY_RESPONSE_WITHHELD\` with the original status and \`Location\` when known: look the resource up instead of retrying.
+- Only 2xx and deterministic 400/404/409/422 JSON responses are recorded. 401, 403, 5xx, streamed and non-JSON responses are not, so a retry runs again.
+- Endpoints that return a secret once (API, inference, ingest and Pages deploy tokens, node enrollment, keys, credentials, bindings) never take the header, and neither do other endpoints outside the list. Bodies over 1 MiB, non-JSON uploads and WebSocket routes run without idempotency, and so does everything while the idempotency store (Redis) is unavailable.
+- MCP create tools (containers, deployments, Compose projects, routes, domains, ACME certificates, databases, storage, Page Projects and similar; not nodes or other secret-returning tools) take an optional \`idempotencyKey\` argument with the same semantics, bound to the MCP token, its scopes and the owner's live scopes; a replayed result carries \`_meta.idempotencyReplayed: true\`.
 
 ## Key Endpoints
 

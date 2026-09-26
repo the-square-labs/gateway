@@ -1180,6 +1180,8 @@ export class DomainsService extends DomainsServiceRuntime {
           skipDomainNodeValidation: true,
           allowSystemNodeMove: true,
           allowPagesNodeMove: true,
+          // Back to where it served before: a duplicate there is recorded, not refused.
+          restoringPriorState: true,
         });
       }
 

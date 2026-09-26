@@ -101,4 +101,92 @@ describe('proxy host domain uniqueness in the database', () => {
     const other = new Error('connection reset');
     await expect(rethrowProxyHostDomainConflict({} as never, other)).rejects.toBe(other);
   });
+
+  describe('toggle rollback after a failed nginx apply', () => {
+    const legacyHost = {
+      id: 'host-legacy',
+      nodeId: NODE_ID,
+      enabled: true,
+      isSystem: false,
+      maintenanceEnabled: false,
+      healthCheckEnabled: false,
+      healthStatus: 'unknown',
+      domainNames: ['legacy.example.com'],
+      updatedAt: new Date('2026-09-01T00:00:00Z'),
+    };
+
+    function toggleHarness(rollback: (statements: string[]) => Promise<unknown[]>) {
+      const statements: string[] = [];
+      const writes: Array<Record<string, unknown>> = [];
+      const update = vi.fn(() => ({
+        set: (values: Record<string, unknown>) => {
+          writes.push(values);
+          return {
+            where: () =>
+              Object.assign(Promise.resolve(undefined), {
+                returning: async () => [{ ...legacyHost, ...values }],
+              }),
+          };
+        },
+      }));
+      const db = {
+        select: selectFor([]),
+        query: { proxyHosts: { findFirst: vi.fn(async () => legacyHost) } },
+        update,
+        transaction: vi.fn(async (callback: (tx: unknown) => Promise<unknown>) =>
+          callback({
+            execute: async (statement: unknown) => {
+              statements.push(JSON.stringify(statement));
+            },
+            update: (...args: unknown[]) => {
+              const chain = (update as any)(...args);
+              return {
+                set: (values: Record<string, unknown>) => ({
+                  where: () => rollback(statements).then(() => chain.set(values).where()),
+                }),
+              };
+            },
+          })
+        ),
+      };
+      const service = new ProxyService(
+        db as never,
+        {} as any,
+        { log: vi.fn() } as any,
+        {} as any,
+        {} as any,
+        {} as any
+      );
+      // Disabling fails in nginx.
+      vi.spyOn(service as any, 'isGatewayPublicRoute').mockResolvedValue(false);
+      vi.spyOn(service as any, 'removeConfigFromNode').mockRejectedValue(new Error('nginx reload failed'));
+      return { service, db, statements, writes };
+    }
+
+    it('restores the previous state in record mode, so a legacy duplicate cannot fail the rollback', async () => {
+      const { service, db, statements, writes } = toggleHarness(async () => []);
+
+      await expect(service.toggleProxyHost(legacyHost.id, false, USER_ID)).rejects.toMatchObject({
+        statusCode: 500,
+        code: 'NGINX_CONFIG_FAILED',
+      });
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(statements.join(' ')).toContain('gateway.proxy_domain_conflicts');
+      expect(writes.at(-1)).toMatchObject({ enabled: true });
+    });
+
+    it('still reports the nginx failure when the rollback itself fails', async () => {
+      const { service } = toggleHarness(async () => {
+        throw Object.assign(new Error('duplicate key'), {
+          code: '23505',
+          constraint: PROXY_HOST_DOMAIN_UNIQUE_INDEX,
+        });
+      });
+
+      await expect(service.toggleProxyHost(legacyHost.id, false, USER_ID)).rejects.toMatchObject({
+        statusCode: 500,
+        code: 'NGINX_CONFIG_FAILED',
+      });
+    });
+  });
 });

@@ -23,9 +23,9 @@ vi.mock('./auth.middleware.js', () => ({
   authMiddleware: async (c: any, next: any) => {
     const header = c.req.header('Authorization');
     if (!header) return c.json({ message: 'Authentication required' }, 401);
-    const token = header === 'Bearer gw_token';
+    const token = header === 'Bearer gw_token' || header === 'Bearer gwo_token';
     c.set('user', USER);
-    c.set('authType', token ? 'api-token' : 'session');
+    c.set('authType', header === 'Bearer gwo_token' ? 'oauth-token' : token ? 'api-token' : 'session');
     // A token bounded by its owner: only the owner's folder grant survives.
     c.set('effectiveScopes', token ? [`docker:containers:view:folder/${FOLDER}`] : USER.scopes);
     await next();
@@ -52,6 +52,7 @@ describe('GET /api/auth/me/access', () => {
     expect(response.status).toBe(200);
     const { data } = (await response.json()) as { data: any };
 
+    // The account holder's own browser session sees who it is.
     expect(data.principal).toEqual({
       userId: USER.id,
       name: 'Dev',
@@ -78,9 +79,21 @@ describe('GET /api/auth/me/access', () => {
     const response = await app().request('/api/auth/me/access', { headers: { Authorization: 'Bearer gw_token' } });
     const { data } = (await response.json()) as { data: any };
 
-    expect(data.principal).toMatchObject({ credential: 'api-token', boundedByOwner: true });
+    // A token gets the access, never its owner's identity (no identity or profile scope exists).
+    expect(data.principal).toEqual({ credential: 'api-token', boundedByOwner: true });
     expect(data.areas.map((area: any) => area.area)).toEqual(['docker_containers']);
     expect(data.areas[0]).toMatchObject({ folders: [{ id: FOLDER, actions: ['view'] }] });
     expect(data.areas[0].create).toBeUndefined();
+    expect(JSON.stringify(data)).not.toContain(USER.email);
+  });
+
+  it('hides the owner identity from OAuth clients and keeps the access', async () => {
+    const response = await app().request('/api/auth/me/access', { headers: { Authorization: 'Bearer gwo_token' } });
+    const { data } = (await response.json()) as { data: any };
+
+    expect(data.principal).toEqual({ credential: 'oauth-token', boundedByOwner: true });
+    expect(JSON.stringify(data)).not.toContain(USER.email);
+    expect(JSON.stringify(data)).not.toContain('developers');
+    expect(data.areas[0]).toMatchObject({ area: 'docker_containers', folders: [{ id: FOLDER }] });
   });
 });

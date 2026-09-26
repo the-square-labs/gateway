@@ -166,6 +166,72 @@ jobs:
       - name: Alpine OpenRC nginx lifecycle regression
         run: bash scripts/test-nginx-openrc.sh
 
+  database:
+    name: Database (PostgreSQL 16)
+    needs: changes
+    if: ${{ github.event_name != 'pull_request' && needs.changes.outputs.application == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # The migrations and the triggers behind every deployment, storage, database and proxy write, on the PostgreSQL
+    # installs run (docker-compose.yml). Each suite creates its own database next to this one.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: gateway
+          POSTGRES_PASSWORD: gateway
+          POSTGRES_DB: gateway_migration_test_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gateway -d gateway_migration_test_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      GATEWAY_MIGRATION_TEST_DATABASE_URL: postgres://gateway:gateway@localhost:5432/gateway_migration_test_ci
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+        with:
+          version: 9.15.0
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '24'
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Migrations, triggers, uniqueness, the rc.10 upgrade and leases
+        working-directory: packages/backend
+        run: |
+          pnpm exec vitest run \
+            src/db/migrations.uniqueness.database.test.ts \
+            src/db/migrations.reservation-holds.database.test.ts \
+            src/db/migrations.upgrade.database.test.ts \
+            src/db/operation-lease.database.test.ts \
+            --reporter=default --reporter=json --outputFile="$RUNNER_TEMP/database-tests.json"
+
+      # The suites are opt-in; a missing or renamed URL would skip them and still pass.
+      - name: Fail on skipped database tests
+        run: |
+          node -e '
+            const report = require(process.argv[1]);
+            if (report.numTotalTests === 0 || report.numPendingTests > 0 || report.numTodoTests > 0) {
+              console.error(`Database suites did not all run: ${report.numPendingTests} of ${report.numTotalTests} skipped`);
+              process.exit(1);
+            }
+            console.log(`${report.numPassedTests} database tests ran`);
+          ' "$RUNNER_TEMP/database-tests.json"
+
   build:
     name: Build
     needs: changes

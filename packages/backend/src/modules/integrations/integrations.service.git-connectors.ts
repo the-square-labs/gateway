@@ -204,6 +204,8 @@ export abstract class IntegrationsGitConnectorService extends IntegrationsGitRep
   }
 
   async syncGitConnector(provider: 'github' | 'git', id: string, userId: string) {
+    // Repositories may have moved or been renamed: re-read provider data behind Git scope checks.
+    this.invalidateRepositoryScopeCache(provider, id);
     const result = await this.testGitConnector(provider, id, userId);
     const [updated] = await this.db
       .update(integrationConnectors)

@@ -115,7 +115,8 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
   protected async gitLabProjectGroupIds(
     _connector: ConnectorRow,
     _projectId: string,
-    _user?: User | null
+    _user?: User | null,
+    _options?: { fresh?: boolean }
   ): Promise<string[]> {
     return commercialModuleUnavailable();
   }
@@ -124,9 +125,14 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
     _user: User,
     _connector: ConnectorRow,
     _project: Pick<ProjectRow, 'remoteId'>,
-    _requiredScopes: readonly string[]
+    _requiredScopes: readonly string[],
+    _options?: { fresh?: boolean }
   ): Promise<GitRepositoryScopeTarget> {
     return commercialModuleUnavailable();
+  }
+  /** Forget cached GitLab groups and projects of a connector, or one project's group ancestry. */
+  protected invalidateGitLabScopeCaches(_connectorId: string, _projectId: string | null): void {
+    commercialModuleUnavailable();
   }
   /** Synced projects a grant covers: connector-wide, exact projects, or projects under a granted group. */
   protected async filterGitLabProjectsByGrant<T extends Pick<ProjectRow, 'remoteId' | 'fullPath'>>(

@@ -52,8 +52,50 @@ export class TtlCache<V> {
     this.entries.delete(key);
   }
 
+  /** Forget every entry (and pending load) whose key starts with `prefix`. */
+  deletePrefix(prefix: string): void {
+    for (const key of [...this.entries.keys()]) if (key.startsWith(prefix)) this.entries.delete(key);
+    for (const key of [...this.loading.keys()]) if (key.startsWith(prefix)) this.loading.delete(key);
+  }
+
+  /**
+   * Load a value, bypassing the cache when `fresh` is set (the result still refreshes it). With a lookup
+   * budget, a load that misses the cache consumes one unit and fails once the budget is spent.
+   */
+  async load(key: string, loader: () => Promise<V>, options: { fresh?: boolean; budget?: LookupBudget } = {}) {
+    if (!options.fresh) {
+      const cached = this.get(key);
+      if (cached !== undefined) return cached;
+    }
+    options.budget?.consume();
+    if (options.fresh) {
+      const value = await loader();
+      this.set(key, value);
+      return value;
+    }
+    return this.getOrLoad(key, loader);
+  }
+
   clear(): void {
     this.entries.clear();
     this.loading.clear();
+  }
+}
+
+/** Thrown when a request spends its provider lookup budget. */
+export class LookupBudgetExceededError extends Error {
+  constructor() {
+    super('Provider lookup budget exceeded');
+    this.name = 'LookupBudgetExceededError';
+  }
+}
+
+/** A per-request cap on uncached provider lookups (for example scope picker labels and group parents). */
+export class LookupBudget {
+  constructor(private remaining: number) {}
+
+  consume(): void {
+    if (this.remaining <= 0) throw new LookupBudgetExceededError();
+    this.remaining -= 1;
   }
 }

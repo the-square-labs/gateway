@@ -12,7 +12,7 @@ import type {
   ContainerArchiveResolutionSchema,
 } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
-import { hasDockerResourceScope } from './docker-access-resource.service.js';
+import { assertContainerNameNotReserved, hasDockerResourceScope } from './docker-access-resource.service.js';
 import { dockerArchiveCommercialRuntime } from './docker-archive-commercial-runtime.js';
 import { assertDockerCreationAccess } from './docker-creation-access.js';
 import { envListToMap } from './docker-env-operations.js';
@@ -237,6 +237,8 @@ export async function importDockerContainerArchive(args: {
     nodeId,
     args.folderId
   );
+  // An imported container must not take the name (and so the identity) a Git source reserves.
+  await assertContainerNameNotReserved(container.resolve<DrizzleClient>(TOKENS.DrizzleClient), nodeId, args.name);
   const dispatch = container.resolve(DockerMigrationDispatchAdapter);
   const registryService = container.resolve(DockerRegistryService);
   const data = await container.resolve<CommercialEditionRuntime>(TOKENS.CommercialEdition).executeDockerArchive(

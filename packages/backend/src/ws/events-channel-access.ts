@@ -6,6 +6,7 @@ import { hasAnyDockerNodeRouteAccess } from '@/modules/docker/docker-route-resol
 import { canViewHostingFinance } from '@/modules/hosting/hosting-permissions.js';
 import { INFERENCE_USAGE_CHANGED_CHANNEL } from '@/modules/inference/accounting/inference-usage-events.js';
 import { INFERENCE_SETUP_EVENT_CHANNEL } from '@/modules/inference/inference-setup-events.service.js';
+import { gitConnectorVisibility } from '@/modules/integrations/integration-permissions.js';
 import { hasLoggingHealthAccess } from '@/modules/logging/logging-permissions.js';
 
 export const DATABASE_CHANNEL_SCOPE_BASES = [
@@ -86,6 +87,29 @@ export function requiredScopeFor(channel: string): string | null {
   return null;
 }
 
+/**
+ * `integration.connector.changed` carries a connector's ID and name: deliver it only to callers who may see
+ * that connector (Git connectors through any grant on them, the others through their provider scopes).
+ */
+export function hasIntegrationConnectorEventAccess(scopes: string[], payload: unknown): boolean {
+  const event = payload as { id?: unknown; provider?: unknown } | null | undefined;
+  if (typeof event?.id !== 'string' || typeof event.provider !== 'string') return false;
+  switch (event.provider) {
+    case 'gitlab':
+    case 'github':
+    case 'git':
+      return gitConnectorVisibility(scopes, event.provider)(event.id).visible;
+    case 'cloudflare':
+      return hasScope(scopes, 'integrations:cloudflare:view') || hasScope(scopes, 'integrations:cloudflare:manage');
+    case 'ssh':
+      return hasScope(scopes, 'integrations:ssh:view') || hasScope(scopes, 'integrations:ssh:manage');
+    case 'hosting':
+      return hasScope(scopes, `integrations:hosting:view:${event.id}`);
+    default:
+      return false;
+  }
+}
+
 export function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'hosting.snapshot.changed' || channel === 'hosting.snapshot.folder.changed')
     return (
@@ -104,7 +128,8 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'system.config.changed') return true;
   if (channel === 'system.relay.health.changed') return true;
   if (channel === 'integration.connector.changed') {
-    // Git scopes may be limited to a connector, group/owner or project/repository; any grant counts.
+    // Git scopes may be limited to a connector, group/owner or project/repository; any grant counts. Each
+    // event is then filtered by hasIntegrationConnectorEventAccess.
     return (
       hasScopeBase(scopes, 'integrations:gitlab:view') ||
       hasScope(scopes, 'integrations:cloudflare:view') ||

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   OPERATION_LEASE_PROCESS,
   type OperationLeaseClaim,
+  type OperationLeaseHold,
+  OperationLeaseLostError,
   type OperationLeaseStore,
   operationLeaseKey,
 } from '@/db/operation-lease.js';
@@ -36,7 +38,7 @@ interface ContainerLeaseData {
 interface ContainerLeaseHold {
   token: string;
   leaseKeys: Set<string>;
-  heartbeat: { stop(): void };
+  heartbeat: OperationLeaseHold;
 }
 
 export class DockerContainerTransitions {
@@ -122,11 +124,24 @@ export class DockerContainerTransitions {
    * leaves leases that lapse. All names or none: when another process holds
    * one, 409 CONTAINER_BUSY and this process's own transitions are left for
    * the caller to give back. Without a lease store this is a no-op.
+   *
+   * Names whose transition this map already backs with a lease are confirmed
+   * instead: renewed at once, so no other process can take them for a full
+   * TTL from here. Call it again right before a step only the lease's owner
+   * may take. A lease that was lost meanwhile (it lapsed and another process
+   * took it over, or it could not be renewed in time) no longer protects the
+   * transition: 409 CONTAINER_BUSY (details.leaseLost), and the operation must
+   * stop.
    */
   async acquireLeases(nodeId: string, names: readonly string[]): Promise<void> {
     const store = this.leaseStore;
     if (!store) return;
-    const wanted = [...new Set(names)].filter((name) => !this.leases.has(this.key(nodeId, name)));
+    const unique = [...new Set(names)];
+    await this.confirmLeases(
+      nodeId,
+      unique.filter((name) => this.leases.has(this.key(nodeId, name)))
+    );
+    const wanted = unique.filter((name) => !this.leases.has(this.key(nodeId, name)));
     if (wanted.length === 0) return;
     const leaseKeys = wanted.map((name) => containerLeaseKey(nodeId, name));
     if (leaseKeys.some((leaseKey) => this.activeLeaseKeys.has(leaseKey))) {
@@ -156,17 +171,46 @@ export class DockerContainerTransitions {
       const state = claim.lease.data.states?.[name] ?? 'busy';
       throw new AppError(409, 'CONTAINER_BUSY', `Container "${name}" is currently ${state}`, { name, elsewhere: true });
     }
-    const hold: ContainerLeaseHold = { token: claim.token, leaseKeys: new Set(leaseKeys), heartbeat: { stop() {} } };
-    hold.heartbeat = store.hold(
-      () => [...hold.leaseKeys],
+    const heldKeys = new Set(leaseKeys);
+    // Once lost, the lease is no longer renewed, and confirming it (above)
+    // refuses the operation's further owner-only steps.
+    const heartbeat = store.hold(
+      () => [...heldKeys],
       claim.token,
-      (leaseKey) => logger.warn('Container operation lease lapsed while the operation was running', { leaseKey })
+      (leaseKey) =>
+        logger.error('Container operation lost its lease while running; it no longer holds the container', {
+          nodeId,
+          leaseKey,
+        }),
+      { since: claim.claimedAt }
     );
+    const hold: ContainerLeaseHold = { token: claim.token, leaseKeys: heldKeys, heartbeat };
     for (const [index, name] of wanted.entries()) {
       const key = this.key(nodeId, name);
       // The transition may have ended here while the lease was being claimed.
       if (!this.transitions.has(key) || this.leases.has(key)) this.releaseLease(hold, leaseKeys[index]!);
       else this.leases.set(key, { hold, leaseKey: leaseKeys[index]! });
+    }
+  }
+
+  /** Renews the leases backing transitions here on `names`; 409 CONTAINER_BUSY when one was lost. */
+  private async confirmLeases(nodeId: string, names: readonly string[]): Promise<void> {
+    const byHold = new Map<ContainerLeaseHold, string[]>();
+    for (const name of names) {
+      const lease = this.leases.get(this.key(nodeId, name));
+      if (lease) byHold.set(lease.hold, [...(byHold.get(lease.hold) ?? []), name]);
+    }
+    for (const [hold, heldNames] of byHold) {
+      if (await hold.heartbeat.confirm()) continue;
+      const reason = hold.heartbeat.signal.reason;
+      const lostKeys = reason instanceof OperationLeaseLostError ? reason.keys : [];
+      const name = heldNames.find((item) => lostKeys.includes(containerLeaseKey(nodeId, item))) ?? heldNames[0]!;
+      throw new AppError(
+        409,
+        'CONTAINER_BUSY',
+        `Container "${name}" is no longer held by this operation: its lease lapsed or another backend process took it over`,
+        { name, elsewhere: true, leaseLost: true }
+      );
     }
   }
 

@@ -39,3 +39,43 @@ export function assertNoReservedDockerLabelChanges(
   const keys = changedReservedDockerLabels(requested, current);
   if (keys.length > 0) throw new AppError(400, 'RESERVED_DOCKER_LABEL', reservedDockerLabelsMessage(keys));
 }
+
+/** Docker daemons that drop reserved labels when duplicating a container advertise this capability. */
+export const DOCKER_DUPLICATE_LABEL_FILTER_CAPABILITY = 'docker_duplicate_label_filter_v1';
+
+/** Daemon-owned data describing the copied configuration itself; a duplicate keeps it. */
+const DUPLICATE_KEPT_LABELS = new Set([
+  'wiolett.gateway.archive.image.reference',
+  'wiolett.gateway.gpu.group-ids',
+  'wiolett.gateway.gpu.group-ids-version',
+]);
+
+/** Reserved labels of a source container that a duplicate must not inherit. */
+export function reservedLabelsDroppedOnDuplicate(labels: Record<string, unknown> | null | undefined): string[] {
+  return Object.keys(labels ?? {}).filter((key) => isReservedDockerLabel(key) && !DUPLICATE_KEPT_LABELS.has(key));
+}
+
+export function hasDuplicateLabelFilterCapability(capabilities: unknown): boolean {
+  if (!capabilities || typeof capabilities !== 'object') return false;
+  const list = (capabilities as { capabilities?: unknown }).capabilities;
+  return Array.isArray(list) && list.includes(DOCKER_DUPLICATE_LABEL_FILTER_CAPABILITY);
+}
+
+/**
+ * A duplicate is a new user workload: it must not inherit the labels that place, group or hide a container (a
+ * Compose project label would move it into that project's root-level folder). Daemons with the label filter drop
+ * them; older daemons copy every label, so duplicating such a container there is refused.
+ */
+export function assertDuplicateDropsReservedLabels(
+  sourceLabels: Record<string, unknown> | null | undefined,
+  nodeCapabilities: unknown
+): void {
+  const reserved = reservedLabelsDroppedOnDuplicate(sourceLabels);
+  if (reserved.length === 0 || hasDuplicateLabelFilterCapability(nodeCapabilities)) return;
+  throw new AppError(
+    409,
+    'UNSUPPORTED_DAEMON',
+    `This container carries labels reserved for Gateway and Docker Compose (${reserved.join(', ')}) that this ` +
+      'Docker daemon would copy into the duplicate. Update the Docker daemon before duplicating it.'
+  );
+}

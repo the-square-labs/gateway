@@ -1,4 +1,5 @@
 import { asc, eq } from 'drizzle-orm';
+import type { DrizzleExecutor } from '@/db/client.js';
 import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
@@ -20,7 +21,11 @@ import {
   findRegisteredDomainNodes,
   registeredDomainsIngressNodeId,
 } from './proxy-domain-node.js';
-import { assertNoProxyDomainOverlap, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
+import {
+  assertNoProxyDomainOverlap,
+  restoringProxyHostState,
+  rethrowProxyHostDomainConflict,
+} from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
 import {
@@ -509,11 +514,13 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     }
 
     const updateHost = async (slug?: string) => {
-      const [updated] = await this.db
-        .update(proxyHosts)
-        .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
-        .where(eq(proxyHosts.id, id))
-        .returning()
+      const write = (executor: DrizzleExecutor) =>
+        executor
+          .update(proxyHosts)
+          .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
+          .where(eq(proxyHosts.id, id))
+          .returning();
+      const [updated] = await (options.restoringPriorState ? restoringProxyHostState(this.db, write) : write(this.db))
         .catch(mapProxyHostCertificateReferenceError)
         .catch((error) => rethrowProxyHostDomainConflict(this.db, error));
       return updated;
@@ -535,7 +542,7 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
     // (skipDomainNodeValidation) skips only the registered-domain node check:
     // two hosts serving one name on the target would still be duplicates.
     let updated =
-      domainAssignmentChanged && existing.enabled
+      domainAssignmentChanged && existing.enabled && !options.restoringPriorState
         ? await withProxyLocks([proxyNodeLockKey(effectiveNodeId)], async () => {
             await assertNoProxyDomainOverlap(this.db, effectiveNodeId, input.domainNames ?? existing.domainNames, id);
             return writeHost();
@@ -759,7 +766,10 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
       rollbackData.secureLinkGeneration = rollbackSecureLinkGeneration;
       rollbackData.updatedAt = existing.updatedAt;
       try {
-        await this.db.update(proxyHosts).set(rollbackData).where(eq(proxyHosts.id, id));
+        // nginx still serves the previous state: restore it even when another host took one of its names meanwhile.
+        await restoringProxyHostState(this.db, (tx) =>
+          tx.update(proxyHosts).set(rollbackData).where(eq(proxyHosts.id, id))
+        );
         if (updated.secureLinkGeneration > 0 && existing.secureLinkGeneration === 0) {
           await this.secureLinks?.cleanup(updated);
         } else if (existing.secureLinkGeneration > 0) {

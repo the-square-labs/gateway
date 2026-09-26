@@ -762,6 +762,46 @@ func httpProbeBodyMatches(body string, expected string, mode string) bool {
 	}
 }
 
+// reservedDuplicateLabelPrefixes are the label namespaces Gateway and Docker Compose read to place, group or
+// hide a container. A duplicate carrying them would join the source's Compose project (and its root-level
+// folder) or disappear behind a Gateway implementation marker, so they are never copied.
+var reservedDuplicateLabelPrefixes = []string{
+	"com.docker.compose.",
+	"wiolett.gateway.",
+	"net.wiolett.gateway.",
+	"com.wiolett.gateway.",
+}
+
+// duplicateContainerLabels copies the source labels a duplicate may keep. Daemon-owned data that describes the
+// copied configuration itself (the archive image reference and the GPU group provenance of the copied host
+// config) is kept.
+func duplicateContainerLabels(source map[string]string) map[string]string {
+	if source == nil {
+		return nil
+	}
+	labels := make(map[string]string, len(source))
+	for key, value := range source {
+		switch key {
+		case archiveImageReferenceLabel, gatewayGPUGroupIDsLabel, gatewayGPUGroupIDsVersionLabel:
+			labels[key] = value
+			continue
+		case "gateway.sandbox":
+			continue
+		}
+		reserved := false
+		for _, prefix := range reservedDuplicateLabelPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				reserved = true
+				break
+			}
+		}
+		if !reserved {
+			labels[key] = value
+		}
+	}
+	return labels
+}
+
 // DuplicateContainer inspects a source container and creates a new one with the
 // same config and a different name.
 func (c *Client) DuplicateContainer(ctx context.Context, id string, newName string) (string, error) {
@@ -774,6 +814,8 @@ func (c *Client) DuplicateContainer(ctx context.Context, id string, newName stri
 	// Clone config, clear runtime fields.
 	cfg := *insp.Config
 	cfg.Hostname = ""
+	// A copy is a new user workload: it never inherits the labels that place, group or hide a container.
+	cfg.Labels = duplicateContainerLabels(insp.Config.Labels)
 	applyDefaultWorkloadLogConfig(insp.HostConfig, c.defaultWorkloadLogDriver())
 	netNames := inspectNetworkNames(&insp)
 	result, err := c.cli.ContainerCreate(ctx, client.ContainerCreateOptions{

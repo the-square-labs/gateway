@@ -10,7 +10,11 @@ export { __testOnly } from './proxy.service-helpers.js';
 
 import { logger, type ProxyHostRow, type ProxyHostView } from './proxy.service.core.js';
 import { ProxyServiceSecureLinks } from './proxy.service.secure-links.js';
-import { assertNoProxyDomainOverlap, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
+import {
+  assertNoProxyDomainOverlap,
+  restoringProxyHostState,
+  rethrowProxyHostDomainConflict,
+} from './proxy-domain-overlap.js';
 import { proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
 
 export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
@@ -177,16 +181,27 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
         hostId: id,
         error,
       });
-      await this.db
-        .update(proxyHosts)
-        .set({
-          enabled: previousEnabled,
-          maintenanceEnabled: existing.maintenanceEnabled,
-          maintenanceStartedAt: existing.maintenanceStartedAt,
-          healthStatus: existing.healthStatus,
-          updatedAt: existing.updatedAt,
-        })
-        .where(eq(proxyHosts.id, id));
+      // nginx still serves the previous state: restore it even when another host took one of its names meanwhile
+      // (recorded as a legacy conflict), and never let a failed rollback replace the apply error.
+      try {
+        await restoringProxyHostState(this.db, (tx) =>
+          tx
+            .update(proxyHosts)
+            .set({
+              enabled: previousEnabled,
+              maintenanceEnabled: existing.maintenanceEnabled,
+              maintenanceStartedAt: existing.maintenanceStartedAt,
+              healthStatus: existing.healthStatus,
+              updatedAt: existing.updatedAt,
+            })
+            .where(eq(proxyHosts.id, id))
+        );
+      } catch (rollbackError) {
+        logger.error('Failed to roll back the proxy host after a toggle failed; it may not match nginx', {
+          hostId: id,
+          rollbackError,
+        });
+      }
       if (error instanceof AppError && error.code === 'NGINX_TLS_DAEMON_UPDATE_REQUIRED') throw error;
       throw new AppError(
         500,

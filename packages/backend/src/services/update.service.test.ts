@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { relayInstances, relayPoolUpdateRuns, relayPoolUpdateSteps } from '@/db/schema/index.js';
 import type { TrustedGatewayUpdateArtifact, TrustedRelayUpdateArtifact } from '@/lib/update-artifact-trust.js';
@@ -443,7 +446,34 @@ describe('UpdateService foundation migration', () => {
     expect(sidecarCommand).toContain('[ "$service" = app ] && continue');
     expect(sidecarCommand).toContain('compose up -d --no-recreate "$service"');
     expect(sidecarCommand).toContain('registry_ready()');
-    expect(sidecarCommand).toContain('sleep 2\nensure_foundation_services\nif service_exists relay; then');
+    expect(sidecarCommand).toContain('sleep 2\nensure_foundation_services\n');
+    // The snapshot is taken before the target app can apply its migrations.
+    expect(sidecarCommand.indexOf('snapshot_database || exit 1')).toBeGreaterThan(-1);
+    expect(sidecarCommand.indexOf('snapshot_database || exit 1')).toBeLessThan(
+      sidecarCommand.indexOf('compose up -d --no-deps --force-recreate app')
+    );
+    expect(sidecarCommand).toContain('GATEWAY_DB_DUMP="$FOUNDATION_BACKUP_DIR/gateway-db.dump"');
+    expect(sidecarCommand).toContain("SELECT pg_database_size('gateway')");
+    expect(sidecarCommand).toContain('df -Pk "$FOUNDATION_BACKUP_DIR"');
+    expect(sidecarCommand).toContain(
+      'compose exec -T postgres pg_dump --format=custom --create --no-password -U gateway -d gateway > "$GATEWAY_DB_DUMP"'
+    );
+    expect(sidecarCommand).toContain('chmod 600 "$GATEWAY_DB_DUMP"');
+    expect(sidecarCommand).toContain(
+      'for old_dump in /srv/gateway/.gateway-foundation-backups/pre-update-*/gateway-db.dump; do'
+    );
+    // The rollback restores the snapshot once postgres is ready, before the previous app starts.
+    const rollbackBody = sidecarCommand.slice(
+      sidecarCommand.indexOf('rollback() {'),
+      sidecarCommand.indexOf('on_exit() {')
+    );
+    expect(rollbackBody.indexOf('pg_isready')).toBeLessThan(rollbackBody.indexOf('restore_database_snapshot'));
+    expect(rollbackBody.indexOf('restore_database_snapshot')).toBeLessThan(rollbackBody.indexOf('compose up -d app'));
+    expect(sidecarCommand).toContain("-d postgres -c 'DROP DATABASE IF EXISTS gateway WITH (FORCE)'");
+    expect(sidecarCommand).toContain(
+      'compose exec -T postgres pg_restore --create --exit-on-error --no-password -U gateway -d postgres < "$GATEWAY_DB_DUMP"'
+    );
+    expect(sidecarCommand).toContain('if [ "$code" -eq 0 ]; then rm -f "$GATEWAY_DB_DUMP" || true; fi');
     expect(sidecarCommand).toContain('relay_reachable && registry_ready');
     expect(sidecarCommand).toContain('compose stop app');
     expect(sidecarCommand).not.toContain('compose stop app relay');
@@ -718,6 +748,208 @@ describe('UpdateService foundation migration', () => {
         HostConfig: { Binds: ['/srv/gateway-workspaces:/srv/gateway-workspaces'] },
       })
     );
+  });
+});
+
+describe('UpdateService update sidecar database snapshot', () => {
+  // Stands in for the Docker CLI: records every call, answers what the sidecar reads.
+  const FAKE_DOCKER = String.raw`#!/bin/sh
+if [ "$1" = compose ]; then
+  shift 7
+  echo "compose $*" >> "$FAKE_LOG"
+  case "$*" in
+    "config --services") printf 'app\nrelay\nregistry\npostgres\nredis\n' ;;
+    "ps -q "*) echo "$3-id" ;;
+    *"--force-recreate app") [ "$FAKE_TARGET_APP" = healthy ] || exit 1 ;;
+    *"pg_database_size"*) echo "$FAKE_DB_BYTES" ;;
+    *" pg_dump "*)
+      [ "$FAKE_DUMP" != fail ] || exit 1
+      [ "$FAKE_DUMP" = empty ] || printf 'PGDMP-fake-archive' ;;
+    *" pg_restore --list") cat > /dev/null ;;
+    *" pg_restore --create "*) cat > /dev/null; [ "$FAKE_RESTORE" = ok ] || exit 1 ;;
+    *"DROP DATABASE"*) [ "$FAKE_DROP" = ok ] || exit 1 ;;
+  esac
+  exit 0
+fi
+echo "docker $*" >> "$FAKE_LOG"
+case "$*" in
+  *working_dir*) echo "$FAKE_COMPOSE_DIR" ;;
+  *Networks*) echo 1 ;;
+  inspect*) echo healthy ;;
+  port*) echo 0.0.0.0:9443 ;;
+esac
+`;
+  const FAKE_DF = `#!/bin/sh
+echo 'Filesystem 1024-blocks Used Available Capacity Mounted on'
+echo "/dev/fake 999999999 1 $FAKE_FREE_KB 1% /"
+`;
+  const GIB_BYTES = 1024 * 1024 * 1024;
+  const dirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** Generates the sidecar script for a real update and runs it against the fakes. */
+  async function runSidecar(
+    options: {
+      freeKb?: number;
+      dump?: 'ok' | 'fail' | 'empty';
+      targetApp?: 'healthy' | 'fail';
+      drop?: 'ok' | 'fail';
+      restore?: 'ok' | 'fail';
+      prepare?: (composeDir: string, backupDir: string) => void;
+    } = {}
+  ) {
+    const composeDir = mkdtempSync(join(tmpdir(), 'gateway-update-'));
+    dirs.push(composeDir);
+    const bin = join(composeDir, 'fake-bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'docker'), FAKE_DOCKER, { mode: 0o755 });
+    writeFileSync(join(bin, 'df'), FAKE_DF, { mode: 0o755 });
+    writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+
+    const dockerService = makeDockerService();
+    await makeUpdateService(dockerService, undefined, { COMPOSE_PROJECT_DIR: composeDir }).performUpdate(
+      'v2.4.3',
+      makeArtifact('registry.example.com/wiolett/gateway@sha256:new')
+    );
+    const sidecar = dockerService.runDetached.mock.calls[0]?.[0] as { Cmd: string[]; Env: string[] } | undefined;
+    const script = sidecar?.Cmd[2];
+    const backupDir = sidecar?.Env[0]?.replace(/^FOUNDATION_BACKUP_DIR=/, '');
+    if (!script || !backupDir) throw new Error('Update sidecar was not launched');
+    mkdirSync(backupDir, { recursive: true });
+    options.prepare?.(composeDir, backupDir);
+
+    const log = join(composeDir, 'docker-calls.log');
+    const result = spawnSync('/bin/sh', ['-c', script], {
+      encoding: 'utf8',
+      env: {
+        PATH: `${bin}:${process.env.PATH ?? '/usr/bin:/bin'}`,
+        FOUNDATION_BACKUP_DIR: backupDir,
+        FAKE_LOG: log,
+        FAKE_COMPOSE_DIR: composeDir,
+        FAKE_DB_BYTES: String(GIB_BYTES),
+        FAKE_FREE_KB: String(options.freeKb ?? 10 * 1024 * 1024),
+        FAKE_DUMP: options.dump ?? 'ok',
+        FAKE_TARGET_APP: options.targetApp ?? 'healthy',
+        FAKE_DROP: options.drop ?? 'ok',
+        FAKE_RESTORE: options.restore ?? 'ok',
+      },
+    });
+    const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n') : [];
+    const at = (fragment: string) => calls.findIndex((call) => call.includes(fragment));
+    return { ...result, calls, at, composeDir, dump: join(backupDir, 'gateway-db.dump') };
+  }
+
+  it('snapshots the database before the target app starts and removes the snapshot once it is healthy', async () => {
+    const run = await runSidecar();
+
+    expect(run.status).toBe(0);
+    expect(run.at('pg_database_size')).toBeGreaterThan(-1);
+    expect(run.at('pg_database_size')).toBeLessThan(run.at(' pg_dump --format=custom --create '));
+    expect(run.at(' pg_dump ')).toBeLessThan(run.at(' pg_restore --list'));
+    expect(run.at(' pg_restore --list')).toBeLessThan(run.at('--force-recreate app'));
+    expect(run.at('DROP DATABASE')).toBe(-1);
+    expect(run.at('pg_restore --create')).toBe(-1);
+    expect(existsSync(run.dump)).toBe(false);
+  });
+
+  it('stops the update before replacing the app when the snapshot does not fit on the disk', async () => {
+    const run = await runSidecar({ freeKb: 1024 * 1024 });
+
+    expect(run.status).toBe(1);
+    // 1 GiB database + 10% + 256 MiB margin.
+    expect(run.stderr).toMatch(/needs 1382 MiB free in \S+pre-update-\S+, but only 1024 MiB are free/);
+    expect(run.at(' pg_dump ')).toBe(-1);
+    expect(run.at('--force-recreate app')).toBe(-1);
+    // Nothing migrated: the rollback only brings the previous app back.
+    expect(run.at('DROP DATABASE')).toBe(-1);
+    expect(run.calls).toContain('compose up -d --no-deps app');
+  });
+
+  it.each(['fail', 'empty'] as const)('stops the update before replacing the app when the dump is %s', async (dump) => {
+    const run = await runSidecar({ dump });
+
+    expect(run.status).toBe(1);
+    expect(run.stderr).toContain('Gateway update stopped before replacing the app');
+    expect(run.at('--force-recreate app')).toBe(-1);
+    expect(run.at('DROP DATABASE')).toBe(-1);
+    expect(existsSync(run.dump)).toBe(false);
+  });
+
+  it('restores the snapshot before the previous app starts when the update rolls back', async () => {
+    const run = await runSidecar({
+      targetApp: 'fail',
+      prepare: (composeDir, backupDir) => {
+        writeFileSync(join(backupDir, '.env'), 'GATEWAY_IMAGE_REF=previous\n');
+        writeFileSync(join(composeDir, '.env'), 'GATEWAY_IMAGE_REF=target\n');
+      },
+    });
+
+    expect(run.status).toBe(1);
+    expect(readFileSync(join(run.composeDir, '.env'), 'utf8')).toBe('GATEWAY_IMAGE_REF=previous\n');
+    const recreate = run.at('--force-recreate app');
+    const ready = run.at('pg_isready');
+    const drop = run.at('-d postgres -c DROP DATABASE IF EXISTS gateway WITH (FORCE)');
+    const restore = run.at('pg_restore --create --exit-on-error --no-password -U gateway -d postgres');
+    expect(recreate).toBeGreaterThan(-1);
+    expect(recreate).toBeLessThan(ready);
+    expect(ready).toBeLessThan(drop);
+    // Every other service is stopped first so nothing holds or reopens a connection.
+    for (const service of ['relay', 'registry', 'redis']) {
+      expect(run.at(`compose stop ${service}`)).toBeGreaterThan(ready);
+      expect(run.at(`compose stop ${service}`)).toBeLessThan(drop);
+    }
+    expect(run.at('compose stop postgres')).toBe(-1);
+    expect(drop).toBeLessThan(restore);
+    expect(restore).toBeLessThan(run.at('CREATE OR REPLACE VIEW'));
+    expect(restore).toBeLessThan(run.calls.indexOf('compose up -d --no-deps app'));
+    expect(run.stdout).toContain('Restored the gateway database from the pre-update snapshot');
+    expect(existsSync(run.dump)).toBe(false);
+  });
+
+  it('keeps the snapshot and leaves Gateway stopped when the restore fails after the drop', async () => {
+    const run = await runSidecar({ targetApp: 'fail', restore: 'fail' });
+
+    expect(run.status).not.toBe(0);
+    expect(run.at('pg_restore --create')).toBeGreaterThan(run.at('DROP DATABASE'));
+    expect(run.stderr).toContain(`Gateway is left stopped. The pre-update snapshot is kept at ${run.dump}`);
+    expect(run.calls).not.toContain('compose up -d --no-deps app');
+    expect(existsSync(run.dump)).toBe(true);
+    expect(statSync(run.dump).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps the snapshot and brings the previous app back when the migrated database cannot be dropped', async () => {
+    const run = await runSidecar({ targetApp: 'fail', drop: 'fail' });
+
+    expect(run.status).toBe(1);
+    expect(run.at('pg_restore --create')).toBe(-1);
+    expect(run.stderr).toContain(`was NOT restored and keeps the changes of the failed update`);
+    expect(run.calls).toContain('compose up -d --no-deps app');
+    expect(existsSync(run.dump)).toBe(true);
+  });
+
+  it('removes database snapshots of earlier updates after a week', async () => {
+    const days = (count: number) => (Date.now() - count * 24 * 60 * 60_000) / 1000;
+    const run = await runSidecar({
+      prepare: (composeDir) => {
+        for (const [name, age] of [
+          ['pre-update-old', 10],
+          ['pre-update-recent', 1],
+        ] as const) {
+          const dir = join(composeDir, '.gateway-foundation-backups', name);
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, 'gateway-db.dump'), 'PGDMP');
+          utimesSync(join(dir, 'gateway-db.dump'), days(age), days(age));
+        }
+      },
+    });
+
+    expect(run.status).toBe(0);
+    const backups = join(run.composeDir, '.gateway-foundation-backups');
+    expect(existsSync(join(backups, 'pre-update-old', 'gateway-db.dump'))).toBe(false);
+    expect(existsSync(join(backups, 'pre-update-recent', 'gateway-db.dump'))).toBe(true);
   });
 });
 

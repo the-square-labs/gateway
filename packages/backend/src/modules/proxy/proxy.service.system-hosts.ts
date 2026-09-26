@@ -9,7 +9,7 @@ import {
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import { buildStatusPageSystemHostRollbackData, getStatusPageUpstream } from './proxy.service-helpers.js';
 import { clearDockerUpstreamFields } from './proxy-docker-upstream.service.js';
-import { rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
+import { restoringProxyHostState, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -156,10 +156,12 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       if (createdNew) {
         await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
       } else if (existing) {
-        await this.db
-          .update(proxyHosts)
-          .set({ ...buildStatusPageSystemHostRollbackData(existing), slug: existing.slug } as any)
-          .where(eq(proxyHosts.id, existing.id));
+        await restoringProxyHostState(this.db, (tx) =>
+          tx
+            .update(proxyHosts)
+            .set({ ...buildStatusPageSystemHostRollbackData(existing), slug: existing.slug } as any)
+            .where(eq(proxyHosts.id, existing.id))
+        );
       }
       throw new AppError(
         500,
@@ -338,10 +340,12 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       if (createdNew) {
         await this.db.delete(proxyHosts).where(eq(proxyHosts.id, host.id));
       } else if (existing) {
-        await this.db
-          .update(proxyHosts)
-          .set({ ...buildStatusPageSystemHostRollbackData(existing), slug: existing.slug } as any)
-          .where(eq(proxyHosts.id, existing.id));
+        await restoringProxyHostState(this.db, (tx) =>
+          tx
+            .update(proxyHosts)
+            .set({ ...buildStatusPageSystemHostRollbackData(existing), slug: existing.slug } as any)
+            .where(eq(proxyHosts.id, existing.id))
+        );
       }
       throw new AppError(
         500,

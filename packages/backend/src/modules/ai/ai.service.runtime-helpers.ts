@@ -46,6 +46,8 @@ export type ReceivePendingSteersHook = (messages: ChatMessage[]) => Promise<Chat
 export type ToolRuntimeContext = {
   pageContext?: PageContext;
   conversationId?: string;
+  /** Who is calling: the in-product assistant (default) or a remote MCP client. */
+  source?: 'ai' | 'mcp';
 };
 
 export type AIContextCompactionTrigger = 'manual' | 'auto';

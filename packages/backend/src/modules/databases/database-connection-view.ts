@@ -77,6 +77,12 @@ export interface ManagedDatabaseConnectionMetadata {
   endpointHost: string | null;
   status: 'creating' | 'updating' | 'ready' | 'paused' | 'stopped' | 'error' | 'deleting';
   lastError: string | null;
+  /**
+   * Published ports another Gateway workload on the node also reserves (the node
+   * assigned one that was reserved but not bound yet). Both bind only while the
+   * other is stopped; move one of them. Empty when there is no such clash.
+   */
+  hostPortConflicts?: Array<{ port: number; owner: string }>;
   clickhouseConfigXml?: string;
   redisConfig?: ManagedRedisConfig;
 }

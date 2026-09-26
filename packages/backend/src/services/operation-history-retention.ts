@@ -262,13 +262,17 @@ export function operationHistoryCutoff(retentionDays: number, now = new Date()):
   return new Date(now.getTime() - retentionDays * DAY_MS);
 }
 
-/** Operation leases (see OperationLeaseStore) that expired more than the grace period ago. */
-function expiredOperationLeases(now: Date): KeyedTarget {
+/**
+ * Operation leases (see OperationLeaseStore) that expired more than the grace
+ * period ago, by the database clock: lease expiry is written on it, and this
+ * process's clock may be off by more than a lease's lifetime.
+ */
+function expiredOperationLeases(): KeyedTarget {
   return {
     name: 'expired operation leases',
     table: 'operation_leases',
     key: 'key',
-    where: sql`"expires_at" < ${new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS)}`,
+    where: sql`"expires_at" < statement_timestamp() - (${EXPIRED_OPERATION_LEASE_GRACE_MS}::double precision * interval '1 millisecond')`,
   };
 }
 
@@ -288,7 +292,7 @@ export async function cleanOperationHistory(db: Executor, retentionDays: number,
   removed['docker build batches'] = grouped.batches;
   removed['docker build log chunks'] = single.logChunks + grouped.logChunks;
   for (const target of operationTargets(cutoff)) removed[target.name] = await deleteInBatches(db, target);
-  const leases = expiredOperationLeases(now);
+  const leases = expiredOperationLeases();
   removed[leases.name] = await deleteInBatches(db, leases);
   // Log chunks and lease rows are counted as detail, not as history rows.
   const total = Object.entries(removed)

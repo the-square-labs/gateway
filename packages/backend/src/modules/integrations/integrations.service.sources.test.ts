@@ -31,7 +31,7 @@ function fixture(enabled = true) {
     async (_connector: unknown, _token: string, path: string) =>
       new Response(
         JSON.stringify(
-          path.startsWith('/repos/acme/app')
+          path.startsWith('/repos/acme/app') || path === '/repositories/123'
             ? githubRepository(123, 'app', 7, 'acme')
             : [githubRepository(123, 'app', 7, 'acme'), githubRepository(124, 'other', 8, 'globex')]
         ),
@@ -200,12 +200,86 @@ describe('Configuring a build source', () => {
         { connectorId: CONNECTOR_ID, projectId: app.id }
       )
     ).resolves.toBeUndefined();
-    expect(request).toHaveBeenCalledWith(expect.anything(), 'connector-token', '/repos/acme/app');
+    // Looked up by the stored repository ID (never by path), fresh: the source decides the build credential.
+    expect(request).toHaveBeenCalledWith(expect.anything(), 'connector-token', '/repositories/123');
     await expect(
       service.assertBuildSourceRepositoryAccess(
         { id: 'user-1', scopes: [`integrations:github:repo:read:${CONNECTOR_ID}`] } as User,
         { connectorId: CONNECTOR_ID, projectId: app.id }
       )
     ).rejects.toMatchObject({ code: 'CONNECTOR_SCOPE_DENIED' });
+  });
+});
+
+describe('Automatic builds of a configured source', () => {
+  function ownerFixture(owner: { scopes: string[]; isBlocked?: boolean } | null) {
+    const { service, connector } = fixture();
+    const limit = vi.fn().mockResolvedValue([
+      {
+        connector,
+        project: {
+          id: 'project-1',
+          remoteId: '123',
+          fullPath: 'acme/app',
+          name: 'app',
+          webUrl: 'https://github.com/acme/app',
+        },
+      },
+    ]);
+    Object.assign(service, {
+      db: {
+        select: () => ({ from: () => ({ innerJoin: () => ({ where: () => ({ limit }) }) }) }),
+        query: {
+          users: {
+            findFirst: vi.fn().mockResolvedValue(
+              owner
+                ? {
+                    id: 'owner-1',
+                    email: 'owner@example.com',
+                    groupId: 'owners',
+                    additionalScopes: [],
+                    additionalGroupIds: [],
+                    isBlocked: owner.isBlocked ?? false,
+                    deletedAt: null,
+                  }
+                : undefined
+            ),
+          },
+          permissionGroups: {
+            findMany: vi
+              .fn()
+              .mockResolvedValue([
+                { id: 'owners', parentId: null, name: 'owners', scopes: owner?.scopes ?? [], requireGateway2fa: false },
+              ]),
+          },
+        },
+      },
+    });
+    return service;
+  }
+  const input = { connectorId: CONNECTOR_ID, projectId: 'project-1' };
+
+  it('keeps building while the saver holds use on the repository', async () => {
+    const service = ownerFixture({ scopes: [`integrations:github:use:${CONNECTOR_ID}/repo/123`] });
+    await expect(service.assertBuildSourceOwnerAccess('owner-1', input)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['revoked use', { scopes: [`integrations:github:use:${CONNECTOR_ID}/repo/999`] }, 'owner@example.com'],
+    [
+      'a blocked account',
+      { scopes: ['integrations:github:use'], isBlocked: true },
+      'the account that saved this source',
+    ],
+    ['a deleted account', null, 'the account that saved this source'],
+  ])('pauses automatic builds after %s, naming the account and repository', async (_label, owner, who) => {
+    const service = ownerFixture(owner);
+    await expect(
+      service.assertBuildSourceOwnerAccess('owner-1', { ...input, repositoryFullPath: 'acme/app' })
+    ).rejects.toMatchObject({
+      statusCode: 403,
+      code: 'SOURCE_OWNER_ACCESS_REVOKED',
+      message: `Build paused: ${who} no longer has use on acme/app`,
+    });
   });
 });

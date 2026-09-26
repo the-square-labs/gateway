@@ -236,6 +236,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       const result = await this.executeToolInternal(executionUser, toolName, args, {
         pageContext: options.pageContext,
         conversationId: options.conversationId,
+        source,
       });
       const invalidateStores = resolveToolStoreInvalidations(
         toolName,
@@ -446,7 +447,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       });
     }
 
-    if (ACCESS_TOOL_NAMES.has(toolName)) return executeAccessTool(user, toolName, args);
+    if (ACCESS_TOOL_NAMES.has(toolName)) return executeAccessTool(user, toolName, args, runtimeContext.source);
     if (toolName === 'manage_database_backups') return executeBackupTool(user, args);
     if (STORAGE_TOOL_NAMES.has(toolName)) return executeStorageTool(user, toolName, args);
     if (DATABASE_TOOL_NAMES.has(toolName)) {

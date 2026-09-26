@@ -44,16 +44,23 @@ import {
 } from './integrations.service.core.js';
 import { IntegrationsPersistenceService } from './integrations.service.persistence.js';
 
-/** GitHub repository and owner IDs by connector and `owner/repository` path, for owner- and repo-qualified scopes. */
-const GITHUB_IDENTITY_TTL_MS = 5 * 60_000;
-const githubRepositoryIdentities = new TtlCache<{ repositoryId: string; ownerId: string } | null>(
-  GITHUB_IDENTITY_TTL_MS,
-  5000
-);
+/**
+ * GitHub repository owner IDs by connector and repository ID, for owner-qualified scopes. Keyed by the stable
+ * repository ID, never by path: a renamed repository and a new one created at its old path never share an entry.
+ * Lookups by URL always ask GitHub; write and credential decisions bypass this cache (`fresh`).
+ */
+const GITHUB_OWNER_TTL_MS = 5 * 60_000;
+const githubRepositoryOwners = new TtlCache<string | null>(GITHUB_OWNER_TTL_MS, 5000);
 
-/** Test hook: forget cached GitHub repository identities. */
+/** Test hook: forget cached GitHub repository owners. */
 export function clearGitHubRepositoryIdentityCache(): void {
-  githubRepositoryIdentities.clear();
+  githubRepositoryOwners.clear();
+}
+
+/** Forget cached GitHub owners of a connector (on sync) or of one repository (on a source webhook). */
+export function invalidateGitHubRepositoryOwners(connectorId: string, repositoryId?: string | null): void {
+  if (repositoryId) githubRepositoryOwners.delete(`${connectorId}:${repositoryId}`);
+  else githubRepositoryOwners.deletePrefix(`${connectorId}:`);
 }
 
 type GitScopeProviderName = 'gitlab' | 'github' | 'git';
@@ -182,35 +189,62 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     return this.githubRepositoryScopeTarget(connector, token, repositoryUrl);
   }
 
-  /** GitHub repository and owner IDs for a repository URL (the IDs owner/ and repo/ qualifiers name). */
+  /**
+   * GitHub repository and owner IDs for a repository URL (the IDs owner/ and repo/ qualifiers name). Always read
+   * from GitHub: a path can point at a different repository after a rename.
+   */
   protected async githubRepositoryScopeTarget(
     connector: ConnectorRow,
     token: string,
     repositoryUrl: string
   ): Promise<GitRepositoryScopeTarget> {
     const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
-    const key = `${connector.id}:${owner.toLowerCase()}/${repository.toLowerCase()}`;
-    const identity = await githubRepositoryIdentities.getOrLoad(key, async () => {
-      const response = await this.githubConnectorRequest(
-        connector,
-        token,
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`
-      );
-      const body = (await response.json().catch(() => null)) as unknown;
-      if (response.status === 404) return null;
-      if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
-      const record = isPlainRecord(body) ? body : {};
-      const ownerRecord = isPlainRecord(record.owner) ? record.owner : {};
-      return typeof record.id === 'number' && typeof ownerRecord.id === 'number'
-        ? { repositoryId: String(record.id), ownerId: String(ownerRecord.id) }
-        : null;
-    });
-    if (!identity) {
-      // Not visible to this credential: do not let one caller's miss hide the repository from others.
-      githubRepositoryIdentities.delete(key);
-      return { connectorId: connector.id };
-    }
-    return { connectorId: connector.id, repositoryId: identity.repositoryId, containerIds: [identity.ownerId] };
+    const response = await this.githubConnectorRequest(
+      connector,
+      token,
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`
+    );
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (response.status === 404) return { connectorId: connector.id };
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    const record = isPlainRecord(body) ? body : {};
+    const ownerRecord = isPlainRecord(record.owner) ? record.owner : {};
+    if (typeof record.id !== 'number' || typeof ownerRecord.id !== 'number') return { connectorId: connector.id };
+    githubRepositoryOwners.set(`${connector.id}:${record.id}`, String(ownerRecord.id));
+    return { connectorId: connector.id, repositoryId: String(record.id), containerIds: [String(ownerRecord.id)] };
+  }
+
+  /**
+   * The owner of a repository known by ID (build sources store it), cached by repository ID. `fresh` skips the
+   * cache for credential and write decisions, so a transferred repository never keeps its old owner's grant.
+   */
+  protected async githubRepositoryScopeTargetById(
+    connector: ConnectorRow,
+    token: string,
+    repositoryId: string,
+    options: { fresh?: boolean } = {}
+  ): Promise<GitRepositoryScopeTarget> {
+    const key = `${connector.id}:${repositoryId}`;
+    const ownerId = await githubRepositoryOwners.load(
+      key,
+      async () => {
+        const response = await this.githubConnectorRequest(
+          connector,
+          token,
+          `/repositories/${encodeURIComponent(repositoryId)}`
+        );
+        const body = (await response.json().catch(() => null)) as unknown;
+        if (response.status === 404) return null;
+        if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+        const record = isPlainRecord(body) ? body : {};
+        const ownerRecord = isPlainRecord(record.owner) ? record.owner : {};
+        return record.id === Number(repositoryId) && typeof ownerRecord.id === 'number' ? String(ownerRecord.id) : null;
+      },
+      options
+    );
+    // A repository this credential cannot see: do not let the miss hide it from later lookups.
+    if (!ownerId) githubRepositoryOwners.delete(key);
+    return { connectorId: connector.id, repositoryId, containerIds: ownerId ? [ownerId] : [] };
   }
 
   protected async resolveGitHubConnectorToken(connector: ConnectorRow): Promise<string> {

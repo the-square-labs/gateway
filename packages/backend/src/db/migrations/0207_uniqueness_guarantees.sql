@@ -378,10 +378,15 @@ ALTER TABLE "proxy_hosts" ADD CONSTRAINT "proxy_hosts_ssl_certificate_id_ssl_cer
 --> statement-breakpoint
 
 -- 4. Active backup runs ---------------------------------------------------------------------------------------------
--- One queued or running backup per policy: the newest active run stays, older ones fail with a clear message and
--- release their executor lease; their runtime is cleaned up like any finished run's.
+-- One queued or running backup per policy: a running run stays over a queued one, then the newest; the others fail
+-- with a clear message and release their executor lease. The backup service asks the executor to cancel each
+-- superseded runner before it cleans up the run's runtime.
 WITH "ranked" AS (
-	SELECT "run"."id", row_number() OVER (PARTITION BY "run"."policy_id" ORDER BY "run"."created_at" DESC, "run"."id" DESC) AS "rank"
+	-- A running backup is kept over a queued one: its runner is working and its lease is taken.
+	SELECT "run"."id", row_number() OVER (
+		PARTITION BY "run"."policy_id"
+		ORDER BY ("run"."status" = 'running') DESC, "run"."created_at" DESC, "run"."id" DESC
+	) AS "rank"
 	FROM "backup_runs" AS "run"
 	WHERE "run"."direction" = 'backup' AND "run"."status" IN ('queued', 'running') AND "run"."policy_id" IS NOT NULL
 ), "superseded" AS (
@@ -409,7 +414,7 @@ FROM "superseded";
 WITH "ranked" AS (
 	SELECT "run"."id", row_number() OVER (
 		PARTITION BY ("run"."restore_target" ->> 'newManagedDatabaseName')
-		ORDER BY "run"."created_at" DESC, "run"."id" DESC
+		ORDER BY ("run"."status" = 'running') DESC, "run"."created_at" DESC, "run"."id" DESC
 	) AS "rank"
 	FROM "backup_runs" AS "run"
 	WHERE "run"."direction" = 'restore'

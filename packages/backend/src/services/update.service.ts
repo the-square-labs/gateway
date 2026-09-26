@@ -1093,6 +1093,7 @@ registry_ready() {
 relay_reachable() {
   compose exec -T app node -e 'const net=require("node:net");const socket=net.connect(9443,"relay",()=>{socket.end();process.exit(0)});socket.setTimeout(3000,()=>{socket.destroy();process.exit(1)});socket.on("error",()=>process.exit(1));'
 }
+${gatewayDatabaseSnapshotShell(composeDir)}
 rollback() {
   if [ -n "$FOUNDATION_BACKUP_DIR" ]; then
     if [ -f "$FOUNDATION_BACKUP_DIR/.env" ]; then
@@ -1112,6 +1113,20 @@ rollback() {
     [ "$attempt" -lt 60 ]
     sleep 2
   done
+  if [ "$db_snapshot_ready" -eq 1 ]; then
+    # The target app may have migrated the schema: the previous app must not run on it.
+    db_restore_status=0
+    restore_database_snapshot || db_restore_status=$?
+    if [ "$db_restore_status" -eq 0 ]; then
+      rm -f "$GATEWAY_DB_DUMP" || true
+      echo "Restored the gateway database from the pre-update snapshot"
+    elif [ "$db_restore_status" -eq 1 ]; then
+      echo "The gateway database was NOT restored and keeps the changes of the failed update. The pre-update snapshot is kept at $GATEWAY_DB_DUMP" >&2
+    else
+      echo "Restoring the gateway database failed after the migrated database was dropped, so Gateway is left stopped. The pre-update snapshot is kept at $GATEWAY_DB_DUMP. Restore it by hand (see Updates in the operations guide), then run docker compose up -d" >&2
+      return 1
+    fi
+  fi
   attempt=0
   until compose exec -T postgres psql -v ON_ERROR_STOP=1 -U gateway -d gateway -c 'BEGIN; CREATE OR REPLACE VIEW "public"."gateway_relay_node_identities_v1" WITH (security_barrier = true) AS SELECT "id" AS "node_id", "type"::text AS "node_type", "status"::text AS "node_status", "certificate_serial" FROM "public"."nodes"; CREATE OR REPLACE VIEW "public"."gateway_relay_managed_databases_v1" WITH (security_barrier = true) AS SELECT "id" AS "managed_database_id", "node_id" AS "database_node_id", "status"::text AS "database_status" FROM "public"."managed_database_instances"; CREATE OR REPLACE VIEW "public"."gateway_relay_bindings_v1" WITH (security_barrier = true) AS SELECT binding."id" AS "binding_id", binding."managed_database_id", binding."target_node_id" AS "source_node_id", binding."status"::text AS "binding_status", managed."node_id" AS "database_node_id", managed."status"::text AS "database_status" FROM "public"."managed_database_bindings" binding INNER JOIN "public"."managed_database_instances" managed ON managed."id" = binding."managed_database_id"; COMMIT;'; do
     attempt=$((attempt + 1))
@@ -1147,11 +1162,15 @@ on_exit() {
   code=$?
   trap - EXIT
   if [ "$code" -ne 0 ]; then rollback; fi
+  # The update settled: the snapshot is not needed any more.
+  if [ "$code" -eq 0 ]; then rm -f "$GATEWAY_DB_DUMP" || true; fi
   exit "$code"
 }
 trap on_exit EXIT
 sleep 2
 ensure_foundation_services
+# Before the target app can apply its migrations. Nothing migrated yet if this fails.
+snapshot_database || exit 1
 if service_exists relay; then
   compose up -d --no-deps --force-recreate app
 else
@@ -1972,6 +1991,89 @@ function legacySettingsMigrationEnv(env: Env): string[] {
   return Object.entries(values)
     .filter((entry): entry is [string, string | number | boolean] => entry[1] !== undefined)
     .map(([key, value]) => `${key}=${String(value)}`);
+}
+
+/**
+ * Update sidecar shell functions. The target app applies its migrations when it
+ * starts, so the sidecar snapshots the gateway database before recreating it and
+ * a rollback restores the snapshot before the previous app starts again: the
+ * previous app never runs on a schema it does not know.
+ *
+ * `restore_database_snapshot` returns 0 when the snapshot is back, 1 when the
+ * database was left as the update changed it, 2 when it was dropped and could
+ * not be restored (the previous app must not start then).
+ */
+function gatewayDatabaseSnapshotShell(composeDir: string): string {
+  return `GATEWAY_DB_DUMP="$FOUNDATION_BACKUP_DIR/gateway-db.dump"
+db_snapshot_ready=0
+prune_database_snapshots() {
+  # Left by an update whose sidecar was killed, or kept after a failed restore.
+  for old_dump in ${composeDir}/.gateway-foundation-backups/pre-update-*/gateway-db.dump; do
+    [ -f "$old_dump" ] || continue
+    [ "$old_dump" != "$GATEWAY_DB_DUMP" ] || continue
+    [ -n "$(find "$old_dump" -mtime +7)" ] || continue
+    if rm -f "$old_dump"; then echo "Removed the database snapshot of an earlier update: $old_dump"; fi
+  done
+}
+snapshot_database() {
+  prune_database_snapshots
+  db_bytes="$(compose exec -T postgres psql -X -At -v ON_ERROR_STOP=1 -U gateway -d gateway -c "SELECT pg_database_size('gateway')")" || db_bytes=
+  case "$db_bytes" in
+    ''|*[!0-9]*)
+      echo "Gateway update stopped before replacing the app: could not read the size of the gateway database" >&2
+      return 1
+      ;;
+  esac
+  free_kb="$(df -Pk "$FOUNDATION_BACKUP_DIR" | awk 'NR == 2 { print $4 }')" || free_kb=
+  case "$free_kb" in
+    ''|*[!0-9]*)
+      echo "Gateway update stopped before replacing the app: could not read the free space in $FOUNDATION_BACKUP_DIR" >&2
+      return 1
+      ;;
+  esac
+  # The compressed dump stays below the database size; keep a margin for the rest of the host.
+  need_kb=$((db_bytes / 1024 + db_bytes / 10240 + 262144))
+  if [ "$free_kb" -lt "$need_kb" ]; then
+    echo "Gateway update stopped before replacing the app: the pre-update database snapshot needs $((need_kb / 1024)) MiB free in $FOUNDATION_BACKUP_DIR, but only $((free_kb / 1024)) MiB are free. Free up disk space and start the update again." >&2
+    return 1
+  fi
+  rm -f "$GATEWAY_DB_DUMP"
+  if ! (umask 077 && compose exec -T postgres pg_dump --format=custom --create --no-password -U gateway -d gateway > "$GATEWAY_DB_DUMP"); then
+    rm -f "$GATEWAY_DB_DUMP"
+    echo "Gateway update stopped before replacing the app: the pre-update database snapshot failed" >&2
+    return 1
+  fi
+  if [ ! -s "$GATEWAY_DB_DUMP" ] || ! chmod 600 "$GATEWAY_DB_DUMP" || ! compose exec -T postgres pg_restore --list < "$GATEWAY_DB_DUMP" > /dev/null; then
+    rm -f "$GATEWAY_DB_DUMP"
+    echo "Gateway update stopped before replacing the app: the pre-update database snapshot is empty or unreadable" >&2
+    return 1
+  fi
+  db_snapshot_ready=1
+  echo "Saved the pre-update database snapshot to $GATEWAY_DB_DUMP"
+}
+restore_database_snapshot() {
+  echo "Restoring the gateway database from the pre-update snapshot $GATEWAY_DB_DUMP"
+  if [ ! -s "$GATEWAY_DB_DUMP" ] || ! compose exec -T postgres pg_restore --list < "$GATEWAY_DB_DUMP" > /dev/null; then
+    echo "The pre-update database snapshot $GATEWAY_DB_DUMP is missing or unreadable" >&2
+    return 1
+  fi
+  # Nothing may hold or reopen a connection while the database is replaced.
+  for service in $(compose config --services); do
+    [ "$service" = postgres ] && continue
+    if ! compose stop "$service"; then
+      echo "Could not stop $service before restoring the gateway database" >&2
+      return 1
+    fi
+  done
+  if ! compose exec -T postgres psql -X -q -v ON_ERROR_STOP=1 -U gateway -d postgres -c 'DROP DATABASE IF EXISTS gateway WITH (FORCE)'; then
+    echo "Could not drop the migrated gateway database" >&2
+    return 1
+  fi
+  if ! compose exec -T postgres pg_restore --create --exit-on-error --no-password -U gateway -d postgres < "$GATEWAY_DB_DUMP"; then
+    echo "pg_restore of $GATEWAY_DB_DUMP failed" >&2
+    return 2
+  fi
+}`;
 }
 
 function parseGatewayUpdateAttempt(value: unknown): GatewayUpdateAttempt | null {

@@ -1310,4 +1310,304 @@ describe('SSLService ACME single flight', () => {
     expect(guard.sql).toContain('"acme_order_url" = $');
     expect(guard.params).toEqual(expect.arrayContaining(['cert-1', 'https://acme.test/order/1', 'renewal']));
   });
+
+  /** Whether the `operationLeaseHeld` conditions of a write's guard hold on the fake lease table (true without any). */
+  function leaseFencesHold(leaseDb: ReturnType<typeof createFakeOperationLeaseDb>, guard: unknown): boolean {
+    const { sql, params } = new PgDialect().sqlToQuery(guard as any);
+    const fences = [...sql.matchAll(/"operation_leases"\."key" = \$(\d+) and "operation_leases"\."token" = \$(\d+)/g)];
+    return fences.every(([, key, token]) =>
+      leaseDb.held(String(params[Number(key) - 1]), String(params[Number(token) - 1]))
+    );
+  }
+
+  /** A certificate row whose guarded writes land only while the operation's lease fences hold. */
+  function fencedCertificateDb(cert: Record<string, unknown>, leaseDb: ReturnType<typeof createFakeOperationLeaseDb>) {
+    const where = vi.fn((guard: unknown) =>
+      Object.assign(Promise.resolve(undefined), {
+        returning: vi.fn(async () => (leaseFencesHold(leaseDb, guard) ? [{ id: cert.id }] : [])),
+      })
+    );
+    const set = vi.fn((_values: Record<string, unknown>) => ({ where }));
+    const db = {
+      query: { sslCertificates: { findFirst: vi.fn().mockResolvedValue(cert) } },
+      update: vi.fn(() => ({ set })),
+    } as any;
+    return { db, set, where };
+  }
+
+  const accountKey = JSON.stringify({ encrypted: 'e', encryptedDek: 'd', dekIv: 'i', contactEmail: 'ops@example.com' });
+
+  // rc.11 data review F6: a verify whose lease had lapsed, and been taken
+  // over by another process, still stored its result as the owner.
+  it('does not store a verify once another process took its lease over', async () => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      type: 'acme',
+      status: 'active',
+      acmeChallengeType: 'dns-01',
+      acmeProvider: 'letsencrypt',
+      domainNames: ['example.com'],
+      acmeAccountKey: accountKey,
+      acmeOrderUrl: 'https://acme.test/order/1',
+      acmePendingOperation: 'renewal',
+      acmePendingChallenges: [],
+      notAfter: new Date(Date.now() + 10 * DAY),
+    };
+    const { db, set, where } = fencedCertificateDb(cert, leaseDb);
+    const order = deferred<ReturnType<typeof issued>>();
+    const acmeService = { requestCertDNS01Verify: vi.fn(() => order.promise) } as any;
+    const cryptoService = {
+      decryptPrivateKey: vi.fn().mockReturnValue('account-key'),
+      encryptPrivateKey: vi.fn().mockReturnValue({ encryptedPrivateKey: 'enc', encryptedDek: 'dek', dekIv: 'iv' }),
+    } as any;
+    const upsertGatewayAsset = vi.fn();
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      {
+        upsertGatewayAsset,
+      } as any
+    );
+    service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+
+    const verify = service.completeDNS01Verification('cert-1', 'user-1');
+    await vi.waitFor(() => expect(acmeService.requestCertDNS01Verify).toHaveBeenCalledTimes(1));
+    // Its lease lapsed while the CA answered, and another process claimed the certificate.
+    const leaseKey = operationLeaseKey('acme', 'cert:cert-1');
+    leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token', holder: 'replica-2:7' });
+    order.resolve(issued());
+
+    await expect(verify).rejects.toMatchObject({ statusCode: 409, code: 'ACME_ORDER_SUPERSEDED' });
+    // Nothing was stored, marked failed or distributed over the new owner's work.
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(upsertGatewayAsset).not.toHaveBeenCalled();
+    const guard = new PgDialect().sqlToQuery(where.mock.calls[0]![0] as any);
+    expect(guard.sql).toContain('"operation_leases"."expires_at" > statement_timestamp()');
+    expect(guard.params).toEqual(expect.arrayContaining(['cert-1', 'https://acme.test/order/1', leaseKey]));
+    // The new owner's lease is untouched.
+    expect(leaseDb.rows.get(leaseKey)).toMatchObject({ token: 'replica-2-token' });
+  });
+
+  it('skips the verify step of a Cloudflare DNS-01 renewal once its lease was lost', async () => {
+    vi.useFakeTimers();
+    const leaseDb = createFakeOperationLeaseDb();
+    const cert = {
+      id: 'cert-1',
+      name: 'example.com',
+      type: 'acme',
+      status: 'active',
+      acmeChallengeType: 'dns-01',
+      acmeProvider: 'letsencrypt',
+      domainNames: ['example.com'],
+      acmeAccountKey: accountKey,
+      acmeOrderUrl: null,
+      acmePendingOperation: null,
+      acmePendingChallenges: null,
+      autoRenewProvider: 'cloudflare',
+      autoRenewDnsBindings: [
+        {
+          domain: 'example.com',
+          connectorId: 'connector-1',
+          connectorName: 'Cloudflare',
+          zoneId: 'zone-1',
+          zoneName: 'example.com',
+        },
+      ],
+      notAfter: new Date(Date.now() + 10 * DAY),
+    };
+    const { db, set } = fencedCertificateDb(cert, leaseDb);
+    const acmeService = {
+      requestCertDNS01Start: vi.fn().mockResolvedValue({
+        accountKey: 'account-key',
+        orderUrl: 'https://acme.test/order/2',
+        challenges: [{ domain: 'example.com', recordName: '_acme-challenge.example.com', recordValue: 'token' }],
+      }),
+      requestCertDNS01Verify: vi.fn(),
+    } as any;
+    const cryptoService = {
+      encryptPrivateKey: vi.fn().mockReturnValue({ encryptedPrivateKey: 'enc', encryptedDek: 'dek', dekIv: 'iv' }),
+    } as any;
+    // The renewal pauses once its new order is stored.
+    const started = deferred<void>();
+    const resume = deferred<void>();
+    const log = vi.fn(async (entry: { action: string }) => {
+      if (entry.action !== 'ssl.acme_dns01_renew_start') return;
+      started.resolve();
+      await resume.promise;
+    });
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log } as any,
+      {
+        upsertGatewayAsset: vi.fn(),
+      } as any
+    );
+    service.setIntegrationsService({
+      resolveCloudflareDnsContext: vi.fn().mockResolvedValue({
+        connector: { id: 'connector-1', name: 'Cloudflare' },
+        zone: { remoteId: 'zone-1', name: 'example.com' },
+        client: {
+          listDnsRecords: vi.fn().mockResolvedValue([]),
+          createDnsRecord: vi.fn().mockResolvedValue({ id: 'record-1' }),
+        },
+      }),
+      getCloudflareDnsContextForRecord: vi.fn().mockResolvedValue({ client: { deleteDnsRecord: vi.fn() } }),
+    } as any);
+    service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+
+    const renewal = service.renewCert('cert-1', 'user-1').catch((error: unknown) => error);
+    await started.promise;
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ acmeOrderUrl: 'https://acme.test/order/2' }));
+    // Another process takes the lease over; the next heartbeat finds out.
+    const leaseKey = operationLeaseKey('acme', 'cert:cert-1');
+    leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    resume.resolve();
+    await vi.runAllTimersAsync();
+
+    await expect(renewal).resolves.toMatchObject({
+      statusCode: 409,
+      code: 'ACME_ORDER_SUPERSEDED',
+      details: { leaseLost: true },
+    });
+    expect(acmeService.requestCertDNS01Verify).not.toHaveBeenCalled();
+    // Not recorded as a renewal failure over the new owner's work either.
+    expect(set).toHaveBeenCalledTimes(1);
+  });
+
+  /** One backend process renewing `httpCert` under a lease whose CA answer the test controls. */
+  function leasedRenewal() {
+    const leaseDb = createFakeOperationLeaseDb();
+    const order = deferred<ReturnType<typeof issued>>();
+    const harness = renewalHarness(httpCert, { issue: () => order.promise });
+    harness.service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+    const leaseKey = operationLeaseKey('acme', 'cert:cert-1');
+    /** Its lease lapsed while the CA answered, and another process claimed the certificate. */
+    const takeOver = () =>
+      leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token', holder: 'replica-2:7' });
+    return { ...harness, leaseDb, order, takeOver };
+  }
+
+  // rc.11 data review F6: the HTTP-01 renewal wrote its certificate by id
+  // after another process had taken its lease over.
+  it('does not store an HTTP-01 renewal once another process took its lease over', async () => {
+    const { service, set, acmeService, order, takeOver } = leasedRenewal();
+
+    const renewal = service.renewCert('cert-1', 'user-1');
+    await vi.waitFor(() => expect(acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1));
+    takeOver();
+    order.resolve(issued());
+
+    await expect(renewal).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ACME_ORDER_SUPERSEDED',
+      details: { leaseLost: true },
+    });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('records no renewal failure once another process took the lease over', async () => {
+    const { service, set, acmeService, order, takeOver } = leasedRenewal();
+
+    const renewal = service.renewCert('cert-1', 'user-1');
+    await vi.waitFor(() => expect(acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1));
+    takeOver();
+    order.reject(new Error('rate limited'));
+
+    await expect(renewal).rejects.toMatchObject({ code: 'ACME_ORDER_SUPERSEDED', details: { leaseLost: true } });
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it('records a renewal failure only while the lease is still its own', async () => {
+    const { service, set, order } = leasedRenewal();
+
+    const renewal = service.renewCert('cert-1', 'user-1');
+    order.reject(new Error('rate limited'));
+
+    await expect(renewal).rejects.toMatchObject({ code: 'RENEWAL_FAILED' });
+    expect(set).toHaveBeenCalledWith(expect.objectContaining({ renewalError: 'Renewal failed: rate limited' }));
+  });
+
+  it.each([
+    'http-01',
+    'dns-01',
+  ] as const)('does not store a %s certificate request once another process took its lease over', async (challengeType) => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const order = deferred<Record<string, unknown>>();
+    const insert = vi.fn();
+    const db = { insert, query: { proxyHosts: { findMany: vi.fn().mockResolvedValue([]) } } } as any;
+    const acmeService = {
+      requestCertHTTP01: vi.fn(() => order.promise),
+      requestCertDNS01Start: vi.fn(() => order.promise),
+    } as any;
+    const cryptoService = {
+      encryptPrivateKey: vi.fn().mockReturnValue({ encryptedPrivateKey: 'enc', encryptedDek: 'dek', dekIv: 'iv' }),
+    } as any;
+    const service = new SSLService(
+      db,
+      acmeService,
+      cryptoService,
+      { log: vi.fn() } as any,
+      { upsertGatewayAsset: vi.fn() } as any
+    );
+    service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+
+    const request = service.requestACMECert(
+      RequestACMECertSchema.parse({ domains: ['example.com'], challengeType }),
+      'user-1',
+      'ops@example.com'
+    );
+    const started = challengeType === 'http-01' ? acmeService.requestCertHTTP01 : acmeService.requestCertDNS01Start;
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1));
+    // Another process now issues for the same domains.
+    const leaseKey = operationLeaseKey('acme', 'acme-request:example.com');
+    leaseDb.rows.set(leaseKey, { ...leaseDb.rows.get(leaseKey)!, token: 'replica-2-token' });
+    order.resolve({
+      ...issued(),
+      accountKey: 'account-key',
+      orderUrl: 'https://acme.test/order/1',
+      challenges: [{ domain: 'example.com', recordName: '_acme-challenge.example.com', recordValue: 'token' }],
+    });
+
+    await expect(request).rejects.toMatchObject({ code: 'ACME_ORDER_SUPERSEDED', details: { leaseLost: true } });
+    expect(insert).not.toHaveBeenCalled();
+  });
+
+  // rc.11 data review F6: a joined caller compared the lease expiry with its
+  // own clock, so a clock running ahead ended its wait on a live operation.
+  it('keeps a caller joined from another process waiting while the operation lives by the database clock', async () => {
+    let databaseNow = Date.now();
+    const leaseDb = createFakeOperationLeaseDb({ now: () => databaseNow });
+    const b = renewalHarness(httpCert);
+    b.service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+    (b.service as unknown as { acmeJoinPollMs: number }).acmeJoinPollMs = 1;
+    const leaseKey = operationLeaseKey('acme', 'cert:cert-1');
+    // The same caller's renewal runs on another process, its lease live for a minute.
+    leaseDb.rows.set(leaseKey, {
+      token: 'replica-1-token',
+      holder: 'replica-1:42',
+      expiresAt: new Date(databaseNow + 60_000),
+      data: { kind: 'renew', actor: 'user-1' },
+    });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // This process's clock runs ten minutes ahead of the database's.
+    vi.setSystemTime(databaseNow + 10 * 60_000);
+
+    const joined = b.service.renewCert('cert-1', 'user-1');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(b.acmeService.requestCertHTTP01).not.toHaveBeenCalled();
+    // It claimed once, then only read the lease: its wait did not end early.
+    expect(leaseDb.acquired).toHaveLength(1);
+
+    // The other process stopped: its lease lapses by the database clock.
+    databaseNow += 61_000;
+    await joined;
+    expect(b.acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1);
+  });
 });

@@ -11,19 +11,22 @@ const DOCUMENTED_METHODS = ['post', 'put', 'patch'] as const;
 
 export const IDEMPOTENCY_API_DESCRIPTION = `## Idempotent retries
 
-Authenticated \`POST\`, \`PUT\`, and \`PATCH\` requests accept an optional \`${IDEMPOTENCY_KEY_HEADER}\` header (1-${IDEMPOTENCY_KEY_MAX_LENGTH} printable ASCII characters, for example a UUID). A client that retries after a timeout with the same key gets the original result instead of creating a second resource. Keys are scoped to the authenticated user or API/OAuth token, the method, and the path; results are kept for 24 hours.
+Selected create operations accept an optional \`${IDEMPOTENCY_KEY_HEADER}\` header (1-${IDEMPOTENCY_KEY_MAX_LENGTH} printable ASCII characters, for example a UUID); each lists it as a parameter. They cover containers, deployments, Compose projects, volumes, networks, registries, routes and route folders, domains, ACME certificates, certificate authorities, databases and managed databases, storage connections and managed storage, Page Projects, alert rules, and SIEM destinations. A client that retries after a timeout with the same key gets the original result instead of creating a second resource. Operations that return a secret once (tokens, enrollment, keys, credentials) never take the header.
+
+Keys are bound to the API/OAuth token or browser session, its current effective scopes, the method, and the path; results are kept encrypted for 24 hours, and every replay is audited. After a scope change the key starts fresh.
 
 - Same key and same request (query and JSON body): the stored response is replayed with \`${IDEMPOTENCY_REPLAYED_HEADER}: true\`.
 - Same key with a different request: \`422 IDEMPOTENCY_KEY_REUSED\`.
 - Same key while the first request is still running: \`409 IDEMPOTENCY_KEY_IN_PROGRESS\` with \`Retry-After\`.
+- The first request completed but its response was not stored (it looked secret or was over 1 MiB): \`409 IDEMPOTENCY_RESPONSE_WITHHELD\` with the original status and \`Location\` when known; look the resource up instead of retrying.
 
-Only 2xx and deterministic 400, 404, 409, and 422 JSON responses are stored. 401, 403, 5xx, streamed, and non-JSON responses are not stored, so a retry runs again. Requests with bodies over 1 MiB or non-JSON bodies (uploads), the Pages deploy upload API (it has upload-session idempotency), remote MCP (tools take an \`idempotencyKey\` argument), and WebSocket routes run without idempotency. If the idempotency store is unavailable, requests run normally without it.`;
+Only 2xx and deterministic 400, 404, 409, and 422 JSON responses are recorded. 401, 403, 5xx, streamed, and non-JSON responses are not, so a retry runs again. Request bodies over 1 MiB or not JSON run without idempotency, and so do all requests when the idempotency store is unavailable. Remote MCP create tools take an \`idempotencyKey\` argument with the same semantics.`;
 
 const IDEMPOTENCY_KEY_PARAMETER = {
   name: IDEMPOTENCY_KEY_HEADER,
   in: 'header',
   required: false,
-  description: `Optional retry key (1-${IDEMPOTENCY_KEY_MAX_LENGTH} printable ASCII characters). A retry with the same key and request within 24 hours replays the original response with \`${IDEMPOTENCY_REPLAYED_HEADER}: true\`; a different request under the same key returns 422 IDEMPOTENCY_KEY_REUSED, and a retry while the first request still runs returns 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After.`,
+  description: `Optional retry key (1-${IDEMPOTENCY_KEY_MAX_LENGTH} printable ASCII characters), bound to your token or session and its current scopes. A retry with the same key and request within 24 hours replays the original response with \`${IDEMPOTENCY_REPLAYED_HEADER}: true\`; a different request under the same key returns 422 IDEMPOTENCY_KEY_REUSED, a retry while the first request still runs returns 409 IDEMPOTENCY_KEY_IN_PROGRESS with Retry-After, and a completed request whose response was not stored returns 409 IDEMPOTENCY_RESPONSE_WITHHELD.`,
   schema: { type: 'string', minLength: 1, maxLength: IDEMPOTENCY_KEY_MAX_LENGTH },
 } as const;
 
@@ -48,7 +51,7 @@ function documentsIdempotencyKey(operation: OpenApiOperation): boolean {
   );
 }
 
-/** Add the shared Idempotency-Key header parameter to every authenticated operation that honors it. */
+/** Add the shared Idempotency-Key header parameter to the opt-in create operations that honor it. */
 export function withIdempotencyKeyDocumentation<T extends object>(input: T): T {
   const document = input as OpenApiDocumentLike;
   const paths: Record<string, Record<string, unknown>> = {};

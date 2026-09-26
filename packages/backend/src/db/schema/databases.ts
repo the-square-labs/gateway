@@ -138,6 +138,12 @@ export interface ManagedDatabaseRuntimeConfig {
 export interface ManagedDatabasePendingOperation {
   id: string;
   action: 'create' | 'update' | 'restart' | 'pause' | 'unpause' | 'delete';
+  /**
+   * An update that moves the published ports: the ports before it. They stay
+   * reserved (held) until the daemon confirms the move, and are restored when
+   * the update fails.
+   */
+  previousPorts?: { publishedPort: number | null; publishedNativePort: number | null };
 }
 
 export type ManagedDatabaseOwnerSeparationState = 'legacy' | 'preparing' | 'active' | 'error';

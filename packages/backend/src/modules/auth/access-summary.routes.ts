@@ -1,5 +1,10 @@
 import { OpenAPIHono, z } from '@hono/zod-openapi';
-import { type AccessCredential, accessSummaryDatabase, buildAccessSummary } from '@/lib/access-summary-resolver.js';
+import {
+  type AccessCredential,
+  accessSummaryDatabase,
+  accessSummaryPrincipal,
+  buildAccessSummary,
+} from '@/lib/access-summary-resolver.js';
 import { appRoute, dataResponseSchema, openApiValidationHook } from '@/lib/openapi.js';
 import type { AppEnv } from '@/types.js';
 import { authMiddleware } from './auth.middleware.js';
@@ -41,12 +46,12 @@ export const AccessSummarySchema = z
   .object({
     principal: z
       .object({
-        userId: z.string(),
-        name: z.string().nullable(),
-        email: z.string(),
-        group: z.string(),
         credential: z.enum(['session', 'api-token', 'oauth-token', 'mcp', 'assistant']),
         boundedByOwner: z.boolean(),
+        userId: z.string().optional().openapi({ description: 'Browser sessions only.' }),
+        name: z.string().nullable().optional().openapi({ description: 'Browser sessions only.' }),
+        email: z.string().optional().openapi({ description: 'Browser sessions only.' }),
+        group: z.string().optional().openapi({ description: 'Browser sessions only.' }),
       })
       .optional(),
     limited: z.boolean(),
@@ -101,7 +106,7 @@ export const myAccessRoute = appRoute({
   tags: ['Authentication'],
   summary: 'Summarize what the caller can access',
   description:
-    "Groups the calling principal's effective access by product area: whether it is broad, which folders (with path), nodes, accounts and specific resources are granted with which actions, and where the caller may create. API tokens and OAuth grants are reported as bounded by their owner's current access. Folder-, node- and resource-limited access is normal: work inside the listed grants and pass folderId (and nodeId) when creating.",
+    "Groups the calling principal's effective access by product area: whether it is broad, which folders (with path), nodes, accounts and specific resources are granted with which actions, and where the caller may create. API tokens and OAuth grants are reported as bounded by their owner's current access; the owner's identity (id, name, email, group) is returned only to browser sessions. Folder-, node- and resource-limited access is normal: work inside the listed grants and pass folderId (and nodeId) when creating.",
   responses: {
     200: {
       description: 'Access summary',
@@ -121,14 +126,10 @@ function credentialFor(authType: AppEnv['Variables']['authType']): AccessCredent
 
 accessSummaryRoutes.openapi(myAccessRoute, async (c) => {
   const user = c.get('user')!;
-  const credential = credentialFor(c.get('authType'));
-  const summary = await buildAccessSummary(accessSummaryDatabase(), c.get('effectiveScopes') ?? [], {
-    userId: user.id,
-    name: user.name,
-    email: user.email,
-    group: user.groupName,
-    credential,
-    boundedByOwner: credential !== 'session',
-  });
+  const summary = await buildAccessSummary(
+    accessSummaryDatabase(),
+    c.get('effectiveScopes') ?? [],
+    accessSummaryPrincipal(user, credentialFor(c.get('authType')))
+  );
   return c.json({ data: summary }, 200);
 });

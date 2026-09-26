@@ -391,7 +391,10 @@ describe('drizzle migration metadata', () => {
       'WHERE "proxy_host_domains"."enabled" = true AND "proxy_host_domains"."legacy_conflict" = false'
     );
     // The newest active run is kept; older ones fail and give their executor lease back.
-    expect(migration).toContain('ORDER BY "run"."created_at" DESC, "run"."id" DESC');
+    // A running run is kept over a queued one, then the newest.
+    expect(migration).toContain(
+      'ORDER BY ("run"."status" = \'running\') DESC, "run"."created_at" DESC, "run"."id" DESC'
+    );
     expect(migration).toContain('DELETE FROM "backup_run_node_leases" USING "superseded"');
     expect(migration).toContain('ON DELETE restrict');
     expect(migration).not.toMatch(/DELETE FROM "(managed_storage_clusters|proxy_hosts|docker_deployments)"/);
@@ -441,5 +444,47 @@ describe('drizzle migration metadata', () => {
       isUnique: false,
       columns: [expect.objectContaining({ expression: 'expires_at' })],
     });
+  });
+
+  it('adds reservation holds, replica reservations and record-mode rollbacks without rewriting 0207', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0209_reservation_holds.sql'), 'utf8');
+    for (const name of [
+      'node_host_port_reservations_add',
+      'node_host_port_reservations_reserve',
+      'node_host_port_reservations_hold',
+      'node_host_port_reservations_settle',
+      'node_host_port_reservations_sync_owner',
+      'node_host_port_reservations_reconcile',
+      'docker_availability_replica_host_ports_sync',
+      'proxy_hosts_domains_trigger',
+      'managed_storage_cluster_take_free_name',
+    ]) {
+      expect(migration, name).toContain(`CREATE OR REPLACE FUNCTION "${name}"`);
+    }
+    // Holds survive the owner's own sync; only a node the owner left or a settle ends them.
+    expect(migration).toContain('OR ("held"."pending_until" IS NULL AND NOT ("held"."host_port" = ANY ("v_ports")))');
+    // Rollbacks record a clashing name instead of failing; an enabled-only change keeps the legacy flag.
+    expect(migration).toContain("current_setting('gateway.proxy_domain_conflicts', true)");
+    expect(migration).toContain(
+      'UPDATE "proxy_host_domains" SET "enabled" = NEW."enabled" WHERE "proxy_host_id" = NEW."id"'
+    );
+    expect(migration).toContain('CREATE INDEX IF NOT EXISTS "node_host_port_reservations_node_port_idx"');
+    expect(migration).toContain('CREATE TRIGGER "docker_availability_placements_host_ports"');
+    expect(migration).not.toMatch(/DROP TABLE|DELETE FROM "(managed_storage_clusters|proxy_hosts|docker_deployments)"/);
+
+    const previous = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0208_snapshot.json'), 'utf8'));
+    const current = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0209_snapshot.json'), 'utf8'));
+    expect(current.prevId).toBe(previous.id);
+    const reservations = current.tables['public.node_host_port_reservations'];
+    expect(reservations.columns.pending_until).toMatchObject({ type: 'timestamp with time zone', notNull: false });
+    expect(reservations.indexes.node_host_port_reservations_node_port_idx).toMatchObject({ isUnique: false });
+    expect(reservations.indexes.node_host_port_reservations_node_port_idx.where).toBeUndefined();
+    expect(reservations.checkConstraints.node_host_port_reservations_owner_kind_valid.value).toContain(
+      "'deployment_replica'"
+    );
+    const changed = Object.keys({ ...previous.tables, ...current.tables }).filter(
+      (table) => JSON.stringify(current.tables[table]) !== JSON.stringify(previous.tables[table])
+    );
+    expect(changed).toEqual(['public.node_host_port_reservations']);
   });
 });

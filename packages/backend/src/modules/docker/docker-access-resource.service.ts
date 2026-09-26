@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient, DrizzleExecutor } from '@/db/client.js';
 import { dockerAccessResources, dockerBuilds, dockerDeployments, dockerSourceBindings } from '@/db/schema/index.js';
 import { hasScope } from '@/lib/permissions.js';
@@ -93,16 +93,26 @@ export class DockerAccessResourceService {
       .select()
       .from(dockerAccessResources)
       .where(and(eq(dockerAccessResources.nodeId, nodeId), eq(dockerAccessResources.resourceType, 'container')));
-    for (const row of rows) this.rememberContainer(row.nodeId, row.resourceKey, row.runtimeId, row.id);
-    return new Map(rows.map((row) => [row.resourceKey, row.id]));
+    // A runtime-less row reserves a name for a Git source container waiting for its first build; it is nobody's
+    // identity until that source adopts it, so a live container of the same name never maps to it.
+    const owned = rows.filter((row) => !!row.runtimeId);
+    for (const row of owned) this.rememberContainer(row.nodeId, row.resourceKey, row.runtimeId, row.id);
+    return new Map(owned.map((row) => [row.resourceKey, row.id]));
   }
 
+  /**
+   * The stable access identity of a container, created on first sight. A runtime-less row is the name reservation
+   * of a Git source container waiting for its first build: only that source's first activation adopts it
+   * (`adoptReservation`). Any other runtime with the name gets no identity (''), so it never inherits the grants
+   * of the reservation's creator.
+   */
   async ensureContainer(
     nodeId: string,
     name: string,
     runtimeId: string,
     preserveExisting = false,
-    executor?: DrizzleExecutor
+    executor?: DrizzleExecutor,
+    options: { adoptReservation?: boolean } = {}
   ): Promise<string> {
     const ensure = async (tx: DrizzleExecutor) => {
       await this.lockContainerIdentity(tx, nodeId, name);
@@ -130,6 +140,8 @@ export class DockerAccessResourceService {
         throw new AppError(409, 'CONTAINER_NAME_CONFLICT', 'A runtime already owns this container identity');
       }
 
+      if (runtimeId && !existing.runtimeId && !options.adoptReservation) return '';
+
       if (!existing.runtimeId || existing.runtimeId === runtimeId || preserveExisting) {
         if (existing.runtimeId !== runtimeId) {
           await tx
@@ -149,15 +161,26 @@ export class DockerAccessResourceService {
       return created.id;
     };
     const resourceId = executor ? await ensure(executor) : await this.db.transaction(ensure);
-    this.rememberContainer(nodeId, name, runtimeId, resourceId);
+    if (resourceId && runtimeId) this.rememberContainer(nodeId, name, runtimeId, resourceId);
     return resourceId;
   }
 
-  async resolveContainer(nodeId: string, options: { name?: string; runtimeId?: string }): Promise<string | null> {
+  /**
+   * The access identity of a container by runtime ID or name. By name, a Git source reservation (no runtime yet)
+   * is returned only with `includeReservations`: a live container of that name does not own it.
+   */
+  async resolveContainer(
+    nodeId: string,
+    options: { name?: string; runtimeId?: string; includeReservations?: boolean }
+  ): Promise<string | null> {
     const conditions = [eq(dockerAccessResources.nodeId, nodeId), eq(dockerAccessResources.resourceType, 'container')];
     if (options.runtimeId) conditions.push(eq(dockerAccessResources.runtimeId, options.runtimeId));
-    else if (options.name) conditions.push(eq(dockerAccessResources.resourceKey, options.name));
-    else return null;
+    else if (options.name) {
+      conditions.push(eq(dockerAccessResources.resourceKey, options.name));
+      if (!options.includeReservations) {
+        conditions.push(isNotNull(dockerAccessResources.runtimeId), ne(dockerAccessResources.runtimeId, ''));
+      }
+    } else return null;
     const [row] = await this.db
       .select({ id: dockerAccessResources.id })
       .from(dockerAccessResources)
@@ -190,7 +213,8 @@ export class DockerAccessResourceService {
       .from(dockerDeployments)
       .where(and(eq(dockerDeployments.nodeId, nodeId), eq(dockerDeployments.name, name)))
       .limit(1);
-    return deployment?.id ?? this.resolveContainer(nodeId, { name });
+    // Folder moves and placements address a pending Git source container by its reservation.
+    return deployment?.id ?? this.resolveContainer(nodeId, { name, includeReservations: true });
   }
 
   async preserveContainerRuntimeId(nodeId: string, name: string, runtimeId: string): Promise<string> {
@@ -465,5 +489,53 @@ export class DockerAccessResourceService {
     toResourceId: string | null
   ): Promise<void> {
     await rewritePersistedDockerResourceScopes(tx, fromResourceId, toResourceId);
+  }
+}
+
+/**
+ * A Git source container reserves its name (source binding plus runtime-less access identity) until its first build
+ * creates it. No other container may take the name: it would adopt the reservation's identity, so the reservation's
+ * creator could reach it and the source's builds would replace it. Only the rollout of the binding named by
+ * `sourceBindingId` may create the reserved container.
+ */
+export async function assertContainerNameNotReserved(
+  executor: Pick<DrizzleExecutor, 'select'>,
+  nodeId: string,
+  name: string,
+  options: { sourceBindingId?: string } = {}
+): Promise<void> {
+  const [binding] = await executor
+    .select({ id: dockerSourceBindings.id })
+    .from(dockerSourceBindings)
+    .where(
+      and(
+        eq(dockerSourceBindings.targetKind, 'container'),
+        eq(dockerSourceBindings.nodeId, nodeId),
+        eq(dockerSourceBindings.containerName, name)
+      )
+    )
+    .limit(1);
+  if (binding && binding.id === options.sourceBindingId) return;
+  const reserved =
+    binding ??
+    (
+      await executor
+        .select({ id: dockerAccessResources.id, runtimeId: dockerAccessResources.runtimeId })
+        .from(dockerAccessResources)
+        .where(
+          and(
+            eq(dockerAccessResources.nodeId, nodeId),
+            eq(dockerAccessResources.resourceType, 'container'),
+            eq(dockerAccessResources.resourceKey, name)
+          )
+        )
+        .limit(1)
+    ).find((row) => !row.runtimeId);
+  if (reserved) {
+    throw new AppError(
+      409,
+      'NAME_IN_USE',
+      `The container name "${name}" is reserved by a Git build source on this node`
+    );
   }
 }

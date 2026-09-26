@@ -18,7 +18,7 @@ import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
-import { assertNoReservedDockerLabelChanges } from './docker-reserved-labels.js';
+import { assertDuplicateDropsReservedLabels, assertNoReservedDockerLabelChanges } from './docker-reserved-labels.js';
 import {
   applyPersistedDockerRuntimeSettingsToConfig,
   type DockerRuntimeOperationContext,
@@ -60,6 +60,46 @@ async function holdAcrossProcesses(
   await ctx.recheckMigrationGuard(nodeId, identities, newName);
 }
 
+/**
+ * Run right before a mutation's final owner-only steps: the leases
+ * `holdAcrossProcesses` took are renewed at once, so no other backend process
+ * can take the names for a full lease TTL from here. A lease lost meanwhile
+ * (it lapsed, and another process may be changing the container) refuses the
+ * steps with 409 CONTAINER_BUSY (details.leaseLost).
+ */
+async function confirmHeldAcrossProcesses(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  names: readonly string[]
+) {
+  await ctx.acquireTransitionLeases(nodeId, names);
+}
+
+/**
+ * A late owner-only step (a completion watcher's env write) runs only while
+ * the mutation still holds the name across processes; otherwise it is
+ * skipped and logged, and the container is left to its new owner.
+ */
+async function whileHeldAcrossProcesses(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  name: string,
+  step: string,
+  run: () => Promise<void>
+) {
+  try {
+    await confirmHeldAcrossProcesses(ctx, nodeId, [name]);
+  } catch (error) {
+    logger.error(`Skipped ${step}: the container is no longer held by this operation`, {
+      nodeId,
+      name,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return;
+  }
+  await run();
+}
+
 export interface DockerContainerMutationContext {
   db: DrizzleClient;
   auditService: AuditService;
@@ -88,8 +128,16 @@ export interface DockerContainerMutationContext {
   assertDockerGpuCapability(nodeId: string): Promise<void>;
   assertDockerPortBindIpCapability(nodeId: string): Promise<void>;
   assertDockerRuntimeProfileAvailable(nodeId: string, profile: unknown, currentProfile?: unknown): Promise<void>;
-  /** `claim`: a transition on `name` held by this claim does not count as "in use". */
-  assertNameAvailable(nodeId: string, name: string, claim?: ContainerTransitionClaim): Promise<void>;
+  /**
+   * `claim`: a transition on `name` held by this claim does not count as "in use". `sourceBindingId`: the name may
+   * be the reservation of that Git source (its first activation creates the container).
+   */
+  assertNameAvailable(
+    nodeId: string,
+    name: string,
+    claim?: ContainerTransitionClaim,
+    options?: { sourceBindingId?: string }
+  ): Promise<void>;
   assertNotManagedDeploymentInternal(nodeId: string, containerId: string): Promise<void>;
   translateNameConflict(err: unknown, name: string): never;
   resolveContainerName(nodeId: string, containerId: string): Promise<string>;
@@ -372,7 +420,8 @@ export async function createContainer(
   nodeId: string,
   config: Record<string, unknown>,
   userId: string,
-  actorScopes: string[] = []
+  actorScopes: string[] = [],
+  options: { sourceBindingId?: string } = {}
 ) {
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
   await ctx.validateDockerNode(nodeId);
@@ -395,10 +444,10 @@ export async function createContainer(
   delete config.registryId;
   const requestedName = (config.name as string | undefined)?.trim();
   const previousResourceId = requestedName
-    ? await ctx.accessResourceService?.resolveContainer?.(nodeId, { name: requestedName })
+    ? await ctx.accessResourceService?.resolveContainer?.(nodeId, { name: requestedName, includeReservations: true })
     : null;
   if (requestedName) {
-    await ctx.assertNameAvailable(nodeId, requestedName);
+    await ctx.assertNameAvailable(nodeId, requestedName, undefined, { sourceBindingId: options.sourceBindingId });
     ctx.setTransition(nodeId, requestedName, 'creating');
   }
   let data: any;
@@ -439,7 +488,16 @@ export async function createContainer(
       details: { nodeId, name: createdName, image: config.image },
     });
     if (createdName && newId) {
-      const resourceId = await ctx.accessResourceService?.ensureContainer(nodeId, createdName, newId, false);
+      const resourceId = await ctx.accessResourceService?.ensureContainer(
+        nodeId,
+        createdName,
+        newId,
+        false,
+        undefined,
+        {
+          adoptReservation: !!options.sourceBindingId,
+        }
+      );
       if (resourceId && resourceId !== previousResourceId)
         await grantCreatedResourcePermissions(userId, 'docker:containers', `${nodeId}/${resourceId}`, {
           folderId: (config.folderId as string | null | undefined) ?? null,
@@ -818,6 +876,9 @@ export async function renameContainer(
     }
     await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
     await ctx.assertNameAvailable(nodeId, newName, claim);
+    // The checks above wait on the node: the names must still be this
+    // rename's across processes before it changes anything.
+    await confirmHeldAcrossProcesses(ctx, nodeId, [oldName, newName]);
     // The runtime name is available, so any name-keyed records left behind by a
     // previously deleted container are stale and must not block reuse.
     await Promise.all([
@@ -914,10 +975,11 @@ export async function duplicateContainer(
   folderId?: string | null
 ) {
   await assertNodeAllowsServiceCreation(ctx.db, nodeId, 'docker');
-  await ctx.validateDockerNode(nodeId);
+  const node = (await ctx.validateDockerNode(nodeId)) as { capabilities?: unknown } | undefined;
   await ctx.assertNotManagedDeploymentInternal(nodeId, containerId);
   const sourceName = await ctx.resolveContainerName(nodeId, containerId);
   const inspect = await ctx.inspectContainer(nodeId, containerId);
+  assertDuplicateDropsReservedLabels(inspect?.Config?.Labels ?? inspect?.Labels, node?.capabilities);
   assertDockerMountChangeAllowed({
     nodeId,
     resourceId: String(inspect?.scopeResourceId ?? ''),
@@ -1070,6 +1132,12 @@ export async function updateContainer(
   }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   const task = await ctx.createTask(nodeId, containerId, name, 'update');
+  try {
+    await confirmHeldAcrossProcesses(ctx, nodeId, [name]);
+  } catch (error) {
+    await ctx.failTask(task?.id, error instanceof Error ? error.message : 'Failed to update container', nodeId, name);
+    throw error;
+  }
   let data: any;
   try {
     // Persist the user-set env with the mutation itself, not from the in-memory
@@ -1103,16 +1171,19 @@ export async function updateContainer(
     daemonTaskId ? ctx.longDockerOperationTimeoutMs + 30000 : updateTimeoutMs,
     hasImageChange
       ? (newContainerId) =>
-          reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId).catch((error) => {
+          whileHeldAcrossProcesses(ctx, nodeId, name, 'the stored env reconciliation after an image update', () =>
+            reconcileStoredEnvAfterImageChange(ctx, nodeId, name, previousRuntimeEnv, newContainerId)
+          ).catch((error) => {
             logger.warn('Failed to reconcile stored env after image update', { nodeId, name, error });
           })
       : undefined,
     daemonTaskId,
     // The env was saved before dispatch; a failed async update did not apply it.
     hasEnvChange
-      ? async () => {
-          await ctx.environmentService?.replace(nodeId, name, storedEnv);
-        }
+      ? () =>
+          whileHeldAcrossProcesses(ctx, nodeId, name, 'restoring the stored env after a failed update', async () => {
+            await ctx.environmentService?.replace(nodeId, name, storedEnv);
+          })
       : undefined
   );
   await ctx.auditService.log({

@@ -18,6 +18,46 @@ export const SCOPE_TARGET_MAX_RESOLVE_IDS = 100;
 export const SCOPE_TARGET_SEARCH_TTL_MS = 60_000;
 /** Group, project, owner and repository lookups (labels and GitLab ancestry). */
 export const SCOPE_TARGET_LOOKUP_TTL_MS = 5 * 60_000;
+/** Uncached provider lookups one picker request may make (labels, group parents); the rest stay unlabeled. */
+export const SCOPE_TARGET_LOOKUP_BUDGET = 60;
+/** Picker requests (search and resolve together) per principal and window. */
+export const SCOPE_TARGET_RATE_LIMIT = { windowMs: 60_000, maxRequests: 60 } as const;
+
+/** A fixed-window request limit per principal for the scope picker (it spends the connector's API budget). */
+export class ScopeTargetRateLimiter {
+  private readonly windows = new Map<string, { start: number; count: number }>();
+
+  constructor(
+    private readonly limit: { windowMs: number; maxRequests: number } = SCOPE_TARGET_RATE_LIMIT,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  consume(principal: string): void {
+    const now = this.now();
+    if (this.windows.size > 10_000) {
+      for (const [key, window] of this.windows) {
+        if (now - window.start >= this.limit.windowMs) this.windows.delete(key);
+      }
+    }
+    const window = this.windows.get(principal);
+    if (!window || now - window.start >= this.limit.windowMs) {
+      this.windows.set(principal, { start: now, count: 1 });
+      return;
+    }
+    if (window.count >= this.limit.maxRequests) {
+      throw new AppError(429, 'SCOPE_TARGET_RATE_LIMITED', 'Too many scope picker requests, try again shortly', {
+        retryAfterSeconds: Math.max(1, Math.ceil((window.start + this.limit.windowMs - now) / 1000)),
+      });
+    }
+    window.count += 1;
+  }
+
+  reset(): void {
+    this.windows.clear();
+  }
+}
+
+export const scopeTargetRateLimiter = new ScopeTargetRateLimiter();
 
 export const ScopeTargetParamsSchema = z.object({
   provider: z.enum(SCOPE_TARGET_PROVIDERS),

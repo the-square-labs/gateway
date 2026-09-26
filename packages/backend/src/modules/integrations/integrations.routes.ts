@@ -9,6 +9,7 @@ import {
   ScopeTargetParamsSchema,
   ScopeTargetResolveQuerySchema,
   ScopeTargetSearchQuerySchema,
+  scopeTargetRateLimiter,
 } from './git-scope-targets.js';
 import {
   assertConnectorOperationAccess,
@@ -157,7 +158,10 @@ function requireGitOperation(
   };
 }
 
-/** Scope picker access: `integrations:<provider>:view` on the connector or anything in it (results are filtered). */
+/**
+ * Scope picker access: `integrations:<provider>:view` on the connector or anything in it (results are filtered),
+ * and a per-account request limit.
+ */
 const requireScopeTargetAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
   const { provider, connectorId } = ScopeTargetParamsSchema.parse({
     provider: c.req.param('provider'),
@@ -172,6 +176,8 @@ const requireScopeTargetAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
     requiredScope: `integrations:${provider}:view`,
     scopeTarget: 'within-connector',
   });
+  // Searches and label lookups spend the connector's provider API budget: limit them per account.
+  scopeTargetRateLimiter.consume(user.id);
   await next();
 };
 

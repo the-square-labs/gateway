@@ -148,24 +148,43 @@ describe('Pending container access identity lifecycle', () => {
     return { row, db, service, rewrite };
   }
 
-  it('adopts the first real runtime without changing the pending resource ID or grants', async () => {
+  it("adopts its source's first runtime without changing the pending resource ID or grants", async () => {
     const { service, row, rewrite, db } = harness('');
-    expect(await service.ensureContainer('node-1', 'api', 'runtime-1')).toBe('stable-resource');
+    expect(
+      await service.ensureContainer('node-1', 'api', 'runtime-1', false, undefined, { adoptReservation: true })
+    ).toBe('stable-resource');
     expect(row.runtimeId).toBe('runtime-1');
     expect(rewrite).not.toHaveBeenCalled();
     expect(db.delete).not.toHaveBeenCalled();
   });
 
-  it('keeps an empty-runtime reservation and its grants across empty snapshot reconciliation', async () => {
+  it('never lets another runtime of the reserved name adopt the reservation or its grants', async () => {
+    // Another team's container created under the name must not become the reservation creator's container.
+    const { service, row, rewrite, db } = harness('');
+    expect(await service.ensureContainer('node-1', 'api', 'victim-runtime')).toBe('');
+    expect(await service.ensureContainer('node-1', 'api', 'victim-runtime', true)).toBe('');
+    expect(row.runtimeId).toBe('');
+    expect(db.update).not.toHaveBeenCalled();
+    expect(rewrite).not.toHaveBeenCalled();
+    expect(service.cachedContainerResourceId('node-1', { name: 'api', runtimeId: 'victim-runtime' })).toBeNull();
+  });
+
+  it('keeps an empty-runtime reservation and its grants across snapshot reconciliation, mapping no runtime to it', async () => {
     const { service, row, db, rewrite } = harness('');
     db.select.mockReturnValue({ from: vi.fn(() => ({ where: vi.fn().mockResolvedValue([row]) })) });
-    expect(await service.syncContainers('node-1', [])).toEqual(new Map([['api', 'stable-resource']]));
-    expect(await service.syncContainers('node-1', [])).toEqual(new Map([['api', 'stable-resource']]));
+    expect(await service.syncContainers('node-1', [])).toEqual(new Map());
     expect(await service.syncContainers('node-1', [{ id: 'source-1', name: 'api', pendingSourceBuild: true }])).toEqual(
-      new Map([['api', 'stable-resource']])
+      new Map()
     );
+    // A live container of the reserved name gets no identity: it is not the reservation's container.
+    db.select.mockReturnValue({
+      from: vi.fn(() => ({
+        where: vi.fn(() => Object.assign(Promise.resolve([row]), { limit: vi.fn().mockResolvedValue([row]) })),
+      })),
+    });
+    expect(await service.syncContainers('node-1', [{ id: 'victim-runtime', name: 'api' }])).toEqual(new Map());
     expect(row.runtimeId).toBe('');
-    expect(service.cachedContainerResourceId('node-1', { name: 'api' })).toBe('stable-resource');
+    expect(service.cachedContainerResourceId('node-1', { name: 'api' })).toBeNull();
     expect(db.delete).not.toHaveBeenCalled();
     expect(db.update).not.toHaveBeenCalled();
     expect(rewrite).not.toHaveBeenCalled();

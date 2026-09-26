@@ -152,7 +152,9 @@ describe('MCP connect-time access summary', () => {
 
     const read = await mcpRequest('resources/read', { uri: MCP_ACCESS_RESOURCE_URI });
     const summary = JSON.parse(read.result.contents[0].text);
-    expect(summary.principal).toMatchObject({ userId: USER.id, credential: 'mcp', boundedByOwner: true });
+    // MCP clients get the access, never the owner's identity.
+    expect(summary.principal).toEqual({ credential: 'mcp', boundedByOwner: true });
+    expect(read.result.contents[0].text).not.toContain(USER.email);
     expect(summary.limited).toBe(true);
     expect(summary.areas.find((area: { area: string }) => area.area === 'routes')).toMatchObject({
       access: 'limited',
@@ -212,10 +214,9 @@ describe('get_my_access and limited-access denials over MCP', () => {
     expect(await mcp.toolNames()).toContain('get_my_access');
     const all = await mcp.call('get_my_access', {});
     expect(all.error).toBeUndefined();
-    expect(all.result).toMatchObject({
-      principal: { credential: 'mcp', boundedByOwner: true },
-      limited: true,
-    });
+    expect(all.result).toMatchObject({ limited: true });
+    expect(all.result.principal).toEqual({ credential: 'mcp', boundedByOwner: true });
+    expect(JSON.stringify(all.result)).not.toContain(USER.email);
     expect(all.result.areas.map((area: { area: string }) => area.area)).toEqual(['docker_containers', 'routes']);
 
     const docker = await mcp.call('get_my_access', { area: 'docker_containers' });
@@ -257,7 +258,14 @@ describe('get_my_access and limited-access denials in the in-product assistant',
 
     expect(outcome.error).toBeUndefined();
     expect(outcome.result).toMatchObject({
-      principal: { userId: USER.id, credential: 'assistant', boundedByOwner: false },
+      // The in-product assistant runs in the user's own browser session.
+      principal: {
+        userId: USER.id,
+        email: USER.email,
+        group: USER.groupName,
+        credential: 'assistant',
+        boundedByOwner: false,
+      },
       limited: true,
     });
   });

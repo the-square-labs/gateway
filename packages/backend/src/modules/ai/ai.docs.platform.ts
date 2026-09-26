@@ -220,7 +220,7 @@ Gateway GitLab connectors are configured by admins in Settings -> Integrations. 
 ## Scope Restrictions
 - GitLab scopes can be limited to a connector (\`<scope>:<connectorId>\`), a group with its subgroups (\`<connectorId>/group/<groupId>\`) or one project (\`<connectorId>/project/<projectId>\`). IDs are GitLab's numeric IDs, not paths.
 - Every project tool checks the project: the unqualified scope, the connector, any group containing the project (resolved from GitLab, so a moved project follows its new group), or the project itself. Implied view applies per qualifier.
-- gitlab_list_connectors and gitlab_list_projects only return connectors and projects the caller's grants cover; a missing project is usually outside the caller's grant, not unsynced.
+- gitlab_list_connectors and gitlab_list_projects only return connectors and projects the caller's grants cover. A project outside the grant answers like an unsynced project (404 GITLAB_PROJECT_NOT_FOUND), so a 404 for a known project usually means the caller's grant does not cover it.
 - Connector management (sync, allowlist changes, settings) needs integrations:gitlab:manage on the connector or unqualified.
 - Without integrations:gitlab:use covering the project and without a personal PAT, a 403 names integrations:gitlab:use and the project.
 

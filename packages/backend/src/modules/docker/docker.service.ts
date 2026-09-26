@@ -26,7 +26,11 @@ import {
   GPU_USAGE_INSPECTION_BATCH_SIZE,
   logger,
 } from './docker.service.shared.js';
-import { type DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
+import {
+  assertContainerNameNotReserved,
+  type DockerAccessResourceService,
+  hasDockerResourceScope,
+} from './docker-access-resource.service.js';
 import type { DockerBuildRolloutGuard, DockerBuildRolloutTarget } from './docker-build-rollout-guard.js';
 import {
   createContainer as createDockerContainer,
@@ -579,7 +583,12 @@ export class DockerManagementService {
    * (2) lists containers and rejects if the name already exists.
    * Should be called BEFORE dispatching create/rename/duplicate to the daemon.
    */
-  private async assertNameAvailable(nodeId: string, name: string, claim?: ContainerTransitionClaim) {
+  private async assertNameAvailable(
+    nodeId: string,
+    name: string,
+    claim?: ContainerTransitionClaim,
+    options: { sourceBindingId?: string } = {}
+  ) {
     if (this.getTransition(nodeId, name) && !this.containerTransitions.isClaimedBy(nodeId, name, claim)) {
       throw new AppError(409, 'NAME_IN_USE', `A container named "${name}" is currently being modified on this node`);
     }
@@ -591,6 +600,8 @@ export class DockerManagementService {
     if (deployment) {
       throw new AppError(409, 'NAME_IN_USE', `A deployment named "${name}" already exists on this node`);
     }
+    // A Git source container waiting for its first build owns its name; only that source's rollout creates it.
+    await assertContainerNameNotReserved(this.db, nodeId, name, options);
     try {
       const result = await this.nodeDispatch.sendDockerContainerCommand(nodeId, 'list');
       const containers = this.parseResult(result);
@@ -1280,7 +1291,7 @@ export class DockerManagementService {
       assertDockerPortBindIpCapability: (nodeId) => this.assertDockerPortBindIpCapability(nodeId),
       assertDockerRuntimeProfileAvailable: (nodeId, profile, currentProfile) =>
         this.assertDockerRuntimeProfileAvailable(nodeId, profile, currentProfile),
-      assertNameAvailable: (nodeId, name, claim) => this.assertNameAvailable(nodeId, name, claim),
+      assertNameAvailable: (nodeId, name, claim, options) => this.assertNameAvailable(nodeId, name, claim, options),
       assertNotManagedDeploymentInternal: (nodeId, containerId) =>
         this.assertContainerMutationAllowed(nodeId, containerId),
       translateNameConflict: (err, name) => this.translateNameConflict(err, name),
@@ -1355,11 +1366,21 @@ export class DockerManagementService {
     };
   }
 
-  async createContainer(nodeId: string, config: Record<string, unknown>, userId: string, actorScopes: string[] = []) {
+  /**
+   * `sourceBindingId`: the first activation of that Git source creates its reserved container. Only then may the
+   * name be one a source reserves, and the new runtime adopts the reservation's access identity.
+   */
+  async createContainer(
+    nodeId: string,
+    config: Record<string, unknown>,
+    userId: string,
+    actorScopes: string[] = [],
+    options: { sourceBindingId?: string } = {}
+  ) {
     await assertDockerCreationAccess(this.db, actorScopes, 'docker:containers:create', nodeId, config.folderId);
     const name = String(config.name ?? config.Name ?? '');
     if (name) await this.migrationGuard?.assertContainerNameAvailable(nodeId, name);
-    return createDockerContainer(this.containerMutationContext(), nodeId, config, userId, actorScopes);
+    return createDockerContainer(this.containerMutationContext(), nodeId, config, userId, actorScopes, options);
   }
 
   async rollbackCreatedContainer(nodeId: string, containerId: string, name: string | undefined, userId: string) {

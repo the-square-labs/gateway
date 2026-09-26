@@ -9,7 +9,7 @@ import {
   proxyHostFolders,
   proxyHosts,
 } from '@/db/schema/index.js';
-import { buildAccessSummary, renderAccessSummaryText } from './access-summary-resolver.js';
+import { accessSummaryPrincipal, buildAccessSummary, renderAccessSummaryText } from './access-summary-resolver.js';
 import { expandFolderScopes } from './folder-scopes.js';
 import { boundScopes } from './permissions.js';
 import { canonicalizeScopes, isMcpTokenScope, SYSTEM_ADMIN_SCOPES } from './scopes.js';
@@ -195,5 +195,25 @@ describe('renderAccessSummaryText', () => {
     expect(text.length).toBeLessThanOrEqual(600);
     expect(text).toMatch(/more limited areas \(see get_my_access\)/);
     expect(text.endsWith('pass folderId (and nodeId) when creating.')).toBe(true);
+  });
+});
+
+describe('accessSummaryPrincipal', () => {
+  const owner = { id: 'user-1', name: 'Dev', email: 'dev@example.com', groupName: 'developers' };
+
+  it('returns the owner identity only to browser sessions', () => {
+    for (const credential of ['session', 'assistant'] as const) {
+      expect(accessSummaryPrincipal(owner, credential)).toEqual({
+        credential,
+        boundedByOwner: false,
+        userId: 'user-1',
+        name: 'Dev',
+        email: 'dev@example.com',
+        group: 'developers',
+      });
+    }
+    for (const credential of ['api-token', 'oauth-token', 'mcp'] as const) {
+      expect(accessSummaryPrincipal(owner, credential)).toEqual({ credential, boundedByOwner: true });
+    }
   });
 });
