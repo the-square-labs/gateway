@@ -186,7 +186,7 @@ export const COLOR_NOTES = {
   "color-muted": "Quiet fills: table header rows, the section-header band (bg-muted/60 in light, solid in dark), secondary badges, slider track, empty health-bar buckets.",
   "color-muted-foreground": "Secondary text: descriptions, labels, placeholders, table headers, inactive tabs, resting icons.",
   "color-border": "1px borders of cards, panels, tables, tabs and menus; also the scrollbar thumb and progress track.",
-  "color-input": "1px borders of form controls: input, textarea, select, outline button, copy and code fields.",
+  "color-input": "1px borders of form controls: input, textarea, select, outline button, copy and code fields. The divider grey, like tabs and panels: a resting control must not read as focused, and the focus ring carries the state, so it has no 3:1 floor.",
   "color-ring": "Keyboard focus: a 1px ring-ring (inset on text fields).",
   "color-primary": "Ink, not a hue: default button, active tab, switch on, slider range, progress fill, default badge. Near-black in light, white in dark.",
   "color-primary-foreground": "Text and icons on a primary fill.",
@@ -239,7 +239,6 @@ const TEXT_GROUNDS = {
 /** Colours that carry meaning without being text (3:1). */
 const MARK_GROUNDS = {
   "color-ring": ["color-background", "color-card"],
-  "color-input": ["color-background"],
   "color-sidebar-ring": ["color-sidebar-background"],
 };
 
