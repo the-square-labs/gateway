@@ -4,12 +4,13 @@ import {
   managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
+  managedStorageBindings,
   nodes,
   relayEndpoints,
   relayPolicyState,
   relayRoutes,
 } from '@/db/schema/index.js';
-import { reconcileManagedDatabaseRelayPolicy } from './relay-policy-reconciler.js';
+import { reconcileManagedDatabaseRelayPolicy, reconcileManagedStorageRelayPolicy } from './relay-policy-reconciler.js';
 
 describe('reconcileManagedDatabaseRelayPolicy', () => {
   it('keeps placement-owned database routes and removes the superseded logical parent route', async () => {
@@ -378,5 +379,47 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
     await reconcileManagedDatabaseRelayPolicy(db as never);
 
     expect(deletedTables).toContain(relayEndpoints);
+  });
+});
+
+describe('reconcileManagedStorageRelayPolicy', () => {
+  it('removes the route of a storage link that no longer exists and keeps the others', async () => {
+    const deletedRoutes: unknown[] = [];
+    const updatedTables: unknown[] = [];
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({
+        from: (table: unknown) =>
+          table === managedStorageBindings
+            ? Promise.resolve([{ id: 'live-link' }])
+            : {
+                where: () =>
+                  Promise.resolve(
+                    table === relayRoutes
+                      ? [
+                          { id: 'route-live', ownerId: 'live-link' },
+                          { id: 'route-orphan', ownerId: 'deleted-link' },
+                        ]
+                      : []
+                  ),
+              },
+      })),
+      delete: vi.fn((table: unknown) => ({
+        where: vi.fn((condition: unknown) => {
+          if (table === relayRoutes) deletedRoutes.push(condition);
+          return Promise.resolve(undefined);
+        }),
+      })),
+      update: vi.fn((table: unknown) => {
+        updatedTables.push(table);
+        return { set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) };
+      }),
+    };
+    const db = { transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)) };
+
+    await reconcileManagedStorageRelayPolicy(db as never);
+
+    expect(deletedRoutes).toHaveLength(1);
+    expect(updatedTables).toContain(relayPolicyState);
   });
 });

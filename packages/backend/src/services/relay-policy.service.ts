@@ -37,6 +37,7 @@ import {
   backfillRelayNodeFingerprints,
   bumpRelayPolicyRevision,
   reconcileManagedDatabaseRelayPolicy,
+  reconcileManagedStorageRelayPolicy,
   updateManagedDatabaseRelayStatus,
 } from './relay-policy-reconciler.js';
 import {
@@ -297,6 +298,7 @@ export class RelayPolicyService {
     await this.policyKeys.ensureInitialized();
     await this.reconcileInternalRegistryEndpoint();
     await reconcileManagedDatabaseRelayPolicy(this.db);
+    await reconcileManagedStorageRelayPolicy(this.db);
     await this.syncSnapshot().catch((error) => {
       logger.warn('Initial relay policy sync deferred until relay is reachable', {
         error: error instanceof Error ? error.message : String(error),
@@ -740,6 +742,7 @@ export class RelayPolicyService {
   async reconcileAndSync(): Promise<number> {
     await backfillRelayNodeFingerprints(this.db);
     await reconcileManagedDatabaseRelayPolicy(this.db);
+    await reconcileManagedStorageRelayPolicy(this.db);
     const revision = await this.syncSnapshot();
     await this.refreshAllNodeGrantsIfDue().catch((error) => {
       logger.warn('Relay policy reconciled but some daemon grant bundles remain pending', {

@@ -7,6 +7,7 @@ import {
   managedDatabaseBindingPlacements,
   managedDatabaseBindings,
   managedDatabaseInstances,
+  managedStorageBindings,
   nodes,
   relayEndpoints,
   relayPolicyState,
@@ -263,6 +264,33 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
           .where(eq(relayRoutes.id, current.id));
         changed = true;
       }
+    }
+    if (changed) await bumpRelayPolicyRevision(tx);
+  });
+}
+
+/**
+ * Removes storage link routes whose link no longer exists. Storage links create and revoke their
+ * routes inline; a crash between the two (or a failed revoke) would otherwise leave a route that
+ * lets the source node reach the storage without a link.
+ */
+export async function reconcileManagedStorageRelayPolicy(db: DrizzleClient): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-reconciliation'))`);
+    // Routes first: a link row is committed before its route is created, so every link whose
+    // route this read sees is visible to the read below.
+    const routes = await tx
+      .select({ id: relayRoutes.id, ownerId: relayRoutes.ownerId })
+      .from(relayRoutes)
+      .where(eq(relayRoutes.ownerKind, 'managed_storage_binding'));
+    if (routes.length === 0) return;
+    const bindings = await tx.select({ id: managedStorageBindings.id }).from(managedStorageBindings);
+    const bindingIds = new Set(bindings.map(({ id }) => id));
+    let changed = false;
+    for (const route of routes) {
+      if (bindingIds.has(route.ownerId)) continue;
+      await tx.delete(relayRoutes).where(eq(relayRoutes.id, route.id));
+      changed = true;
     }
     if (changed) await bumpRelayPolicyRevision(tx);
   });
