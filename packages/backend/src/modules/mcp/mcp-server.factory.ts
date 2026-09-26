@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import type { User } from '@/types.js';
 import { registerMcpPrompts } from './mcp-prompts.js';
 import { registerMcpResources } from './mcp-resources.js';
+import { registerMcpSkills } from './mcp-skills.js';
 import { registerMcpToolHandlers } from './mcp-tools.js';
 
 export interface CreateMcpServerOptions {
@@ -22,7 +23,7 @@ export function createMcpServer(options: CreateMcpServerOptions) {
     { name: 'gateway', version: '1.0.0' },
     {
       instructions:
-        'Gateway MCP exposes scoped control-plane tools, curated read-only resources, and operational prompts. OAuth token scopes determine every listed and callable capability.',
+        'Gateway MCP exposes scoped control-plane tools, curated read-only resources, operational prompts, and agent skills (gateway://skills; start with gateway://skills/using-gateway/SKILL.md). OAuth token scopes determine every listed and callable capability.',
     }
   );
 
@@ -48,6 +49,7 @@ export function createMcpServer(options: CreateMcpServerOptions) {
   );
   registerMcpResources(server, options.scopes);
   registerMcpPrompts(server, options.scopes);
+  registerMcpSkills(server);
 
   return { server, transport };
 }

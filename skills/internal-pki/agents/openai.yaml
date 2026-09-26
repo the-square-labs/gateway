@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gateway Internal PKI"
+  short_description: "Operate Gateway certificate authorities"
+  default_prompt: "Use $internal-pki to issue and verify an internal certificate through Gateway."

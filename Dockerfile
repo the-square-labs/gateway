@@ -75,6 +75,9 @@ COPY config/update-trust/opencodex-signing-public-key.pem ./dist/lib/opencodex-s
 # Copy proto file (loaded at runtime by @grpc/proto-loader)
 COPY proto/ /app/proto/
 
+# Agent skills served to MCP clients (gateway://skills)
+COPY skills/ /app/skills/
+
 # Copy frontend build into public/ for the backend to serve
 COPY --from=frontend-builder /app/packages/frontend/dist ./public
 

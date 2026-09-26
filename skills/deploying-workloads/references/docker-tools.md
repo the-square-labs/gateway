@@ -1,0 +1,47 @@
+# Docker tool catalog
+
+Exact tool names in the MCP `docker` toolset. All require `nodeId` unless noted. The connected instance's tool schemas are authoritative; re-read them when an argument is rejected.
+
+## Standalone Containers
+
+`create_docker_container`, `list_docker_containers`, `get_docker_container`, `start_docker_container`, `stop_docker_container`, `restart_docker_container`, `kill_docker_container`, `remove_docker_container`, `update_docker_container_image`, `rename_docker_container`, `duplicate_docker_container`, `get_docker_container_stats`, `get_docker_container_logs`, `execute_docker_container_console_command`, `manage_docker_container_config`, `manage_docker_container`, `upload_docker_container_archive`, `download_docker_archive`.
+
+## Blue/green Deployments
+
+`list_docker_deployments`, `get_docker_deployment`, `start_docker_deployment`, `stop_docker_deployment`, `restart_docker_deployment`, `kill_docker_deployment`, `deploy_docker_deployment`, `switch_docker_deployment_slot`, `rollback_docker_deployment`, `stop_docker_deployment_slot`, `manage_docker_deployment`.
+
+## Compose
+
+`manage_docker_compose` (single tool: `project`/`revision`/operation-history/lifecycle/secret resources with an `operation` field).
+
+## Images
+
+`list_docker_images`, `pull_docker_image`, `remove_docker_image`, `prune_docker_images`.
+
+## Volumes and networks
+
+`list_docker_volumes`, `manage_docker_volume`, `list_docker_networks`, `manage_docker_network`.
+
+## Registries
+
+`manage_docker_registry`.
+
+## Git sources and builds
+
+`list_docker_builds`, `manage_docker_build`, `manage_docker_source`.
+
+## Tasks, migration, availability, runtime
+
+`manage_docker_task`, `force_cancel_docker_task`, `manage_docker_migration`, `manage_docker_availability` (see `high-availability` skill), `manage_docker_runtime`.
+
+## Folders
+
+`list_resource_folders`, `manage_resource_folder` (shared cross-domain tool; `resourceType: "docker"` plus `dockerResourceType: "container"|"compose"|"image"|"network"|"volume"`).
+
+## `manage_docker_availability` operations
+
+`preflight`, `enable`, `get`, `get_by_resource`, `list_operations`, `update`, `disable`, `retry_operation`. Workflow and limits are in the `high-availability` skill.
+
+## `manage_docker_migration` operations
+
+`preflight`, `start`, `list`, `get`, `cancel`, `retry_cleanup`, `resolve`.

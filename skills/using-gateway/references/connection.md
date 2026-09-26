@@ -1,0 +1,79 @@
+# Gateway MCP connection
+
+Use this reference only when Gateway remote MCP is missing, unauthenticated, or connected to the wrong instance. If Gateway itself is not installed, still requires first-run setup, or has no Node suitable for the workload, read [New instance setup](instance-setup.md) first.
+
+## Endpoint
+
+Gateway exposes one Streamable HTTP MCP endpoint:
+
+```text
+https://<gateway-host>/api/mcp
+```
+
+Normalize a base URL by removing a trailing slash before adding `/api/mcp`. Prefer HTTPS. Do not infer a production hostname from a repository name, email domain, or previous task.
+
+## Administrator prerequisites
+
+An administrator enables MCP once, in Gateway settings under **OAuth and MCP access**:
+
+1. Turn on **Enable MCP server**.
+2. Keep **Extended MCP compatibility** on for ordinary clients; every scoped tool is then listed up front. Turn it off only for clients whose context cannot hold the full catalog; those clients activate toolsets with `discover_tools` (see [MCP toolsets](mcp-toolsets.md)).
+3. Give the connecting user `mcp:use` plus the resource scopes the agent may use.
+
+## Codex
+
+Inspect existing configuration first:
+
+```bash
+codex mcp list
+codex mcp get good-gateway
+```
+
+If no Gateway server exists:
+
+```bash
+codex mcp add good-gateway --url https://gateway.example.com/api/mcp
+codex mcp login good-gateway
+codex mcp list
+```
+
+An existing configuration may use another name, such as `gateway`. If it points elsewhere, report the mismatch before replacing it. Use a distinct name such as `good-gateway-staging` when the user needs several installations.
+
+## Claude Code
+
+```bash
+claude mcp add --transport http good-gateway --scope user https://gateway.example.com/api/mcp
+claude mcp login good-gateway
+claude mcp get good-gateway
+```
+
+Use project scope only when the repository should share the server definition; every developer still signs in with their own Gateway account.
+
+## Authentication and scopes
+
+Gateway uses OAuth Authorization Code with PKCE and dynamic client registration. Let the user complete browser login and consent. Never ask them to paste the resulting token.
+
+During consent the user can narrow the grant: **Restrict...** per scope, or **Limit selected scopes to folder...** for one folder across every selected scope of that resource type. High-risk scopes need explicit approval and start unticked, for example `admin:*`, `settings:gateway:edit`, `nodes:manage`, `nodes:console`, `nodes:files:*`, Docker console, file, export, secret, mount, and migrate scopes, `proxy:raw:write`, `proxy:unrestricted`, `ssl:cert:issue`, `pki:ca:export`, `storage:credentials:reveal`, `storage:iam`, `databases:query:*`, `databases:credentials:reveal`, `databases:backups:restore`, and connector `:use` or `:repo:write` scopes. Never assume one was granted; call the tool and read the 403.
+
+A grant is bounded by the user's **current** permissions. Narrowing the user's group or removing `mcp:use` takes effect immediately, even mid-session. Scope shapes and restrictions are explained in the `access-control` skill.
+
+## Token types
+
+| Prefix | Credential | Accepted by |
+| --- | --- | --- |
+| `gwo_` | OAuth access token bound to one resource | MCP only when issued for the MCP resource; REST when issued for the Gateway API |
+| `gw_` | API token | REST only |
+| `gwl_` | Logging ingest token | Log ingestion only |
+| `gwi_` | Gateway Inference token | Inference data plane only |
+
+Gateway MCP accepts only `gwo_` tokens issued for the MCP resource. `gw_`, `gwl_`, and `gwi_` tokens, browser cookies, and OAuth tokens for another resource are rejected there. If a tool is absent, distinguish an undiscovered toolset from a missing scope, entitlement, disabled MCP server, unavailable subsystem, or incompatible client.
+
+## Verify the connection
+
+After setup, refresh MCP tools or start a new session if the host cannot hot-load the connection. Then run a read-only smoke test before any change:
+
+1. list Nodes or resources the connection can see;
+2. confirm that one action the user should not have is denied;
+3. when the user has audit access, confirm the audit log attributes the calls to them and their OAuth client.
+
+Do not create a plugin-owned proxy or store credentials in the skill directory. Connection troubleshooting: [API and MCP](https://docs.goodgateway.dev/en/integrations/api-and-mcp/#mcp-connection-troubleshooting).

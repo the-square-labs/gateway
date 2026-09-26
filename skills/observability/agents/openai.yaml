@@ -1,0 +1,4 @@
+interface:
+  display_name: "Gateway Observability"
+  short_description: "Logs, alerts, SIEM, status pages, and audit"
+  default_prompt: "Use $observability to find the Gateway logs, alerts, and audit events for this incident."
