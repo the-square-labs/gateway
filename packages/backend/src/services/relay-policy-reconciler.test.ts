@@ -40,6 +40,7 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
             sourceNodeId: 'origin-node',
             targetType: 'container',
             targetResourceId: 'api',
+            desiredState: 'active',
             status: 'ready',
           },
         ],
@@ -52,6 +53,7 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
             bindingId: 'binding-1',
             availabilityPlacementId: 'placement-1',
             sourceNodeId: 'workload-node',
+            desiredState: 'active',
             status: 'ready',
           },
         ],
@@ -135,6 +137,7 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
             sourceNodeId: 'survivor-node',
             targetType: 'deployment',
             targetResourceId: 'deployment-1',
+            desiredState: 'active',
             status: 'ready',
           },
         ],
@@ -147,6 +150,7 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
             bindingId: 'binding-1',
             availabilityPlacementId: null,
             sourceNodeId: 'survivor-node',
+            desiredState: 'active',
             status: 'ready',
           },
         ],
@@ -244,6 +248,89 @@ describe('reconcileManagedDatabaseRelayPolicy', () => {
     expect(deletedTables).toContain(relayRoutes);
     expect(deletedTables).not.toContain(relayEndpoints);
     expect(updatedTables).toContain(relayPolicyState);
+  });
+
+  it('keeps the route of a link that is still being created or failed a reconcile, until it is deleted', async () => {
+    const fingerprint = `sha256:${'a'.repeat(64)}`;
+    const endpoint = {
+      id: 'endpoint-1',
+      ownerId: 'database-1',
+      subjectId: 'database-node',
+      certificateSha256: fingerprint,
+      status: 'active',
+    };
+    const routeFor = (ownerId: string) => ({
+      id: `route-${ownerId}`,
+      ownerId,
+      sourceId: 'workload-node',
+      sourceCertificateSha256: fingerprint,
+      targetEndpointId: endpoint.id,
+    });
+    const binding = (id: string, status: string, desiredState = 'active') => ({
+      id,
+      managedDatabaseId: 'database-1',
+      sourceNodeId: 'workload-node',
+      targetType: 'deployment',
+      targetResourceId: `deployment-${id}`,
+      desiredState,
+      status,
+    });
+    const canonical = new Map<unknown, unknown[]>([
+      [managedDatabaseInstances, [{ id: 'database-1', nodeId: 'database-node', status: 'ready' }]],
+      [
+        managedDatabaseBindings,
+        [
+          binding('creating-link', 'creating'),
+          binding('failed-link', 'error'),
+          binding('deleting-link', 'deleting', 'deleted'),
+        ],
+      ],
+      [
+        nodes,
+        [
+          { id: 'database-node', certificateFingerprint: fingerprint },
+          { id: 'workload-node', certificateFingerprint: fingerprint },
+        ],
+      ],
+    ]);
+    const deletedRoutes: unknown[] = [];
+    const tx = {
+      execute: vi.fn().mockResolvedValue(undefined),
+      select: vi.fn(() => ({
+        from: (table: unknown) => ({
+          where: () =>
+            Promise.resolve(
+              table === relayEndpoints
+                ? [endpoint]
+                : table === relayRoutes
+                  ? [routeFor('creating-link'), routeFor('failed-link'), routeFor('deleting-link')]
+                  : []
+            ),
+        }),
+      })),
+      delete: vi.fn((table: unknown) => ({
+        where: vi.fn((condition: unknown) => {
+          if (table === relayRoutes) deletedRoutes.push(condition);
+          return Promise.resolve(undefined);
+        }),
+      })),
+      update: vi.fn((_table: unknown) => ({
+        set: () => ({ where: vi.fn().mockResolvedValue(undefined) }),
+      })),
+      insert: vi.fn(),
+    };
+    const db = {
+      select: vi.fn(() => ({
+        from: (table: unknown) => Promise.resolve(canonical.get(table) ?? []),
+      })),
+      transaction: vi.fn((callback: (value: typeof tx) => unknown) => callback(tx)),
+    };
+
+    await reconcileManagedDatabaseRelayPolicy(db as never);
+
+    // Only the link being deleted loses its route; nothing is recreated for the other two.
+    expect(deletedRoutes).toHaveLength(1);
+    expect(tx.insert).not.toHaveBeenCalled();
   });
 
   it('removes an endpoint whose canonical target node no longer has an identity', async () => {

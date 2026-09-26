@@ -86,6 +86,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
         sourceNodeId: managedDatabaseBindings.targetNodeId,
         targetType: managedDatabaseBindings.targetType,
         targetResourceId: managedDatabaseBindings.targetResourceId,
+        desiredState: managedDatabaseBindings.desiredState,
         status: managedDatabaseBindings.status,
       })
       .from(managedDatabaseBindings),
@@ -95,6 +96,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
         bindingId: managedDatabaseBindingPlacements.bindingId,
         availabilityPlacementId: managedDatabaseBindingPlacements.availabilityPlacementId,
         sourceNodeId: managedDatabaseBindingPlacements.nodeId,
+        desiredState: managedDatabaseBindingPlacements.desiredState,
         status: managedDatabaseBindingPlacements.status,
       })
       .from(managedDatabaseBindingPlacements),
@@ -152,6 +154,7 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
               id: placement.id,
               managedDatabaseId: parent.managedDatabaseId,
               sourceNodeId: placement.sourceNodeId,
+              desiredState: placement.desiredState,
               status: placement.status,
             },
           ]
@@ -212,9 +215,15 @@ export async function reconcileManagedDatabaseRelayPolicy(db: DrizzleClient): Pr
       .select()
       .from(relayRoutes)
       .where(eq(relayRoutes.ownerKind, 'managed_database_binding'));
+    // A link keeps its route from creation until it is deleted. Creation starts the workload with
+    // the link before the link is 'ready', and a failed reconcile marks a working link 'error';
+    // dropping the route in either state closes the listener the workload connects through.
     const desiredBindings = relayBindings.filter(
-      ({ status, managedDatabaseId, sourceNodeId }) =>
-        status === 'ready' && endpointByDatabase.has(managedDatabaseId) && fingerprints.has(sourceNodeId)
+      ({ desiredState, status, managedDatabaseId, sourceNodeId }) =>
+        desiredState === 'active' &&
+        status !== 'deleting' &&
+        endpointByDatabase.has(managedDatabaseId) &&
+        fingerprints.has(sourceNodeId)
     );
     const desiredBindingIds = new Set(desiredBindings.map(({ id }) => id));
     for (const route of existingRoutes) {
