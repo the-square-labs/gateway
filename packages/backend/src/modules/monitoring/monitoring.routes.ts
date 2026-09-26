@@ -37,6 +37,7 @@ import { NodeRegistryService } from '@/services/node-registry.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { SessionService } from '@/services/session.service.js';
+import { SystemCertificateRenewalService } from '@/services/system-certificate-renewal.service.js';
 import { UpdateService } from '@/services/update.service.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -46,6 +47,7 @@ import {
 } from './dashboard-attention.js';
 import { DashboardReadModelService, dashboardStatsFromSourceSnapshots } from './dashboard-read-model.service.js';
 import { getNginxLogHistory, logRelay, type RelayedLogEntry } from './log-relay.service.js';
+import { visibleManagedCertificateAttention } from './managed-certificate-attention.js';
 import {
   dashboardBootstrapRoute,
   dashboardStatsRoute,
@@ -468,6 +470,21 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
         .getAuditLog({ page: 1, limit: 6 })
         .then((result) => result.data)
     : Promise.resolve([]);
+  // Managed database and storage certificates that need attention (renewal
+  // failed, 7 days or less left, reload pending, ...), limited to the
+  // resources the viewer may see.
+  const managedCertificatesPromise =
+    (hasScopeBase(scopes, 'storage:view') || canViewDatabases) &&
+    container.isRegistered(SystemCertificateRenewalService)
+      ? container
+          .resolve(SystemCertificateRenewalService)
+          .listAttention()
+          .then((items) =>
+            visibleManagedCertificateAttention(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, items, scopes)
+          )
+          // Optional card: a failing summary must not take the dashboard down.
+          .catch(() => [])
+      : Promise.resolve([]);
   const tlsRepairFailuresPromise = canViewSsl
     ? container.resolve(NginxCertificateDistributionService).getActiveRepairFailureCount()
     : Promise.resolve(0);
@@ -640,6 +657,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     tlsRepairFailures,
     daemonUpdates,
     dockerNavigationHealth,
+    managedCertificates,
   ] = await Promise.all([
     statsPromise,
     healthPromise,
@@ -661,6 +679,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
     tlsRepairFailuresPromise,
     daemonUpdatesPromise,
     dockerNavigationHealthPromise,
+    managedCertificatesPromise,
   ]);
   const now = Date.now();
   const nodeCardIds = nodeResponse.data
@@ -761,6 +780,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       ? [{ id: 'proxy-health', severity: 'warning' as const }]
       : []),
     ...(expiring.length > 0 ? [{ id: 'certificate-expiry', severity: 'warning' as const }] : []),
+    ...(managedCertificates.length > 0 ? [{ id: 'managed-certificates', severity: 'warning' as const }] : []),
     ...(nodeCapacityWarning ? [{ id: 'node-capacity', severity: 'warning' as const }] : []),
     ...(nodeHealthWarning ? [{ id: 'node-health', severity: 'warning' as const }] : []),
     ...(pinnedDatabaseWarning ? [{ id: 'pinned-database-health', severity: 'warning' as const }] : []),
@@ -825,6 +845,7 @@ monitoringRoutes.openapi(dashboardBootstrapRoute, async (c) => {
       inferenceUsage,
       inviteUserMethods,
       relay,
+      managedCertificates,
       pinned: {
         dashboard: {
           nodes: resolveByIds(dashboardPinNodeIds, visibleNodes),

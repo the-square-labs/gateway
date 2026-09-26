@@ -1,7 +1,6 @@
-import { AlertTriangle } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { Notice, NoticeAction } from "@/components/common/Notice";
 import { api } from "@/services/api";
 import type { DatabaseConnection } from "@/types";
 
@@ -45,29 +44,30 @@ export function DatabaseTlsVerificationNotice({
   };
 
   return (
-    <div className="flex flex-col gap-3 border border-warning/30 bg-warning/5 p-3 sm:flex-row sm:items-center">
-      <div className="flex flex-1 items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
-        <div className="space-y-0.5">
-          <p className="text-sm font-medium text-warning-foreground">
-            TLS certificate is not verified
-          </p>
-          <p className="text-xs text-muted-foreground">
-            The connection is encrypted, but Gateway does not check the server identity, so the
-            database could be impersonated on the network path.
-          </p>
-        </div>
-      </div>
-      {canEdit && (
-        <div className="flex shrink-0 gap-2">
-          <Button variant="outline" size="sm" onClick={onOpenSettings} disabled={verifying}>
-            Add CA certificate
-          </Button>
-          <Button size="sm" onClick={() => void enableVerification()} pending={verifying}>
-            Test and enable verification
-          </Button>
-        </div>
-      )}
-    </div>
+    <Notice
+      tone="warning"
+      title="TLS certificate is not verified"
+      actions={
+        canEdit ? (
+          <>
+            <NoticeAction tone="warning" onClick={onOpenSettings} disabled={verifying}>
+              Add CA certificate
+            </NoticeAction>
+            <NoticeAction
+              tone="warning"
+              onClick={() => void enableVerification()}
+              pending={verifying}
+            >
+              Test and enable verification
+            </NoticeAction>
+          </>
+        ) : undefined
+      }
+    >
+      <p className="text-sm text-muted-foreground">
+        The connection is encrypted, but Gateway does not check the server identity, so the database
+        could be impersonated on the network path.
+      </p>
+    </Notice>
   );
 }

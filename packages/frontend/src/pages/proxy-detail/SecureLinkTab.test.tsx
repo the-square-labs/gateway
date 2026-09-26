@@ -150,10 +150,8 @@ describe("SecureLinkTab", () => {
 
     render(<SecureLinkTab hostId="host-1" />);
 
-    expect(await screen.findByText(/Telemetry is stale/i)).toHaveTextContent(
-      /Showing the last complete sample from/i
-    );
-    expect(screen.getByRole("status")).toHaveClass("border-warning/30", "bg-warning/5");
+    expect(await screen.findByText(/Telemetry is stale/i)).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/Showing the last complete sample from/i);
     await waitFor(() => expect(screen.queryByText(/Telemetry is stale/i)).not.toBeInTheDocument(), {
       timeout: 3000,
     });

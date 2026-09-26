@@ -1,6 +1,5 @@
 import {
   Activity,
-  AlertTriangle,
   ArrowDownToLine,
   ArrowUpFromLine,
   Ban,
@@ -14,6 +13,7 @@ import {
   Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { Notice } from "@/components/common/Notice";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
@@ -323,19 +323,12 @@ export function SecureLinkTab({ hostId }: { hostId: string }) {
       </div>
 
       {link.telemetryStale === true && (
-        <div
-          className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3"
-          role="status"
-        >
-          <AlertTriangle
-            aria-hidden="true"
-            className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground"
-          />
-          <p className="text-sm text-warning-foreground">
-            Telemetry is stale. Showing the last complete sample
+        <Notice tone="warning" role="status" title="Telemetry is stale">
+          <p className="text-sm text-muted-foreground">
+            Showing the last complete sample
             {link.telemetrySampledAt ? ` from ${formatDateTime(link.telemetrySampledAt)}` : ""}.
           </p>
-        </div>
+        </Notice>
       )}
 
       <section>

@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { confirm, confirmAction } from "@/components/common/ConfirmDialog";
 import { CopyButton } from "@/components/common/CopyButton";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
+import { Notice } from "@/components/common/Notice";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -1167,17 +1168,20 @@ export function ProxyHostDetail({
         )}
 
         {host.maintenanceEnabled && (
-          <div className="border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
-            Maintenance mode is active. User requests receive HTTP 503 and managed health checks are
-            paused.
-          </div>
+          <Notice tone="warning" title="Maintenance mode is active">
+            <p className="text-sm text-muted-foreground">
+              User requests receive HTTP 503 and managed health checks are paused.
+            </p>
+          </Notice>
         )}
 
         {/* ── Raw mode warning banner ────────────────────────── */}
         {isRawMode && (
-          <div className="border border-warning bg-warning/10 p-3 text-sm text-warning-foreground">
-            Raw mode active — template rendering is bypassed. Config is sent directly to the daemon.
-          </div>
+          <Notice tone="warning" title="Raw mode is active">
+            <p className="text-sm text-muted-foreground">
+              Template rendering is bypassed; the config is sent directly to the daemon.
+            </p>
+          </Notice>
         )}
 
         {/* ── Tabs ───────────────────────────────────────────── */}

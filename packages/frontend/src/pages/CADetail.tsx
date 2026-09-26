@@ -1,4 +1,4 @@
-import { AlertTriangle, Copy, Download, Pencil, Plus, Shield, ShieldOff } from "lucide-react";
+import { Copy, Download, Pencil, Plus, Shield, ShieldOff } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -9,6 +9,7 @@ import { CopyCodeBlock } from "@/components/common/CopyCodeBlock";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
 import { EmptyState } from "@/components/common/EmptyState";
+import { Notice } from "@/components/common/Notice";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -481,13 +482,14 @@ export function CADetail() {
             </PanelShell>
 
             {expiryDays <= 30 && expiryDays > 0 && (
-              <div className="flex items-start gap-2 border border-warning/30 bg-warning/5 p-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
-                <p className="text-sm text-warning-foreground">
-                  Expires in{" "}
-                  {expiryDays > 0 ? `${expiryDays} days` : `${hoursUntil(ca.notAfter)} hours`}.
+              <Notice
+                tone="warning"
+                title={`This CA expires in ${expiryDays > 0 ? `${expiryDays} days` : `${hoursUntil(ca.notAfter)} hours`}`}
+              >
+                <p className="text-sm text-muted-foreground">
+                  Certificates it issued stop being trusted when it expires.
                 </p>
-              </div>
+              </Notice>
             )}
 
             {childCAs.length > 0 && (

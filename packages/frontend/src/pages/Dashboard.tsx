@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { LiteModeBackButton } from "@/components/common/LiteModeBackButton";
+import { Notice, NoticeAction } from "@/components/common/Notice";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Button } from "@/components/ui/button";
@@ -40,7 +41,6 @@ import type {
 import type { InferenceSelfUsage } from "@/types/inference";
 import { CertificateAuthoritiesCard } from "./dashboard/CertificateAuthoritiesCard";
 import { CertificateExpiryCard, type ExpiringItem } from "./dashboard/CertificateExpiryCard";
-import { DashboardNotice, DashboardNoticeAction } from "./dashboard/DashboardNotice";
 import { FinalizeSetupDialog, type FinalizeSetupRootStep } from "./dashboard/FinalizeSetupDialog";
 import { ConfigureAIWorkspaceWizard } from "./dashboard/finalize-setup/ConfigureAIWorkspaceWizard";
 import { IntegrationsSetupWizard } from "./dashboard/finalize-setup/IntegrationsSetupWizard";
@@ -48,6 +48,7 @@ import { InviteUsersSetupWizard } from "./dashboard/finalize-setup/InviteUsersSe
 import { MfaSetupWizard } from "./dashboard/finalize-setup/MfaSetupWizard";
 import { NodeSetupWizard } from "./dashboard/finalize-setup/NodeSetupWizard";
 import { HealthOverviewCard } from "./dashboard/HealthOverviewCard";
+import { ManagedCertificatesNotice } from "./dashboard/ManagedCertificatesNotice";
 import { NodesCard } from "./dashboard/NodesCard";
 import { PinnedNodeCard, WARN_THRESHOLD } from "./dashboard/PinnedNodeCard";
 import { PinnedProxyCard } from "./dashboard/PinnedProxyCard";
@@ -195,19 +196,19 @@ export function RelayHealthNotice({
   const tone = critical ? "destructive" : "warning";
   return (
     <>
-      <DashboardNotice
+      <Notice
         tone={tone}
         role={critical ? "alert" : "status"}
         aria-live="polite"
         title={copy.title}
         actions={
-          <DashboardNoticeAction tone={tone} onClick={() => setDetailsOpen(true)}>
+          <NoticeAction tone={tone} onClick={() => setDetailsOpen(true)}>
             View details
-          </DashboardNoticeAction>
+          </NoticeAction>
         }
       >
         <p className="text-sm text-muted-foreground">{copy.summary}</p>
-      </DashboardNotice>
+      </Notice>
 
       <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
         <DialogContent className={isAdmin ? "sm:max-w-lg" : "sm:max-w-md"}>
@@ -315,20 +316,20 @@ export function LicenseGraceNotice({
   const absolute = new Date(deadline).toLocaleString();
 
   return (
-    <DashboardNotice
+    <Notice
       tone="destructive"
       role="alert"
       aria-live="polite"
       title="Gateway license has expired"
       actions={
         canManage ? (
-          <DashboardNoticeAction
+          <NoticeAction
             tone="destructive"
             to="/settings/general"
             state={{ scrollTarget: "gateway-license" }}
           >
             Update license key
-          </DashboardNoticeAction>
+          </NoticeAction>
         ) : null
       }
     >
@@ -341,7 +342,7 @@ export function LicenseGraceNotice({
           Contact your administrator before the grace period ends.
         </p>
       ) : null}
-    </DashboardNotice>
+    </Notice>
   );
 }
 
@@ -639,38 +640,40 @@ export function Dashboard() {
           />
 
           {tlsCertificateDistributionNeedsAttention && (
-            <DashboardNotice
+            <Notice
               tone="destructive"
               role="alert"
               title="TLS certificate distribution needs attention"
               actions={
-                <DashboardNoticeAction tone="destructive" to="/ssl-certificates">
+                <NoticeAction tone="destructive" to="/ssl-certificates">
                   View certificates
-                </DashboardNoticeAction>
+                </NoticeAction>
               }
             >
               <p className="text-sm text-muted-foreground">
                 At least one active route has not received its current certificate.
               </p>
-            </DashboardNotice>
+            </Notice>
           )}
+
+          <ManagedCertificatesNotice certificates={dashboardBootstrap?.managedCertificates ?? []} />
 
           {/* Update available */}
           {(dashboardBootstrap?.update?.updateAvailable ||
             dashboardBootstrap?.update?.relay?.updateAvailable) &&
             showUpdateNotifications && (
-              <DashboardNotice
+              <Notice
                 tone="warning"
                 icon={ArrowUpCircle}
                 title="Update Available"
                 actions={
-                  <DashboardNoticeAction
+                  <NoticeAction
                     tone="warning"
                     to="/settings/general"
                     state={{ scrollTarget: "system-updates" }}
                   >
                     Go to Settings
-                  </DashboardNoticeAction>
+                  </NoticeAction>
                 }
               >
                 <p className="text-sm text-muted-foreground">
@@ -678,11 +681,11 @@ export function Dashboard() {
                     ? `Gateway ${dashboardBootstrap.update.latestVersion} is ready to install`
                     : `Relay ${dashboardBootstrap.update.relay?.latestVersion} is ready to install`}
                 </p>
-              </DashboardNotice>
+              </Notice>
             )}
 
           {loggingHealth && !["disabled", "healthy"].includes(loggingHealth.status) && (
-            <DashboardNotice
+            <Notice
               tone="warning"
               title={
                 loggingHealth.status === "exhausted"
@@ -696,24 +699,24 @@ export function Dashboard() {
                       : "Structured logging maintenance degraded"
               }
               actions={
-                <DashboardNoticeAction
+                <NoticeAction
                   tone="warning"
                   to="/settings/features"
                   state={{ scrollTarget: "housekeeping" }}
                 >
                   Open Housekeeping
-                </DashboardNoticeAction>
+                </NoticeAction>
               }
             >
               <p className="truncate text-sm text-muted-foreground">
                 {loggingHealth.reason ??
                   "Check ClickHouse storage health and maintenance settings."}
               </p>
-            </DashboardNotice>
+            </Notice>
           )}
 
           {(mfaRequired || mfaGraceReauthenticationRequired) && (
-            <DashboardNotice
+            <Notice
               tone="warning"
               title={
                 mfaHasFactor
@@ -723,13 +726,13 @@ export function Dashboard() {
               actions={
                 <>
                   {!mfaHasFactor && (
-                    <DashboardNoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
+                    <NoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
                       Set up MFA
-                    </DashboardNoticeAction>
+                    </NoticeAction>
                   )}
-                  <DashboardNoticeAction tone="warning" onClick={() => void signOutForMfa()}>
+                  <NoticeAction tone="warning" onClick={() => void signOutForMfa()}>
                     Sign out
-                  </DashboardNoticeAction>
+                  </NoticeAction>
                 </>
               }
             >
@@ -738,16 +741,16 @@ export function Dashboard() {
                   ? `Your group now requires MFA. Complete a fresh sign-in with a passkey or authenticator app before ${mfaGraceDeadline}. Setting up a factor alone will not preserve this current session.`
                   : "Your group requires MFA. Sign in with a passkey or authenticator app to continue."}
               </p>
-            </DashboardNotice>
+            </Notice>
           )}
 
           {mfaOnboardingReminder && (
-            <DashboardNotice
+            <Notice
               tone="warning"
               title="Configure MFA"
               actions={
                 <>
-                  <DashboardNoticeAction
+                  <NoticeAction
                     tone="warning"
                     muted
                     arrow={false}
@@ -755,34 +758,34 @@ export function Dashboard() {
                     disabled={mfaReminderBusy}
                   >
                     Hide
-                  </DashboardNoticeAction>
-                  <DashboardNoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
+                  </NoticeAction>
+                  <NoticeAction tone="warning" onClick={openStandaloneMfaSetup}>
                     Set up MFA
-                  </DashboardNoticeAction>
+                  </NoticeAction>
                 </>
               }
             >
               <p className="text-sm text-muted-foreground">
                 Protect this administrator account with a passkey or authenticator app.
               </p>
-            </DashboardNotice>
+            </Notice>
           )}
 
           {finalizeSetup && !isFinalizeSetupComplete(finalizeSetup) && !mfaOnboardingReminder && (
-            <DashboardNotice
+            <Notice
               tone="info"
               icon={Info}
               title="Finalize setup"
               actions={
-                <DashboardNoticeAction tone="info" onClick={() => setFinalizeSetupOpen(true)}>
+                <NoticeAction tone="info" onClick={() => setFinalizeSetupOpen(true)}>
                   Open checklist
-                </DashboardNoticeAction>
+                </NoticeAction>
               }
             >
               <p className="text-sm text-muted-foreground">
                 Connect infrastructure, secure your account, and enable optional Gateway features.
               </p>
-            </DashboardNotice>
+            </Notice>
           )}
 
           <QuickStatsCard

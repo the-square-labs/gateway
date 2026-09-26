@@ -1,8 +1,14 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { ManagedCertificateStatus as StatusView } from "@/types";
-import { describeCertificateRenewal, ManagedCertificateStatus } from "./ManagedCertificateStatus";
+import {
+  certificateAttention,
+  describeCertificateRenewal,
+  ManagedCertificateDetailRow,
+  ManagedCertificateNotice,
+  useManagedCertificateStatus,
+} from "./ManagedCertificateStatus";
 
 function status(renewal: Partial<StatusView["renewal"]> = {}, daysRemaining = 120): StatusView {
   return {
@@ -70,38 +76,91 @@ describe("describeCertificateRenewal", () => {
   });
 });
 
-describe("ManagedCertificateStatus", () => {
-  it("shows the expiry and the last renewal error", async () => {
-    render(
-      <ManagedCertificateStatus
-        load={vi
-          .fn()
-          .mockResolvedValue(status({ state: "failed", lastError: "engine refused the key" }))}
-      />
+describe("certificateAttention", () => {
+  it("asks for attention only when the certificate does not renew on its own", () => {
+    expect(certificateAttention(status())).toBeNull();
+    expect(certificateAttention(status({ state: "delivering" }))).toBeNull();
+    expect(certificateAttention(status({ state: "failed" }))).toBe("renewal_failed");
+    expect(certificateAttention(status({ state: "ca_limited" }))).toBe("ca_limited");
+    expect(certificateAttention(status({ state: "waiting_for_daemon" }))).toBe(
+      "waiting_for_daemon"
     );
-    expect(await screen.findByText(/TLS certificate expires/)).toBeInTheDocument();
-    expect(screen.getByText(/120 days/)).toBeInTheDocument();
-    expect(screen.getByText(/engine refused the key/)).toBeInTheDocument();
+    expect(certificateAttention(status({ state: "awaiting_reload" }))).toBe("awaiting_reload");
+    expect(certificateAttention(status({}, 7))).toBe("expiring");
+    expect(certificateAttention(status({}, 8))).toBeNull();
   });
+});
 
-  it("renders nothing when the resource has no TLS certificate", async () => {
-    const load = vi.fn().mockRejectedValue(new Error("TLS off"));
-    const { container } = render(<ManagedCertificateStatus load={load} />);
-    await waitFor(() => expect(load).toHaveBeenCalled());
+describe("ManagedCertificateNotice", () => {
+  it("renders nothing while the certificate renews on its own", () => {
+    const { container } = render(<ManagedCertificateNotice status={status()} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renews on request and reloads the status", async () => {
+  it("explains a failed renewal with the last error and the expiry", () => {
+    render(
+      <ManagedCertificateNotice
+        status={status({ state: "failed", lastError: "engine refused the key" })}
+      />
+    );
+    expect(screen.getByText("TLS certificate renewal failed")).toBeInTheDocument();
+    expect(screen.getByText(/engine refused the key/)).toBeInTheDocument();
+    expect(screen.getByText(/expires Jan 1, 2027/)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("renews from a text action, stays pending while the request runs, then reloads", async () => {
     const user = userEvent.setup();
-    const load = vi
-      .fn()
-      .mockResolvedValueOnce(status())
-      .mockResolvedValueOnce(status({ lastSuccessAt: "2026-09-25T12:00:00.000Z" }, 365));
-    const onRenew = vi.fn().mockResolvedValue(true);
-    render(<ManagedCertificateStatus load={load} onRenew={onRenew} />);
-    await user.click(await screen.findByRole("button", { name: /Renew now/ }));
-    expect(onRenew).toHaveBeenCalled();
-    expect(await screen.findByText(/365 days/)).toBeInTheDocument();
-    expect(screen.getByText(/Renewed automatically .* without a restart/)).toBeInTheDocument();
+    let finish!: (value: boolean) => void;
+    const onRenew = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finish = resolve;
+        })
+    );
+    const onRenewed = vi.fn();
+    render(
+      <ManagedCertificateNotice status={status({}, 3)} onRenew={onRenew} onRenewed={onRenewed} />
+    );
+    expect(screen.getByText("TLS certificate expires in 3 days")).toBeInTheDocument();
+    const action = screen.getByRole("button", { name: "Renew now" });
+    expect(action).not.toHaveClass("h-8");
+    await user.click(action);
+    expect(action).toBeDisabled();
+    finish(true);
+    await waitFor(() => expect(onRenewed).toHaveBeenCalled());
+    expect(action).toBeEnabled();
+  });
+});
+
+describe("ManagedCertificateDetailRow", () => {
+  it("shows the expiry as a quiet detail", () => {
+    render(<ManagedCertificateDetailRow status={status()} />);
+    expect(screen.getByText("TLS Certificate")).toBeInTheDocument();
+    expect(screen.getByText(/Expires Jan 1, 2027 · renewed automatically/)).toBeInTheDocument();
+  });
+
+  it("renders nothing without a certificate", () => {
+    const { container } = render(
+      <ManagedCertificateDetailRow status={{ ...status(), certificate: null }} />
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+});
+
+describe("useManagedCertificateStatus", () => {
+  it("reports loading until the first answer and treats a refusal as no certificate", async () => {
+    const load = vi.fn().mockRejectedValue(new Error("TLS off"));
+    const { result } = renderHook(() => useManagedCertificateStatus(load, { enabled: true }));
+    expect(result.current.loading).toBe(true);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.status).toBeNull();
+  });
+
+  it("does not load for a resource without TLS", () => {
+    const load = vi.fn();
+    const { result } = renderHook(() => useManagedCertificateStatus(load, { enabled: false }));
+    expect(result.current.loading).toBe(false);
+    expect(load).not.toHaveBeenCalled();
   });
 });

@@ -247,6 +247,8 @@ export interface DashboardBootstrap {
   inferenceUsage: InferenceSelfUsage | null;
   inviteUserMethods: { password: boolean; emailOtp: boolean } | null;
   relay: DashboardRelaySnapshot | null;
+  /** Managed database and storage certificates that need attention, limited to what the viewer may see. */
+  managedCertificates?: DashboardManagedCertificate[];
   pinned: {
     dashboard: DashboardBootstrapPinnedResources;
     sidebar: DashboardBootstrapPinnedResources;
@@ -260,6 +262,17 @@ export interface DashboardBootstrap {
     "proxy-hosts": NavigationAttentionSeverity | null;
     docker: NavigationAttentionSeverity | null;
   };
+}
+
+export interface DashboardManagedCertificate {
+  kind: "storage" | "database";
+  /** The storage or database connection. */
+  id: string;
+  slug: string;
+  name: string;
+  reason: "renewal_failed" | "ca_limited" | "waiting_for_daemon" | "awaiting_reload" | "expiring";
+  daysRemaining: number;
+  notAfter: string;
 }
 
 export interface DashboardBootstrapPinnedResources {

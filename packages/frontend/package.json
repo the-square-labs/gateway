@@ -13,7 +13,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "design-screens:export": "node scripts/design-screens/run.mjs",
+    "design-system:export": "node scripts/design-system/export.mjs"
   },
   "dependencies": {
     "@codemirror/commands": "^6.10.3",

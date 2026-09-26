@@ -226,6 +226,40 @@ export interface CertificateRenewalStatusView {
   };
 }
 
+/** Why a managed certificate needs someone to look at it; null when it renews on its own. */
+export type CertificateAttentionReason =
+  | 'renewal_failed'
+  | 'ca_limited'
+  | 'waiting_for_daemon'
+  | 'awaiting_reload'
+  | 'expiring';
+
+/** Days before expiry from which a certificate is shown as needing attention. */
+export const ATTENTION_BEFORE_EXPIRY_DAYS = 7;
+
+export function certificateAttentionReason(
+  state: string | null | undefined,
+  daysRemaining: number
+): CertificateAttentionReason | null {
+  if (state === 'failed') return 'renewal_failed';
+  if (state === 'ca_limited') return 'ca_limited';
+  if (state === 'waiting_for_daemon') return 'waiting_for_daemon';
+  if (state === 'awaiting_reload') return 'awaiting_reload';
+  return daysRemaining <= ATTENTION_BEFORE_EXPIRY_DAYS ? 'expiring' : null;
+}
+
+/** A managed certificate that needs attention (dashboard summary). */
+export interface CertificateAttentionItem {
+  ownerType: RenewableOwnerType;
+  ownerId: string;
+  reason: CertificateAttentionReason;
+  daysRemaining: number;
+  notAfter: string;
+}
+
+/** The dashboard reads the summary often; renewal state changes clear it at once. */
+const ATTENTION_CACHE_MS = 60_000;
+
 export interface RenewalReadiness {
   ready: boolean;
   /** `renewing`, `renewal_failed`, `waiting_for_daemon` or `unavailable` when not ready. */
@@ -303,6 +337,7 @@ export class SystemCertificateRenewalService {
   private readonly now: () => Date;
   private readonly store: SystemCertificateRenewalStateStore;
   private readonly schedule: (task: () => void, delayMs: number) => void;
+  private attentionCache: { at: number; items: Promise<CertificateAttentionItem[]> } | null = null;
 
   constructor(
     db: DrizzleClient,
@@ -480,6 +515,52 @@ export class SystemCertificateRenewalService {
         pendingSerial: state?.pendingSerial ?? null,
       },
     };
+  }
+
+  /**
+   * Managed certificates that need attention across every owner type: a
+   * failed or CA-limited renewal, a renewal waiting for the daemon or for the
+   * engine to reload, or 7 days or less left. The caller filters by what the
+   * viewer may see.
+   */
+  async listAttention(): Promise<CertificateAttentionItem[]> {
+    const nowMs = this.now().getTime();
+    if (this.attentionCache && nowMs - this.attentionCache.at < ATTENTION_CACHE_MS) {
+      return this.attentionCache.items;
+    }
+    const items = this.collectAttention().catch((error) => {
+      this.attentionCache = null;
+      throw error;
+    });
+    this.attentionCache = { at: nowMs, items };
+    return items;
+  }
+
+  private async collectAttention(): Promise<CertificateAttentionItem[]> {
+    const now = this.now();
+    const groups = await Promise.all(
+      [...this.adapters.values()].map(async (adapter) => {
+        const [targets, states] = await Promise.all([adapter.listTargets(), this.store.list(adapter.ownerType)]);
+        const stateByOwner = new Map(states.map((row) => [row.ownerId, row.state]));
+        return targets.flatMap((target): CertificateAttentionItem[] => {
+          if (!target.current) return [];
+          const { daysRemaining } = evaluateCertificateRenewal(target.current, target, now);
+          const reason = certificateAttentionReason(stateByOwner.get(target.ownerId), daysRemaining);
+          return reason
+            ? [
+                {
+                  ownerType: target.ownerType,
+                  ownerId: target.ownerId,
+                  reason,
+                  daysRemaining,
+                  notAfter: target.current.notAfter.toISOString(),
+                },
+              ]
+            : [];
+        });
+      })
+    );
+    return groups.flat();
   }
 
   /**
@@ -944,6 +1025,7 @@ export class SystemCertificateRenewalService {
   }
 
   private saveState(target: SystemCertificateRenewalTarget, patch: RenewalStatePatch) {
+    this.attentionCache = null;
     return this.store.save(target.ownerType, target.ownerId, patch, this.now());
   }
 

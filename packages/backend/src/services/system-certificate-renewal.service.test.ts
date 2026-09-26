@@ -648,3 +648,42 @@ describe('SystemCertificateRenewalService', () => {
     });
   });
 });
+
+describe('certificate attention summary', () => {
+  it('lists failed, waiting and soon-expiring certificates and leaves healthy ones out', async () => {
+    const h = harness();
+    expect(await h.service.listAttention()).toEqual([]);
+
+    const expiring = harness({ current: leaf({ issuedDaysAgo: 360 }) });
+    expect(await expiring.service.listAttention()).toEqual([
+      expect.objectContaining({
+        ownerType: 'managed_storage',
+        ownerId: 'cluster-1',
+        reason: 'expiring',
+        daysRemaining: 5,
+      }),
+    ]);
+
+    const failed = harness();
+    await failed.store.save(
+      'managed_storage',
+      'cluster-1',
+      { state: 'failed', lastError: 'daemon offline' },
+      new Date(NOW)
+    );
+    expect(await failed.service.listAttention()).toEqual([expect.objectContaining({ reason: 'renewal_failed' })]);
+  });
+
+  it('forgets the cached summary as soon as a renewal changes the state', async () => {
+    const h = harness({ current: leaf({ issuedDaysAgo: 360 }) });
+    h.adapter.probe.mockImplementation(async () => served(h.pending));
+    expect(await h.service.listAttention()).toHaveLength(1);
+
+    // The renewal replaces the expiring leaf; the summary must not keep reporting it.
+    h.adapter.promote.mockImplementation(async () => {
+      h.target.current = h.pending;
+    });
+    await h.service.renewDue();
+    expect(await h.service.listAttention()).toEqual([]);
+  });
+});

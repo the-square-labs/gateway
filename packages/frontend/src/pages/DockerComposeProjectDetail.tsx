@@ -26,6 +26,7 @@ import { confirm } from "@/components/common/ConfirmDialog";
 import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
 import { DetailRow } from "@/components/common/DetailRow";
+import { Notice } from "@/components/common/Notice";
 import { PageBackButton } from "@/components/common/PageBackButton";
 import { PageHeader } from "@/components/common/PageHeader";
 import { PageTransition } from "@/components/common/PageTransition";
@@ -1152,10 +1153,14 @@ export function DockerComposeProjectDetail() {
         />
 
         {project.availability === "unavailable" && (
-          <div className="flex shrink-0 gap-2 border border-warning/30 bg-warning/10 p-3 text-sm">
-            <Activity className="mt-0.5 h-4 w-4" />
-            The node snapshot is unavailable. Last known Compose metadata is shown.
-          </div>
+          <Notice
+            tone="warning"
+            icon={Activity}
+            className="shrink-0"
+            title="The node snapshot is unavailable"
+          >
+            <p className="text-sm text-muted-foreground">Last known Compose metadata is shown.</p>
+          </Notice>
         )}
         <AvailabilityProgress policy={availabilityPolicy} fallbackOperation={currentOperation} />
         <Tabs

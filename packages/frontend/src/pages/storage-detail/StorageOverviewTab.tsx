@@ -1,11 +1,16 @@
 import { Activity } from "lucide-react";
 import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
+import { ManagedCertificateDetailRow } from "@/components/common/ManagedCertificateStatus";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
-import type { ObjectStorageConnection, ObjectStorageMetricSnapshot } from "@/types";
+import type {
+  ManagedCertificateStatus,
+  ObjectStorageConnection,
+  ObjectStorageMetricSnapshot,
+} from "@/types";
 import {
   formatManagedStorageError,
   MANAGED_STORAGE_ENGINE_LABELS,
@@ -25,6 +30,8 @@ interface StorageOverviewTabProps {
   healthStatus: ObjectStorageConnection["healthStatus"];
   history: ObjectStorageMetricSnapshot[];
   monitoringLoading: boolean;
+  /** TLS certificate of managed storage, shown as a detail row. */
+  certificateStatus?: ManagedCertificateStatus | null;
 }
 
 export function StorageOverviewTab({
@@ -33,6 +40,7 @@ export function StorageOverviewTab({
   healthStatus,
   history,
   monitoringLoading,
+  certificateStatus,
 }: StorageOverviewTabProps) {
   const latest = history.at(-1);
   const engine = managedStorageEngine(storage);
@@ -146,6 +154,7 @@ export function StorageOverviewTab({
               </Badge>
             }
           />
+          <ManagedCertificateDetailRow status={certificateStatus ?? null} />
         </PanelShell>
 
         <PanelShell

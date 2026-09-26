@@ -4,7 +4,10 @@ import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
-import { ManagedCertificateStatus } from "@/components/common/ManagedCertificateStatus";
+import {
+  ManagedCertificateNotice,
+  useManagedCertificateStatus,
+} from "@/components/common/ManagedCertificateStatus";
 import { PageTransition } from "@/components/common/PageTransition";
 import {
   Dialog,
@@ -281,6 +284,10 @@ function StorageDetailContent({
         : Promise.reject(new Error("Not managed storage")),
     [managedId]
   );
+  const managedCertificate = useManagedCertificateStatus(loadManagedCertificate, {
+    enabled: !!managedId,
+    refreshKey: storage?.updatedAt,
+  });
 
   const renewManagedCertificate = async () => {
     if (!managedId || !canEdit) return false;
@@ -384,13 +391,13 @@ function StorageDetailContent({
 
         <ManagedStorageLegacyEngineBanner storage={storage} />
 
-        {storage.managed && (
-          <ManagedCertificateStatus
-            load={loadManagedCertificate}
-            onRenew={canEdit ? renewManagedCertificate : undefined}
-            refreshKey={storage.updatedAt}
-          />
-        )}
+        {/* The certificate detail row and any warning wait for the first status. */}
+        <ContentLoading loading={managedCertificate.loading} />
+        <ManagedCertificateNotice
+          status={managedCertificate.status}
+          onRenew={canEdit ? renewManagedCertificate : undefined}
+          onRenewed={managedCertificate.refresh}
+        />
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col">
           <TabsList className="shrink-0">
@@ -415,6 +422,7 @@ function StorageDetailContent({
           <TabsContent value="overview" className="space-y-4">
             <StorageOverviewTab
               storage={storage}
+              certificateStatus={managedCertificate.status}
               canViewMonitoring={canViewMonitoring}
               healthStatus={liveHealthStatus}
               history={monitoringHistory}

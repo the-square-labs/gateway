@@ -1,3 +1,4 @@
+import { Notice, NoticeAction } from "@/components/common/Notice";
 import type { ObjectStorageConnection } from "@/types";
 import {
   isEngineImageUnavailable,
@@ -23,34 +24,34 @@ export function ManagedStorageLegacyEngineBanner({
   const writesFrozen = Boolean(storage.managed?.writesFrozenAt);
 
   return (
-    <div
+    <Notice
       role="note"
-      className="space-y-1.5 border border-warning bg-warning/10 p-3 text-sm text-warning-foreground"
-    >
-      <p>
-        <span className="font-medium">Legacy MinIO engine.</span> MinIO is no longer distributed by
-        its vendor. This cluster keeps running; new managed storage clusters use SeaweedFS.
-      </p>
-      <p>
-        To move this cluster to SeaweedFS, ask the built-in assistant to migrate it. It copies the
-        data, keeps workload links and access keys working, and switches over with a short write
-        pause.{" "}
-        <a
-          href={MANAGED_STORAGE_MIGRATION_DOCS_URL}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="font-medium text-link hover:underline"
-        >
+      tone="warning"
+      title="Legacy MinIO engine"
+      actions={
+        <NoticeAction tone="warning" href={MANAGED_STORAGE_MIGRATION_DOCS_URL}>
           See the migration guide
-        </a>
-      </p>
-      {writesFrozen && (
+        </NoticeAction>
+      }
+    >
+      <div className="space-y-1.5 text-sm text-muted-foreground">
         <p>
-          Writes are paused for a migration: every access key and workload link of this cluster is
-          read-only until the migration finishes or is rolled back.
+          MinIO is no longer distributed by its vendor. This cluster keeps running; new managed
+          storage clusters use SeaweedFS.
         </p>
-      )}
-      {imageUnavailable && <p>{MANAGED_STORAGE_ENGINE_IMAGE_UNAVAILABLE_MESSAGE}</p>}
-    </div>
+        <p>
+          To move this cluster to SeaweedFS, ask the built-in assistant to migrate it. It copies the
+          data, keeps workload links and access keys working, and switches over with a short write
+          pause.
+        </p>
+        {writesFrozen && (
+          <p>
+            Writes are paused for a migration: every access key and workload link of this cluster is
+            read-only until the migration finishes or is rolled back.
+          </p>
+        )}
+        {imageUnavailable && <p>{MANAGED_STORAGE_ENGINE_IMAGE_UNAVAILABLE_MESSAGE}</p>}
+      </div>
+    </Notice>
   );
 }

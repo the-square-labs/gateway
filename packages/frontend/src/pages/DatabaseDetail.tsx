@@ -3,8 +3,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { confirm } from "@/components/common/ConfirmDialog";
+import { ContentLoading } from "@/components/common/ContentLoading";
 import { DetailPageSkeleton } from "@/components/common/DetailPageSkeleton";
-import { ManagedCertificateStatus } from "@/components/common/ManagedCertificateStatus";
+import {
+  ManagedCertificateNotice,
+  useManagedCertificateStatus,
+} from "@/components/common/ManagedCertificateStatus";
 import { PageTransition } from "@/components/common/PageTransition";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { HealthBars } from "@/components/ui/health-bars";
@@ -525,16 +529,23 @@ function DatabaseDetailContent({
         : Promise.reject(new Error("Not a managed database")),
     [managedDatabaseId]
   );
+  const managedCertificate = useManagedCertificateStatus(loadManagedCertificate, {
+    enabled: !!managedDatabaseId && !!database?.managed?.tlsEnabled,
+    refreshKey: `${database?.updatedAt}:${database?.managed?.status}`,
+  });
+  const canRotateCertificate =
+    !!database?.managed && canManageSettings && database.managed.publishedPort != null;
 
+  /** Resolves to whether a rotation was requested (for the certificate notice). */
   const rotateCertificate = async () => {
-    if (!database?.managed || !canManageSettings || database.managed.publishedPort == null) return;
+    if (!database?.managed || !canRotateCertificate) return false;
     const ok = await confirm({
       title: "Rotate TLS Certificate",
       description:
         "Gateway will issue a replacement certificate for this database node's current IP addresses. The running database reloads it without a restart (older node daemons recreate the database). Direct clients must continue trusting the same Gateway Database CA.",
       confirmLabel: "Rotate certificate",
     });
-    if (!ok) return;
+    if (!ok) return false;
     try {
       const result = await api.rotateManagedDatabaseCertificate(database.managed.id);
       toast.success(
@@ -546,6 +557,7 @@ function DatabaseDetailContent({
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to rotate TLS certificate");
     }
+    return true;
   };
 
   const pause = async () => {
@@ -675,12 +687,14 @@ function DatabaseDetailContent({
               }}
             />
 
-            {database.managed?.tlsEnabled && (
-              <ManagedCertificateStatus
-                load={loadManagedCertificate}
-                refreshKey={`${database.updatedAt}:${database.managed.status}`}
-              />
-            )}
+            {/* The certificate detail row and any warning wait for the first status. */}
+            <ContentLoading loading={managedCertificate.loading} />
+            <ManagedCertificateNotice
+              status={managedCertificate.status}
+              onRenew={canRotateCertificate ? rotateCertificate : undefined}
+              onRenewed={managedCertificate.refresh}
+              renewLabel="Rotate now"
+            />
 
             {!isManagedPaused && (
               <HealthBars history={liveHealthHistory} currentStatus={liveHealthStatus} />
@@ -748,6 +762,7 @@ function DatabaseDetailContent({
           <TabsContent value="overview" className="space-y-4">
             <DatabaseOverviewTab
               database={database}
+              certificateStatus={managedCertificate.status}
               canViewMonitoring={canViewMonitoring}
               healthStatus={displayHealthStatus}
               history={monitoringHistory}

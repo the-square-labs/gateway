@@ -1,7 +1,7 @@
-import { AlertTriangle, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { cn, formatDate, formatDateTime } from "@/lib/utils";
+import { DetailRow } from "@/components/common/DetailRow";
+import { Notice, NoticeAction } from "@/components/common/Notice";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import type { ManagedCertificateStatus as ManagedCertificateStatusView } from "@/types";
 
 /** One line of what the automatic renewal is doing, or null when nothing needs saying. */
@@ -47,25 +47,67 @@ export function describeCertificateRenewal(
   }
 }
 
+/** Days before expiry from which a certificate needs attention (matches the backend summary). */
+const ATTENTION_BEFORE_EXPIRY_DAYS = 7;
+
+export type CertificateAttention =
+  | "renewal_failed"
+  | "ca_limited"
+  | "waiting_for_daemon"
+  | "awaiting_reload"
+  | "expiring";
+
+/** Why the certificate needs someone to look at it, or null while it renews on its own. */
+export function certificateAttention(
+  status: ManagedCertificateStatusView | null
+): CertificateAttention | null {
+  if (!status?.certificate) return null;
+  switch (status.renewal.state) {
+    case "failed":
+      return "renewal_failed";
+    case "ca_limited":
+      return "ca_limited";
+    case "waiting_for_daemon":
+      return "waiting_for_daemon";
+    case "awaiting_reload":
+      return "awaiting_reload";
+    default:
+      return status.certificate.daysRemaining <= ATTENTION_BEFORE_EXPIRY_DAYS ? "expiring" : null;
+  }
+}
+
+function daysLabel(days: number) {
+  if (days <= 0) return "today";
+  return `in ${days} ${days === 1 ? "day" : "days"}`;
+}
+
+/** Notice title for a certificate that needs attention. */
+export function certificateAttentionTitle(attention: CertificateAttention, daysRemaining: number) {
+  switch (attention) {
+    case "renewal_failed":
+      return "TLS certificate renewal failed";
+    case "ca_limited":
+      return "TLS certificate renewal is limited by its CA";
+    case "waiting_for_daemon":
+      return "TLS certificate renewal is waiting for the node daemon";
+    case "awaiting_reload":
+      return "Renewed TLS certificate is not loaded yet";
+    case "expiring":
+      return `TLS certificate expires ${daysLabel(daysRemaining)}`;
+  }
+}
+
 /**
- * Server certificate of a managed storage cluster or managed database: when
- * it expires and what its automatic renewal is doing. Renders nothing when
- * the resource has no TLS certificate.
+ * Loads the TLS certificate status of a managed storage cluster or managed
+ * database. `loading` is true until the first answer while enabled; a
+ * resource without TLS (or an older Gateway) answers with no status.
  */
-export function ManagedCertificateStatus({
-  load,
-  onRenew,
-  renewLabel = "Renew now",
-  refreshKey,
-}: {
-  load: () => Promise<ManagedCertificateStatusView>;
-  /** Shown as a button when set (the caller checks permissions and confirms). */
-  onRenew?: () => Promise<boolean>;
-  renewLabel?: string;
-  refreshKey?: unknown;
-}) {
+export function useManagedCertificateStatus(
+  load: () => Promise<ManagedCertificateStatusView>,
+  { enabled, refreshKey }: { enabled: boolean; refreshKey?: unknown }
+) {
   const [status, setStatus] = useState<ManagedCertificateStatusView | null>(null);
-  const [renewing, setRenewing] = useState(false);
+  const [settled, setSettled] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -73,67 +115,101 @@ export function ManagedCertificateStatus({
     } catch {
       // TLS off, no permission, or an older Gateway: nothing to show.
       setStatus(null);
+    } finally {
+      setSettled(true);
     }
   }, [load]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey reloads the status when the owning resource changes.
   useEffect(() => {
+    if (!enabled) return;
     void refresh();
-  }, [refresh, refreshKey]);
+  }, [enabled, refresh, refreshKey]);
 
-  if (!status?.certificate) return null;
-  const note = describeCertificateRenewal(status);
+  return {
+    status: enabled ? status : null,
+    // Only the first load holds the page; later refreshes update in place.
+    loading: enabled && !settled,
+    refresh,
+  };
+}
+
+/**
+ * Warning notice for a managed certificate that needs attention: renewal
+ * failed, 7 days or less left, a delivered certificate not loaded yet, a
+ * renewal waiting for the node daemon or limited by its CA. Renders nothing
+ * while the certificate renews on its own.
+ */
+export function ManagedCertificateNotice({
+  status,
+  onRenew,
+  onRenewed,
+  renewLabel = "Renew now",
+}: {
+  status: ManagedCertificateStatusView | null;
+  /** Shown as an action when set (the caller checks permissions and confirms). */
+  onRenew?: () => Promise<boolean>;
+  /** Called after a renewal request, to reload the status. */
+  onRenewed?: () => Promise<void> | void;
+  renewLabel?: string;
+}) {
+  const [renewing, setRenewing] = useState(false);
+  const attention = certificateAttention(status);
+  if (!status?.certificate || !attention) return null;
   const { certificate } = status;
-  const expiring = certificate.daysRemaining <= 7;
+  const note = describeCertificateRenewal(status);
 
   const renew = async () => {
     if (!onRenew) return;
     setRenewing(true);
     try {
-      if (await onRenew()) await refresh();
+      if (await onRenew()) await onRenewed?.();
     } finally {
       setRenewing(false);
     }
   };
 
   return (
-    <div
-      className={cn(
-        "flex flex-col gap-2 border p-3 sm:flex-row sm:items-center",
-        note?.tone === "warning" || expiring ? "border-warning/30 bg-warning/5" : "border-border"
-      )}
+    <Notice
+      tone="warning"
+      role="status"
+      title={certificateAttentionTitle(attention, certificate.daysRemaining)}
+      actions={
+        onRenew ? (
+          <NoticeAction tone="warning" onClick={() => void renew()} pending={renewing}>
+            {renewLabel}
+          </NoticeAction>
+        ) : undefined
+      }
     >
-      <div className="flex flex-1 items-start gap-2">
-        {note?.tone === "warning" || expiring ? (
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-foreground" />
-        ) : (
-          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-        )}
-        <div className="space-y-0.5">
-          <p className="text-sm font-medium">
-            TLS certificate expires {formatDate(certificate.notAfter)} ({certificate.daysRemaining}{" "}
-            {certificate.daysRemaining === 1 ? "day" : "days"})
-          </p>
-          <p className="text-xs text-muted-foreground">
-            {note?.text ??
-              (status.renewal.lastSuccessAt
-                ? `Renewed automatically ${formatDateTime(status.renewal.lastSuccessAt)}${status.renewal.lastRestarted ? " (with a restart)" : " without a restart"}.`
-                : "Gateway renews it automatically before it expires, without a restart.")}
-          </p>
-        </div>
-      </div>
-      {onRenew && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="shrink-0"
-          onClick={() => void renew()}
-          pending={renewing}
-        >
-          <RefreshCw />
-          {renewLabel}
-        </Button>
-      )}
-    </div>
+      <p className="text-sm text-muted-foreground">
+        {note ? `${note.text} ` : ""}
+        The current certificate expires {formatDate(certificate.notAfter)}.
+      </p>
+    </Notice>
+  );
+}
+
+/**
+ * The certificate's expiry as a quiet row of the resource's details, for
+ * example "Expires Mar 12, 2027 · renewed automatically".
+ */
+export function ManagedCertificateDetailRow({
+  status,
+}: {
+  status: ManagedCertificateStatusView | null;
+}) {
+  if (!status?.certificate) return null;
+  const attention = certificateAttention(status);
+  return (
+    <DetailRow
+      label="TLS Certificate"
+      value={
+        <span className="text-muted-foreground">
+          Expires {formatDate(status.certificate.notAfter)} ·{" "}
+          {attention ? "needs attention" : "renewed automatically"}
+        </span>
+      }
+    />
   );
 }

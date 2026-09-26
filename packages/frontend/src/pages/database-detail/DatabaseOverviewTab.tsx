@@ -1,11 +1,12 @@
 import { Activity } from "lucide-react";
 import { useMemo } from "react";
 import { DetailRow } from "@/components/common/DetailRow";
+import { ManagedCertificateDetailRow } from "@/components/common/ManagedCertificateStatus";
 import { PanelShell } from "@/components/common/PanelShell";
 import { useContentLoading } from "@/components/common/reveal-gate";
 import { Badge } from "@/components/ui/badge";
 import { StatCard } from "@/components/ui/stat-card";
-import type { DatabaseConnection, DatabaseMetricSnapshot } from "@/types";
+import type { DatabaseConnection, DatabaseMetricSnapshot, ManagedCertificateStatus } from "@/types";
 import { hasUnverifiedTls } from "./DatabaseTlsVerificationNotice";
 import { formatHealthStatusLabel, formatMetricValue, HEALTH_BADGE, METRIC_COLORS } from "./shared";
 
@@ -15,6 +16,8 @@ interface DatabaseOverviewTabProps {
   healthStatus: DatabaseConnection["healthStatus"] | "paused";
   history: DatabaseMetricSnapshot[];
   monitoringLoading: boolean;
+  /** TLS certificate of a managed database, shown as a detail row. */
+  certificateStatus?: ManagedCertificateStatus | null;
 }
 
 type OverviewMetric = {
@@ -105,6 +108,7 @@ export function DatabaseOverviewTab({
   healthStatus,
   history,
   monitoringLoading,
+  certificateStatus,
 }: DatabaseOverviewTabProps) {
   const latest = history.at(-1);
   const showMonitoring =
@@ -464,6 +468,7 @@ export function DatabaseOverviewTab({
               )
             }
           />
+          <ManagedCertificateDetailRow status={certificateStatus ?? null} />
           <DetailRow
             label="Username"
             value={<span className="font-mono">{database.username || "-"}</span>}

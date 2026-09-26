@@ -27,8 +27,9 @@ describe("legacy MinIO engine banner", () => {
   it("marks a managed cluster without an engine as legacy MinIO and links the migration guide", () => {
     renderBanner({ provider: "minio", managed: managed(), lastError: null });
     const banner = screen.getByRole("note");
+    expect(within(banner).getByText("Legacy MinIO engine")).toBeInTheDocument();
     expect(banner).toHaveTextContent(
-      "Legacy MinIO engine. MinIO is no longer distributed by its vendor. This cluster keeps running; new managed storage clusters use SeaweedFS."
+      "MinIO is no longer distributed by its vendor. This cluster keeps running; new managed storage clusters use SeaweedFS."
     );
     expect(within(banner).getByRole("link", { name: "See the migration guide" })).toHaveAttribute(
       "href",
