@@ -42,6 +42,19 @@ export async function migrateDatabase(pool: pg.Pool, lastTag?: string): Promise<
 }
 
 /**
+ * pool.end() resolves before its clients' sockets close, so a later `drop database ... with (force)` can terminate
+ * a connection pg is still closing. That FATAL 57P01 is expected; any other client error still surfaces.
+ */
+export function tolerateDatabaseDrop(pool: pg.Pool): pg.Pool {
+  pool.on('connect', (client) => {
+    client.on('error', (error: Error & { code?: string }) => {
+      if (error.code !== '57P01') throw error;
+    });
+  });
+  return pool;
+}
+
+/**
  * A fresh database next to the one `url` names (`<name>_<suffix>`), so each opt-in suite has its own. The URL must
  * point at a local, dedicated `gateway_migration_test_*` database: these suites drop and create databases.
  */
@@ -60,7 +73,7 @@ export async function disposableDatabase(url: string, suffix: string) {
   await admin.query(`create database "${name}"`);
   const own = new URL(url);
   own.pathname = `/${name}`;
-  const pool = new pg.Pool({ connectionString: own.toString(), max: 4 });
+  const pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: own.toString(), max: 4 }));
   return {
     pool,
     async drop() {

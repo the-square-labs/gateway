@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as schema from '@/db/schema/index.js';
 import { cleanOperationHistory, EXPIRED_OPERATION_LEASE_GRACE_MS } from '@/services/operation-history-retention.js';
 import type { DrizzleClient } from './client.js';
+import { tolerateDatabaseDrop } from './migration-database.test-helpers.js';
 import { OperationLeaseStore, operationLeaseHeld } from './operation-lease.js';
 
 const url = process.env.GATEWAY_MIGRATION_TEST_DATABASE_URL;
@@ -57,7 +58,7 @@ describe.skipIf(!url)('operation leases on disposable PostgreSQL', () => {
     await admin.query(`create database "${databaseName}"`);
     leaseUrl = new URL(url!);
     leaseUrl.pathname = `/${databaseName}`;
-    const pool = new pg.Pool({ connectionString: leaseUrl.toString(), max: 4 });
+    const pool = tolerateDatabaseDrop(new pg.Pool({ connectionString: leaseUrl.toString(), max: 4 }));
     pools.push(pool);
 
     const before = migrationsThrough('0207_uniqueness_guarantees');
@@ -88,7 +89,7 @@ describe.skipIf(!url)('operation leases on disposable PostgreSQL', () => {
 
   it('lets one of two processes claim a key, renews, finishes and releases on the real table', async () => {
     const processA = new OperationLeaseStore(db(pools[0]!));
-    const other = new pg.Pool({ connectionString: leaseUrl.toString(), max: 4 });
+    const other = tolerateDatabaseDrop(new pg.Pool({ connectionString: leaseUrl.toString(), max: 4 }));
     pools.push(other);
     const processB = new OperationLeaseStore(db(other));
 
