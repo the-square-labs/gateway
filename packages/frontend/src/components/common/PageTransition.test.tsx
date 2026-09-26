@@ -26,6 +26,29 @@ describe("PageTransition", () => {
     expect(parent).toHaveStyle({ visibility: "visible" });
     expect(parent?.querySelector("[data-page-transition]")).toHaveStyle({ visibility: "hidden" });
   });
+
+  it("keeps a tab that is ready before its page hidden until the page reveals", async () => {
+    const page = (loading: boolean) => (
+      <PageTransition>
+        <h1>Nodes</h1>
+        {loading ? <Skeleton /> : null}
+        <PageTransition>
+          <div>Tab ready</div>
+        </PageTransition>
+      </PageTransition>
+    );
+    const { rerender } = render(page(true));
+    const [parent, nested] = document.querySelectorAll<HTMLElement>("[data-page-transition]");
+    expect(nested).toHaveAttribute("data-reveal-phase", "revealed");
+    expect(parent).toHaveStyle({ visibility: "hidden" });
+    // A revealed tab inherits its page's visibility instead of showing through it.
+    expect(nested.style.visibility).toBe("");
+    expect(getComputedStyle(screen.getByText("Tab ready")).visibility).toBe("hidden");
+
+    rerender(page(false));
+    await waitFor(() => expect(parent).toHaveStyle({ visibility: "visible" }));
+    expect(getComputedStyle(screen.getByText("Tab ready")).visibility).toBe("visible");
+  });
   it("reveals navigated page content only after its initial data is ready", async () => {
     const { rerender } = render(
       <PageTransition>

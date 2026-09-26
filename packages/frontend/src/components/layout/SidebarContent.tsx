@@ -33,6 +33,7 @@ import { useUpdateStore } from "@/stores/update";
 import { dashboardAttentionDotClass, dashboardAttentionLabel } from "./dashboard-attention";
 import { navigationAttentionForItem, navigationAttentionLabel } from "./navigation-attention";
 import { SidebarPinnedResources } from "./SidebarPinnedResources";
+import { SIDEBAR_ITEM_FADE, SIDEBAR_ITEM_FILL, SIDEBAR_ITEM_HOVER_FILL } from "./sidebar-item-fill";
 
 function getInitials(name: string | null): string {
   if (!name) return "?";
@@ -192,8 +193,10 @@ export function SidebarContent({
                         size="icon-sm"
                         aria-label={item.name}
                         className={cn(
+                          // The button's own hover stays; the active fill fades like the expanded items'.
+                          "transition-[color,background-color,box-shadow] shadow-[inset_0_0_0_100vmax_transparent]",
                           isSidebarNavigationActive(location.pathname, item.href) &&
-                            "bg-sidebar-accent"
+                            SIDEBAR_ITEM_FILL
                         )}
                         onClick={() => navigate(item.href)}
                       >
@@ -384,10 +387,14 @@ export function SidebarContent({
                           to={item.href}
                           onClick={onNavigate}
                           className={cn(
-                            "flex items-center gap-3 px-3 py-2 text-sm transition-colors whitespace-nowrap overflow-hidden",
+                            "flex items-center gap-3 px-3 py-2 text-sm whitespace-nowrap overflow-hidden",
+                            SIDEBAR_ITEM_FADE,
                             isActive
-                              ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                              : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+                              ? cn(SIDEBAR_ITEM_FILL, "text-sidebar-accent-foreground font-medium")
+                              : cn(
+                                  SIDEBAR_ITEM_HOVER_FILL,
+                                  "text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
+                                )
                           )}
                         >
                           <item.icon className="h-4 w-4 shrink-0" />

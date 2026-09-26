@@ -39,7 +39,8 @@ export function PageTransition({
           <div
             ref={rootRef}
             className={cn("relative h-full", className)}
-            style={{ visibility: revealed ? "visible" : "hidden" }}
+            // Once revealed, inherit: `visible` would show a tab through its still-hidden page.
+            style={revealed ? undefined : { visibility: "hidden" }}
             aria-busy={revealed ? undefined : true}
             data-page-transition=""
             data-reveal-phase={phase}

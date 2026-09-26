@@ -141,6 +141,7 @@ describe("AdminNodes", () => {
   it("opens hosted creation only after the choice and keeps the selected mode fixed", async () => {
     prepareChoice([hostedConnector]);
     renderWithRouter(<AdminNodes />);
+    await waitForReveal();
     const user = userEvent.setup();
     await user.click(screen.getAllByRole("button", { name: /add node/i })[0]!);
     await user.click(screen.getByRole("button", { name: /Hosted VM/ }));
@@ -155,6 +156,7 @@ describe("AdminNodes", () => {
   it("does not turn a connector lookup error into a no-hosting message", async () => {
     const list = prepareChoice();
     renderWithRouter(<AdminNodes />);
+    await waitForReveal();
     await waitFor(() => expect(list).toHaveBeenCalled());
     list.mockRejectedValue(new Error("Hosting access denied"));
     const error = vi.spyOn(toast, "error");
@@ -170,6 +172,7 @@ describe("AdminNodes", () => {
   it("does not reopen a dismissed choice when a slow hosting lookup finishes", async () => {
     const list = prepareChoice();
     renderWithRouter(<AdminNodes />);
+    await waitForReveal();
     await waitFor(() => expect(list).toHaveBeenCalled());
     let resolve!: (value: HostingConnector[]) => void;
     list.mockImplementationOnce(
@@ -214,7 +217,8 @@ describe("AdminNodes", () => {
       isLoading: false,
     });
     renderWithRouter(<AdminNodes />);
-    expect(await screen.findByText(label)).toBeInTheDocument();
+    await waitForReveal();
+    expect(screen.getByText(label)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove node" })).toBeEnabled();
     expect(screen.queryByText("online")).not.toBeInTheDocument();
   });
@@ -286,6 +290,7 @@ describe("AdminNodes", () => {
     });
 
     renderWithRouter(<AdminNodes />);
+    await waitForReveal();
 
     await waitFor(() => {
       expect(api.listNodes).toHaveBeenCalled();
@@ -350,6 +355,7 @@ describe("AdminNodes", () => {
     });
 
     renderWithRouter(<AdminNodes />);
+    await waitForReveal();
     await waitFor(() => expect(api.listNodes).toHaveBeenCalled());
 
     const user = userEvent.setup();

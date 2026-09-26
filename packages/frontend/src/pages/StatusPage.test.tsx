@@ -124,6 +124,7 @@ describe("StatusPage", () => {
     });
 
     const title = (await screen.findByLabelText("Public title")) as HTMLInputElement;
+    await waitForReveal();
     expect(title).toHaveAttribute("placeholder", "e.g. Acme Status");
     expect(screen.getByRole("heading", { name: "Public description" })).toBeInTheDocument();
     expect(screen.getByLabelText("Public description")).toHaveAttribute(

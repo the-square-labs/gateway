@@ -15,6 +15,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "design-screens:export": "node scripts/design-screens/run.mjs",
+    "app-preview": "vite build --config scripts/app-preview/vite.config.ts && vite preview --config scripts/app-preview/vite.config.ts",
     "design-system:export": "node scripts/design-system/export.mjs"
   },
   "dependencies": {

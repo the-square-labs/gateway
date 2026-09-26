@@ -30,6 +30,7 @@ import { usePinnedNodesStore } from "@/stores/pinned-nodes";
 import { usePinnedProxiesStore } from "@/stores/pinned-proxies";
 import { usePinnedStorageStore } from "@/stores/pinned-storage";
 import { effectiveNodeStatus } from "@/types";
+import { SIDEBAR_ITEM_FADE, SIDEBAR_ITEM_FILL, SIDEBAR_ITEM_HOVER_FILL } from "./sidebar-item-fill";
 
 /**
  * A pinned node's dot: any state that is not settled (pending, enrolling,
@@ -147,10 +148,14 @@ export function SidebarPinnedResources({
 
   const linkClass = (active: boolean) =>
     cn(
-      "flex items-center gap-3 overflow-hidden whitespace-nowrap px-3 py-2 text-sm transition-colors",
+      "flex items-center gap-3 overflow-hidden whitespace-nowrap px-3 py-2 text-sm",
+      SIDEBAR_ITEM_FADE,
       active
-        ? "bg-sidebar-accent font-medium text-sidebar-accent-foreground"
-        : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        ? cn(SIDEBAR_ITEM_FILL, "font-medium text-sidebar-accent-foreground")
+        : cn(
+            SIDEBAR_ITEM_HOVER_FILL,
+            "text-sidebar-foreground/70 hover:text-sidebar-accent-foreground"
+          )
     );
   const statusDot = (
     status: string | null | undefined,
