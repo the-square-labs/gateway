@@ -10,7 +10,7 @@
 ## create_route fields
 
 - `domainNames`, type `proxy`, `redirect`, or `404`, and optionally `nodeId` (the Ingress Node).
-- Omit `nodeId` when a Domain is a registered Gateway Domain: the Route uses the Domain's Ingress Node, and registered Domains on different Nodes cannot share a Route. Without a registered Domain, an omitted `nodeId` works only when one Node is eligible; otherwise the call fails and lists the Nodes.
+- Omit `nodeId` when a Domain is a registered Gateway Domain: the Route uses the Domain's Ingress Node, and registered Domains on different Nodes cannot share a Route. Without a registered Domain, an omitted `nodeId` works only when exactly one Node is eligible and that Node is online; otherwise the call fails with `ROUTE_INGRESS_NODE_REQUIRED` and lists the eligible Nodes with their status.
 - `list_route_ingress_nodes({ folderId? })` lists the Ingress Nodes you may create Routes on (id, name, hostname, availability status). It needs any `proxy:create` grant (broad, on a folder, or on a Node) and no Node permission. A folder-limited grant also needs `folderId` on `create_route`.
 - Proxy target: `forwardHost`, `forwardPort`, `forwardScheme`, and `upstreamKind` (`manual`, `docker_container`, `docker_deployment`, or `pages`).
 - TLS: `sslEnabled`, `sslCertificateId` (an SSL certificate ID, never a PKI certificate ID), `sslForced`, `http2Support`.

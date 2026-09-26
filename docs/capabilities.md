@@ -85,7 +85,7 @@ Container workflows:
 - Create, inspect, and remove images, volumes, and networks across managed nodes.
 - Run durable cross-node migrations on Personal and higher for eligible containers and blue/green deployments, including image and volume transfer, capacity preflight, verification, cutover, cancellation, and cleanup recovery. GPU-attached workloads are intentionally not portable in v1.
 - Move resource-scoped grants with a container or deployment during migration. Recreates preserve the stable access identity; explicit deletion removes its grants so a later same-name resource starts without inherited access.
-- Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits.
+- Edit image, command, environment variables, secrets, labels, ports, restart policy, and runtime limits. Labels under `com.docker.compose.`, `wiolett.gateway.`, `net.wiolett.gateway.` and `com.wiolett.gateway.`, and `gateway.sandbox`, are reserved: create refuses them, recreate keeps existing ones only unchanged, and duplicates leave them out (a Docker daemon without `docker_duplicate_label_filter_v1` refuses to duplicate a container that carries them). A name held by a Git source still waiting for its first build cannot be taken by create, duplicate, rename or archive import (`409 NAME_IN_USE`).
 - Edit mounts only with the dedicated `docker:containers:mounts` scope. New and changed mounts accept only Gateway-managed local volumes; new host bind mounts are rejected. Existing legacy mounts are preserved during normal image, environment, and webhook updates.
 - Browse container logs with search and follow mode.
 - On Community and every paid plan, discover externally created Docker Compose projects from canonical labels and inspect their inventory, status, monitoring, and logs as read-only Compose Projects. Gateway can adopt a project only after the user supplies its complete single-file YAML; Gateway never reads host Compose files from label paths.
@@ -297,7 +297,7 @@ Gateway includes connector and operational communication surfaces:
 - Threshold and event alert rules for nodes, containers, Git builds, Compose Projects, routes, Pages, Gateway/relay health, logging, integrations, certificates, security events, PostgreSQL, ClickHouse, and Redis. GPU node rules evaluate only metrics reported by each physical device and can target a selected GPU on one scoped node.
 - Public status pages on Personal and higher with managed services, incidents, incident updates, proxy templates, and preview.
 
-Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope.
+Connector credentials are encrypted at rest. GitLab access is split between connector administration and per-user credentials unless the caller has the explicit system credential scope. Git integration scopes can be limited to a connector, a GitLab group or project, or a GitHub owner or repository; see the Git Integration Restrictions section of [SCOPES.md](../SCOPES.md).
 
 ## Application Scaling
 

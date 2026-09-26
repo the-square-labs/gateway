@@ -77,7 +77,7 @@ Use Gateway-native state transitions and read the resulting resource after each 
 5. Read the final desired and reported resource state.
 6. Verify the external outcome from the real consumer path: HTTPS response, workload health, database connection through the binding, or a published Pages link.
 
-Retry only when the failure is understood and the operation is safe to repeat. Never create duplicate resources as a retry strategy. After an ambiguous timeout, reconcile the first operation before repeating creation, deletion, migration, recovery, or credential rotation.
+Retry only when the failure is understood and the operation is safe to repeat. Never create duplicate resources as a retry strategy. After an ambiguous timeout, reconcile the first operation before repeating creation, deletion, migration, recovery, or credential rotation. Create tools that list an `idempotencyKey` argument are the exception: send a new key with each create and repeat the call with the same key and arguments; `IDEMPOTENCY_RESULT_WITHHELD` means the first call already succeeded, so look the resource up instead.
 
 ## Return a complete result
 
