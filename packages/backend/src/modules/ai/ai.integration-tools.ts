@@ -1,8 +1,12 @@
 import { container } from '@/container.js';
-import { hasScope } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { ExternalSshService } from '@/modules/integrations/external-ssh.service.js';
-import { assertConnectorOperationAccess } from '@/modules/integrations/integration-permissions.js';
+import {
+  assertConnectorOperationAccess,
+  type ConnectorScopeTarget,
+  gitConnectorVisibility,
+  holdsConnectorOperationScope,
+} from '@/modules/integrations/integration-permissions.js';
 import {
   CloudflareConnectorCreateSchema,
   CloudflareConnectorPreviewTestSchema,
@@ -31,20 +35,36 @@ type ConnectorProvider = (typeof CONNECTOR_PROVIDERS)[number];
 interface ConnectorRouteAccess {
   operation: string;
   requiredScope: string | readonly string[];
+  /** Lists accept a Git grant on any connector, group/owner or project/repository and filter the result. */
+  scopeTarget?: ConnectorScopeTarget;
 }
+
+const GIT_CONNECTOR_PROVIDERS = new Set<ConnectorProvider>(['gitlab', 'github', 'git']);
 
 /**
  * Mirrors the connector list middleware in integrations.routes.ts. Git and SSH
  * routes name the operation after the HTTP method (`connector.get`).
  */
 const CONNECTOR_LIST_ACCESS: Record<ConnectorProvider, ConnectorRouteAccess> = {
-  gitlab: { operation: 'connector.list', requiredScope: ['integrations:gitlab:view', 'integrations:gitlab:manage'] },
+  gitlab: {
+    operation: 'connector.list',
+    requiredScope: ['integrations:gitlab:view', 'integrations:gitlab:manage'],
+    scopeTarget: 'within-connector',
+  },
   cloudflare: {
     operation: 'connector.list',
     requiredScope: ['integrations:cloudflare:view', 'integrations:cloudflare:manage'],
   },
-  github: { operation: 'connector.get', requiredScope: ['integrations:github:view', 'integrations:github:manage'] },
-  git: { operation: 'connector.get', requiredScope: ['integrations:git:view', 'integrations:git:manage'] },
+  github: {
+    operation: 'connector.get',
+    requiredScope: ['integrations:github:view', 'integrations:github:manage'],
+    scopeTarget: 'within-connector',
+  },
+  git: {
+    operation: 'connector.get',
+    requiredScope: ['integrations:git:view', 'integrations:git:manage'],
+    scopeTarget: 'within-connector',
+  },
   ssh: { operation: 'connector.get', requiredScope: ['integrations:ssh:view', 'integrations:ssh:manage'] },
 };
 
@@ -98,8 +118,10 @@ export async function executeIntegrationTool(user: User, toolName: string, args:
   if (toolName === 'list_integration_connectors') return listIntegrationConnectors(service, user, a);
   if (toolName === 'sync_integration_connector') return syncIntegrationConnector(service, user, a);
   if (toolName === 'manage_integration_connector') return manageIntegrationConnector(service, user, a);
-  if (toolName === 'github_list_connectors') return service.listGitConnectors('github', true);
-  if (toolName === 'git_list_connectors') return service.listGitConnectors('git', true);
+  if (toolName === 'github_list_connectors')
+    return visibleGitConnectors(user, 'github', await service.listGitConnectors('github', true));
+  if (toolName === 'git_list_connectors')
+    return visibleGitConnectors(user, 'git', await service.listGitConnectors('git', true));
   if (toolName === 'github_list_repositories') {
     return service.githubListRepositories(user, { connectorId: requiredString(a.connectorId) });
   }
@@ -257,6 +279,23 @@ export async function executeIntegrationTool(user: User, toolName: string, args:
   throw new Error(`Unsupported integration tool: ${toolName}`);
 }
 
+/**
+ * GitHub and generic Git connectors the caller may see (any Git grant on the connector); connectors seen only
+ * through owner- or repo-qualified grants leave out their allowlist, like GET /integrations/<provider>/connectors.
+ */
+function visibleGitConnectors<T extends { id: string; allowlistEntries: unknown[] }>(
+  user: User,
+  provider: 'github' | 'git',
+  rows: T[]
+): T[] {
+  const visibility = gitConnectorVisibility(user.scopes, provider);
+  return rows.flatMap((row) => {
+    const access = visibility(row.id);
+    if (!access.visible) return [];
+    return [access.full ? row : { ...row, allowlistEntries: [] }];
+  });
+}
+
 function assertConnectorRouteAccess(
   user: User,
   provider: ConnectorProvider,
@@ -264,11 +303,12 @@ function assertConnectorRouteAccess(
   access: ConnectorRouteAccess
 ) {
   assertConnectorOperationAccess({
-    actor: { userId: user.id, scopes: user.scopes },
+    actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
     provider,
     connectorId,
     operation: access.operation,
     requiredScope: access.requiredScope,
+    scopeTarget: access.scopeTarget,
   });
 }
 
@@ -278,9 +318,14 @@ function connectorProvider(value: unknown): ConnectorProvider {
 }
 
 function canListConnectorProvider(user: User, provider: ConnectorProvider): boolean {
-  const { requiredScope } = CONNECTOR_LIST_ACCESS[provider];
+  const { requiredScope, scopeTarget } = CONNECTOR_LIST_ACCESS[provider];
   const scopes = typeof requiredScope === 'string' ? [requiredScope] : requiredScope;
-  return scopes.some((scope) => hasScope(user.scopes, scope));
+  return scopes.some((scope) =>
+    holdsConnectorOperationScope(
+      { actor: { scopes: user.scopes, accountScopes: user.accountScopes }, connectorId: null, scopeTarget },
+      scope
+    )
+  );
 }
 
 interface ListedConnectorRow {
@@ -316,9 +361,14 @@ async function listProviderConnectors(
   provider: ConnectorProvider,
   enabled: boolean | undefined
 ) {
+  const visible = GIT_CONNECTOR_PROVIDERS.has(provider)
+    ? gitConnectorVisibility(user.scopes, provider as 'gitlab' | 'github' | 'git')
+    : () => ({ visible: true, full: true });
   switch (provider) {
     case 'gitlab':
-      return (await service.listGitLabConnectors({ enabled })).map((row) => compactConnector(provider, row));
+      return (await service.listGitLabConnectors({ enabled }))
+        .filter((row) => visible(row.id).visible)
+        .map((row) => compactConnector(provider, row));
     case 'cloudflare':
       return (await service.listCloudflareConnectors({ enabled })).map((row) => ({
         ...compactConnector(provider, row),
@@ -326,7 +376,7 @@ async function listProviderConnectors(
       }));
     case 'github':
     case 'git':
-      return (await service.listGitConnectors(provider, enabled)).map((row) => ({
+      return visibleGitConnectors(user, provider, await service.listGitConnectors(provider, enabled)).map((row) => ({
         ...compactConnector(provider, row),
         repositoryCount: row.allowlistEntries.length,
       }));

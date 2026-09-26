@@ -11,7 +11,17 @@ import {
   integrationConnectors,
   integrationGitHubOAuthSessions,
 } from '@/db/schema/index.js';
+import {
+  type GitConnectorGrant,
+  type GitRepositoryScopeTarget,
+  gitGrantsConnectorWide,
+  hasGitGrants,
+  principalGitConnectorGrants,
+  principalGitGrantNeedsLookup,
+  principalHasGitRepositoryScope,
+} from '@/lib/git-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
+import { TtlCache } from '@/lib/ttl-cache.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import { assertConnectorOperationAccess } from './integration-permissions.js';
@@ -34,6 +44,32 @@ import {
 } from './integrations.service.core.js';
 import { IntegrationsPersistenceService } from './integrations.service.persistence.js';
 
+/** GitHub repository and owner IDs by connector and `owner/repository` path, for owner- and repo-qualified scopes. */
+const GITHUB_IDENTITY_TTL_MS = 5 * 60_000;
+const githubRepositoryIdentities = new TtlCache<{ repositoryId: string; ownerId: string } | null>(
+  GITHUB_IDENTITY_TTL_MS,
+  5000
+);
+
+/** Test hook: forget cached GitHub repository identities. */
+export function clearGitHubRepositoryIdentityCache(): void {
+  githubRepositoryIdentities.clear();
+}
+
+type GitScopeProviderName = 'gitlab' | 'github' | 'git';
+
+const PROVIDER_LABELS: Record<GitScopeProviderName, string> = { gitlab: 'GitLab', github: 'GitHub', git: 'Git' };
+
+export interface GitHubAccountAccess {
+  connector: ConnectorRow;
+  token: string;
+  /**
+   * Set when the connector credential is used through a narrower integrations:github:use grant: the caller
+   * may only see the owners and repositories that grant covers.
+   */
+  systemCredentialLimit: GitConnectorGrant[] | null;
+}
+
 export abstract class IntegrationsGitSupportService extends IntegrationsPersistenceService {
   abstract createGitConnector(
     provider: 'github' | 'git',
@@ -50,31 +86,131 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     userId: string
   ): Promise<{ id: string }>;
 
-  protected async resolveGitHubAccount(
-    user: User,
-    connectorId: string
-  ): Promise<{ connector: ConnectorRow; token: string }> {
+  /**
+   * Credential for listing a GitHub connector's repositories. Listing needs integrations:github:repo:read on
+   * the connector or anything in it (the result is filtered per repository). The connector credential is
+   * used with integrations:github:use on the connector; a personal credential otherwise; and the connector
+   * credential limited to what a narrower integrations:github:use grant covers as a last resort.
+   */
+  protected async resolveGitHubAccount(user: User, connectorId: string): Promise<GitHubAccountAccess> {
     const connector = await this.getConnectorRow(connectorId, 'github');
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: user.scopes },
+      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
       provider: 'github',
       connectorId: connector.id,
       connectorName: connector.name,
       operation: 'repository.list',
       requiredScope: 'integrations:github:repo:read',
+      scopeTarget: 'within-connector',
     });
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
-    if (hasScope(user.scopes, 'integrations:github:use')) {
-      if (!connector.encryptedToken) {
-        throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
-      }
-      return { connector, token: await this.resolveGitHubConnectorToken(connector) };
+    const useGrants = principalGitConnectorGrants(user, 'integrations:github:use', connector.id);
+    if (gitGrantsConnectorWide(useGrants)) {
+      return { connector, token: await this.connectorGitHubToken(connector), systemCredentialLimit: null };
     }
     // Without integrations:github:use the caller acts with its owner's personal credential (set up in
     // AI Workspace). A token may use it too: its owner's AI Workspace access is not required.
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
-    if (!personal) throw this.gitUserCredentialRequired('github', connector);
-    return { connector, token: personal.auth.token };
+    if (personal) return { connector, token: personal.auth.token, systemCredentialLimit: null };
+    if (hasGitGrants(useGrants)) {
+      return { connector, token: await this.connectorGitHubToken(connector), systemCredentialLimit: useGrants };
+    }
+    throw this.gitCredentialUnavailable(
+      'github',
+      user,
+      connector,
+      null,
+      this.gitUserCredentialRequired('github', connector)
+    );
+  }
+
+  protected async connectorGitHubToken(connector: ConnectorRow): Promise<string> {
+    if (!connector.encryptedToken) {
+      throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
+    }
+    return this.resolveGitHubConnectorToken(connector);
+  }
+
+  /**
+   * No credential for a repository operation: without integrations:<provider>:use covering it and without a
+   * personal credential. A caller that can store a personal credential right now (an AI Workspace user) gets
+   * the 428 the assistant turns into its authorization dialog; everyone else a 403 naming the missing scope
+   * and the repository.
+   */
+  protected gitCredentialUnavailable(
+    provider: GitScopeProviderName,
+    user: User,
+    connector: ConnectorRow,
+    repository: string | null,
+    personalRequired: AppError
+  ): AppError {
+    if (hasScope(user.scopes, 'ai:workspace:use')) return personalRequired;
+    const requiredScope = `integrations:${provider}:use`;
+    const subject = repository ? `Repository ${repository}` : connector.name;
+    return new AppError(
+      403,
+      'CONNECTOR_SCOPE_DENIED',
+      `${subject} needs permission to use the connector credential or a personal ${PROVIDER_LABELS[provider]} authorization`,
+      {
+        provider,
+        connectorId: connector.id,
+        operation: 'credential.resolve',
+        requiredScope,
+        ...(repository ? { repository } : {}),
+        personalCredential: 'missing',
+      }
+    );
+  }
+
+  /**
+   * The repository as Git scope checks see it. GitHub owner and repository IDs are looked up (and cached)
+   * only when a narrower grant needs them; generic Git has connector qualifiers only.
+   */
+  protected async gitRepositoryScopeTarget(
+    user: User,
+    provider: 'github' | 'git',
+    connector: ConnectorRow,
+    repositoryUrl: string,
+    requiredScopes: readonly string[]
+  ): Promise<GitRepositoryScopeTarget> {
+    const target: GitRepositoryScopeTarget = { connectorId: connector.id };
+    if (provider !== 'github' || !principalGitGrantNeedsLookup(user, requiredScopes, connector.id)) return target;
+    const token = connector.encryptedToken
+      ? await this.resolveGitHubConnectorToken(connector)
+      : (await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl))?.auth.token;
+    if (!token) return target;
+    return this.githubRepositoryScopeTarget(connector, token, repositoryUrl);
+  }
+
+  /** GitHub repository and owner IDs for a repository URL (the IDs owner/ and repo/ qualifiers name). */
+  protected async githubRepositoryScopeTarget(
+    connector: ConnectorRow,
+    token: string,
+    repositoryUrl: string
+  ): Promise<GitRepositoryScopeTarget> {
+    const { owner, repository } = this.githubRepositoryIdentity(repositoryUrl);
+    const key = `${connector.id}:${owner.toLowerCase()}/${repository.toLowerCase()}`;
+    const identity = await githubRepositoryIdentities.getOrLoad(key, async () => {
+      const response = await this.githubConnectorRequest(
+        connector,
+        token,
+        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repository)}`
+      );
+      const body = (await response.json().catch(() => null)) as unknown;
+      if (response.status === 404) return null;
+      if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+      const record = isPlainRecord(body) ? body : {};
+      const ownerRecord = isPlainRecord(record.owner) ? record.owner : {};
+      return typeof record.id === 'number' && typeof ownerRecord.id === 'number'
+        ? { repositoryId: String(record.id), ownerId: String(ownerRecord.id) }
+        : null;
+    });
+    if (!identity) {
+      // Not visible to this credential: do not let one caller's miss hide the repository from others.
+      githubRepositoryIdentities.delete(key);
+      return { connectorId: connector.id };
+    }
+    return { connectorId: connector.id, repositoryId: identity.repositoryId, containerIds: [identity.ownerId] };
   }
 
   protected async resolveGitHubConnectorToken(connector: ConnectorRow): Promise<string> {
@@ -345,7 +481,9 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
   /**
    * Repository reads need `integrations:<provider>:repo:read`; file, secret and variable writes, and
    * reading CI/CD variables (their values are secrets), need `integrations:<provider>:repo:write`
-   * (the same verbs as GitLab). Connector admin (`:manage`) is not involved.
+   * (the same verbs as GitLab). Connector admin (`:manage`) is not involved. The scope must cover the
+   * repository: unqualified, the connector, the GitHub owner, or the exact repository. The connector
+   * credential is used when integrations:<provider>:use covers the repository the same way.
    */
   protected async resolveGitRepository(
     user: User,
@@ -355,13 +493,17 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     access: 'read' | 'write' = 'read'
   ): Promise<{ connector: ConnectorRow; repositoryUrl: string; username: string; token: string }> {
     const connector = await this.getConnectorRow(connectorId, provider);
+    const requiredScope = `integrations:${provider}:repo:${access}`;
+    const operation = access === 'write' ? 'repository.write' : 'repository.read';
+    // Nothing on this connector grants the scope: refuse before any provider call.
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: user.scopes },
+      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
       provider,
       connectorId: connector.id,
       connectorName: connector.name,
-      operation: access === 'write' ? 'repository.write' : 'repository.read',
-      requiredScope: `integrations:${provider}:repo:${access}`,
+      operation,
+      requiredScope,
+      scopeTarget: 'within-connector',
     });
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
     const repositoryUrl = this.normalizeRepositoryUrl(rawRepositoryUrl);
@@ -377,7 +519,23 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
     if (!allowed) {
       throw new AppError(403, 'REPOSITORY_NOT_ALLOWED', 'Repository is not included in this connector');
     }
-    if (hasScope(user.scopes, `integrations:${provider}:use`)) {
+    const useScope = `integrations:${provider}:use`;
+    const repository = await this.gitRepositoryScopeTarget(user, provider, connector, repositoryUrl, [
+      requiredScope,
+      useScope,
+    ]);
+    const label = this.repositoryLabel(repositoryUrl);
+    assertConnectorOperationAccess({
+      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
+      provider,
+      connectorId: connector.id,
+      connectorName: connector.name,
+      operation,
+      requiredScope,
+      repository,
+      project: { fullPath: label },
+    });
+    if (principalHasGitRepositoryScope(user, useScope, repository)) {
       if (!connector.encryptedToken) {
         throw new AppError(400, 'CONNECTOR_CREDENTIAL_MISSING', `${connector.name} has no credential`);
       }
@@ -389,13 +547,30 @@ export abstract class IntegrationsGitSupportService extends IntegrationsPersiste
       };
     }
     const personal = await this.gitLabUserCredentials.resolveAuth(user.id, connector.id, connector.baseUrl);
-    if (!personal) throw this.gitUserCredentialRequired(provider, connector);
+    if (!personal) {
+      throw this.gitCredentialUnavailable(
+        provider,
+        user,
+        connector,
+        label,
+        this.gitUserCredentialRequired(provider, connector)
+      );
+    }
     return {
       connector,
       repositoryUrl,
       username: personal.gitlabUsername,
       token: personal.auth.token,
     };
+  }
+
+  /** `owner/repository` for a GitHub URL, the URL path otherwise: how errors name a repository. */
+  protected repositoryLabel(repositoryUrl: string): string {
+    try {
+      return new URL(repositoryUrl).pathname.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '') || repositoryUrl;
+    } catch {
+      return repositoryUrl;
+    }
   }
 
   protected normalizeRepositoryUrl(rawUrl: string): string {

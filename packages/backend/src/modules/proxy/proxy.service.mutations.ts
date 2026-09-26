@@ -1,12 +1,12 @@
-import { eq } from 'drizzle-orm';
-import { proxyHosts } from '@/db/schema/index.js';
+import { asc, eq } from 'drizzle-orm';
+import { nodes, proxyHosts } from '@/db/schema/index.js';
 import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissions.js';
 import { writeWithAllocatedSlug } from '@/lib/resource-slugs.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import type { PageRouteNodeMigration } from '@/modules/pages/routes/page-route.service.js';
 import type { AdditionalRouteNodeMigration } from './additional-route.service.js';
-import type { CreateProxyHostInput, UpdateProxyHostInput } from './proxy.schemas.js';
+import type { CreateProxyHostInput, CreateProxyHostRequest, UpdateProxyHostInput } from './proxy.schemas.js';
 import {
   assertSslPrerequisites,
   assertSslPrerequisitesForUpdate,
@@ -15,10 +15,22 @@ import {
   rawConfigAuditDetails,
   storedRawConfigForRawModeEnablement,
 } from './proxy.service-helpers.js';
-import { assertRegisteredDomainsUseNode } from './proxy-domain-node.js';
-import { assertNoProxyDomainOverlap } from './proxy-domain-overlap.js';
+import {
+  assertRegisteredDomainsUseNode,
+  findRegisteredDomainNodes,
+  registeredDomainsIngressNodeId,
+} from './proxy-domain-node.js';
+import { assertNoProxyDomainOverlap, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 import { attachDockerUpstreamDisplay } from './proxy-upstream-display.js';
+import {
+  type RouteIngressNode,
+  type RouteIngressNodeCandidate,
+  type RouteIngressNodeSource,
+  resolveRouteIngressNode,
+  routeIngressNodesForScopes,
+  toRouteIngressNode,
+} from './route-ingress-nodes.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
 
@@ -43,13 +55,65 @@ function mapProxyHostCertificateReferenceError(error: unknown): never {
 }
 
 export abstract class ProxyServiceMutations extends ProxyServiceCore {
-  async createProxyHost(input: CreateProxyHostInput, userId: string, validationOptions: ProxyValidationInput = {}) {
+  /** Every nginx node as a route destination: identity and availability only (no node details). */
+  protected async loadRouteIngressNodeCandidates(): Promise<RouteIngressNodeCandidate[]> {
+    const rows = await this.db
+      .select({
+        id: nodes.id,
+        displayName: nodes.displayName,
+        hostname: nodes.hostname,
+        status: nodes.status,
+        serviceCreationLocked: nodes.serviceCreationLocked,
+      })
+      .from(nodes)
+      .where(eq(nodes.type, 'nginx'))
+      .orderBy(asc(nodes.createdAt), asc(nodes.id));
+    return rows.map((row) => ({
+      ...row,
+      status: row.status === 'online' && !this.nodeDispatch.isNodeConnected(row.id) ? 'offline' : row.status,
+    }));
+  }
+
+  /**
+   * Nginx ingress nodes the caller may create routes on (see routeIngressNodesForScopes), for
+   * creators without `nodes:details`. `folderId` limits the list to a route in that folder.
+   */
+  async listRouteIngressNodes(scopes: readonly string[], folderId?: string | null): Promise<RouteIngressNode[]> {
+    return routeIngressNodesForScopes(await this.loadRouteIngressNodeCandidates(), scopes, folderId).map(
+      toRouteIngressNode
+    );
+  }
+
+  /**
+   * The ingress node of a new route: the requested one, else the node its registered domains are
+   * assigned to, else the only node the caller may create on at this destination (409 listing them
+   * when several qualify). Runs before the destination checks, which then use the returned node.
+   */
+  async resolveRouteIngressNode(
+    scopes: readonly string[],
+    input: Pick<CreateProxyHostRequest, 'nodeId' | 'domainNames' | 'folderId'>
+  ): Promise<{ nodeId: string; source: RouteIngressNodeSource }> {
+    if (input.nodeId) return { nodeId: input.nodeId, source: 'request' };
+    const registered = await findRegisteredDomainNodes(this.db, input.domainNames);
+    const pinnedNodeId = registeredDomainsIngressNodeId(registered);
+    return resolveRouteIngressNode({
+      scopes,
+      folderId: input.folderId,
+      pinnedNodeId,
+      pinnedByDomain: registered[0]?.domain,
+      candidates: pinnedNodeId ? [] : await this.loadRouteIngressNodeCandidates(),
+    });
+  }
+
+  async createProxyHost(request: CreateProxyHostRequest, userId: string, validationOptions: ProxyValidationInput = {}) {
     const options = normalizeProxyValidationOptions(validationOptions);
 
-    // 0. Require a node assignment
-    if (!input.nodeId) {
+    // 0. Require a node assignment (callers resolve an omitted nodeId with resolveRouteIngressNode
+    // before their destination checks)
+    if (!request.nodeId) {
       throw new AppError(400, 'NODE_REQUIRED', 'A node must be selected for the proxy host');
     }
+    const input: CreateProxyHostInput = { ...request, nodeId: request.nodeId };
     await assertNodeAllowsServiceCreation(this.db, input.nodeId, 'nginx');
     await assertRegisteredDomainsUseNode(this.db, input.domainNames, input.nodeId);
 
@@ -148,7 +212,8 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
               createdById: userId,
             })
             .returning()
-            .catch(mapProxyHostCertificateReferenceError);
+            .catch(mapProxyHostCertificateReferenceError)
+            .catch((error) => rethrowProxyHostDomainConflict(this.db, error));
           return created;
         },
       });
@@ -449,7 +514,8 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         .set({ ...updateData, ...(slug === undefined ? {} : { slug }) })
         .where(eq(proxyHosts.id, id))
         .returning()
-        .catch(mapProxyHostCertificateReferenceError);
+        .catch(mapProxyHostCertificateReferenceError)
+        .catch((error) => rethrowProxyHostDomainConflict(this.db, error));
       return updated;
     };
     const primaryDomainChanged = input.domainNames !== undefined && input.domainNames[0] !== existing.domainNames[0];
@@ -465,9 +531,11 @@ export abstract class ProxyServiceMutations extends ProxyServiceCore {
         : updateHost();
     // A domain change or move of a serving host takes the target node's lock
     // for the overlap check and the write (host lock, then node lock, the same
-    // order every other proxy operation uses).
+    // order every other proxy operation uses). An ingress migration's move
+    // (skipDomainNodeValidation) skips only the registered-domain node check:
+    // two hosts serving one name on the target would still be duplicates.
     let updated =
-      domainAssignmentChanged && existing.enabled && !options.skipDomainNodeValidation
+      domainAssignmentChanged && existing.enabled
         ? await withProxyLocks([proxyNodeLockKey(effectiveNodeId)], async () => {
             await assertNoProxyDomainOverlap(this.db, effectiveNodeId, input.domainNames ?? existing.domainNames, id);
             return writeHost();

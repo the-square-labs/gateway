@@ -226,6 +226,7 @@ describe('AI tool scope filtering', () => {
       'wait',
       'send_comment',
       'end_conversation',
+      'get_my_access',
       'find_resource',
       'search_chats',
       'search_compacted_history',
@@ -253,6 +254,7 @@ describe('AI tool scope filtering', () => {
       'list_routes',
       'get_route',
       'create_route',
+      'list_route_ingress_nodes',
       'update_route',
       'set_route_maintenance',
       'resync_tls_distribution',
@@ -305,8 +307,6 @@ describe('AI tool scope filtering', () => {
       'update_gateway_settings',
       'manage_system_updates',
       'get_audit_log',
-      'manage_system_alerts',
-      'get_dashboard_stats',
     ]);
     expect(TOOL_STORE_INVALIDATION_MAP.create_root_ca).toEqual(['ca']);
     expect(TOOL_STORE_INVALIDATION_MAP.manage_certificate).toEqual(['certificates', 'ca']);

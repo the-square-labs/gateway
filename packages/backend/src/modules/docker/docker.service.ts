@@ -1,5 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import type { OperationLeaseStore } from '@/db/operation-lease.js';
 import {
   dockerDeployments,
   dockerManagedVolumes,
@@ -287,6 +288,20 @@ export class DockerManagementService {
     this.migrationGuard = guard;
   }
 
+  /** Makes rename and update claims (and migration admissions) exclusive across backend processes. */
+  setOperationLeases(leases: OperationLeaseStore) {
+    this.containerTransitions.setLeaseStore(leases);
+  }
+
+  /**
+   * Backs this process's transitions on the names with database leases (see
+   * DockerContainerTransitions.acquireLeases): 409 CONTAINER_BUSY while
+   * another backend process holds one of them.
+   */
+  acquireTransitionLeases(nodeId: string, names: readonly string[]): Promise<void> {
+    return this.containerTransitions.acquireLeases(nodeId, names);
+  }
+
   setBuildRolloutGuard(guard: DockerBuildRolloutGuard) {
     this.buildRolloutGuard = guard;
   }
@@ -441,7 +456,10 @@ export class DockerManagementService {
           folderId: folderId ?? null,
           nodeId,
         });
-        if (folderId)
+        // Pulled at the root: a placement left by an earlier image with this id (removed outside Gateway)
+        // must not pull the new one into that folder.
+        if (!folderId) await this.folderService?.deleteResourceAssignment(nodeId, 'image', imageId);
+        else
           await this.folderService?.moveResourcesToFolder(
             { resourceType: 'image', folderId, items: [{ nodeId, resourceKey: imageId }] },
             userId
@@ -496,7 +514,12 @@ export class DockerManagementService {
           folderId: folderId ?? null,
           nodeId,
         });
-        if (!folderId) return;
+        // Created at the root: a placement left by an earlier volume of this name (removed outside Gateway)
+        // must not pull the new one into that folder.
+        if (!folderId) {
+          await this.folderService?.deleteResourceAssignment(nodeId, 'volume', volumeName);
+          return;
+        }
         await this.folderService?.moveResourcesToFolder(
           { resourceType: 'volume', folderId, items: [{ nodeId, resourceKey: volumeName }] },
           userId
@@ -1101,12 +1124,23 @@ export class DockerManagementService {
       )
     );
     for (const item of decorated) names.add(String(item.name ?? item.Name ?? '').replace(/^\/+/, ''));
-    const pending = await readPendingDockerSourceContainers(this.db, nodeId);
+    const pending = (await readPendingDockerSourceContainers(this.db, nodeId)).filter(
+      (item) => !names.has(item.containerName)
+    );
+    // A pending source container was placed in its destination folder when it was created; list it there,
+    // not at the root.
+    const placements =
+      pending.length > 0 && this.folderService
+        ? await this.folderService.getPlacementsForRefs(
+            pending.map((item) => ({ nodeId, containerName: item.containerName }))
+          )
+        : [];
+    const placementByName = new Map(placements.map((placement) => [placement.containerName, placement]));
     return [
       ...decorated,
-      ...pending
-        .filter((item) => !names.has(item.containerName))
-        .map((item) => ({
+      ...pending.map((item) => {
+        const placement = placementByName.get(item.containerName);
+        return {
           ...item,
           id: item.Id,
           name: item.containerName,
@@ -1121,11 +1155,12 @@ export class DockerManagementService {
           healthCheckEnabled: false,
           healthStatus: 'unknown',
           secureLinkDown: false,
-          folderId: null,
-          folderIsSystem: false,
-          folderSortOrder: 0,
+          folderId: placement?.folderId ?? null,
+          folderIsSystem: placement?.folderIsSystem ?? false,
+          folderSortOrder: placement?.sortOrder ?? 0,
           // id/Id identify the source reservation only; this is not a Docker runtime.
-        })),
+        };
+      }),
     ];
   }
 
@@ -1263,6 +1298,8 @@ export class DockerManagementService {
       clearTransition: (nodeId, name) => this.clearTransition(nodeId, name),
       claimTransitions: (nodeId, entries) => this.containerTransitions.claim(nodeId, entries),
       releaseTransitions: (claim) => this.containerTransitions.release(claim),
+      acquireTransitionLeases: (nodeId, names) => this.containerTransitions.acquireLeases(nodeId, names),
+      recheckMigrationGuard: (nodeId, identities, newName) => this.recheckMigrationGuard(nodeId, identities, newName),
       emitContainer: (nodeId, name, id, action, extra) => this.emitContainer(nodeId, name, id, action, extra),
       emitTransition: (nodeId, name, id, transition) => this.emitTransition(nodeId, name, id, transition),
       createTask: (nodeId, containerId, containerName, type) =>
@@ -2049,6 +2086,17 @@ export class DockerManagementService {
       if (managed) identities.push({ nodeId: managed.nodeId, containerName: managed.containerName });
       return identities;
     });
+  }
+
+  /**
+   * The guard is checked before a mutation claims the container as a fast
+   * path, and again after: a migration admitted in between has written its
+   * row by the time the claim (and its lease) succeeded.
+   */
+  private async recheckMigrationGuard(nodeId: string, identities: readonly string[], newName?: string): Promise<void> {
+    if (!this.migrationGuard) return;
+    for (const identity of new Set(identities)) await this.migrationGuard.assertContainerAllowed(nodeId, identity);
+    if (newName) await this.migrationGuard.assertContainerNameAvailable(nodeId, newName);
   }
 
   private async assertContainerMigrationAllowed(nodeId: string, containerId: string): Promise<void> {

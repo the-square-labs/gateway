@@ -364,4 +364,82 @@ describe('drizzle migration metadata', () => {
       'public.page_upload_sessions',
     ]);
   });
+  it('moves uniqueness guarantees into the database without failing on existing collisions', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0207_uniqueness_guarantees.sql'), 'utf8');
+    const position = (text: string) => {
+      const index = migration.indexOf(text);
+      expect(index, text).toBeGreaterThan(-1);
+      return index;
+    };
+    // Every collision is flagged or resolved before the unique index that would reject it is built.
+    expect(position('INSERT INTO "node_host_port_reservations"')).toBeLessThan(
+      position('CREATE TRIGGER "docker_deployment_routes_host_ports"')
+    );
+    expect(position('INSERT INTO "proxy_host_domains"')).toBeLessThan(
+      position('CREATE UNIQUE INDEX IF NOT EXISTS "proxy_host_domains_node_domain_unique"')
+    );
+    expect(position('"phase" = \'superseded\'')).toBeLessThan(
+      position('CREATE UNIQUE INDEX IF NOT EXISTS "backup_runs_policy_active_unique"')
+    );
+    expect(position("'storage.managed.renamed_duplicate'")).toBeLessThan(
+      position('CREATE UNIQUE INDEX IF NOT EXISTS "managed_storage_clusters_node_name_active_unique"')
+    );
+    // Later owners of a shared port are recorded as conflicts, outside the unique index.
+    expect(migration).toContain('WHERE "node_host_port_reservations"."conflict" = false');
+    expect(migration).toMatch(/row_number\(\) OVER \(\s*PARTITION BY "owned"."node_id", "owned"."port"/);
+    expect(migration).toContain(
+      'WHERE "proxy_host_domains"."enabled" = true AND "proxy_host_domains"."legacy_conflict" = false'
+    );
+    // The newest active run is kept; older ones fail and give their executor lease back.
+    expect(migration).toContain('ORDER BY "run"."created_at" DESC, "run"."id" DESC');
+    expect(migration).toContain('DELETE FROM "backup_run_node_leases" USING "superseded"');
+    expect(migration).toContain('ON DELETE restrict');
+    expect(migration).not.toMatch(/DELETE FROM "(managed_storage_clusters|proxy_hosts|docker_deployments)"/);
+
+    const previous = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0206_snapshot.json'), 'utf8'));
+    const current = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0207_snapshot.json'), 'utf8'));
+    expect(current.prevId).toBe(previous.id);
+    expect(
+      current.tables['public.proxy_hosts'].foreignKeys.proxy_hosts_ssl_certificate_id_ssl_certificates_id_fk.onDelete
+    ).toBe('restrict');
+    expect(
+      current.tables['public.node_host_port_reservations'].indexes.node_host_port_reservations_port_unique
+    ).toMatchObject({
+      isUnique: true,
+      where: '"node_host_port_reservations"."conflict" = false',
+    });
+    const changed = Object.keys({ ...previous.tables, ...current.tables }).filter(
+      (table) => JSON.stringify(current.tables[table]) !== JSON.stringify(previous.tables[table])
+    );
+    expect(changed.sort()).toEqual([
+      'public.backup_runs',
+      'public.managed_storage_clusters',
+      'public.node_host_port_reservations',
+      'public.proxy_host_domains',
+      'public.proxy_hosts',
+    ]);
+  });
+  it('moves operation leases out of settings into their own table', () => {
+    const migration = readFileSync(join(process.cwd(), 'src/db/migrations/0208_operation_leases.sql'), 'utf8');
+    expect(migration).toContain('CREATE TABLE IF NOT EXISTS "operation_leases"');
+    expect(migration).toContain('"key" text PRIMARY KEY NOT NULL');
+    expect(migration).toContain(
+      'CREATE INDEX IF NOT EXISTS "operation_leases_expires_at_idx" ON "operation_leases" USING btree ("expires_at")'
+    );
+    // The minute-long lease rows kept in settings before are dropped, nothing else there.
+    expect(migration).toContain(`DELETE FROM "settings" WHERE "key" LIKE 'operation-lease:%'`);
+    expect(migration.match(/DELETE FROM/g)).toHaveLength(1);
+
+    const previous = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0207_snapshot.json'), 'utf8'));
+    const current = JSON.parse(readFileSync(join(process.cwd(), 'src/db/migrations/meta/0208_snapshot.json'), 'utf8'));
+    expect(current.prevId).toBe(previous.id);
+    const changed = Object.keys({ ...previous.tables, ...current.tables }).filter(
+      (table) => JSON.stringify(current.tables[table]) !== JSON.stringify(previous.tables[table])
+    );
+    expect(changed).toEqual(['public.operation_leases']);
+    expect(current.tables['public.operation_leases'].indexes.operation_leases_expires_at_idx).toMatchObject({
+      isUnique: false,
+      columns: [expect.objectContaining({ expression: 'expires_at' })],
+    });
+  });
 });

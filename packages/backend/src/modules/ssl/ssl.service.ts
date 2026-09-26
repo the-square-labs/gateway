@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import crypto from 'node:crypto';
 import { and, asc, count, desc, eq, gt, ilike, inArray, isNull, lte, ne, or, type SQL, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
+import { type OperationLeaseStore, operationLeaseKey } from '@/db/operation-lease.js';
 import {
   certificateAuthorities,
   certificates,
@@ -27,6 +28,7 @@ import {
 } from '@/services/nginx-certificate-distribution.service.js';
 import type { PaginatedResponse } from '@/types.js';
 import type { ACMEService } from './acme.service.js';
+import { rethrowCertificateInUse } from './certificate-in-use.js';
 import type {
   LinkInternalCertInput,
   RequestACMECertInput,
@@ -71,6 +73,51 @@ type AcmeOperationKind = 'issue' | 'renew' | 'verify';
 /** ACME operation keys held by the current async call chain (see SSLService.runAcmeOperation). */
 const heldAcmeOperations = new AsyncLocalStorage<ReadonlySet<string>>();
 
+/** How long a finished operation's outcome stays readable for callers in other processes that joined it. */
+const ACME_OUTCOME_RETAIN_MS = 60_000;
+
+type AcmeOperationOutcome =
+  | { status: 'fulfilled'; value: unknown }
+  | { status: 'rejected'; error: { message: string; statusCode?: number; code?: string; details?: unknown } };
+
+/** An ACME operation's lease: who runs what, and once it finished, how it ended. */
+type AcmeOperationLease = { kind: AcmeOperationKind; actor: string; outcome?: AcmeOperationOutcome };
+
+function acmeOperationInProgress(kind: AcmeOperationKind, runningKind: AcmeOperationKind) {
+  return new AppError(
+    409,
+    'ACME_OPERATION_IN_PROGRESS',
+    kind === 'issue' && runningKind === 'issue'
+      ? 'A certificate request for these domains is already running'
+      : `An ACME ${runningKind} is already running for this certificate`,
+    { operation: runningKind }
+  );
+}
+
+/** The result as a joined caller in another process receives it: its JSON form. */
+function acmeOutcomeValue(value: unknown): unknown {
+  try {
+    return value === undefined ? null : JSON.parse(JSON.stringify(value));
+  } catch {
+    return null;
+  }
+}
+
+function acmeOutcomeError(error: unknown): Extract<AcmeOperationOutcome, { status: 'rejected' }>['error'] {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof AppError)) return { message };
+  return { message, statusCode: error.statusCode, code: error.code, details: acmeOutcomeValue(error.details) };
+}
+
+function settleAcmeOutcome<T>(outcome: AcmeOperationOutcome): T {
+  if (outcome.status === 'fulfilled') return outcome.value as T;
+  const { error } = outcome;
+  if (error.statusCode === undefined || !error.code) throw new Error(error.message);
+  const rebuilt = new AppError(error.statusCode, error.code, error.message, error.details ?? undefined);
+  rebuilt.message = error.message;
+  throw rebuilt;
+}
+
 type AutoRenewDnsBinding = {
   domain: string;
   connectorId: string;
@@ -99,8 +146,15 @@ export class SSLService {
     string,
     { kind: AcmeOperationKind; actor: string; promise: Promise<unknown> }
   >();
+  /** Makes ACME operations exclusive across backend processes; without it, per process only. */
+  private operationLeases?: OperationLeaseStore;
+  /** How often a caller that joined another process's operation looks for its outcome. */
+  private acmeJoinPollMs = 500;
   setEventBus(bus: EventBusService) {
     this.eventBus = bus;
+  }
+  setOperationLeases(leases: OperationLeaseStore) {
+    this.operationLeases = leases;
   }
   setIntegrationsService(service: IntegrationsService) {
     this.integrationsService = service;
@@ -231,9 +285,10 @@ export class SSLService {
    * certificate gets 409 until it finishes. Calls made by the running operation
    * itself (renew, then verify for Cloudflare DNS-01) run directly.
    *
-   * In-process, like the internal and system certificate renewal single
-   * flights; the conditional order-state writes below keep a second writer
-   * from overwriting a newer order.
+   * Within a process the running promise is shared. Across backend processes
+   * the same rules hold through an operation lease (runAcmeOperationAcrossProcesses).
+   * The conditional order-state writes below still keep a writer whose lease
+   * lapsed from overwriting a newer order.
    */
   private runAcmeOperation<T>(key: string, kind: AcmeOperationKind, actor: string, task: () => Promise<T>): Promise<T> {
     const held = heldAcmeOperations.getStore();
@@ -241,22 +296,100 @@ export class SSLService {
     const running = this.acmeOperations.get(key);
     if (running) {
       if (running.kind === kind && running.actor === actor) return running.promise as Promise<T>;
-      return Promise.reject(
-        new AppError(
-          409,
-          'ACME_OPERATION_IN_PROGRESS',
-          kind === 'issue' && running.kind === 'issue'
-            ? 'A certificate request for these domains is already running'
-            : `An ACME ${running.kind} is already running for this certificate`,
-          { operation: running.kind }
-        )
-      );
+      return Promise.reject(acmeOperationInProgress(kind, running.kind));
     }
-    const promise = heldAcmeOperations.run(new Set([...(held ?? []), key]), task).finally(() => {
-      if (this.acmeOperations.get(key)?.promise === promise) this.acmeOperations.delete(key);
-    });
+    const promise = heldAcmeOperations
+      .run(new Set([...(held ?? []), key]), () => this.runAcmeOperationAcrossProcesses(key, kind, actor, task))
+      .finally(() => {
+        if (this.acmeOperations.get(key)?.promise === promise) this.acmeOperations.delete(key);
+      });
     this.acmeOperations.set(key, { kind, actor, promise });
     return promise;
+  }
+
+  /**
+   * One ACME operation per key across backend processes. A lease row
+   * (OperationLeaseStore) is claimed in a short locked transaction before the
+   * operation and renewed while it runs; no database lock is held across the
+   * calls to the ACME server. Another operation on the key gets 409. The same
+   * caller repeating the same operation waits for the running one and receives
+   * its outcome, which the owner leaves on the lease for a while. A lease whose
+   * process stopped lapses, and the waiting caller then runs the operation.
+   */
+  private async runAcmeOperationAcrossProcesses<T>(
+    key: string,
+    kind: AcmeOperationKind,
+    actor: string,
+    task: () => Promise<T>
+  ): Promise<T> {
+    const leases = this.operationLeases;
+    if (!leases) return task();
+    const leaseKey = operationLeaseKey('acme', key);
+    for (;;) {
+      const claim = await leases.claim<AcmeOperationLease>(
+        [leaseKey],
+        { kind, actor },
+        // A finished operation only keeps its outcome for callers that joined it.
+        { replaceable: (lease) => lease.data.outcome !== undefined }
+      );
+      if (claim.acquired) return this.runLeasedAcmeOperation(leases, leaseKey, claim.token, { kind, actor }, task);
+      const running = claim.lease.data;
+      if (running.kind !== kind || running.actor !== actor) throw acmeOperationInProgress(kind, running.kind);
+      const outcome = await this.waitForAcmeOutcome(leases, leaseKey, claim.lease.token);
+      if (outcome) return settleAcmeOutcome<T>(outcome);
+    }
+  }
+
+  private async runLeasedAcmeOperation<T>(
+    leases: OperationLeaseStore,
+    leaseKey: string,
+    token: string,
+    lease: AcmeOperationLease,
+    task: () => Promise<T>
+  ): Promise<T> {
+    const heartbeat = leases.hold(
+      () => [leaseKey],
+      token,
+      () => logger.warn('ACME operation lease lapsed while the operation was running', { leaseKey })
+    );
+    let outcome: AcmeOperationOutcome = { status: 'rejected', error: { message: 'ACME operation did not finish' } };
+    try {
+      const value = await task();
+      outcome = { status: 'fulfilled', value: acmeOutcomeValue(value) };
+      return value;
+    } catch (error) {
+      outcome = { status: 'rejected', error: acmeOutcomeError(error) };
+      throw error;
+    } finally {
+      heartbeat.stop();
+      await leases
+        .release([leaseKey], token, { data: { ...lease, outcome }, retainMs: ACME_OUTCOME_RETAIN_MS })
+        .catch((error) =>
+          logger.warn('Could not record an ACME operation outcome', {
+            leaseKey,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        );
+      const cleanup = setTimeout(() => {
+        void leases.release([leaseKey], token).catch(() => undefined);
+      }, ACME_OUTCOME_RETAIN_MS);
+      cleanup.unref?.();
+    }
+  }
+
+  /** The outcome of the operation holding `token`, or null once it is gone without one. */
+  private async waitForAcmeOutcome(
+    leases: OperationLeaseStore,
+    leaseKey: string,
+    token: string
+  ): Promise<AcmeOperationOutcome | null> {
+    for (;;) {
+      await sleep(this.acmeJoinPollMs);
+      const lease = await leases.read<AcmeOperationLease>(leaseKey);
+      if (!lease || lease.token !== token) return null;
+      if (lease.data.outcome) return lease.data.outcome;
+      if (lease.expiresAt.getTime() <= Date.now()) return null;
+    }
   }
 
   /** Matches the certificate row only while it still holds the ACME order an operation started from. */
@@ -1563,7 +1696,8 @@ export class SSLService {
       await this.certificateDistribution.removeSslCertificateAsset(certId, tx);
 
       // Delete from DB
-      await tx.delete(sslCertificates).where(eq(sslCertificates.id, certId));
+      // ON DELETE RESTRICT: a host assigned after the check above still blocks the delete.
+      await tx.delete(sslCertificates).where(eq(sslCertificates.id, certId)).catch(rethrowCertificateInUse);
       return cert;
     });
 

@@ -19,7 +19,8 @@ import {
   proxyHosts,
 } from '@/db/schema/index.js';
 import { expandFolderScopes } from '@/lib/folder-scopes.js';
-import { hasScopeForCreation } from '@/lib/permissions.js';
+import { boundScopes, hasScopeForCreation } from '@/lib/permissions.js';
+import { canonicalizeScopes, isMcpTokenScope, SYSTEM_ADMIN_SCOPES } from '@/lib/scopes.js';
 import { directResourceIdsForScopes } from '@/modules/ai/ai.service-helpers.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
@@ -180,12 +181,21 @@ function folderGrants(bases: string[], folderId: string) {
 type McpResult = { isError?: boolean; content: Array<{ type: string; text: string }> };
 
 /**
- * One MCP connection for an OAuth token: the token and its owner hold the same folder grants,
- * expanded like the OAuth token lifecycle and AuthService do on every request.
+ * The token's owner: `null` holds the same folder grants as the token; otherwise a system administrator
+ * whose broad scopes must never widen the folder-restricted grant (the rc.10 report).
+ */
+let ownerScopes: string[] | null = null;
+
+/**
+ * One MCP connection for an OAuth token, expanded and bounded by its owner like the OAuth token
+ * lifecycle and AuthService do on every request.
  */
 async function connect(grants: string[], services: Parameters<typeof createService>[0]) {
-  const scopes = await expand(grants);
-  const account: User = { ...USER, scopes };
+  const expanded = await expand(grants);
+  const scopes = ownerScopes
+    ? canonicalizeScopes(boundScopes(expanded, ownerScopes)).filter(isMcpTokenScope)
+    : expanded;
+  const account: User = { ...USER, scopes: ownerScopes ?? scopes };
   const service = createService({
     ...services,
     authService: { getUserById: vi.fn().mockResolvedValue(account) },
@@ -241,8 +251,12 @@ function registerPlatformServices() {
 
 const auditService = () => ({ log: vi.fn().mockResolvedValue(undefined) });
 
-describe('MCP tools with folder-scoped grants', () => {
+describe.each([
+  ['with the same folder grants', null],
+  ['who is a system administrator', [...SYSTEM_ADMIN_SCOPES]],
+])('MCP tools with folder-scoped grants, owner %s', (_owner, owner) => {
   beforeEach(() => {
+    ownerScopes = owner;
     rows = folderRows();
     registerPlatformServices();
   });
@@ -553,9 +567,13 @@ describe('MCP tools with folder-scoped grants', () => {
       // Creators receive the destination summary only.
       expect(ingress.result.data).toEqual([expect.not.objectContaining({ osInfo: expect.anything() })]);
 
+      // Without a type, the creator still gets the nodes its grants target instead of a refusal.
       const everything = await mcp.call('list_nodes', {});
-      expect(everything.error).toContain('Pass type');
-      expect(nodesService.list).toHaveBeenCalledTimes(1);
+      expect(everything.error).toBeUndefined();
+      expect(everything.result).toMatchObject({ types: ['nginx'], total: 1 });
+      expect(everything.result.data).toEqual([expect.not.objectContaining({ osInfo: expect.anything() })]);
+      expect(nodesService.list).toHaveBeenCalledTimes(2);
+      expect(nodesService.list).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'nginx' }), undefined);
     });
   });
 

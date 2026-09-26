@@ -25,7 +25,7 @@ import {
   type NginxNodeOptions,
   selectBackfillNginxNode,
 } from './domain.service.shared.js';
-import { assertDomainIngressMoveAccess } from './domain-creation-access.js';
+import { assertDomainIngressMoveAccess, domainNginxNodeRequiredError } from './domain-creation-access.js';
 
 export abstract class DomainsServiceRuntime {
   protected eventBus?: EventBusService;
@@ -167,7 +167,7 @@ export abstract class DomainsServiceRuntime {
       return selected;
     }
     if (options.eligibleNodes.length === 1) return options.eligibleNodes[0]!;
-    throw new AppError(400, 'DOMAIN_NGINX_NODE_REQUIRED', 'Select an Nginx node for this domain');
+    throw domainNginxNodeRequiredError(options.eligibleNodes);
   }
 
   protected async getNginxNodeSummary(nodeId: string): Promise<EligibleNginxNode | null> {

@@ -307,4 +307,67 @@ describe("DockerDeployDialog runtime section", () => {
     });
     expect(create).not.toHaveBeenCalled();
   });
+
+  it("creates from a Git source into the only folder a folder-limited creator may use", async () => {
+    const user = userEvent.setup();
+    useAuthStore.setState({
+      user: {
+        id: "user-1",
+        scopes: ["docker:containers:create:folder/folder-1"],
+      } as never,
+      isAuthenticated: true,
+      isLoading: false,
+    });
+    vi.spyOn(api, "listDockerFolders").mockResolvedValue([
+      { id: "folder-1", name: "Team", parentId: null, children: [], containers: [] },
+      { id: "folder-2", name: "Other", parentId: null, children: [], containers: [] },
+    ] as never);
+    vi.mocked(api.listDockerSourceConnectors).mockResolvedValue([
+      { id: "github-1", provider: "github", name: "GitHub production" },
+    ]);
+    vi.spyOn(api, "listDockerBuildRepositories").mockResolvedValue([
+      {
+        connectorId: "github-1",
+        connectorName: "GitHub production",
+        projectId: "repo-1",
+        provider: "github",
+        remoteId: "repo-1",
+        fullPath: "acme/api",
+        name: "api",
+        webUrl: "https://github.com/acme/api",
+        defaultBranch: "main",
+        archived: false,
+      },
+    ]);
+    const create = vi.spyOn(api, "createDockerSourceResource").mockResolvedValue({
+      source: { id: "source-1" },
+      build: null,
+      target: { kind: "container", nodeId: baseNode.id, containerName: "payments-api" },
+    } as never);
+
+    renderWithRouter(
+      <DockerDeployDialog
+        open
+        onOpenChange={vi.fn()}
+        nodeId={baseNode.id}
+        dockerNodes={[baseNode]}
+      />
+    );
+
+    await user.click(screen.getByRole("tab", { name: "Repository" }));
+    await user.click(await screen.findByPlaceholderText("Select Git integration"));
+    await user.click(await screen.findByRole("button", { name: "GitHub production" }));
+    await user.click(await screen.findByPlaceholderText("Select allowlisted repository"));
+    await user.click(await screen.findByRole("button", { name: "acme/api" }));
+    await user.type(screen.getAllByPlaceholderText("my-container").at(-1)!, "payments-api");
+    await user.click(screen.getByRole("button", { name: "Create and build" }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    expect(create).toHaveBeenCalledWith(
+      baseNode.id,
+      expect.objectContaining({
+        resource: expect.objectContaining({ kind: "container", folderId: "folder-1" }),
+      })
+    );
+  });
 });

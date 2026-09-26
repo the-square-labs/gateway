@@ -16,6 +16,8 @@ const OAUTH_EXPIRED_GRACE_MS = DAY_MS;
 const OAUTH_REVOKED_ACCESS_GRACE_MS = 7 * DAY_MS;
 /** A client registration that never completed authorization is removed after this long. */
 export const OAUTH_UNUSED_CLIENT_DAYS = 30;
+/** An expired operation lease holds nothing; its row is kept this long for troubleshooting. */
+export const EXPIRED_OPERATION_LEASE_GRACE_MS = 60 * 60 * 1000;
 
 const FINISHED_BUILD = sql`('succeeded', 'failed', 'cancelled', 'superseded')`;
 
@@ -260,7 +262,23 @@ export function operationHistoryCutoff(retentionDays: number, now = new Date()):
   return new Date(now.getTime() - retentionDays * DAY_MS);
 }
 
-/** Remove finished operation history older than the retention period, in batches. */
+/** Operation leases (see OperationLeaseStore) that expired more than the grace period ago. */
+function expiredOperationLeases(now: Date): KeyedTarget {
+  return {
+    name: 'expired operation leases',
+    table: 'operation_leases',
+    key: 'key',
+    where: sql`"expires_at" < ${new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS)}`,
+  };
+}
+
+/** Names in `removed` that are detail, not history rows. */
+const NOT_HISTORY = new Set(['docker build log chunks', 'expired operation leases']);
+
+/**
+ * Remove finished operation history older than the retention period, in
+ * batches, and the rows of operation leases that expired a while ago.
+ */
 export async function cleanOperationHistory(db: Executor, retentionDays: number, now = new Date()) {
   const cutoff = operationHistoryCutoff(retentionDays, now);
   const removed: Record<string, number> = {};
@@ -270,9 +288,11 @@ export async function cleanOperationHistory(db: Executor, retentionDays: number,
   removed['docker build batches'] = grouped.batches;
   removed['docker build log chunks'] = single.logChunks + grouped.logChunks;
   for (const target of operationTargets(cutoff)) removed[target.name] = await deleteInBatches(db, target);
-  // Log chunks are counted as detail, not as history rows.
+  const leases = expiredOperationLeases(now);
+  removed[leases.name] = await deleteInBatches(db, leases);
+  // Log chunks and lease rows are counted as detail, not as history rows.
   const total = Object.entries(removed)
-    .filter(([name]) => name !== 'docker build log chunks')
+    .filter(([name]) => !NOT_HISTORY.has(name))
     .reduce((sum, [, value]) => sum + value, 0);
   return { total, removed };
 }

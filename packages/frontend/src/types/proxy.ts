@@ -350,7 +350,8 @@ export interface AccessList {
 // Request types (Gateway)
 export interface CreateProxyHostRequest {
   type: ProxyHostType;
-  nodeId: string;
+  /** Omitted: the ingress node of the registered domains, or the only node the caller may use. */
+  nodeId?: string;
   domainNames: string[];
   upstreamKind?: ProxyUpstreamKind;
   forwardHost?: string;

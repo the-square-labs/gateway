@@ -55,7 +55,7 @@ const repositoryFields = {
 export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'github_list_connectors',
-    description: 'List GitHub connectors without exposing credentials.',
+    description: 'List GitHub connectors the caller holds a GitHub scope on, without exposing credentials.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'GitHub',
@@ -65,7 +65,7 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'git_list_connectors',
-    description: 'List generic Git connectors without exposing credentials.',
+    description: 'List generic Git connectors the caller holds a Git scope on, without exposing credentials.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'Git',
@@ -76,7 +76,7 @@ export const INTEGRATION_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'github_list_repositories',
     description:
-      'List repositories visible to the authorized GitHub account. Use an exact connector UUID from github_list_connectors.',
+      'List repositories visible to the authorized GitHub account that integrations:github:repo:read covers (owner- or repo-limited scopes list only those). Use an exact connector UUID from github_list_connectors.',
     parameters: {
       type: 'object',
       properties: { connectorId: { type: 'string' } },

@@ -12,10 +12,13 @@ import { canListSourceConnectors, canPickDockerSource, listSourceConnectors } fr
 const NODE_ID = '11111111-1111-4111-8111-111111111111';
 const CONNECTOR_ID = '22222222-2222-4222-8222-222222222222';
 
+const GITHUB_ID = '33333333-3333-4333-8333-333333333333';
+const GITLAB_ID = '44444444-4444-4444-8444-444444444444';
+const GIT_ID = '55555555-5555-4555-8555-555555555555';
 const connectorRows = [
-  { id: 'gh-1', name: 'GitHub', provider: 'github' },
-  { id: 'gl-1', name: 'GitLab', provider: 'gitlab' },
-  { id: 'git-1', name: 'Plain Git', provider: 'git' },
+  { id: GITHUB_ID, name: 'GitHub', provider: 'github' },
+  { id: GITLAB_ID, name: 'GitLab', provider: 'gitlab' },
+  { id: GIT_ID, name: 'Plain Git', provider: 'git' },
 ];
 
 function connectorDb() {
@@ -53,14 +56,21 @@ describe('source connector picker access', () => {
     [`docker:compose:manage:${NODE_ID}/project-1`],
     ['pages:edit:project-1'],
     ['pages:create:folder/folder-1'],
-  ])('lists enabled Git connectors for %s without any integration scope', async (scope) => {
+  ])('lets %s open the connector picker, listing only connectors its Git scopes cover', async (scope) => {
     const { router, fakeDb } = app([scope]);
 
     const response = await router.request('/sources/connectors');
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ data: connectorRows });
+    // No Git scope: nothing to pick from.
+    await expect(response.json()).resolves.toEqual({ data: [] });
     expect(fakeDb.from).toHaveBeenCalledWith(integrationConnectors);
+
+    const scoped = app([scope, `integrations:gitlab:use:${GITLAB_ID}/project/42`, 'integrations:git:view']);
+    const scopedResponse = await scoped.router.request('/sources/connectors');
+    await expect(scopedResponse.json()).resolves.toEqual({
+      data: [connectorRows[1], connectorRows[2]],
+    });
   });
 
   it.each([
@@ -103,8 +113,31 @@ describe('source connector picker access', () => {
   it('only selects picker identity fields from enabled Git connectors', async () => {
     const { db, select } = connectorDb();
 
-    await expect(listSourceConnectors(db as never)).resolves.toEqual(connectorRows);
+    await expect(
+      listSourceConnectors(db as never, [
+        'integrations:github:view',
+        'integrations:gitlab:view',
+        'integrations:git:use',
+      ])
+    ).resolves.toEqual(connectorRows);
 
     expect(Object.keys((select.mock.calls[0] as unknown[])[0] as object).sort()).toEqual(['id', 'name', 'provider']);
+  });
+
+  it.each([
+    [[`integrations:github:repo:read:${GITHUB_ID}/owner/7`], [GITHUB_ID]],
+    [[`integrations:gitlab:use:${GITLAB_ID}`], [GITLAB_ID]],
+    [
+      [`integrations:gitlab:repo:write:${GITLAB_ID}/group/9`, `integrations:git:use:${GIT_ID}`],
+      [GITLAB_ID, GIT_ID],
+    ],
+    [['integrations:gitlab:manage'], [GITLAB_ID]],
+    [['integrations:cloudflare:view'], []],
+  ])('offers the connectors %j covers through implied view', async (scopes, expected) => {
+    const { db } = connectorDb();
+
+    const listed = await listSourceConnectors(db as never, scopes);
+
+    expect(listed.map((connector) => connector.id)).toEqual(expected);
   });
 });

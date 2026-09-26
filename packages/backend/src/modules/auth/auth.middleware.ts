@@ -4,6 +4,7 @@ import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import { hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { runWithIdempotency } from '@/middleware/idempotency.js';
 import { getAuditRequestContext, setAuditImpersonationContext } from '@/modules/audit/audit-request-context.js';
 import { requiresSessionMfaReauthentication, resolveLiveSessionUser } from '@/modules/auth/live-session-user.js';
 import { assertDemoRequestAllowed } from '@/modules/demo/demo-mode.js';
@@ -149,6 +150,7 @@ function applyBearerContext(c: Context<AppEnv>, result: AuthenticatedBearer): vo
   c.set('effectiveScopes', result.scopes);
   c.set('isTokenAuth', true);
   c.set('authType', result.type);
+  c.set('authTokenId', result.tokenId);
 }
 
 export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
@@ -230,7 +232,8 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
     }
   }
 
-  await next();
+  // Idempotency-Key is scoped to the principal, so it applies once authentication succeeded.
+  return runWithIdempotency(c, next);
 };
 
 export const optionalAuthMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {

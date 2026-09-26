@@ -71,6 +71,21 @@ describe('Pending source presentation boundaries', () => {
     expect(inspect).not.toHaveBeenCalled();
   });
 
+  it('lists a pending container in the folder it was created in, not at the root', async () => {
+    vi.spyOn(sourceModule, 'readPendingDockerSourceContainers').mockResolvedValue([pending]);
+    const service = new DockerManagementService({} as never, {} as never, {} as never, {} as never);
+    vi.spyOn(service, 'decorateContainerSnapshot').mockImplementation(async (_nodeId, rows) => rows);
+    const getPlacementsForRefs = vi
+      .fn()
+      .mockResolvedValue([
+        { nodeId: 'node-1', containerName: 'api', folderId: 'folder-1', folderIsSystem: false, sortOrder: 3 },
+      ]);
+    service.setFolderService({ getPlacementsForRefs } as never);
+    const [row] = await service.decoratePublicContainerSnapshot('node-1', []);
+    expect(getPlacementsForRefs).toHaveBeenCalledWith([{ nodeId: 'node-1', containerName: 'api' }]);
+    expect(row).toMatchObject({ name: 'api', folderId: 'folder-1', folderIsSystem: false, folderSortOrder: 3 });
+  });
+
   it('does not duplicate a pending name once a real runtime appears', async () => {
     vi.spyOn(sourceModule, 'readPendingDockerSourceContainers').mockResolvedValue([pending]);
     const service = new DockerManagementService({} as never, {} as never, {} as never, {} as never);

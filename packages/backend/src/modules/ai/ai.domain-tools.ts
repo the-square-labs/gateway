@@ -13,7 +13,11 @@ import {
   UpdateDomainSchema,
 } from '@/modules/domains/domain.schemas.js';
 import type { DomainsService } from '@/modules/domains/domain.service.js';
-import { canPickDomainNginxNode, domainNginxNodeOptionsForScopes } from '@/modules/domains/domain-creation-access.js';
+import {
+  canPickDomainNginxNode,
+  domainNginxNodeOptionsForScopes,
+  resolveDomainCreationNginxNodeId,
+} from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import { SSLService } from '@/modules/ssl/ssl.service.js';
 import { SSLCertificateFolderService } from '@/modules/ssl/ssl-certificate-folders.service.js';
@@ -47,7 +51,7 @@ export async function executeDomainTool(
         { allowedIds: allowedResourceIdsForScopes(user.scopes, 'domains:view') }
       );
     case 'create_domain': {
-      const input = CreateDomainSchema.parse({
+      const request = CreateDomainSchema.parse({
         domain: a.domain,
         dnsProvider: a.dnsProvider,
         description: a.description,
@@ -57,6 +61,11 @@ export async function executeDomainTool(
         overwriteDns: a.overwriteDns,
         nginxNodeId: a.nginxNodeId,
       });
+      // Like POST /domains: a node-limited creator that omits nginxNodeId gets its only granted node.
+      const nginxNodeId = await resolveDomainCreationNginxNodeId(user.scopes, request, () =>
+        context.domainsService.getNginxNodeOptions()
+      );
+      const input = nginxNodeId ? { ...request, nginxNodeId } : request;
       if (!hasScopeForCreation(user.scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
       }

@@ -28,7 +28,15 @@ A scope is `domain:resource:action[:qualifier]`:
 - **Resource-scoped** (`proxy:view:<hostId>`): exactly that resource.
 - **Folder or Node restricted** (`<scope>:folder/<folderId>`, `<scope>:node/<nodeId>`): the folder or Node, its subfolders, and everything placed there now or later.
 
+A folder grant covers the folder's subfolders, and an agent holding only folder or Node grants works inside them: lists return that subset (an empty list is not a denial), `list_resource_folders` shows every folder it holds any grant on with `access.actions` and `access.canCreate`, and creation needs `folderId` (and `nodeId` where the tool takes one) because a create without a destination targets the root.
+
 Each scope family has one view scope that its action scopes imply (`proxy:edit` satisfies `proxy:view`). Creation scopes are the exception: `*:create*` names a destination and implies no view, so `proxy:create:folder/F` does not list what is in `F`. Folder-tree scopes (`*:folders:manage`) grant folder visibility and changes, not item visibility; moving an item still needs the item's own edit or manage scope. Scopes that look symmetric often are not; check the reference.
+
+## Check what a principal can reach
+
+If you can't see or do something at the root, check `get_my_access`; folder-limited access is normal, so work inside the granted folders. It (also `gateway://access` over MCP, and `GET /api/auth/me/access` for a REST token) groups the calling principal's access by area: whether it is broad, which folders (id, name, path), Nodes, accounts and resources are granted with which actions, and where it may create (`create.atRoot`, `create.folders`, `create.nodes`). A token or OAuth grant is reported as bounded by its owner. When the connection is limited, MCP also adds a short version of this summary to its server instructions at connect time.
+
+Use it before reporting a permission problem: a denial at the root, or a refusal that names folders or Nodes, means the access is limited, not missing. Only when it shows no grant for the action anywhere is the user missing a scope; then name the exact scope and restriction to ask an administrator for.
 
 ## Restrict access
 

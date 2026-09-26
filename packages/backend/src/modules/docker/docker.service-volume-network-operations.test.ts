@@ -596,3 +596,33 @@ describe('DockerManagementService volume and network operations', () => {
     });
   });
 });
+
+describe('volume placement on creation', () => {
+  it('drops a stale placement when a volume is created at the root, and places one created in a folder', async () => {
+    const service = new DockerManagementService(
+      dbWithOnlineDockerNode() as never,
+      {} as never,
+      {} as never,
+      { log: vi.fn() } as never
+    );
+    const folderService = {
+      deleteResourceAssignment: vi.fn().mockResolvedValue(undefined),
+      moveResourcesToFolder: vi.fn().mockResolvedValue(undefined),
+    };
+    service.setFolderService(folderService as never);
+    const context = (
+      service as unknown as { volumeNetworkOperationContext(): Record<string, (...args: unknown[]) => Promise<void>> }
+    ).volumeNetworkOperationContext();
+
+    // A row left by an earlier volume of this name would otherwise pull the new root volume into its folder.
+    await context.onVolumeCreated('node-1', 'data', null, 'user-1');
+    expect(folderService.deleteResourceAssignment).toHaveBeenCalledWith('node-1', 'volume', 'data');
+    expect(folderService.moveResourcesToFolder).not.toHaveBeenCalled();
+
+    await context.onVolumeCreated('node-1', 'data', 'folder-1', 'user-1');
+    expect(folderService.moveResourcesToFolder).toHaveBeenCalledWith(
+      { resourceType: 'volume', folderId: 'folder-1', items: [{ nodeId: 'node-1', resourceKey: 'data' }] },
+      'user-1'
+    );
+  });
+});

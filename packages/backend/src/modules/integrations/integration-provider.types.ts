@@ -57,6 +57,35 @@ export interface VcsProjectRef {
   archived?: boolean;
 }
 
+/** A GitLab group (or namespace) by its stable ID. */
+export interface VcsGroupRef {
+  id: string;
+  fullPath: string;
+  name: string;
+  /** The parent group ID; null for a top-level group. */
+  parentId: string | null;
+}
+
+/** The namespace a project lives in: a group (with its parent) or a user namespace. */
+export interface VcsProjectNamespace {
+  id: string;
+  kind: 'group' | 'user';
+  fullPath: string;
+  parentId: string | null;
+}
+
+/** A project as the scope picker shows it. */
+export interface VcsProjectScopeRef {
+  id: string;
+  pathWithNamespace: string;
+  name: string;
+}
+
+export interface VcsScopeTargetSearchResult {
+  groups: VcsGroupRef[];
+  projects: VcsProjectScopeRef[];
+}
+
 export interface VcsAllowlistSearchResult {
   entryType: IntegrationAllowlistEntryType;
   remoteId: string;
@@ -283,6 +312,14 @@ export interface VcsConnectorProvider extends ConnectorProvider {
   rotateToken?(auth: VcsConnectorAuth, expiresAt: Date): Promise<VcsRotatedToken>;
   /** Revoke the authenticating token. */
   revokeToken?(auth: VcsConnectorAuth): Promise<void>;
+  /** The project's namespace, used to resolve group-qualified scopes; null when the project is not visible. */
+  getProjectNamespace?(auth: VcsConnectorAuth, projectId: string): Promise<VcsProjectNamespace | null>;
+  /** One group by ID; null when it does not exist or is not visible. */
+  getGroup?(auth: VcsConnectorAuth, groupId: string): Promise<VcsGroupRef | null>;
+  /** One project by ID for scope labels; null when it does not exist or is not visible. */
+  getProjectScopeRef?(auth: VcsConnectorAuth, projectId: string): Promise<VcsProjectScopeRef | null>;
+  /** Groups and projects matching a search, for the scope picker. */
+  searchScopeTargets?(auth: VcsConnectorAuth, query: string, limit: number): Promise<VcsScopeTargetSearchResult>;
   getProjectAccess(auth: VcsConnectorAuth, project: VcsProjectRef): Promise<VcsProjectAccess>;
   getBranchAccess(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string): Promise<VcsBranchAccess>;
   createBranch(auth: VcsConnectorAuth, project: VcsProjectRef, branch: string, ref: string): Promise<void>;

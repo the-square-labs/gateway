@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   bigint,
   boolean,
@@ -9,6 +10,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -185,6 +187,11 @@ export const managedStorageClusters = pgTable(
     nodeIdx: index('managed_storage_clusters_node_idx').on(table.nodeId),
     statusIdx: index('managed_storage_clusters_status_idx').on(table.status),
     slugUnique: unique('managed_storage_clusters_slug_unique').on(table.slug),
+    // One cluster per name on a node (409 MANAGED_STORAGE_NAME_IN_USE); a
+    // cluster being deleted no longer holds its name.
+    nodeNameActiveUnique: uniqueIndex('managed_storage_clusters_node_name_active_unique')
+      .on(table.nodeId, table.name)
+      .where(sql`${table.status} <> 'deleting'`),
   })
 );
 

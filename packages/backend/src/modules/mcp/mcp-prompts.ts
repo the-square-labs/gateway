@@ -58,7 +58,7 @@ const prompts: PromptDefinition[] = [
     title: 'Provision ingress route',
     description: 'Guide route provisioning with domain affinity, target, certificate, and ingress-node checks.',
     requiredScopes: ['proxy:create', 'proxy:view'],
-    text: 'Guide provisioning an ingress route through the existing proxy-host tools. Verify that each registered domain is assigned to the selected nginx ingress node, then verify the target upstream, TLS requirements, existing certificates, access list needs, and health check settings. Do not invent hostnames, ports, node IDs, or certificate IDs; request missing operator-specific values.',
+    text: 'Guide provisioning an ingress route through the existing proxy-host tools. A registered domain pins its nginx ingress node: omit nodeId on create_route to use it, or pick a node from list_route_ingress_nodes when no registered domain applies, and verify that every registered domain of the route is on that node. Then verify the target upstream, TLS requirements, existing certificates, access list needs, and health check settings. Do not invent hostnames, ports, node IDs, or certificate IDs; request missing operator-specific values.',
   },
   {
     name: 'renew-or-debug-certificate',

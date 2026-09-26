@@ -54,6 +54,8 @@ export const AI_TOOL_ANY_SCOPE_REQUIREMENTS: Readonly<Record<string, readonly st
     'storage:credentials:reveal',
   ],
   read_gateway_documentation: MCP_TOKEN_SCOPES,
+  // Every caller may read its own access summary: MCP grants hold only delegable scopes, the assistant the workspace.
+  get_my_access: ['ai:workspace:use', ...MCP_TOKEN_SCOPES],
   manage_docker_compose: [
     'docker:compose:view',
     'docker:compose:create',

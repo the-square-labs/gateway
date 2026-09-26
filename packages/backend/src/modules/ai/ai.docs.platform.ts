@@ -215,7 +215,14 @@ AI Workspace settings control the provider, request limits, tool exposure, web s
 
   gitlab: `# GitLab Integrations
 
-Gateway GitLab connectors are configured by admins in Settings -> Integrations. Embedded AI users authorize each connector with their own encrypted PAT unless they have the explicit integrations:gitlab:use scope (use the connector's system credential). GitLab tools are not exposed through Gateway MCP; external agents should configure their own GitLab MCP connection.
+Gateway GitLab connectors are configured by admins in Settings -> Integrations. Embedded AI users authorize each connector with their own encrypted PAT unless integrations:gitlab:use covers the project (use the connector's system credential). Gateway MCP exposes the same GitLab tools with the same checks, except cloning into the AI sandbox.
+
+## Scope Restrictions
+- GitLab scopes can be limited to a connector (\`<scope>:<connectorId>\`), a group with its subgroups (\`<connectorId>/group/<groupId>\`) or one project (\`<connectorId>/project/<projectId>\`). IDs are GitLab's numeric IDs, not paths.
+- Every project tool checks the project: the unqualified scope, the connector, any group containing the project (resolved from GitLab, so a moved project follows its new group), or the project itself. Implied view applies per qualifier.
+- gitlab_list_connectors and gitlab_list_projects only return connectors and projects the caller's grants cover; a missing project is usually outside the caller's grant, not unsynced.
+- Connector management (sync, allowlist changes, settings) needs integrations:gitlab:manage on the connector or unqualified.
+- Without integrations:gitlab:use covering the project and without a personal PAT, a 403 names integrations:gitlab:use and the project.
 
 ## Discovery
 - Use gitlab_list_connectors to find enabled connectors.

@@ -7,7 +7,7 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { createNodeWebSocket, type NodeWebSocket } from '@hono/node-ws';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { apiReference } from '@scalar/hono-api-reference';
-import type { MiddlewareHandler } from 'hono';
+import type { Context, MiddlewareHandler } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
@@ -18,8 +18,10 @@ import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { GATEWAY_RESTARTING_HTML, GATEWAY_RESTARTING_SCRIPT, gatewayNotFoundHtml } from '@/lib/gateway-error-pages.js';
 import { injectLoginAuthMethods } from '@/lib/login-page.js';
 import { tags as openApiTags, openApiValidationHook, securitySchemes } from '@/lib/openapi.js';
+import { IDEMPOTENCY_API_DESCRIPTION, withIdempotencyKeyDocumentation } from '@/lib/openapi-idempotency.js';
 import { auditContextMiddleware } from '@/middleware/audit-context.js';
 import { errorHandler } from '@/middleware/error-handler.js';
+import { IDEMPOTENCY_REPLAYED_HEADER } from '@/middleware/idempotency.js';
 import { loggerMiddleware } from '@/middleware/logger.js';
 import {
   aiWebSocketRateLimitMiddleware,
@@ -42,6 +44,7 @@ import { alertRoutes } from '@/modules/audit/alert.routes.js';
 import { auditRoutes } from '@/modules/audit/audit.routes.js';
 import { auditExportRouteRuntime } from '@/modules/audit/audit-export-route-runtime.js';
 import { siemRouteRuntime } from '@/modules/audit/siem-route-runtime.js';
+import { accessSummaryRoutes } from '@/modules/auth/access-summary.routes.js';
 import {
   authMiddleware,
   isAdmittedSetupPurposeRequest,
@@ -486,7 +489,13 @@ export function createApp(): GatewayAppRuntime {
         'OpenAI-Project',
         'Idempotency-Key',
       ],
-      exposeHeaders: ['X-Request-ID', 'X-RateLimit-Limit', 'X-RateLimit-Remaining', 'X-RateLimit-Reset'],
+      exposeHeaders: [
+        'X-Request-ID',
+        'X-RateLimit-Limit',
+        'X-RateLimit-Remaining',
+        'X-RateLimit-Reset',
+        IDEMPOTENCY_REPLAYED_HEADER,
+      ],
       maxAge: 86400,
     })
   );
@@ -755,6 +764,7 @@ export function createApp(): GatewayAppRuntime {
   app.route('/api/mcp/.well-known', oauthMetadataRoutes);
   app.route('/api/audit', auditRoutes);
   app.route('/api/alerts', alertRoutes);
+  app.route('/api/auth', accessSummaryRoutes);
   app.route('/api/tokens', tokensRoutes);
   app.route('/api/admin/groups', groupRoutes);
   app.route('/api/admin', adminRoutes);
@@ -1001,7 +1011,8 @@ export function createApp(): GatewayAppRuntime {
       title: 'Gateway API',
       version: '1.0.0',
       description:
-        'Gateway is an infrastructure control plane for managing nodes, reverse proxies, Docker workloads, certificates, databases, logging, monitoring, status pages, notifications, and operational automation.\n\n## Authentication\n\nBrowser sessions authenticate through the HttpOnly `session_id` cookie set by OIDC login. Cookie-authenticated mutating requests must include `X-CSRF-Token` from `/auth/csrf`.\n\nAPI tokens use `Authorization: Bearer gw_...` for programmatic REST access. OAuth public clients use Authorization Code + PKCE and Gateway-issued `gwo_...` access tokens for the same programmatic API surface.\n\n## Remote MCP\n\n`POST /api/mcp` exposes Gateway through stateless Streamable HTTP MCP. It accepts only OAuth `gwo_...` access tokens issued for the Gateway MCP resource. Browser cookies, `gw_...` API tokens, and `gwl_...` logging ingest tokens are not accepted.\n\n## Public PKI Endpoints\n\nCRL and OCSP endpoints under `/pki/` are unauthenticated and publicly accessible.',
+        'Gateway is an infrastructure control plane for managing nodes, reverse proxies, Docker workloads, certificates, databases, logging, monitoring, status pages, notifications, and operational automation.\n\n## Authentication\n\nBrowser sessions authenticate through the HttpOnly `session_id` cookie set by OIDC login. Cookie-authenticated mutating requests must include `X-CSRF-Token` from `/auth/csrf`.\n\nAPI tokens use `Authorization: Bearer gw_...` for programmatic REST access. OAuth public clients use Authorization Code + PKCE and Gateway-issued `gwo_...` access tokens for the same programmatic API surface.\n\n## Remote MCP\n\n`POST /api/mcp` exposes Gateway through stateless Streamable HTTP MCP. It accepts only OAuth `gwo_...` access tokens issued for the Gateway MCP resource. Browser cookies, `gw_...` API tokens, and `gwl_...` logging ingest tokens are not accepted.\n\n## Public PKI Endpoints\n\nCRL and OCSP endpoints under `/pki/` are unauthenticated and publicly accessible.\n\n' +
+        IDEMPOTENCY_API_DESCRIPTION,
     },
     servers: [
       {
@@ -1011,10 +1022,18 @@ export function createApp(): GatewayAppRuntime {
     ],
     tags: openApiTags,
   };
+  // Same as app.doc31, plus the shared Idempotency-Key header on operations that honor it.
+  const serveOpenApiDocument = (c: Context<AppEnv>) => {
+    try {
+      return c.json(withIdempotencyKeyDocumentation(app.getOpenAPI31Document(openApiDocument)));
+    } catch (error) {
+      return c.json(error as object, 500);
+    }
+  };
   app.use(OPENAPI_DOCUMENT_PATH, authMiddleware, requireActiveUser, requireAnyEffectiveScope);
-  app.doc31(OPENAPI_DOCUMENT_PATH, openApiDocument);
+  app.get(OPENAPI_DOCUMENT_PATH, serveOpenApiDocument);
   app.use('/openapi.json', authMiddleware, requireActiveUser, requireAnyEffectiveScope);
-  app.doc31('/openapi.json', openApiDocument);
+  app.get('/openapi.json', serveOpenApiDocument);
 
   // Scalar API Reference UI
   app.use('/docs', authMiddleware, requireActiveUser, requireAnyEffectiveScope);

@@ -9,6 +9,7 @@ import {
 import { assertNodeAllowsServiceCreation } from '@/modules/nodes/service-creation-lock.js';
 import { buildStatusPageSystemHostRollbackData, getStatusPageUpstream } from './proxy.service-helpers.js';
 import { clearDockerUpstreamFields } from './proxy-docker-upstream.service.js';
+import { rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
 import { proxyHostLockKey, proxyNodeLockKey, withProxyLocks } from './proxy-host-lock.js';
 
 export { __testOnly } from './proxy.service-helpers.js';
@@ -125,15 +126,17 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       return host;
     };
     const primaryDomainChanged = !existing || existing.domainNames[0] !== input.domain;
-    const host = primaryDomainChanged
-      ? await writeWithAllocatedSlug({
+    // A name another enabled host on the node already serves is refused by the database (409).
+    const host = await (primaryDomainChanged
+      ? writeWithAllocatedSlug({
           source: input.domain,
           fallback: 'proxy-host',
           reserved: ['new'],
           constraint: 'proxy_hosts_slug_unique',
           write: writeHost,
         })
-      : await writeHost();
+      : writeHost()
+    ).catch((error) => rethrowProxyHostDomainConflict(this.db, error));
 
     try {
       const certPaths = await this.resolveCertPaths(host);
@@ -302,15 +305,17 @@ export class ProxyServiceSystemHosts extends ProxyServiceReconciliation {
       return host;
     };
     const primaryDomainChanged = !existing || existing.domainNames[0] !== input.domain;
-    const host = primaryDomainChanged
-      ? await writeWithAllocatedSlug({
+    // A name another enabled host on the node already serves is refused by the database (409).
+    const host = await (primaryDomainChanged
+      ? writeWithAllocatedSlug({
           source: input.domain,
           fallback: 'internal-registry',
           reserved: ['new'],
           constraint: 'proxy_hosts_slug_unique',
           write: writeHost,
         })
-      : await writeHost();
+      : writeHost()
+    ).catch((error) => rethrowProxyHostDomainConflict(this.db, error));
 
     try {
       const certPaths = await this.resolveCertPaths(host);

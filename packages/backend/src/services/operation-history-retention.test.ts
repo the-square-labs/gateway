@@ -5,6 +5,7 @@ import {
   cleanOperationHistory,
   countExpiredOAuthGrants,
   countOperationHistory,
+  EXPIRED_OPERATION_LEASE_GRACE_MS,
   OPERATION_HISTORY_KEEP_PER_OWNER,
   purgeExpiredOAuthGrants,
   RETENTION_DELETE_BATCH,
@@ -30,6 +31,26 @@ function executingDb(respond: Responder = () => undefined) {
 const compact = (value: string) => value.replace(/\s+/g, ' ');
 
 describe('operation history retention', () => {
+  it('removes operation leases that expired over an hour ago, in batches, without counting them as history', async () => {
+    let leaseBatches = 0;
+    const { db, statements } = executingDb((query) => {
+      if (!query.sql.startsWith('DELETE FROM "operation_leases"')) return undefined;
+      leaseBatches += 1;
+      return { rowCount: leaseBatches === 1 ? RETENTION_DELETE_BATCH : 2 };
+    });
+
+    const result = await cleanOperationHistory(db as never, 90, now);
+
+    expect(leaseBatches).toBe(2);
+    expect(result.removed['expired operation leases']).toBe(RETENTION_DELETE_BATCH + 2);
+    expect(result.total).toBe(0);
+    const lease = statements.find((query) => query.sql.startsWith('DELETE FROM "operation_leases"'))!;
+    expect(compact(lease.sql)).toContain(
+      'WHERE "key" IN (SELECT "key" FROM "operation_leases" WHERE "expires_at" < $1'
+    );
+    expect(lease.params).toContainEqual(new Date(now.getTime() - EXPIRED_OPERATION_LEASE_GRACE_MS));
+  });
+
   it('deletes each kind of finished history in batches', async () => {
     let composeBatches = 0;
     const { db, statements } = executingDb((query) => {

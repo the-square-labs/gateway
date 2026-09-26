@@ -5,6 +5,14 @@ import {
   integrationConnectors,
 } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import {
+  type GitRepositoryScopeTarget,
+  gitGrantsConnectorWide,
+  gitGrantsCover,
+  hasGitGrants,
+  principalGitConnectorGrants,
+  principalGitGrantNeedsLookup,
+} from '@/lib/git-scopes.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import type { ResolvedGitLabUserCredential } from './gitlab-user-credentials.service.js';
@@ -12,10 +20,12 @@ import { assertConnectorOperationAccess } from './integration-permissions.js';
 import type { VcsConnectorProvider } from './integration-provider.types.js';
 import type { GitLabUserCredentialAuthorizeInput } from './integrations.schemas.js';
 import {
+  type ConnectorRow,
   type DockerBuildCheckoutCredential,
   type DockerBuildSourceRepository,
   type DockerBuildSourceResolution,
   isPlainRecord,
+  type ProjectRow,
 } from './integrations.service.core.js';
 import { IntegrationsGitLabSupportService } from './integrations.service.gitlab-support.js';
 
@@ -24,9 +34,12 @@ interface GitHubRepositorySummary {
   name: string;
   fullName: string;
   repositoryUrl: string;
+  ownerId?: string | null;
   defaultBranch: string | null;
   archived: boolean;
 }
+
+type SourceProvider = 'gitlab' | 'github' | 'git';
 
 export abstract class IntegrationsSourceService extends IntegrationsGitLabSupportService {
   abstract githubListRepositories(user: User, input: { connectorId: string }): Promise<GitHubRepositorySummary[]>;
@@ -154,14 +167,22 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     return commercialModuleUnavailable();
   }
 
+  /**
+   * Repositories a Docker or Pages build source can be picked from. The workload scopes authorize the
+   * picker; the list holds only repositories the caller may see through its Git scopes (any qualified
+   * integrations:<provider>:view or :use, through implied view per qualifier). Discovery itself uses the
+   * connector credential, like source resolution and queued builds.
+   */
   async listDockerBuildSourceRepositories(user: User, connectorId: string): Promise<DockerBuildSourceRepository[]> {
     const connector = await this.getConnectorRow(connectorId);
     if (!['gitlab', 'github', 'git'].includes(connector.provider)) {
       throw new AppError(400, 'UNSUPPORTED_SOURCE_CONNECTOR', 'Connector does not provide a Git repository');
     }
     if (!connector.enabled) throw new AppError(409, 'CONNECTOR_DISABLED', `${connector.name} is disabled`);
-    // PaaS entrypoints authorize Docker/Pages access. Repository discovery must
-    // use the same connector credential as source resolution and queued builds.
+    const provider = connector.provider as SourceProvider;
+    const visible = principalGitConnectorGrants(user, `integrations:${provider}:view`, connector.id);
+    if (!hasGitGrants(visible)) return [];
+    // Repository discovery uses the connector credential, never the caller's personal one.
     const sourceActor: User = {
       ...user,
       scopes: [
@@ -173,7 +194,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       ],
     };
 
-    if (connector.provider === 'gitlab') {
+    if (provider === 'gitlab') {
       assertConnectorOperationAccess({
         actor: { userId: sourceActor.id, scopes: sourceActor.scopes },
         provider: 'gitlab',
@@ -195,13 +216,21 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
         )
         .orderBy(integrationConnectorProjects.fullPath);
       const allowlistRows = await this.listAllowlistRows(connector.id);
-      return this.filterAllowedProjects(connector, allowlistRows, projects).map((project) =>
-        this.toDockerBuildSourceRepository(connector, project)
-      );
+      const allowed = this.filterAllowedProjects(connector, allowlistRows, projects);
+      let permitted = allowed;
+      if (!gitGrantsConnectorWide(visible)) {
+        for (const grant of visible) permitted = await this.filterGitLabProjectsByGrant(connector, permitted, grant);
+      }
+      return permitted.map((project) => this.toDockerBuildSourceRepository(connector, project));
     }
 
-    if (connector.provider === 'github') {
-      const repositories = await this.githubListRepositories(sourceActor, { connectorId });
+    if (provider === 'github') {
+      const repositories = (await this.githubListRepositories(sourceActor, { connectorId })).filter((repository) =>
+        gitGrantsCover(visible, {
+          repositoryId: repository.id === null ? null : String(repository.id),
+          containerIds: repository.ownerId ? [repository.ownerId] : [],
+        })
+      );
       await this.upsertProjectRows(
         connector.id,
         repositories
@@ -241,6 +270,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       });
     }
 
+    // Generic Git takes connector qualifiers only, so a grant here covers every repository.
     assertConnectorOperationAccess({
       actor: { userId: sourceActor.id, scopes: sourceActor.scopes },
       provider: 'git',
@@ -271,6 +301,73 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
       )
       .orderBy(integrationConnectorProjects.fullPath);
     return rows.map((project) => this.toDockerBuildSourceRepository(connector, project));
+  }
+
+  /**
+   * Configuring a Docker or Pages build source needs integrations:<provider>:use on the repository
+   * (unqualified, the connector, a GitLab group or GitHub owner containing it, or the exact project or
+   * repository), next to the workload's own permissions. Neither repo:read, an unqualified view nor a
+   * personal credential is needed: the build runs with the connector's own credential.
+   */
+  async assertBuildSourceRepositoryAccess(
+    user: User,
+    input: { connectorId: string; projectId: string }
+  ): Promise<void> {
+    const [joined] = await this.db
+      .select({ connector: integrationConnectors, project: integrationConnectorProjects })
+      .from(integrationConnectorProjects)
+      .innerJoin(integrationConnectors, eq(integrationConnectors.id, integrationConnectorProjects.connectorId))
+      .where(
+        and(
+          eq(integrationConnectorProjects.id, input.projectId),
+          eq(integrationConnectorProjects.connectorId, input.connectorId)
+        )
+      )
+      .limit(1);
+    if (!joined || !['gitlab', 'github', 'git'].includes(joined.connector.provider)) {
+      throw new AppError(404, 'SOURCE_PROJECT_NOT_FOUND', 'Repository is not available through this connector');
+    }
+    const { connector, project } = joined;
+    const provider = connector.provider as SourceProvider;
+    const useScope = `integrations:${provider}:use`;
+    const repository = await this.sourceRepositoryScopeTarget(user, provider, connector, project, [useScope]);
+    assertConnectorOperationAccess({
+      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
+      provider,
+      connectorId: connector.id,
+      connectorName: connector.name,
+      operation: 'source.configure',
+      requiredScope: useScope,
+      repository,
+      project: { remoteId: project.remoteId, fullPath: project.fullPath, name: project.name },
+    });
+  }
+
+  /** A synced source project as Git scope checks see it; provider IDs are looked up only when a grant needs them. */
+  protected async sourceRepositoryScopeTarget(
+    user: User,
+    provider: SourceProvider,
+    connector: ConnectorRow,
+    project: ProjectRow,
+    requiredScopes: readonly string[]
+  ): Promise<GitRepositoryScopeTarget> {
+    if (provider === 'gitlab') {
+      return this.gitLabRepositoryScopeTarget(user, connector, project, requiredScopes);
+    }
+    if (provider === 'git') return { connectorId: connector.id };
+    // GitHub source rows store the repository ID; owner grants need the owner ID from the API.
+    const target: GitRepositoryScopeTarget = { connectorId: connector.id, repositoryId: project.remoteId };
+    if (!principalGitGrantNeedsLookup(user, requiredScopes, connector.id, { repositoryId: project.remoteId })) {
+      return target;
+    }
+    if (!connector.encryptedToken) return target;
+    const repositoryUrl = this.normalizeRepositoryUrl(project.webUrl || `${connector.baseUrl}/${project.fullPath}`);
+    const resolved = await this.githubRepositoryScopeTarget(
+      connector,
+      await this.resolveGitHubConnectorToken(connector),
+      repositoryUrl
+    );
+    return { ...resolved, repositoryId: resolved.repositoryId ?? project.remoteId };
   }
 
   async resolveDockerBuildSource(
@@ -305,7 +402,7 @@ export abstract class IntegrationsSourceService extends IntegrationsGitLabSuppor
     let commitSha: string | null = null;
     if (connector.provider === 'gitlab') {
       assertConnectorOperationAccess({
-        actor: { userId: user.id, scopes: user.scopes },
+        actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
         provider: 'gitlab',
         operation: 'repository.read',
         requiredScope: 'integrations:gitlab:repo:read',

@@ -12,7 +12,11 @@ import {
   requireScopeBase,
   requireScopeForResource,
 } from '@/modules/auth/auth.middleware.js';
-import { canPickDomainNginxNode, domainNginxNodeOptionsForScopes } from '@/modules/domains/domain-creation-access.js';
+import {
+  canPickDomainNginxNode,
+  domainNginxNodeOptionsForScopes,
+  resolveDomainCreationNginxNodeId,
+} from '@/modules/domains/domain-creation-access.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
 import {
   CreateResourceFolderSchema,
@@ -226,12 +230,18 @@ domainRoutes.openapi({ ...getDomainRoute, middleware: requireScopeForResource('d
 domainRoutes.openapi(createDomainRoute, async (c) => {
   const user = c.get('user')!;
   const body = await c.req.json();
-  const input = CreateDomainSchema.parse(body);
-  if (!hasScopeForCreation(c.get('effectiveScopes') ?? [], 'domains:create', input.folderId, input.nginxNodeId)) {
+  const request = CreateDomainSchema.parse(body);
+  const scopes = c.get('effectiveScopes') ?? [];
+  const domainsService = container.resolve(DomainsService);
+  // A node-limited creator that omits nginxNodeId gets its only granted ingress node (or the list).
+  const nginxNodeId = await resolveDomainCreationNginxNodeId(scopes, request, () =>
+    domainsService.getNginxNodeOptions()
+  );
+  const input = nginxNodeId ? { ...request, nginxNodeId } : request;
+  if (!hasScopeForCreation(scopes, 'domains:create', input.folderId, input.nginxNodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing domains:create permission for the selected destination');
   }
   await container.resolve(DomainFolderService).assertFolderExists(input.folderId);
-  const domainsService = container.resolve(DomainsService);
   try {
     const domain = await domainsService.createDomain(input, user.id);
     return c.json({ data: domain }, 201);

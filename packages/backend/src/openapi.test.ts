@@ -177,6 +177,23 @@ describe('OpenAPI documentation', () => {
       code: 'FORBIDDEN',
     });
 
+    // Authenticated mutating operations share the Idempotency-Key header; public and excluded ones do not.
+    const idempotencyRef = { $ref: '#/components/parameters/IdempotencyKey' };
+    expect((document as any).components.parameters.IdempotencyKey).toMatchObject({
+      name: 'Idempotency-Key',
+      in: 'header',
+      required: false,
+    });
+    expect((document as any).info.description).toContain('Idempotency-Key');
+    expect(document.paths?.['/api/nodes']?.post.parameters).toContainEqual(idempotencyRef);
+    expect(document.paths?.['/api/domains']?.post.parameters).toContainEqual(idempotencyRef);
+    expect(document.paths?.['/api/nodes']?.get.parameters ?? []).not.toContainEqual(idempotencyRef);
+    const publicWebhook = Object.entries(document.paths ?? {}).find(([path]) =>
+      path.startsWith('/api/webhooks/docker/')
+    );
+    expect(publicWebhook?.[1].post).toBeDefined();
+    expect(publicWebhook?.[1].post.parameters ?? []).not.toContainEqual(idempotencyRef);
+
     const legacyResponse = await app.request('/openapi.json', {
       headers: { host: 'gateway.test', Authorization: 'Bearer gw_test' },
     });

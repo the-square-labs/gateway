@@ -1,5 +1,7 @@
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { OperationLeaseStore, operationLeaseKey } from '@/db/operation-lease.js';
+import { createFakeOperationLeaseDb } from '@/db/operation-lease.test-helpers.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { NginxCertificateDistributionService } from '@/services/nginx-certificate-distribution.service.js';
 import { RequestACMECertSchema } from './ssl.schemas.js';
@@ -1167,6 +1169,87 @@ describe('SSLService ACME single flight', () => {
     expect(secondResult).toBe(firstResult);
     expect(acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1);
     expect(insertValues).toHaveBeenCalledTimes(1);
+  });
+
+  /** Two SSL services on one database: separate backend processes. */
+  function twoProcesses(issueA?: () => Promise<unknown>, issueB?: () => Promise<unknown>) {
+    const leaseDb = createFakeOperationLeaseDb();
+    const processes = [renewalHarness(httpCert, { issue: issueA }), renewalHarness(httpCert, { issue: issueB })];
+    for (const { service } of processes) {
+      service.setOperationLeases(new OperationLeaseStore(leaseDb.db));
+      (service as unknown as { acmeJoinPollMs: number }).acmeJoinPollMs = 1;
+    }
+    return { a: processes[0]!, b: processes[1]!, leaseDb };
+  }
+
+  // rc.11: the single flight above was per process, so the renewal job on one
+  // replica and a Renew on another still ran two orders for one certificate.
+  it('runs one ACME order per certificate across backend processes, joining the same caller', async () => {
+    const order = deferred<ReturnType<typeof issued>>();
+    const { a, b } = twoProcesses(() => order.promise);
+
+    const first = a.service.renewCert('cert-1', 'user-1');
+    await vi.waitFor(() => expect(a.acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1));
+    // A's call to the ACME server is pending and holds no database lock: B's
+    // claims are answered at once.
+    await expect(b.service.renewCert('cert-1', '00000000-0000-0000-0000-000000000000')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ACME_OPERATION_IN_PROGRESS',
+    });
+    await expect(b.service.completeDNS01Verification('cert-1', 'user-1')).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'ACME_OPERATION_IN_PROGRESS',
+    });
+    const repeated = b.service.renewCert('cert-1', 'user-1');
+
+    order.resolve(issued());
+    const [firstResult, repeatedResult] = await Promise.all([first, repeated]);
+
+    expect(repeatedResult).toEqual(JSON.parse(JSON.stringify(firstResult)));
+    expect(b.acmeService.requestCertHTTP01).not.toHaveBeenCalled();
+
+    // Once it finished, another process may renew the certificate.
+    await b.service.renewCert('cert-1', '00000000-0000-0000-0000-000000000000');
+    expect(b.acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1);
+  });
+
+  it('gives a caller that joined from another process the same failure', async () => {
+    const order = deferred<ReturnType<typeof issued>>();
+    const { a, b } = twoProcesses(() => order.promise);
+
+    const first = a.service.renewCert('cert-1', 'user-1');
+    await vi.waitFor(() => expect(a.acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1));
+    const repeated = b.service.renewCert('cert-1', 'user-1');
+    order.reject(new Error('rate limited'));
+
+    await expect(first).rejects.toMatchObject({ statusCode: 500, code: 'RENEWAL_FAILED' });
+    await expect(repeated).rejects.toMatchObject({
+      statusCode: 500,
+      code: 'RENEWAL_FAILED',
+      message: 'Certificate renewal failed: rate limited',
+    });
+    expect(b.acmeService.requestCertHTTP01).not.toHaveBeenCalled();
+  });
+
+  it('takes over the operation of a process that stopped once its lease lapses', async () => {
+    const { b, leaseDb } = twoProcesses();
+    const leaseKey = operationLeaseKey('acme', 'cert:cert-1');
+    const stale = {
+      token: 'stopped-process',
+      holder: 'replica-1:42',
+      expiresAt: new Date(Date.now() + 60_000),
+      data: { kind: 'renew', actor: 'user-2' },
+    };
+    leaseDb.rows.set(leaseKey, stale);
+    await expect(b.service.renewCert('cert-1', 'user-1')).rejects.toMatchObject({
+      code: 'ACME_OPERATION_IN_PROGRESS',
+    });
+
+    leaseDb.rows.set(leaseKey, { ...stale, expiresAt: new Date(Date.now() - 1) });
+    await b.service.renewCert('cert-1', 'user-1');
+
+    expect(b.acmeService.requestCertHTTP01).toHaveBeenCalledTimes(1);
+    expect(leaseDb.rows.get(leaseKey)).toMatchObject({ data: { kind: 'renew', outcome: { status: 'fulfilled' } } });
   });
 
   // Regression (rc10 audit F3): a verify that lost the race wrote status

@@ -111,9 +111,10 @@ describe('IntegrationsService', () => {
       });
     const service = new IntegrationsService({ select } as never, { log: vi.fn() } as never, {} as never);
 
+    // An AI Workspace user is asked to authorize; callers that cannot store a credential get a 403 instead.
     await expect(
       service.githubListRepositoryTree(
-        { ...BASE_USER, scopes: ['integrations:github:repo:read'] },
+        { ...BASE_USER, scopes: ['integrations:github:repo:read', 'ai:workspace:use'] },
         {
           connectorId: '11111111-1111-4111-8111-111111111111',
           repositoryUrl: 'https://github.com/acme/app',

@@ -1,5 +1,6 @@
-import { container } from '@/container.js';
-import { hasScope, hasScopeBase } from '@/lib/permissions.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { isComposeOwnedNetwork } from '@/modules/docker/compose/compose-discovery.service.js';
 import { NetworkConnectSchema, NetworkCreateSchema } from '@/modules/docker/docker.schemas.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
@@ -7,6 +8,7 @@ import {
   DockerAccessResourceService,
   hasDockerResourceScope,
 } from '@/modules/docker/docker-access-resource.service.js';
+import { dockerCreationDeniedMessage } from '@/modules/docker/docker-creation-access.js';
 import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import type { User } from '@/types.js';
 import { compactAgentList, compactDockerNetworkForAgent, dockerNetworkMatchesSearch } from './ai.service-helpers.js';
@@ -52,7 +54,7 @@ export async function manageDockerNetworkForAgent(
   const operation = String(input.operation);
   if (operation === 'create') {
     const network = NetworkCreateSchema.parse(args);
-    assertNetworkDestinationScope(user, 'docker:networks:create', nodeId, network.folderId);
+    await assertNetworkDestinationScope(user, 'docker:networks:create', nodeId, network.folderId);
     return dockerService.createNetwork(nodeId, network, user.id);
   }
   if (operation === 'delete') {
@@ -74,20 +76,15 @@ export async function manageDockerNetworkForAgent(
   throw new Error(`Unsupported Docker network operation: ${operation}`);
 }
 
-function assertNetworkDestinationScope(
+async function assertNetworkDestinationScope(
   user: User,
   baseScope: string,
   nodeId: string,
   folderId: string | null | undefined
-): void {
-  if (
-    hasScope(user.scopes, baseScope) ||
-    hasScope(user.scopes, `${baseScope}:${nodeId}`) ||
-    (!!folderId && hasScope(user.scopes, `${baseScope}:folder/${folderId}`))
-  ) {
-    return;
-  }
-  throw new Error(`PERMISSION_DENIED: Missing required scope: ${baseScope}`);
+): Promise<void> {
+  if (hasScopeForCreation(user.scopes, baseScope, folderId, nodeId)) return;
+  const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+  throw new Error(`PERMISSION_DENIED: ${await dockerCreationDeniedMessage(db, user.scopes, baseScope, folderId)}`);
 }
 
 async function assertNetworkScope(user: User, baseScope: string, nodeId: string, networkId: string): Promise<void> {

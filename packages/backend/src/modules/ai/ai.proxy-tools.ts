@@ -12,6 +12,7 @@ import { redactProxyHostForScopes } from '@/modules/proxy/page-target-visibility
 import {
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
+  RouteIngressNodeListQuerySchema,
   UpdateProxyHostSchema,
   ValidateAdvancedConfigSchema,
 } from '@/modules/proxy/proxy.schemas.js';
@@ -38,6 +39,7 @@ export const PROXY_TOOL_NAMES = new Set([
   'list_routes',
   'get_route',
   'create_route',
+  'list_route_ingress_nodes',
   'update_route',
   'set_route_maintenance',
   'delete_route',
@@ -102,8 +104,13 @@ export async function executeProxyTool(
     }
     case 'get_route':
       return compact(await context.proxyService.getProxyHost(a.routeId));
+    case 'list_route_ingress_nodes': {
+      // Mirrors GET /proxy-hosts/ingress-nodes: any proxy:create grant form, no node permission.
+      const { folderId } = RouteIngressNodeListQuerySchema.parse({ folderId: a.folderId ?? undefined });
+      return { data: await context.proxyService.listRouteIngressNodes(user.scopes, folderId) };
+    }
     case 'create_route': {
-      const input = CreateProxyHostSchema.parse({
+      const request = CreateProxyHostSchema.parse({
         type: a.type,
         upstreamKind: a.upstreamKind,
         nodeId: a.nodeId,
@@ -150,7 +157,12 @@ export async function executeProxyTool(
         healthCheckBodyMatchMode: a.healthCheckBodyMatchMode,
         healthCheckSlowThreshold: a.healthCheckSlowThreshold,
       });
-      if (input.upstreamKind === 'pages') await requirePagesAvailable();
+      if (request.upstreamKind === 'pages') await requirePagesAvailable();
+      // Like POST /proxy-hosts: without nodeId the route takes the node of its registered domains or the
+      // caller's only eligible node, and every destination check below runs against that node.
+      const nodeId =
+        request.nodeId ?? (await context.proxyService.resolveRouteIngressNode(user.scopes, request)).nodeId;
+      const input = { ...request, nodeId };
       if (!hasScopeForCreation(user.scopes, 'proxy:create', input.folderId, input.nodeId)) {
         throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
       }

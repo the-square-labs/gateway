@@ -4,13 +4,50 @@ import { desc, eq, type SQL } from 'drizzle-orm';
 import sodium from 'libsodium-wrappers';
 import { integrationConnectors } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
-import { hasScope } from '@/lib/permissions.js';
+import { gitGrantsCover, principalGitConnectorGrants, principalHasGitScopeOnConnector } from '@/lib/git-scopes.js';
+import { TtlCache } from '@/lib/ttl-cache.js';
 import { buildWhere } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
+import {
+  type GitHubScopeTargets,
+  matchesScopeTargetSearch,
+  parseScopeTargetIds,
+  SCOPE_TARGET_LOOKUP_TTL_MS,
+  SCOPE_TARGET_SEARCH_TTL_MS,
+  type ScopeTargetResolution,
+  type ScopeTargetResolutionItem,
+  type ScopeTargetSearchQuery,
+  unresolvedScopeTarget,
+} from './git-scope-targets.js';
+import { assertConnectorOperationAccess } from './integration-permissions.js';
 import type { GitLabConnectorListQuery } from './integrations.schemas.js';
+import type { ConnectorRow } from './integrations.service.core.js';
 import { GIT_FILE_READ_LIMIT_BYTES, GIT_FILE_WRITE_LIMIT_BYTES, isPlainRecord } from './integrations.service.core.js';
 import { IntegrationsSourceService } from './integrations.service.sources.js';
+
+interface GitHubScopeCatalogEntry {
+  id: string;
+  fullName: string;
+  ownerId: string;
+  ownerLogin: string;
+  ownerType: string;
+}
+
+/** Repositories and organizations a GitHub connector credential sees, per connector (scope picker search). */
+const githubScopeCatalogs = new TtlCache<GitHubScopeCatalogEntry[]>(SCOPE_TARGET_SEARCH_TTL_MS, 200);
+/** Owner logins and repository names by connector and ID (scope picker labels). */
+const githubScopeLabels = new TtlCache<{ label: string; ownerId: string | null } | null>(
+  SCOPE_TARGET_LOOKUP_TTL_MS,
+  5000
+);
+const GITHUB_SCOPE_CATALOG_PAGES = 3;
+
+/** Test hook: forget cached GitHub scope picker data. */
+export function clearGitHubScopeTargetCache(): void {
+  githubScopeCatalogs.clear();
+  githubScopeLabels.clear();
+}
 
 export abstract class IntegrationsGitRepositoryService extends IntegrationsSourceService {
   async listGitLabConnectors(
@@ -35,8 +72,13 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     );
   }
 
+  /**
+   * Repositories the caller may read: integrations:github:repo:read on the connector lists everything the
+   * credential sees; owner- and repo-qualified grants list only the repositories they cover.
+   */
   async githubListRepositories(user: User, input: { connectorId: string }) {
-    const { connector, token } = await this.resolveGitHubAccount(user, input.connectorId);
+    const { connector, token, systemCredentialLimit } = await this.resolveGitHubAccount(user, input.connectorId);
+    const readGrants = principalGitConnectorGrants(user, 'integrations:github:repo:read', connector.id);
     const response = await this.githubConnectorRequest(
       connector,
       token,
@@ -55,6 +97,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
         fullName: typeof repository.full_name === 'string' ? repository.full_name : '',
         repositoryUrl: typeof repository.html_url === 'string' ? repository.html_url : '',
         owner: typeof owner.login === 'string' ? owner.login : '',
+        ownerId: typeof owner.id === 'number' ? String(owner.id) : null,
         defaultBranch: typeof repository.default_branch === 'string' ? repository.default_branch : null,
         private: repository.private === true,
         archived: repository.archived === true,
@@ -67,7 +110,15 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
         },
       };
     });
-    return repositories;
+    return repositories.filter((repository) => {
+      const target = {
+        repositoryId: repository.id === null ? null : String(repository.id),
+        containerIds: repository.ownerId ? [repository.ownerId] : [],
+      };
+      return (
+        gitGrantsCover(readGrants, target) && (!systemCredentialLimit || gitGrantsCover(systemCredentialLimit, target))
+      );
+    });
   }
 
   async githubListRepositoryTree(
@@ -254,7 +305,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       content: string;
     }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+    if (!principalHasGitScopeOnConnector(user, 'integrations:github:repo:write', input.connectorId)) {
       throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
         requiredScope: 'integrations:github:repo:write',
       });
@@ -314,7 +365,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     user: User,
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+    if (!principalHasGitScopeOnConnector(user, 'integrations:github:repo:write', input.connectorId)) {
       throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
         requiredScope: 'integrations:github:repo:write',
       });
@@ -347,7 +398,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
     user: User,
     input: { connectorId: string; repositoryUrl: string; name: string; value: string }
   ) {
-    if (!hasScope(user.scopes, 'integrations:github:repo:write')) {
+    if (!principalHasGitScopeOnConnector(user, 'integrations:github:repo:write', input.connectorId)) {
       throw new AppError(403, 'PERMISSION_DENIED', 'GitHub repository write scope is required', {
         requiredScope: 'integrations:github:repo:write',
       });
@@ -383,6 +434,146 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       throw this.githubRepositoryRequestError(response.status, await response.json().catch(() => null));
     }
     return { repositoryUrl: context.repositoryUrl, name, updated: true };
+  }
+
+  /**
+   * Scope picker search for a GitHub connector: owners and repositories the connector credential sees,
+   * limited to what the caller may view (connector-wide, a granted owner, or a granted repository).
+   */
+  async listGitHubScopeTargets(
+    user: User,
+    connectorId: string,
+    query: ScopeTargetSearchQuery
+  ): Promise<GitHubScopeTargets> {
+    const { connector, token, grants } = await this.githubScopeTargetAccess(user, connectorId);
+    const catalog = await githubScopeCatalogs.getOrLoad(connector.id, () =>
+      this.loadGitHubScopeCatalog(connector, token)
+    );
+    const owners = new Map<string, GitHubScopeTargets['owners'][number]>();
+    const repos: GitHubScopeTargets['repos'] = [];
+    for (const entry of catalog) {
+      const ownerVisible = grants.every((grant) => grant.connectorWide || grant.containerIds.has(entry.ownerId));
+      if (ownerVisible && !owners.has(entry.ownerId) && matchesScopeTargetSearch(query.search, entry.ownerLogin)) {
+        owners.set(entry.ownerId, { id: entry.ownerId, login: entry.ownerLogin, type: entry.ownerType });
+      }
+      if (
+        entry.id &&
+        gitGrantsCover(grants, { repositoryId: entry.id, containerIds: [entry.ownerId] }) &&
+        matchesScopeTargetSearch(query.search, entry.fullName)
+      ) {
+        repos.push({ id: entry.id, fullName: entry.fullName });
+      }
+    }
+    return { owners: [...owners.values()].slice(0, query.limit), repos: repos.slice(0, query.limit) };
+  }
+
+  /** Labels for stored GitHub qualifiers (`owner/<id>`, `repo/<id>`); targets the caller may not view stay unlabeled. */
+  async resolveGitHubScopeTargets(user: User, connectorId: string, rawIds: string): Promise<ScopeTargetResolution> {
+    const ids = parseScopeTargetIds('github', rawIds);
+    const { connector, token, grants } = await this.githubScopeTargetAccess(user, connectorId);
+    const items = await Promise.all(
+      ids.map(async ({ qualifier, kind, id }): Promise<ScopeTargetResolutionItem> => {
+        if (kind === 'owner') {
+          if (!grants.every((grant) => grant.connectorWide || grant.containerIds.has(id))) {
+            return unresolvedScopeTarget(qualifier);
+          }
+          const owner = await githubScopeLabels.getOrLoad(`${connector.id}:owner:${id}`, () =>
+            this.githubScopeLabel(connector, token, `/user/${id}`, (body) =>
+              typeof body.login === 'string' ? { label: body.login, ownerId: id } : null
+            )
+          );
+          return owner
+            ? { qualifier, label: owner.label, missing: false }
+            : { qualifier, label: qualifier, missing: true };
+        }
+        const repository = await githubScopeLabels.getOrLoad(`${connector.id}:repo:${id}`, () =>
+          this.githubScopeLabel(connector, token, `/repositories/${id}`, (body) => {
+            const owner = isPlainRecord(body.owner) ? body.owner : {};
+            return typeof body.full_name === 'string'
+              ? { label: body.full_name, ownerId: typeof owner.id === 'number' ? String(owner.id) : null }
+              : null;
+          })
+        );
+        const target = { repositoryId: id, containerIds: repository?.ownerId ? [repository.ownerId] : [] };
+        if (!gitGrantsCover(grants, target)) return unresolvedScopeTarget(qualifier);
+        return repository
+          ? { qualifier, label: repository.label, missing: false }
+          : { qualifier, label: qualifier, missing: true };
+      })
+    );
+    return { items };
+  }
+
+  private async githubScopeTargetAccess(user: User, connectorId: string) {
+    const connector = await this.getConnectorRow(connectorId, 'github');
+    assertConnectorOperationAccess({
+      actor: { userId: user.id, scopes: user.scopes, accountScopes: user.accountScopes },
+      provider: 'github',
+      connectorId: connector.id,
+      connectorName: connector.name,
+      operation: 'connector.scope_targets',
+      requiredScope: 'integrations:github:view',
+      scopeTarget: 'within-connector',
+    });
+    const grants = principalGitConnectorGrants(user, 'integrations:github:view', connector.id);
+    return { connector, grants, token: await this.connectorGitHubToken(connector) };
+  }
+
+  private async loadGitHubScopeCatalog(connector: ConnectorRow, token: string): Promise<GitHubScopeCatalogEntry[]> {
+    const entries: GitHubScopeCatalogEntry[] = [];
+    for (let page = 1; page <= GITHUB_SCOPE_CATALOG_PAGES; page += 1) {
+      const response = await this.githubConnectorRequest(
+        connector,
+        token,
+        `/user/repos?per_page=100&page=${page}&sort=updated&affiliation=owner%2Ccollaborator%2Corganization_member`
+      );
+      const body = (await response.json().catch(() => null)) as unknown;
+      if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+      const rows = Array.isArray(body) ? body : [];
+      for (const row of rows) {
+        const repository = isPlainRecord(row) ? row : {};
+        const owner = isPlainRecord(repository.owner) ? repository.owner : {};
+        if (typeof repository.id !== 'number' || typeof owner.id !== 'number') continue;
+        entries.push({
+          id: String(repository.id),
+          fullName: typeof repository.full_name === 'string' ? repository.full_name : String(repository.id),
+          ownerId: String(owner.id),
+          ownerLogin: typeof owner.login === 'string' ? owner.login : String(owner.id),
+          ownerType: typeof owner.type === 'string' ? owner.type : 'User',
+        });
+      }
+      if (rows.length < 100) break;
+    }
+    // Organizations the credential belongs to, even without a repository it can see.
+    const organizations = await this.githubConnectorRequest(connector, token, '/user/orgs?per_page=100');
+    const organizationBody = (await organizations.json().catch(() => null)) as unknown;
+    if (organizations.ok && Array.isArray(organizationBody)) {
+      for (const row of organizationBody) {
+        const organization = isPlainRecord(row) ? row : {};
+        if (typeof organization.id !== 'number' || typeof organization.login !== 'string') continue;
+        entries.push({
+          id: '',
+          fullName: '',
+          ownerId: String(organization.id),
+          ownerLogin: organization.login,
+          ownerType: 'Organization',
+        });
+      }
+    }
+    return entries;
+  }
+
+  private async githubScopeLabel(
+    connector: ConnectorRow,
+    token: string,
+    path: string,
+    read: (body: Record<string, unknown>) => { label: string; ownerId: string | null } | null
+  ): Promise<{ label: string; ownerId: string | null } | null> {
+    const response = await this.githubConnectorRequest(connector, token, path);
+    const body = (await response.json().catch(() => null)) as unknown;
+    if (response.status === 404) return null;
+    if (!response.ok) throw this.githubRepositoryRequestError(response.status, body);
+    return isPlainRecord(body) ? read(body) : null;
   }
 
   async gitListRemoteRefs(user: User, input: { connectorId: string; repositoryUrl: string }) {
@@ -467,7 +658,7 @@ export abstract class IntegrationsGitRepositoryService extends IntegrationsSourc
       content: string;
     }
   ) {
-    if (!hasScope(user.scopes, 'integrations:git:repo:write')) {
+    if (!principalHasGitScopeOnConnector(user, 'integrations:git:repo:write', input.connectorId)) {
       throw new AppError(403, 'PERMISSION_DENIED', 'Git repository write scope is required', {
         requiredScope: 'integrations:git:repo:write',
       });

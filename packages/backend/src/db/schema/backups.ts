@@ -1,4 +1,16 @@
-import { boolean, index, integer, jsonb, pgTable, primaryKey, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
 // Keep the schema load order safe when this module imports databases.ts directly.
 import './certificate-templates.js';
 import { databaseConnections } from './databases.js';
@@ -118,6 +130,17 @@ export const backupRuns = pgTable(
     index('backup_runs_database_idx').on(table.databaseConnectionId),
     index('backup_runs_executor_status_idx').on(table.executorNodeId, table.status),
     index('backup_runs_created_at_idx').on(table.createdAt),
+    // At most one queued or running backup per policy (409 BACKUP_ALREADY_RUNNING).
+    uniqueIndex('backup_runs_policy_active_unique')
+      .on(table.policyId)
+      .where(sql`${table.direction} = 'backup' AND ${table.status} IN ('queued', 'running')`),
+    // At most one queued or running restore into one new managed database name
+    // (409 BACKUP_RESTORE_ALREADY_RUNNING).
+    uniqueIndex('backup_runs_restore_new_database_active_unique')
+      .on(sql`(${table.restoreTarget} ->> 'newManagedDatabaseName')`)
+      .where(
+        sql`${table.direction} = 'restore' AND ${table.status} IN ('queued', 'running') AND (${table.restoreTarget} ->> 'newManagedDatabaseName') IS NOT NULL`
+      ),
   ]
 );
 

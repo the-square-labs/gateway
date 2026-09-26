@@ -11,6 +11,7 @@ import {
 import {
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
+  RouteIngressNodeListQuerySchema,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -31,6 +32,17 @@ export const listProxyHostsRoute = appRoute({
   tags: ['Routes'],
   summary: 'List ingress routes',
   request: { query: ProxyHostListQuerySchema },
+  responses: okJson(UnknownDataResponseSchema),
+});
+
+export const listRouteIngressNodesRoute = appRoute({
+  method: 'get',
+  path: '/ingress-nodes',
+  tags: ['Routes'],
+  summary: 'List the nginx ingress nodes the caller may create routes on',
+  description:
+    'Needs any proxy:create grant (broad, folder or node) and no node permission. Returns id, displayName, hostname and status of each nginx node a new route may use: every node for a broad or folder grant, only granted nodes for node grants; nodes locked for new services are omitted. Pass folderId to limit the list to a route in that folder. A route created without nodeId uses the node of its registered domains, or the only listed node.',
+  request: { query: RouteIngressNodeListQuerySchema },
   responses: okJson(UnknownDataResponseSchema),
 });
 

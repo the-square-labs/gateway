@@ -8,7 +8,9 @@ import { grantCreatedResourcePermissions } from '@/lib/created-resource-permissi
 import { isMatchingUniqueConstraintViolation } from '@/lib/resource-slugs.js';
 import { buildWhere, escapeLike } from '@/lib/utils.js';
 import { AppError } from '@/middleware/error-handler.js';
+import type { CloudflareDnsRecordInput } from '@/modules/integrations/cloudflare-client.js';
 import { getRegisteredDomainCandidates } from '@/modules/proxy/proxy-domain-node.js';
+import { assertNoProxyDomainOverlap } from '@/modules/proxy/proxy-domain-overlap.js';
 import { probeDnsRecords } from './dns.utils.js';
 import type {
   CreateDomainInput,
@@ -19,7 +21,12 @@ import type {
   UpdateDomainInput,
 } from './domain.schemas.js';
 import { DomainsServiceRuntime } from './domain.service.runtime.js';
-import { type DomainUsage, logger } from './domain.service.shared.js';
+import {
+  type CloudflareAddressRecord,
+  type DomainCloudflarePlan,
+  type DomainUsage,
+  logger,
+} from './domain.service.shared.js';
 import { assertDomainIngressMoveAccess } from './domain-creation-access.js';
 
 const DOMAIN_UNIQUE_CONSTRAINT = 'domains_domain_unique';
@@ -137,6 +144,7 @@ export class DomainsService extends DomainsServiceRuntime {
       }
     }
     if (impact.pending) return this.completeIngressMigration(impact, userId);
+    await this.assertIngressTargetServesNoMovedName(impact);
 
     if (impact.proxyHosts.some((host) => host.upstreamKind !== 'manual')) {
       for (const domain of impact.domains.filter((candidate) => candidate.dnsProvider !== 'cloudflare')) {
@@ -310,6 +318,7 @@ export class DomainsService extends DomainsServiceRuntime {
 
     let ownership: 'created' | 'matched_existing' | 'overwritten' = 'created';
     let providerRecordIds: string[] = [];
+    let recordsToOverwrite: typeof addressRecords = [];
 
     if (addressRecords.length > 0) {
       if (currentMatches) {
@@ -333,18 +342,22 @@ export class DomainsService extends DomainsServiceRuntime {
           });
         }
         ownership = 'overwritten';
-        for (const record of addressRecords) {
-          await context.client.deleteDnsRecord(context.zone.remoteId, record.id);
-        }
+        recordsToOverwrite = addressRecords;
       }
     }
 
-    // Records created by this call are deleted again if the domain row is not
-    // stored (a concurrent create of the same domain wins the unique index, or
-    // any other failure): nothing else would record or clean them up.
+    // If the domain row is not stored (a concurrent create of the same domain
+    // wins the unique index, or any other failure), nothing else would record
+    // or clean up the provider side: records created by this call are deleted
+    // again, and records `overwriteDns` deleted are recreated as they were.
     const createdRecordIds: string[] = [];
+    const deletedRecords: typeof addressRecords = [];
     let row: typeof domains.$inferSelect;
     try {
+      for (const record of recordsToOverwrite) {
+        await context.client.deleteDnsRecord(context.zone.remoteId, record.id);
+        deletedRecords.push(record);
+      }
       if (providerRecordIds.length === 0) {
         for (const record of desiredRecords) {
           const created = await context.client.createDnsRecord(context.zone.remoteId, record);
@@ -390,6 +403,7 @@ export class DomainsService extends DomainsServiceRuntime {
           });
         }
       }
+      await this.restoreOverwrittenCloudflareRecords(context, domainName, deletedRecords);
       if (isMatchingUniqueConstraintViolation(error, DOMAIN_UNIQUE_CONSTRAINT)) {
         throw new AppError(409, 'DUPLICATE', 'Domain already exists');
       }
@@ -423,6 +437,40 @@ export class DomainsService extends DomainsServiceRuntime {
     this.emitDomain(row.id, 'created', row.domain);
 
     return row;
+  }
+
+  /**
+   * Recreates address records that `overwriteDns` deleted for a domain that was
+   * then not stored, from their captured values (Cloudflare cannot undelete; the
+   * records get new ids). A record that cannot be recreated is logged with its
+   * values so it can be restored by hand.
+   */
+  private async restoreOverwrittenCloudflareRecords(
+    context: DomainCloudflarePlan['context'],
+    domainName: string,
+    deleted: CloudflareAddressRecord[]
+  ) {
+    for (const record of deleted) {
+      const previous: CloudflareDnsRecordInput = {
+        type: record.type as CloudflareDnsRecordInput['type'],
+        name: record.name,
+        content: record.content,
+        ttl: record.ttl,
+        ...(typeof record.proxied === 'boolean' ? { proxied: record.proxied } : {}),
+        ...(record.comment ? { comment: record.comment } : {}),
+      };
+      try {
+        await context.client.createDnsRecord(context.zone.remoteId, previous);
+      } catch (restoreError) {
+        logger.error('Failed to restore an overwritten Cloudflare record after the domain was not created', {
+          domain: domainName,
+          zoneId: context.zone.remoteId,
+          deletedRecordId: record.id,
+          record: previous,
+          error: restoreError instanceof Error ? restoreError.message : String(restoreError),
+        });
+      }
+    }
   }
 
   async previewDomain(input: PreviewDomainInput) {
@@ -1074,6 +1122,39 @@ export class DomainsService extends DomainsServiceRuntime {
     });
     for (const domain of impact.domains) this.emitDomain(domain.id, 'ingress_migrated', domain.domain);
     return this.serializeIngressMigrationImpact({ ...impact, domains: refreshed }, 'completed');
+  }
+
+  /**
+   * Refuses (409) an ingress move before anything moves when an enabled proxy
+   * host on the target node already serves a name of an enabled host that
+   * moves: nginx would serve only one of the two. Each move checks again under
+   * the target node's lock.
+   */
+  private async assertIngressTargetServesNoMovedName(
+    impact: Awaited<ReturnType<DomainsService['buildIngressMigrationImpact']>>
+  ) {
+    for (const host of impact.proxyHosts) {
+      if (!host.enabled || host.nodeId === impact.targetNode.id) continue;
+      try {
+        await assertNoProxyDomainOverlap(this.db, impact.targetNode.id, host.domainNames, host.id);
+      } catch (error) {
+        if (!(error instanceof AppError) || error.code !== 'PROXY_HOST_DOMAIN_CONFLICT') throw error;
+        const conflict = (error.details ?? {}) as { proxyHostId?: string; domains?: string[] };
+        const domainList = conflict.domains?.length ? conflict.domains.join(', ') : host.domainNames.join(', ');
+        const targetName = impact.targetNode.displayName || impact.targetNode.hostname;
+        throw new AppError(
+          409,
+          'DOMAIN_INGRESS_TARGET_DOMAIN_CONFLICT',
+          `Proxy host ${host.domainNames[0] ?? host.id} cannot move to ${targetName}: an enabled proxy host there already serves ${domainList}`,
+          {
+            proxyHostId: host.id,
+            conflictingProxyHostId: conflict.proxyHostId ?? null,
+            targetNodeId: impact.targetNode.id,
+            domains: conflict.domains ?? [],
+          }
+        );
+      }
+    }
   }
 
   protected async rollbackIngressMigration(

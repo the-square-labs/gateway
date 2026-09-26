@@ -10,7 +10,7 @@ export { __testOnly } from './proxy.service-helpers.js';
 
 import { logger, type ProxyHostRow, type ProxyHostView } from './proxy.service.core.js';
 import { ProxyServiceSecureLinks } from './proxy.service.secure-links.js';
-import { assertNoProxyDomainOverlap } from './proxy-domain-overlap.js';
+import { assertNoProxyDomainOverlap, rethrowProxyHostDomainConflict } from './proxy-domain-overlap.js';
 import { proxyNodeLockKey, withProxyHostLock, withProxyLocks } from './proxy-host-lock.js';
 
 export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
@@ -149,7 +149,8 @@ export abstract class ProxyServiceListing extends ProxyServiceSecureLinks {
         updatedAt: new Date(),
       })
       .where(eq(proxyHosts.id, id))
-      .returning();
+      .returning()
+      .catch((error) => rethrowProxyHostDomainConflict(this.db, error));
 
     try {
       if (enabled) {

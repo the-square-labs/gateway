@@ -203,7 +203,8 @@ export class TokensService {
     const tokenScopes = await expandFolderScopes(this.db, (token.scopes || []).filter(isApiTokenScope));
     const scopes = canonicalizeScopes(boundScopes(tokenScopes, user.scopes).filter(isApiTokenScope));
     return {
-      user,
+      // The owner's live scopes travel with the caller: Git repository checks require both (User.accountScopes).
+      user: { ...user, accountScopes: user.scopes },
       scopes,
       tokenId: token.id,
       tokenPrefix: token.tokenPrefix,

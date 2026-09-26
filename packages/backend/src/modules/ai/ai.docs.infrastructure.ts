@@ -242,7 +242,7 @@ Pages serves immutable static Deployments owned by a Page Project. Use \`find_re
 - \`manage_pages\` operates deployment metadata, source configuration, builds, and publication, not local archive bytes. The REST resumable deploy API remains available to ordinary API clients.
 - Deploy tokens can be listed, created, and revoked with \`manage_pages\`. A newly created raw token is returned once; do not repeat it in later chat messages, notifications, or logs.
 - Deployments are immutable. Mutable Tags point at ready Deployments. Ingress Routes and Additional Routes target a Tag, never an immutable Deployment.
-- Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override and its Tag preview. Previews serve the default configuration.
+- Runtime configuration is a JSON object exposed as \`window.runtime.config\`. Save a default config or a Tag override; deleting a Tag also removes its override and its Tag preview. Deployment previews serve the default configuration; a Tag preview serves the Tag's override when it has one, like the Tag's Routes.
 - Disabling Pages stops immutable preview publication but existing Tag routes and stored content continue to work.
 
 ## Permissions

@@ -56,6 +56,7 @@ export type CloudflareAddressRecord = {
   content: string;
   ttl: number;
   proxied?: boolean | null;
+  comment?: string | null;
 };
 
 export type DomainCloudflarePlan = {

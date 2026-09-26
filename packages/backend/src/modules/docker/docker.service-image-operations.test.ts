@@ -78,7 +78,8 @@ describe('DockerManagementService image operations', () => {
     };
     const { service } = createService(dispatch);
     const moveResourcesToFolder = vi.fn().mockResolvedValue(undefined);
-    service.setFolderService({ moveResourcesToFolder } as never);
+    const deleteResourceAssignment = vi.fn().mockResolvedValue(undefined);
+    service.setFolderService({ moveResourcesToFolder, deleteResourceAssignment } as never);
 
     await service.pullImageImmediate('node-1', 'acme/api:latest', undefined, 'folder-b', 'creator');
 
@@ -108,7 +109,8 @@ describe('DockerManagementService image operations', () => {
     };
     const { service } = createService(dispatch);
     const moveResourcesToFolder = vi.fn().mockResolvedValue(undefined);
-    service.setFolderService({ moveResourcesToFolder } as never);
+    const deleteResourceAssignment = vi.fn().mockResolvedValue(undefined);
+    service.setFolderService({ moveResourcesToFolder, deleteResourceAssignment } as never);
     const folderOnly = ['docker:containers:create:folder/folder-1'];
 
     // A standalone pull still needs docker:images:pull for the node or an image folder.
@@ -131,8 +133,10 @@ describe('DockerManagementService image operations', () => {
       { imageRef: 'acme/api:latest', registryAuthJson: undefined },
       600000
     );
-    // The container folder is not an image folder: the pulled image is not placed anywhere.
+    // The container folder is not an image folder: the pulled image is not placed anywhere, and a stale
+    // placement left by an earlier image with this id does not pull it into that image folder.
     expect(moveResourcesToFolder).not.toHaveBeenCalled();
+    expect(deleteResourceAssignment).toHaveBeenCalledWith('node-1', 'image', 'sha256:app');
     expect(grantCreatedResourcePermissions).toHaveBeenCalledWith(
       'creator',
       'docker:images',

@@ -171,4 +171,46 @@ describe('Docker folder routes', () => {
       'user-1'
     );
   });
+
+  describe('a grant restricted to one folder', () => {
+    const OTHER_FOLDER_ID = '33333333-3333-4333-8333-333333333333';
+    // Folder expansion resolves the folder grant to the container inside it (in-folder-id).
+    const scopes = [
+      'docker:folders:manage',
+      `docker:containers:edit:folder/${FOLDER_ID}`,
+      `docker:containers:edit:${NODE_ID}/in-folder-id`,
+    ];
+    function move(folderId: string | null, containerName: string) {
+      return appWithScopes(scopes).request('/folders/move-containers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ folderId, items: [{ nodeId: NODE_ID, containerName }] }),
+      });
+    }
+
+    it.each([
+      ['to the root', null],
+      ['to another folder', OTHER_FOLDER_ID],
+    ])('cannot move a container out of the folder %s', async (_label, destination) => {
+      const moveContainersToFolder = vi.fn();
+      container.registerInstance(DockerFolderService, { moveContainersToFolder } as never);
+      container.registerInstance(DockerAccessResourceService, {
+        resolveResourceByName: vi.fn().mockResolvedValue('in-folder-id'),
+      } as never);
+
+      expect((await move(destination, 'inside')).status).toBe(403);
+      expect(moveContainersToFolder).not.toHaveBeenCalled();
+    });
+
+    it('cannot pull a root container into the folder', async () => {
+      const moveContainersToFolder = vi.fn();
+      container.registerInstance(DockerFolderService, { moveContainersToFolder } as never);
+      container.registerInstance(DockerAccessResourceService, {
+        resolveResourceByName: vi.fn().mockResolvedValue('root-id'),
+      } as never);
+
+      expect((await move(FOLDER_ID, 'outside')).status).toBe(403);
+      expect(moveContainersToFolder).not.toHaveBeenCalled();
+    });
+  });
 });

@@ -1,4 +1,5 @@
 import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForResource } from '@/lib/permissions.js';
+import { extractBaseScope } from '@/lib/scopes.js';
 import type { DockerManagementService } from '@/modules/docker/docker.service.js';
 import { dockerScopedNodeIds, hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import type { DockerSnapshotKind, DockerSnapshotService } from '@/modules/docker/docker-snapshot.service.js';
@@ -386,15 +387,29 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
             }))
           );
         }
-        if (typeWanted('docker_image') && hasScopeForResource(user.scopes, 'docker:images:view', nodeId)) {
+        // Folder and per-resource grants reach single images, volumes and networks on a node: filter each item like
+        // list_docker_images/volumes/networks instead of requiring the whole node.
+        if (typeWanted('docker_image') && hasDockerViewOnNode(user.scopes, 'docker:images:view', nodeId)) {
+          const canViewNode = hasDockerResourceScope(user.scopes, 'docker:images:view', nodeId, '');
           dockerTasks.push(() =>
             collectSnapshot(
               'docker_image',
               nodeId,
               node.slug,
               'images',
-              (images) =>
-                images
+              async (snapshotImages) =>
+                (canViewNode
+                  ? snapshotImages
+                  : itemsOf(await deps.dockerService.decoratePublicImageSnapshot(nodeId, snapshotImages)).filter(
+                      (image) =>
+                        hasDockerResourceScope(
+                          user.scopes,
+                          'docker:images:view',
+                          nodeId,
+                          String(image.scopeResourceId ?? image.id ?? image.Id ?? '')
+                        )
+                    )
+                )
                   .filter((image) => dockerImageMatchesSearch(image, query))
                   .map((image) => compactDockerImageForAgent(image)),
               (image) => ({
@@ -404,19 +419,40 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
             )
           );
         }
-        if (typeWanted('docker_volume') && hasScopeForResource(user.scopes, 'docker:volumes:view', nodeId)) {
+        if (typeWanted('docker_volume') && hasDockerViewOnNode(user.scopes, 'docker:volumes:view', nodeId)) {
           dockerTasks.push(() =>
             collectSnapshot('docker_volume', nodeId, node.slug, 'volumes', (volumes) =>
               volumes
+                .filter((volume) =>
+                  hasDockerResourceScope(
+                    user.scopes,
+                    'docker:volumes:view',
+                    nodeId,
+                    String(volume.name ?? volume.Name ?? '')
+                  )
+                )
                 .filter((volume) => dockerVolumeMatchesSearch(volume, query))
                 .map((volume) => compactDockerVolumeForAgent(volume))
             )
           );
         }
-        if (typeWanted('docker_network') && hasScopeForResource(user.scopes, 'docker:networks:view', nodeId)) {
+        if (typeWanted('docker_network') && hasDockerViewOnNode(user.scopes, 'docker:networks:view', nodeId)) {
+          const canViewNode = hasDockerResourceScope(user.scopes, 'docker:networks:view', nodeId, '');
           dockerTasks.push(() =>
-            collectSnapshot('docker_network', nodeId, node.slug, 'networks', (networks) =>
-              networks
+            collectSnapshot('docker_network', nodeId, node.slug, 'networks', async (snapshotNetworks) =>
+              (canViewNode
+                ? snapshotNetworks
+                : itemsOf(await deps.dockerService.decoratePublicNetworkSnapshot(nodeId, snapshotNetworks)).filter(
+                    (network) =>
+                      !!network.scopeResourceId &&
+                      hasDockerResourceScope(
+                        user.scopes,
+                        'docker:networks:view',
+                        nodeId,
+                        String(network.scopeResourceId)
+                      )
+                  )
+              )
                 .filter((network) => dockerNetworkMatchesSearch(network, query))
                 .map((network) => compactDockerNetworkForAgent(network))
             )
@@ -452,6 +488,19 @@ export async function findResource(deps: ResourceSearchDeps, user: User, args: R
     truncated: results.length >= limit,
     errors: errors.length > 0 ? errors : undefined,
   };
+}
+
+/** The node, or any resource on it, is granted for this Docker view scope (directly or by an implying scope). */
+function hasDockerViewOnNode(scopes: string[], baseScope: string, nodeId: string): boolean {
+  return (
+    hasScopeForResource(scopes, baseScope, nodeId) ||
+    scopes.some((scope) => {
+      const base = extractBaseScope(scope);
+      return (
+        scope.startsWith(`${base}:${nodeId}/`) && hasScope([scope], `${baseScope}:${scope.slice(base.length + 1)}`)
+      );
+    })
+  );
 }
 
 async function findDockerSearchNodes(nodesService: NodesService, user: User, nodeId?: string) {

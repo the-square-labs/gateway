@@ -285,6 +285,13 @@ Every Git provider (\`<p>\` = gitlab, github, git) uses the same verbs.
 | integrations:<p>:repo:write | Commit files and change CI config, variables, secrets, webhooks, and registry settings; read GitHub Actions variable values |
 | integrations:gitlab:sandbox:clone | Clone a GitLab repository into the AI sandbox |
 
+Git scopes can be limited with stable IDs: \`<scope>:<connectorId>\` (every repository of one connector), GitLab \`<connectorId>/group/<groupId>\` (the group, its subgroups and their projects) or \`<connectorId>/project/<projectId>\`, GitHub \`<connectorId>/owner/<ownerId>\` or \`<connectorId>/repo/<repoId>\`. Generic Git and \`:manage\` take the connector only; creating connectors needs unqualified \`:manage\`.
+- A repository operation is allowed by the unqualified scope, the connector, any containing group/owner, or the exact project/repository; implied view applies per qualifier (\`repo:write:<connectorId>/project/42\` also grants \`view\` there).
+- The connector credential is used when \`:use\` covers the repository the same way, the personal credential otherwise.
+- Connector, project and repository lists only show what the caller's grants cover.
+- Configuring a Docker or Pages build source needs \`integrations:<provider>:use\` on the repository (any covering qualifier), not \`repo:read\` or a personal credential.
+- Tokens and MCP grants are bounded per qualifier by the owner's grants; for repository operations both the token and the owner's current scopes must cover the repository (a token limited to a project inside the owner's group works; a token limited to a group whose owner holds one project reaches that project only).
+
 ### Status Page
 | Scope | Description |
 |-------|-------------|
@@ -313,9 +320,17 @@ Groups can have a parent group. Inherited scopes from all ancestors are added to
 ## Resource-Scoped Permissions
 Scopes marked "resource-scopable" support resource-level suffixes (e.g., "pki:cert:issue:ca-uuid" or "nodes:details:node-uuid"). Docker container scopes use "docker:containers:<action>:<node-id>" for a whole node or "docker:containers:<action>:<node-id>/<stable-resource-id>" for one container or deployment. Compose scopes use "docker:compose:<action>:<node-id>" for a whole node or "docker:compose:<action>:<node-id>/<project-id>" for one project. Without a suffix, the scope applies to all resources.
 
-Folder grants: scopes of foldered resources accept "<scope>:folder/<folder-id>". The grant covers every resource in that folder and its subfolders, including resources created or moved there later, and stops covering a resource that leaves the folder. Creation scopes accept a destination instead: "proxy:create:folder/<folder-id>" or "proxy:create:node/<node-id>" lets the caller create in that folder or on that node only; pass the folderId (and nodeId) when creating. list_resource_folders shows a folder-scoped caller its granted folders even while they are empty, and list_nodes with a type shows creators the nodes they may create on.
+Folder grants: scopes of foldered resources accept "<scope>:folder/<folder-id>". The grant covers every resource in that folder and its subfolders, including resources created or moved there later, and stops covering a resource that leaves the folder. Creation scopes accept a destination instead: "proxy:create:folder/<folder-id>" or "proxy:create:node/<node-id>" lets the caller create in that folder or on that node only; pass the folderId (and nodeId) when creating. list_resource_folders shows a folder-scoped caller its granted folders even while they are empty, and list_nodes with a type shows creators the nodes they may create on. Route creators can also use list_route_ingress_nodes, and create_route may omit nodeId when a registered domain pins the ingress node or only one node is eligible.
 
 Implied scopes: any action scope in a family implies that family's view scope with the same suffix, so "proxy:edit:<route-id>" also lets the caller view that route and "databases:query:read:<database-id>" lets it view that database.
+
+## Limited Access (folders, nodes, resources)
+Access limited to folders, nodes or resources is normal. If you can't see or do something at the root, check get_my_access; folder-limited access is normal, so work inside the granted folders.
+- get_my_access (MCP also serves it as the gateway://access resource; REST: GET /api/auth/me/access) groups the caller's access by area: broad or limited, the granted folders (id, name, path), nodes, accounts and specific resources with their actions, and where it may create (create.atRoot, create.folders, create.nodes). Tokens and OAuth/MCP grants are reported as bounded by the owner's current access.
+- MCP adds a short summary of limited access to the server instructions at connect time.
+- List tools return the subset the caller can access; an empty list is not a denial. list_resource_folders shows every folder the caller holds any grant on (even an empty one) with access.actions and access.canCreate.
+- A create without a destination targets the root. With folder- or node-limited create access, pass folderId (and nodeId where the tool takes one); a refused root create names the folders and nodes that hold the grant.
+- A permission error that says the access is limited is not "no access": retry inside the listed folders, nodes or resources. Report a missing permission only when get_my_access shows no grant for the action anywhere.
 
 ## Scope Containment Rule
 A user can only manage another user whose scopes are a subset of their own.`;

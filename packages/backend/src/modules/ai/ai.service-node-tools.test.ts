@@ -239,7 +239,14 @@ describe('AIService node parity tools', () => {
         servicePort: 7443,
         folderId: '33333333-3333-4333-8333-333333333333',
       })
-    ).resolves.toMatchObject({ error: 'Missing nodes:create permission for the selected destination' });
+    ).resolves.toMatchObject({
+      // The refusal names the folder the caller may create in instead of reading as "no access".
+      error: expect.stringMatching(
+        new RegExp(
+          `^Missing nodes:create permission for the selected destination\\. .*folder ${FOLDER_ID}.*pass folderId`
+        )
+      ),
+    });
     expect(nodesService.create).not.toHaveBeenCalled();
 
     await expect(

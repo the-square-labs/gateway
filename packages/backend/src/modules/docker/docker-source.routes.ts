@@ -98,7 +98,10 @@ function requireDeploymentSourceScope(scope: string): MiddlewareHandler<AppEnv> 
   };
 }
 
-/** Picking a source needs the create or edit scope of the workload it is for, never the integration's scopes. */
+/**
+ * Picking a source needs the create or edit scope of the workload it is for; the connectors and repositories offered
+ * are those the caller's Git scopes cover, and saving the source needs integrations:<provider>:use on the repository.
+ */
 function requireSourcePicker(allowed: (scopes: string[]) => boolean): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!allowed(c.get('effectiveScopes') ?? [])) {
@@ -114,7 +117,10 @@ function requireSourcePicker(allowed: (scopes: string[]) => boolean): Middleware
 export function registerDockerSourceRoutes(router: OpenAPIHonoType<AppEnv>) {
   // One connector list for every source picker (containers, deployments, Compose Projects and Pages builds).
   router.get('/sources/connectors', requireSourcePicker(canListSourceConnectors), async (c) => {
-    const data = await listSourceConnectors(container.resolve(TOKENS.DrizzleClient) as DrizzleClient);
+    const data = await listSourceConnectors(
+      container.resolve(TOKENS.DrizzleClient) as DrizzleClient,
+      c.get('effectiveScopes') ?? []
+    );
     return c.json({ data });
   });
 

@@ -11,6 +11,7 @@ import { eq } from 'drizzle-orm';
 import { getEnv } from '@/config/env.js';
 import { container, TOKENS } from '@/container.js';
 import { createDrizzleClient } from '@/db/client.js';
+import { OperationLeaseStore } from '@/db/operation-lease.js';
 import { hostingResources } from '@/db/schema/index.js';
 import { COMMERCIAL_HOST_API_VERSION } from '@/edition/contract.js';
 import { initializeCommercialEdition } from '@/edition/runtime.js';
@@ -900,6 +901,9 @@ export async function initializeContainer(): Promise<void> {
   dockerManagementService.setNetworkAccessResourceService(dockerNetworkAccessResourceService);
   const dockerMigrationGuard = new DockerMigrationGuard(db);
   dockerManagementService.setMigrationGuard(dockerMigrationGuard);
+  // Rename, update and migration-admission claims hold across backend processes.
+  const operationLeases = new OperationLeaseStore(db);
+  dockerManagementService.setOperationLeases(operationLeases);
   // A build rollout owns its target while its lease is live (see DockerBuildRolloutGuard).
   const dockerBuildRolloutGuard = new DockerBuildRolloutGuard(db);
   dockerManagementService.setBuildRolloutGuard(dockerBuildRolloutGuard);
@@ -1539,6 +1543,8 @@ export async function initializeContainer(): Promise<void> {
 
   const sslService = new SSLService(db, acmeService, cryptoService, auditService, nginxCertificateDistribution);
   sslService.setEventBus(eventBus);
+  // One ACME operation per certificate across backend processes.
+  sslService.setOperationLeases(operationLeases);
   sslService.setIntegrationsService(integrationsService);
   sslService.setProxyService(proxyService);
   integrationsService.setSSLService(sslService);

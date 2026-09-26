@@ -8,11 +8,13 @@
 
 import { replaceRetiredScopes, retiredScopeBase } from './scopes-aliases.js';
 import { ALL_SCOPES, PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
+import { gitScopeQualifierIssue, isGitScopeBase } from './scopes-git.js';
 import { RESOURCE_SCOPABLE } from './scopes-resource.js';
 
 export * from './scopes-aliases.js';
 export * from './scopes-base.js';
 export * from './scopes-builtins.js';
+export * from './scopes-git.js';
 export * from './scopes-implications.js';
 export * from './scopes-resource.js';
 
@@ -163,8 +165,15 @@ export function isRetiredScope(scope: string): boolean {
  */
 export function isValidInboundScope(scope: string): boolean {
   const trimmed = scope.trim();
-  if (!isRetiredScope(trimmed)) return isValidBaseScope(trimmed);
-  return replaceRetiredScopes([trimmed]).every(isValidBaseScope);
+  if (!isRetiredScope(trimmed)) return isValidInboundCanonicalScope(trimmed);
+  return replaceRetiredScopes([trimmed]).every(isValidInboundCanonicalScope);
+}
+
+/** A valid canonical scope whose Git qualifier, if any, has the connector/group/project/owner/repo shape. */
+function isValidInboundCanonicalScope(scope: string): boolean {
+  if (!isValidBaseScope(scope)) return false;
+  const base = extractBaseScope(scope);
+  return scope === base || !isGitScopeBase(base) || gitScopeQualifierIssue(base, scope.slice(base.length + 1)) === null;
 }
 
 /**

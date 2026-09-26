@@ -61,7 +61,9 @@ const RelaySpreadModeSchema = z.enum(['inherit', 'fixed', 'all']);
 export const CreateProxyHostSchema = z
   .object({
     type: z.enum(['proxy', 'redirect', '404', 'raw']).default('proxy'),
-    nodeId: z.string().uuid('A node must be selected'),
+    // Optional: omitted, the route uses the ingress node its registered Gateway domains are assigned
+    // to, or the only nginx node the caller may create routes on (see route-ingress-nodes.ts).
+    nodeId: z.string().uuid('A node must be selected').optional(),
     domainNames: z.array(DomainNameSchema).min(1, 'At least one domain name is required'),
 
     // Upstream — proxy type
@@ -417,6 +419,11 @@ export const ToggleProxyMaintenanceSchema = z.object({
 // Validate advanced config
 // ---------------------------------------------------------------------------
 
+export const RouteIngressNodeListQuerySchema = z.object({
+  /** Limit the list to the nodes a new route in this folder may use. */
+  folderId: z.string().uuid().optional(),
+});
+
 export const ValidateAdvancedConfigSchema = z.object({
   snippet: z.string().min(1).max(100000),
   mode: z.enum(['advanced', 'raw']).optional().default('advanced'),
@@ -430,7 +437,10 @@ export const ValidateAdvancedConfigSchema = z.object({
 // Inferred types
 // ---------------------------------------------------------------------------
 
-export type CreateProxyHostInput = z.infer<typeof CreateProxyHostSchema>;
+/** A create request: `nodeId` may be omitted and is resolved before the create checks run. */
+export type CreateProxyHostRequest = z.infer<typeof CreateProxyHostSchema>;
+/** A create with its ingress node resolved (the service and Pages contract). */
+export type CreateProxyHostInput = CreateProxyHostRequest & { nodeId: string };
 export type UpdateProxyHostInput = z.infer<typeof UpdateProxyHostSchema>;
 export type ProxyHostListQuery = z.infer<typeof ProxyHostListQuerySchema>;
 export type ToggleProxyHostInput = z.infer<typeof ToggleProxyHostSchema>;

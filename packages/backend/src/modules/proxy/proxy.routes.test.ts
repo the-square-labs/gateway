@@ -1186,6 +1186,97 @@ describe('proxy routes programmatic raw config handling', () => {
     });
   });
 
+  describe('ingress node of a new route', () => {
+    const EDGE = '11111111-1111-4111-8111-111111111111';
+    const FOLDER_ID = '22222222-2222-4222-8222-222222222222';
+    const create = { domainNames: ['app.example.com'], forwardHost: 'upstream', forwardPort: 8080 };
+    const proxyService = mocks.proxyService as Record<string, any>;
+
+    function appJson(method: string, path: string, body?: unknown) {
+      return createApp().request(path, {
+        method,
+        headers: { Authorization: 'Bearer gw_token', 'Content-Type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      });
+    }
+
+    beforeEach(() => {
+      mocks.authType = 'session';
+      proxyService.resolveRouteIngressNode = vi.fn().mockResolvedValue({ nodeId: EDGE, source: 'domain' });
+      proxyService.listRouteIngressNodes = vi
+        .fn()
+        .mockResolvedValue([{ id: EDGE, displayName: 'Edge', hostname: 'edge-1', status: 'online' }]);
+    });
+
+    it('lists the ingress nodes a creator may use, for its scopes and the requested folder', async () => {
+      mocks.scopes = [`proxy:create:folder/${FOLDER_ID}`];
+
+      const response = await appJson('GET', `/ingress-nodes?folderId=${FOLDER_ID}`);
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({
+        data: [{ id: EDGE, displayName: 'Edge', hostname: 'edge-1', status: 'online' }],
+      });
+      expect(proxyService.listRouteIngressNodes).toHaveBeenCalledWith(mocks.scopes, FOLDER_ID);
+      expect(mocks.proxyService.getProxyHost).not.toHaveBeenCalled();
+    });
+
+    it('creates without nodeId on the resolved node and checks the destination against it', async () => {
+      mocks.scopes = [`proxy:create:node/${EDGE}`];
+
+      const response = await appJson('POST', '/', create);
+
+      expect(response.status).toBe(201);
+      expect(proxyService.resolveRouteIngressNode).toHaveBeenCalledWith(
+        mocks.scopes,
+        expect.objectContaining({ domainNames: ['app.example.com'] })
+      );
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledWith(
+        expect.objectContaining({ nodeId: EDGE, domainNames: ['app.example.com'] }),
+        'user-1',
+        expect.anything()
+      );
+
+      // A node outside the grant still fails the destination check.
+      proxyService.resolveRouteIngressNode.mockResolvedValue({
+        nodeId: '99999999-9999-4999-8999-999999999999',
+        source: 'single_eligible',
+      });
+      expect((await appJson('POST', '/', create)).status).toBe(403);
+      expect(mocks.proxyService.createProxyHost).toHaveBeenCalledOnce();
+    });
+
+    it('returns the resolver refusal with its eligible node list', async () => {
+      mocks.scopes = ['proxy:create'];
+      const eligibleNodes = [
+        { id: EDGE, displayName: null, hostname: 'edge-1', status: 'online' },
+        { id: '33333333-3333-4333-8333-333333333333', displayName: null, hostname: 'edge-2', status: 'offline' },
+      ];
+      proxyService.resolveRouteIngressNode.mockRejectedValue(
+        new AppError(409, 'ROUTE_INGRESS_NODE_REQUIRED', 'nodeId is required', { eligibleNodes })
+      );
+
+      const response = await appJson('POST', '/', create);
+
+      expect(response.status).toBe(409);
+      await expect(response.json()).resolves.toMatchObject({
+        code: 'ROUTE_INGRESS_NODE_REQUIRED',
+        details: { eligibleNodes },
+      });
+      expect(mocks.proxyService.createProxyHost).not.toHaveBeenCalled();
+    });
+
+    it('resolves nothing for a caller without proxy:create or for an explicit node', async () => {
+      mocks.scopes = ['proxy:view'];
+      expect((await appJson('POST', '/', create)).status).toBe(403);
+      expect(proxyService.resolveRouteIngressNode).not.toHaveBeenCalled();
+
+      mocks.scopes = ['proxy:create'];
+      expect((await appJson('POST', '/', { ...create, nodeId: EDGE })).status).toBe(201);
+      expect(proxyService.resolveRouteIngressNode).not.toHaveBeenCalled();
+    });
+  });
+
   describe('TLS resync', () => {
     function resync(id: string) {
       return createApp().request(`/${id}/tls/resync`, {

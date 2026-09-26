@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { replaceRetiredScopes } from './scopes-aliases.js';
 import { ALL_SCOPES } from './scopes-base.js';
+import { gitScopeQualifierIssue, isGitScopeBase } from './scopes-git.js';
 import { FOLDER_CREATION_SCOPES, FOLDER_SCOPABLE, RESOURCE_SCOPABLE } from './scopes-resource.js';
 
 /** Longest accepted delegated scope string, including its resource, folder, or node qualifier. */
@@ -61,6 +62,8 @@ function canonicalScopeIssue(scope: string): string | null {
   const target = scope.slice(base.length + 1);
   const segments = target.split('/');
   if (segments.some((segment) => !TARGET_SEGMENT.test(segment))) return 'Scope target is malformed';
+  // Git scopes take stable connector, group/owner and project/repository IDs, never folders or nodes.
+  if (isGitScopeBase(base)) return gitScopeQualifierIssue(base, target);
 
   if (target.startsWith('folder/')) {
     if (!FOLDER_SCOPABLE_SET.has(base)) return `${base} cannot be restricted to a folder`;

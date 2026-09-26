@@ -3,9 +3,18 @@ import type { MiddlewareHandler } from 'hono';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
 import { authMiddleware, requireScope, sessionOnly } from '@/modules/auth/auth.middleware.js';
-import type { AppEnv } from '@/types.js';
+import type { AppEnv, User } from '@/types.js';
 import { ExternalSshService } from './external-ssh.service.js';
-import { assertConnectorOperationAccess } from './integration-permissions.js';
+import {
+  ScopeTargetParamsSchema,
+  ScopeTargetResolveQuerySchema,
+  ScopeTargetSearchQuerySchema,
+} from './git-scope-targets.js';
+import {
+  assertConnectorOperationAccess,
+  type ConnectorScopeTarget,
+  gitConnectorVisibility,
+} from './integration-permissions.js';
 import {
   authorizeGitLabUserCredentialRoute,
   createCloudflareConnectorRoute,
@@ -21,10 +30,12 @@ import {
   listCloudflareZonesRoute,
   listGitLabAllowlistOptionsRoute,
   listGitLabConnectorsRoute,
+  listGitScopeTargetsRoute,
   previewCloudflareConnectorTestRoute,
   previewGitLabAllowlistRoute,
   previewGitLabConnectorTestRoute,
   refreshGitLabAllowlistOptionsRoute,
+  resolveGitScopeTargetsRoute,
   rotateCloudflareConnectorTokenRoute,
   rotateGitLabConnectorTokenRoute,
   searchGitLabAllowlistRoute,
@@ -72,21 +83,41 @@ const requireGitLabUserCredentialAccess: MiddlewareHandler<AppEnv> = async (c, n
   });
 };
 
+interface GitRouteAccessOptions {
+  /** `within-connector` for lists: any Git grant counts and the handler filters the connectors. */
+  scopeTarget?: ConnectorScopeTarget;
+  /** The path parameter holding the connector ID; null when the route names no connector. */
+  connectorParam?: string | null;
+}
+
 function requireGitLabOperation(
   operation: string,
-  requiredScope: string | readonly string[]
+  requiredScope: string | readonly string[],
+  options: GitRouteAccessOptions = {}
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const user = c.get('user')!;
+    const connectorParam = options.connectorParam === undefined ? 'id' : options.connectorParam;
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes },
+      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes, accountScopes: user.accountScopes },
       provider: 'gitlab',
-      connectorId: c.req.param('id') ?? null,
+      connectorId: connectorParam ? (c.req.param(connectorParam) ?? null) : null,
       operation,
       requiredScope,
+      scopeTarget: options.scopeTarget,
     });
     await next();
   };
+}
+
+/** The request's scopes: the bounded token scopes for bearer tokens, the session's effective scopes otherwise. */
+function requestScopes(c: { get(name: 'user'): User | undefined; get(name: 'effectiveScopes'): string[] | undefined }) {
+  return c.get('effectiveScopes') ?? c.get('user')?.scopes ?? [];
+}
+
+/** The caller as services see it: the account with the request's scopes. */
+function requestActor(c: { get(name: 'user'): User | undefined; get(name: 'effectiveScopes'): string[] | undefined }) {
+  return { ...c.get('user')!, scopes: requestScopes(c) };
 }
 
 function requireCloudflareOperation(
@@ -96,7 +127,7 @@ function requireCloudflareOperation(
   return async (c, next) => {
     const user = c.get('user')!;
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes },
+      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes, accountScopes: user.accountScopes },
       provider: 'cloudflare',
       connectorId: c.req.param('id') ?? null,
       operation,
@@ -108,20 +139,41 @@ function requireCloudflareOperation(
 
 function requireGitOperation(
   provider: 'github' | 'git' | 'ssh',
-  requiredScope: string | readonly string[]
+  requiredScope: string | readonly string[],
+  options: GitRouteAccessOptions = {}
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     const user = c.get('user')!;
+    const connectorParam = options.connectorParam === undefined ? 'id' : options.connectorParam;
     assertConnectorOperationAccess({
-      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes },
+      actor: { userId: user.id, scopes: c.get('effectiveScopes') ?? user.scopes, accountScopes: user.accountScopes },
       provider,
-      connectorId: c.req.param('id') ?? null,
+      connectorId: connectorParam ? (c.req.param(connectorParam) ?? null) : null,
       operation: `connector.${c.req.method.toLowerCase()}`,
       requiredScope,
+      scopeTarget: options.scopeTarget,
     });
     await next();
   };
 }
+
+/** Scope picker access: `integrations:<provider>:view` on the connector or anything in it (results are filtered). */
+const requireScopeTargetAccess: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
+    provider: c.req.param('provider'),
+    connectorId: c.req.param('connectorId'),
+  });
+  const user = c.get('user')!;
+  assertConnectorOperationAccess({
+    actor: { userId: user.id, scopes: requestScopes(c), accountScopes: user.accountScopes },
+    provider,
+    connectorId,
+    operation: 'connector.scope_targets',
+    requiredScope: `integrations:${provider}:view`,
+    scopeTarget: 'within-connector',
+  });
+  await next();
+};
 
 integrationsRoutes.get(
   '/github/oauth',
@@ -141,7 +193,7 @@ integrationsRoutes.post(
 
 integrationsRoutes.get(
   '/github/oauth/sessions/:id',
-  requireGitOperation('github', 'integrations:github:manage'),
+  requireGitOperation('github', 'integrations:github:manage', { connectorParam: null }),
   async (c) => {
     const data = await container
       .resolve(IntegrationsService)
@@ -152,7 +204,7 @@ integrationsRoutes.get(
 
 integrationsRoutes.delete(
   '/github/oauth/sessions/:id',
-  requireGitOperation('github', 'integrations:github:manage'),
+  requireGitOperation('github', 'integrations:github:manage', { connectorParam: null }),
   async (c) => {
     const data = await container.resolve(IntegrationsService).cancelGitHubOAuth(c.req.param('id'), c.get('user')!.id);
     return c.json({ data });
@@ -183,12 +235,21 @@ for (const provider of ['github', 'git'] as const) {
   const scopeBase = `integrations:${provider}`;
   integrationsRoutes.get(
     `/${provider}/connectors`,
-    requireGitOperation(provider, [`${scopeBase}:view`, `${scopeBase}:manage`]),
+    requireGitOperation(provider, [`${scopeBase}:view`, `${scopeBase}:manage`], { scopeTarget: 'within-connector' }),
     async (c) => {
       const enabled = c.req.query('enabled');
       const service = container.resolve(IntegrationsService);
+      const visibility = gitConnectorVisibility(requestScopes(c), provider);
+      const connectors = await service.listGitConnectors(
+        provider,
+        enabled === undefined ? undefined : enabled === 'true'
+      );
       return c.json({
-        data: await service.listGitConnectors(provider, enabled === undefined ? undefined : enabled === 'true'),
+        data: connectors.flatMap((connector) => {
+          const access = visibility(connector.id);
+          if (!access.visible) return [];
+          return [access.full ? connector : { ...connector, allowlistEntries: [] }];
+        }),
       });
     }
   );
@@ -335,15 +396,49 @@ integrationsRoutes.delete('/ssh/connectors/:id', requireGitOperation('ssh', 'int
 integrationsRoutes.openapi(
   {
     ...listGitLabConnectorsRoute,
-    middleware: requireGitLabOperation('connector.list', ['integrations:gitlab:view', 'integrations:gitlab:manage']),
+    middleware: requireGitLabOperation('connector.list', ['integrations:gitlab:view', 'integrations:gitlab:manage'], {
+      scopeTarget: 'within-connector',
+      connectorParam: null,
+    }),
   },
   async (c) => {
     const service = container.resolve(IntegrationsService);
     const query = GitLabConnectorListQuerySchema.parse(c.req.query());
-    const data = await service.listGitLabConnectors(query);
+    const visibility = gitConnectorVisibility(requestScopes(c), 'gitlab');
+    const data = (await service.listGitLabConnectors(query)).filter((connector) => visibility(connector.id).visible);
     return c.json({ data });
   }
 );
+
+integrationsRoutes.openapi({ ...listGitScopeTargetsRoute, middleware: requireScopeTargetAccess }, async (c) => {
+  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
+    provider: c.req.param('provider'),
+    connectorId: c.req.param('connectorId'),
+  });
+  const query = ScopeTargetSearchQuerySchema.parse(c.req.query());
+  const service = container.resolve(IntegrationsService);
+  const actor = requestActor(c);
+  return c.json(
+    provider === 'gitlab'
+      ? await service.listGitLabScopeTargets(actor, connectorId, query)
+      : await service.listGitHubScopeTargets(actor, connectorId, query)
+  );
+});
+
+integrationsRoutes.openapi({ ...resolveGitScopeTargetsRoute, middleware: requireScopeTargetAccess }, async (c) => {
+  const { provider, connectorId } = ScopeTargetParamsSchema.parse({
+    provider: c.req.param('provider'),
+    connectorId: c.req.param('connectorId'),
+  });
+  const { ids } = ScopeTargetResolveQuerySchema.parse(c.req.query());
+  const service = container.resolve(IntegrationsService);
+  const actor = requestActor(c);
+  return c.json(
+    provider === 'gitlab'
+      ? await service.resolveGitLabScopeTargets(actor, connectorId, ids)
+      : await service.resolveGitHubScopeTargets(actor, connectorId, ids)
+  );
+});
 
 integrationsRoutes.openapi(
   {

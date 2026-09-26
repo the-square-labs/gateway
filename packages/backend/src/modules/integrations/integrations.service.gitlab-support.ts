@@ -1,5 +1,6 @@
 import type { IntegrationConnectorCapabilities } from '@/db/schema/index.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
+import type { GitConnectorGrant, GitRepositoryScopeTarget } from '@/lib/git-scopes.js';
 import type { AppError } from '@/middleware/error-handler.js';
 import type { User } from '@/types.js';
 import type { VcsConnectorAuth, VcsConnectorProvider, VcsProjectRef } from './integration-provider.types.js';
@@ -19,6 +20,8 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
     _operation: string,
     _input?: {
       auditAction?: string;
+      /** `within-connector`: a grant on any connector, group or project counts (lists filter their result). */
+      scopeTarget?: 'connector' | 'within-connector';
     }
   ): Promise<void> {
     return commercialModuleUnavailable();
@@ -97,7 +100,40 @@ export abstract class IntegrationsGitLabSupportService extends IntegrationsGitSu
   ): Promise<boolean> {
     return commercialModuleUnavailable();
   }
-  protected async resolveGitLabCredential(_user: User, _connector: ConnectorRow): Promise<ResolvedGitLabCredential> {
+  protected async resolveGitLabCredential(
+    _user: User,
+    _connector: ConnectorRow,
+    _repository?: GitRepositoryScopeTarget | null,
+    _repositoryLabel?: string | null
+  ): Promise<ResolvedGitLabCredential> {
+    return commercialModuleUnavailable();
+  }
+  /**
+   * The project's namespace group and every parent group (GitLab API, cached), for group-qualified scopes.
+   * The connector credential reads them; without one, the user's personal credential.
+   */
+  protected async gitLabProjectGroupIds(
+    _connector: ConnectorRow,
+    _projectId: string,
+    _user?: User | null
+  ): Promise<string[]> {
+    return commercialModuleUnavailable();
+  }
+  /** The repository target of a GitLab project, looking up its groups only when a group grant needs them. */
+  protected async gitLabRepositoryScopeTarget(
+    _user: User,
+    _connector: ConnectorRow,
+    _project: Pick<ProjectRow, 'remoteId'>,
+    _requiredScopes: readonly string[]
+  ): Promise<GitRepositoryScopeTarget> {
+    return commercialModuleUnavailable();
+  }
+  /** Synced projects a grant covers: connector-wide, exact projects, or projects under a granted group. */
+  protected async filterGitLabProjectsByGrant<T extends Pick<ProjectRow, 'remoteId' | 'fullPath'>>(
+    _connector: ConnectorRow,
+    _projects: T[],
+    _grant: GitConnectorGrant
+  ): Promise<T[]> {
     return commercialModuleUnavailable();
   }
   protected gitLabProviderForCredential(

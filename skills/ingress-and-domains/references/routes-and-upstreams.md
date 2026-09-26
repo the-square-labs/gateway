@@ -2,14 +2,16 @@
 
 ## Domains
 
-- `create_domain({ domain, nginxNodeId })` needs `domains:create`. `nginxNodeId` may be omitted only when exactly one nginx Node has a detected public address.
+- `create_domain({ domain, nginxNodeId })` needs `domains:create`. `nginxNodeId` may be omitted only when exactly one nginx Node with a detected public address is open to your grant; otherwise the call fails and lists the eligible Nodes. `manage_domain({ operation: "list_nginx_nodes" })` lists them without Node permissions.
 - With a Cloudflare connector, `create_domain` returns conflict metadata when different A/AAAA records already exist. Overwrite or adopt only after explicit user approval.
 - `manage_domain({ operation: "check_dns", domainId })` re-checks resolution.
 - A Domain used by a Route cannot be deleted until it is removed from those Routes; `isSystem` Domains cannot be deleted.
 
 ## create_route fields
 
-- `nodeId` (required Ingress Node), `domainNames`, type `proxy`, `redirect`, or `404`.
+- `domainNames`, type `proxy`, `redirect`, or `404`, and optionally `nodeId` (the Ingress Node).
+- Omit `nodeId` when a Domain is a registered Gateway Domain: the Route uses the Domain's Ingress Node, and registered Domains on different Nodes cannot share a Route. Without a registered Domain, an omitted `nodeId` works only when one Node is eligible; otherwise the call fails and lists the Nodes.
+- `list_route_ingress_nodes({ folderId? })` lists the Ingress Nodes you may create Routes on (id, name, hostname, availability status). It needs any `proxy:create` grant (broad, on a folder, or on a Node) and no Node permission. A folder-limited grant also needs `folderId` on `create_route`.
 - Proxy target: `forwardHost`, `forwardPort`, `forwardScheme`, and `upstreamKind` (`manual`, `docker_container`, `docker_deployment`, or `pages`).
 - TLS: `sslEnabled`, `sslCertificateId` (an SSL certificate ID, never a PKI certificate ID), `sslForced`, `http2Support`.
 - Behavior: `websocketSupport`, `accessListId`, `healthCheckEnabled`, `folderId`, `nginxTemplateId`.

@@ -17,7 +17,10 @@ export interface User {
   groupScopes?: string[];
   additionalScopes?: string[];
   scopes: string[];
-  /** Live account scopes behind a programmatic (MCP) caller whose `scopes` are token-bounded. */
+  /**
+   * Live account scopes behind a programmatic caller (API token, OAuth grant, MCP) whose `scopes` are
+   * token-bounded. Git repository checks require both sets to cover the repository.
+   */
   accountScopes?: string[];
   isBlocked: boolean;
   isDeleted?: boolean;
@@ -68,6 +71,8 @@ export interface AppEnv {
     effectiveScopes?: string[];
     isTokenAuth?: boolean;
     authType?: 'session' | 'api-token' | 'oauth-token' | 'inference-token';
+    /** Id of the API or OAuth token that authenticated the request. */
+    authTokenId?: string;
     impersonation?: {
       actor: User;
       subject: User;

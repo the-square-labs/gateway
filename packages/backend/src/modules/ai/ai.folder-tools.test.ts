@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container } from '@/container.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
+import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import { DockerFolderService } from '@/modules/docker/docker-folder.service.js';
 import { DockerNetworkAccessResourceService } from '@/modules/docker/docker-network-access-resource.service.js';
 import { DomainFolderService } from '@/modules/domains/domain-folders.service.js';
@@ -135,7 +136,7 @@ describe('AI folder tools', () => {
       executeFolderTool({ ...BASE_USER, scopes: ['domains:folders:manage'] }, 'list_resource_folders', {
         resourceType: 'domains',
       })
-    ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [] }]);
+    ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [], access: { actions: [], canCreate: false } }]);
     expect(domainFolderService.getFolderTree).toHaveBeenLastCalledWith({ includeAllFolders: true });
 
     await expect(
@@ -144,11 +145,86 @@ describe('AI folder tools', () => {
         'list_resource_folders',
         { resourceType: 'domains' }
       )
-    ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [] }]);
+    ).resolves.toEqual([{ id: 'folder-1', name: 'Domains', children: [], access: { actions: [], canCreate: false } }]);
     expect(domainFolderService.getFolderTree).toHaveBeenLastCalledWith({
       allowedResourceIds: ['domain-1'],
       allowedFolderIds: ['folder-9'],
     });
+  });
+
+  it('shows a folder-limited caller every folder it holds any grant on, with the actions in each', async () => {
+    const databaseFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([
+        {
+          id: 'folder-1',
+          name: 'Analytics',
+          children: [{ id: 'folder-2', name: 'Nested', children: [] }],
+        },
+      ]),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DatabaseFolderService) return databaseFolderService as never;
+      if (token === LicensePolicyService)
+        return { requireFeatureForExistingRuntime: vi.fn().mockResolvedValue(undefined) } as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    // Query and create grants reveal their folders (expanded to the subfolder by authentication), even while empty.
+    const scopes = [
+      'databases:query:read:folder/folder-1',
+      'databases:query:read:folder/folder-2',
+      'databases:create:folder/folder-1',
+      'databases:create:folder/folder-2',
+    ];
+    await expect(
+      executeFolderTool({ ...BASE_USER, scopes }, 'list_resource_folders', { resourceType: 'databases' })
+    ).resolves.toEqual([
+      {
+        id: 'folder-1',
+        name: 'Analytics',
+        access: { actions: ['create', 'query:read', 'view'], canCreate: true },
+        children: [
+          {
+            id: 'folder-2',
+            name: 'Nested',
+            children: [],
+            access: { actions: ['create', 'query:read', 'view'], canCreate: true },
+          },
+        ],
+      },
+    ]);
+    expect(databaseFolderService.getFolderTree).toHaveBeenCalledWith({
+      allowedResourceIds: [],
+      allowedFolderIds: ['folder-1', 'folder-2'],
+    });
+  });
+
+  it('lists the Docker folder type the caller can use when dockerResourceType is omitted', async () => {
+    const dockerFolderService = {
+      getFolderTree: vi.fn().mockResolvedValue([{ id: 'volume-folder', name: 'Data', children: [] }]),
+    };
+    vi.spyOn(container, 'resolve').mockImplementation((token: unknown) => {
+      if (token === DockerFolderService) return dockerFolderService as never;
+      throw new Error('Unexpected service resolution');
+    });
+
+    await expect(
+      executeFolderTool(
+        { ...BASE_USER, scopes: ['docker:volumes:files:read:folder/volume-folder'] },
+        'list_resource_folders',
+        { resourceType: 'docker' }
+      )
+    ).resolves.toEqual([
+      {
+        id: 'volume-folder',
+        name: 'Data',
+        children: [],
+        access: { actions: ['files:read', 'view'], canCreate: false },
+      },
+    ]);
+    expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith(
+      expect.objectContaining({ resourceType: 'volume', allowedFolderIds: ['volume-folder'] })
+    );
   });
 
   it('lets node creators list every node folder, like the node folder route', async () => {
@@ -271,7 +347,10 @@ describe('AI folder tools', () => {
         'list_resource_folders',
         { resourceType: 'ssl_certificates' }
       )
-    ).resolves.toEqual([{ id: 'folder-1', name: 'TLS', children: [] }]);
+    ).resolves.toEqual([
+      // Broad ssl:cert:view holds in every folder.
+      { id: 'folder-1', name: 'TLS', children: [], access: { actions: ['view'], canCreate: false } },
+    ]);
     expect(sslFolderService.getFolderTree).toHaveBeenCalledWith({ includeAllFolders: true });
   });
 
@@ -338,7 +417,9 @@ describe('AI folder tools', () => {
         resourceType: 'docker',
         dockerResourceType: 'compose',
       })
-    ).resolves.toEqual([{ id: 'compose-folder-1', name: 'Stacks', children: [] }]);
+    ).resolves.toEqual([
+      { id: 'compose-folder-1', name: 'Stacks', children: [], access: { actions: [], canCreate: false } },
+    ]);
     expect(dockerFolderService.getFolderTree).toHaveBeenCalledWith({
       resourceType: 'compose',
       allowedFolderIds: [],

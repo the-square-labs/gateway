@@ -1,3 +1,5 @@
+import { GIT_SCOPABLE } from './scopes-git.js';
+
 export const FOLDER_CREATION_SCOPES = [
   'domains:create',
   'proxy:create',
@@ -23,6 +25,9 @@ export const RESOURCE_SCOPABLE: readonly string[] = [
   // Hosting qualifiers: connector ID for accounts/create/billing, resource ID for VM actions.
   'integrations:hosting:view',
   'integrations:hosting:manage',
+  // Git qualifiers: <connectorId>, then GitLab group/<id> or project/<id>, GitHub owner/<id> or repo/<id>
+  // (see scopes-git.ts). Connector administration (manage) takes the connector only.
+  ...GIT_SCOPABLE,
   'hosting:resources:view',
   'hosting:resources:create',
   'hosting:resources:power',

@@ -122,3 +122,75 @@ describe('ProxyService domain overlap per node', () => {
     });
   });
 });
+
+describe('ProxyService domain overlap on ingress migration moves', () => {
+  const SOURCE_ID = '11111111-1111-4111-8111-111111111111';
+
+  // rc.11: skipDomainNodeValidation (the ingress migration's host moves)
+  // skipped the overlap check too, so a move made the target serve one name
+  // from two enabled hosts.
+  it('refuses to move a host onto a node where an enabled host already serves its name', async () => {
+    const hosts: HostRow[] = [
+      { id: 'host-1', nodeId: NODE_ID, enabled: true, domainNames: ['app.example.com'] },
+      {
+        id: 'host-2',
+        nodeId: SOURCE_ID,
+        enabled: true,
+        domainNames: ['App.example.com'],
+        type: 'proxy',
+        upstreamKind: 'manual',
+        forwardHost: 'upstream.internal',
+        forwardPort: 8080,
+        forwardScheme: 'http',
+        isSystem: false,
+        maintenanceEnabled: false,
+        rawConfigEnabled: false,
+        relaySpreadMode: 'auto',
+        relaySpreadCount: null,
+        sslEnabled: false,
+        secureLinkGeneration: 0,
+      },
+    ];
+    const select = vi.fn(() => ({
+      from: (table: unknown) => {
+        const run = async () => {
+          if (table === nodes) return [{ id: NODE_ID, type: 'nginx', serviceCreationLocked: false }];
+          if (table === proxyHosts) {
+            return hosts
+              .filter((host) => host.nodeId === NODE_ID && host.enabled && host.id !== 'host-2')
+              .map((host) => ({ id: host.id, domainNames: host.domainNames }));
+          }
+          return [];
+        };
+        const query = {
+          where: () => query,
+          limit: () => run(),
+          // biome-ignore lint/suspicious/noThenProperty: mimics Drizzle's awaitable query builder
+          then: (resolve: (value: unknown) => unknown, reject: (error: unknown) => unknown) =>
+            run().then(resolve, reject),
+        };
+        return query;
+      },
+    }));
+    const update = vi.fn();
+    const db = {
+      select,
+      update,
+      query: { proxyHosts: { findFirst: vi.fn(async () => hosts[1]) } },
+    };
+    const service = new ProxyService(db as never, {} as any, { log: vi.fn() } as any, {} as any, {} as any, {} as any);
+
+    await expect(
+      service.updateProxyHost('host-2', { nodeId: NODE_ID }, USER_ID, {
+        skipDomainNodeValidation: true,
+        preserveFormerNodeConfig: true,
+        allowSystemNodeMove: true,
+      })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'PROXY_HOST_DOMAIN_CONFLICT',
+      details: { proxyHostId: 'host-1', nodeId: NODE_ID, domains: ['app.example.com'] },
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+});

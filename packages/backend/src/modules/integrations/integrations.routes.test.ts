@@ -3,11 +3,13 @@ import { Hono } from 'hono';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
 import type { DrizzleClient } from '@/db/client.js';
+import { boundScopes } from '@/lib/permissions.js';
 import { errorHandler } from '@/middleware/error-handler.js';
 import { TokensService } from '@/modules/tokens/tokens.service.js';
 import { SessionService } from '@/services/session.service.js';
 import type { AppEnv, SessionData, User } from '@/types.js';
 import { integrationsRoutes } from './integrations.routes.js';
+import { clearGitHubScopeTargetCache } from './integrations.service.git-repositories.js';
 import { IntegrationsService } from './integrations.service.js';
 
 const USER: User = {
@@ -729,5 +731,205 @@ describe('integrations routes', () => {
 
     expect(response.status).toBe(200);
     expect(syncGitConnector).toHaveBeenCalledWith('github', 'gh-1', USER.id);
+  });
+});
+
+describe('Git scope restrictions on connector routes', () => {
+  const GITLAB = '44444444-4444-4444-8444-444444444444';
+  const OTHER = '55555555-5555-4555-8555-555555555555';
+
+  it('lists only connectors the caller holds a Git scope on and keeps connector management on the connector', async () => {
+    const listGitLabConnectors = vi.fn().mockResolvedValue([
+      { id: GITLAB, name: 'Main' },
+      { id: OTHER, name: 'Other' },
+    ]);
+    const listGitConnectors = vi.fn().mockResolvedValue([
+      { id: GITLAB, name: 'GitHub', allowlistEntries: [{ fullPath: 'acme/app' }] },
+      { id: OTHER, name: 'Other GitHub', allowlistEntries: [{ fullPath: 'globex/app' }] },
+    ]);
+    const syncGitLabConnector = vi.fn().mockResolvedValue({ status: 'success' });
+    registerServices(
+      [
+        `integrations:gitlab:repo:read:${GITLAB}/group/7`,
+        `integrations:gitlab:manage:${OTHER}`,
+        `integrations:github:use:${GITLAB}/repo/123`,
+      ],
+      { listGitLabConnectors, listGitConnectors, syncGitLabConnector }
+    );
+    const app = createApp();
+
+    const gitlab = await app.request('/api/integrations/gitlab/connectors', { headers: authHeaders() });
+    expect(gitlab.status).toBe(200);
+    const gitlabBody = (await gitlab.json()) as { data: { id: string }[] };
+    expect(gitlabBody.data.map((row) => row.id)).toEqual([GITLAB, OTHER]);
+
+    const github = await app.request('/api/integrations/github/connectors', { headers: authHeaders() });
+    // Seen only through a repository grant: no allowlist details.
+    const githubBody = (await github.json()) as { data: unknown[] };
+    expect(githubBody.data).toEqual([{ id: GITLAB, name: 'GitHub', allowlistEntries: [] }]);
+
+    const post = (id: string) =>
+      app.request(`/api/integrations/gitlab/connectors/${id}/sync`, { method: 'POST', headers: authHeaders() });
+    expect((await post(OTHER)).status).toBe(200);
+    // A group grant never manages the connection.
+    expect((await post(GITLAB)).status).toBe(403);
+    expect(syncGitLabConnector).toHaveBeenCalledTimes(1);
+    const details = await app.request(`/api/integrations/gitlab/connectors/${GITLAB}`, { headers: authHeaders() });
+    expect(details.status).toBe(403);
+  });
+});
+
+describe('Git scope picker endpoints', () => {
+  const CONNECTOR = '33333333-3333-4333-8333-333333333333';
+  const OTHER = '55555555-5555-4555-8555-555555555555';
+
+  function githubService() {
+    const request = vi.fn(async (_connector: unknown, _token: string, path: string) => {
+      if (path.startsWith('/user/repos')) {
+        return new Response(
+          JSON.stringify([
+            { id: 123, full_name: 'acme/app', owner: { id: 7, login: 'acme', type: 'Organization' } },
+            { id: 124, full_name: 'globex/other', owner: { id: 8, login: 'globex', type: 'User' } },
+          ]),
+          { status: 200 }
+        );
+      }
+      if (path.startsWith('/user/orgs')) {
+        return new Response(JSON.stringify([{ id: 9, login: 'initech' }]), { status: 200 });
+      }
+      if (path === '/user/7') return new Response(JSON.stringify({ login: 'acme' }), { status: 200 });
+      if (path === '/repositories/123') {
+        return new Response(JSON.stringify({ full_name: 'acme/app', owner: { id: 7 } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ message: 'Not Found' }), { status: 404 });
+    });
+    const service = Object.assign(Object.create(IntegrationsService.prototype), {
+      getConnectorRow: vi.fn(async (id: string) => ({
+        id,
+        provider: 'github',
+        name: 'GitHub',
+        enabled: true,
+        baseUrl: 'https://github.com',
+        encryptedToken: 'encrypted',
+      })),
+      resolveGitHubConnectorToken: vi.fn().mockResolvedValue('connector-token'),
+      githubConnectorRequest: request,
+    });
+    return { service: service as IntegrationsService, request };
+  }
+
+  function get(path: string) {
+    return createApp().request(`/api/integrations/${path}`, { headers: authHeaders() });
+  }
+
+  afterEach(() => clearGitHubScopeTargetCache());
+
+  it('searches GitHub owners and repositories the caller may view, with a cached catalog', async () => {
+    const { service, request } = githubService();
+    registerServices(['integrations:github:view'], service);
+
+    const all = await get(`github/${CONNECTOR}/scope-targets?search=&limit=50`);
+    expect(all.status).toBe(200);
+    expect(await all.json()).toEqual({
+      owners: [
+        { id: '7', login: 'acme', type: 'Organization' },
+        { id: '8', login: 'globex', type: 'User' },
+        { id: '9', login: 'initech', type: 'Organization' },
+      ],
+      repos: [
+        { id: '123', fullName: 'acme/app' },
+        { id: '124', fullName: 'globex/other' },
+      ],
+    });
+    const searched = await get(`github/${CONNECTOR}/scope-targets?search=ACME&limit=1`);
+    expect(await searched.json()).toEqual({
+      owners: [{ id: '7', login: 'acme', type: 'Organization' }],
+      repos: [{ id: '123', fullName: 'acme/app' }],
+    });
+    // One catalog load (repositories and organizations) serves both searches.
+    expect(request.mock.calls.filter(([, , path]) => String(path).startsWith('/user/repos'))).toHaveLength(1);
+  });
+
+  it.each([
+    [[`integrations:github:use:${CONNECTOR}/owner/7`], ['7'], ['123']],
+    [[`integrations:github:repo:read:${CONNECTOR}/repo/124`], [], ['124']],
+    [[`integrations:github:view:${CONNECTOR}`], ['7', '8', '9'], ['123', '124']],
+  ])('limits GitHub picker results to %j', async (scopes, owners, repos) => {
+    const { service } = githubService();
+    registerServices(scopes, service);
+
+    const response = await get(`github/${CONNECTOR}/scope-targets`);
+    const body = (await response.json()) as { owners: { id: string }[]; repos: { id: string }[] };
+    expect(body.owners.map((owner) => owner.id)).toEqual(owners);
+    expect(body.repos.map((repo) => repo.id)).toEqual(repos);
+  });
+
+  it('limits a token to what both it and its owner cover', async () => {
+    const { service } = githubService();
+    const owner = [`integrations:github:view:${CONNECTOR}/repo/123`];
+    container.registerInstance(TokensService, {
+      validateToken: vi.fn().mockResolvedValue({
+        user: { ...USER, scopes: owner, accountScopes: owner },
+        // The token names the whole owner 7; its owner holds one repository of it.
+        scopes: boundScopes([`integrations:github:view:${CONNECTOR}/owner/7`], owner),
+        tokenId: 'token-1',
+        tokenPrefix: 'gw_abc1234',
+      }),
+    } as unknown as TokensService);
+    container.registerInstance(IntegrationsService, service);
+
+    const body = (await (await get(`github/${CONNECTOR}/scope-targets`)).json()) as {
+      owners: { id: string }[];
+      repos: { id: string }[];
+    };
+    expect(body.owners).toEqual([]);
+    expect(body.repos.map((repo) => repo.id)).toEqual(['123']);
+  });
+
+  it('refuses callers without a GitHub grant on the connector and validates the request', async () => {
+    const { service, request } = githubService();
+    registerServices([`integrations:github:view:${OTHER}`, 'integrations:gitlab:view'], service);
+
+    expect((await get(`github/${CONNECTOR}/scope-targets`)).status).toBe(403);
+    expect((await get(`github/not-a-uuid/scope-targets`)).status).toBe(400);
+    expect((await get(`git/${CONNECTOR}/scope-targets`)).status).toBe(400);
+    expect((await get(`github/${OTHER}/scope-targets?limit=500`)).status).toBe(400);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('resolves stored GitHub qualifiers without revealing targets the caller cannot view', async () => {
+    const { service } = githubService();
+    registerServices([`integrations:github:view:${CONNECTOR}/owner/7`], service);
+
+    const response = await get(`github/${CONNECTOR}/scope-targets/resolve?ids=owner/7,repo/123,repo/124,owner/8`);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      items: [
+        { qualifier: 'owner/7', label: 'acme', missing: false },
+        { qualifier: 'repo/123', label: 'acme/app', missing: false },
+        { qualifier: 'repo/124', label: 'repo/124', missing: false },
+        { qualifier: 'owner/8', label: 'owner/8', missing: false },
+      ],
+    });
+
+    registerServices([`integrations:github:view:${CONNECTOR}`], githubService().service);
+    const missing = await get(`github/${CONNECTOR}/scope-targets/resolve?ids=repo/999`);
+    expect(await missing.json()).toEqual({ items: [{ qualifier: 'repo/999', label: 'repo/999', missing: true }] });
+    expect((await get(`github/${CONNECTOR}/scope-targets/resolve?ids=group/1`)).status).toBe(400);
+  });
+
+  it('documents both picker endpoints in OpenAPI', () => {
+    const document = integrationsRoutes.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'test', version: '1' },
+    }) as { paths: Record<string, { get?: { parameters?: { name: string }[] } }> };
+    const search = document.paths['/{provider}/{connectorId}/scope-targets']?.get;
+    const resolve = document.paths['/{provider}/{connectorId}/scope-targets/resolve']?.get;
+    expect(search?.parameters?.map((parameter) => parameter.name)).toEqual(
+      expect.arrayContaining(['provider', 'connectorId', 'search', 'limit'])
+    );
+    expect(resolve?.parameters?.map((parameter) => parameter.name)).toEqual(
+      expect.arrayContaining(['provider', 'connectorId', 'ids'])
+    );
   });
 });

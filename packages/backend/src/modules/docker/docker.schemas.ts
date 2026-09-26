@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FILE_UPLOAD_MAX_BYTES } from '@/modules/settings/general-settings.service.js';
+import { changedReservedDockerLabels, reservedDockerLabelsMessage } from './docker-reserved-labels.js';
 
 // Docker's container name rule: [a-zA-Z0-9][a-zA-Z0-9_.-]+
 const ContainerNameSchema = z
@@ -128,6 +129,14 @@ export const ContainerCreateSchema = z
     }
     if (config.labels && Object.keys(config.labels).length > DOCKER_LABELS_MAX) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['labels'], message: `At most ${DOCKER_LABELS_MAX} labels` });
+    }
+    const reservedLabels = changedReservedDockerLabels(config.labels);
+    if (reservedLabels.length > 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['labels'],
+        message: reservedDockerLabelsMessage(reservedLabels),
+      });
     }
     if (config.networks && new Set(config.networks).size !== config.networks.length) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['networks'], message: 'Network names must be unique' });

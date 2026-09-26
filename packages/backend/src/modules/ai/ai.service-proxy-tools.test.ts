@@ -886,7 +886,11 @@ describe('AIService proxy tool routing', () => {
     const scopes = [`proxy:create:folder/${folderId}`];
     await expect(
       service.executeTool({ ...BASE_USER, scopes }, 'create_route', { ...base, forwardHost: 'app' })
-    ).resolves.toEqual({ error: 'Missing proxy:create permission for the selected destination', invalidateStores: [] });
+    ).resolves.toEqual({
+      // The refusal names the granted folder and asks for folderId instead of reading as "no access".
+      error: `Missing proxy:create permission for the selected destination. Your proxy:create access is limited to folder ${folderId}: pass folderId for one of them. Call get_my_access to see every folder and node you can use.`,
+      invalidateStores: [],
+    });
     await expect(
       service.executeTool({ ...BASE_USER, scopes }, 'create_route', { ...base, forwardHost: 'app', folderId })
     ).resolves.toEqual({ result: COMPACT_HOST, invalidateStores: ['proxy'] });

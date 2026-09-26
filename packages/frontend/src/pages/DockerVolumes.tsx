@@ -297,7 +297,12 @@ export function DockerVolumes({
     [createNodeId, folderList, user?.scopes]
   );
   useEffect(() => {
-    if (createOpen && !createFolderId && !canCreateVolumeAtRoot && createVolumeFolderOptions.length === 1) {
+    if (
+      createOpen &&
+      !createFolderId &&
+      !canCreateVolumeAtRoot &&
+      createVolumeFolderOptions.length === 1
+    ) {
       setCreateFolderId(createVolumeFolderOptions[0].id);
     }
   }, [canCreateVolumeAtRoot, createFolderId, createOpen, createVolumeFolderOptions]);
@@ -639,11 +644,11 @@ export function DockerVolumes({
                   <SelectContent>
                     {canCreateVolumeAtRoot && <SelectItem value="__none__">No folder</SelectItem>}
                     {createVolumeFolderOptions.map((folder) => (
-                        <SelectItem key={folder.id} value={folder.id}>
-                          {"— ".repeat(folder.depth)}
-                          {folder.name}
-                        </SelectItem>
-                      ))}
+                      <SelectItem key={folder.id} value={folder.id}>
+                        {"— ".repeat(folder.depth)}
+                        {folder.name}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

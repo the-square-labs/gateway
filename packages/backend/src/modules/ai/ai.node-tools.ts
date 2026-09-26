@@ -67,6 +67,59 @@ export interface NodeToolContext {
   getDispatchService?: () => NodeDispatchService;
 }
 
+type ListedNode = Awaited<ReturnType<NodesService['list']>>['data'][number];
+
+function presentListedNode(node: ListedNode, compact: boolean) {
+  return compact
+    ? {
+        id: node.id,
+        type: node.type,
+        hostname: node.hostname,
+        displayName: node.displayName,
+        appearanceColor: node.appearanceColor,
+        status: node.status,
+        isConnected: node.isConnected,
+        serviceCreationLocked: node.serviceCreationLocked,
+        daemonVersion: node.daemonVersion,
+        lastSeenAt: node.lastSeenAt,
+      }
+    : {
+        id: node.id,
+        type: node.type,
+        hostname: node.hostname,
+        displayName: node.displayName,
+        appearanceColor: node.appearanceColor,
+        status: node.status,
+        isConnected: node.isConnected,
+        serviceCreationLocked: node.serviceCreationLocked,
+        daemonVersion: node.daemonVersion,
+        osInfo: node.osInfo,
+        configVersionHash: node.configVersionHash,
+        capabilities: node.capabilities,
+        lastSeenAt: node.lastSeenAt,
+        createdAt: node.createdAt,
+        updatedAt: node.updatedAt,
+      };
+}
+
+/** Node types a Docker, folder or create grant can target when list_nodes is called without a type. */
+const DESTINATION_NODE_TYPES = ['docker', 'nginx', 'databases', 'storage'] as const;
+
+async function listNodesOfGrantedTypes(context: NodeToolContext, user: User, a: Record<string, any>) {
+  const lists = await Promise.all(
+    DESTINATION_NODE_TYPES.map(async (type) => {
+      const access = resolveNodeListAccess(user.scopes, type);
+      if (!access.allowed) return null;
+      const result = await context.nodesService.list(
+        { search: a.search, type, status: a.status, page: 1, limit: agentPageLimit(a.limit) },
+        access.allowedIds ? { allowedIds: access.allowedIds } : undefined
+      );
+      return { type, nodes: result.data.map((node) => presentListedNode(node, access.compact)) };
+    })
+  );
+  return lists.filter((list): list is NonNullable<typeof list> => list !== null);
+}
+
 export async function executeNodeTool(
   context: NodeToolContext,
   user: User,
@@ -80,6 +133,17 @@ export async function executeNodeTool(
       // Same inventory rule as GET /api/nodes: creators and Docker grants discover their destination nodes.
       const access = resolveNodeListAccess(user.scopes, a.type);
       if (!access.allowed) {
+        // Without a type, Docker, folder and create grants still list the nodes of the types they target.
+        const byType = a.type ? [] : await listNodesOfGrantedTypes(context, user, a);
+        if (byType.length > 0) {
+          const data = [...new Map(byType.flatMap(({ nodes }) => nodes).map((node) => [node.id, node])).values()];
+          return {
+            data,
+            total: data.length,
+            types: byType.map(({ type }) => type),
+            note: `Your node access comes from Docker, folder or create grants, so nodes are listed for the types they target (${byType.map(({ type }) => type).join(', ')}). Pass type to narrow the list.`,
+          };
+        }
         throw new Error(
           `PERMISSION_DENIED: Missing permission for the requested node inventory (one of ${access.requiredScopes.join(', ')}).${
             a.type
@@ -98,41 +162,7 @@ export async function executeNodeTool(
         },
         access.allowedIds ? { allowedIds: access.allowedIds } : undefined
       );
-      return {
-        ...result,
-        data: result.data.map((node) =>
-          access.compact
-            ? {
-                id: node.id,
-                type: node.type,
-                hostname: node.hostname,
-                displayName: node.displayName,
-                appearanceColor: node.appearanceColor,
-                status: node.status,
-                isConnected: node.isConnected,
-                serviceCreationLocked: node.serviceCreationLocked,
-                daemonVersion: node.daemonVersion,
-                lastSeenAt: node.lastSeenAt,
-              }
-            : {
-                id: node.id,
-                type: node.type,
-                hostname: node.hostname,
-                displayName: node.displayName,
-                appearanceColor: node.appearanceColor,
-                status: node.status,
-                isConnected: node.isConnected,
-                serviceCreationLocked: node.serviceCreationLocked,
-                daemonVersion: node.daemonVersion,
-                osInfo: node.osInfo,
-                configVersionHash: node.configVersionHash,
-                capabilities: node.capabilities,
-                lastSeenAt: node.lastSeenAt,
-                createdAt: node.createdAt,
-                updatedAt: node.updatedAt,
-              }
-        ),
-      };
+      return { ...result, data: result.data.map((node) => presentListedNode(node, access.compact)) };
     }
     case 'get_node':
       return context.nodesService.get(a.nodeId);

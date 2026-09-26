@@ -19,6 +19,7 @@ import { SSH_AI_TOOLS } from './ai.tools.ssh.js';
 import type { AIToolDefinition } from './ai.types.js';
 import { createAIToolArgumentValidator } from './ai-tool-contract.js';
 import { canUseAiTool } from './ai-tool-filtering.js';
+import { withFolderAccessNotes } from './ai-tool-folder-access-notes.js';
 import { withAIToolPolicyMetadata } from './ai-tool-policy-metadata.js';
 
 const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
@@ -43,7 +44,7 @@ const AI_TOOL_DEFINITIONS: AIToolDefinition[] = [
   WEB_SEARCH_AI_TOOL,
 ];
 
-export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(AI_TOOL_DEFINITIONS);
+export const AI_TOOLS: AIToolDefinition[] = withAIToolPolicyMetadata(withFolderAccessNotes(AI_TOOL_DEFINITIONS));
 
 const destructiveSet = new Set(AI_TOOLS.filter((t) => t.destructive).map((t) => t.name));
 const REQUIRED_RUNTIME_AI_TOOL_NAMES = new Set([
@@ -72,6 +73,7 @@ const BASE_AI_TOOL_NAMES = new Set([
   'send_comment',
   'end_conversation',
   'find_resource',
+  'get_my_access',
   'ask_question',
   'internal_documentation',
   'search_chats',

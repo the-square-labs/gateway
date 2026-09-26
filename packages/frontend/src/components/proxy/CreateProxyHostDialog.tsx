@@ -96,6 +96,8 @@ function getCachedNodeOptions(): NodeOption[] {
 
 const NO_SCOPES: string[] = [];
 const ROOT_FOLDER_VALUE = "__root__";
+/** Create without a node: the server uses the registered domain's ingress node (or the only eligible one). */
+const AUTO_NODE_VALUE = "__auto__";
 
 const STEP_ANIMATION = {
   initial: { opacity: 0, y: 8 },
@@ -136,6 +138,7 @@ export function CreateProxyHostDialog({
   // Step 1 — Basics
   const [type, setType] = useState<ProxyHostType>("proxy");
   const [nodeId, setNodeId] = useState<string>("");
+  const [autoNode, setAutoNode] = useState(false);
   const [domainNames, setDomainNames] = useState<string[]>([""]);
   // Create only: destination folder ("" = root). Moving an existing route uses the move dialog.
   const [folderId, setFolderId] = useState<string>("");
@@ -187,6 +190,7 @@ export function CreateProxyHostDialog({
 
     setType("proxy");
     setNodeId("");
+    setAutoNode(false);
     setFolderId("");
     setDomainNames([""]);
     setUpstream(DEFAULT_PROXY_UPSTREAM);
@@ -365,6 +369,14 @@ export function CreateProxyHostDialog({
   }, [folderChoices, isEditing, open]);
   const canCreateInSelectedFolder =
     isEditing || canCreateInFolder(scopes, "proxy:create", folderId || null, nodeId || undefined);
+  // A node-free destination check needs a broad or folder grant; node-only creators pick their node.
+  const canUseAutomaticNode =
+    !isEditing && (canCreateInFolder(scopes, "proxy:create", null) || hasFolderCreationGrant);
+  const nodeChoice = autoNode ? AUTO_NODE_VALUE : nodeId || "__none__";
+  const chooseNode = (value: string) => {
+    setAutoNode(value === AUTO_NODE_VALUE);
+    setNodeId(value === AUTO_NODE_VALUE || value === "__none__" ? "" : value);
+  };
   const showFolderPicker =
     !isEditing && (folderChoices.folders.length > 0 || !folderChoices.allowRoot);
   const selectedNode = useMemo(
@@ -381,7 +393,7 @@ export function CreateProxyHostDialog({
 
   // Validation
   const isStep1Valid =
-    nodeId !== "" &&
+    (nodeId !== "" || (autoNode && canUseAutomaticNode)) &&
     !selectedLockedForCreation &&
     canCreateInSelectedFolder &&
     domainNames.some((d) => d.trim() !== "");
@@ -429,7 +441,7 @@ export function CreateProxyHostDialog({
     const domains = domainNames.filter((d) => d.trim() !== "");
     const req: CreateProxyHostRequest = {
       type,
-      nodeId,
+      nodeId: autoNode ? undefined : nodeId,
       domainNames: domains,
       folderId: folderId || undefined,
       websocketSupport: upstream.kind === "pages" ? false : websocketSupport,
@@ -565,11 +577,7 @@ export function CreateProxyHostDialog({
                 {/* Node Selector */}
                 <div className="space-y-1.5">
                   <label className="text-sm font-medium">Ingress node</label>
-                  <Select
-                    value={nodeId || "__none__"}
-                    onValueChange={(v) => setNodeId(v === "__none__" ? "" : v)}
-                    disabled={nodesLoading}
-                  >
+                  <Select value={nodeChoice} onValueChange={chooseNode} disabled={nodesLoading}>
                     <SelectTrigger aria-label="Ingress node" aria-busy={nodesLoading}>
                       {selectedNode ? (
                         <div className="flex min-w-0 items-center gap-3 pr-2">
@@ -585,6 +593,10 @@ export function CreateProxyHostDialog({
                             {selectedNode.status}
                           </Badge>
                         </div>
+                      ) : autoNode ? (
+                        <span className="min-w-0 flex-1 truncate">
+                          Automatic (from the registered domain)
+                        </span>
                       ) : (
                         <SelectValue placeholder="Select a node..." />
                       )}
@@ -593,6 +605,11 @@ export function CreateProxyHostDialog({
                       <SelectItem value="__none__" disabled>
                         Select a node...
                       </SelectItem>
+                      {canUseAutomaticNode && (
+                        <SelectItem value={AUTO_NODE_VALUE}>
+                          Automatic (from the registered domain)
+                        </SelectItem>
+                      )}
                       {visibleNodes.map((node) => {
                         const lockedForCreation =
                           node.serviceCreationLocked &&
@@ -668,6 +685,7 @@ export function CreateProxyHostDialog({
                             }}
                             onDomainSelect={(selectedDomain) => {
                               if (selectedDomain?.nginxNodeId) {
+                                setAutoNode(false);
                                 setNodeId(selectedDomain.nginxNodeId);
                               }
                             }}

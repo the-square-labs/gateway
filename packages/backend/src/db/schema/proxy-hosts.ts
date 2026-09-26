@@ -7,9 +7,11 @@ import {
   jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -116,7 +118,8 @@ export const proxyHosts = pgTable(
     sslEnabled: boolean('ssl_enabled').notNull().default(false),
     sslForced: boolean('ssl_forced').notNull().default(false), // HTTP → HTTPS redirect
     http2Support: boolean('http2_support').notNull().default(true),
-    sslCertificateId: uuid('ssl_certificate_id').references(() => sslCertificates.id, { onDelete: 'set null' }),
+    // Restrict: a certificate a host still serves cannot be deleted (409 CERT_IN_USE).
+    sslCertificateId: uuid('ssl_certificate_id').references(() => sslCertificates.id, { onDelete: 'restrict' }),
     internalCertificateId: uuid('internal_certificate_id').references(() => certificates.id, { onDelete: 'set null' }),
 
     // Proxy options
@@ -203,4 +206,34 @@ export const proxyHosts = pgTable(
     ),
     slugUnique: unique('proxy_hosts_slug_unique').on(table.slug),
   })
+);
+
+/**
+ * The names each proxy host serves, one row per lowercased domain, kept in sync
+ * with `proxy_hosts` (domains, enabled, node) by a trigger (migration 0207).
+ * The partial unique index is the guarantee that two enabled hosts on one node
+ * never serve the same name. `legacy_conflict` marks duplicates that existed
+ * before the index; they stay outside it until their host's domains, node or
+ * enabled state change, and the service's overlap check still reports them.
+ */
+export const proxyHostDomains = pgTable(
+  'proxy_host_domains',
+  {
+    proxyHostId: uuid('proxy_host_id')
+      .notNull()
+      .references(() => proxyHosts.id, { onDelete: 'cascade' }),
+    nodeId: uuid('node_id')
+      .notNull()
+      .references(() => nodes.id, { onDelete: 'cascade' }),
+    domain: text('domain').notNull(),
+    enabled: boolean('enabled').notNull(),
+    legacyConflict: boolean('legacy_conflict').notNull().default(false),
+  },
+  (table) => [
+    primaryKey({ columns: [table.proxyHostId, table.domain], name: 'proxy_host_domains_pkey' }),
+    uniqueIndex('proxy_host_domains_node_domain_unique')
+      .on(table.nodeId, table.domain)
+      .where(sql`${table.enabled} = true AND ${table.legacyConflict} = false`),
+    index('proxy_host_domains_node_domain_idx').on(table.nodeId, table.domain),
+  ]
 );

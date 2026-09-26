@@ -29,7 +29,10 @@ export const DOC_TOPIC_SCOPES: Record<string, string | string[]> = {
   siem: 'audit:siem:view',
   nginx: 'proxy:edit',
   nodes: 'nodes:details',
+  // Every assistant and MCP connection may read it: folder-limited agents need it, not only folder managers.
   folders: [
+    'ai:workspace:use',
+    'mcp:use',
     'nodes:folders:manage',
     'databases:folders:manage',
     'domains:folders:manage',

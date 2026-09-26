@@ -10,6 +10,14 @@ import {
   successJson,
 } from '@/lib/openapi.js';
 import {
+  GitHubScopeTargetsSchema,
+  GitLabScopeTargetsSchema,
+  ScopeTargetParamsSchema,
+  ScopeTargetResolutionSchema,
+  ScopeTargetResolveQuerySchema,
+  ScopeTargetSearchQuerySchema,
+} from './git-scope-targets.js';
+import {
   CloudflareConnectorCreateSchema,
   CloudflareConnectorListQuerySchema,
   CloudflareConnectorPreviewTestSchema,
@@ -421,4 +429,34 @@ export const listCloudflareZonesRoute = appRoute({
   summary: 'List cached Cloudflare zones',
   request: { params: connectorParams },
   responses: okJson(listResponseSchema(CloudflareZoneResponseSchema)),
+});
+
+export const listGitScopeTargetsRoute = appRoute({
+  method: 'get',
+  path: '/{provider}/{connectorId}/scope-targets',
+  tags: ['Integrations'],
+  summary: 'Search groups, projects, owners and repositories for Git scope restrictions',
+  description:
+    'Scope picker search for one GitLab or GitHub connector. GitLab returns groups and projects, GitHub owners and ' +
+    'repositories; IDs are the stable provider IDs that qualifiers use (`<connectorId>/group/<id>`, ' +
+    '`<connectorId>/project/<id>`, `<connectorId>/owner/<id>`, `<connectorId>/repo/<id>`). Needs ' +
+    '`integrations:<provider>:view` on the connector or on anything in it; results only list what the caller ' +
+    'may view. `search` filters by path or name and `limit` (1-100, default 50) caps each list. Provider results ' +
+    'are cached briefly per connector.',
+  request: { params: ScopeTargetParamsSchema, query: ScopeTargetSearchQuerySchema },
+  responses: okJson(z.union([GitLabScopeTargetsSchema, GitHubScopeTargetsSchema])),
+});
+
+export const resolveGitScopeTargetsRoute = appRoute({
+  method: 'get',
+  path: '/{provider}/{connectorId}/scope-targets/resolve',
+  tags: ['Integrations'],
+  summary: 'Resolve labels for stored Git scope qualifiers',
+  description:
+    'Labels for qualifiers relative to the connector, passed as `ids=group/123,project/456` (GitLab) or ' +
+    '`ids=owner/789,repo/1011` (GitHub), up to 100. `missing` is true when the target no longer exists. A target ' +
+    'the caller may not view keeps its raw qualifier as the label. Needs `integrations:<provider>:view` on the ' +
+    'connector or on anything in it.',
+  request: { params: ScopeTargetParamsSchema, query: ScopeTargetResolveQuerySchema },
+  responses: okJson(ScopeTargetResolutionSchema),
 });

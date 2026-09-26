@@ -104,15 +104,13 @@ export function hasChannelAccess(scopes: string[], channel: string): boolean {
   if (channel === 'system.config.changed') return true;
   if (channel === 'system.relay.health.changed') return true;
   if (channel === 'integration.connector.changed') {
+    // Git scopes may be limited to a connector, group/owner or project/repository; any grant counts.
     return (
-      hasScope(scopes, 'integrations:gitlab:view') ||
-      hasScope(scopes, 'integrations:gitlab:manage') ||
+      hasScopeBase(scopes, 'integrations:gitlab:view') ||
       hasScope(scopes, 'integrations:cloudflare:view') ||
       hasScope(scopes, 'integrations:cloudflare:manage') ||
-      hasScope(scopes, 'integrations:github:view') ||
-      hasScope(scopes, 'integrations:github:manage') ||
-      hasScope(scopes, 'integrations:git:view') ||
-      hasScope(scopes, 'integrations:git:manage') ||
+      hasScopeBase(scopes, 'integrations:github:view') ||
+      hasScopeBase(scopes, 'integrations:git:view') ||
       hasScope(scopes, 'integrations:ssh:view') ||
       hasScope(scopes, 'integrations:ssh:manage')
     );

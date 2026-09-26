@@ -19,7 +19,9 @@ describe("DockerMoveToFolderDialog", () => {
         onOpenChange={vi.fn()}
         folders={[folder("f1", "Team"), folder("f2", "Other")]}
         currentFolderId="f2"
-        canMoveTo={(folderId) => canCreateInFolder(scopes, "docker:containers:edit", folderId, "node-1")}
+        canMoveTo={(folderId) =>
+          canCreateInFolder(scopes, "docker:containers:edit", folderId, "node-1")
+        }
         onMove={onMove}
       />
     );

@@ -230,6 +230,37 @@ describe('domain routes authorization', () => {
     expect(mocks.domainsService.createDomain).not.toHaveBeenCalled();
   });
 
+  it('creates on the only ingress node of a node-limited grant when nginxNodeId is omitted', async () => {
+    const NODE_A = '55555555-5555-4555-8555-555555555555';
+    const NODE_B = '66666666-6666-4666-8666-666666666666';
+    mocks.domainsService.getNginxNodeOptions.mockResolvedValue({
+      eligibleNodes: [
+        { id: NODE_A, hostname: 'edge-a', displayName: null },
+        { id: NODE_B, hostname: 'edge-b', displayName: null },
+      ],
+      unconfiguredNodes: [],
+      totalNginxNodes: 2,
+      unconfiguredNginxNodes: 0,
+    });
+
+    mocks.scopes = [`domains:create:node/${NODE_B}`];
+    const created = await request('POST', '/', { domain: 'example.com' });
+    expect(created.status).toBe(201);
+    expect(mocks.domainsService.createDomain).toHaveBeenCalledWith(
+      { domain: 'example.com', dnsProvider: 'cloudflare', nginxNodeId: NODE_B },
+      'user-1'
+    );
+
+    mocks.scopes = [`domains:create:node/${NODE_A}`, `domains:create:node/${NODE_B}`];
+    const ambiguous = await request('POST', '/', { domain: 'other.example.com' });
+    expect(ambiguous.status).toBe(409);
+    await expect(ambiguous.json()).resolves.toMatchObject({
+      code: 'DOMAIN_NGINX_NODE_REQUIRED',
+      details: { eligibleNodes: [{ id: NODE_A }, { id: NODE_B }] },
+    });
+    expect(mocks.domainsService.createDomain).toHaveBeenCalledOnce();
+  });
+
   it('uses domains:create for the domain Nginx node options', async () => {
     mocks.scopes = ['domains:create'];
 

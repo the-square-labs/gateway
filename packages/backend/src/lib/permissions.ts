@@ -7,6 +7,7 @@ import { isFolderScopedScope } from './folder-scopes.js';
 import { canonicalizeScopes, extractBaseScope, isValidBaseScope, MANUAL_APPROVAL_SCOPE_SET } from './scopes.js';
 import { scopeCleanupAdditions } from './scopes-aliases.js';
 import { PROGRAMMATIC_DENIED_SCOPE_SET } from './scopes-base.js';
+import { isGitScopeBase, parseGitScopeQualifier } from './scopes-git.js';
 import { IMPLIED_SCOPES_BY_REQUIRED_SCOPE } from './scopes-implications.js';
 
 /** Reverse of the implication closure: scope -> the required scopes it satisfies. */
@@ -24,9 +25,18 @@ const DOCKER_CHILD_SCOPE_PREFIXES = [
   'docker:availability:',
 ] as const;
 
+/**
+ * The qualifier a child qualifier sits under: the node of a Docker `<nodeId>/<resourceId>` grant, or the
+ * connector of a Git `<connectorId>/<kind>/<id>` grant. GitLab group and GitHub owner containment needs
+ * provider data, so it is resolved by the Git repository checks (git-scopes.ts), never here.
+ */
 function parentResourceId(baseScope: string, resourceId: string | null): string | null {
-  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (!resourceId) return null;
+  if (isGitScopeBase(baseScope)) {
+    const separator = resourceId.indexOf('/');
+    return separator > 0 ? resourceId.slice(0, separator) : null;
+  }
+  if (!DOCKER_CHILD_SCOPE_PREFIXES.some((prefix) => baseScope.startsWith(prefix))) return null;
   if (resourceId.startsWith('folder/') || resourceId.startsWith('node/')) return null;
   const separator = resourceId.indexOf('/');
   return separator > 0 ? resourceId.slice(0, separator) : null;
@@ -217,19 +227,60 @@ export function boundScopes(delegatedScopes: readonly string[], principalScopes:
   }
 
   // 3. A broad delegated scope narrowed to the resources the principal holds it for, directly or through a
-  //    scope that implies it (`proxy:view` + owner `proxy:edit:<id>` -> `proxy:view:<id>`).
+  //    scope that implies it (`proxy:view` + owner `proxy:edit:<id>` -> `proxy:view:<id>`). A delegated
+  //    parent grant narrows the same way (`integrations:gitlab:view:<connectorId>` + owner
+  //    `integrations:gitlab:repo:read:<connectorId>/project/<id>` -> `integrations:gitlab:view:<connectorId>/project/<id>`).
   for (const principalScope of principalScopes) {
     const principalBase = extractBaseScope(principalScope);
     if (principalScope === principalBase) continue;
     const resourceId = principalScope.slice(principalBase.length + 1);
     for (const delegatedBase of [principalBase, ...(IMPLIED_BY_SCOPE.get(principalBase) ?? [])]) {
-      if (!delegatedSet.has(delegatedBase)) continue;
+      const parentId = parentResourceId(delegatedBase, resourceId);
+      if (!delegatedSet.has(delegatedBase) && !(parentId && delegatedSet.has(`${delegatedBase}:${parentId}`))) continue;
       const narrowedDelegatedScope = `${delegatedBase}:${resourceId}`;
       if (hasScope([principalScope], narrowedDelegatedScope)) bounded.add(narrowedDelegatedScope);
     }
   }
 
+  // 4. Git scopes limited to a group, owner, project or repository that the principal holds only through
+  //    another group, owner, project or repository qualifier on the same connector. Containment (GitLab
+  //    group ancestry, GitHub ownership) is provider data, so they are kept here and every repository check
+  //    of a token or OAuth caller requires both these scopes and the owner's current scopes to cover the
+  //    repository (git-scopes.ts, `User.accountScopes`). Grant and manage boundaries drop them
+  //    (privilegeBoundaryScopes).
+  const narrowGitGrants = narrowGitGrantKeys(principalScopes);
+  if (narrowGitGrants.size > 0) {
+    for (const scope of delegatedScopes) {
+      if (bounded.has(scope) || !isNarrowGitScope(scope)) continue;
+      const base = extractBaseScope(scope);
+      const connectorId = parseGitScopeQualifier(scope.slice(base.length + 1))?.connectorId;
+      if (!connectorId) continue;
+      const satisfying = [base, ...(IMPLIED_SCOPES_BY_REQUIRED_SCOPE[base] ?? [])];
+      if (satisfying.some((held) => narrowGitGrants.has(`${held}|${connectorId}`))) bounded.add(scope);
+    }
+  }
+
   return [...bounded];
+}
+
+/** A Git scope limited below its connector: to a GitLab group or project, or a GitHub owner or repository. */
+export function isNarrowGitScope(scope: string): boolean {
+  const base = extractBaseScope(scope);
+  if (scope === base || !isGitScopeBase(base)) return false;
+  const parsed = parseGitScopeQualifier(scope.slice(base.length + 1));
+  return !!parsed && parsed.kind !== 'connector';
+}
+
+/** `<base>|<connectorId>` for every narrow Git grant (group, owner, project or repository qualifier). */
+function narrowGitGrantKeys(scopes: readonly string[]): Set<string> {
+  const keys = new Set<string>();
+  for (const scope of scopes) {
+    if (!isNarrowGitScope(scope)) continue;
+    const base = extractBaseScope(scope);
+    const connectorId = parseGitScopeQualifier(scope.slice(base.length + 1))?.connectorId;
+    if (connectorId) keys.add(`${base}|${connectorId}`);
+  }
+  return keys;
 }
 
 /**
@@ -243,7 +294,9 @@ export function privilegeBoundaryScopes(
 ): string[] {
   if (!accountScopes) return actorScopes;
   return [
-    ...actorScopes,
+    // Narrow Git scopes a token keeps only for request-time checks against its owner's scopes (boundScopes
+    // step 4) count only where the owner covers them without provider data.
+    ...actorScopes.filter((scope) => !isNarrowGitScope(scope) || hasScope(accountScopes, scope)),
     ...accountScopes.filter((scope) => {
       const base = extractBaseScope(scope);
       // A programmatic caller may never hand out impersonation, even when its owner holds it.

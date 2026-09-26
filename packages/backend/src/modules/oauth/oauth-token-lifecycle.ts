@@ -251,7 +251,8 @@ export class OAuthTokenLifecycle {
       .catch(() => {});
 
     return {
-      user,
+      // The owner's live scopes travel with the caller: Git repository checks require both (User.accountScopes).
+      user: { ...user, accountScopes: user.scopes },
       scopes,
       tokenId: token.id,
       tokenPrefix: token.tokenPrefix,

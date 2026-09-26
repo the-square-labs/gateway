@@ -1,6 +1,7 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
-import { container } from '@/container.js';
-import { hasScope, hasScopeBase } from '@/lib/permissions.js';
+import { container, TOKENS } from '@/container.js';
+import type { DrizzleClient } from '@/db/client.js';
+import { hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import type { AppEnv } from '@/types.js';
 import {
@@ -19,6 +20,7 @@ import { NetworkConnectSchema, NetworkCreateSchema } from './docker.schemas.js';
 import { DockerManagementService } from './docker.service.js';
 import { requireDockerNetworkScope } from './docker-access.middleware.js';
 import { DockerAccessResourceService, hasDockerResourceScope } from './docker-access-resource.service.js';
+import { dockerCreationDeniedMessage } from './docker-creation-access.js';
 import { DockerFolderService } from './docker-folder.service.js';
 import { isGatewayManagedDockerNetwork } from './docker-internal-networks.js';
 import { DockerSnapshotService } from './docker-snapshot.service.js';
@@ -57,12 +59,7 @@ function hasNetworkDestinationScope(
   nodeId: string,
   folderId: string | null | undefined
 ): boolean {
-  const grants = [...scopes];
-  return (
-    hasScope(grants, baseScope) ||
-    hasScope(grants, `${baseScope}:${nodeId}`) ||
-    (!!folderId && hasScope(grants, `${baseScope}:folder/${folderId}`))
-  );
+  return hasScopeForCreation(scopes, baseScope, folderId, nodeId);
 }
 
 async function assertNetworkContainerEditScope(scopes: string[], nodeId: string, containerId: string): Promise<void> {
@@ -162,7 +159,12 @@ export function registerNetworkRoutes(router: OpenAPIHono<AppEnv>) {
     const config = NetworkCreateSchema.parse(body);
     const scopes = c.get('effectiveScopes') ?? [];
     if (!hasNetworkDestinationScope(scopes, 'docker:networks:create', nodeId, config.folderId)) {
-      throw new AppError(403, 'FORBIDDEN', 'Missing required scope: docker:networks:create');
+      const db = container.resolve<DrizzleClient>(TOKENS.DrizzleClient);
+      throw new AppError(
+        403,
+        'FORBIDDEN',
+        await dockerCreationDeniedMessage(db, scopes, 'docker:networks:create', config.folderId)
+      );
     }
     await container.resolve(DockerFolderService).assertResourceDestination('network', config.folderId);
     const data = await service.createNetwork(nodeId, config, user.id);

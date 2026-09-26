@@ -22,18 +22,21 @@ describe('Docker destination authorization', () => {
     null,
     undefined,
     'f2',
-  ])('rejects unauthorized destination %s before querying or mutating', async (folderId) => {
+  ])('rejects unauthorized destination %s before touching it, naming the folders it may use', async (folderId) => {
+    // Read-only: the denial may look folder names up for its message, but nothing is written.
     const db = folderDb();
-    await expect(
-      assertDockerCreationAccess(
-        db as never,
-        ['docker:containers:create:folder/f1'],
-        'docker:containers:create',
-        'n1',
-        folderId
-      )
-    ).rejects.toMatchObject({ statusCode: 403 });
-    expect(db.select).not.toHaveBeenCalled();
+    const denial = assertDockerCreationAccess(
+      db as never,
+      ['docker:containers:create:folder/f1'],
+      'docker:containers:create',
+      'n1',
+      folderId
+    );
+    await expect(denial).rejects.toMatchObject({ statusCode: 403, code: 'FORBIDDEN' });
+    const message = ((await denial.catch((error: Error) => error)) as Error).message;
+    expect(message).toContain(folderId ? `docker:containers:create:folder/${folderId}` : 'at the root (no folder)');
+    expect(message).toContain('f1');
+    expect(message).toContain('pass folderId');
   });
   it('refuses a missing or protected folder even for broad creators', async () => {
     for (const rows of [[], [{ id: 'f1', isSystem: true }]]) {
@@ -78,5 +81,18 @@ describe('Docker destination authorization', () => {
       resourceKey: 'app',
       folderId: 'f1',
     });
+  });
+  it.each([
+    null,
+    undefined,
+  ])('drops a stale placement of the name when the resource is created at the root (%s)', async (folderId) => {
+    const where = vi.fn().mockResolvedValue(undefined);
+    const db = { insert: vi.fn(), delete: vi.fn(() => ({ where })) };
+    await placeCreatedDockerResource(db as never, 'n1', 'container', 'app', folderId);
+    // A row left by an earlier container named "app" would otherwise pull the new root container into that
+    // folder, where the folder's grants (API tokens, MCP grants) could read and manage it.
+    expect(db.delete).toHaveBeenCalledOnce();
+    expect(where).toHaveBeenCalledOnce();
+    expect(db.insert).not.toHaveBeenCalled();
   });
 });

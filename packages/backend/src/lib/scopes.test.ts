@@ -31,11 +31,13 @@ function frontendResourceScopableScopes(): string[] {
   const source = readFileSync(join(process.cwd(), '../frontend/src/types/scope-resource-restrictions.ts'), 'utf8');
   const match = source.match(/export const RESOURCE_SCOPABLE_SCOPES = \[([\s\S]*?)\] as const;/);
   if (!match) throw new Error('RESOURCE_SCOPABLE_SCOPES not found');
-  const creation = source.match(/export const FOLDER_CREATION_SCOPES = \[([\s\S]*?)\] as const;/);
-  if (!creation) throw new Error('FOLDER_CREATION_SCOPES not found');
-  return [...match[1].replace('...FOLDER_CREATION_SCOPES', creation[1]).matchAll(/"([^"]+)"/g)].map(
-    (entry) => entry[1]
-  );
+  // Expand every `...LIST` spread (FOLDER_CREATION_SCOPES, GIT_TARGET_SCOPES, ...) from the same module.
+  const body = match[1].replace(/\.\.\.([A-Z_]+)/g, (_spread, name: string) => {
+    const list = source.match(new RegExp(`export const ${name} = \\[([\\s\\S]*?)\\] as const;`));
+    if (!list) throw new Error(`${name} not found`);
+    return list[1];
+  });
+  return [...body.matchAll(/"([^"]+)"/g)].map((entry) => entry[1]);
 }
 
 function frontendSelectableScopes(): string[] {

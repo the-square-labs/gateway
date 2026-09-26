@@ -1,3 +1,4 @@
+import { ACCESS_AREAS } from '@/lib/access-summary.js';
 import type { AIToolDefinition } from './ai.types.js';
 
 export const DISCOVERY_AI_TOOLS: AIToolDefinition[] = [
@@ -176,6 +177,25 @@ export const DISCOVERY_AI_TOOLS: AIToolDefinition[] = [
     },
     destructive: false,
     category: 'Interaction',
+    requiredScope: 'ai:workspace:use',
+    invalidateStores: [],
+  },
+  {
+    name: 'get_my_access',
+    description:
+      'Summarize what you can access in Gateway, grouped by area (Docker, routes, domains, certificates, databases, storage, Pages, logging, nodes, integrations, and more): whether access is broad, which folders (id, name, path), nodes and specific resources are granted with which actions, and where you may create (folders, nodes, or the root). Call it when a list comes back empty, when something is refused at the root, and before creating. Folder-limited access is normal: work inside the granted folders and pass folderId (and nodeId) when creating.',
+    parameters: {
+      type: 'object',
+      properties: {
+        area: {
+          type: 'string',
+          enum: ACCESS_AREAS.map((area) => area.id),
+          description: 'Optional area to return, for example docker_containers or routes. Default: every area.',
+        },
+      },
+    },
+    destructive: false,
+    category: 'Discovery',
     requiredScope: 'ai:workspace:use',
     invalidateStores: [],
   },

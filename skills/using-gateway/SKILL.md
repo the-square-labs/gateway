@@ -13,7 +13,8 @@ Use existing Gateway MCP tools when they are already available. If no usable Gat
 
 Never ask the user to paste an OAuth token, API token, setup code, Node enrollment token, deploy token, registry password, database credential, or other secret into chat.
 
-- **Tools.** With Extended MCP compatibility (the default) every scoped tool is listed. Otherwise activate only the toolsets the request needs with `discover_tools({ category })` and list tools again; `find_resource` and `read_gateway_documentation` are always visible. Toolset IDs and exclusions: [MCP toolsets](references/mcp-toolsets.md).
+- **Tools.** With Extended MCP compatibility (the default) every scoped tool is listed. Otherwise activate only the toolsets the request needs with `discover_tools({ category })` and list tools again; `find_resource`, `get_my_access`, and `read_gateway_documentation` are always visible. Toolset IDs and exclusions: [MCP toolsets](references/mcp-toolsets.md).
+- **Your access.** Read the server instructions: when the connection is limited to folders, Nodes, or resources, they end with a short summary of those grants. `get_my_access` (also the `gateway://access` resource) returns the full picture by area: broad or limited, the granted folders (id, name, path), Nodes and resources with their actions, and where you may create.
 - **Documentation.** Before complex or recently added operations, read `read_gateway_documentation({ topic })` or `gateway://docs/<topic>` instead of relying on remembered arguments. The connected release is the source of truth.
 - **Resources.** Use `find_resource` for names, domains, images, containers, deployments, Compose Projects, Page Projects, certificates, Nodes, databases, and builds. Never invent resource IDs.
 
@@ -43,11 +44,19 @@ Prefer Pages for static output. Prefer a standalone Container for one ordinary s
 
 Inspect whether the repository already has a healthy deployment pipeline. If Gateway Git-source builds are admitted and no deployment CI exists, use Gateway source bindings, Build Workers, `autoBuild`, and `autoDeploy` instead of authoring CI solely to deploy through Gateway. Preserve an existing release pipeline unless the user asks to replace it.
 
+## Limited access is normal
+
+If you can't see or do something at the root, check `get_my_access`; folder-limited access is normal, so work inside the granted folders. Many users and grants hold scopes only on some folders, Nodes, or resources (`docker:containers:create:folder/<id>`), never at the root.
+
+- An empty list means nothing visible matches, not that the tool is forbidden. Lists return only what you can access; do not conclude you have no access.
+- To create, pass `folderId` (and `nodeId` where the tool takes one) for a destination listed under `create` in `get_my_access`, or a folder whose `access.canCreate` is true in `list_resource_folders`. A create without a destination targets the root and is refused unless `create.atRoot` is true.
+- A permission error that names your folders or Nodes is telling you where to act: retry there. Report a missing permission only when `get_my_access` shows no grant for the needed action anywhere, and then name the exact scope the user should ask for.
+
 ## Preflight before promising success
 
 Check only prerequisites relevant to the selected path:
 
-- effective scopes, `mcp:use`, OAuth manual-approval scopes, and feature entitlement;
+- effective scopes (`get_my_access`: broad or limited to folders, Nodes, or resources), `mcp:use`, OAuth manual-approval scopes, and feature entitlement;
 - suitable online Nodes and advertised capabilities;
 - build admission, allowlisted Git connector, exact repository and branch, writable internal registry, and Build Worker readiness;
 - existing resources, conflicting names, active Tasks, Domains, certificates, Routes, Tags, and ownership;
@@ -64,7 +73,7 @@ Use Gateway-native state transitions and read the resulting resource after each 
 1. Run the preflight or dry run where one exists (Docker migration, Docker Availability, storage copy) before the real operation.
 2. Record returned resource, operation, request, build, and Task identifiers.
 3. Follow the owning Task or status resource until a terminal state or concrete blocker is known.
-4. Inspect structured failure details instead of retrying blindly: `401` authentication, `403` scope or entitlement, `404` not visible or not existing, `409` lifecycle or quota conflict, `422` validation, `429` back off, `5xx` or offline Node: reconcile the durable Task first.
+4. Inspect structured failure details instead of retrying blindly: `401` authentication, `403` scope or entitlement (with limited access, the destination or target is outside your grants: check `get_my_access`), `404` not visible or not existing, `409` lifecycle or quota conflict, `422` validation, `429` back off, `5xx` or offline Node: reconcile the durable Task first.
 5. Read the final desired and reported resource state.
 6. Verify the external outcome from the real consumer path: HTTPS response, workload health, database connection through the binding, or a published Pages link.
 

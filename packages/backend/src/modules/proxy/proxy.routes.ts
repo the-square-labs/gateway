@@ -1,7 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { container } from '@/container.js';
 import { openApiValidationHook } from '@/lib/openapi.js';
-import { getResourceScopedIds, hasScope, hasScopeForCreation } from '@/lib/permissions.js';
+import { getResourceScopedIds, hasScope, hasScopeBase, hasScopeForCreation } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { authMiddleware, requireScopeBase, requireScopeForResource } from '@/modules/auth/auth.middleware.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
@@ -29,6 +29,7 @@ import {
   getProxyHostHealthHistoryRoute,
   getProxyHostRoute,
   listProxyHostsRoute,
+  listRouteIngressNodesRoute,
   renderedProxyConfigRoute,
   resyncProxyHostTlsRoute,
   toggleProxyHostRoute,
@@ -41,6 +42,7 @@ import {
   CreateProxyHostSchema,
   ProxyHostListQuerySchema,
   parseRetargetAdditionalSecureLink,
+  RouteIngressNodeListQuerySchema,
   ToggleProxyHostSchema,
   ToggleProxyMaintenanceSchema,
   UpdateProxyHostSchema,
@@ -119,6 +121,14 @@ proxyRoutes.openapi({ ...listProxyHostsRoute, middleware: requireScopeBase('prox
   );
   const scopedData = result.data.map((host) => redactProxyHostForScopes(host as any, scopes));
   return c.json({ ...result, data: scopedData });
+});
+
+// Registered before /{id}. Any proxy:create grant form (broad, folder or node) may list the ingress
+// nodes it can create routes on, without nodes:details.
+proxyRoutes.openapi({ ...listRouteIngressNodesRoute, middleware: requireScopeBase('proxy:create') }, async (c) => {
+  const { folderId } = RouteIngressNodeListQuerySchema.parse(c.req.query());
+  const data = await container.resolve(ProxyService).listRouteIngressNodes(c.get('effectiveScopes') || [], folderId);
+  return c.json({ data });
 });
 
 proxyRoutes.openapi(getProxyHostBySlugRoute, async (c) => {
@@ -320,12 +330,19 @@ proxyRoutes.openapi(
 proxyRoutes.openapi(createProxyHostRoute, async (c) => {
   const proxyService = container.resolve(ProxyService);
   const user = c.get('user')!;
-  const input = CreateProxyHostSchema.parse(await c.req.json());
+  const request = CreateProxyHostSchema.parse(await c.req.json());
   const scopes = c.get('effectiveScopes') || [];
-  if (input.upstreamKind === 'pages') {
+  if (request.upstreamKind === 'pages') {
     await container.resolve(LicensePolicyService).requireFeature('pages');
     await container.resolve(PageProfileService).requireEnabled();
   }
+  if (!hasScopeBase(scopes, 'proxy:create')) {
+    throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
+  }
+  // Without nodeId the route takes the node of its registered domains or the caller's only eligible
+  // node; every destination check below runs against that node.
+  const nodeId = request.nodeId ?? (await proxyService.resolveRouteIngressNode(scopes, request)).nodeId;
+  const input = { ...request, nodeId };
   if (!hasScopeForCreation(scopes, 'proxy:create', input.folderId, input.nodeId)) {
     throw new AppError(403, 'FORBIDDEN', 'Missing proxy:create permission for the selected destination');
   }

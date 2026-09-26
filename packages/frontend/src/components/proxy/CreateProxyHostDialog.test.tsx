@@ -206,6 +206,75 @@ describe("CreateProxyHostDialog", () => {
     expect(screen.getByRole("combobox", { name: "Ingress node" })).toHaveTextContent("Edge Two");
   });
 
+  describe("automatic ingress node", () => {
+    const twoNodes = {
+      data: ["node-1", "node-2"].map((id, index) => ({
+        id,
+        hostname: `edge-${index + 1}`,
+        displayName: `Edge ${index + 1}`,
+        type: "nginx",
+        status: "online",
+        serviceCreationLocked: false,
+        capabilities: {},
+      })),
+    };
+
+    beforeEach(() => {
+      api.invalidateCache("nodes:list:default");
+      vi.spyOn(api, "listNodes").mockResolvedValue(twoNodes as never);
+      vi.spyOn(api, "listSSLCertificates").mockResolvedValue({ data: [] } as never);
+      vi.spyOn(api, "listNginxTemplates").mockResolvedValue([]);
+      vi.spyOn(api, "listDockerContainerSnapshots").mockResolvedValue([]);
+      // Domains the caller cannot list: the dialog cannot fill the node itself.
+      vi.spyOn(api, "searchDomains").mockResolvedValue([]);
+    });
+
+    it("creates without a node so the server uses the registered domain's ingress node", async () => {
+      const createProxyHost = vi
+        .spyOn(api, "createProxyHost")
+        .mockResolvedValue({ id: "route-1" } as never);
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled()
+      );
+      await user.type(screen.getByPlaceholderText("example.com"), "app.example.com");
+      expect(screen.getByRole("button", { name: /next/i })).toBeDisabled();
+      await user.click(screen.getByRole("combobox", { name: "Ingress node" }));
+      await user.click(screen.getByRole("option", { name: /Automatic/i }));
+      expect(screen.getByRole("combobox", { name: "Ingress node" })).toHaveTextContent(
+        "Automatic (from the registered domain)"
+      );
+      await user.click(screen.getByRole("button", { name: /next/i }));
+      await user.type(await screen.findByPlaceholderText("192.168.1.100"), "10.0.0.2");
+      await user.click(screen.getByRole("button", { name: /create/i }));
+
+      await waitFor(() => expect(createProxyHost).toHaveBeenCalledOnce());
+      const request = createProxyHost.mock.calls[0]?.[0];
+      expect(request).toEqual(expect.objectContaining({ domainNames: ["app.example.com"] }));
+      expect(request?.nodeId).toBeUndefined();
+    });
+
+    it("does not offer the automatic node to a node-limited creator", async () => {
+      useAuthStore.setState({
+        user: { id: "user-1", scopes: ["proxy:create:node/node-2"] } as never,
+      });
+      const user = userEvent.setup();
+
+      render(<CreateProxyHostDialog open onOpenChange={vi.fn()} />);
+
+      await waitFor(() =>
+        expect(screen.getByRole("combobox", { name: "Ingress node" })).not.toBeDisabled()
+      );
+      await user.click(screen.getByRole("combobox", { name: "Ingress node" }));
+      expect(screen.queryByRole("option", { name: /Automatic/i })).not.toBeInTheDocument();
+      expect(screen.getByRole("option", { name: /Edge 2/i })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: /Edge 1/i })).not.toBeInTheDocument();
+    });
+  });
+
   it("submits a Pages upstream target through the create flow", async () => {
     api.invalidateCache("nodes:list:default");
     vi.spyOn(api, "listNodes").mockResolvedValue({

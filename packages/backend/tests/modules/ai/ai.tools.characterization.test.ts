@@ -42,10 +42,10 @@ describe('AI tool registry characterization', () => {
     };
 
     expect(summary).toEqual({
-      count: 257,
-      digest: '41a4763e9fab6a185269fecd374636c87991433cce8f7823779258a3a57eec38',
+      count: 259,
+      digest: 'ea8d7a16e52b1061a10b8161975d70423a6210ffa746b0d0509a46a13db27382',
       categoryCounts: {
-        Discovery: 6,
+        Discovery: 7,
         Artifact: 2,
         Interaction: 3,
         'Conversation Retrieval': 5,
@@ -54,7 +54,7 @@ describe('AI tool registry characterization', () => {
         'PKI - Certificates': 5,
         'PKI - Templates': 4,
         Folders: 2,
-        Ingress: 17,
+        Ingress: 18,
         'SSL Certificates': 4,
         Domains: 4,
         'Access Lists': 4,
@@ -114,20 +114,20 @@ describe('AI tool registry characterization', () => {
       )
     ).toEqual({
       allDefault: {
-        count: 251,
-        digest: '0c815eebb23eb355c2667de2d6b2986ab0a6e288e4d6b073ae658fc433f1056a',
+        count: 253,
+        digest: 'eb29dbe632dbe83f0e8e71fd1f95a9663012aac0d6d7ee6847d4f6e902180161',
       },
       allCapabilities: {
-        count: 252,
-        digest: '150b25c1df6c3c16b9372dbc6bce285323b01c92f38496319b0ec08c072cf9f5',
+        count: 254,
+        digest: 'af77941a089e7f11eed524680f5962557308d5632df3b1ad0f7444b926d3fd6b',
       },
       discoveredIngressDocker: {
-        count: 79,
-        digest: '394ee8d8df9d1391d4872491e5a52be815fa8cdafe49258431535ea3cae990e2',
+        count: 81,
+        digest: 'c82d3678904eef7394c53217c27dcb6d30c3b2e07f983d1ee9a27422bcc59e5f',
       },
       planningMode: {
-        count: 146,
-        digest: '6f81772409c248f31048dcde4ee746e65449925578b2fbecd21a4635000e21e3',
+        count: 148,
+        digest: '92b4321eddafb73879491b9d24b38cff4712418624a7092d9f830bd5096847af',
       },
     });
     expect(matrix.allDefault).not.toContain('web_search');

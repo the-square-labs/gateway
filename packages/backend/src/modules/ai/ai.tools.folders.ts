@@ -4,7 +4,7 @@ export const FOLDER_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'list_resource_folders',
     description:
-      'List folders for a Gateway resource type. Use this before moving resources between folders or when the user asks about folder layout.',
+      'List the folders of a Gateway resource type that you can use. Each folder carries access.actions (the actions you hold there, broad grants included) and access.canCreate. With folder-limited access you see every folder you hold any grant on, even an empty one: pick a folderId here before creating or moving resources, and see get_my_access for all your grants.',
     parameters: {
       type: 'object',
       properties: {

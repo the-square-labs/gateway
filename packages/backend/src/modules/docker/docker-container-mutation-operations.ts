@@ -18,6 +18,7 @@ import { assertManagedMountMutation } from './docker-managed-mounts.js';
 import { hasRequestedSpecificPortBindIp } from './docker-port-bindings.js';
 import { assertContainerNotUsedByProxy } from './docker-proxy-link.guard.js';
 import type { DockerRegistryAuthCandidate, DockerRegistryService } from './docker-registry.service.js';
+import { assertNoReservedDockerLabelChanges } from './docker-reserved-labels.js';
 import {
   applyPersistedDockerRuntimeSettingsToConfig,
   type DockerRuntimeOperationContext,
@@ -39,6 +40,25 @@ const logger = createChildLogger('DockerContainerMutationOperations');
 
 /** Placeholder that inspect returns for secret-backed env values. */
 const MASKED_ENV_VALUE = '********';
+
+/**
+ * Run once a mutation holds its names in this process, before it changes
+ * anything: the names are leased across backend processes, and the migration
+ * guard is checked again. The caller checked the guard before claiming; a
+ * migration admitted in between has written its row by now (its admission is
+ * refused while the container is claimed or leased), so it is refused here.
+ * The caller gives its claim back when this throws.
+ */
+async function holdAcrossProcesses(
+  ctx: DockerContainerMutationContext,
+  nodeId: string,
+  names: readonly string[],
+  identities: readonly string[],
+  newName?: string
+) {
+  await ctx.acquireTransitionLeases(nodeId, names);
+  await ctx.recheckMigrationGuard(nodeId, identities, newName);
+}
 
 export interface DockerContainerMutationContext {
   db: DrizzleClient;
@@ -91,6 +111,15 @@ export interface DockerContainerMutationContext {
     entries: ReadonlyArray<{ name: string; state: ContainerTransition }>
   ): ContainerTransitionClaim;
   releaseTransitions(claim: ContainerTransitionClaim): void;
+  /**
+   * Backs this process's transitions on the names with database leases, so
+   * another backend process cannot rename or update them meanwhile: 409
+   * CONTAINER_BUSY (details.name) when one holds a name. Released when the
+   * name's transition ends here.
+   */
+  acquireTransitionLeases(nodeId: string, names: readonly string[]): Promise<void>;
+  /** The migration guard, checked again once the mutation holds the container. */
+  recheckMigrationGuard(nodeId: string, identities: readonly string[], newName?: string): Promise<void>;
   emitContainer(
     nodeId: string,
     name: string,
@@ -773,6 +802,20 @@ export async function renameContainer(
     throw error;
   }
   try {
+    try {
+      await holdAcrossProcesses(ctx, nodeId, [oldName, newName], [oldName, containerId], newName);
+    } catch (error) {
+      // Another backend process is creating or renaming a container to the new name.
+      const busyName = error instanceof AppError ? (error.details as { name?: unknown } | undefined)?.name : undefined;
+      if (error instanceof AppError && error.code === 'CONTAINER_BUSY' && busyName === newName) {
+        throw new AppError(
+          409,
+          'NAME_IN_USE',
+          `A container named "${newName}" is currently being modified on this node`
+        );
+      }
+      throw error;
+    }
     await ctx.accessResourceService?.assertContainerRenameAllowed?.(nodeId, oldName, newName);
     await ctx.assertNameAvailable(nodeId, newName, claim);
     // The runtime name is available, so any name-keyed records left behind by a
@@ -1019,6 +1062,12 @@ export async function updateContainer(
     : Math.max(120000, ctx.lifecycleWatchTimeoutMs(updateStopTimeout, 60));
   ctx.requireNoTransition(nodeId, name);
   ctx.setTransition(nodeId, name, 'updating');
+  try {
+    await holdAcrossProcesses(ctx, nodeId, [name], [name, containerId]);
+  } catch (error) {
+    ctx.clearTransition(nodeId, name);
+    throw error;
+  }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   const task = await ctx.createTask(nodeId, containerId, name, 'update');
   let data: any;
@@ -1145,6 +1194,12 @@ export async function recreateWithConfig(
     delete config.env;
   }
   const inspect = await ctx.inspectContainer(nodeId, containerId);
+  // Labels are replaced wholesale: Compose and Gateway labels may only come back unchanged, or the
+  // recreated container would leave its folder (Compose re-homing) or hide from its users.
+  assertNoReservedDockerLabelChanges(
+    config.labels as Record<string, string> | undefined,
+    (inspect?.Config?.Labels ?? {}) as Record<string, unknown>
+  );
   const requestedImage = typeof config.image === 'string' ? config.image.trim() : '';
   const hasRequestedImage = !!requestedImage;
   const currentRuntimeProfile = inspect?.HostConfig?.Runtime === 'runsc' ? 'secure' : 'default';
@@ -1186,6 +1241,7 @@ export async function recreateWithConfig(
   ctx.requireNoTransition(nodeId, name);
   ctx.setTransition(nodeId, name, 'recreating');
   try {
+    await holdAcrossProcesses(ctx, nodeId, [name], [name, containerId]);
     await persistDockerRuntimeSettings(ctx.runtimeOperationContext(), nodeId, name, config);
   } catch (error) {
     ctx.clearTransition(nodeId, name);
@@ -1441,6 +1497,12 @@ export async function updateContainerEnv(
   // overwritten by a recreate that started meanwhile.
   ctx.requireNoTransition(nodeId, name);
   ctx.setTransition(nodeId, name, 'updating');
+  try {
+    await holdAcrossProcesses(ctx, nodeId, [name], [name, containerId]);
+  } catch (error) {
+    ctx.clearTransition(nodeId, name);
+    throw error;
+  }
   ctx.emitTransition(nodeId, name, containerId, 'updating');
   const task = await ctx.createTask(nodeId, containerId, name, 'update');
   let data: any;

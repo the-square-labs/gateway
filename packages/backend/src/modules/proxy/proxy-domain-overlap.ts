@@ -1,7 +1,10 @@
 import { and, eq, ne, sql } from 'drizzle-orm';
 import type { DrizzleClient } from '@/db/client.js';
-import { proxyHosts } from '@/db/schema/index.js';
+import { proxyHostDomains, proxyHosts } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+
+/** Partial unique index on `proxy_host_domains`: one enabled host per name on a node. */
+export const PROXY_HOST_DOMAIN_UNIQUE_INDEX = 'proxy_host_domains_node_domain_unique';
 
 /**
  * Two enabled proxy hosts on one node must not serve the same name: nginx keeps
@@ -40,5 +43,61 @@ export async function assertNoProxyDomainOverlap(
     'PROXY_HOST_DOMAIN_CONFLICT',
     `Another enabled proxy host on this node already serves ${overlapping.join(', ') || 'these domains'}`,
     { proxyHostId: conflict.id, nodeId, domains: overlapping }
+  );
+}
+
+/** The node and name of a violation of the per-node domain index, or null for any other error. */
+function proxyHostDomainViolation(error: unknown): { nodeId?: string; domain?: string } | null {
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 6 && current && typeof current === 'object' && !seen.has(current); depth += 1) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; constraint?: unknown; detail?: unknown; cause?: unknown };
+    if (candidate.code === '23505' && candidate.constraint === PROXY_HOST_DOMAIN_UNIQUE_INDEX) {
+      // Key (node_id, domain)=(<node>, <domain>) already exists.
+      const key =
+        typeof candidate.detail === 'string' ? /=\(([^,]+), (.+)\) already exists/.exec(candidate.detail) : null;
+      return key ? { nodeId: key[1], domain: key[2] } : {};
+    }
+    current = candidate.cause;
+  }
+  return null;
+}
+
+/**
+ * The database keeps one enabled host per name on a node (`proxy_host_domains`,
+ * kept in sync with `proxy_hosts` by a trigger). A write that loses that race,
+ * or that no service check covered, gets the same 409 as
+ * `assertNoProxyDomainOverlap`; any other error is rethrown unchanged.
+ */
+export async function rethrowProxyHostDomainConflict(db: DrizzleClient, error: unknown): Promise<never> {
+  const violation = proxyHostDomainViolation(error);
+  if (!violation) throw error;
+  const { nodeId, domain } = violation;
+  let proxyHostId: string | undefined;
+  if (nodeId && domain) {
+    try {
+      const [holder] = await db
+        .select({ proxyHostId: proxyHostDomains.proxyHostId })
+        .from(proxyHostDomains)
+        .where(
+          and(
+            eq(proxyHostDomains.nodeId, nodeId),
+            eq(proxyHostDomains.domain, domain),
+            eq(proxyHostDomains.enabled, true),
+            eq(proxyHostDomains.legacyConflict, false)
+          )
+        )
+        .limit(1);
+      proxyHostId = holder?.proxyHostId;
+    } catch {
+      // The conflict stands without naming the other host.
+    }
+  }
+  throw new AppError(
+    409,
+    'PROXY_HOST_DOMAIN_CONFLICT',
+    `Another enabled proxy host on this node already serves ${domain ?? 'these domains'}`,
+    { ...(proxyHostId ? { proxyHostId } : {}), nodeId, domains: domain ? [domain] : [] }
   );
 }

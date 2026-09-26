@@ -54,6 +54,58 @@ export function domainNginxNodeOptionsForScopes<TEligible extends NodeOption, TU
   };
 }
 
+interface NamedNginxNode {
+  id: string;
+  hostname: string;
+  displayName: string | null;
+}
+
+const LISTED_NODES_IN_MESSAGE = 10;
+
+/** The DOMAIN_NGINX_NODE_REQUIRED refusal: several ingress nodes qualify, so the caller must name one. */
+export function domainNginxNodeRequiredError(eligibleNodes: readonly NamedNginxNode[]): AppError {
+  const nodes = eligibleNodes.map((node) => ({ id: node.id, displayName: node.displayName, hostname: node.hostname }));
+  const listed = nodes
+    .slice(0, LISTED_NODES_IN_MESSAGE)
+    .map((node) =>
+      node.displayName && node.displayName !== node.hostname
+        ? `${node.displayName} (${node.hostname}): ${node.id}`
+        : `${node.hostname}: ${node.id}`
+    )
+    .join('; ');
+  const more = nodes.length > LISTED_NODES_IN_MESSAGE ? `; and ${nodes.length - LISTED_NODES_IN_MESSAGE} more` : '';
+  return new AppError(
+    409,
+    'DOMAIN_NGINX_NODE_REQUIRED',
+    `nginxNodeId is required: ${nodes.length} Nginx ingress nodes with a public address can serve this domain. Pass nginxNodeId with one of: ${listed}${more}`,
+    { eligibleNodes: nodes }
+  );
+}
+
+/**
+ * The ingress node of a domain created without nginxNodeId. A broad grant, or a grant on the
+ * destination folder, covers every node: the service then picks the only node with a public address
+ * or lists them. A caller limited to nodes (`domains:create:node/<id>`) gets its only such granted
+ * node; several refuse with the list, none leaves it unset so the destination check refuses.
+ */
+export async function resolveDomainCreationNginxNodeId<TEligible extends NamedNginxNode>(
+  scopes: string[],
+  input: { nginxNodeId?: string; folderId?: string | null },
+  loadOptions: () => Promise<{ eligibleNodes: TEligible[] }>
+): Promise<string | undefined> {
+  if (input.nginxNodeId) return input.nginxNodeId;
+  if (hasScopeForCreation(scopes, 'domains:create', input.folderId ?? null)) return undefined;
+  const nodeScoped = scopes.some(
+    (scope) => scope.startsWith('domains:create:') && !scope.startsWith('domains:create:folder/')
+  );
+  if (!nodeScoped) return undefined;
+  const candidates = (await loadOptions()).eligibleNodes.filter((node) =>
+    hasScopeForCreation(scopes, 'domains:create', input.folderId ?? null, node.id)
+  );
+  if (candidates.length > 1) throw domainNginxNodeRequiredError(candidates);
+  return candidates[0]?.id;
+}
+
 /**
  * Moving a domain's ingress to another node re-creates every covered route there, so it needs the
  * same grants as `PUT /proxy-hosts/:id {nodeId}`: proxy:create on the target for each route's

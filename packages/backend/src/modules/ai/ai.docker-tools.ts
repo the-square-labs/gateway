@@ -205,9 +205,12 @@ export async function executeDockerTool(
         // Creating never implies starting: like POST .../start, it needs docker:containers:manage
         // on the new container, otherwise the container is returned stopped.
         const created = await context.dockerService.inspectContainer(a.nodeId, containerId);
+        // A folder grant covers containers placed in the folder later, including this one: the request's
+        // expanded scopes predate it, so the destination folder grant is checked directly.
         const canStart =
           hasScopeForResource(user.scopes, 'docker:containers:manage', a.nodeId) ||
-          hasDockerContainerScope(user, 'docker:containers:manage', a.nodeId, created);
+          hasDockerContainerScope(user, 'docker:containers:manage', a.nodeId, created) ||
+          (!!input.folderId && hasScope(user.scopes, `docker:containers:manage:folder/${input.folderId}`));
         if (canStart) await context.dockerService.startContainer(a.nodeId, containerId, user.id);
         const inspect = canStart ? await context.dockerService.inspectContainer(a.nodeId, containerId) : created;
         const name = String((inspect as any)?.Name ?? (data as any)?.name ?? '').replace(/^\//, '');
@@ -1264,7 +1267,7 @@ async function manageDockerSource(
     if (!canListSourceConnectors(user.scopes)) {
       throw new Error('PERMISSION_DENIED: Picking a Git source requires create or edit access to its workload');
     }
-    return listSourceConnectors(container.resolve(TOKENS.DrizzleClient) as DrizzleClient);
+    return listSourceConnectors(container.resolve(TOKENS.DrizzleClient) as DrizzleClient, user.scopes);
   }
   if (operation === 'repositories') {
     // GET /sources/connectors/:connectorId/repositories: the Docker workload create/edit scopes.

@@ -1,10 +1,23 @@
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
 import type { User } from '@/types.js';
+import type { GitLabScopeTargets, ScopeTargetResolution, ScopeTargetSearchQuery } from './git-scope-targets.js';
 import type { VcsCommitFileChange } from './integration-provider.types.js';
 import { IntegrationsCloudflareService } from './integrations.service.cloudflare.js';
 
 // Public contract only. The commercial package supplies paid implementations.
 export class IntegrationsGitLabToolService extends IntegrationsCloudflareService {
+  /** Scope picker search: groups and projects the caller may view on a GitLab connector. */
+  async listGitLabScopeTargets(
+    _user: User,
+    _connectorId: string,
+    _query: ScopeTargetSearchQuery
+  ): Promise<GitLabScopeTargets> {
+    return commercialModuleUnavailable();
+  }
+  /** Labels for stored GitLab qualifiers (`group/<id>`, `project/<id>`). */
+  async resolveGitLabScopeTargets(_user: User, _connectorId: string, _rawIds: string): Promise<ScopeTargetResolution> {
+    return commercialModuleUnavailable();
+  }
   async searchGitLabAllowlist(
     _id: string,
     _query: string

@@ -10,7 +10,8 @@ vi.mock('@/lib/folder-scopes.js', () => ({
   isFolderScopedScope: (scope: string) => /:folder\/[^/]+$/.test(scope),
 }));
 
-import type { AppError } from '@/middleware/error-handler.js';
+import { AppError } from '@/middleware/error-handler.js';
+import { assertNoProxyDomainOverlap } from '@/modules/proxy/proxy-domain-overlap.js';
 import { probeDnsRecords } from './dns.utils.js';
 import { DomainsService, selectBackfillNginxNode } from './domain.service.js';
 
@@ -34,6 +35,10 @@ vi.mock('@/db/schema/ssl-certificates.js', () => ({
     status: 'sslCertificates.status',
     notAfter: 'sslCertificates.notAfter',
   },
+}));
+
+vi.mock('@/modules/proxy/proxy-domain-overlap.js', () => ({
+  assertNoProxyDomainOverlap: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('./dns.utils.js', () => ({
@@ -223,6 +228,78 @@ describe('DomainsService Cloudflare lifecycle', () => {
         allowSystemNodeMove: true,
       })
     );
+  });
+
+  // rc.11: the ingress migration moved hosts with skipDomainNodeValidation,
+  // which skipped the overlap check, so the target served one name twice.
+  it('refuses an ingress move before anything moves when the target already serves a moved name', async () => {
+    const targetNode = {
+      id: '22222222-2222-4222-8222-222222222222',
+      slug: 'target',
+      hostname: 'edge-target',
+      displayName: 'Edge target',
+      appearanceColor: null,
+      effectiveAddress: '1.1.1.1',
+    };
+    const domain = {
+      id: 'domain-1',
+      domain: 'app.example.com',
+      dnsProvider: 'cloudflare',
+      nginxNodeId: 'node-source',
+      dnsTargetIps: ['8.8.8.8'],
+      ingressMigrationId: null,
+    };
+    const hosts = [
+      { id: 'host-0', slug: 'off', domainNames: ['off.example.com'], enabled: false, nodeId: 'node-source' },
+      { id: 'host-1', slug: 'app', domainNames: ['app.example.com'], enabled: true, nodeId: 'node-source' },
+    ];
+    const db = { update: vi.fn(), select: vi.fn() };
+    const service = new DomainsService(db as never, { log: vi.fn() } as never);
+    const proxyService = { updateProxyHost: vi.fn() };
+    service.setProxyService(proxyService as never);
+    vi.spyOn(service as any, 'buildIngressMigrationImpact').mockResolvedValue({
+      root: domain,
+      sourceNode: { id: 'node-source' },
+      targetNode,
+      domains: [domain],
+      proxyHosts: hosts,
+      pending: false,
+      migrationId: null,
+    });
+    vi.mocked(assertNoProxyDomainOverlap)
+      .mockClear()
+      .mockRejectedValueOnce(
+        new AppError(409, 'PROXY_HOST_DOMAIN_CONFLICT', 'Another enabled proxy host on this node already serves it', {
+          proxyHostId: 'host-9',
+          nodeId: targetNode.id,
+          domains: ['app.example.com'],
+        })
+      );
+
+    await expect(
+      service.migrateIngress(domain.id, { targetNodeId: targetNode.id }, 'user-1', [
+        `proxy:create:${targetNode.id}`,
+        'proxy:edit:host-0',
+        'proxy:edit:host-1',
+        'admin:system',
+      ])
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DOMAIN_INGRESS_TARGET_DOMAIN_CONFLICT',
+      message:
+        'Proxy host app.example.com cannot move to Edge target: an enabled proxy host there already serves app.example.com',
+      details: {
+        proxyHostId: 'host-1',
+        conflictingProxyHostId: 'host-9',
+        targetNodeId: targetNode.id,
+        domains: ['app.example.com'],
+      },
+    });
+    // Only the enabled host is checked; nothing was marked or moved.
+    expect(assertNoProxyDomainOverlap).toHaveBeenCalledTimes(1);
+    expect(assertNoProxyDomainOverlap).toHaveBeenCalledWith(db, targetNode.id, ['app.example.com'], 'host-1');
+    expect(db.update).not.toHaveBeenCalled();
+    expect(proxyService.updateProxyHost).not.toHaveBeenCalled();
   });
 
   it('keeps a prepared external-DNS migration pending until DNS reaches the target', async () => {
@@ -429,7 +506,12 @@ describe('DomainsService Cloudflare lifecycle', () => {
     });
 
     await expect(service.previewDomain({ domain: 'app.example.com' })).rejects.toMatchObject({
+      statusCode: 409,
       code: 'DOMAIN_NGINX_NODE_REQUIRED',
+      message: expect.stringContaining(`edge-1: ${eligibleNodes[0]!.id}; edge-2: ${eligibleNodes[1]!.id}`),
+      details: {
+        eligibleNodes: eligibleNodes.map(({ id, hostname, displayName }) => ({ id, hostname, displayName })),
+      },
     });
     await expect(
       service.previewDomain({ domain: 'app.example.com', nginxNodeId: eligibleNodes[1]!.id })
@@ -942,6 +1024,90 @@ describe('DomainsService Cloudflare lifecycle', () => {
     expect(client.createDnsRecord).toHaveBeenCalledTimes(2);
     expect(client.deleteDnsRecord).toHaveBeenCalledTimes(1);
     expect(client.deleteDnsRecord).toHaveBeenCalledWith('zone-1', 'record-2');
+  });
+
+  // rc10 audit F13 (rc.11): with overwriteDns, the existing records were
+  // deleted before the domain insert; when the insert then failed, the name was
+  // left without the records it had before.
+  it('recreates the records overwriteDns deleted when the domain is not stored', async () => {
+    const previous = [
+      { id: 'old-a', type: 'A', name: 'app.example.com', content: '198.51.100.20', ttl: 300, proxied: false },
+      {
+        id: 'old-aaaa',
+        type: 'AAAA',
+        name: 'app.example.com',
+        content: '2001:db8::20',
+        ttl: 1,
+        proxied: true,
+        comment: 'legacy origin',
+      },
+    ];
+    const db = createInsertDb({});
+    db.values.mockImplementationOnce(() => ({
+      returning: vi.fn().mockRejectedValue(new Error('connection terminated')),
+    }));
+    const { service, client } = createService(db, previous);
+    const calls: string[] = [];
+    client.deleteDnsRecord.mockImplementation(async (_zoneId: string, recordId: string) => {
+      calls.push(`delete ${recordId}`);
+    });
+    client.createDnsRecord.mockImplementation(async (_zoneId: string, record: Record<string, unknown>) => {
+      calls.push(`create ${record.type} ${record.content}`);
+      return { id: `new-${calls.length}`, ...record };
+    });
+
+    await expect(service.createDomain({ domain: 'app.example.com', overwriteDns: true }, 'user-1')).rejects.toThrow(
+      'connection terminated'
+    );
+
+    expect(calls).toEqual([
+      'delete old-a',
+      'delete old-aaaa',
+      'create A 8.8.8.8',
+      // The record this call created goes first, then the previous ones return.
+      'delete new-3',
+      'create A 198.51.100.20',
+      'create AAAA 2001:db8::20',
+    ]);
+    expect(client.createDnsRecord).toHaveBeenCalledWith('zone-1', {
+      type: 'A',
+      name: 'app.example.com',
+      content: '198.51.100.20',
+      ttl: 300,
+      proxied: false,
+    });
+    expect(client.createDnsRecord).toHaveBeenCalledWith('zone-1', {
+      type: 'AAAA',
+      name: 'app.example.com',
+      content: '2001:db8::20',
+      ttl: 1,
+      proxied: true,
+      comment: 'legacy origin',
+    });
+  });
+
+  it('recreates the records already deleted when overwriteDns fails part way', async () => {
+    const previous = [
+      { id: 'old-a', type: 'A', name: 'app.example.com', content: '198.51.100.20', ttl: 300, proxied: false },
+      { id: 'old-b', type: 'A', name: 'app.example.com', content: '198.51.100.21', ttl: 300, proxied: false },
+    ];
+    const db = createInsertDb({});
+    const { service, client } = createService(db, previous);
+    client.deleteDnsRecord.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('rate limited'));
+
+    await expect(service.createDomain({ domain: 'app.example.com', overwriteDns: true }, 'user-1')).rejects.toThrow(
+      'rate limited'
+    );
+
+    expect(db.insert).not.toHaveBeenCalled();
+    expect(client.createDnsRecord).toHaveBeenCalledTimes(1);
+    expect(client.createDnsRecord).toHaveBeenCalledWith('zone-1', {
+      type: 'A',
+      name: 'app.example.com',
+      content: '198.51.100.20',
+      ttl: 300,
+      proxied: false,
+    });
   });
 
   it('creates an external domain only after DNS matches the selected Nginx node', async () => {

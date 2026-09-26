@@ -289,6 +289,44 @@ describe('AIService domain tool routing', () => {
     );
   });
 
+  it('creates a domain on the only ingress node of a node-limited grant when nginxNodeId is omitted', async () => {
+    const NODE_A = '55555555-5555-4555-8555-555555555555';
+    const NODE_B = '66666666-6666-4666-8666-666666666666';
+    const domainsService = {
+      createDomain: vi.fn().mockResolvedValue({ id: 'domain-4' }),
+      getNginxNodeOptions: vi.fn().mockResolvedValue({
+        eligibleNodes: [
+          { id: NODE_A, hostname: 'edge-a', displayName: 'Edge A' },
+          { id: NODE_B, hostname: 'edge-b', displayName: null },
+        ],
+        unconfiguredNodes: [],
+        totalNginxNodes: 2,
+        unconfiguredNginxNodes: 0,
+      }),
+    };
+    const service = createService(domainsService);
+
+    await expect(
+      service.executeTool({ ...BASE_USER, scopes: [`domains:create:node/${NODE_A}`] }, 'create_domain', {
+        domain: 'app.example.com',
+      })
+    ).resolves.toMatchObject({ result: { id: 'domain-4' } });
+    expect(domainsService.createDomain).toHaveBeenCalledWith(
+      { domain: 'app.example.com', dnsProvider: 'cloudflare', nginxNodeId: NODE_A },
+      'user-1'
+    );
+
+    const ambiguous = await service.executeTool(
+      { ...BASE_USER, scopes: [`domains:create:node/${NODE_A}`, `domains:create:node/${NODE_B}`] },
+      'create_domain',
+      { domain: 'other.example.com' }
+    );
+    expect(ambiguous).toMatchObject({
+      error: expect.stringContaining(`Edge A (edge-a): ${NODE_A}; edge-b: ${NODE_B}`),
+    });
+    expect(domainsService.createDomain).toHaveBeenCalledOnce();
+  });
+
   it('creates external-DNS domains with the route schema', async () => {
     const domainsService = { createDomain: vi.fn().mockResolvedValue({ id: 'domain-3' }) };
     const service = createService(domainsService);

@@ -2,6 +2,7 @@ import 'reflect-metadata';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { container, TOKENS } from '@/container.js';
+import { dockerContainerFolders } from '@/db/schema/index.js';
 import { AppError, errorHandler } from '@/middleware/error-handler.js';
 import { LicensePolicyService } from '@/modules/license/license-policy.service.js';
 import type { AppEnv } from '@/types.js';
@@ -18,6 +19,8 @@ const PROJECT_ID = '33333333-3333-4333-8333-333333333333';
 /** No deployment, Compose Project or folder rows. */
 function emptyDb(deploymentNames: string[] = []) {
   return {
+    // A container reserved at the root clears any stale placement of its name.
+    delete: () => ({ where: vi.fn().mockResolvedValue(undefined) }),
     select: () => ({
       from: () => ({
         where: () => ({
@@ -343,5 +346,123 @@ describe('Source creation persistence boundary', () => {
       expect(source.upsert).not.toHaveBeenCalled();
       expect(source.createBuild).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('Creating from a Git source into a folder', () => {
+  const FOLDER_ID = '44444444-4444-4444-8444-444444444444';
+  /** Folder rows for the destination check, no deployment with the requested name, placement writes recorded. */
+  function folderDb() {
+    const placements: Array<Record<string, unknown>> = [];
+    const db = {
+      placements,
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: vi
+              .fn()
+              .mockResolvedValue(table === dockerContainerFolders ? [{ id: FOLDER_ID, isSystem: false }] : []),
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: (row: Record<string, unknown>) => {
+          placements.push(row);
+          return { onConflictDoUpdate: vi.fn().mockResolvedValue(undefined) };
+        },
+      }),
+      delete: () => ({ where: vi.fn().mockResolvedValue(undefined) }),
+    };
+    return db;
+  }
+  function folderApp(scopes: string[]) {
+    const router = new OpenAPIHono<AppEnv>();
+    const db = folderDb();
+    container.registerInstance(TOKENS.DrizzleClient, db as never);
+    container.registerInstance(LicensePolicyService, { requireFeature: vi.fn().mockResolvedValue(undefined) } as never);
+    router.onError(errorHandler);
+    router.use('*', async (c, next) => {
+      c.set('effectiveScopes', scopes);
+      c.set('user', { id: 'user-1', scopes: [] } as never);
+      await next();
+    });
+    registerDockerSourceRoutes(router);
+    return { router, db };
+  }
+  const folderOnly = [`docker:containers:create:folder/${FOLDER_ID}`];
+  function request(router: OpenAPIHono<AppEnv>, resource: Record<string, unknown>) {
+    return router.request(`/nodes/${NODE_ID}/source-resources`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...body(), resource: { ...body().resource, ...resource } }),
+    });
+  }
+
+  it('reserves a container in the chosen folder for a folder-only creator', async () => {
+    const source = {
+      upsert: vi.fn().mockResolvedValue({ id: 'source-1' }),
+      createBuild: vi.fn().mockResolvedValue({ build: { id: 'build-1' } }),
+      remove: vi.fn(),
+    };
+    container.registerInstance(DockerSourceService, source as never);
+    container.registerInstance(DockerDeploymentService, {} as never);
+    container.registerInstance(DockerManagementService, { listContainers: vi.fn().mockResolvedValue([]) } as never);
+    const { router, db } = folderApp(folderOnly);
+
+    const response = await request(router, { folderId: FOLDER_ID });
+
+    expect(response.status).toBe(201);
+    // The folder travels with the pending record and the placement is written before the first build.
+    expect(source.upsert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ initialConfig: expect.objectContaining({ folderId: FOLDER_ID }) })
+    );
+    expect(db.placements).toEqual([
+      { nodeId: NODE_ID, resourceType: 'container', resourceKey: 'payments-api', folderId: FOLDER_ID },
+    ]);
+  });
+
+  it('creates a pending blue/green deployment in the chosen folder', async () => {
+    const createPending = vi.fn().mockResolvedValue({ id: PROJECT_ID });
+    container.registerInstance(DockerSourceService, {
+      upsert: vi.fn().mockResolvedValue({ id: 'source-1' }),
+      createBuild: vi.fn().mockResolvedValue({ build: { id: 'build-1' } }),
+      remove: vi.fn(),
+    } as never);
+    container.registerInstance(DockerDeploymentService, { createPending, discardPending: vi.fn() } as never);
+    container.registerInstance(DockerManagementService, { listContainers: vi.fn() } as never);
+    const { router } = folderApp(folderOnly);
+
+    const response = await request(router, {
+      kind: 'deployment',
+      folderId: FOLDER_ID,
+      routes: [{ hostPort: 8080, containerPort: 80, isPrimary: true }],
+    });
+
+    expect(response.status).toBe(201);
+    expect(createPending).toHaveBeenCalledWith(
+      NODE_ID,
+      expect.objectContaining({ folderId: FOLDER_ID }),
+      'user-1',
+      folderOnly
+    );
+  });
+
+  it('refuses the root for a folder-only creator and names the folder to pass', async () => {
+    const source = { upsert: vi.fn(), createBuild: vi.fn(), remove: vi.fn() };
+    container.registerInstance(DockerSourceService, source as never);
+    container.registerInstance(DockerDeploymentService, {} as never);
+    container.registerInstance(DockerManagementService, { listContainers: vi.fn() } as never);
+    const { router } = folderApp(folderOnly);
+
+    const response = await request(router, {});
+
+    expect(response.status).toBe(403);
+    const error = (await response.json()) as { message: string };
+    expect(error.message).toContain('Missing docker:containers:create at the root');
+    expect(error.message).toContain(FOLDER_ID);
+    expect(error.message).toContain('pass folderId');
+    expect(source.upsert).not.toHaveBeenCalled();
   });
 });

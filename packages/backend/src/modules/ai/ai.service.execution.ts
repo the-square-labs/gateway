@@ -1,13 +1,16 @@
 import { container, TOKENS } from '@/container.js';
 import type { CommercialEditionRuntime } from '@/edition/runtime.js';
 import { commercialModuleUnavailable } from '@/edition/unavailable.js';
-import { boundScopes } from '@/lib/permissions.js';
+import { withLimitedAccessGuidance } from '@/lib/access-denied.js';
+import { accessSummaryDatabase } from '@/lib/access-summary-resolver.js';
+import { boundScopes, hasScopeBase } from '@/lib/permissions.js';
 import { AppError } from '@/middleware/error-handler.js';
 import { getAuditRequestContext, setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import { type LicenseFeature, requireConfiguredLicensePolicy } from '@/modules/license/license-policy.service.js';
 import { NodeDispatchService } from '@/services/node-dispatch.service.js';
 import type { User } from '@/types.js';
 import { ACCESS_LIST_TOOL_NAMES, executeAccessListTool } from './ai.access-list-tools.js';
+import { ACCESS_TOOL_NAMES, executeAccessTool } from './ai.access-tools.js';
 import { executeBackupTool } from './ai.backup-tools.js';
 import { DATABASE_TOOL_NAMES, executeDatabaseTool } from './ai.database-tools.js';
 import { DOCKER_TOOL_NAMES, executeDockerTool } from './ai.docker-tools.js';
@@ -187,6 +190,17 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
 
     // Permission check — tools with empty requiredScope are blocked (must be explicit)
     if (!hasToolExecutionScope(executionUser.scopes, toolName, toolDef.requiredScope, args, toolDef)) {
+      // A caller holding the scope on other folders, nodes or resources is limited, not unauthorized.
+      if (toolDef.requiredScope && hasScopeBase(executionUser.scopes, toolDef.requiredScope)) {
+        return {
+          error: await withLimitedAccessGuidance(
+            `PERMISSION_DENIED: "${toolDef.requiredScope}" is not granted for this target.`,
+            executionUser.scopes,
+            accessSummaryDatabase()
+          ),
+          invalidateStores: [],
+        };
+      }
       return {
         error: `PERMISSION_DENIED: You do not have the "${toolDef.requiredScope || 'unknown'}" scope required for this action. Tell the user they lack this permission and suggest contacting an administrator. Do NOT ask follow-up questions or retry.`,
         invalidateStores: [],
@@ -287,7 +301,11 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
           },
         });
       }
-      return { error: message, invalidateStores: [] };
+      // Folder-, node- and resource-limited callers learn where they can act instead of reading "no access".
+      return {
+        error: await withLimitedAccessGuidance(message, executionUser.scopes, accessSummaryDatabase()),
+        invalidateStores: [],
+      };
     }
   }
 
@@ -428,6 +446,7 @@ export abstract class AIServiceExecution extends AIServiceRuntimeSupport {
       });
     }
 
+    if (ACCESS_TOOL_NAMES.has(toolName)) return executeAccessTool(user, toolName, args);
     if (toolName === 'manage_database_backups') return executeBackupTool(user, args);
     if (STORAGE_TOOL_NAMES.has(toolName)) return executeStorageTool(user, toolName, args);
     if (DATABASE_TOOL_NAMES.has(toolName)) {

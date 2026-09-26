@@ -270,7 +270,9 @@ describe("NodeEnrollmentDialog", () => {
       node: makeNode({ id: "node-9", type: "docker", status: "pending" }),
       enrollmentToken: "token",
       gatewayCertSha256: `sha256:${"a".repeat(64)}`,
-      gatewayEnrollmentTargets: { public: { label: "Public node", gateway: "gateway.example.com:9443" } },
+      gatewayEnrollmentTargets: {
+        public: { label: "Public node", gateway: "gateway.example.com:9443" },
+      },
     });
 
     render(

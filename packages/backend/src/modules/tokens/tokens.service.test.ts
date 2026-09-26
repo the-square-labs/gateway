@@ -1,5 +1,6 @@
 import 'reflect-metadata';
 import { describe, expect, it, vi } from 'vitest';
+import { principalHasGitRepositoryScope } from '@/lib/git-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
 import { runWithAuditRequestContext } from '@/modules/audit/audit-request-context.js';
 import { resolveRequestedTokenScopes, TokensService } from './tokens.service.js';
@@ -58,6 +59,45 @@ function createService(db: any) {
 }
 
 describe('TokensService.validateToken', () => {
+  it('keeps a project-limited Git scope inside the owner group grant and checks both at request time', async () => {
+    const connector = '33333333-3333-4333-8333-333333333333';
+    const db = createDb({
+      userGroupId: 'developers',
+      tokenScopes: [
+        `integrations:gitlab:repo:read:${connector}/project/42`,
+        `integrations:gitlab:repo:read:${connector}/project/43`,
+      ],
+      groups: [
+        {
+          id: 'developers',
+          name: 'developers',
+          parentId: null,
+          scopes: [`integrations:gitlab:repo:read:${connector}/group/7`],
+        },
+      ],
+    });
+
+    const result = await createService(db).validateToken('gw_test_token');
+
+    expect(result?.user.accountScopes).toEqual([`integrations:gitlab:repo:read:${connector}/group/7`]);
+    const caller = { scopes: result?.scopes ?? [], accountScopes: result?.user.accountScopes };
+    // Project 42 lies in group 7, project 43 in group 8.
+    expect(
+      principalHasGitRepositoryScope(caller, 'integrations:gitlab:repo:read', {
+        connectorId: connector,
+        repositoryId: '42',
+        containerIds: ['7'],
+      })
+    ).toBe(true);
+    expect(
+      principalHasGitRepositoryScope(caller, 'integrations:gitlab:repo:read', {
+        connectorId: connector,
+        repositoryId: '43',
+        containerIds: ['8'],
+      })
+    ).toBe(false);
+  });
+
   it('never lets a destination-only creation grant reach existing resources through a token', async () => {
     // Reviewer repro: the owner can create containers on n1 but cannot view the ones already there.
     const db = createDb({

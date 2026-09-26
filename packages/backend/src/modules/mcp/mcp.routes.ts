@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { container } from '@/container.js';
 import type { AppEnv } from '@/types.js';
+import { buildMcpAccessInstructions, isMcpInitializeRequest } from './mcp-access.js';
 import { mcpAuthMiddleware } from './mcp-auth.middleware.js';
 import { createMcpServer } from './mcp-server.factory.js';
 import { McpSettingsService } from './mcp-settings.service.js';
@@ -98,6 +99,10 @@ mcpRoutes.post('/', async (c) => {
   const responseMcpSessionId = incomingMcpSessionId ?? randomUUID();
   const handlerMcpSessionId = incomingMcpSessionId ?? (requestedMcpSessionId ? responseMcpSessionId : undefined);
   rememberIssuedMcpSession(authKey, responseMcpSessionId);
+  // Instructions are only sent in the initialize result, so the access summary is built only then.
+  const accessInstructions = (await isMcpInitializeRequest(c.req.raw))
+    ? await buildMcpAccessInstructions(scopes)
+    : undefined;
   const { server, transport } = createMcpServer({
     user,
     scopes,
@@ -108,6 +113,7 @@ mcpRoutes.post('/', async (c) => {
     authType: auth.authType,
     clientId: auth.clientId,
     eagerToolListing: c.get('mcpExtendedCompatibility') ?? true,
+    accessInstructions,
   });
 
   await server.connect(transport);

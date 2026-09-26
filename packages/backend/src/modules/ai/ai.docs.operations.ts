@@ -4,7 +4,7 @@ export const OPERATIONS_DOCS: Record<string, string> = {
 Gateway uses shared folder views for several resource lists. Use folder tools instead of guessing REST paths.
 
 ## Tools
-- list_resource_folders({ resourceType, dockerResourceType? }) lists folders and visible assignments.
+- list_resource_folders({ resourceType, dockerResourceType? }) lists the folders you can use and visible assignments. Each folder carries access.actions (the actions you hold in it, broad grants included) and access.canCreate. Without dockerResourceType, Docker lists the first Docker type you can use.
 - manage_resource_folder({ resourceType, operation, ... }) mutates folder trees and item placement.
 
 ## Resource Types
@@ -30,7 +30,8 @@ Gateway uses shared folder views for several resource lists. Use folder tools in
 - move_folder is supported only where the underlying resource service supports moving folders.
 
 ## Scope Rules
-Listing needs the module's view scope, its create scope, or its folder-management scope. A caller without broad access sees the folders holding the resources it can view plus every folder it holds a folder grant on (\`<scope>:folder/<folderId>\`), including a granted folder that is still empty; broad create or folder management lists every folder.
+Listing needs the module's view scope, its create scope, its folder-management scope, or a folder grant of any of its scopes. A caller without broad access sees the folders holding the resources it can view plus every folder it holds a folder grant on (\`<scope>:folder/<folderId>\` for any scope of the family: view, create, edit, query, deploy, console, ...), including a granted folder that is still empty; broad create or folder management lists every folder.
+Folder-limited access is normal: when a root-level list is empty or a create at the root is refused, call get_my_access, pick a folder from it or from this list, and pass folderId (and nodeId) when creating.
 - nodes: list with nodes:details, nodes:create, or nodes:folders:manage; mutate with nodes:folders:manage.
 - databases: list with databases:view, databases:create, or databases:folders:manage; mutate with databases:folders:manage.
 - storage: list with storage:view, storage:create, or storage:folders:manage; mutate with storage:folders:manage; moving connections also checks storage:edit for each connection and the destination.
@@ -183,6 +184,22 @@ OAuth access tokens use the \`gwo_\` prefix and the same Bearer header. Browser-
 
 ## Base URL
 All endpoints are under \`/api/\`. Example: \`https://gateway.example.com/api/cas\`
+
+## Safe Retries (Idempotency-Key)
+Authenticated \`POST\`, \`PUT\` and \`PATCH\` requests accept an optional \`Idempotency-Key\` header (1-255 printable ASCII characters, for example a UUID). Send a new key per logical operation and reuse it only when retrying that same request after a timeout or dropped connection:
+
+\`\`\`bash
+curl -X POST -H "Authorization: Bearer gw_your_token_here" -H "Content-Type: application/json" \\
+  -H "Idempotency-Key: 5f0c6c1e-8a55-4c43-9d4e-2f1f8c3d9b10" \\
+  -d '{"domain":"app.example.com"}' https://gateway.example.com/api/domains
+\`\`\`
+
+- Keys are scoped to the authenticated user or API/OAuth token, the method and the path, and results are kept for 24 hours.
+- Same key and same request (query and JSON body): the original response is replayed with \`Idempotency-Replayed: true\`; nothing is created twice.
+- Same key with a different request: \`422 IDEMPOTENCY_KEY_REUSED\`. Same key while the first request still runs: \`409 IDEMPOTENCY_KEY_IN_PROGRESS\` with \`Retry-After\`.
+- Only 2xx and deterministic 400/404/409/422 JSON responses are stored. 401, 403, 5xx, streamed and non-JSON responses are not, so a retry runs again.
+- Not covered: bodies over 1 MiB and non-JSON uploads, the Pages deploy upload API (its upload session has its own idempotency key), WebSocket routes, and the \`/api/mcp\` endpoint itself. If the idempotency store (Redis) is unavailable, requests run normally without it.
+- MCP create tools (containers, deployments, Compose projects, routes, domains, ACME certificates, databases, storage, Page Projects, nodes and similar) take an optional \`idempotencyKey\` argument with the same semantics, scoped to the MCP token and tool; a replayed result carries \`_meta.idempotencyReplayed: true\`.
 
 ## Key Endpoints
 

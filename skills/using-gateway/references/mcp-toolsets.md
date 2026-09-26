@@ -3,7 +3,7 @@
 ## Tool visibility
 
 - With **Extended MCP compatibility** on (the default), `tools/list` returns every tool the OAuth scopes allow.
-- With it off, a connection starts with the `core` toolset plus the always-visible `find_resource` and `read_gateway_documentation`. Call `discover_tools({ category: "<id>" })` to activate a toolset, then list tools again. Activation lasts for the MCP session; call it again to add more toolsets.
+- With it off, a connection starts with the `core` toolset plus the always-visible `find_resource`, `get_my_access`, and `read_gateway_documentation`. Call `discover_tools({ category: "<id>" })` to activate a toolset, then list tools again. Activation lasts for the MCP session; call it again to add more toolsets.
 - A missing tool is usually an inactive toolset or a missing scope, not a broken connection. Distinguish those from a missing entitlement, a disabled MCP server, an unavailable subsystem, or a client that cannot refresh its tool list.
 
 ## Toolset IDs

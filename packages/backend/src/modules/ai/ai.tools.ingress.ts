@@ -40,16 +40,22 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'create_route',
-    description: 'Create a new ingress route configuration on a selected nginx node.',
+    description:
+      'Create an ingress route on an nginx ingress node. nodeId is optional: omitted, the route uses the ingress node its registered Gateway domains are assigned to, or the only node you may create routes on; when several qualify the call fails and lists them (list_route_ingress_nodes shows them up front, no node permission needed). Needs proxy:create broadly, on the route folder (pass folderId), or on the ingress node.',
     parameters: {
       type: 'object',
       properties: {
         type: { type: 'string', enum: ['proxy', 'redirect', '404'], description: 'Host type (default: proxy)' },
-        nodeId: { type: 'string', description: 'Nginx ingress node UUID to deploy this route on (required)' },
+        nodeId: {
+          type: 'string',
+          description:
+            'Nginx ingress node UUID. Omit it when a domain is a registered Gateway domain (its ingress node is used) or when list_route_ingress_nodes returns one node.',
+        },
         domainNames: {
           type: 'array',
           items: { type: 'string' },
-          description: 'Domain names for this route; registered domains must use the same nginx node',
+          description:
+            'Domain names for this route; all registered Gateway domains among them must share one ingress node',
         },
         upstreamKind: {
           type: 'string',
@@ -143,12 +149,27 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         },
         healthCheckSlowThreshold: { type: 'number', description: 'Nx average threshold for degraded health checks' },
       },
-      required: ['nodeId', 'domainNames'],
+      required: ['domainNames'],
     },
     destructive: true,
     category: 'Ingress',
     requiredScope: 'proxy:create',
     invalidateStores: ['proxy'],
+  },
+  {
+    name: 'list_route_ingress_nodes',
+    description:
+      'List the nginx ingress nodes you may create routes on: id, displayName, hostname, and availability status only, with no node permission needed. A broad or folder proxy:create grant covers every node, a node grant only that node; nodes locked for new services are omitted. Pass folderId to see the nodes allowed for a route in that folder. Use an id as create_route nodeId when the route has no registered Gateway domain and more than one node is listed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        folderId: { type: 'string', description: 'Route folder UUID the new route will be created in' },
+      },
+    },
+    destructive: false,
+    category: 'Ingress',
+    requiredScope: 'proxy:create',
+    invalidateStores: [],
   },
   {
     name: 'update_route',
@@ -538,7 +559,8 @@ export const INGRESS_AI_TOOLS: AIToolDefinition[] = [
         proxied: { type: 'boolean', description: 'Optional Cloudflare proxy override' },
         nginxNodeId: {
           type: 'string',
-          description: 'Eligible Nginx node UUID; optional only when exactly one eligible node exists',
+          description:
+            'Nginx ingress node UUID. Omit it when exactly one node with a public address is open to your domains:create grant at this destination; otherwise the call fails and lists them. manage_domain list_nginx_nodes lists them without node permissions.',
         },
         overwriteDns: {
           type: 'boolean',

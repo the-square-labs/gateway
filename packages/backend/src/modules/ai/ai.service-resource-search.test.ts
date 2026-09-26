@@ -292,6 +292,60 @@ describe('AIService resource search tool', () => {
     expect(dockerService.listNetworks).not.toHaveBeenCalled();
   });
 
+  it('finds folder-granted Docker images, volumes and networks without node-wide access', async () => {
+    const nodesService = {
+      list: vi.fn().mockResolvedValue({ data: [{ id: 'node-1', slug: 'node-one' }], totalPages: 1 }),
+    };
+    const dockerSnapshotService = {
+      getList: vi.fn(async (_nodeId: string, kind: string) => ({
+        data:
+          kind === 'images'
+            ? [
+                { Id: 'image-1', RepoTags: ['example/app:secure'] },
+                { Id: 'image-2', RepoTags: ['example/other:secure'] },
+              ]
+            : kind === 'volumes'
+              ? [{ Name: 'secure-data' }, { Name: 'secure-other' }]
+              : [
+                  { Id: 'network-1', Name: 'secure-network' },
+                  { Id: 'network-2', Name: 'secure-other-network' },
+                ],
+      })),
+    };
+    const dockerService = {
+      decoratePublicImageSnapshot: vi.fn(async (_nodeId: string, images: Array<Record<string, unknown>>) =>
+        images.map((image) => ({ ...image, scopeResourceId: image.Id }))
+      ),
+      decoratePublicNetworkSnapshot: vi.fn(async (_nodeId: string, networks: Array<Record<string, unknown>>) =>
+        networks.map((network) => ({ ...network, scopeResourceId: `access-${network.Id}` }))
+      ),
+    };
+    const service = createService({ nodesService, dockerService, dockerSnapshotService });
+
+    // Grants expanded from Docker folders name single resources on the node.
+    const result = await service.executeTool(
+      {
+        ...BASE_USER,
+        scopes: [
+          'docker:images:view:node-1/image-1',
+          'docker:volumes:view:node-1/secure-data',
+          'docker:networks:view:node-1/access-network-1',
+        ],
+      },
+      'find_resource',
+      { query: 'secure', types: ['docker_image', 'docker_volume', 'docker_network'] }
+    );
+
+    expect(nodesService.list).toHaveBeenCalledWith(expect.objectContaining({ type: 'docker' }), {
+      allowedIds: ['node-1'],
+    });
+    expect((result.result as { results: Array<{ type: string; name: string }> }).results).toEqual([
+      expect.objectContaining({ type: 'docker_image', name: 'example/app:secure' }),
+      expect.objectContaining({ type: 'docker_volume', name: 'secure-data' }),
+      expect.objectContaining({ type: 'docker_network', name: 'secure-network' }),
+    ]);
+  });
+
   it('lists typed resources when query is empty', async () => {
     const nodesService = {
       list: vi.fn().mockResolvedValue({

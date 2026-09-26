@@ -62,6 +62,27 @@ Gateway evaluates scopes with exact, broad, resource-scoped, and implied-scope r
 - Folder-scopable scopes accept `<scope>:folder/<folderId>`; the grant covers the folder, its subfolders, and every resource currently inside them. Node-bound families (routes, Pages, storage, databases, Docker, hosted VM snapshots and resources) and every creation scope accept `<scope>:node/<nodeId>`. Logging token scopes resolve folder grants through logging environment folders; `docker:availability:manage` through the granted container or Compose folder.
 - With "assign created resource permissions" enabled, the creator of a resource keeps only the per-resource scopes they already hold for it (broadly, on the destination folder or node, or through an existing grant), and always view of the created resource itself, so the grant survives a later move without adding capabilities. The destination is read from the created resource when the caller does not pass it.
 
+## Git Integration Restrictions
+
+Git integration scopes can be limited to one connected account and, below it, to GitLab groups and projects or GitHub owners and repositories. Qualifiers are stable provider IDs, never names or paths, so renaming or moving a group or repository never changes a grant.
+
+| Qualifier | Grants |
+|-----------|--------|
+| `<scope>:<connectorId>` | Every repository of that connector. |
+| `<scope>:<connectorId>/group/<groupId>` | GitLab: the group, its subgroups, and every project under them. Group ancestry comes from the GitLab API (the project's namespace and its parent groups, cached for a few minutes), so a moved project follows its new group. |
+| `<scope>:<connectorId>/project/<projectId>` | GitLab: that project. |
+| `<scope>:<connectorId>/owner/<ownerId>` | GitHub: every repository of that organization or user. |
+| `<scope>:<connectorId>/repo/<repoId>` | GitHub: that repository. |
+
+- Restrictable scopes: `integrations:{gitlab,github,git}:{view,use,repo:read,repo:write}` and `integrations:gitlab:sandbox:clone`. Generic Git takes connector qualifiers only. `integrations:<provider>:manage` is unqualified or limited to a connector: managing the connection (settings, tokens, allowlist, sync, test, delete) needs it on the connector or unqualified, and creating connectors needs it unqualified.
+- An operation on a repository is allowed with the unqualified scope, the connector qualifier, any group or owner qualifier that contains the repository, or the exact project or repository qualifier. Implied view applies per qualifier: `integrations:gitlab:repo:write:<connectorId>/project/42` also grants `integrations:gitlab:view:<connectorId>/project/42`. Folder qualifiers do not apply to integrations.
+- Every repository operation checks the repository: files, trees, branches, commits, CI pipelines, job logs and variables, webhooks, deploy tokens, registry settings, sandbox clones, and Docker or Pages build sources, in the REST API, the AI assistant and Gateway MCP alike.
+- The connector's system credential is used when `integrations:<provider>:use` covers the repository the same way; otherwise the caller's personal credential. Without either, AI Workspace users are asked to authorize a personal credential and every other caller gets a 403 naming `integrations:<provider>:use` and the repository.
+- Lists show only what the caller may view: connector lists hold the connectors the caller has any Git scope on (connectors seen only through group, owner, project or repository grants leave out their allowlist), and project and repository lists hold the projects and repositories the grants cover.
+- Configuring a Docker or Pages build source needs `integrations:<provider>:use` on the repository (any qualifier covering it) next to the workload's own permissions; `repo:read`, an unqualified `view`, or a personal credential are not needed, because builds run with the connector credential. The source picker lists the connectors and repositories the caller's Git scopes cover (`use` implies `view`). Builds, polling and webhook deliveries of an already configured source run under the workload's permissions.
+- The scope picker reads `GET /api/integrations/{gitlab|github}/{connectorId}/scope-targets?search=&limit=50` (groups and projects, or owners and repositories) and `GET .../scope-targets/resolve?ids=group/123,project/456` (labels for stored qualifiers; `missing` when the target no longer exists). Both need `integrations:<provider>:view` on the connector or anything in it and return only targets the caller may view; a stored qualifier the caller cannot view keeps its raw ID as the label.
+- API tokens and OAuth/MCP grants are bounded by the owner's current scopes per qualifier: a broader token is narrowed to the owner's qualifiers, and a token limited to a group, owner, project or repository keeps that qualifier when its owner holds the same scope (or one implying it) unqualified, on the connector, or with any group, owner, project or repository qualifier on the same connector. Containment is provider data, so every repository operation of a token or OAuth caller requires both the token's scopes and the owner's current scopes to cover the repository: a token limited to project P works when its owner holds the group containing P, and a token limited to group G whose owner holds only project P reaches P alone. Such narrow token scopes never count when the token grants permissions to users or groups.
+
 ## Retired Scope Names
 
 The v2.11 catalog cleanup renamed, merged, or removed these scopes. Migration `0200_scope_catalog_cleanup` rewrote every stored grant (qualifiers are kept: `old:<suffix>` becomes `new:<suffix>`), and holders of `pki:ca:create:root` also received `pki:ca:edit` and `pki:ca:export`, holders of `integrations:{github,git}:view` received `:repo:read`, holders of `integrations:{github,git}:manage` received `:repo:read` and `:repo:write`, and holders of `docker:volumes:create` (broad or on a bare node ID; not folder or `node/` destinations, and not delete-only holders) received `docker:volumes:edit` with the same qualifier. For two releases Gateway still accepts the old names on input (OAuth `scope`, API token create/update, permission group create/update, user additional permissions, and OAuth authorization edits) and rewrites them the same way; a request whose scopes were all removed is rejected. New API tokens and OAuth requests also receive these additions when the requester holds them, except manual-approval scopes such as `pki:ca:export` or `integrations:github:repo:write`, which must be requested explicitly (OAuth consent shows the additions and they can be unticked). Permission checks use only the current names.
@@ -187,22 +208,22 @@ Legacy global nginx management routes under `/api/monitoring/nginx/*` are no lon
 | `admin:alerts` |  |
 | `settings:gateway:view` |  |
 | `settings:gateway:edit` |  |
-| `integrations:gitlab:view` | View GitLab connectors, their sync status, and their synced projects. Absorbs `projects:view`. |
-| `integrations:gitlab:manage` | Configure, test, and synchronize GitLab connectors. |
-| `integrations:gitlab:use` | Use the GitLab connector system credential. Replaces `integrations:gitlab:system`. |
-| `integrations:gitlab:repo:read` | Read GitLab repository content, CI pipelines and job logs, and CI/CD variable keys (never values; these can still be sensitive). Absorbs `ci:view` and `variables:view`. |
-| `integrations:gitlab:repo:write` | Write GitLab repository content, CI configuration, CI/CD variables, webhooks, and container registry state. Absorbs `ci:edit`, `variables:edit`, `variables:delete`, `webhooks:manage`, and `registry:manage`. |
-| `integrations:gitlab:sandbox:clone` |  |
-| `integrations:github:view` |  |
-| `integrations:github:manage` | Configure, test, and synchronize GitHub connectors. |
-| `integrations:github:use` | Use GitHub connector system credentials. Replaces `integrations:github:system`. |
-| `integrations:github:repo:read` | List and read GitHub repositories and their files; no Actions variable values. |
-| `integrations:github:repo:write` | Write GitHub repository files and secrets, and read or change Actions variables. |
-| `integrations:git:view` |  |
-| `integrations:git:manage` | Configure, test, and synchronize generic Git connectors. |
-| `integrations:git:use` | Use generic Git connector system credentials. Replaces `integrations:git:system`. |
-| `integrations:git:repo:read` | List and read generic Git repositories and their files. |
-| `integrations:git:repo:write` | Write generic Git repository files. |
+| `integrations:gitlab:view` | View GitLab connectors, their sync status, and their synced projects. Absorbs `projects:view`. Restrictable to a connector, group, or project. |
+| `integrations:gitlab:manage` | Configure, test, and synchronize GitLab connectors. Restrictable to a connector. |
+| `integrations:gitlab:use` | Use the GitLab connector system credential; configure Docker and Pages build sources from a repository. Replaces `integrations:gitlab:system`. Restrictable to a connector, group, or project. |
+| `integrations:gitlab:repo:read` | Read GitLab repository content, CI pipelines and job logs, and CI/CD variable keys (never values; these can still be sensitive). Absorbs `ci:view` and `variables:view`. Restrictable to a connector, group, or project. |
+| `integrations:gitlab:repo:write` | Write GitLab repository content, CI configuration, CI/CD variables, webhooks, and container registry state. Absorbs `ci:edit`, `variables:edit`, `variables:delete`, `webhooks:manage`, and `registry:manage`. Restrictable to a connector, group, or project. |
+| `integrations:gitlab:sandbox:clone` | Clone a GitLab repository into the AI sandbox. Restrictable to a connector, group, or project. |
+| `integrations:github:view` | View GitHub connectors. Restrictable to a connector, owner, or repository. |
+| `integrations:github:manage` | Configure, test, and synchronize GitHub connectors. Restrictable to a connector. |
+| `integrations:github:use` | Use GitHub connector system credentials; configure Docker and Pages build sources from a repository. Replaces `integrations:github:system`. Restrictable to a connector, owner, or repository. |
+| `integrations:github:repo:read` | List and read GitHub repositories and their files; no Actions variable values. Restrictable to a connector, owner, or repository. |
+| `integrations:github:repo:write` | Write GitHub repository files and secrets, and read or change Actions variables. Restrictable to a connector, owner, or repository. |
+| `integrations:git:view` | View generic Git connectors. Restrictable to a connector. |
+| `integrations:git:manage` | Configure, test, and synchronize generic Git connectors. Restrictable to a connector. |
+| `integrations:git:use` | Use generic Git connector system credentials; configure Docker and Pages build sources from a repository. Replaces `integrations:git:system`. Restrictable to a connector. |
+| `integrations:git:repo:read` | List and read generic Git repositories and their files. Restrictable to a connector. |
+| `integrations:git:repo:write` | Write generic Git repository files. Restrictable to a connector. |
 | `integrations:ssh:view` |  |
 | `integrations:ssh:manage` |  |
 | `integrations:ssh:use` |  |
@@ -346,7 +367,7 @@ Some operations stay browser-only regardless of scopes because they are bound to
 
 Account-level baseline scopes that gate a whole route family (for example `feat:ai:use` in front of inference administration) are evaluated against the token owner's live permissions for bearer callers; the token still needs the route's own delegated scope. Personal inference key management requires `feat:ai:use` on the token itself.
 
-Git providers (GitLab, GitHub, generic Git) share the same verbs: `integrations:<provider>:view` lists connectors, `:manage` configures, tests, and synchronizes them, `:use` uses the connector's system credential, and `:repo:read` / `:repo:write` read or write repository content (files, CI, secrets, webhooks, registry). Listing GitLab's synced projects is connector metadata under `integrations:gitlab:view`. GitLab `:repo:read` includes CI job logs and CI/CD variable keys (never values); GitHub Actions variable values are secrets, so reading them needs `integrations:github:repo:write`. `integrations:cloudflare:sync` lets API and OAuth tokens resync a Cloudflare connector without holding `integrations:cloudflare:manage`. External SSH has no sync scope: its connection re-test authenticates with the stored credential and stays under `integrations:ssh:manage`.
+Git providers (GitLab, GitHub, generic Git) share the same verbs: `integrations:<provider>:view` lists connectors, `:manage` configures, tests, and synchronizes them, `:use` uses the connector's system credential, and `:repo:read` / `:repo:write` read or write repository content (files, CI, secrets, webhooks, registry). Each can be limited to a connector and, for GitLab and GitHub, to groups/projects or owners/repositories (see Git Integration Restrictions); tokens and MCP grants carry those qualifiers too. Listing GitLab's synced projects is connector metadata under `integrations:gitlab:view`. GitLab `:repo:read` includes CI job logs and CI/CD variable keys (never values); GitHub Actions variable values are secrets, so reading them needs `integrations:github:repo:write`. `integrations:cloudflare:sync` lets API and OAuth tokens resync a Cloudflare connector without holding `integrations:cloudflare:manage`. External SSH has no sync scope: its connection re-test authenticates with the stored credential and stays under `integrations:ssh:manage`.
 
 ## OAuth Manual Approval Scopes
 

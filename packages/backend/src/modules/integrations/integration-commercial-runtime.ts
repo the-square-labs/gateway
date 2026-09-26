@@ -7,12 +7,34 @@ import {
   integrationConnectorProjects,
   integrationConnectors,
 } from '@/db/schema/index.js';
+import {
+  gitConnectorGrant,
+  gitGrantCovers,
+  gitGrantNeedsLookup,
+  gitGrantsConnectorWide,
+  gitGrantsCover,
+  hasGitGrant,
+  hasGitGrants,
+  hasGitRepositoryScope,
+  principalGitConnectorGrants,
+  principalGitGrantNeedsLookup,
+  principalHasGitRepositoryScope,
+} from '@/lib/git-scopes.js';
 import { hasScope } from '@/lib/permissions.js';
+import { TtlCache } from '@/lib/ttl-cache.js';
 import { buildWhere } from '@/lib/utils.js';
 import {
   hasConfiguredLicenseFeatureForExistingRuntime,
   requireConfiguredLicensePolicy,
 } from '@/modules/license/license-policy.service.js';
+import {
+  isUnderGitLabPath,
+  matchesScopeTargetSearch,
+  parseScopeTargetIds,
+  SCOPE_TARGET_LOOKUP_TTL_MS,
+  SCOPE_TARGET_SEARCH_TTL_MS,
+  unresolvedScopeTarget,
+} from './git-scope-targets.js';
 import {
   buildGitLabFileCommitAuditDetails,
   GITLAB_AUDIT_ACTIONS,
@@ -40,4 +62,23 @@ export const integrationCommercialRuntime = {
   hashGitLabDiff,
   integrationConnectorCredentials,
   requireConfiguredLicensePolicy,
+  // Git scope qualifiers (connector, GitLab group/project) and the scope picker.
+  gitConnectorGrant,
+  gitGrantCovers,
+  gitGrantNeedsLookup,
+  hasGitGrant,
+  hasGitRepositoryScope,
+  principalGitConnectorGrants,
+  principalGitGrantNeedsLookup,
+  principalHasGitRepositoryScope,
+  gitGrantsConnectorWide,
+  gitGrantsCover,
+  hasGitGrants,
+  TtlCache,
+  isUnderGitLabPath,
+  matchesScopeTargetSearch,
+  parseScopeTargetIds,
+  unresolvedScopeTarget,
+  SCOPE_TARGET_LOOKUP_TTL_MS,
+  SCOPE_TARGET_SEARCH_TTL_MS,
 };

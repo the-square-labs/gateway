@@ -1,8 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
+import { OperationLeaseStore } from '@/db/operation-lease.js';
+import { createFakeOperationLeaseDb } from '@/db/operation-lease.test-helpers.js';
 import { dockerWebhooks, managedDatabaseBindings, managedStorageBindings } from '@/db/schema/index.js';
 import { AppError } from '@/middleware/error-handler.js';
+import { DockerManagementService } from './docker.service.js';
 import {
   createContainer,
+  type DockerContainerMutationContext,
   daemonContainerCreateConfig,
   duplicateContainer,
   killContainer,
@@ -12,7 +16,18 @@ import {
   updateContainer,
   updateContainerEnv,
 } from './docker-container-mutation-operations.js';
-import { type ContainerTransitionClaim, DockerContainerTransitions } from './docker-container-transitions.js';
+import {
+  type ContainerTransition,
+  type ContainerTransitionClaim,
+  DockerContainerTransitions,
+} from './docker-container-transitions.js';
+import { DockerMigrationGuard } from './docker-migration-guard.js';
+
+/** Leases always granted, and a migration guard that always allows. */
+const crossProcessHolds = () => ({
+  acquireTransitionLeases: vi.fn().mockResolvedValue(undefined),
+  recheckMigrationGuard: vi.fn().mockResolvedValue(undefined),
+});
 
 describe('killContainer emergency path', () => {
   it('reuses an already-authorized transition identity and kills by stable name', async () => {
@@ -383,6 +398,7 @@ describe('container name-keyed metadata lifecycle', () => {
       clearTransition: vi.fn(),
       claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
       releaseTransitions: vi.fn(),
+      ...crossProcessHolds(),
       folderService: {
         deleteContainerAssignment: vi.fn().mockResolvedValue(undefined),
         renameContainerAssignment: vi.fn().mockResolvedValue(undefined),
@@ -425,6 +441,7 @@ describe('container name-keyed metadata lifecycle', () => {
       clearTransition: vi.fn(),
       claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
       releaseTransitions: vi.fn(),
+      ...crossProcessHolds(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -472,6 +489,7 @@ describe('container name-keyed metadata lifecycle', () => {
       clearTransition: vi.fn(),
       claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
       releaseTransitions: vi.fn(),
+      ...crossProcessHolds(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -534,6 +552,7 @@ describe('container name-keyed metadata lifecycle', () => {
       claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
         transitions.claim(nodeId, entries),
       releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
+      ...crossProcessHolds(),
       emitContainer,
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -606,6 +625,7 @@ describe('container webhooks follow the container name', () => {
       clearTransition: vi.fn(),
       claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
       releaseTransitions: vi.fn(),
+      ...crossProcessHolds(),
       emitContainer: vi.fn(),
       translateNameConflict: (error: unknown) => {
         throw error;
@@ -719,6 +739,7 @@ describe('updateContainerEnv persistence', () => {
       clearTransition: vi.fn(),
       claimTransitions: vi.fn(() => ({ nodeId: 'node-1', names: [], token: Symbol('claim') })),
       releaseTransitions: vi.fn(),
+      ...crossProcessHolds(),
       emitTransition: vi.fn(),
       createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
       watchRecreateByName: vi.fn(),
@@ -832,6 +853,45 @@ describe('recreateWithConfig runtime settings', () => {
   });
 });
 
+describe('recreateWithConfig reserved labels', () => {
+  it('refuses to add a Compose project label, which would re-home the container out of its folder', async () => {
+    const runtimeSettingsService = { get: vi.fn().mockResolvedValue(null), replace: vi.fn() };
+    const runtimeContext = {
+      db: {},
+      nodeDispatch: { sendDockerContainerCommand: vi.fn() },
+      nodeRegistry: { getNode: vi.fn().mockReturnValue(undefined) },
+      runtimeSettingsService,
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+    const ctx = {
+      db: {},
+      runtimeSettingsService,
+      nodeDispatch: runtimeContext.nodeDispatch,
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      requireNoTransition: vi.fn(),
+      inspectContainer: vi.fn().mockResolvedValue({ HostConfig: {}, Config: { Env: [], Labels: { team: 'a' } } }),
+      runtimeOperationContext: () => runtimeContext,
+      setTransition: vi.fn(),
+      parseResult: runtimeContext.parseResult,
+    };
+
+    await expect(
+      recreateWithConfig(
+        ctx as never,
+        'node-1',
+        'container-1',
+        { labels: { team: 'a', 'com.docker.compose.project': 'elsewhere' } },
+        'user-1'
+      )
+    ).rejects.toMatchObject({ code: 'RESERVED_DOCKER_LABEL' });
+    expect(ctx.setTransition).not.toHaveBeenCalled();
+    expect(runtimeContext.nodeDispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateContainer image changes', () => {
   it('syncs registry credentials and realigns stored env that mirrored the old image default', async () => {
     const environmentService = {
@@ -862,6 +922,7 @@ describe('updateContainer image changes', () => {
       runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
       requireNoTransition: vi.fn(),
       setTransition: vi.fn(),
+      ...crossProcessHolds(),
       emitTransition: vi.fn(),
       createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
       watchRecreateByName,
@@ -910,6 +971,7 @@ describe('updateContainer image changes', () => {
       runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
       requireNoTransition: vi.fn(),
       setTransition: vi.fn(),
+      ...crossProcessHolds(),
       emitTransition: vi.fn(),
       createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
       watchRecreateByName,
@@ -927,61 +989,63 @@ describe('updateContainer image changes', () => {
   });
 });
 
-describe('container rename claims both names', () => {
-  function renameContext(transitions: DockerContainerTransitions, names: Record<string, string>) {
-    const environmentService = {
-      deleteImported: vi.fn().mockResolvedValue(undefined),
-      rename: vi.fn().mockResolvedValue(undefined),
-    };
-    const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
-    let releaseRenameCheck!: () => void;
-    const renameCheck = new Promise<void>((resolve) => {
-      releaseRenameCheck = resolve;
-    });
-    let reachedRenameCheck!: () => void;
-    const firstRenameChecking = new Promise<void>((resolve) => {
-      reachedRenameCheck = resolve;
-    });
-    const assertNameAvailable = vi.fn(async (nodeId: string, name: string, claim?: ContainerTransitionClaim) => {
-      // Mirrors DockerService.assertNameAvailable: only a transition this
-      // rename holds itself is not "in use".
-      if (transitions.get(nodeId, name) && !transitions.isClaimedBy(nodeId, name, claim)) {
-        throw new AppError(409, 'NAME_IN_USE', `A container named "${name}" is currently being modified on this node`);
-      }
-    });
-    const ctx = {
-      db: unlockedDockerNodeDb(),
-      auditService: { log: vi.fn().mockResolvedValue(undefined) },
-      nodeDispatch: { sendDockerContainerCommand: renameRuntime },
-      environmentService,
-      validateDockerNode: vi.fn().mockResolvedValue(undefined),
-      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
-      resolveContainerName: vi.fn(async (_nodeId: string, containerId: string) => names[containerId]!),
-      requireNoTransition: (nodeId: string, name: string) => transitions.requireIdle(nodeId, name),
-      assertNameAvailable,
-      setTransition: (nodeId: string, name: string, state: 'creating') => transitions.set(nodeId, name, state),
-      clearTransition: (nodeId: string, name: string) => transitions.clear(nodeId, name),
-      claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
-        transitions.claim(nodeId, entries),
-      releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
-      // The first rename stalls in its permission check, after claiming.
-      accessResourceService: {
-        assertContainerRenameAllowed: vi.fn(() => {
-          reachedRenameCheck();
-          return renameCheck;
-        }),
-        removeContainer: vi.fn().mockResolvedValue(undefined),
-        renameContainer: vi.fn().mockResolvedValue(undefined),
-      },
-      emitContainer: vi.fn(),
-      translateNameConflict: (error: unknown) => {
-        throw error;
-      },
-      parseResult: vi.fn(),
-    };
-    return { ctx, environmentService, renameRuntime, releaseRenameCheck, firstRenameChecking };
-  }
+/** A rename whose permission check (after it claimed both names) waits for `releaseRenameCheck`. */
+function renameContext(transitions: DockerContainerTransitions, names: Record<string, string>) {
+  const environmentService = {
+    deleteImported: vi.fn().mockResolvedValue(undefined),
+    rename: vi.fn().mockResolvedValue(undefined),
+  };
+  const renameRuntime = vi.fn().mockResolvedValue({ success: true, detail: '{}' });
+  let releaseRenameCheck!: () => void;
+  const renameCheck = new Promise<void>((resolve) => {
+    releaseRenameCheck = resolve;
+  });
+  let reachedRenameCheck!: () => void;
+  const firstRenameChecking = new Promise<void>((resolve) => {
+    reachedRenameCheck = resolve;
+  });
+  const assertNameAvailable = vi.fn(async (nodeId: string, name: string, claim?: ContainerTransitionClaim) => {
+    // Mirrors DockerService.assertNameAvailable: only a transition this
+    // rename holds itself is not "in use".
+    if (transitions.get(nodeId, name) && !transitions.isClaimedBy(nodeId, name, claim)) {
+      throw new AppError(409, 'NAME_IN_USE', `A container named "${name}" is currently being modified on this node`);
+    }
+  });
+  const ctx = {
+    db: unlockedDockerNodeDb(),
+    auditService: { log: vi.fn().mockResolvedValue(undefined) },
+    nodeDispatch: { sendDockerContainerCommand: renameRuntime },
+    environmentService,
+    validateDockerNode: vi.fn().mockResolvedValue(undefined),
+    assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+    resolveContainerName: vi.fn(async (_nodeId: string, containerId: string) => names[containerId]!),
+    requireNoTransition: (nodeId: string, name: string) => transitions.requireIdle(nodeId, name),
+    assertNameAvailable,
+    setTransition: (nodeId: string, name: string, state: 'creating') => transitions.set(nodeId, name, state),
+    clearTransition: (nodeId: string, name: string) => transitions.clear(nodeId, name),
+    claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
+      transitions.claim(nodeId, entries),
+    releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
+    ...crossProcessHolds(),
+    // The first rename stalls in its permission check, after claiming.
+    accessResourceService: {
+      assertContainerRenameAllowed: vi.fn(() => {
+        reachedRenameCheck();
+        return renameCheck;
+      }),
+      removeContainer: vi.fn().mockResolvedValue(undefined),
+      renameContainer: vi.fn().mockResolvedValue(undefined),
+    },
+    emitContainer: vi.fn(),
+    translateNameConflict: (error: unknown) => {
+      throw error;
+    },
+    parseResult: vi.fn(),
+  };
+  return { ctx, environmentService, renameRuntime, releaseRenameCheck, firstRenameChecking };
+}
 
+describe('container rename claims both names', () => {
   // Regression (rc10 audit F7): a double-submitted rename to X passed the name
   // checks twice and the loser's pre-clean deleted the env and secrets the
   // winner had already moved to X.
@@ -1030,4 +1094,188 @@ describe('container rename claims both names', () => {
     expect(transitions.get('node-1', 'old')).toBeUndefined();
     expect(transitions.get('node-1', 'new')).toBe('recreating');
   });
+});
+
+describe('container rename and update claims across backend processes', () => {
+  /** One backend process: its own transition map, on a database shared with the others. */
+  function backendProcess(leaseDb: ReturnType<typeof createFakeOperationLeaseDb>) {
+    const transitions = new DockerContainerTransitions();
+    transitions.setLeaseStore(new OperationLeaseStore(leaseDb.db));
+    return {
+      transitions,
+      holds: {
+        requireNoTransition: (nodeId: string, name: string) => transitions.requireIdle(nodeId, name),
+        setTransition: (nodeId: string, name: string, state: ContainerTransition) =>
+          transitions.set(nodeId, name, state),
+        clearTransition: (nodeId: string, name: string) => transitions.clear(nodeId, name),
+        claimTransitions: (nodeId: string, entries: Parameters<DockerContainerTransitions['claim']>[1]) =>
+          transitions.claim(nodeId, entries),
+        releaseTransitions: (claim: ContainerTransitionClaim) => transitions.release(claim),
+        acquireTransitionLeases: (nodeId: string, names: readonly string[]) => transitions.acquireLeases(nodeId, names),
+        recheckMigrationGuard: vi.fn().mockResolvedValue(undefined),
+      },
+    };
+  }
+
+  function updateContext(name: string, holds: Record<string, unknown>) {
+    return {
+      db: unlockedDockerNodeDb(),
+      environmentService: { getDecryptedMap: vi.fn().mockResolvedValue({}), replace: vi.fn() },
+      nodeDispatch: { sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }) },
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue(name),
+      inspectContainer: vi.fn().mockResolvedValue({ Config: { Image: 'app:1', Env: [], Labels: {} } }),
+      resolveExpectedRecreateState: vi.fn().mockResolvedValue('running'),
+      resolveContainerStopTimeout: vi.fn().mockResolvedValue(10),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
+      longDockerOperationTimeoutMs: 600000,
+      runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      watchRecreateByName: vi.fn(),
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+      ...holds,
+    };
+  }
+
+  // rc.11 (rc10 audit F7 follow-up): the owner-token claims were per process,
+  // so a rename on one backend process and an update of the same container on
+  // another both went ahead.
+  it('refuses an update and a rename to the same name on another process while a rename holds the names', async () => {
+    const leaseDb = createFakeOperationLeaseDb();
+    const a = backendProcess(leaseDb);
+    const b = backendProcess(leaseDb);
+    const names = { 'container-1': 'orders-api', 'container-2': 'billing-api' };
+    const renaming = renameContext(a.transitions, names);
+    const first = renameContainer(
+      { ...renaming.ctx, ...a.holds } as never,
+      'node-1',
+      'container-1',
+      'orders-v2',
+      'user-1'
+    );
+    await renaming.firstRenameChecking;
+
+    const update = updateContext('orders-api', b.holds);
+    await expect(
+      updateContainer(update as never, 'node-1', 'container-1', { tag: '2' }, 'user-2')
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'CONTAINER_BUSY',
+      message: expect.stringContaining('orders-api'),
+    });
+    expect(update.nodeDispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+    expect(update.createTask).not.toHaveBeenCalled();
+    // B gave its own claim back.
+    expect(b.transitions.get('node-1', 'orders-api')).toBeUndefined();
+
+    const otherRename = renameContext(b.transitions, names);
+    await expect(
+      renameContainer({ ...otherRename.ctx, ...b.holds } as never, 'node-1', 'container-2', 'orders-v2', 'user-2')
+    ).rejects.toMatchObject({ statusCode: 409, code: 'NAME_IN_USE' });
+    expect(otherRename.environmentService.deleteImported).not.toHaveBeenCalled();
+    expect(b.transitions.get('node-1', 'billing-api')).toBeUndefined();
+
+    renaming.releaseRenameCheck();
+    await first;
+    await vi.waitFor(() => expect(leaseDb.rows.size).toBe(0));
+
+    // The rename is over: B updates the container, and holds it until its
+    // transition ends (the completion watcher clears it).
+    const retry = updateContext('orders-v2', b.holds);
+    await updateContainer(retry as never, 'node-1', 'container-1', { tag: '2' }, 'user-2');
+    expect(retry.nodeDispatch.sendDockerContainerCommand).toHaveBeenCalledTimes(1);
+    expect(leaseDb.rows.size).toBe(1);
+    await expect(a.transitions.acquireLeases('node-1', ['orders-v2'])).rejects.toMatchObject({
+      code: 'CONTAINER_BUSY',
+      message: 'Container "orders-v2" is currently updating',
+    });
+    b.transitions.clear('node-1', 'orders-v2');
+    await vi.waitFor(() => expect(leaseDb.rows.size).toBe(0));
+  });
+});
+
+describe('container updates re-check the migration guard after claiming', () => {
+  // The guard was checked only before the claim: a migration admitted in
+  // between (its row written) ran against a container this update recreated.
+  it.each([
+    'update',
+    'env',
+  ] as const)('refuses a %s once a migration was admitted between the guard check and the claim', async (operation) => {
+    const rows: Array<Record<string, unknown>> = [];
+    const guard = new DockerMigrationGuard({
+      select: () => ({ from: () => ({ where: async () => rows }) }),
+    } as never);
+    const service = new DockerManagementService({} as never, {} as never, {} as never, {} as never);
+    service.setMigrationGuard(guard);
+    const hostContext = (
+      service as unknown as { containerMutationContext(): DockerContainerMutationContext }
+    ).containerMutationContext();
+    // DockerManagementService checks the guard before the operation starts.
+    await guard.assertContainerAllowed('node-1', 'app');
+
+    const transitions = new DockerContainerTransitions();
+    const ctx = {
+      ...envMigrationContext(transitions),
+      recheckMigrationGuard: hostContext.recheckMigrationGuard,
+      // The migration is admitted while the update reads the container's state.
+      resolveExpectedRecreateState: vi.fn(async () => {
+        rows.push({
+          id: 'migration-1',
+          status: 'pending',
+          resourceType: 'container',
+          resourceName: 'app',
+          sourceNodeId: 'node-1',
+          targetNodeId: 'node-2',
+          keepSource: false,
+          deploymentId: null,
+          plan: null,
+        });
+        return 'running' as const;
+      }),
+    };
+
+    const run =
+      operation === 'update'
+        ? updateContainer(ctx as never, 'node-1', 'container-1', { tag: '2' }, 'user-1')
+        : updateContainerEnv(ctx as never, 'node-1', 'container-1', { NEW_VAR: '1' }, undefined, 'user-1');
+    await expect(run).rejects.toMatchObject({ statusCode: 409, code: 'DOCKER_RESOURCE_MIGRATING' });
+
+    expect(transitions.get('node-1', 'app')).toBeUndefined();
+    expect(ctx.createTask).not.toHaveBeenCalled();
+    expect(ctx.environmentService.replace).not.toHaveBeenCalled();
+    expect(ctx.nodeDispatch.sendDockerContainerCommand).not.toHaveBeenCalled();
+  });
+
+  function envMigrationContext(transitions: DockerContainerTransitions) {
+    return {
+      db: unlockedDockerNodeDb(),
+      environmentService: {
+        getDecryptedMap: vi.fn().mockResolvedValue({ APP_MODE: 'prod' }),
+        replace: vi.fn().mockResolvedValue(undefined),
+      },
+      nodeDispatch: { sendDockerContainerCommand: vi.fn().mockResolvedValue({ success: true, detail: '{}' }) },
+      auditService: { log: vi.fn().mockResolvedValue(undefined) },
+      validateDockerNode: vi.fn().mockResolvedValue(undefined),
+      assertNotManagedDeploymentInternal: vi.fn().mockResolvedValue(undefined),
+      resolveContainerName: vi.fn().mockResolvedValue('app'),
+      inspectContainer: vi.fn().mockResolvedValue({ Config: { Image: 'app:1', Env: ['APP_MODE=prod'], Labels: {} } }),
+      resolveContainerStopTimeout: vi.fn().mockResolvedValue(10),
+      resolveStopTimeoutFromInspect: vi.fn().mockReturnValue(10),
+      lifecycleWatchTimeoutMs: vi.fn().mockReturnValue(60000),
+      longDockerOperationTimeoutMs: 600000,
+      runtimeOperationContext: () => ({ runtimeSettingsService: undefined }),
+      requireNoTransition: (nodeId: string, name: string) => transitions.requireIdle(nodeId, name),
+      setTransition: (nodeId: string, name: string, state: ContainerTransition) => transitions.set(nodeId, name, state),
+      clearTransition: (nodeId: string, name: string) => transitions.clear(nodeId, name),
+      acquireTransitionLeases: (nodeId: string, names: readonly string[]) => transitions.acquireLeases(nodeId, names),
+      emitTransition: vi.fn(),
+      createTask: vi.fn().mockResolvedValue({ id: 'task-1' }),
+      watchRecreateByName: vi.fn(),
+      parseResult: (result: { detail?: string }) => JSON.parse(result.detail || '{}'),
+    };
+  }
 });

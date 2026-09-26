@@ -151,7 +151,9 @@ export function ComposeProjectEditor({
       nodeId || undefined
     );
     if (folderId && !destinationFolders.some((folder) => folder.id === folderId)) {
-      setFolderId(!rootAllowed && destinationFolders.length === 1 ? destinationFolders[0]!.id : null);
+      setFolderId(
+        !rootAllowed && destinationFolders.length === 1 ? destinationFolders[0]!.id : null
+      );
     } else if (!folderId && !rootAllowed && destinationFolders.length === 1) {
       setFolderId(destinationFolders[0]!.id);
     }

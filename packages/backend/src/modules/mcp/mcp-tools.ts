@@ -5,15 +5,18 @@ import {
   type ListToolsResult,
 } from '@modelcontextprotocol/sdk/types.js';
 import { container } from '@/container.js';
+import { withLimitedAccessGuidance } from '@/lib/access-denied.js';
+import { accessSummaryDatabase } from '@/lib/access-summary-resolver.js';
 import { AIService } from '@/modules/ai/ai.service.js';
 import { redactArgsForTool } from '@/modules/ai/ai.service.tool-helpers.js';
 import { AI_TOOLS, validateAIToolArguments } from '@/modules/ai/ai.tools.js';
-import type { AIToolDefinition } from '@/modules/ai/ai.types.js';
+import type { AIToolDefinition, ToolExecutionResult } from '@/modules/ai/ai.types.js';
 import { getAIToolResourceId } from '@/modules/ai/ai-tool-policy-metadata.js';
 import { hasAIToolCallScope, hasAIToolVisibilityScope } from '@/modules/ai/ai-tool-scope-policy.js';
 import { AuditService } from '@/modules/audit/audit.service.js';
 import { setAuditMcpContext } from '@/modules/audit/audit-request-context.js';
 import type { User } from '@/types.js';
+import { extractMcpIdempotencyKey, mcpToolListing, runMcpToolIdempotently } from './mcp-idempotency.js';
 import type { McpAuthContext } from './mcp-types.js';
 
 /**
@@ -71,7 +74,7 @@ const MCP_EXCLUDED_TOOLS = new Set([
   'open_connector_setup',
   'set_resource_pin',
 ]);
-const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource', 'read_gateway_documentation']);
+const MCP_ALWAYS_VISIBLE_AI_TOOLS = new Set(['find_resource', 'get_my_access', 'read_gateway_documentation']);
 const MCP_TOOLS_PAGE_SIZE = 80;
 const MCP_DISCOVERY_STATE_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -453,7 +456,7 @@ function toolError(message: string): CallToolResult {
   };
 }
 
-function toolResult(value: unknown): CallToolResult {
+function toolResult(value: unknown, options: { idempotencyReplayed?: boolean } = {}): CallToolResult {
   return {
     content: [
       {
@@ -461,6 +464,7 @@ function toolResult(value: unknown): CallToolResult {
         text: typeof value === 'string' ? value : JSON.stringify(value ?? null),
       },
     ],
+    ...(options.idempotencyReplayed ? { _meta: { idempotencyReplayed: true } } : {}),
   };
 }
 
@@ -475,12 +479,7 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
       ...(auth.eagerToolListing ? [] : [MCP_DISCOVER_TOOLS_DEFINITION]),
       ...listAvailableMcpTools(auth.scopes, visibleToolNames).map((tool) => ({
         name: tool.name,
-        description: tool.description,
-        inputSchema: tool.parameters as {
-          type: 'object';
-          properties?: Record<string, object>;
-          required?: string[];
-        },
+        ...mcpToolListing(tool),
         annotations: {
           readOnlyHint: !tool.destructive && tool.invalidateStores.length === 0,
           destructiveHint: tool.destructive,
@@ -530,7 +529,9 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
     const eligible = !!tool && isEligibleMcpTool(tool);
     // Tools hidden by the token scopes never validate arguments, so callers get no schema feedback.
     const visible = !!tool && eligible && hasToolScope(auth.scopes, tool);
-    const validation = visible ? validateAIToolArguments(toolName, args) : null;
+    const idempotency = visible ? extractMcpIdempotencyKey(tool, args) : null;
+    if (idempotency && !idempotency.ok) return toolError(idempotency.error);
+    const validation = visible ? validateAIToolArguments(toolName, idempotency?.args ?? args) : null;
     if (!tool || !visible || !validation?.ok || !hasToolScopeForArgs(auth.scopes, tool, validation.arguments)) {
       await auditDeniedMcpTool(
         tool,
@@ -541,22 +542,45 @@ export function registerMcpToolHandlers(server: McpAuthContext['server'], auth: 
         !eligible ? 'unavailable_tool' : validation && !validation.ok ? 'invalid_arguments' : 'missing_scope'
       );
       if (validation && !validation.ok) return toolError(validation.error);
-      return toolError(`Tool "${toolName}" is unavailable for this MCP token`);
+      const denied = `Tool "${toolName}" is unavailable for this MCP token`;
+      if (tool && visible && validation?.ok && tool.requiredScope) {
+        // The tool is listed but not for this target: a folder-, node- or resource-limited grant, not "no access".
+        const guided = await withLimitedAccessGuidance(
+          `${denied}: "${tool.requiredScope}" is not granted for this target.`,
+          auth.scopes,
+          accessSummaryDatabase()
+        );
+        if (guided.includes('get_my_access')) return toolError(guided);
+      }
+      return toolError(denied);
     }
 
-    const result = await container.resolve(AIService).executeTool(user, toolName, validation.arguments, {
-      source: 'mcp',
-      scopes: auth.scopes,
-      tokenId: auth.tokenId,
-      tokenPrefix: auth.tokenPrefix,
-      authType: auth.authType,
-      clientId: auth.clientId,
-    });
+    const execute = () =>
+      container.resolve(AIService).executeTool(user, toolName, validation.arguments, {
+        source: 'mcp',
+        scopes: auth.scopes,
+        tokenId: auth.tokenId,
+        tokenPrefix: auth.tokenPrefix,
+        authType: auth.authType,
+        clientId: auth.clientId,
+      });
+    const idempotencyKey = idempotency?.ok ? idempotency.key : undefined;
+    if (!idempotencyKey) return executionResult(await execute());
 
-    if (result.error) {
-      return toolError(result.error);
-    }
-
-    return toolResult(result.result);
+    const outcome = await runMcpToolIdempotently(
+      { auth, toolName, key: idempotencyKey, args: validation.arguments },
+      execute
+    );
+    if (outcome.kind === 'rejected') return toolError(outcome.error);
+    if (outcome.kind === 'replayed') return toolResult(outcome.result, { idempotencyReplayed: true });
+    return executionResult(outcome.execution);
   });
+}
+
+function executionResult(result: ToolExecutionResult): CallToolResult {
+  if (result.error) {
+    return toolError(result.error);
+  }
+
+  return toolResult(result.result);
 }

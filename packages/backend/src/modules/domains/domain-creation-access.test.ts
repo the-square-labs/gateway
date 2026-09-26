@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   assertDomainIngressMoveAccess,
   canPickDomainNginxNode,
   domainNginxNodeOptionsForScopes,
+  resolveDomainCreationNginxNodeId,
 } from './domain-creation-access.js';
 
 const TARGET = '22222222-2222-4222-8222-222222222222';
@@ -67,6 +68,56 @@ describe('domain creation node access', () => {
       unconfiguredNodes: [],
       totalNginxNodes: 1,
       unconfiguredNginxNodes: 0,
+    });
+  });
+});
+
+describe('resolveDomainCreationNginxNodeId', () => {
+  const NODE_A = '55555555-5555-4555-8555-555555555555';
+  const NODE_B = '66666666-6666-4666-8666-666666666666';
+  const eligibleNodes = [
+    { id: NODE_A, hostname: 'edge-a', displayName: 'Edge A' },
+    { id: NODE_B, hostname: 'edge-b', displayName: null },
+  ];
+  const load = () => vi.fn().mockResolvedValue({ eligibleNodes });
+
+  it('keeps an explicit node and leaves the choice to the service for broad and destination-folder grants', async () => {
+    const options = load();
+    await expect(
+      resolveDomainCreationNginxNodeId(['domains:create:node/x'], { nginxNodeId: NODE_B }, options)
+    ).resolves.toBe(NODE_B);
+    await expect(resolveDomainCreationNginxNodeId(['domains:create'], {}, options)).resolves.toBeUndefined();
+    await expect(
+      resolveDomainCreationNginxNodeId([`domains:create:folder/${FOLDER}`], { folderId: FOLDER }, options)
+    ).resolves.toBeUndefined();
+    // A folder grant without its folder cannot create at the root: the destination check refuses.
+    await expect(
+      resolveDomainCreationNginxNodeId([`domains:create:folder/${FOLDER}`], {}, options)
+    ).resolves.toBeUndefined();
+    expect(options).not.toHaveBeenCalled();
+  });
+
+  it('gives a node-limited creator its only granted node with a public address', async () => {
+    await expect(resolveDomainCreationNginxNodeId([`domains:create:node/${NODE_B}`], {}, load())).resolves.toBe(NODE_B);
+    await expect(resolveDomainCreationNginxNodeId([`domains:create:${NODE_A}`], {}, load())).resolves.toBe(NODE_A);
+    await expect(
+      resolveDomainCreationNginxNodeId(['domains:create:node/99999999-9999-4999-8999-999999999999'], {}, load())
+    ).resolves.toBeUndefined();
+  });
+
+  it('refuses a node-limited creator with several granted nodes and lists them', async () => {
+    await expect(
+      resolveDomainCreationNginxNodeId([`domains:create:node/${NODE_A}`, `domains:create:node/${NODE_B}`], {}, load())
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'DOMAIN_NGINX_NODE_REQUIRED',
+      message: expect.stringContaining(`Edge A (edge-a): ${NODE_A}; edge-b: ${NODE_B}`),
+      details: {
+        eligibleNodes: [
+          { id: NODE_A, hostname: 'edge-a', displayName: 'Edge A' },
+          { id: NODE_B, hostname: 'edge-b', displayName: null },
+        ],
+      },
     });
   });
 });

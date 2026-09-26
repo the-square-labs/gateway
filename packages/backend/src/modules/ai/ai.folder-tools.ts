@@ -1,4 +1,5 @@
 import { container } from '@/container.js';
+import { type AccessDockerFolderType, type AccessFolderResourceType, accessAreaForBase } from '@/lib/access-summary.js';
 import { getFolderScopedIds } from '@/lib/folder-scopes.js';
 import {
   getResourceScopedIds,
@@ -6,7 +7,9 @@ import {
   hasScopeBase,
   hasScopeForCreation,
   hasScopeForResource,
+  scopeMatcher,
 } from '@/lib/permissions.js';
+import { FOLDER_SCOPABLE } from '@/lib/scopes.js';
 import { AdminUserFolderService } from '@/modules/admin/admin-user-folders.service.js';
 import { DatabaseFolderService } from '@/modules/databases/database-folders.service.js';
 import {
@@ -51,9 +54,6 @@ import type { User } from '@/types.js';
 
 export const FOLDER_TOOL_NAMES = new Set(['list_resource_folders', 'manage_resource_folder']);
 
-/** Folder-scoped grants of these scopes reveal their route folders, like GET /api/proxy-host-folders. */
-const PROXY_FOLDER_GRANT_SCOPES = ['proxy:view', 'proxy:edit', 'proxy:delete', 'proxy:create'] as const;
-
 type ResourceType =
   | 'nodes'
   | 'databases'
@@ -78,8 +78,6 @@ type GenericFolderConfig = {
   resourceMoveScope: string;
   /** Creation scope that also lets the HTTP folder list route show every folder. */
   createScope?: string;
-  /** Folder-scoped grants of these scopes reveal their folders to resource-scoped callers. */
-  folderGrantScopes?: readonly string[];
   /** Per-resource scope the HTTP reorder route requires on every reordered resource. */
   reorderItemScope?: string;
   /** Resource ids visible to a caller without broad view access; defaults to viewScope grants. */
@@ -94,6 +92,27 @@ const DOCKER_MOVE_SCOPE_BY_RESOURCE_TYPE = {
   network: 'docker:networks:edit',
   compose: 'docker:compose:manage',
 } as const;
+
+const DOCKER_CREATE_SCOPE_BY_RESOURCE_TYPE = {
+  container: 'docker:containers:create',
+  compose: 'docker:compose:create',
+  image: 'docker:images:pull',
+  volume: 'docker:volumes:create',
+  network: 'docker:networks:create',
+} as const;
+
+/** Without dockerResourceType, list the first Docker folder type the caller can use instead of refusing. */
+function defaultDockerListType(scopes: string[]): keyof typeof DOCKER_CREATE_SCOPE_BY_RESOURCE_TYPE {
+  const types = ['container', 'compose', 'image', 'volume', 'network'] as const;
+  if (hasScope(scopes, 'docker:folders:manage')) return 'container';
+  return (
+    types.find(
+      (type) =>
+        hasScopeBase(scopes, `docker:${type === 'compose' ? 'compose' : `${type}s`}:view`) ||
+        hasScopeBase(scopes, DOCKER_CREATE_SCOPE_BY_RESOURCE_TYPE[type])
+    ) ?? 'container'
+  );
+}
 
 async function ensureDockerResourceMoveScopes(
   user: User,
@@ -177,6 +196,47 @@ function ensureResourceMoveAccess(
   }
 }
 
+/**
+ * Every folder-scopable scope of one folder family. A folder grant of any of them (view, create, query,
+ * deploy, console, ...) reveals the folder to a caller without broad access, even while it is empty.
+ */
+function folderFamilyBases(resourceType: AccessFolderResourceType, dockerType?: AccessDockerFolderType): string[] {
+  return FOLDER_SCOPABLE.filter((base) => {
+    const { area } = accessAreaForBase(base);
+    return area.folderResourceType === resourceType && (!dockerType || area.dockerFolderType === dockerType);
+  });
+}
+
+/**
+ * Add the caller's actions in each listed folder (`access.actions`, `access.canCreate`), so an agent with
+ * folder-limited access can pick a destination. Broad grants count in every folder; folder grants include
+ * their subfolders.
+ */
+function annotateFolderAccess(
+  tree: unknown,
+  scopes: readonly string[],
+  bases: readonly string[],
+  createScope?: string
+) {
+  if (!Array.isArray(tree)) return tree;
+  const holds = scopeMatcher(scopes);
+  const visit = (node: unknown): unknown => {
+    if (!node || typeof node !== 'object' || typeof (node as { id?: unknown }).id !== 'string') return node;
+    const folder = node as { id: string; children?: unknown };
+    const actions = [
+      ...new Set(
+        bases.filter((base) => holds(`${base}:folder/${folder.id}`)).map((base) => accessAreaForBase(base).action)
+      ),
+    ].sort();
+    return {
+      ...folder,
+      access: { actions, canCreate: !!createScope && holds(`${createScope}:folder/${folder.id}`) },
+      ...(Array.isArray(folder.children) ? { children: folder.children.map(visit) } : {}),
+    };
+  };
+  return tree.map(visit);
+}
+
 function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>): GenericFolderConfig {
   switch (resourceType) {
     case 'nodes':
@@ -187,7 +247,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'nodes:rename',
         resourceMoveScope: 'nodes:rename',
         createScope: 'nodes:create',
-        folderGrantScopes: ['nodes:details', 'nodes:rename', 'nodes:create'],
       };
     case 'databases':
       return {
@@ -197,7 +256,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'databases:edit',
         resourceMoveScope: 'databases:edit',
         createScope: 'databases:create',
-        folderGrantScopes: ['databases:view', 'databases:edit', 'databases:create'],
       };
     case 'storage':
       return {
@@ -207,7 +265,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'storage:edit',
         resourceMoveScope: 'storage:edit',
         createScope: 'storage:create',
-        folderGrantScopes: ['storage:view', 'storage:edit', 'storage:delete', 'storage:create'],
       };
     case 'domains':
       return {
@@ -217,7 +274,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'domains:edit',
         resourceMoveScope: 'domains:edit',
         createScope: 'domains:create',
-        folderGrantScopes: ['domains:view', 'domains:edit', 'domains:create'],
       };
     case 'ssl_certificates':
       return {
@@ -227,7 +283,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'ssl:cert:issue',
         resourceMoveScope: 'ssl:cert:issue',
         createScope: 'ssl:cert:issue',
-        folderGrantScopes: ['ssl:cert:view', 'ssl:cert:issue', 'ssl:cert:delete'],
       };
     case 'logging_environments':
       return {
@@ -237,12 +292,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'logs:environments:edit',
         resourceMoveScope: 'logs:environments:edit',
         createScope: 'logs:environments:create',
-        folderGrantScopes: [
-          'logs:environments:view',
-          'logs:environments:edit',
-          'logs:environments:delete',
-          'logs:environments:create',
-        ],
       };
     case 'logging_schemas':
       return {
@@ -252,7 +301,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'logs:schemas:edit',
         resourceMoveScope: 'logs:schemas:edit',
         createScope: 'logs:schemas:create',
-        folderGrantScopes: ['logs:schemas:view', 'logs:schemas:edit', 'logs:schemas:delete', 'logs:schemas:create'],
       };
     case 'admin_users':
       return {
@@ -260,7 +308,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         viewScope: 'admin:users',
         manageScope: 'admin:users:folders:manage',
         resourceMoveScope: 'admin:users',
-        folderGrantScopes: ['admin:users'],
         reorderItemScope: 'admin:users',
       };
     case 'permission_groups':
@@ -269,7 +316,6 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         viewScope: 'admin:groups',
         manageScope: 'admin:groups:folders:manage',
         resourceMoveScope: 'admin:groups',
-        folderGrantScopes: ['admin:groups'],
         reorderItemScope: 'admin:groups',
       };
     case 'pages':
@@ -280,27 +326,34 @@ function genericConfig(resourceType: Exclude<ResourceType, 'routes' | 'docker'>)
         moveEditScope: 'pages:edit',
         resourceMoveScope: 'pages:edit',
         createScope: 'pages:create',
-        folderGrantScopes: ['pages:view', 'pages:edit', 'pages:create'],
         reorderItemScope: 'pages:edit',
         visibleResourceIds: (scopes) => visiblePageProjectIds(scopes) ?? [],
       };
   }
 }
 
-/** Mirrors each module's GET .../folders route: who may list, and which folders a scoped caller sees. */
-function genericListOptions(user: User, config: GenericFolderConfig) {
+/**
+ * Mirrors each module's GET .../folders route: who may list, and which folders a scoped caller sees. A
+ * folder grant of any of the family's scopes counts, so a folder-limited caller always sees its folders.
+ */
+function genericListOptions(
+  user: User,
+  config: GenericFolderConfig,
+  resourceType: Exclude<ResourceType, 'routes' | 'docker'>
+) {
   const scopes = user.scopes;
   const canManageFolders = hasScope(scopes, config.manageScope);
   const hasGlobalView = hasScope(scopes, config.viewScope);
   const hasGlobalCreate = !!config.createScope && hasScope(scopes, config.createScope);
   const listScopes = [config.viewScope, config.manageScope, ...(config.createScope ? [config.createScope] : [])];
-  if (!canManageFolders && !listScopes.some((scope) => hasScopeBase(scopes, scope))) {
+  const grantedFolderIds = getFolderScopedIds(scopes, folderFamilyBases(resourceType));
+  if (!canManageFolders && grantedFolderIds.length === 0 && !listScopes.some((scope) => hasScopeBase(scopes, scope))) {
     throw new Error(`PERMISSION_DENIED: Missing one of required scopes: ${listScopes.join(', ')}`);
   }
   if (canManageFolders || hasGlobalView || hasGlobalCreate) return { includeAllFolders: true };
   return {
     allowedResourceIds: config.visibleResourceIds?.(scopes) ?? getResourceScopedIds(scopes, config.viewScope),
-    ...(config.folderGrantScopes ? { allowedFolderIds: getFolderScopedIds(scopes, config.folderGrantScopes) } : {}),
+    allowedFolderIds: grantedFolderIds,
   };
 }
 
@@ -328,7 +381,14 @@ async function executeGenericFolderTool(
     else await policy.requireFeature(feature);
   }
   const config = genericConfig(resourceType);
-  if (operation === 'list') return config.service.getFolderTree(genericListOptions(user, config));
+  if (operation === 'list') {
+    return annotateFolderAccess(
+      await config.service.getFolderTree(genericListOptions(user, config, resourceType)),
+      user.scopes,
+      folderFamilyBases(resourceType),
+      config.createScope
+    );
+  }
   if (resourceType === 'pages') await container.resolve(PageProfileService).requireEnabled();
 
   ensureScope(user, config.manageScope);
@@ -392,15 +452,16 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
     }
     const includeAllFolders =
       hasScope(scopes, 'proxy:folders:manage') || hasScope(scopes, 'proxy:view') || hasScope(scopes, 'proxy:create');
+    const routeFolderBases = folderFamilyBases('routes');
     const tree = await service.getFolderTree(
       includeAllFolders
         ? { includeAllFolders: true }
         : {
             allowedHostIds: getResourceScopedIds(scopes, 'proxy:view'),
-            allowedFolderIds: getFolderScopedIds(scopes, PROXY_FOLDER_GRANT_SCOPES),
+            allowedFolderIds: getFolderScopedIds(scopes, routeFolderBases),
           }
     );
-    return present(tree);
+    return annotateFolderAccess(present(tree), scopes, routeFolderBases, 'proxy:create');
   }
 
   ensureScope(user, 'proxy:folders:manage');
@@ -440,11 +501,24 @@ async function executeProxyFolderTool(user: User, args: Record<string, unknown>)
 async function executeDockerFolderTool(user: User, args: Record<string, unknown>) {
   const service = container.resolve(DockerFolderService);
   const operation = operationArg(args.operation);
-  const resourceType = DockerFolderResourceTypeSchema.parse(args.dockerResourceType ?? 'container');
+  const resourceType = DockerFolderResourceTypeSchema.parse(
+    args.dockerResourceType ?? (operation === 'list' ? defaultDockerListType(user.scopes) : 'container')
+  );
 
   if (operation === 'list') {
-    // Same access rule and visibility as GET /docker/folders, including Compose projects.
-    return service.getFolderTree(await dockerFolderTreeOptions(user.scopes, resourceType));
+    // Same access rule and visibility as GET /docker/folders, including Compose projects, plus every folder the
+    // caller holds any grant of this Docker type on.
+    const bases = folderFamilyBases('docker', resourceType);
+    const options = await dockerFolderTreeOptions(user.scopes, resourceType);
+    const tree = await service.getFolderTree(
+      'allowedFolderIds' in options && options.allowedFolderIds
+        ? {
+            ...options,
+            allowedFolderIds: [...new Set([...options.allowedFolderIds, ...getFolderScopedIds(user.scopes, bases)])],
+          }
+        : options
+    );
+    return annotateFolderAccess(tree, user.scopes, bases, DOCKER_CREATE_SCOPE_BY_RESOURCE_TYPE[resourceType]);
   }
 
   ensureScope(user, 'docker:folders:manage');

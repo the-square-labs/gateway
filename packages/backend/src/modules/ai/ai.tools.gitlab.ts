@@ -18,7 +18,8 @@ const projectSelector = {
 export const GITLAB_AI_TOOLS: AIToolDefinition[] = [
   {
     name: 'gitlab_list_connectors',
-    description: 'List enabled GitLab connectors available through Gateway. Does not expose connector tokens.',
+    description:
+      'List enabled GitLab connectors the caller holds a GitLab scope on (scopes can be limited to a connector, group, or project). Does not expose connector tokens.',
     parameters: { type: 'object', properties: {} },
     destructive: false,
     category: 'GitLab',
@@ -28,7 +29,8 @@ export const GITLAB_AI_TOOLS: AIToolDefinition[] = [
   },
   {
     name: 'gitlab_list_projects',
-    description: 'List synced GitLab projects for a connector using Gateway allowlist rules.',
+    description:
+      'List synced GitLab projects for a connector using Gateway allowlist rules. Group- or project-limited GitLab scopes list only the projects they cover; every project tool is checked against the project, its groups, and the connector.',
     parameters: {
       type: 'object',
       properties: {
