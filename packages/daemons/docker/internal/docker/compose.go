@@ -127,6 +127,17 @@ func (p *DockerPlugin) handleComposeCommand(cmd *pb.DockerComposeCommand, result
 		result.Error = "docker compose executor is unavailable"
 		return
 	}
+	if cmd.GetAction() == composeActionPullCreate && p.client != nil {
+		running, err := p.client.composeProjectRunning(context.Background(), cmd.GetProjectName())
+		if err == nil && running {
+			err = errStandbyOverRunningCopy
+		}
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+			return
+		}
+	}
 	detail, err := p.composeExecutor.handle(cmd)
 	if err != nil {
 		result.Success = false
@@ -279,7 +290,7 @@ func validateComposeCommand(cmd *pb.DockerComposeCommand) (composeRequest, error
 		}
 		return request, nil
 	}
-	if request.removeOrphans && request.action != "apply" && request.action != "pull_apply" && request.action != "down" {
+	if request.removeOrphans && request.action != "apply" && request.action != "pull_apply" && request.action != composeActionPullCreate && request.action != "down" {
 		return composeRequest{}, errors.New("remove_orphans is not allowed for this docker compose action")
 	}
 	if request.action == "delete_volumes" {
@@ -321,7 +332,7 @@ func validateComposeCommand(cmd *pb.DockerComposeCommand) (composeRequest, error
 
 func isComposeAction(action string) bool {
 	switch action {
-	case "apply", "pull_apply", "start", "stop", "restart", "down", "delete_volumes", "cancel":
+	case "apply", "pull_apply", composeActionPullCreate, "start", "stop", "restart", "down", "delete_volumes", "cancel":
 		return true
 	default:
 		return false
@@ -479,6 +490,13 @@ func composeSidecarCommands(request composeRequest) ([][]string, error) {
 		return [][]string{{"up", "--detach", "--no-build", "--pull", "never"}}, nil
 	case "pull_apply":
 		return [][]string{{"pull"}, {"up", "--detach", "--no-build", "--pull", "never"}}, nil
+	case composeActionPullCreate:
+		// A lease-mode standby (D7): pulled and created, never started.
+		create := []string{"create", "--no-build", "--pull", "never"}
+		if request.removeOrphans {
+			create = append(create, "--remove-orphans")
+		}
+		return [][]string{{"pull"}, create}, nil
 	case "start", "stop", "restart":
 		return [][]string{{request.action}}, nil
 	case "down":

@@ -22,8 +22,32 @@ func (p *DockerPlugin) leaseGate(cmd *pb.GatewayCommand) error {
 			return fmt.Errorf("refused for availability policy %s: %w", policyID, err)
 		}
 	}
-	if payload, ok := cmd.Payload.(*pb.GatewayCommand_DockerContainer); ok && payload.DockerContainer.GetAction() == "live_update" {
-		return p.leaseLiveUpdateGate(payload.DockerContainer)
+	switch payload := cmd.Payload.(type) {
+	case *pb.GatewayCommand_DockerContainer:
+		if payload.DockerContainer.GetAction() == "live_update" {
+			return p.leaseLiveUpdateGate(payload.DockerContainer)
+		}
+	case *pb.GatewayCommand_DockerAvailability:
+		return p.leaseStandbyPrepareGate(payload.DockerAvailability)
+	}
+	return nil
+}
+
+// leaseStandbyPrepareGate keeps a standby prepare (T6 §3.1) off the node that
+// holds the policy's lease: its running copy is the serving one, and it is
+// re-prepared only after a handoff moved the lease away.
+func (p *DockerPlugin) leaseStandbyPrepareGate(cmd *pb.DockerAvailabilityCommand) error {
+	if cmd.GetAction() != availabilityActionPrepare {
+		return nil
+	}
+	var config struct {
+		Phase string `json:"phase"`
+	}
+	if json.Unmarshal([]byte(cmd.GetConfigJson()), &config) != nil || config.Phase != "standby" {
+		return nil
+	}
+	if p.lease.runtime.Holds(cmd.GetPolicyId()) {
+		return fmt.Errorf("availability policy %s: this node holds the lease; a standby is prepared only on another candidate", cmd.GetPolicyId())
 	}
 	return nil
 }

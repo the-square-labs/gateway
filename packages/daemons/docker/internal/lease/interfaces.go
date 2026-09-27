@@ -87,6 +87,10 @@ type Placements interface {
 	// ServeSet selects, from every container labeled with the policy, the
 	// ones that run while the lease is held. The others stay stopped.
 	ServeSet(policyID string, containers []Container) []Container
+	// MarkServing records the placement lifecycle for the backend (T6 §3.1):
+	// active once the lease holder started it, stopped after a confirmed
+	// stop. Called from background operations.
+	MarkServing(policyID string, serving bool)
 }
 
 // PolicyKey is a Gateway policy signing key delivered over the
@@ -98,12 +102,13 @@ type PolicyKey struct {
 
 // BlockUpdate is one lease distribution from the Gateway: T3's
 // SyncAvailabilityLeaseCommand after decoding its opaque relay.v1 blocks.
+// Each manifest carries its policy's voters and voter epoch (A18); there is
+// no cluster-wide voter config any more.
 type BlockUpdate struct {
 	Revision     uint64
 	MemberID     string
 	PolicyKeys   []PolicyKey
 	KeyRotations []*relayv1.LeasePolicyKeyRotation
-	VoterConfig  *relayv1.LeaseSignedBlock
 	Manifests    []*relayv1.LeaseSignedBlock
 }
 

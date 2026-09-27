@@ -272,6 +272,8 @@ func (p *DockerPlugin) handleDeploymentCommand(cmd *pb.DockerDeploymentCommand, 
 	switch cmd.Action {
 	case "create":
 		detail, err = p.client.CreateDeployment(ctx, payload)
+	case deploymentActionCreateStandby:
+		detail, err = p.client.CreateDeploymentStandby(ctx, payload)
 	case "deploy_slot":
 		detail, err = p.client.DeployDeploymentSlot(ctx, payload)
 	case "switch":

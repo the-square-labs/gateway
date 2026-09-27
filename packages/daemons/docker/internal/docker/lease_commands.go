@@ -24,7 +24,9 @@ func (p *DockerPlugin) handleAvailabilityLeaseSync(cmd *pb.SyncAvailabilityLease
 	for _, key := range cmd.GetPolicyKeys() {
 		keys = append(keys, lease.PolicyKey{ID: key.GetKeyId(), PublicKey: key.GetPublicKey()})
 	}
-	update, err := lease.DecodeBlockUpdate(cmd.GetRevision(), cmd.GetMemberId(), keys, cmd.GetKeyRotations(), cmd.GetVoterConfig(), cmd.GetManifests())
+	// voter_config is obsolete: every manifest carries its policy's voters
+	// (A18). A non-empty value from an older Gateway is ignored.
+	update, err := lease.DecodeBlockUpdate(cmd.GetRevision(), cmd.GetMemberId(), keys, cmd.GetKeyRotations(), cmd.GetManifests())
 	if err == nil {
 		err = p.lease.runtime.ApplyLeaseBlocks(update)
 	}
@@ -72,13 +74,13 @@ func (p *DockerPlugin) availabilityLeaseReport() *pb.AvailabilityLeaseReport {
 
 func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeaseReport {
 	out := &pb.AvailabilityLeaseReport{
-		MemberId: report.MemberID, IdentityPublicKey: identity, Incarnation: report.Incarnation, Epoch: report.Epoch,
+		// The top-level epoch is not used with per-policy voters (A18):
+		// each manifest ack and acceptor view carries its policy's epoch.
+		MemberId: report.MemberID, IdentityPublicKey: identity, Incarnation: report.Incarnation,
 		TrustedPolicyKeyIds: report.TrustedPolicyKeyIDs, AcceptorAbstaining: report.AcceptorAbstaining,
 		WatchdogReady: report.WatchdogReady, LeaseRevision: report.LeaseRevision,
 	}
-	versions := map[string]uint64{}
 	for _, manifest := range report.Manifests {
-		versions[manifest.PolicyID] = manifest.Version
 		out.Manifests = append(out.Manifests, &pb.AvailabilityLeaseManifestAck{PolicyId: manifest.PolicyID, ManifestVersion: manifest.Version, Closed: manifest.Closed})
 	}
 	for _, held := range report.Held {
@@ -94,7 +96,7 @@ func leaseReportProto(report lease.Report, identity []byte) *pb.AvailabilityLeas
 			State:    strings.ToLower(strings.TrimPrefix(view.State.String(), "LEASE_KEY_STATE_")),
 			HolderId: view.Holder, ReservedFor: view.ReservedFor,
 			Promised: leaseBallotProto(view.Promised), Committed: leaseBallotProto(view.CommitBallot),
-			Epoch: report.Epoch, ManifestVersion: versions[view.Key.PolicyID],
+			Epoch: view.VoterEpoch, ManifestVersion: view.ManifestVersion,
 		})
 	}
 	for _, event := range report.Events {

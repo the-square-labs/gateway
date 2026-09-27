@@ -91,6 +91,15 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 	// the last operation of this policy completed.
 	fresh := r.snapshot.at >= wl.lastOpDone
 	bootstrap := r.bootstrapPendingLocked(manifest)
+	held := status.Role == availabilitylease.RoleHolding || status.Role == availabilitylease.RoleRecovering
+	if held && status.Key.Slot >= manifest.Slots && wl.release == nil {
+		// Scale-down: the slot left the manifest (surge lowered, replicas
+		// reduced). Acceptors refuse its renewals, so the holder stops,
+		// confirms the cgroup is empty and releases (A6) instead of waiting
+		// for its renewal timer.
+		wl.release = &releaseIntent{reason: "slot removed from the manifest"}
+		r.logger.Info("availability lease slot left the manifest; releasing it", "policy_id", manifest.PolicyID, "slot", status.Key.Slot)
+	}
 	switch status.Role {
 	case availabilitylease.RoleHolding:
 		switch {
@@ -106,6 +115,10 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 	case availabilitylease.RoleRecovering:
 		if !r.hbFresh {
 			r.abandonLocked(wl, status, "watchdog heartbeat is stale")
+			break
+		}
+		if wl.release != nil {
+			r.stopLocked(wl, status, containers, purposeRelease)
 			break
 		}
 		// Unconfirmed container after a restart (A2.3): it keeps running on
@@ -292,6 +305,10 @@ func (r *Runtime) startLocked(wl *workload, key availabilitylease.Key, serve, co
 			}
 			cancel()
 		}
+		if len(failed) < len(containers) {
+			// T6 §3.1: the started standby placement becomes active.
+			r.opts.Placements.MarkServing(key.PolicyID, true)
+		}
 		return func() {
 			adoptServingLocked(wl, serve, r.opts.Clock.Now())
 			r.logger.Info("availability lease holder started its workload", "policy_id", key.PolicyID, "slot", key.Slot, "failed", len(failed))
@@ -363,6 +380,11 @@ func (r *Runtime) stopLocked(wl *workload, status availabilitylease.HolderStatus
 			if err != nil || !empty {
 				confirmed = false
 			}
+		}
+		if confirmed {
+			// T6 §3.1: a released or fenced placement is marked stopped
+			// before the release leaves.
+			r.opts.Placements.MarkServing(policyID, false)
 		}
 		var releaseErr error
 		if confirmed && purpose == purposeRelease {

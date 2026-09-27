@@ -66,7 +66,6 @@ type world struct {
 	seq        int
 	log        []string
 	violations []string
-	config     *pb.LeaseSignedBlock
 	manifest   *pb.LeaseSignedBlock
 	manifestV  uint64
 	candidates []string
@@ -74,6 +73,7 @@ type world struct {
 	bootstrap  string
 	closed     bool
 	available  bool
+	slots      uint32
 	watchdogOn bool
 	logger     *slog.Logger
 }
@@ -86,6 +86,7 @@ type worldSpec struct {
 	voters    []string
 	bootstrap string
 	available bool
+	slots     uint32
 }
 
 func newWorld(t *testing.T, spec worldSpec) *world {
@@ -93,7 +94,7 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	w := &world{
 		t: t, clock: &fakeClock{now: time.Hour}, policyID: testPolicy, policyPriv: priv, byID: map[string]any{},
-		candidates: spec.candidates, voters: spec.voters, bootstrap: spec.bootstrap, available: spec.available, watchdogOn: true,
+		candidates: spec.candidates, voters: spec.voters, bootstrap: spec.bootstrap, available: spec.available, slots: max(spec.slots, 1), watchdogOn: true,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if len(w.voters) == 0 {
@@ -111,7 +112,7 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 		h.endpoints = &fakeEndpoints{w: w, host: id, serving: map[string]bool{}}
 		w.daemons = append(w.daemons, h)
 	}
-	w.buildBlocks()
+	w.buildManifest()
 	for _, relay := range w.relays {
 		node, err := availabilitylease.NewNode(availabilitylease.Config{
 			ID: relay.id, Clock: w.clock, Store: availabilitylease.NewMemoryStore(), Transport: w,
@@ -123,9 +124,6 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 		relay.node = node
 		w.byID[relay.id] = relay
 		if err := node.TrustPolicyKey("k1", priv.Public().(ed25519.PublicKey)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := node.AdoptVoterConfig(w.config); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := node.AdoptManifest(w.manifest); err != nil {
@@ -166,37 +164,35 @@ func (w *world) keyOf(id string) *ecdsa.PrivateKey {
 	return nil
 }
 
-func (w *world) buildBlocks() {
-	config := &pb.LeaseVoterConfig{SchemaVersion: 1, Epoch: 1}
-	members := map[string]bool{}
-	for _, relay := range w.relays {
-		members[relay.id] = true
-		config.Members = append(config.Members, &pb.LeaseMember{Id: relay.id, PublicKey: publicKeyDER(relay.key), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
-	}
-	for _, id := range w.voters {
-		if !members[id] {
-			config.Members = append(config.Members, &pb.LeaseMember{Id: id, PublicKey: publicKeyDER(w.keyOf(id)), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
-		}
-	}
-	config.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: append([]string(nil), w.voters...)}}
-	payload, _ := proto.Marshal(config)
-	w.config = availabilitylease.SignPolicyBlock("k1", w.policyPriv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)
-	w.buildManifest()
-}
-
 func (w *world) buildManifest() {
 	w.manifestV++
 	manifest := &pb.LeaseManifest{
-		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: 1, Epoch: 1, Closed: w.closed,
+		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: w.slots, VoterEpoch: 1, Closed: w.closed,
 		Mode: pb.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		LeaseTermMs: 30000,
 	}
 	for _, id := range w.candidates {
 		manifest.Candidates = append(manifest.Candidates, &pb.LeaseCandidate{Id: id, PublicKey: publicKeyDER(w.keyOf(id))})
 	}
+	if w.slots > 1 {
+		manifest.Mode = pb.LeasePolicyMode_LEASE_POLICY_MODE_REPLICATED
+	}
 	if w.available {
 		manifest.PartitionMode = pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE
 	}
+	// Per-policy voters (A18): every relay is a member (shadow accepts for
+	// its gate); the voters form the policy's single quorum set.
+	members := map[string]bool{}
+	for _, relay := range w.relays {
+		members[relay.id] = true
+		manifest.Members = append(manifest.Members, &pb.LeaseMember{Id: relay.id, PublicKey: publicKeyDER(relay.key), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
+	}
+	for _, id := range w.voters {
+		if !members[id] {
+			manifest.Members = append(manifest.Members, &pb.LeaseMember{Id: id, PublicKey: publicKeyDER(w.keyOf(id)), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
+		}
+	}
+	manifest.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: append([]string(nil), w.voters...)}}
 	if w.bootstrap != "" {
 		manifest.BootstrapId = 1
 		manifest.Bootstrap = []*pb.LeaseBootstrapSlot{{Slot: 0, HolderId: w.bootstrap}}
@@ -205,9 +201,19 @@ func (w *world) buildManifest() {
 	w.manifest = availabilitylease.SignPolicyBlock("k1", w.policyPriv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, payload)
 }
 
+// setSlots publishes a manifest with another slot count (scale or surge).
+func (w *world) setSlots(slots uint32) {
+	w.slots = slots
+	w.publishManifest()
+}
+
 // closeLease publishes a lease-closed manifest (A5) to every host.
 func (w *world) closeLease() {
 	w.closed = true
+	w.publishManifest()
+}
+
+func (w *world) publishManifest() {
 	w.buildManifest()
 	for _, relay := range w.relays {
 		_, _ = relay.node.AdoptManifest(w.manifest)
@@ -220,7 +226,7 @@ func (w *world) closeLease() {
 func (w *world) deliverBlocks(h *daemonHost) {
 	err := h.runtime.ApplyLeaseBlocks(BlockUpdate{
 		Revision: w.manifestV, MemberID: h.id, PolicyKeys: []PolicyKey{{ID: "k1", PublicKey: w.policyPriv.Public().(ed25519.PublicKey)}},
-		VoterConfig: w.config, Manifests: []*pb.LeaseSignedBlock{w.manifest},
+		Manifests: []*pb.LeaseSignedBlock{w.manifest},
 	})
 	if err != nil {
 		w.t.Fatalf("apply blocks on %s: %v", h.id, err)
@@ -232,7 +238,7 @@ func (w *world) deliverBlocks(h *daemonHost) {
 func (w *world) startDaemon(h *daemonHost) {
 	runtime, err := New(Options{
 		NodeID: h.id, Clock: w.clock, Wall: w.wall, Signer: availabilitylease.ECDSASigner{Key: h.key},
-		Engine: h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id},
+		Engine: h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id, w: w},
 		Logger: w.logger, Store: h.store, Transport: w,
 		Async: func(fn func()) { h.ops = append(h.ops, fn) },
 	})
@@ -340,7 +346,7 @@ func (w *world) checkSingleCopy() {
 			}
 		}
 	}
-	if len(running) > 1 {
+	if len(running) > int(w.slots) {
 		w.violations = append(w.violations, fmt.Sprintf("t=%.3fs two copies running on %v", (w.clock.now-time.Hour).Seconds(), running))
 	}
 }

@@ -155,10 +155,17 @@ func (e *fakeEndpoints) SetServing(policyID string, serving bool) {
 	e.serving[policyID] = serving
 }
 
-type fakePlacements struct{ host string }
+type fakePlacements struct {
+	host string
+	w    *world
+}
 
 func (p fakePlacements) Local(string) (Placement, bool) {
 	return Placement{PlacementID: "placement-" + p.host, Generation: 7}, true
 }
 
 func (fakePlacements) ServeSet(_ string, containers []Container) []Container { return containers }
+
+func (p fakePlacements) MarkServing(_ string, serving bool) {
+	p.w.logf("%s placement serving=%v", p.host, serving)
+}

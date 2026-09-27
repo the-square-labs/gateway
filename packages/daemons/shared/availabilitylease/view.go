@@ -4,15 +4,28 @@ package availabilitylease
 // daemon: which policies are in lease mode after a restart (A2.3), whether
 // this node is a candidate, and the bootstrap reservation (A5).
 type ManifestInfo struct {
-	PolicyID    string
-	Version     uint64
-	Epoch       uint64
+	PolicyID string
+	Version  uint64
+	// Epoch is the policy's voter epoch (A18).
+	Epoch uint64
+	// Voters are the policy's voters across its quorum sets (A18).
+	Voters      []string
 	Available   bool
 	Closed      bool
 	Slots       uint32
 	Candidates  []string
 	BootstrapID uint64
 	Bootstrap   map[uint32]string
+}
+
+// IsVoter reports whether id votes for this policy (A18).
+func (m ManifestInfo) IsVoter(id string) bool {
+	for _, voter := range m.Voters {
+		if voter == id {
+			return true
+		}
+	}
+	return false
 }
 
 // IsCandidate reports whether id is listed as a candidate.
@@ -100,6 +113,9 @@ func manifestInfo(manifest *Manifest) ManifestInfo {
 	}
 	for slot, holder := range manifest.Bootstrap {
 		info.Bootstrap[slot] = holder
+	}
+	if manifest.Voters != nil {
+		info.Voters = append([]string(nil), manifest.Voters.voterIDs...)
 	}
 	return info
 }

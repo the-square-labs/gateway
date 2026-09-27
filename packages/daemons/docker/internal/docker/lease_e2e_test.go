@@ -177,28 +177,28 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	clock := newE2EClock()
-	relays := []*e2eRelay{{id: "relay-1"}, {id: "relay-2"}, {id: "relay-3"}}
+	// Per-policy voters (A18/A19): the two candidates plus one witness relay.
+	// relay-2 only routes and keeps shadow accepts for its gate.
+	relays := []*e2eRelay{{id: "relay-witness"}, {id: "relay-2"}}
 	daemons := []*e2eDaemon{{id: "node-1"}, {id: "node-2"}}
 	for _, d := range daemons {
 		d.key = e2eKey()
 	}
 	policyPublic, policyPrivate, _ := ed25519.GenerateKey(rand.Reader)
-	config := &relayv1.LeaseVoterConfig{SchemaVersion: 1, Epoch: 1, QuorumSets: []*relayv1.LeaseQuorumSet{{}}}
+	manifest := &relayv1.LeaseManifest{
+		SchemaVersion: 1, PolicyId: e2ePolicy, ManifestVersion: 1, Slots: 1, VoterEpoch: 1, LeaseTermMs: 30000,
+		Mode: relayv1.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: relayv1.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
+		QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: []string{"node-1", "node-2", "relay-witness"}}},
+	}
 	for _, relay := range relays {
 		relay.key = e2eKey()
-		config.Members = append(config.Members, &relayv1.LeaseMember{Id: relay.id, PublicKey: e2eDER(relay.key), Role: relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
-		config.QuorumSets[0].VoterIds = append(config.QuorumSets[0].VoterIds, relay.id)
-	}
-	manifest := &relayv1.LeaseManifest{
-		SchemaVersion: 1, PolicyId: e2ePolicy, ManifestVersion: 1, Slots: 1, Epoch: 1, LeaseTermMs: 30000,
-		Mode: relayv1.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: relayv1.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
+		manifest.Members = append(manifest.Members, &relayv1.LeaseMember{Id: relay.id, PublicKey: e2eDER(relay.key), Role: relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
 	}
 	for _, d := range daemons {
 		manifest.Candidates = append(manifest.Candidates, &relayv1.LeaseCandidate{Id: d.id, PublicKey: e2eDER(d.key)})
+		manifest.Members = append(manifest.Members, &relayv1.LeaseMember{Id: d.id, PublicKey: e2eDER(d.key), Role: relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
 	}
-	configPayload, _ := proto.Marshal(config)
 	manifestPayload, _ := proto.Marshal(manifest)
-	configBlock := availabilitylease.SignPolicyBlock("k1", policyPrivate, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, configPayload)
 	manifestBlock := availabilitylease.SignPolicyBlock("k1", policyPrivate, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, manifestPayload)
 
 	conns := map[string]*grpc.ClientConn{}
@@ -213,7 +213,6 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		}
 		relay.node = node
 		_ = node.TrustPolicyKey("k1", policyPublic)
-		_, _ = node.AdoptVoterConfig(configBlock)
 		_, _ = node.AdoptManifest(manifestBlock)
 		listener := bufconn.Listen(1 << 20)
 		server := grpc.NewServer()
@@ -254,7 +253,7 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		// SyncAvailabilityLeaseCommand).
 		result := d.plugin.HandleCommand(&pb.GatewayCommand{CommandId: "sync", Payload: &pb.GatewayCommand_SyncAvailabilityLease{
 			SyncAvailabilityLease: &pb.SyncAvailabilityLeaseCommand{
-				Revision: 1, MemberId: d.id, VoterConfig: mustMarshal(t, configBlock), Manifests: [][]byte{mustMarshal(t, manifestBlock)},
+				Revision: 1, MemberId: d.id, Manifests: [][]byte{mustMarshal(t, manifestBlock)},
 				PolicyKeys: []*pb.AvailabilityLeasePolicyKey{{KeyId: "k1", PublicKey: policyPublic}},
 			},
 		}})
@@ -311,6 +310,14 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 		t.Fatalf("holder report incomplete: %v", report)
 	}
 
+	voterView := daemons[1].plugin.availabilityLeaseReport().GetAcceptor()
+	// The holder completes rounds with the fastest majority, so this voter's
+	// own hold may have lapsed; it must still show the policy's voter epoch
+	// and the holder's ballots it promised.
+	if len(voterView) != 1 || voterView[0].GetPolicyId() != e2ePolicy || voterView[0].GetEpoch() != 1 ||
+		voterView[0].GetPromised().GetProposerId() != "node-1" || voterView[0].GetState() == "abstaining" {
+		t.Fatalf("a candidate voter must report its per-policy acceptor view (A18): %v", voterView)
+	}
 	handoff := daemons[0].plugin.HandleCommand(&pb.GatewayCommand{CommandId: "handoff", Payload: &pb.GatewayCommand_AvailabilityLeaseHandoff{
 		AvailabilityLeaseHandoff: &pb.AvailabilityLeaseHandoffCommand{PolicyId: e2ePolicy, SuccessorId: "node-2", OperationId: "op-1", ManifestVersion: 1},
 	}})
@@ -335,6 +342,14 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 	}
 	if err := daemons[0].plugin.leaseGate(availabilityGatewayCommand(activate)); err == nil {
 		t.Fatal("the previous holder must refuse backend serve commands after the handoff")
+	}
+	standby := availabilityCommand(availabilityActionPrepare, 2, "re:standby", "op", `{"phase":"standby","runtimeIdentity":{"containerId":"c"}}`)
+	standby.PolicyId = e2ePolicy
+	if err := daemons[1].plugin.leaseGate(availabilityGatewayCommand(standby)); err == nil {
+		t.Fatal("the holder must not be re-prepared as a standby")
+	}
+	if err := daemons[0].plugin.leaseGate(availabilityGatewayCommand(standby)); err != nil {
+		t.Fatalf("the former holder is re-prepared as a standby after the handoff: %v", err)
 	}
 }
 
