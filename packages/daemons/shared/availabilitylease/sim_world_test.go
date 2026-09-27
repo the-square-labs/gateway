@@ -189,6 +189,16 @@ func (w *simWorld) addNode(id string, relay bool, rate float64) *simNode {
 // send routes a batch: daemon<->relay directly, daemon->daemon via up to two
 // relays, with per-hop loss, delay and duplication.
 func (w *simWorld) send(from, to string, batch *pb.LeaseBatch) {
+	var payload []byte
+	if w.wire {
+		payload = w.seal(w.nodes[from], batch)
+	}
+	w.sendPayload(from, to, batch, payload)
+}
+
+// sendPayload routes a batch; in wire mode payload is the encoded frame the
+// sending node sealed, delivered to ReceiveFrame unchanged.
+func (w *simWorld) sendPayload(from, to string, batch *pb.LeaseBatch, payload []byte) {
 	src, dst := w.nodes[from], w.nodes[to]
 	if src == nil || dst == nil || !src.hostUp {
 		return
@@ -198,10 +208,6 @@ func (w *simWorld) send(from, to string, batch *pb.LeaseBatch) {
 	}
 	if w.drop != nil && w.drop(from, to, batch) {
 		return
-	}
-	var payload []byte
-	if w.wire {
-		payload = w.seal(src, batch)
 	}
 	deliver := func(delay time.Duration, via *simNode, viaGen uint64) {
 		w.after(delay, func() {

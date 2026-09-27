@@ -46,6 +46,9 @@ type simPolicy struct {
 	sets       [][]string
 	joint      bool
 	jointAcked time.Duration
+	// keys overrides identity keys listed in this policy's manifest, for
+	// identity-key rotations that reach policies at different times.
+	keys map[string][]byte
 }
 
 func newSimGateway(w *simWorld) *simGateway {
@@ -64,6 +67,13 @@ func (g *simGateway) newKey(n int) simPolicyKey {
 // key is the signing key: a rotated key is used only after a majority of
 // voters acked it (A14).
 func (g *simGateway) key() simPolicyKey { return g.keys[g.signIdx] }
+
+func (g *simGateway) policyKey(p *simPolicy, id string) []byte {
+	if key, ok := p.keys[id]; ok {
+		return key
+	}
+	return g.publicKey(id)
+}
 
 func (g *simGateway) publicKey(id string) []byte {
 	if n := g.w.nodes[id]; n != nil && g.w.wire {
@@ -86,7 +96,7 @@ func (g *simGateway) buildManifest(p *simPolicy) *pb.LeaseSignedBlock {
 		value.PartitionMode = pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE
 	}
 	for _, id := range p.candidates {
-		value.Candidates = append(value.Candidates, &pb.LeaseCandidate{Id: id, PublicKey: g.publicKey(id)})
+		value.Candidates = append(value.Candidates, &pb.LeaseCandidate{Id: id, PublicKey: g.policyKey(p, id)})
 	}
 	for slot := uint32(0); slot < p.slots; slot++ {
 		if holder := p.bootstrap[slot]; holder != "" {
@@ -108,7 +118,7 @@ func (g *simGateway) buildManifest(p *simPolicy) *pb.LeaseSignedBlock {
 		if g.w.nodes[id].relay {
 			role = pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY
 		}
-		value.Members = append(value.Members, &pb.LeaseMember{Id: id, PublicKey: g.publicKey(id), Role: role})
+		value.Members = append(value.Members, &pb.LeaseMember{Id: id, PublicKey: g.policyKey(p, id), Role: role})
 	}
 	payload, _ := proto.Marshal(value)
 	key := g.key()

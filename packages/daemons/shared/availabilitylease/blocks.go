@@ -135,6 +135,7 @@ func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, 
 			if manifest.Version == current.Version && n.resigned(current.block, block, domainManifest) {
 				current.block = block
 				n.dirtyOther[prefixManifest+manifest.PolicyID] = data
+				n.keyCache = nil
 				return true, nil
 			}
 			return false, nil
@@ -148,6 +149,7 @@ func (n *Node) adoptBlock(block *pb.LeaseSignedBlock, now time.Duration) (bool, 
 		}
 		n.manifests[manifest.PolicyID] = manifest
 		n.dirtyOther[prefixManifest+manifest.PolicyID] = data
+		n.keyCache = nil
 		if n.rememberVoters(manifest.Voters) {
 			n.dirtyOther[votersRecordName(manifest.PolicyID, manifest.Epoch)] = data
 		}

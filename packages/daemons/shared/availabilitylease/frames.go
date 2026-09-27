@@ -24,13 +24,17 @@ func (n *Node) ReceiveFrame(frame *pb.CoordinationFrame) error {
 		// frame signature check is safe and lets a new candidate's first
 		// frame verify against the manifest it carries.
 		n.adoptForwarded(batch, now)
-		publicKey, ok := n.identityKey(batch.GetSenderId())
-		if !ok {
+		// Any signature under any key listed for the sender in any adopted
+		// manifest authenticates it, so an identity-key rotation never drops
+		// frames while manifests catch up (the sender dual-signs). Replay
+		// binding (A9) is unchanged: it works on the authenticated batch.
+		keys := n.identityKeys(batch.GetSenderId())
+		if len(keys) == 0 {
 			n.reportUnknownSender(batch)
 			verr = ErrUnknownSender
 			return
 		}
-		if !n.verifier.Verify(publicKey, frameMessage(frame.GetPayload()), frame.GetSignature()) {
+		if !n.verifyAny(keys, frameMessage(frame.GetPayload()), frame.GetSignature(), frame.GetAdditionalSignatures()) {
 			verr = fmt.Errorf("lease frame from %q has an invalid signature", batch.GetSenderId())
 			return
 		}
@@ -49,7 +53,7 @@ func (n *Node) receive(batch *pb.LeaseBatch) error {
 	var err error
 	n.run(func(now time.Duration) {
 		n.adoptForwarded(batch, now)
-		if _, ok := n.identityKey(batch.GetSenderId()); !ok {
+		if len(n.identityKeys(batch.GetSenderId())) == 0 {
 			n.reportUnknownSender(batch)
 			err = ErrUnknownSender
 			return

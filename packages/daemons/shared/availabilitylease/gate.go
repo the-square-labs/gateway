@@ -40,9 +40,8 @@ func (n *Node) commitQuorum(commit *pb.LeaseCommit, manifest *Manifest) (bool, e
 			accepted.GetEpoch() != commit.GetEpoch() || accepted.GetManifestVersion() != commit.GetManifestVersion() {
 			continue
 		}
-		publicKey, _ := config.publicKey(id)
 		message := acceptStatement(key, ballot, accepted.GetEpoch(), accepted.GetManifestVersion(), id, accepted.GetAcceptorIncarnation())
-		if !n.verifier.Verify(publicKey, message, accepted.GetSignature()) {
+		if !n.verifyAny(n.identityKeys(id), message, accepted.GetSignature(), accepted.GetAdditionalSignatures()) {
 			continue
 		}
 		signers[id] = true
