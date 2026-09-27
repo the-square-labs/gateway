@@ -30,9 +30,26 @@ type endpointRegistration struct {
 	incoming             chan *relayv1.IncomingTunnel
 	stop                 chan struct{}
 	stopOnce             sync.Once
+	// stopReason is written before stop closes, so readers of a closed stop
+	// see it without a lock.
+	stopReason string
 }
 
-func (r *endpointRegistration) close() { r.stopOnce.Do(func() { close(r.stop) }) }
+func (r *endpointRegistration) close() { r.closeWith("") }
+
+func (r *endpointRegistration) closeWith(reason string) {
+	r.stopOnce.Do(func() {
+		r.stopReason = reason
+		close(r.stop)
+	})
+}
+
+func (r *endpointRegistration) revokedMessage() string {
+	if r.stopReason != "" {
+		return r.stopReason
+	}
+	return "endpoint policy was revoked"
+}
 
 type acceptedConnection struct {
 	stream relayv1.TunnelBroker_AcceptTunnelServer
@@ -81,6 +98,7 @@ type Broker struct {
 	metricsSince     time.Time
 	draining         atomic.Bool
 	dialLocalService func(context.Context, string) (net.Conn, error)
+	lease            LeaseGate
 }
 
 func New(store *policy.Store) *Broker {
@@ -321,6 +339,12 @@ func (b *Broker) ApplySnapshot(request *relayv1.ApplySnapshotRequest) (*policy.S
 	}
 	if !unchanged {
 		b.reconcileLocked(next)
+		if b.lease != nil {
+			// Adopt the snapshot's lease blocks before the new policy admits
+			// anything, then drop registrations the new view no longer admits.
+			b.lease.ApplyPolicy(next)
+			b.enforceLeaseGatesLocked()
+		}
 	}
 	return next, unchanged, nil
 }

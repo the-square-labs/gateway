@@ -283,6 +283,7 @@ func (p *Plugin) collectRuntime(ctx context.Context) *pb.RelayRuntimeStatus {
 			EndpointId: count.GetEndpointId(), AssignmentGeneration: count.GetAssignmentGeneration(), ActiveTunnels: count.GetActiveTunnels(),
 		})
 	}
+	status.AvailabilityLease = forwardAvailabilityLease(health.GetAvailabilityLease(), p.logger)
 	status.Error = health.GetReason()
 	if bootstrapErr != nil && status.Error == "" {
 		status.Error = "bootstrap policy trust: " + bootstrapErr.Error()

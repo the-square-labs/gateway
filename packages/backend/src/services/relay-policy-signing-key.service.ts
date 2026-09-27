@@ -222,10 +222,17 @@ export interface RelayPublishedPolicyKey extends RelayPolicyTrustAnchor {
 }
 
 export class RelayPolicySigningKeyService {
+  private retainedKeyIds?: () => Promise<string[]>;
+
   constructor(
     private readonly db: DrizzleClient,
     private readonly cryptoService: CryptoService
   ) {}
+
+  /** Keys another signer still needs, such as the availability lease signing key (A14); never destroyed. */
+  setRetainedKeyIds(provider: () => Promise<string[]>): void {
+    this.retainedKeyIds = provider;
+  }
 
   async ensureInitialized(): Promise<void> {
     await this.db.transaction(async (tx) => {
@@ -384,6 +391,7 @@ export class RelayPolicySigningKeyService {
    * a relay that depended on it would be locked out for good.
    */
   async destroyUnneededPrivateKeys(now = new Date()): Promise<boolean> {
+    const retained = new Set(this.retainedKeyIds ? await this.retainedKeyIds() : []);
     return this.db.transaction(async (tx) => {
       await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-policy-key-rotation'))`);
       const [active] = await tx
@@ -414,7 +422,7 @@ export class RelayPolicySigningKeyService {
         .from(relayInstances);
       if (!instances.every(hasReportedTrust)) return false;
       const needed = new Set(instances.flatMap((instance) => keysNeededByInstance(instance, active.keyId, keys)));
-      const destroy = held.filter(({ keyId }) => !needed.has(keyId)).map(({ id }) => id);
+      const destroy = held.filter(({ keyId }) => !needed.has(keyId) && !retained.has(keyId)).map(({ id }) => id);
       if (destroy.length === 0) return false;
       await tx
         .update(relayPolicySigningKeys)

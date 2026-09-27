@@ -1,5 +1,6 @@
 import { createChildLogger } from '@/lib/logger.js';
 import { formatHostPort, isValidUpstreamHost } from '@/lib/network-endpoint.js';
+import * as availabilityUpstream from '@/modules/proxy/nginx-availability-upstream.js';
 import type { ConfigValidatorService } from './config-validator.service.js';
 import { injectAccessListIntoAdvancedLocations } from './nginx-advanced-location.js';
 
@@ -162,6 +163,7 @@ export class NginxConfigGenerator {
     const serverNames = host.domainNames.map((d) => this.sanitizeNginxValue(d)).join(' ');
     const sanitizedHost = host.forwardHost ? this.validateForwardHost(host.forwardHost) : '';
     const secureLinkUpstreamName = `gateway_secure_link_${host.id.replace(/-/g, '_')}`;
+    const availability = Boolean(host.secureLinkUpstream && host.secureLinkSocketPaths?.length);
     const upstream = host.secureLinkUpstream
       ? `${host.forwardScheme}://${secureLinkUpstreamName}`
       : `${host.forwardScheme}://${formatHostPort(sanitizedHost, host.forwardPort ?? 0)}`;
@@ -187,15 +189,11 @@ export class NginxConfigGenerator {
     }
 
     if (host.secureLinkUpstream) {
-      lines.push(`upstream ${secureLinkUpstreamName} {`);
       const socketPaths = host.secureLinkSocketPaths?.length
         ? host.secureLinkSocketPaths
         : [host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`];
-      if (socketPaths.length > 1) lines.push('    least_conn;');
-      for (const socketPath of socketPaths) lines.push(`    server unix:${socketPath};`);
-      lines.push('    keepalive 64;');
-      lines.push('}');
-      lines.push('');
+      const body = availabilityUpstream.managedSecureLinkUpstreamBody(socketPaths, availability);
+      lines.push(`upstream ${secureLinkUpstreamName} {\n${body}\n}`, '');
     }
 
     if (host.cacheEnabled && host.cacheOptions) {
@@ -287,6 +285,7 @@ export class NginxConfigGenerator {
 
     if (host.secureLinkUpstream) lines.push(`        # gateway-managed-secure-link-upstream ${host.id}`);
     lines.push(`        proxy_pass ${upstream};`);
+    if (availability) lines.push(`        ${availabilityUpstream.AVAILABILITY_NEXT_UPSTREAM_DIRECTIVE}`);
     lines.push('');
     lines.push('        proxy_set_header Host $host;');
     lines.push('        proxy_set_header X-Real-IP $remote_addr;');

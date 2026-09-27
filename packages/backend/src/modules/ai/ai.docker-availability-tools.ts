@@ -11,6 +11,12 @@ import {
   dockerAvailabilityResourceFromQuery,
 } from '@/modules/docker/availability/docker-availability.schemas.js';
 import { DockerAvailabilityService } from '@/modules/docker/availability/docker-availability.service.js';
+import {
+  applyAvailabilityPartitionMode,
+  withAvailabilityLease,
+  withOptionalAvailabilityLease,
+  withPreflightAvailabilityLease,
+} from '@/modules/docker/availability/docker-availability-lease-view.js';
 import type { User } from '@/types.js';
 import { pickDefinedArguments } from './ai.docker-tool-access.js';
 
@@ -24,6 +30,7 @@ const POLICY_FIELDS = [
   'priorityMode',
   'nodePriority',
   'failbackDelaySeconds',
+  'partitionMode',
 ] as const;
 const MANAGE_OPERATIONS = new Set(['enable', 'update', 'disable', 'retry_operation']);
 
@@ -40,18 +47,25 @@ export async function manageDockerAvailabilityTool(user: User, args: Record<stri
   const service = container.resolve(DockerAvailabilityService);
   switch (operation) {
     case 'preflight':
-      return service.preflight(policyInput(args), user.scopes);
-    case 'enable':
-      return service.enable(policyInput(args), user.id, user.scopes);
+      return withPreflightAvailabilityLease(await service.preflight(policyInput(args), user.scopes));
+    case 'enable': {
+      const input = policyInput(args);
+      const enabled = await service.enable(input, user.id, user.scopes);
+      return withAvailabilityLease(await applyAvailabilityPartitionMode(enabled, input.partitionMode));
+    }
     case 'get_by_resource': {
       const resource = (args.resource ?? {}) as Record<string, unknown>;
       const query = DockerAvailabilityByResourceQuerySchema.parse(
         pickDefinedArguments(resource, ['type', 'nodeId', 'containerName', 'deploymentId', 'composeProjectId'])
       );
-      return service.getByResource(dockerAvailabilityResourceFromQuery(query), user.scopes);
+      return withOptionalAvailabilityLease(
+        await service.getByResource(dockerAvailabilityResourceFromQuery(query), user.scopes)
+      );
     }
     case 'get':
-      return service.get(DockerAvailabilityPolicyIdSchema.parse(args.policyId), user.scopes);
+      return withAvailabilityLease(
+        await service.get(DockerAvailabilityPolicyIdSchema.parse(args.policyId), user.scopes)
+      );
     case 'list_operations': {
       const query = DockerAvailabilityOperationsQuerySchema.parse(pickDefinedArguments(args, ['page', 'limit']));
       return service.listOperationsPage(
@@ -61,21 +75,26 @@ export async function manageDockerAvailabilityTool(user: User, args: Record<stri
         query.limit
       );
     }
-    case 'update':
-      return service.update(
+    case 'update': {
+      const input = DockerAvailabilityPolicyUpdateSchema.parse(pickDefinedArguments(args, POLICY_FIELDS));
+      const updated = await service.update(
         DockerAvailabilityPolicyIdSchema.parse(args.policyId),
-        DockerAvailabilityPolicyUpdateSchema.parse(pickDefinedArguments(args, POLICY_FIELDS)),
+        input,
         user.id,
         user.scopes
       );
+      return withAvailabilityLease(await applyAvailabilityPartitionMode(updated, input.partitionMode));
+    }
     case 'disable':
-      return service.disable(
-        DockerAvailabilityPolicyIdSchema.parse(args.policyId),
-        DockerAvailabilityDisableInputSchema.parse(
-          pickDefinedArguments(args, ['survivingPlacementId', 'confirmation'])
-        ),
-        user.id,
-        user.scopes
+      return withAvailabilityLease(
+        await service.disable(
+          DockerAvailabilityPolicyIdSchema.parse(args.policyId),
+          DockerAvailabilityDisableInputSchema.parse(
+            pickDefinedArguments(args, ['survivingPlacementId', 'confirmation'])
+          ),
+          user.id,
+          user.scopes
+        )
       );
     case 'retry_operation':
       return service.retryOperation(

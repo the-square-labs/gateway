@@ -67,6 +67,13 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	trafficClass := routeTrafficClass(route)
 	metrics := b.routeMetricsLocked(route.RouteId)
 	startedAt := time.Now()
+	if err := b.tunnelLeaseErrorLocked(route, endpoint); err != nil {
+		metrics.opened.Add(1)
+		metrics.touch()
+		b.mu.Unlock()
+		metrics.recordFailedOpen(time.Since(startedAt))
+		return err
+	}
 	if endpoint.SubjectKind == "local_service" {
 		target, targetErr := config.BuiltinLocalServiceTarget(endpoint.SubjectId)
 		if targetErr != nil {

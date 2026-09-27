@@ -2,17 +2,20 @@ package server
 
 import (
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"github.com/wiolett-industries/gateway/relay/internal/admin"
 	"github.com/wiolett-industries/gateway/relay/internal/broker"
 	"github.com/wiolett-industries/gateway/relay/internal/codec"
 	"github.com/wiolett-industries/gateway/relay/internal/config"
 	"github.com/wiolett-industries/gateway/relay/internal/identity"
+	"github.com/wiolett-industries/gateway/relay/internal/lease"
 	"github.com/wiolett-industries/gateway/relay/internal/policy"
 	"github.com/wiolett-industries/gateway/relay/internal/proxy"
 	"google.golang.org/grpc"
@@ -39,6 +42,7 @@ type Runtime struct {
 	Listener net.Listener
 	State    *policy.Store
 	Proxy    *proxy.Handler
+	Lease    *lease.Coordinator
 }
 
 func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
@@ -93,18 +97,23 @@ func Start(cfg config.Config, buildVersion string) (*Runtime, error) {
 		reloadUpstream = proxyHandler.ReloadUpstream
 		serverOptions = append(serverOptions, grpc.UnknownServiceHandler(proxyHandler.Handle))
 	}
+	adminService := admin.New(state, tunnelBroker, identityStore, reloadUpstream, buildVersion)
+	coordinator := startLease(cfg, state, identityStore, tunnelBroker, adminService)
 	grpcServer := grpc.NewServer(serverOptions...)
 	relayv1.RegisterTunnelBrokerServer(grpcServer, tunnelBroker)
-	relayv1.RegisterRelayAdminServer(grpcServer, admin.New(state, tunnelBroker, identityStore, reloadUpstream, buildVersion))
+	relayv1.RegisterRelayAdminServer(grpcServer, adminService)
 	listener, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", cfg.Port))
 	if err != nil {
 		if app != nil {
 			app.Close()
 		}
+		if coordinator != nil {
+			coordinator.Stop()
+		}
 		state.Close()
 		return nil, err
 	}
-	runtime := &Runtime{GRPC: grpcServer, Listener: listener, State: state, Proxy: proxyHandler}
+	runtime := &Runtime{GRPC: grpcServer, Listener: listener, State: state, Proxy: proxyHandler, Lease: coordinator}
 	go func() { _ = grpcServer.Serve(listener) }()
 	return runtime, nil
 }
@@ -113,6 +122,9 @@ func (r *Runtime) Stop() {
 	r.GRPCStop()
 	if r.Proxy != nil {
 		_ = r.Proxy.Close()
+	}
+	if r.Lease != nil {
+		r.Lease.Stop()
 	}
 	_ = r.State.Close()
 }
@@ -154,4 +166,36 @@ func targetServerName(target string) (string, error) {
 		host = strings.Split(target, ":")[0]
 	}
 	return host, nil
+}
+
+// startLease runs availability lease coordination when the relay has a lease
+// member id (its relay instance id). Without it, or when its state cannot be
+// opened, the relay does not advertise the capability and lease-bound
+// endpoints stay closed.
+func startLease(cfg config.Config, state *policy.Store, identityStore *identity.Store, tunnelBroker *broker.Broker, adminService *admin.Service) *lease.Coordinator {
+	if cfg.InstanceID == "" {
+		return nil
+	}
+	leaseState, fresh, err := state.LeaseState()
+	if err != nil {
+		slog.Error("availability lease state unavailable; lease coordination disabled", "error", err)
+		return nil
+	}
+	signer := lease.IdentitySigner{Identity: identityStore}
+	coordinator, err := lease.New(lease.Config{
+		ID: cfg.InstanceID, Store: leaseState, Signer: signer, PublicKey: signer.PublicKey,
+		TrustedKeys: state.TrustedPolicyKeys, Logger: slog.Default(),
+	})
+	if err != nil {
+		slog.Error("availability lease coordination disabled", "error", err)
+		return nil
+	}
+	if fresh {
+		slog.Warn("availability lease state created fresh; the relay abstains from voting after start", "abstain", availabilitylease.AbstainAfterStart.String())
+	}
+	tunnelBroker.SetLeaseGate(coordinator)
+	coordinator.ApplyPolicy(state.Current())
+	coordinator.Start(tunnelBroker.EnforceLeaseGates)
+	adminService.SetLeaseReporter(coordinator)
+	return coordinator
 }

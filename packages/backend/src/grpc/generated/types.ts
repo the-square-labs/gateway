@@ -137,6 +137,8 @@ export interface RelayRuntimeStatus {
   servicePort: number;
   assignmentTunnels: RelayAssignmentTunnelCount[];
   policySigningKeyIds: string[];
+  /** The relay's acceptor and gate view; relays advertising availability_lease_v1. */
+  availabilityLease?: AvailabilityLeaseReport | null;
 }
 
 export interface RelayAssignmentTunnelCount {
@@ -231,6 +233,8 @@ export interface HealthReport {
   containersStopped: number;
   containersTotal: number;
   gpuDevices: GpuDevice[];
+  /** Present when the daemon advertises availability_lease_v1. */
+  availabilityLease?: AvailabilityLeaseReport | null;
 }
 
 export interface StatsReport {
@@ -287,6 +291,8 @@ export interface GatewayCommand {
   setRelayDrain?: SetRelayDrainCommand;
   updateRelayWorker?: UpdateRelayWorkerCommand;
   renewRelayIdentity?: RenewRelayIdentityCommand;
+  syncAvailabilityLease?: SyncAvailabilityLeaseCommand;
+  availabilityLeaseHandoff?: AvailabilityLeaseHandoffCommand;
   syncDockerRegistryBindings?: SyncDockerRegistryBindingsCommand;
   dockerBuild?: DockerBuildCommand;
   dockerBuildCancel?: DockerBuildCancelCommand;
@@ -787,6 +793,98 @@ export interface DockerAvailabilityCommand {
   configJson: string;
 }
 
+// ─── Availability data-plane lease ───────────────────────────────────
+
+/**
+ * Signed lease blocks for one daemon. Blocks and rotation links are serialized relay.v1
+ * messages (LeaseSignedBlock, LeasePolicyKeyRotation); the daemon verifies them itself.
+ */
+export interface SyncAvailabilityLeaseCommand {
+  revision: string;
+  memberId: string;
+  policyKeys: AvailabilityLeasePolicyKey[];
+  keyRotations: Buffer[];
+  voterConfig: Buffer;
+  manifests: Buffer[];
+}
+
+export interface AvailabilityLeasePolicyKey {
+  keyId: string;
+  publicKey: Buffer;
+  publicKeyFingerprint: string;
+}
+
+/** Planned handoff: the holder of (policyId, slot) releases to successorId. */
+export interface AvailabilityLeaseHandoffCommand {
+  policyId: string;
+  slot: number;
+  successorId: string;
+  operationId: string;
+  successorGeneration: string;
+  manifestVersion: string;
+}
+
+export interface AvailabilityLeaseBallot {
+  round: string;
+  incarnation: string;
+  proposerId: string;
+}
+
+export interface AvailabilityLeaseReport {
+  memberId: string;
+  identityPublicKey: Buffer;
+  incarnation: string;
+  epoch: string;
+  trustedPolicyKeyIds: string[];
+  manifests: AvailabilityLeaseManifestAck[];
+  held: AvailabilityLeaseHeld[];
+  acceptor: AvailabilityLeaseKeyView[];
+  acceptorAbstaining: boolean;
+  watchdogReady: boolean;
+  events: AvailabilityLeaseEvent[];
+  leaseRevision: string;
+}
+
+export interface AvailabilityLeaseManifestAck {
+  policyId: string;
+  manifestVersion: string;
+  closed: boolean;
+}
+
+export interface AvailabilityLeaseHeld {
+  policyId: string;
+  slot: number;
+  role: string;
+  ballot?: AvailabilityLeaseBallot | null;
+  epoch: string;
+  manifestVersion: string;
+  placementId: string;
+  placementGeneration: string;
+}
+
+export interface AvailabilityLeaseKeyView {
+  policyId: string;
+  slot: number;
+  state: string;
+  holderId: string;
+  reservedFor: string;
+  promised?: AvailabilityLeaseBallot | null;
+  committed?: AvailabilityLeaseBallot | null;
+  epoch: string;
+  manifestVersion: string;
+  gateOpen: boolean;
+}
+
+export interface AvailabilityLeaseEvent {
+  kind: string;
+  policyId: string;
+  slot: number;
+  ballot?: AvailabilityLeaseBallot | null;
+  successorId: string;
+  reason: string;
+  atUnixMs: string;
+}
+
 /** Admission control for a first-party database connector sidecar on a Docker node. */
 export interface SyncRelayGrantsCommand {
   policyRevision: string;
@@ -815,6 +913,10 @@ export interface ProxySecureLinkBinding {
   sourceConfigManaged?: boolean;
   rotateListener?: boolean;
   socketOnly?: boolean;
+  /** Availability members: a standby's member; closed until its candidate holds the lease. */
+  dormant?: boolean;
+  availabilityPolicyId?: string;
+  availabilityCandidateId?: string;
 }
 
 export interface ProbeProxySecureLinkCommand {

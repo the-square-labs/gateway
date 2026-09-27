@@ -25,6 +25,7 @@ import {
   ADDITIONAL_ROUTES_TEMPLATE_PLACEHOLDER,
   supportsAdditionalRoutesTemplate,
 } from './additional-route-template.js';
+import { managedSecureLinkUpstreamBody, withAvailabilityNextUpstream } from './nginx-availability-upstream.js';
 import type { CreateNginxTemplateInput, UpdateNginxTemplateInput } from './nginx-template.schemas.js';
 import { withoutReservedTemplateVariables } from './proxy-template-variables.js';
 
@@ -135,6 +136,24 @@ function safePagesFallbackUrl(value: string | null | undefined): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Upstreams served by Availability members. Their socket lists are set only for Availability workloads (one member
+ * per placement); every other Secure Link upstream has a single socket path.
+ */
+function availabilityUpstreamNames(host: ProxyHostConfig, includeRoutes: boolean): string[] {
+  return [
+    ...(host.secureLinkUpstream && host.secureLinkSocketPaths?.length
+      ? [`gateway_secure_link_${host.id.replace(/-/g, '_')}`]
+      : []),
+    ...(host.additionalSecureLinks ?? [])
+      .filter((binding) => binding.socketPaths?.length)
+      .map((binding) => `gateway_additional_secure_link_${binding.id.replace(/-/g, '_')}`),
+    ...(includeRoutes ? (host.additionalRoutes ?? []) : [])
+      .filter((route) => route.secureLinkUpstream && route.secureLinkSocketPaths?.length)
+      .map((route) => `gateway_additional_secure_link_${route.id.replace(/-/g, '_')}`),
+  ];
 }
 
 function renderAdditionalRouteLocation(
@@ -1032,9 +1051,10 @@ export class NginxTemplateService {
       this.ensureManagedSecureLinkUpstream(rendered, host),
       host
     );
-    return supportsAdditionalRoutes
+    const withUpstreams = supportsAdditionalRoutes
       ? this.ensureManagedAdditionalRouteUpstreams(withSecureLinkUpstreams, host)
       : withSecureLinkUpstreams;
+    return withAvailabilityNextUpstream(withUpstreams, availabilityUpstreamNames(host, supportsAdditionalRoutes));
   }
 
   private applyUpstreamIpFamily(rendered: string, host: ProxyHostConfig): string {
@@ -1146,7 +1166,7 @@ export class NginxTemplateService {
       if (declaration.test(rendered)) return [];
       const socketPaths = binding.socketPaths?.length ? binding.socketPaths : [binding.socketPath];
       return [
-        `upstream ${upstreamName} {\n${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}\n    keepalive 64;\n}`,
+        `upstream ${upstreamName} {\n${managedSecureLinkUpstreamBody(socketPaths, Boolean(binding.socketPaths?.length))}\n}`,
       ];
     });
     return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
@@ -1165,7 +1185,7 @@ export class NginxTemplateService {
           ? route.secureLinkSocketPaths
           : [route.secureLinkSocketPath!];
         return [
-          `upstream ${upstreamName} {\n${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}\n    keepalive 64;\n}`,
+          `upstream ${upstreamName} {\n${managedSecureLinkUpstreamBody(socketPaths, Boolean(route.secureLinkSocketPaths?.length))}\n}`,
         ];
       });
     return declarations.length > 0 ? `${declarations.join('\n\n')}\n\n${rendered}` : rendered;
@@ -1180,8 +1200,7 @@ export class NginxTemplateService {
       ? host.secureLinkSocketPaths
       : [host.secureLinkSocketPath ?? `/run/gateway-secure-links/${host.id}.sock`];
     const declaration = `upstream ${upstreamName} {
-${socketPaths.length > 1 ? '    least_conn;\n' : ''}${socketPaths.map((socketPath) => `    server unix:${socketPath};`).join('\n')}
-    keepalive 64;
+${managedSecureLinkUpstreamBody(socketPaths, Boolean(host.secureLinkSocketPaths?.length))}
 }`;
     if (upstreamDeclaration.test(rendered)) {
       return rendered.replace(new RegExp(`upstream[\\t ]+${upstreamName}[\\t ]*\\{[^}]*\\}`, 'm'), declaration);

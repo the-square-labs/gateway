@@ -64,6 +64,8 @@ type Snapshot struct {
 	EndpointAssignments map[string]*relayv1.EndpointPolicy
 	RouteAssignments    map[string]*relayv1.RoutePolicy
 	Admission           *relayv1.AdmissionPolicy
+	LeaseBlocks         []*relayv1.LeaseSignedBlock
+	LeaseKeyRotations   []*relayv1.LeasePolicyKeyRotation
 	Digest              [sha256.Size]byte
 }
 
@@ -556,6 +558,7 @@ func buildSnapshot(payload *relayv1.PolicyEnvelopePayload, mode relayv1.RelayMod
 	if err := validateAdmissionPolicy(next.Admission); err != nil {
 		return nil, err
 	}
+	leaseFields(next, payload)
 	for _, key := range payload.GrantPublicKeys {
 		if key.KeyId == "" || len(key.PublicKey) != ed25519.PublicKeySize {
 			return nil, fmt.Errorf("invalid public key")

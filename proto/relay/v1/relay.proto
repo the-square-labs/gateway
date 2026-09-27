@@ -10,6 +10,15 @@ service TunnelBroker {
   rpc RegisterEndpoint(stream EndpointControl) returns (stream EndpointControl);
   rpc OpenTunnel(stream TunnelFrame) returns (stream TunnelFrame);
   rpc AcceptTunnel(stream TunnelFrame) returns (stream TunnelFrame);
+  // Availability lease coordination (Docker Availability data-plane failover).
+  // The relay routes frames by destination_id among connected members and is
+  // itself an acceptor. Only identities named by the current signed voter
+  // config or a manifest candidate list may use it.
+  rpc Coordinate(stream CoordinationFrame) returns (stream CoordinationFrame);
+  // Streams this relay's data-path gate view for lease keys: sent on every
+  // change and at least once a second. nginx daemons derive Secure Link
+  // socket state from it with a TTL of at most the lease term (A8).
+  rpc WatchLeaseGates(LeaseGateWatchRequest) returns (stream LeaseGateSnapshot);
 }
 
 // RelayAdmin is reachable on the same listener but only by the pinned Gateway
@@ -108,6 +117,10 @@ message EndpointPolicy {
   string pool_id = 7;
   string relay_instance_id = 8;
   uint64 assignment_generation = 9;
+  // Availability policy whose data-plane lease gates this endpoint. When set,
+  // the relay admits the registration and its tunnels only while its lease
+  // gate is open for subject_id (A2.4, A8, A11). Empty keeps legacy admission.
+  string lease_policy_id = 10;
 }
 
 message RoutePolicy {
@@ -126,6 +139,10 @@ message RoutePolicy {
   // The relay remains unaware of concrete Gateway resource identifiers.
   string traffic_class = 10;
   uint64 assignment_generation = 11;
+  // Availability policy whose lease gates the route's source, for managed-DB
+  // routes of lease-mode placements: tunnels open only while the lease gate
+  // is open for source_id. Empty keeps legacy admission.
+  string lease_policy_id = 12;
 }
 
 message AdmissionPolicy {
@@ -149,6 +166,11 @@ message PolicyEnvelopePayload {
   AdmissionPolicy admission_policy = 11;
   repeated string capabilities = 12;
   repeated PolicySigningKey policy_signing_keys = 13;
+  // Availability lease (T3): the signed voter config and every lease-mode
+  // policy manifest, plus the policy key rotation chain that lets a relay
+  // verify blocks signed by a key it has not pinned yet (A4, A14).
+  repeated LeaseSignedBlock lease_blocks = 40;
+  repeated LeasePolicyKeyRotation lease_key_rotations = 41;
 }
 
 message SignedPolicyEnvelope {
@@ -231,6 +253,9 @@ message HealthResponse {
   bool draining = 29;
   repeated AssignmentTunnelCount assignment_tunnels = 30;
   repeated string policy_key_ids = 31;
+  // Present when the relay runs availability lease coordination; the same
+  // shape as gateway.v1 AvailabilityLeaseReport.
+  AvailabilityLeaseReport availability_lease = 32;
 }
 
 message AssignmentTunnelCount {
@@ -549,4 +574,126 @@ message LeasePolicyKeyRotation {
   bytes public_key = 3;
   string public_key_fingerprint = 4;
   bytes signature = 5;
+}
+
+// ---------------------------------------------------------------------------
+// Relay availability lease views (health and nginx gate watch).
+// ---------------------------------------------------------------------------
+
+message LeaseGateWatchRequest {
+  // Empty watches every policy the relay knows.
+  repeated string policy_ids = 1;
+}
+
+message LeaseGateSnapshot {
+  string relay_member_id = 1;
+  uint64 relay_incarnation = 2;
+  repeated LeaseGateView gates = 3;
+}
+
+// The relay data-path gate for one lease key.
+message LeaseGateView {
+  string policy_id = 1;
+  uint32 slot = 2;
+  // False when the relay has no lease-mode manifest for the policy (unknown or
+  // lease closed); legacy admission applies then.
+  bool lease_mode = 3;
+  bool open = 4;
+  string holder_id = 5;
+  LeaseBallot ballot = 6;
+  // Local milliseconds until the gate closes unless refreshed. Receivers
+  // treat the view as closed after min(remaining_ms, 30000) from receipt.
+  uint64 remaining_ms = 7;
+  string reason = 8;
+}
+
+// The messages below mirror gateway.v1 AvailabilityLeaseReport and its parts
+// field for field (same names, numbers and types), so the relay supervisor
+// forwards the report as RelayRuntimeStatus.availability_lease by re-decoding
+// the bytes, and the Gateway ingests relay views like daemon reports.
+// Numbers from 20 up are relay-only additions; gateway.v1 keeps them as
+// unknown fields.
+
+message AvailabilityLeaseReport {
+  // Relay instance id.
+  string member_id = 1;
+  // PKIX DER ECDSA P-256 public key that signs this relay's frames (the
+  // external server certificate key).
+  bytes identity_public_key = 2;
+  uint64 incarnation = 3;
+  uint64 epoch = 4;
+  repeated string trusted_policy_key_ids = 5;
+  repeated AvailabilityLeaseManifestAck manifests = 6;
+  // Daemons only; empty on relays.
+  repeated AvailabilityLeaseHeld held = 7;
+  repeated AvailabilityLeaseKeyView acceptor = 8;
+  bool acceptor_abstaining = 9;
+  // Daemons only.
+  bool watchdog_ready = 10;
+  // Daemons only.
+  repeated AvailabilityLeaseEvent events = 11;
+  // Daemons only.
+  uint64 lease_revision = 12;
+  // Relay-only: in a quorum set of the current voter config.
+  bool voter = 20;
+  repeated string connected_member_ids = 21;
+  // Relay-only: last detected host suspend (A17); zero when none.
+  int64 last_suspend_unix_ms = 22;
+  uint64 last_suspend_duration_ms = 23;
+}
+
+message AvailabilityLeaseManifestAck {
+  string policy_id = 1;
+  uint64 manifest_version = 2;
+  bool closed = 3;
+}
+
+message AvailabilityLeaseHeld {
+  string policy_id = 1;
+  uint32 slot = 2;
+  string role = 3;
+  AvailabilityLeaseBallot ballot = 4;
+  uint64 epoch = 5;
+  uint64 manifest_version = 6;
+  string placement_id = 7;
+  uint64 placement_generation = 8;
+}
+
+message AvailabilityLeaseKeyView {
+  string policy_id = 1;
+  uint32 slot = 2;
+  // free, held, reserved, abstaining or closed.
+  string state = 3;
+  string holder_id = 4;
+  string reserved_for = 5;
+  AvailabilityLeaseBallot promised = 6;
+  AvailabilityLeaseBallot committed = 7;
+  uint64 epoch = 8;
+  uint64 manifest_version = 9;
+  // The data-path gate is open for holder_id (A11, A15, A17).
+  bool gate_open = 10;
+  // Relay-only gate details.
+  string gate_holder_id = 20;
+  AvailabilityLeaseBallot gate_ballot = 21;
+  string gate_reason = 22;
+  uint64 gate_remaining_ms = 23;
+  // This relay does not vote for the key: restart abstention or not in a
+  // quorum set (shadow accepts only).
+  bool abstaining = 24;
+}
+
+message AvailabilityLeaseBallot {
+  uint64 round = 1;
+  uint64 incarnation = 2;
+  string proposer_id = 3;
+}
+
+message AvailabilityLeaseEvent {
+  string kind = 1;
+  string policy_id = 2;
+  uint32 slot = 3;
+  AvailabilityLeaseBallot ballot = 4;
+  string successor_id = 5;
+  string reason = 6;
+  int64 at_unix_ms = 7;
 }

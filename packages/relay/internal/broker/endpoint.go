@@ -29,9 +29,16 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	registration.expiresAt.Store(claims.ExpiresAt)
 	registration.maxSessions.Store(claims.MaxConcurrentSessions)
 	b.mu.Lock()
-	if err := grant.ValidatePolicy(claims, "endpoint", b.store.Current()); err != nil {
+	snapshot := b.store.Current()
+	if err := grant.ValidatePolicy(claims, "endpoint", snapshot); err != nil {
 		b.mu.Unlock()
 		return status.Error(codes.PermissionDenied, err.Error())
+	}
+	// A lease-bound placement registers only while this relay's lease gate is
+	// open for it (A2.4, A8, A11).
+	if err := b.endpointLeaseErrorLocked(snapshot.Endpoint(claims.EndpointID, claims.AssignmentGeneration)); err != nil {
+		b.mu.Unlock()
+		return err
 	}
 	registrationKey := policyAssignmentKey(claims.EndpointID, claims.AssignmentGeneration)
 	if previous := b.endpoints[registrationKey]; previous != nil {
@@ -72,7 +79,7 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 	for {
 		select {
 		case <-registration.stop:
-			return status.Error(codes.Aborted, "endpoint policy was revoked")
+			return status.Error(codes.Aborted, registration.revokedMessage())
 		case <-stream.Context().Done():
 			return stream.Context().Err()
 		case err := <-receiveErr:
@@ -94,9 +101,14 @@ func (b *Broker) RegisterEndpoint(stream relayv1.TunnelBroker_RegisterEndpointSe
 				b.mu.Unlock()
 				return status.Error(codes.Aborted, "endpoint policy was revoked")
 			}
-			if err := grant.ValidatePolicy(next, "endpoint", b.store.Current()); err != nil {
+			current := b.store.Current()
+			if err := grant.ValidatePolicy(next, "endpoint", current); err != nil {
 				b.mu.Unlock()
 				return status.Error(codes.PermissionDenied, err.Error())
+			}
+			if err := b.endpointLeaseErrorLocked(current.Endpoint(next.EndpointID, next.AssignmentGeneration)); err != nil {
+				b.mu.Unlock()
+				return err
 			}
 			registration.expiresAt.Store(next.ExpiresAt)
 			registration.maxSessions.Store(next.MaxConcurrentSessions)

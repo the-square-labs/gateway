@@ -1,4 +1,10 @@
 import { z } from '@hono/zod-openapi';
+import {
+  DockerAvailabilityLeaseSchema,
+  DockerAvailabilityPartitionModeSchema,
+} from './docker-availability-lease.schemas.js';
+
+export { DockerAvailabilityLeaseSchema, DockerAvailabilityPartitionModeSchema };
 
 const UUID = z.string().uuid();
 
@@ -95,6 +101,7 @@ const DockerAvailabilityPolicyValuesSchema = z.object({
   priorityMode: z.boolean().default(false),
   nodePriority: nodePriorityArray.default([]),
   failbackDelaySeconds: failbackDelaySecondsSchema.default(300),
+  partitionMode: DockerAvailabilityPartitionModeSchema.default('strict'),
 });
 
 export const DockerAvailabilityPolicyInputSchema = z
@@ -145,6 +152,7 @@ export const DockerAvailabilityPolicyUpdateSchema = z
     priorityMode: z.boolean().optional(),
     nodePriority: nodePriorityArray.optional(),
     failbackDelaySeconds: failbackDelaySecondsSchema.optional(),
+    partitionMode: DockerAvailabilityPartitionModeSchema.optional(),
   })
   .superRefine((value, context) => {
     if (value.mode === 'replicated' && value.desiredReplicaCount === 1) {
@@ -408,6 +416,7 @@ export const DockerAvailabilityPolicySchema = z.object({
   priorityMode: z.boolean(),
   nodePriority: z.array(UUID),
   failbackDelaySeconds: failbackDelaySecondsSchema,
+  partitionMode: DockerAvailabilityPartitionModeSchema,
   status: DockerAvailabilityPolicyStatusSchema,
   lastErrorCode: z.string().nullable(),
   lastErrorMessage: z.string().nullable(),
@@ -417,6 +426,7 @@ export const DockerAvailabilityPolicySchema = z.object({
   updatedAt: z.coerce.date(),
   placements: z.array(DockerAvailabilityPlacementSchema),
   latestOperation: DockerAvailabilityOperationSchema.nullable(),
+  lease: DockerAvailabilityLeaseSchema.nullable(),
 });
 
 export const DockerAvailabilityProposedPolicySchema = z.object({
@@ -429,6 +439,7 @@ export const DockerAvailabilityProposedPolicySchema = z.object({
   priorityMode: z.boolean(),
   nodePriority: z.array(UUID),
   failbackDelaySeconds: failbackDelaySecondsSchema,
+  partitionMode: DockerAvailabilityPartitionModeSchema.optional(),
 });
 
 export const DockerAvailabilityIssueSchema = z.object({

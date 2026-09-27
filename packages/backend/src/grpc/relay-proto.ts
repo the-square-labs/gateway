@@ -23,8 +23,20 @@ export function loadRelayV1Proto(): any {
   return (grpc.loadPackageDefinition(definition) as any).relay.v1;
 }
 
+const relayV1Definitions = new Map<string, protoLoader.PackageDefinition>();
+
+/** Parsed once per proto path: lease blocks are encoded for every relay snapshot and daemon sync. */
 function loadRelayV1Definition(): protoLoader.PackageDefinition {
-  return protoLoader.loadSync(resolveRelayV1ProtoPath(), {
+  const path = resolveRelayV1ProtoPath();
+  const cached = relayV1Definitions.get(path);
+  if (cached) return cached;
+  const definition = parseRelayV1Definition(path);
+  relayV1Definitions.set(path, definition);
+  return definition;
+}
+
+function parseRelayV1Definition(path: string): protoLoader.PackageDefinition {
+  return protoLoader.loadSync(path, {
     keepCase: false,
     longs: String,
     enums: String,

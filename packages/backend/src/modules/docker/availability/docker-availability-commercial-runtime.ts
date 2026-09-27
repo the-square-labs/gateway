@@ -16,6 +16,7 @@ import type { DockerManagementService } from '../docker.service.js';
 import type { DockerEnvironmentService } from '../docker-environment.service.js';
 import type { DockerInternalRegistryService } from '../docker-registry-internal.service.js';
 import type { DockerSecretService } from '../docker-secret.service.js';
+import type { AvailabilityLeaseService } from './lease/availability-lease.service.js';
 export interface DockerAvailabilitySetup {
   db: DrizzleClient;
   nodes: NodeRegistryService;
@@ -32,6 +33,8 @@ export interface DockerAvailabilitySetup {
   proxy: ProxyService;
   secureLinks?: ProxySecureLinkService;
   workloads: DockerWorkloadResolverService;
+  /** Data-plane lease host: lease mode per policy, holders, planned handoffs, partition mode (T6 contract). */
+  lease?: AvailabilityLeaseService;
 }
 
 import { and, asc, desc, eq, inArray, isNotNull, isNull, lt, ne, notInArray, or, sql } from 'drizzle-orm';
@@ -66,6 +69,8 @@ import { encodeComposeServiceTarget } from '@/modules/docker/compose/compose-man
 import { hasDockerResourceScope } from '@/modules/docker/docker-access-resource.service.js';
 import { registryRuntimeReferences } from '@/modules/docker/docker-registry-maintenance.js';
 import { EventBusService } from '@/services/event-bus.service.js';
+import { AVAILABILITY_LEASE_CAPABILITY } from './lease/lease-constants.js';
+import { availabilityStandbyCount } from './lease/lease-gating.js';
 
 const loggerDockerAvailabilityService = createChildLogger('DockerAvailabilityService');
 export const dockerAvailabilityCommercialRuntime = {
@@ -110,4 +115,6 @@ export const dockerAvailabilityCommercialRuntime = {
   loggerDockerAvailabilityService,
   dockerAvailabilityWorkloadFolderId,
   missingDockerAvailabilityCandidateScopes,
+  AVAILABILITY_LEASE_CAPABILITY,
+  availabilityStandbyCount,
 };
