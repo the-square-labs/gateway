@@ -1,0 +1,158 @@
+package availabilitylease
+
+import (
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	pb "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+)
+
+// verifyCommit checks a commit certificate against the voter config of its
+// epoch (A11). Strict policies need a majority of every quorum set; available
+// policies also accept a minority certificate with at least one voting relay
+// (D11). The returned bool reports whether the certificate is a majority.
+func (n *Node) verifyCommit(commit *pb.LeaseCommit, manifest *Manifest) error {
+	_, err := n.commitQuorum(commit, manifest)
+	return err
+}
+
+func (n *Node) commitQuorum(commit *pb.LeaseCommit, manifest *Manifest) (bool, error) {
+	key, ok := keyFromProto(commit.GetKey())
+	if !ok || manifest == nil || key.PolicyID != manifest.PolicyID {
+		return false, errors.New("lease commit key is invalid")
+	}
+	config := n.configByEpoch(commit.GetEpoch())
+	if config == nil {
+		return false, fmt.Errorf("lease commit epoch %d is unknown", commit.GetEpoch())
+	}
+	ballot := ballotFromProto(commit.GetBallot())
+	signers := map[string]bool{}
+	relay := false
+	for _, accepted := range commit.GetQuorum() {
+		id := accepted.GetAcceptorId()
+		if !config.isVoter(id) || signers[id] {
+			continue
+		}
+		acceptedKey, _ := keyFromProto(accepted.GetKey())
+		if acceptedKey != key || ballotFromProto(accepted.GetBallot()) != ballot ||
+			accepted.GetEpoch() != commit.GetEpoch() || accepted.GetManifestVersion() != commit.GetManifestVersion() {
+			continue
+		}
+		publicKey, _ := config.publicKey(id)
+		message := acceptStatement(key, ballot, accepted.GetEpoch(), accepted.GetManifestVersion(), id, accepted.GetAcceptorIncarnation())
+		if !n.verifier.Verify(publicKey, message, accepted.GetSignature()) {
+			continue
+		}
+		signers[id] = true
+		relay = relay || config.isRelay(id)
+	}
+	if config.quorum(signers) {
+		return true, nil
+	}
+	if manifest.Available && relay {
+		return false, nil
+	}
+	return false, errors.New("lease commit lacks a quorum")
+}
+
+// Gate evaluates the relay data-path gate for one key (A2.4, A8, A11). It is
+// open for the holder of the highest valid commit this node stores when:
+//   - no ballot this node accepted from another proposer, and no relinquish
+//     or release by the holder, supersedes the commit;
+//   - this node itself accepted (or, while abstaining or not voting,
+//     shadow-accepted) the committed ballot with an echo of its own promise;
+//   - less than GateWindow of local time passed since that promise.
+//
+// Anchoring on the promise that the proposer echoed bounds the gate by the
+// proposer's send time rather than by message delay, so the gate closes
+// before any acceptor that accepted the ballot can accept another holder.
+func (n *Node) Gate(key Key) GateDecision {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.gateLocked(key, n.clock.Now())
+}
+
+func (n *Node) gateLocked(key Key, now time.Duration) GateDecision {
+	manifest := n.manifests[key.PolicyID]
+	if manifest == nil || manifest.Closed {
+		return GateDecision{Reason: "not in lease mode"}
+	}
+	decision := GateDecision{LeaseMode: true}
+	ak := n.acceptors[key]
+	if ak == nil || ak.commit == nil {
+		decision.Reason = "no commit"
+		return decision
+	}
+	ballot := ak.commitBallot
+	holder := ballot.Proposer
+	decision.Holder, decision.Ballot = holder, ballot
+	if relinquished, ok := ak.relinquished[holder]; ok && !relinquished.Less(ballot) {
+		decision.Reason = "relinquished"
+		return decision
+	}
+	if released, ok := ak.rec.Released[holder]; ok && !released.Less(ballot) {
+		decision.Reason = "released"
+		return decision
+	}
+	var own *acceptRecord
+	for i := range ak.accepts {
+		record := &ak.accepts[i]
+		if record.ballot.IsZero() {
+			continue
+		}
+		if record.ballot.Proposer != holder && ballot.Less(record.ballot) {
+			decision.Reason = "superseded"
+			return decision
+		}
+		if record.ballot == ballot {
+			own = record
+		}
+	}
+	if ak.lease.open && ak.lease.holder != holder && ballot.Less(ak.lease.ballot) {
+		decision.Reason = "superseded"
+		return decision
+	}
+	if own == nil || !own.anchored {
+		decision.Reason = "no own accept"
+		return decision
+	}
+	decision.Until = own.anchor + GateWindow
+	if now >= decision.Until {
+		decision.Reason = "expired"
+		return decision
+	}
+	decision.Open = true
+	return decision
+}
+
+// AcceptorView lists the acceptor state of every known key, for relay
+// GetHealth and daemon lease reports.
+func (n *Node) AcceptorView() []KeyView {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	now := n.clock.Now()
+	keys := make([]Key, 0, len(n.acceptors))
+	for key := range n.acceptors {
+		if n.manifests[key.PolicyID] != nil {
+			keys = append(keys, key)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].PolicyID != keys[j].PolicyID {
+			return keys[i].PolicyID < keys[j].PolicyID
+		}
+		return keys[i].Slot < keys[j].Slot
+	})
+	views := make([]KeyView, 0, len(keys))
+	for _, key := range keys {
+		ak := n.acceptors[key]
+		state, holder, reserved := n.keyState(ak, n.manifests[key.PolicyID], key, now)
+		views = append(views, KeyView{
+			Key: key, State: state, Holder: holder, ReservedFor: reserved, Promised: ak.promised(),
+			CommitBallot: ak.commitBallot, Abstaining: !n.voting(now),
+		})
+	}
+	return views
+}
