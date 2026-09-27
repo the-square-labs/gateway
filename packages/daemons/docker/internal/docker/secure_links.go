@@ -628,6 +628,10 @@ func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksComm
 	if err != nil {
 		return "", err
 	}
+	if p.lease != nil {
+		p.lease.refreshLinkPolicies()
+		p.reconcileRelayRegistrations()
+	}
 	detail, err := json.Marshal(map[string]any{"bindings": statuses})
 	return string(detail), err
 }

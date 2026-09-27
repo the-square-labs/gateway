@@ -40,6 +40,8 @@ type relayEndpointRegistration struct {
 	cancel context.CancelFunc
 	renew  chan *pb.RelayGrantAssignment
 	ready  atomic.Bool
+	// done closes when the registration stream and its tunnels have ended.
+	done chan struct{}
 }
 
 // BackupRelayRoute is a daemon-local TCP entrypoint for one signed, per-run
@@ -98,6 +100,7 @@ func (p *DockerPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Cli
 		}
 	}
 	router.reconcileRegistrations()
+	p.lease.attachRelay(ctx, conn, relayInstanceID)
 	<-ctx.Done()
 }
 
@@ -125,7 +128,9 @@ func (p *DockerPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 	return p.relayGrants.changed
 }
 
-func (r *relayTunnelRouter) reconcileRegistrations() {
+// reconcileRegistrations returns the done channels of the registrations it
+// cancelled, so a lease release can wait until they are gone (A6).
+func (r *relayTunnelRouter) reconcileRegistrations() []chan struct{} {
 	bundle := r.plugin.relayGrants.get()
 	desired := map[string]*pb.RelayGrantAssignment{}
 	if r.plugin.cfg.Docker.IsStorageProfile() {
@@ -138,18 +143,21 @@ func (r *relayTunnelRouter) reconcileRegistrations() {
 		}
 	} else {
 		for _, assignment := range bundle.Grants {
-			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" {
+			if assignment.Role == "endpoint" && assignment.OwnerKind == proxySecureLinkOwnerKind && assignment.EndpointId != "" &&
+				r.plugin.lease.endpointAllowed(assignment.OwnerId) {
 				for _, projected := range assignmentsForRelayTarget(assignment, r.targetID) {
 					desired[relayRegistrationKey(projected)] = projected
 				}
 			}
 		}
 	}
+	var cancelled []chan struct{}
 	r.mu.Lock()
 	for id, registration := range r.registrations {
 		assignment := desired[id]
 		if assignment == nil {
 			registration.cancel()
+			cancelled = append(cancelled, registration.done)
 			delete(r.registrations, id)
 			continue
 		}
@@ -158,15 +166,19 @@ func (r *relayTunnelRouter) reconcileRegistrations() {
 	}
 	for id, assignment := range desired {
 		ctx, cancel := context.WithCancel(r.ctx)
-		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan *pb.RelayGrantAssignment, 1)}
+		registration := &relayEndpointRegistration{cancel: cancel, renew: make(chan *pb.RelayGrantAssignment, 1), done: make(chan struct{})}
 		r.registrations[id] = registration
-		go r.runRegistration(ctx, assignment, registration.renew)
+		go func() {
+			defer close(registration.done)
+			r.runRegistration(ctx, assignment, registration.renew)
+		}()
 	}
 	r.plugin.logger.Info("relay endpoint registrations reconciled", "relay_instance_id", r.targetID, "registrations", len(r.registrations))
 	r.mu.Unlock()
+	return cancelled
 }
 
-func (p *DockerPlugin) reconcileRelayRegistrations() {
+func (p *DockerPlugin) reconcileRelayRegistrations() []chan struct{} {
 	p.relayTunnelMu.Lock()
 	routers := make([]*relayTunnelRouter, 0, len(p.relayTunnels))
 	for _, router := range p.relayTunnels {
@@ -175,9 +187,11 @@ func (p *DockerPlugin) reconcileRelayRegistrations() {
 		}
 	}
 	p.relayTunnelMu.Unlock()
+	var cancelled []chan struct{}
 	for _, router := range routers {
-		router.reconcileRegistrations()
+		cancelled = append(cancelled, router.reconcileRegistrations()...)
 	}
+	return cancelled
 }
 
 func assignmentsForRelayTarget(assignment *pb.RelayGrantAssignment, targetID string) []*pb.RelayGrantAssignment {

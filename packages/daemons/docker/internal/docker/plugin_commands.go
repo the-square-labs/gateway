@@ -78,6 +78,12 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		return result
 	}
 
+	if err := p.leaseGate(cmd); err != nil {
+		result.Success = false
+		result.Error = err.Error()
+		return result
+	}
+
 	switch payload := cmd.Payload.(type) {
 	case *pb.GatewayCommand_DockerContainer:
 		p.handleContainerCommand(payload.DockerContainer, result)
@@ -284,7 +290,7 @@ func sensitiveAvailabilityMetadataKey(key string) bool {
 func availabilityMetadataKeyAllowed(key string) bool {
 	switch key {
 	case "runtime", "identity", "runtimeidentity", "status", "health", "metadata", "config", "phase",
-		"id", "runtimeid", "containerid", "containername", "deploymentid", "projectid", "projectname", "runtimeidentityid", "name", "runtimename", "image", "imageid", "digest", "imagedigest", "revision", "version", "state", "healthstatus", "ready", "serving", "draining", "restartcount", "exitcode", "architecture", "arch", "platform", "nodeid", "routername", "networkname", "slots", "blue", "green", "observedat", "startedat", "stoppedat", "createdat", "updatedat":
+		"id", "runtimeid", "containerid", "containername", "deploymentid", "projectid", "projectname", "runtimeidentityid", "name", "runtimename", "image", "imageid", "digest", "imagedigest", "revision", "version", "state", "healthstatus", "ready", "serving", "draining", "restartcount", "exitcode", "architecture", "arch", "platform", "nodeid", "routername", "networkname", "slots", "blue", "green", "activeslot", "observedat", "startedat", "stoppedat", "createdat", "updatedat":
 		return true
 	default:
 		return false

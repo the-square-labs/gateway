@@ -1,0 +1,382 @@
+package lease
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"path/filepath"
+	"sync"
+	"time"
+
+	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
+	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
+)
+
+const (
+	// maxStepInterval bounds the loop period; the node needs Tick at least
+	// every 250 ms.
+	maxStepInterval = 250 * time.Millisecond
+	minStepInterval = 10 * time.Millisecond
+	observeInterval = time.Second
+	// snapshotMaxAge is how old the container view may be for candidacy and
+	// health evidence; an older view (dockerd hanging) is no evidence.
+	snapshotMaxAge = 5 * time.Second
+	// maxGracefulStop caps docker stop before the kill (D5).
+	maxGracefulStop = 10 * time.Second
+	// killMargin keeps the graceful stop inside the fence deadline.
+	killMargin     = time.Second
+	opTimeout      = 25 * time.Second
+	dockerCallWait = 5 * time.Second
+	abandonRetry   = 2 * time.Second
+	// suspendThreshold is the wall-clock jump beyond the BOOTTIME advance
+	// that is treated as a frozen VM (A17).
+	suspendThreshold = 3 * time.Second
+	maxPendingEvents = 256
+)
+
+type Options struct {
+	// NodeID is this daemon's voter/candidate id (its Gateway node id).
+	NodeID string
+	// StateDir holds the durable acceptor store.
+	StateDir string
+	// Clock is CLOCK_BOOTTIME; it must be the clock of the watchdog records.
+	Clock availabilitylease.Clock
+	// Wall is the wall clock without a monotonic reading, for suspend
+	// detection (A17) and event timestamps.
+	Wall       func() time.Time
+	Signer     availabilitylease.Signer
+	Engine     Engine
+	Fence      Fence
+	Endpoints  Endpoints
+	Placements Placements
+	Logger     *slog.Logger
+	// Store overrides the file store (tests).
+	Store availabilitylease.Store
+	// Transport overrides the relay transport (tests).
+	Transport availabilitylease.Transport
+	// Async runs background operations; default is a goroutine. Operations
+	// never run on the loop, so a hung dockerd cannot stall renewals.
+	Async func(func())
+}
+
+type bootClock struct{}
+
+func (bootClock) Now() time.Duration { return leasefence.Now() }
+
+// Runtime is the lease side of a docker daemon.
+type Runtime struct {
+	opts      Options
+	node      *availabilitylease.Node
+	transport *RelayTransport
+	logger    *slog.Logger
+	wake      chan struct{}
+
+	mu          sync.Mutex
+	workloads   map[string]*workload
+	results     []func()
+	snapshot    *snapshot
+	observing   bool
+	nextObserve time.Duration
+	records     map[string]leasefence.Record
+	hbFresh     bool
+	started     bool
+	ready       map[string]bool
+	events      []ReportEvent
+	revision    uint64
+	lastWall    time.Time
+	lastClock   time.Duration
+}
+
+type snapshot struct {
+	at       time.Duration
+	byPolicy map[string][]Container
+	byID     map[string]Container
+}
+
+// New opens the durable store, starts the protocol node (bumping and
+// persisting its incarnation, A3) and prepares the relay transport.
+func New(opts Options) (*Runtime, error) {
+	if opts.NodeID == "" || opts.Signer == nil || opts.Engine == nil || opts.Fence == nil || opts.Endpoints == nil || opts.Placements == nil {
+		return nil, errors.New("availability lease runtime needs node id, signer, engine, fence, endpoints and placements")
+	}
+	if opts.Clock == nil {
+		opts.Clock = bootClock{}
+	}
+	if opts.Wall == nil {
+		opts.Wall = func() time.Time { return time.Now().Round(0) }
+	}
+	if opts.Logger == nil {
+		opts.Logger = slog.Default()
+	}
+	if opts.Async == nil {
+		opts.Async = func(fn func()) { go fn() }
+	}
+	if opts.Store == nil {
+		store, err := OpenFileStore(filepath.Join(opts.StateDir, "availability-lease", "acceptor.json"))
+		if err != nil {
+			return nil, err
+		}
+		opts.Store = store
+	}
+	r := &Runtime{
+		opts: opts, logger: opts.Logger, wake: make(chan struct{}, 1), workloads: map[string]*workload{},
+		records: map[string]leasefence.Record{}, ready: map[string]bool{},
+	}
+	r.transport = NewRelayTransport(opts.Logger)
+	var transport availabilitylease.Transport = r.transport
+	if opts.Transport != nil {
+		transport = opts.Transport
+	}
+	node, err := availabilitylease.NewNode(availabilitylease.Config{
+		ID: opts.NodeID, Clock: opts.Clock, Store: opts.Store, Transport: transport, Signer: opts.Signer,
+		Logf:             func(format string, args ...any) { r.logger.Debug(fmt.Sprintf(format, args...)) },
+		IncarnationFloor: uint64(opts.Wall().UnixMilli()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	r.node = node
+	r.transport.setReceiver(node.ReceiveFrame)
+	return r, nil
+}
+
+// Node exposes the protocol node (acceptor view, gate evaluation in tests).
+func (r *Runtime) Node() *availabilitylease.Node { return r.node }
+
+// Transport is attached to every relay connection by the daemon.
+func (r *Runtime) Transport() *RelayTransport { return r.transport }
+
+// Run drives the loop until ctx ends. It never waits on Docker.
+func (r *Runtime) Run(ctx context.Context) {
+	timer := time.NewTimer(0)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		case <-r.wake:
+		}
+		r.Step()
+		wait := r.node.NextWakeup() - r.opts.Clock.Now()
+		if wait > maxStepInterval {
+			wait = maxStepInterval
+		}
+		if wait < minStepInterval {
+			wait = minStepInterval
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(wait)
+	}
+}
+
+func (r *Runtime) kick() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
+}
+
+// Step runs one loop iteration: protocol timers, completed operations,
+// then the container side of every policy.
+func (r *Runtime) Step() {
+	now := r.opts.Clock.Now()
+	r.detectSuspend(now)
+	r.node.Tick()
+	now = r.opts.Clock.Now()
+	manifests := r.node.Manifests()
+	holders := map[string]availabilitylease.HolderStatus{}
+	for _, status := range r.node.Holders() {
+		if current, ok := holders[status.Key.PolicyID]; !ok || rolePriority(status.Role) > rolePriority(current.Role) {
+			holders[status.Key.PolicyID] = status
+		}
+	}
+	hbFresh := r.opts.Fence.HeartbeatFresh(now)
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	results := r.results
+	r.results = nil
+	for _, done := range results {
+		done()
+	}
+	r.hbFresh = hbFresh
+	r.collectEventsLocked()
+	r.loadRecordsLocked()
+	r.maybeObserveLocked(now, manifests, holders)
+	if r.snapshot == nil {
+		return
+	}
+	if !r.started {
+		// Recovered keys show up in the next step's holder view.
+		r.started = true
+		r.startupFenceLocked(now, manifests)
+		return
+	}
+	for _, manifest := range manifests {
+		status, held := holders[manifest.PolicyID]
+		if !held {
+			status = availabilitylease.HolderStatus{Role: availabilitylease.RoleNone}
+		}
+		r.reconcileLocked(manifest, status, now)
+	}
+}
+
+// rolePriority picks the most significant key of a policy on this node;
+// one node holds at most one slot per policy.
+func rolePriority(role availabilitylease.Role) int {
+	switch role {
+	case availabilitylease.RoleHolding, availabilitylease.RoleRecovering:
+		return 5
+	case availabilitylease.RoleFencing, availabilitylease.RoleAbandoned:
+		return 4
+	case availabilitylease.RoleReleasing:
+		return 3
+	case availabilitylease.RoleBootstrapping, availabilitylease.RoleAcquiring:
+		return 2
+	}
+	return 1
+}
+
+// detectSuspend compares the wall-clock advance with the BOOTTIME advance.
+// A frozen VM (suspend or RAM snapshot under kvmclock) does not advance
+// BOOTTIME; the protocol then shifts deadlines back so the resumed holder
+// fences at once instead of running on its frozen budget (A17, A2.5).
+func (r *Runtime) detectSuspend(now time.Duration) {
+	wall := r.opts.Wall()
+	r.mu.Lock()
+	previousWall, previousClock := r.lastWall, r.lastClock
+	r.lastWall, r.lastClock = wall, now
+	r.mu.Unlock()
+	if previousWall.IsZero() {
+		return
+	}
+	gap := wall.Sub(previousWall) - (now - previousClock)
+	if gap > suspendThreshold {
+		r.logger.Warn("host resumed from a freeze the monotonic clock did not see; fencing on the frozen budget", "frozen_for", gap)
+		r.node.ObserveSuspend(gap)
+	}
+}
+
+func (r *Runtime) loadRecordsLocked() {
+	records, err := r.opts.Fence.Records()
+	if err != nil {
+		r.logger.Warn("lease watchdog records unreadable", "error", err)
+		return
+	}
+	r.records = records
+}
+
+func (r *Runtime) snapshotFreshLocked(now time.Duration) bool {
+	return r.snapshot != nil && now-r.snapshot.at <= snapshotMaxAge
+}
+
+// maybeObserveLocked refreshes the container view in the background, forces
+// RestartPolicy "no" on every container of a lease-mode policy (A2.1) and
+// confirms which stale records may be deleted (A12.3).
+func (r *Runtime) maybeObserveLocked(now time.Duration, manifests []availabilitylease.ManifestInfo, holders map[string]availabilitylease.HolderStatus) {
+	if r.observing || now < r.nextObserve {
+		return
+	}
+	leasePolicies := map[string]bool{}
+	for _, manifest := range manifests {
+		if !manifest.Closed {
+			leasePolicies[manifest.PolicyID] = true
+		}
+	}
+	gc := r.recordGCCandidatesLocked(leasePolicies, holders)
+	r.observing = true
+	r.opts.Async(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), opTimeout)
+		defer cancel()
+		containers, err := r.opts.Engine.ListLeaseContainers(ctx)
+		var deletable []string
+		if err == nil {
+			for i := range containers {
+				c := &containers[i]
+				if leasePolicies[c.PolicyID] && c.RestartPolicy != "no" {
+					if updateErr := r.opts.Engine.DisableRestart(ctx, c.ID); updateErr != nil {
+						r.logger.Warn("could not force restart policy no on a lease-mode container", "container_id", c.ID, "error", updateErr)
+					} else {
+						c.RestartPolicy = "no"
+					}
+				}
+			}
+			deletable = r.confirmDeletable(ctx, containers, gc)
+		}
+		at := r.opts.Clock.Now()
+		r.mu.Lock()
+		r.results = append(r.results, func() {
+			r.observing = false
+			r.nextObserve = at + observeInterval
+			if err != nil {
+				r.logger.Debug("lease container observation failed", "error", err)
+				return
+			}
+			r.applySnapshotLocked(at, containers, deletable)
+		})
+		r.mu.Unlock()
+		r.kick()
+	})
+}
+
+func (r *Runtime) applySnapshotLocked(at time.Duration, containers []Container, deletable []string) {
+	next := &snapshot{at: at, byPolicy: map[string][]Container{}, byID: map[string]Container{}}
+	for _, c := range containers {
+		next.byPolicy[c.PolicyID] = append(next.byPolicy[c.PolicyID], c)
+		next.byID[c.ID] = c
+	}
+	r.snapshot = next
+	for _, id := range deletable {
+		if err := r.opts.Fence.DeleteRecord(id); err != nil {
+			r.logger.Warn("could not delete a lease deadline record", "container_id", id, "error", err)
+			continue
+		}
+		delete(r.records, id)
+	}
+}
+
+// recordGCCandidatesLocked lists records that may go once their cgroup is
+// confirmed empty: the container is gone, or its policy left lease mode and
+// this node does not hold it (A12.3).
+func (r *Runtime) recordGCCandidatesLocked(leasePolicies map[string]bool, holders map[string]availabilitylease.HolderStatus) []leasefence.Record {
+	var out []leasefence.Record
+	for _, record := range r.records {
+		if leasePolicies[record.PolicyID] {
+			if r.snapshot == nil || r.snapshot.byID[record.ContainerID].ID != "" {
+				continue
+			}
+		} else if status, held := holders[record.PolicyID]; held && rolePriority(status.Role) >= 3 {
+			continue
+		}
+		out = append(out, record)
+	}
+	return out
+}
+
+func (r *Runtime) confirmDeletable(ctx context.Context, containers []Container, candidates []leasefence.Record) []string {
+	byID := map[string]Container{}
+	for _, c := range containers {
+		byID[c.ID] = c
+	}
+	var out []string
+	for _, record := range candidates {
+		c, exists := byID[record.ContainerID]
+		if exists && c.Running {
+			continue
+		}
+		if !exists {
+			c = Container{ID: record.ContainerID, CgroupPath: record.CgroupPath}
+		}
+		if empty, err := r.opts.Engine.CgroupEmpty(ctx, c); err == nil && empty {
+			out = append(out, record.ContainerID)
+		}
+	}
+	return out
+}

@@ -62,6 +62,7 @@ type DockerPlugin struct {
 	runtimeStatusMu          sync.RWMutex
 	runtimeStatus            runtimemanager.Status
 	availability             *availabilityManager
+	lease                    *leaseIntegration
 
 	// Log stream follow support
 	writer           *stream.Writer
@@ -315,6 +316,9 @@ func (p *DockerPlugin) Init(cfg *lifecycle.BaseConfig, logger *slog.Logger) erro
 	p.setRuntimeStatus(p.runtimeManager.Preflight(preflightCtx))
 	cancelPreflight()
 	p.availability = availability
+	if availability != nil && p.lease == nil {
+		p.initAvailabilityLease()
+	}
 
 	return nil
 }
@@ -414,6 +418,11 @@ func (p *DockerPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 		values := []string{"docker_deployments_v1", "docker_gpu_v1", "docker_migration_v1", "docker_archive_v1", "docker_port_bind_ip_v1", "generic_relay_tunnel_v1", "relay_pool_v1", "proxy_secure_links_v1", "docker_registry_proxy_v1", "docker_runtime_management_v1", "docker_managed_volumes_v1", "docker_duplicate_label_filter_v1"}
 		if p.cfg.Docker.Mode == "" && p.availability != nil {
 			values = append(values, dockerAvailabilityCapability)
+		}
+		// Advertised only with a live watchdog (A12.4); the lease report's
+		// watchdog_ready carries later changes within the session.
+		if p.lease != nil && p.lease.watchdogReady() {
+			values = append(values, availabilityLeaseCapability)
 		}
 		values = append(values, "managed_database_binding_listener_v1")
 		if p.volumeImages != nil && p.volumeImages.supported {

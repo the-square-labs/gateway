@@ -19,6 +19,9 @@ type DockerConfig struct {
 	Database DatabaseConfig `yaml:"database"`
 	Compose  ComposeConfig  `yaml:"compose"`
 	Builder  BuilderConfig  `yaml:"builder"`
+	// LeaseWatchdogDir is the tmpfs directory shared with the independent
+	// lease watchdog; empty means /run/gateway-lease-watchdog.
+	LeaseWatchdogDir string `yaml:"lease_watchdog_dir"`
 }
 
 func (c DockerConfig) IsStorageProfile() bool {

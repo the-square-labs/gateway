@@ -138,7 +138,7 @@ func (p *DockerPlugin) handleContainerCommand(cmd *pb.DockerContainerCommand, re
 		var id, name string
 		var err error
 		if internal.Workload == "" {
-			id, name, err = p.client.CreateContainer(ctx, cmd.ConfigJson)
+			id, name, err = p.client.CreateContainer(ctx, p.leaseCreateConfig(cmd.ConfigJson))
 		} else if internal.Workload == managedStorageConnectorWorkload {
 			id, name, err = p.createManagedStorageConnector(ctx, cmd.ConfigJson)
 		} else {

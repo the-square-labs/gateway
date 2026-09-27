@@ -263,6 +263,49 @@ func (m *availabilityManager) apply(cmd *pb.DockerAvailabilityCommand) (string, 
 	return detail, nil
 }
 
+// leasePlacement returns this node's current placement of a policy: the
+// live placement with the highest generation (D12 mapping for lease reports).
+func (m *availabilityManager) leasePlacement(policyID string) (availabilityPlacement, bool) {
+	if m == nil {
+		return availabilityPlacement{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var best availabilityPlacement
+	found := false
+	for _, placement := range m.state.Placements {
+		if placement.PolicyID != policyID || placement.Tombstone {
+			continue
+		}
+		if !found || placement.HighestGeneration > best.HighestGeneration {
+			best, found = placement, true
+		}
+	}
+	if found {
+		best.RuntimeMetadata = cloneAvailabilityMetadata(best.RuntimeMetadata)
+	}
+	return best, found
+}
+
+// policiesForResource lists the policies with a live placement of a resource
+// on this node, for the backend lease gate (A5).
+func (m *availabilityManager) policiesForResource(kind, resourceID string) []string {
+	if m == nil || resourceID == "" {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[string]bool{}
+	var out []string
+	for _, placement := range m.state.Placements {
+		if placement.ResourceKind == kind && placement.ResourceID == resourceID && !placement.Tombstone && !seen[placement.PolicyID] {
+			seen[placement.PolicyID] = true
+			out = append(out, placement.PolicyID)
+		}
+	}
+	return out
+}
+
 func (m *availabilityManager) persistLocked() error {
 	data, err := json.MarshalIndent(m.state, "", "  ")
 	if err != nil {
