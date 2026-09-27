@@ -45,8 +45,14 @@ type Node struct {
 	store     Store
 	transport Transport
 	signer    Signer
-	verifier  Verifier
-	logf      func(format string, args ...any)
+	// previousSigner dual-signs during an identity-key rotation; currentKey
+	// is the public key of signer once rotated.
+	previousSigner Signer
+	keyCache       map[string][][]byte
+	currentKey     []byte
+	overlapSince   time.Duration
+	verifier       Verifier
+	logf           func(format string, args ...any)
 
 	incarnation uint64
 	startedAt   time.Duration
@@ -80,8 +86,9 @@ type Node struct {
 }
 
 type outgoing struct {
-	to    string
-	batch *pb.LeaseBatch
+	to      string
+	batch   *pb.LeaseBatch
+	signers []Signer
 }
 
 const dedupCapacity = 8192
@@ -201,6 +208,7 @@ func (n *Node) run(fn func(now time.Duration)) {
 	now := n.clock.Now()
 	fn(now)
 	n.processLoopback(now)
+	n.retireIdentityOverlap(now)
 	out := n.commitLocked(now)
 	n.mu.Unlock()
 	n.send(out)
@@ -338,7 +346,7 @@ func (n *Node) commitLocked(now time.Duration) []outgoing {
 			}
 			batch.KeyRotations = n.chain.chainLinks()
 		}
-		out = append(out, outgoing{to: dest, batch: batch})
+		out = append(out, outgoing{to: dest, batch: batch, signers: n.signers()})
 	}
 	n.outbox, n.attach = map[string][]*pb.LeaseItem{}, map[string]map[string]bool{}
 	return out
@@ -353,7 +361,7 @@ func (n *Node) send(out []outgoing) {
 		if n.transport == nil {
 			continue
 		}
-		frame, err := SealFrame(message.batch, n.signer)
+		frame, err := SealFrame(message.batch, message.signers...)
 		if err != nil {
 			n.logf("seal availability lease frame: %v", err)
 			continue
@@ -407,29 +415,6 @@ func (n *Node) rememberVoters(config *VoterConfig) bool {
 
 func votersRecordName(policyID string, epoch uint64) string {
 	return fmt.Sprintf("%s%s/%020d", prefixVoters, policyID, epoch)
-}
-
-// identityKey resolves a frame sender among every policy's members and
-// candidates. Being known to one policy does not make a node a voter of
-// another: votes are always checked against the key's own policy.
-func (n *Node) identityKey(id string) ([]byte, bool) {
-	for _, policyID := range sortedKeys(n.manifests) {
-		manifest := n.manifests[policyID]
-		if key, ok := manifest.keys[id]; ok {
-			return key, true
-		}
-		if key, ok := manifest.Voters.publicKey(id); ok {
-			return key, true
-		}
-	}
-	for _, policyID := range sortedKeys(n.history) {
-		for _, config := range n.history[policyID] {
-			if key, ok := config.publicKey(id); ok {
-				return key, true
-			}
-		}
-	}
-	return nil, false
 }
 
 func (n *Node) emit(event Event) { n.events = append(n.events, event) }

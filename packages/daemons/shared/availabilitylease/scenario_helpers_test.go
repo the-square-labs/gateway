@@ -23,6 +23,7 @@ type scenarioSpec struct {
 	slots      uint32
 	bootstrap  string
 	seed       int64
+	wire       bool
 }
 
 // newScenario builds a lossless, deterministic world from spec and starts
@@ -34,6 +35,7 @@ func newScenario(t *testing.T, spec scenarioSpec) *simWorld {
 		seed = 42
 	}
 	w := newSimWorld(seed)
+	w.wire = spec.wire
 	var voters []string
 	for _, n := range spec.relays {
 		w.newNode(n.id, true, rateOr(n.rate))
