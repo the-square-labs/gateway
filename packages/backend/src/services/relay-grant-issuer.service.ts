@@ -12,6 +12,11 @@ import {
   relayRoutes,
 } from '@/db/schema/index.js';
 import type { SignedRelayGrant } from '@/grpc/relay-control.client.js';
+import {
+  effectiveRelayGrantTtlHours,
+  LEGACY_RELAY_GRANT_TTL_MAX_HOURS,
+  LONG_POLICY_LEASE_CAPABILITY,
+} from '@/modules/settings/general-settings.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
@@ -313,6 +318,7 @@ export class RelayGrantIssuerService {
         poolId: assignment.poolId,
         relayInstanceId: assignment.instanceId,
         assignmentGeneration: assignment.generation,
+        longLeaseCapable: this.instanceCapabilities(assignment).includes(LONG_POLICY_LEASE_CAPABILITY),
         // The relay enforces the lower of the policy and grant limits, so a candidate grant
         // must carry the same effective limit as the policy or it caps the route below it.
         ...(kind === 'endpoint'
@@ -503,8 +509,17 @@ export class RelayGrantIssuerService {
     input: Omit<
       RelayGrantClaims,
       'schemaVersion' | 'audience' | 'grantId' | 'gatewayInstanceId' | 'issuedAt' | 'notBefore' | 'expiresAt'
-    > & { schemaVersion?: 1 | 2 }
+    > & {
+      schemaVersion?: 1 | 2;
+      /**
+       * Set only for a grant scoped to one relay instance that reported
+       * LONG_POLICY_LEASE_CAPABILITY. Every other grant (legacy schemaVersion 1, or one whose
+       * target has not upgraded) keeps the 48-hour cap an older relay still enforces.
+       */
+      longLeaseCapable?: boolean;
+    }
   ): Promise<SignedRelayGrant> {
+    const { longLeaseCapable, ...claimsInput } = input;
     const [state, settings, active] = await Promise.all([
       this.requireState(),
       this.settings.getConfig(),
@@ -521,15 +536,20 @@ export class RelayGrantIssuerService {
       throw new RelayPolicyNotAcknowledgedError(state.revision);
     }
     const now = Math.floor(Date.now() / 1000);
+    // A grant not scoped to a specific upgraded relay instance keeps the legacy cap: an older
+    // relay build rejects any grant lifetime past LEGACY_RELAY_GRANT_TTL_MAX_HOURS outright.
+    const ttlHours = longLeaseCapable
+      ? effectiveRelayGrantTtlHours(settings.relayGrantTtlHours, settings.relayPolicyLeaseHours)
+      : Math.min(settings.relayGrantTtlHours, LEGACY_RELAY_GRANT_TTL_MAX_HOURS);
     const claims: RelayGrantClaims = {
-      schemaVersion: input.schemaVersion ?? 1,
+      schemaVersion: claimsInput.schemaVersion ?? 1,
       audience: 'wiolett-relay',
       grantId: randomUUID(),
       gatewayInstanceId: state.gatewayInstanceId,
-      ...input,
+      ...claimsInput,
       issuedAt: now,
       notBefore: now,
-      expiresAt: now + settings.relayGrantTtlHours * 60 * 60,
+      expiresAt: now + ttlHours * 60 * 60,
     };
     const payload = Buffer.from(JSON.stringify(claims));
     const privateKeyPem = this.cryptoService.decryptPrivateKey({

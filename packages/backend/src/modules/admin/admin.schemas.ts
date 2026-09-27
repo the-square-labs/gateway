@@ -18,6 +18,8 @@ import {
   RELAY_GRANT_TTL_MIN_HOURS,
   RELAY_HARD_PRESSURE_MAX_PERCENT,
   RELAY_HARD_PRESSURE_MIN_PERCENT,
+  RELAY_POLICY_LEASE_MAX_HOURS,
+  RELAY_POLICY_LEASE_MIN_HOURS,
   RELAY_PROXY_TARGET_PRESSURE_MAX_PERCENT,
   RELAY_PROXY_TARGET_PRESSURE_MIN_PERCENT,
   RELAY_READ_CHUNK_BYTES_MAX,
@@ -232,6 +234,12 @@ export const UpdateAuthProvisioningSettingsSchema = z.object({
         .optional(),
       shutdown: ShutdownSettingsSchema.optional(),
       relayGrantTtlHours: z.number().int().min(RELAY_GRANT_TTL_MIN_HOURS).max(RELAY_GRANT_TTL_MAX_HOURS).optional(),
+      relayPolicyLeaseHours: z
+        .number()
+        .int()
+        .min(RELAY_POLICY_LEASE_MIN_HOURS)
+        .max(RELAY_POLICY_LEASE_MAX_HOURS)
+        .optional(),
       features: z
         .object({
           pkiEnabled: z.boolean().optional(),

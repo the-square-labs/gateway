@@ -12,9 +12,16 @@ const KEY_ROTATION_MS = 7 * 24 * 60 * 60 * 1000;
 const PUBLIC_KEY_RETENTION_MS = 48 * 60 * 60 * 1000 + 5 * 60 * 1000;
 /**
  * How long a pending grant key is published before it signs. Remote relays learn it from policy
- * snapshots, and a relay admits traffic only on a snapshot younger than its 15-minute lease, so
- * after this long every relay still serving verifies the key. Activating sooner makes remote
- * relays refuse the renewed endpoint grants, and a refused renewal closes the endpoint's tunnels.
+ * snapshots, which Gateway keeps pushing every 30 seconds while it is reachable, so a relay that
+ * is currently online sees the pending key almost immediately. This window instead covers a relay
+ * that briefly dropped and reconnects: it still gets the pending key on its next push well inside
+ * this margin. Activating sooner makes such a relay refuse the renewed endpoint grants, and a
+ * refused renewal closes the endpoint's tunnels until the next push retries it.
+ *
+ * A relay that is disconnected from Gateway for longer than this (up to its own policy lease,
+ * see relayPolicyLeaseHours) can still be admitting on a policy that predates the rotation when it
+ * reconnects; it self-heals on the next 30-second push and is not left permanently unable to
+ * verify grants, but a renewal can bounce once in that window.
  */
 export const GRANT_KEY_PUBLICATION_MS = 20 * 60 * 1000;
 

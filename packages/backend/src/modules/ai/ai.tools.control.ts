@@ -167,7 +167,7 @@ export const CONTROL_AI_TOOLS: AIToolDefinition[] = [
         generalSettings: {
           type: 'object',
           description:
-            'Partial general settings: publicUrl, updateChannel, hideExternalBranding, autoAssignCreatedResourcePermissions, sendInvitationOnUserCreate (email the account invitation to every created user; off by default), file limits, gatewayGrpcPublicTarget, gatewayGrpcLocalIp, relayAutoRecovery, relay tuning, shutdown deadlines, relayGrantTtlHours, features.',
+            'Partial general settings: publicUrl, updateChannel, hideExternalBranding, autoAssignCreatedResourcePermissions, sendInvitationOnUserCreate (email the account invitation to every created user; off by default), file limits, gatewayGrpcPublicTarget, gatewayGrpcLocalIp, relayAutoRecovery, relay tuning, shutdown deadlines, relayGrantTtlHours, relayPolicyLeaseHours (lifetime of the signed policy pushed to a relay, 1-168 hours, default 72), features.',
         },
         networkSecurity: { type: 'object' },
         outboundWebhookPolicy: { type: 'object' },
