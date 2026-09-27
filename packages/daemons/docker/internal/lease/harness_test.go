@@ -74,6 +74,7 @@ type world struct {
 	bootstrap  string
 	closed     bool
 	available  bool
+	slots      uint32
 	watchdogOn bool
 	logger     *slog.Logger
 }
@@ -86,6 +87,7 @@ type worldSpec struct {
 	voters    []string
 	bootstrap string
 	available bool
+	slots     uint32
 }
 
 func newWorld(t *testing.T, spec worldSpec) *world {
@@ -93,7 +95,7 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	w := &world{
 		t: t, clock: &fakeClock{now: time.Hour}, policyID: testPolicy, policyPriv: priv, byID: map[string]any{},
-		candidates: spec.candidates, voters: spec.voters, bootstrap: spec.bootstrap, available: spec.available, watchdogOn: true,
+		candidates: spec.candidates, voters: spec.voters, bootstrap: spec.bootstrap, available: spec.available, slots: max(spec.slots, 1), watchdogOn: true,
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	if len(w.voters) == 0 {
@@ -187,12 +189,15 @@ func (w *world) buildBlocks() {
 func (w *world) buildManifest() {
 	w.manifestV++
 	manifest := &pb.LeaseManifest{
-		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: 1, Epoch: 1, Closed: w.closed,
+		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: w.slots, Epoch: 1, Closed: w.closed,
 		Mode: pb.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		LeaseTermMs: 30000,
 	}
 	for _, id := range w.candidates {
 		manifest.Candidates = append(manifest.Candidates, &pb.LeaseCandidate{Id: id, PublicKey: publicKeyDER(w.keyOf(id))})
+	}
+	if w.slots > 1 {
+		manifest.Mode = pb.LeasePolicyMode_LEASE_POLICY_MODE_REPLICATED
 	}
 	if w.available {
 		manifest.PartitionMode = pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE
@@ -205,9 +210,19 @@ func (w *world) buildManifest() {
 	w.manifest = availabilitylease.SignPolicyBlock("k1", w.policyPriv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, payload)
 }
 
+// setSlots publishes a manifest with another slot count (scale or surge).
+func (w *world) setSlots(slots uint32) {
+	w.slots = slots
+	w.publishManifest()
+}
+
 // closeLease publishes a lease-closed manifest (A5) to every host.
 func (w *world) closeLease() {
 	w.closed = true
+	w.publishManifest()
+}
+
+func (w *world) publishManifest() {
 	w.buildManifest()
 	for _, relay := range w.relays {
 		_, _ = relay.node.AdoptManifest(w.manifest)
@@ -232,7 +247,7 @@ func (w *world) deliverBlocks(h *daemonHost) {
 func (w *world) startDaemon(h *daemonHost) {
 	runtime, err := New(Options{
 		NodeID: h.id, Clock: w.clock, Wall: w.wall, Signer: availabilitylease.ECDSASigner{Key: h.key},
-		Engine: h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id},
+		Engine: h.engine, Fence: h.fence, Endpoints: h.endpoints, Placements: fakePlacements{host: h.id, w: w},
 		Logger: w.logger, Store: h.store, Transport: w,
 		Async: func(fn func()) { h.ops = append(h.ops, fn) },
 	})
@@ -340,7 +355,7 @@ func (w *world) checkSingleCopy() {
 			}
 		}
 	}
-	if len(running) > 1 {
+	if len(running) > int(w.slots) {
 		w.violations = append(w.violations, fmt.Sprintf("t=%.3fs two copies running on %v", (w.clock.now-time.Hour).Seconds(), running))
 	}
 }

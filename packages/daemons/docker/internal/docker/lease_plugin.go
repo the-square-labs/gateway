@@ -67,7 +67,7 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	}
 	runtime, err := lease.New(lease.Options{
 		NodeID: stored.NodeID, StateDir: p.cfg.StateDir, Signer: signer,
-		Engine: &leaseEngine{client: p.client, cgroupRoot: leasefence.DefaultCgroupRoot},
+		Engine: &leaseEngine{client: p.client, cgroupRoot: leasefence.DefaultCgroupRoot, composeProjects: p.availability.leaseComposeProjects},
 		Fence:  integration.fence, Endpoints: integration, Placements: integration, Logger: p.logger,
 	})
 	if err != nil {
@@ -198,6 +198,13 @@ func (l *leaseIntegration) ServeSet(policyID string, containers []lease.Containe
 		out = append(out, c)
 	}
 	return out
+}
+
+// MarkServing implements lease.Placements (T6 §3.1).
+func (l *leaseIntegration) MarkServing(policyID string, serving bool) {
+	if err := l.plugin.availability.markLeaseLifecycle(policyID, serving); err != nil {
+		l.plugin.logger.Warn("could not record the availability placement lifecycle", "policy_id", policyID, "serving", serving, "error", err)
+	}
 }
 
 // identityKeySigner signs lease frames with the node's mTLS identity key

@@ -87,6 +87,10 @@ type Placements interface {
 	// ServeSet selects, from every container labeled with the policy, the
 	// ones that run while the lease is held. The others stay stopped.
 	ServeSet(policyID string, containers []Container) []Container
+	// MarkServing records the placement lifecycle for the backend (T6 §3.1):
+	// active once the lease holder started it, stopped after a confirmed
+	// stop. Called from background operations.
+	MarkServing(policyID string, serving bool)
 }
 
 // PolicyKey is a Gateway policy signing key delivered over the

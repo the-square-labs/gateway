@@ -336,6 +336,14 @@ func TestLeaseEndToEndThroughCommandHandlerAndCoordinateRPC(t *testing.T) {
 	if err := daemons[0].plugin.leaseGate(availabilityGatewayCommand(activate)); err == nil {
 		t.Fatal("the previous holder must refuse backend serve commands after the handoff")
 	}
+	standby := availabilityCommand(availabilityActionPrepare, 2, "re:standby", "op", `{"phase":"standby","runtimeIdentity":{"containerId":"c"}}`)
+	standby.PolicyId = e2ePolicy
+	if err := daemons[1].plugin.leaseGate(availabilityGatewayCommand(standby)); err == nil {
+		t.Fatal("the holder must not be re-prepared as a standby")
+	}
+	if err := daemons[0].plugin.leaseGate(availabilityGatewayCommand(standby)); err != nil {
+		t.Fatalf("the former holder is re-prepared as a standby after the handoff: %v", err)
+	}
 }
 
 func mustMarshal(t *testing.T, message proto.Message) []byte {

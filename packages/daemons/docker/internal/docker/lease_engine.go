@@ -17,9 +17,13 @@ import (
 
 // leaseEngine is the Docker side of the availability lease runtime. The
 // runtime calls it only from background operations, never from its loop.
+const composeProjectLabel = "com.docker.compose.project"
+
 type leaseEngine struct {
 	client     *Client
 	cgroupRoot string
+	// composeProjects maps compose project names of live placements to them.
+	composeProjects func() map[string]availabilityPlacement
 
 	infoMu        sync.Mutex
 	cgroupDriver  string
@@ -35,12 +39,47 @@ func (e *leaseEngine) ListLeaseContainers(ctx context.Context) ([]lease.Containe
 		return nil, fmt.Errorf("list lease-mode containers: %w", err)
 	}
 	out := make([]lease.Container, 0, len(listed.Items))
+	seen := map[string]bool{}
 	for _, item := range listed.Items {
 		c, found, inspectErr := e.Inspect(ctx, item.ID)
 		if inspectErr != nil {
 			return nil, inspectErr
 		}
 		if found {
+			seen[c.ID] = true
+			out = append(out, c)
+		}
+	}
+	return e.appendComposeProjects(ctx, out, seen)
+}
+
+// appendComposeProjects adds the containers of compose placements: user
+// Compose files carry no availability labels, so they are found by their
+// project name from the placement's runtime identity (T6 §3.1).
+func (e *leaseEngine) appendComposeProjects(ctx context.Context, out []lease.Container, seen map[string]bool) ([]lease.Container, error) {
+	if e.composeProjects == nil {
+		return out, nil
+	}
+	projects := e.composeProjects()
+	if len(projects) == 0 {
+		return out, nil
+	}
+	filters := make(mobyclient.Filters).Add("label", composeProjectLabel)
+	listed, err := e.client.cli.ContainerList(ctx, mobyclient.ContainerListOptions{All: true, Filters: filters})
+	if err != nil {
+		return nil, fmt.Errorf("list compose placement containers: %w", err)
+	}
+	for _, item := range listed.Items {
+		placement, ok := projects[item.Labels[composeProjectLabel]]
+		if !ok || seen[item.ID] {
+			continue
+		}
+		c, found, inspectErr := e.Inspect(ctx, item.ID)
+		if inspectErr != nil {
+			return nil, inspectErr
+		}
+		if found {
+			c.PolicyID, c.PlacementID = placement.PolicyID, placement.PlacementID
 			out = append(out, c)
 		}
 	}

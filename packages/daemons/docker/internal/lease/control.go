@@ -79,6 +79,16 @@ func (r *Runtime) ApplyLeaseBlocks(update BlockUpdate) error {
 	return errors.Join(errs...)
 }
 
+// Holds reports whether this node holds (or recovers) a slot of the policy.
+func (r *Runtime) Holds(policyID string) bool {
+	for _, status := range r.node.Holders() {
+		if status.Key.PolicyID == policyID && (status.Role == availabilitylease.RoleHolding || status.Role == availabilitylease.RoleRecovering) {
+			return true
+		}
+	}
+	return false
+}
+
 // BootstrapPending reports whether this node is the named initial holder of
 // a slot of the policy and has not acquired it yet (A5).
 func (r *Runtime) BootstrapPending(policyID string) bool {
@@ -175,7 +185,11 @@ func (r *Runtime) Handoff(request Handoff) error {
 		wl.release = &releaseIntent{successor: request.SuccessorID, operationID: request.OperationID, reason: "handoff"}
 	}
 	r.mu.Unlock()
+	// SuccessorGeneration is the successor placement's generation (its last
+	// standby prepare, T6 §3.3); the successor serves under it after it
+	// acquires, and reports it with its held key (D12).
 	r.logger.Info("availability lease handoff requested", "policy_id", request.PolicyID, "slot", request.Slot,
+		"successor_generation", request.SuccessorGeneration,
 		"successor_id", request.SuccessorID, "operation_id", request.OperationID)
 	r.kick()
 	return nil
