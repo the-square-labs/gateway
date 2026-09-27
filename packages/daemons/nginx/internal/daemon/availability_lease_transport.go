@@ -6,6 +6,8 @@ import (
 
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // runForTarget watches one relay's lease gate views for the life of ctx, over
@@ -24,7 +26,7 @@ func (c *availabilityLeaseCoordinator) runForTarget(ctx context.Context, conn *g
 	for ctx.Err() == nil {
 		stream, err := client.WatchLeaseGates(ctx, &relayv1.LeaseGateWatchRequest{})
 		if err != nil {
-			c.logf("availability lease gate watch to relay %s failed: %v", relayID, err)
+			c.logWatchError(relayID, err)
 			if !sleepContext(ctx, availabilityLeaseReconnectDelay) {
 				return
 			}
@@ -33,6 +35,9 @@ func (c *availabilityLeaseCoordinator) runForTarget(ctx context.Context, conn *g
 		for {
 			snapshot, recvErr := stream.Recv()
 			if recvErr != nil {
+				if ctx.Err() == nil {
+					c.logWatchError(relayID, recvErr)
+				}
 				break
 			}
 			c.gates.apply(relayID, snapshot, time.Now())
@@ -45,6 +50,23 @@ func (c *availabilityLeaseCoordinator) runForTarget(ctx context.Context, conn *g
 			return
 		}
 	}
+}
+
+// logWatchError reports a WatchLeaseGates failure. PermissionDenied is
+// logged loudly (Warn, not Debug): it means the relay currently refuses this
+// daemon's gate watch, so every lease-bound Secure Link member on it fails
+// closed until the relay is fixed to allow it (B1). Lease-bound bindings
+// stay closed throughout: reconcileSockets never opens one without a fresh,
+// admitting view.
+func (c *availabilityLeaseCoordinator) logWatchError(relayID string, err error) {
+	if status.Code(err) == codes.PermissionDenied {
+		if c.logger != nil {
+			c.logger.Warn("availability lease gate watch denied by relay; lease-bound Secure Link members on it stay closed",
+				"relay_instance_id", relayID, "error", err)
+		}
+		return
+	}
+	c.logf("availability lease gate watch to relay %s failed: %v", relayID, err)
 }
 
 func (c *availabilityLeaseCoordinator) claimWatch(relayID string) bool {

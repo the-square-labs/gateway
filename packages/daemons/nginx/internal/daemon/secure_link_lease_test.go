@@ -128,6 +128,42 @@ func TestAvailabilityLeaseCoordinatorClosesSocketOnStaleView(t *testing.T) {
 	}
 }
 
+// TestAvailabilityLeaseCoordinatorOpensSocketOnLeaseModeFalseView covers the
+// B2 fix end to end: a policy that leaves lease mode (or was never in it)
+// must not leave its lease-bound Secure Link members closed forever. Once a
+// relay reports lease_mode=false, the socket opens regardless of holder_id.
+func TestAvailabilityLeaseCoordinatorOpensSocketOnLeaseModeFalseView(t *testing.T) {
+	manager := testSourceLinkManager(t, func(_ string, connection net.Conn) { _ = connection.Close() })
+	statuses, err := manager.sync(availabilityMemberCommand("policy-1", "node-a"))
+	if err != nil || len(statuses) != 1 {
+		t.Fatalf("sync: statuses=%#v err=%v", statuses, err)
+	}
+	socketPath := statuses[0].SocketPath
+
+	coordinator := newAvailabilityLeaseCoordinator(t.TempDir(), manager, nil)
+	defer coordinator.close()
+
+	// No view yet: the lease-bound member stays closed (fail closed).
+	coordinator.reconcileSockets()
+	if _, err := net.DialTimeout("unix", socketPath, 200*time.Millisecond); err == nil {
+		t.Fatal("a lease-bound member must stay closed before any view arrives")
+	}
+
+	// The relay reports the policy is not lease-bound (legacy admission, or
+	// its lease just closed): the socket must open even though no view ever
+	// named node-a as holder.
+	coordinator.gates.apply("relay-1", &relayv1.LeaseGateSnapshot{Gates: []*relayv1.LeaseGateView{{
+		PolicyId: "policy-1", Slot: 0, LeaseMode: false, Open: false,
+	}}}, time.Now())
+	coordinator.reconcileSockets()
+
+	connection, err := net.DialTimeout("unix", socketPath, time.Second)
+	if err != nil {
+		t.Fatalf("socket did not open once the relay reported lease_mode=false: %v", err)
+	}
+	_ = connection.Close()
+}
+
 // TestAvailabilityLeaseCoordinatorSocketSweepClosesStaleViewOnItsOwn checks
 // the background sweep started by (*availabilityLeaseCoordinator).start:
 // nothing needs to call reconcileSockets by hand for a stale view to close.
