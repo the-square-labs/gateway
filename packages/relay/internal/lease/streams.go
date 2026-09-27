@@ -197,13 +197,15 @@ func (c *Coordinator) revalidateStreams() {
 	}
 }
 
-// WatchLeaseGates streams this relay's gate views to a lease member (T5:
-// nginx daemons open a Secure Link member socket only while a fresh view says
-// its holder's gate is open). Views go out on every change and at least once
-// a second; remaining_ms is the relay's local time left.
+// WatchLeaseGates streams this relay's gate views to any client with a
+// verified certificate (T5: nginx daemons open a Secure Link member socket
+// only while a fresh view says its holder's gate is open). nginx daemons are
+// observers and never manifest members (A18), and a gate view is read-only
+// and holds no secret, so membership is required only on Coordinate. Views go
+// out on every change and at least once a second; remaining_ms is the relay's
+// local time left.
 func (c *Coordinator) WatchLeaseGates(request *relayv1.LeaseGateWatchRequest, stream relayv1.TunnelBroker_WatchLeaseGatesServer) error {
-	client, err := peer.Require(stream.Context())
-	if err != nil {
+	if _, err := peer.Require(stream.Context()); err != nil {
 		return status.Error(codes.Unauthenticated, err.Error())
 	}
 	policyIDs := append([]string(nil), request.GetPolicyIds()...)
@@ -213,9 +215,6 @@ func (c *Coordinator) WatchLeaseGates(request *relayv1.LeaseGateWatchRequest, st
 	var last []*relayv1.LeaseGateView
 	var sentAt time.Time
 	for {
-		if !c.view.authorized(client.SubjectID) {
-			return status.Error(codes.PermissionDenied, "client is not an availability lease member")
-		}
 		views := c.gateViews(policyIDs)
 		if time.Since(sentAt) >= watchRefresh || !sameGates(last, views) {
 			snapshot := &relayv1.LeaseGateSnapshot{RelayMemberId: c.id, RelayIncarnation: c.node.Incarnation(), Gates: views}

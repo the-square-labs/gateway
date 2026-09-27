@@ -121,8 +121,11 @@ func (c *Coordinator) gateView(key availabilitylease.Key) *relayv1.LeaseGateView
 // in the gateway.v1 AvailabilityLeaseReport shape.
 func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 	c.observeSuspend()
+	c.mu.Lock()
+	identityKey := append([]byte(nil), c.identityKey...)
+	c.mu.Unlock()
 	report := &relayv1.AvailabilityLeaseReport{
-		MemberId: c.id, IdentityPublicKey: c.publicKey(), Incarnation: c.node.Incarnation(),
+		MemberId: c.id, IdentityPublicKey: identityKey, Incarnation: c.node.Incarnation(),
 		AcceptorAbstaining: c.clock.Now() < c.startedAt+availabilitylease.AbstainAfterStart,
 	}
 	for _, id := range c.view.keyIDs() {
@@ -137,7 +140,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 			manifest, _ := c.view.manifest(policyID)
 			report.Manifests = append(report.Manifests, &relayv1.AvailabilityLeaseManifestAck{
 				PolicyId: policyID, ManifestVersion: version, Closed: !c.node.LeaseMode(policyID),
-				VoterEpoch: c.node.Epoch(policyID), Voter: manifest.voters[c.id], Member: manifest.members[c.id],
+				VoterEpoch: c.node.Epoch(policyID), Voter: manifest.voters[c.id], Member: manifest.members[c.id] != nil,
 			})
 		}
 	}

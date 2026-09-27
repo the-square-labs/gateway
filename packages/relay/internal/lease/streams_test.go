@@ -198,15 +198,20 @@ func (s *watchStream) SetHeader(metadata.MD) error  { return nil }
 func (s *watchStream) SendHeader(metadata.MD) error { return nil }
 func (s *watchStream) SetTrailer(metadata.MD)       {}
 
-func TestWatchLeaseGatesStreamsTheGateViewToMembers(t *testing.T) {
+// nginx daemons are observers (A18): never manifest members or candidates,
+// yet they must receive gate views. Only an unauthenticated client is refused.
+func TestWatchLeaseGatesStreamsTheGateViewToObservers(t *testing.T) {
 	h := newHarness(t, true)
 	h.ready("d1", "d2")
 	acquire(t, h, "d1")
-	stranger := &watchStream{ctx: clientContext("stranger"), sent: make(chan *relayv1.LeaseGateSnapshot, 1)}
-	if err := h.relay.WatchLeaseGates(&relayv1.LeaseGateWatchRequest{}, stranger); status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("stranger watch = %v", err)
+	anonymous := &watchStream{ctx: context.Background(), sent: make(chan *relayv1.LeaseGateSnapshot, 1)}
+	if err := h.relay.WatchLeaseGates(&relayv1.LeaseGateWatchRequest{}, anonymous); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("anonymous watch = %v", err)
 	}
-	ctx, cancel := context.WithCancel(clientContext("d2"))
+	if h.relay.view.authorized("nginx-1") {
+		t.Fatal("the observer is a manifest member; the test would not cover observers")
+	}
+	ctx, cancel := context.WithCancel(clientContext("nginx-1"))
 	defer cancel()
 	stream := &watchStream{ctx: ctx, sent: make(chan *relayv1.LeaseGateSnapshot, 4)}
 	result := make(chan error, 1)
