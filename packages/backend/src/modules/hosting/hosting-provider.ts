@@ -1,4 +1,5 @@
 import type { HostingConnection, HostingProviderAdapter } from './hosting-provider.types.js';
+import { CloudBlastHostingAdapter } from './providers/cloudblast.js';
 import { DigitalOceanHostingAdapter } from './providers/digitalocean.js';
 import { HetznerHostingAdapter } from './providers/hetzner.js';
 import { HostkeyHostingAdapter } from './providers/hostkey.js';
@@ -12,6 +13,8 @@ export function createHostingAdapter(connection: HostingConnection): HostingProv
       return new HetznerHostingAdapter(connection);
     case 'hostkey':
       return new HostkeyHostingAdapter(connection);
+    case 'cloudblast':
+      return new CloudBlastHostingAdapter(connection);
     case 'proxmox':
       return new ProxmoxHostingAdapter(connection);
   }

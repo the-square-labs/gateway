@@ -1,7 +1,7 @@
 import type { HostingFirewallAdapter } from './hosting-firewall.types.js';
 import type { HostingSnapshotAction, HostingSnapshotAdapter } from './hosting-snapshot.types.js';
 /** Hosting adapters contain provider IO only; authorization and durable intents live in services. */
-export const HOSTING_PROVIDERS = ['hostkey', 'digitalocean', 'hetzner', 'proxmox'] as const;
+export const HOSTING_PROVIDERS = ['hostkey', 'digitalocean', 'hetzner', 'cloudblast', 'proxmox'] as const;
 export type HostingProvider = (typeof HOSTING_PROVIDERS)[number];
 export type HostingResourceKind = 'vm' | 'ct';
 export type HostingRole = 'nginx' | 'docker' | 'builder' | 'databases' | 'storage' | 'monitoring' | 'relay';

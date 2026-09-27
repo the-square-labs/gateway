@@ -9,11 +9,12 @@ Hosting accounts let Gateway create a provider VM, run the existing role install
 | HOSTKEY | VM orders and lifecycle management | Account balance and estimated monthly expenses |
 | DigitalOcean | Droplets and lifecycle management | Account balance when available and estimated monthly expenses |
 | Hetzner Cloud | Cloud servers; not Robot or bare metal | Estimated VM expenses; no account balance API |
+| CloudBlast | Inventory and lifecycle of existing VPS servers; no creation (see below) | EUR credit balance and estimated monthly expenses |
 | Proxmox VE | Create QEMU VMs; inventory and manage eligible QEMU VMs and LXC containers | None; placement shows host/storage capacity |
 
 Connect accounts under **Settings → Integrations → Hosting**, also listed under **Nodes → Providers**. Account pages contain Overview and Virtual machines, with account settings in the action menu. Balance and monthly expenses appear as overview cards where available and permitted. There is no Finance tab, invoice browser or top-up action. Testing a connection does not order a VM or create an invoice.
 
-**Add connector** uses the existing step-based dialog composition. HOSTKEY, DigitalOcean and Hetzner use Connection → Settings. Proxmox uses Connection → Proxmox host → Infrastructure → Network → Review; inventory-only mode skips infrastructure and network. Back preserves the draft. Only the final action saves a connector; Continue/discovery never creates a VM. New connectors are enabled immediately; existing connectors retain their enabled state when edited.
+**Add connector** uses the existing step-based dialog composition. HOSTKEY, DigitalOcean, Hetzner and CloudBlast use Connection → Settings. Proxmox uses Connection → Proxmox host → Infrastructure → Network → Review; inventory-only mode skips infrastructure and network. Back preserves the draft. Only the final action saves a connector; Continue/discovery never creates a VM. New connectors are enabled immediately; existing connectors retain their enabled state when edited.
 
 Hosting extends the existing node header and Overview tab. Eligible VMs also expose Firewall and Snapshots. Docker resources are linked from Overview to the filtered Docker pages. Provider power state remains distinct from Gateway daemon availability.
 
@@ -33,6 +34,16 @@ An operation is not ready merely because its VM is running or its installer exit
 If installation fails on a known new VM, **Retry installation** keeps that VM and the pending node ID, rotates the enrollment token and does not order a replacement. An uncertain installer outcome is reconciled rather than blindly executed again. Expired installation credentials require the explicit retry path.
 
 Installing Gateway on a visible existing server is an explicit action, distinct from adoption. It requires a proven Guest Agent channel or an existing trusted SSH connection to that server's actual interface address. Gateway does not reinstall the operating system to gain access.
+
+## CloudBlast
+
+CloudBlast connects with an API token from CloudBlast Account Settings → API; Gateway calls the official API v2 at `https://console.cloudblast.io`. The account's numeric ID is its identity, so a replacement token for the same account can be saved on the existing connector.
+
+- **No VM creation from Gateway.** CloudBlast's create API accepts no user data or cloud-init input, so Gateway cannot deliver its installer to a new server. Create the server in CloudBlast, then use **Install Gateway** on the discovered server with a trusted SSH connection. Plan changes (resize) and daemon recovery are also unavailable through its API.
+- Inventory reads each server's plan, addresses and real-time hypervisor state. Start, graceful shutdown, reboot and destroy are polled through that state and never re-sent. Destroying a server keeps only addresses that were already reserved IPs.
+- **Snapshots** are CloudBlast backups taken in snapshot mode (the server stays online). Names are limited to 40 characters. Restore requires a stopped server. Storage cost uses the plan's backup price per GB-month.
+- **Firewall** uses one Gateway-owned security group per server, with explicit catch-all rules for the inbound and outbound policy. Gateway refuses to apply while the server is attached to other security groups, or when its group is shared or contains rules Gateway cannot represent. After confirmed server deletion, the unused owned group is removed.
+- Balance is the account credit in EUR. Top-ups, SSH keys, reverse DNS, extra or reserved IPs, reinstall and rename remain CloudBlast console actions.
 
 ## Proxmox prerequisites
 
@@ -57,7 +68,7 @@ Relevant Proxmox permissions include `VM.Audit`, `VM.PowerMgmt`, `VM.Allocate`, 
 
 ## OS admission policy
 
-New hosted VMs use a shared, fail-closed OS/version/architecture/role policy across all four providers. The installer/package compatibility matrix is independent of the pinned images Gateway downloads for Proxmox: Ubuntu 22.04/24.04/26.04, Debian 11/12/13, and Fedora 43/44 on x64 (reviewed 2026-09-05 against the existing installers and upstream Docker/Nginx package support). Proxmox still offers its three pinned canonical builds; cloud providers expose compatible images from their own catalogs. Gateway never invents an image absent from the provider. Ubuntu 20.04 is not currently admitted for new automatic hosting installation and is absent from DO's distribution catalog. This does not declare existing Ubuntu 20.04 daemons incompatible. This is admission policy, **not** a claim that each provider/image/role combination has completed live E2E verification. Unknown OS versions, unknown architectures and missing compatibility metadata are not implicitly supported.
+New hosted VMs use a shared, fail-closed OS/version/architecture/role policy across all providers. The installer/package compatibility matrix is independent of the pinned images Gateway downloads for Proxmox: Ubuntu 22.04/24.04/26.04, Debian 11/12/13, and Fedora 43/44 on x64 (reviewed 2026-09-05 against the existing installers and upstream Docker/Nginx package support). Proxmox still offers its three pinned canonical builds; cloud providers expose compatible images from their own catalogs. Gateway never invents an image absent from the provider. Ubuntu 20.04 is not currently admitted for new automatic hosting installation and is absent from DO's distribution catalog. This does not declare existing Ubuntu 20.04 daemons incompatible. This is admission policy, **not** a claim that each provider/image/role combination has completed live E2E verification. Unknown OS versions, unknown architectures and missing compatibility metadata are not implicitly supported.
 
 DigitalOcean plain distributions must have a recognized public slug and matching distribution metadata. Its documented Ubuntu 24.04 NVIDIA/AMD AI/ML images are also admitted by pinned public image ID, with compatible GPU vendor/count size restrictions; a changed mutable GPU alias requires a new review rather than silently upgrading the base OS. Hetzner requires a non-deprecated system image with the exact OS name and architecture. HOSTKEY requires an exact plain OS label including explicit x64 architecture; uncertain labels remain unavailable until their metadata is verified. Proxmox uses the canonical image identities, not arbitrary existing templates.
 
@@ -89,7 +100,7 @@ For a confirmed HOSTKEY VM order, Gateway can apply available account credit to 
 
 ## Firewall, snapshots and alerts
 
-Firewall management is opt-in for DigitalOcean and Proxmox. Rules share inbound/outbound direction, Allow/Deny, protocol, ports and source/destination addresses. Provider prerequisites and current token permissions are checked before applying. Gateway does not enable the Proxmox cluster firewall or overwrite unrelated provider policies.
+Firewall management is opt-in for DigitalOcean, CloudBlast and Proxmox. Rules share inbound/outbound direction, Allow/Deny, protocol, ports and source/destination addresses. Provider prerequisites and current token permissions are checked before applying. Gateway does not enable the Proxmox cluster firewall or overwrite unrelated provider policies.
 
 After confirmed DigitalOcean VM deletion, Gateway also removes its unused owned firewall. Cleanup checks the exact provider ID and deterministic ownership name, then refuses to delete policies still attached to droplets or tags. Shared or renamed policies are preserved and recorded in the operation result. Firewall cleanup requires provider read/delete permissions; unresolved cleanup keeps the operation pending reconciliation. A lost DELETE response is checked by ID and never blindly replayed. Merely disabling the firewall still retains its rules and policy for later reuse.
 
@@ -103,4 +114,4 @@ Hosting connectors, VM lifecycle, snapshots, firewalls and account finances are 
 
 ## Verification boundary
 
-Provider fixture/contract tests are not live provider acceptance. HOSTKEY, DigitalOcean and Hetzner require separately supplied test credentials and explicit spending/financial authority before real orders or invoices can be tested. Proxmox E2E should run only in a positively identified test pool with exact guest IDs, a resource limit and a cleanup/restore inventory. Never use a production VM as an implicitly disposable fixture.
+Provider fixture/contract tests are not live provider acceptance. HOSTKEY, DigitalOcean, Hetzner and CloudBlast require separately supplied test credentials and explicit spending/financial authority before real orders or invoices can be tested. Proxmox E2E should run only in a positively identified test pool with exact guest IDs, a resource limit and a cleanup/restore inventory. Never use a production VM as an implicitly disposable fixture.

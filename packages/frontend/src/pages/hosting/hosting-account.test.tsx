@@ -686,6 +686,26 @@ it("sends an explicit trust mode when switching a saved private CA to system tru
   expect(request.settings.certificateFingerprint).toBeUndefined();
 });
 
+it("connects CloudBlast through the shared two-step form at its official origin", async () => {
+  const save = vi.spyOn(api, "createHostingConnector").mockResolvedValue(connector);
+  renderWithRouter(<HostingConnectorDialog open onClose={vi.fn()} onSaved={vi.fn()} />);
+  fireEvent.click(screen.getByRole("combobox", { name: "Provider" }));
+  fireEvent.mouseDown(await screen.findByRole("button", { name: "CloudBlast" }));
+  expect(await screen.findByText("Step 1 of 2 — Connection")).toBeInTheDocument();
+  fireEvent.change(screen.getByRole("textbox", { name: "Connector name" }), {
+    target: { value: "CloudBlast" },
+  });
+  fireEvent.change(screen.getByLabelText("API token"), { target: { value: "test-token" } });
+  await nextConnectorStep();
+  fireEvent.click(screen.getByRole("button", { name: "Create connector" }));
+  await waitFor(() => expect(save).toHaveBeenCalledOnce());
+  expect(save.mock.calls[0][0]).toMatchObject({
+    provider: "cloudblast",
+    baseUrl: "https://console.cloudblast.io",
+    token: "test-token",
+  });
+});
+
 it("puts Proxmox host and trust on a separate step with Cancel only on the first step", async () => {
   renderWithRouter(<HostingConnectorDialog open onClose={vi.fn()} onSaved={vi.fn()} />);
   fireEvent.click(screen.getByRole("combobox", { name: "Provider" }));

@@ -355,6 +355,15 @@ describe('hosting paid provisioning state machine', () => {
     expect(test.operations.dispatch).not.toHaveBeenCalled();
     expect(test.adapter.create).not.toHaveBeenCalled();
   });
+  it('refuses CloudBlast creation before reserving a node because the installer cannot be delivered', async () => {
+    const test = runner();
+    test.connectors.get.mockResolvedValue({ id: input.connectorId, provider: 'cloudblast' });
+    await expect(test.service.create(input, actor)).rejects.toMatchObject({ code: 'HOSTING_ACTION_UNSUPPORTED' });
+    expect(test.nodeService.create).not.toHaveBeenCalled();
+    expect(test.nodeService.getGatewayEnrollmentTargets).not.toHaveBeenCalled();
+    expect(test.operations.dispatch).not.toHaveBeenCalled();
+    expect(test.adapter.create).not.toHaveBeenCalled();
+  });
   it('fails a queued create before dispatch when scope validation is denied', async () => {
     const test = runner();
     test.adapter.validateCreate.mockRejectedValue(new HostingProviderError(403, false, 'Missing tag:create'));

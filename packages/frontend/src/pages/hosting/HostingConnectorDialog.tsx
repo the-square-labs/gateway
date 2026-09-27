@@ -559,7 +559,9 @@ export function HostingConnectorDialog({
                       help={
                         provider === "hostkey"
                           ? "Create a dedicated key in Invapi → API keys. For an existing connector, leave blank to retain its saved key. Credentials are encrypted and never displayed."
-                          : "Use a dedicated scoped token. Saved credentials are encrypted and never displayed."
+                          : provider === "cloudblast"
+                            ? "Create a token in CloudBlast Account Settings → API. CloudBlast cannot receive the Gateway installer at server creation: create servers in CloudBlast, then install Gateway on them over SSH. Saved credentials are encrypted and never displayed."
+                            : "Use a dedicated scoped token. Saved credentials are encrypted and never displayed."
                       }
                     >
                       <Input

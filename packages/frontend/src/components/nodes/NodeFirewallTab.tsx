@@ -19,18 +19,19 @@ import { Switch } from "@/components/ui/switch";
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import { accessContextKey, useAuthStore } from "@/stores/auth";
-import type {
-  HostingFirewallConfig,
-  HostingFirewallDirection,
-  HostingFirewallRule,
-  HostingFirewallView,
+import {
+  HOSTING_PROVIDER_LABELS,
+  type HostingFirewallConfig,
+  type HostingFirewallDirection,
+  type HostingFirewallRule,
+  type HostingFirewallView,
 } from "@/types/hosting";
 
 export interface NodeFirewallTabProps {
   nodeId: string;
   connectorId: string;
   resourceId: string;
-  provider: "digitalocean" | "proxmox";
+  provider: "digitalocean" | "cloudblast" | "proxmox";
   mutationLocked?: boolean;
 }
 
@@ -216,7 +217,7 @@ export function NodeFirewallTab({
     : view?.observation?.blockers.length
       ? `Enabling constraints: ${view.observation.blockers.join(" ")}`
       : null;
-  const providerLabel = provider === "digitalocean" ? "DigitalOcean" : "Proxmox VE";
+  const providerLabel = HOSTING_PROVIDER_LABELS[provider];
   const notification =
     loadError ||
     saveError ||

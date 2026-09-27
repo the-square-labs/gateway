@@ -584,7 +584,7 @@ export function NodeSnapshotsTab({
           ? "—"
           : `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(s.sizeGb)} GB`,
     },
-    ...(["digitalocean", "hetzner"].includes(view?.provider ?? "")
+    ...(["digitalocean", "hetzner", "cloudblast"].includes(view?.provider ?? "")
       ? [
           {
             id: "cost",
@@ -776,7 +776,7 @@ export function NodeSnapshotsTab({
               {view?.provider === "proxmox" && (
                 <DetailRow label="RAM included" value={details.includeRam ? "Yes" : "No"} />
               )}
-              {["digitalocean", "hetzner"].includes(view?.provider ?? "") && (
+              {["digitalocean", "hetzner", "cloudblast"].includes(view?.provider ?? "") && (
                 <DetailRow
                   label="Est. monthly storage"
                   value={

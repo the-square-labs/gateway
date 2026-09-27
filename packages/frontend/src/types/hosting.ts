@@ -1,4 +1,4 @@
-export type HostingProvider = "hostkey" | "digitalocean" | "hetzner" | "proxmox";
+export type HostingProvider = "hostkey" | "digitalocean" | "hetzner" | "cloudblast" | "proxmox";
 export type HostingRole =
   | "nginx"
   | "docker"
@@ -350,12 +350,14 @@ export const HOSTING_PROVIDER_LABELS: Record<HostingProvider, string> = {
   hostkey: "HOSTKEY",
   digitalocean: "DigitalOcean",
   hetzner: "Hetzner Cloud",
+  cloudblast: "CloudBlast",
   proxmox: "Proxmox VE",
 };
 export const HOSTING_API_ORIGINS: Record<HostingProvider, string> = {
   hostkey: "https://invapi.hostkey.com",
   digitalocean: "https://api.digitalocean.com",
   hetzner: "https://api.hetzner.cloud",
+  cloudblast: "https://console.cloudblast.io",
   proxmox: "",
 };
 export const DEFAULT_HOSTING_SETTINGS: HostingSettings = {

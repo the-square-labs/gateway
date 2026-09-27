@@ -43,6 +43,7 @@ import type {
   HostingResourceSnapshot,
 } from './hosting-provider.types.js';
 import { isHostedNodeReady } from './hosting-readiness.js';
+import { CLOUDBLAST_CREATE_UNSUPPORTED } from './providers/cloudblast.js';
 import { allocateProxmoxPool } from './proxmox-allocation.js';
 import { reserveProxmoxQuota } from './proxmox-quota.js';
 
@@ -130,6 +131,9 @@ export class HostingProvisioningService {
     const connector = await this.connectors.get(input.connectorId, user, true);
     const settings = this.connectors.settings(connector);
     const adapter = this.connectors.adapter(connector);
+    // CloudBlast cannot deliver the installer to a new server; refuse before reserving a node.
+    if (connector.provider === 'cloudblast' && !input.existingResourceId)
+      throw new AppError(409, 'HOSTING_ACTION_UNSUPPORTED', CLOUDBLAST_CREATE_UNSUPPORTED);
     // Reject insufficient DO permissions before reserving a node or durable order.
     // The adapter checks again at dispatch in case scopes changed in the meantime.
     if (connector.provider === 'digitalocean' && !input.existingResourceId) {
