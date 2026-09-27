@@ -41,3 +41,19 @@ export function decodeHealthDiskMounts(rawMounts: unknown): {
 
   return managedStorageCapacity ? { diskMounts, managedStorageCapacity } : { diskMounts };
 }
+
+/**
+ * Relay round trips of a daemon health report, in milliseconds. Absent when the daemon measured
+ * none, so reports of nodes without relays keep their shape.
+ */
+export function relayLatencyHealth(rawSamples: unknown): {
+  relayLatencies?: Array<{ relayInstanceId: string; rttMs: number }>;
+} {
+  const relayLatencies = (Array.isArray(rawSamples) ? rawSamples : []).flatMap((sample) => {
+    const relayInstanceId = (sample as { relayInstanceId?: unknown })?.relayInstanceId;
+    const micros = Number((sample as { rttMicros?: unknown })?.rttMicros);
+    if (typeof relayInstanceId !== 'string' || !relayInstanceId || !Number.isFinite(micros) || micros <= 0) return [];
+    return [{ relayInstanceId, rttMs: Math.round(micros) / 1000 }];
+  });
+  return relayLatencies.length ? { relayLatencies } : {};
+}

@@ -231,6 +231,12 @@ export interface HealthReport {
   containersStopped: number;
   containersTotal: number;
   gpuDevices: GpuDevice[];
+  relayLatencies?: RelayLatencySample[];
+}
+
+export interface RelayLatencySample {
+  relayInstanceId: string;
+  rttMicros: number;
 }
 
 export interface StatsReport {
@@ -794,6 +800,14 @@ export interface SyncRelayGrantsCommand {
   grants: RelayGrantAssignment[];
   dataLanes?: number;
   readChunkBytes?: number;
+  relayLatencyTargets?: RelayLatencyTarget[];
+}
+
+/** A pool relay the daemon measures its round trip to; never a tunnel target. */
+export interface RelayLatencyTarget {
+  relayInstanceId: string;
+  addresses: string[];
+  port: number;
 }
 
 /** Complete desired set of Proxy Host secure-link listeners or bindings. */
@@ -861,6 +875,12 @@ export interface RelayDataCandidate {
   capabilities: string[];
   grant: RelaySignedGrant;
   assignmentState: string;
+  topology?: RelayCandidateTopology;
+}
+
+export interface RelayCandidateTopology {
+  role: string; // "primary" or "standby"
+  endpointRttMicros: number; // 0 when unknown
 }
 
 export interface ProbeRelayCandidateCommand {

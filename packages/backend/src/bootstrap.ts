@@ -262,6 +262,7 @@ import { RelayRegistryService } from '@/services/relay-registry.service.js';
 import { RelayRegistryIngressService } from '@/services/relay-registry-ingress.service.js';
 import { RelayStartupFinalizerService } from '@/services/relay-startup-finalizer.service.js';
 import { RelaySupervisorService } from '@/services/relay-supervisor.service.js';
+import { RelayTopologyService } from '@/services/relay-topology.service.js';
 import { ResourceSnapshotStore } from '@/services/resource-snapshot.store.js';
 import { RuntimeRestartService } from '@/services/runtime-restart.service.js';
 import { SessionService } from '@/services/session.service.js';
@@ -763,6 +764,7 @@ export async function initializeContainer(): Promise<void> {
     ? new RelayPoolService(db, relayPolicyService, eventBus, auditService, generalSettingsService)
     : undefined;
   if (relayPoolService) container.registerInstance(RelayPoolService, relayPoolService);
+  relayPoolService?.setTopology(new RelayTopologyService(db));
   if (relayPoolService && relayPolicyService) {
     relayPoolService.setCertificateRenewal(
       new RelayCertificateRenewalService(
