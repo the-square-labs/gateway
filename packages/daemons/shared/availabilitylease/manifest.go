@@ -1,6 +1,7 @@
 package availabilitylease
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"sort"
@@ -9,12 +10,15 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Manifest is a verified per-policy lease manifest (D4).
+// Manifest is a verified per-policy lease manifest (D4) with the policy's own
+// voter set (A18).
 type Manifest struct {
-	block      *pb.LeaseSignedBlock
-	PolicyID   string
-	Version    uint64
+	block    *pb.LeaseSignedBlock
+	PolicyID string
+	Version  uint64
+	// Epoch is the policy's voter epoch; Voters is the voter config of it.
 	Epoch      uint64
+	Voters     *VoterConfig
 	Available  bool
 	Slots      uint32
 	Closed     bool
@@ -53,7 +57,7 @@ func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
 		return nil, errors.New("lease manifest slot count is invalid")
 	}
 	manifest := &Manifest{
-		block: block, PolicyID: value.GetPolicyId(), Version: value.GetManifestVersion(), Epoch: value.GetEpoch(),
+		block: block, PolicyID: value.GetPolicyId(), Version: value.GetManifestVersion(), Epoch: value.GetVoterEpoch(),
 		Available: partition == pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE,
 		Slots:     slots, Closed: value.GetClosed(),
 		rank: map[string]int{}, keys: map[string][]byte{},
@@ -82,6 +86,16 @@ func parseManifest(block *pb.LeaseSignedBlock) (*Manifest, error) {
 		}
 		manifest.Bootstrap[entry.GetSlot()] = entry.GetHolderId()
 	}
+	voters, err := newVoterConfig(manifest.PolicyID, value.GetVoterEpoch(), value.GetMembers(), value.GetQuorumSets(), manifest.Closed)
+	if err != nil {
+		return nil, err
+	}
+	for id, member := range voters.members {
+		if key, ok := manifest.keys[id]; ok && !bytes.Equal(key, member.GetPublicKey()) {
+			return nil, fmt.Errorf("lease member %q has another key than its candidate entry", id)
+		}
+	}
+	manifest.Voters = voters
 	return manifest, nil
 }
 
@@ -90,35 +104,36 @@ func (m *Manifest) isCandidate(id string) bool {
 	return ok
 }
 
-// VoterConfig is a verified cluster voter set. Two quorum sets mean a
-// joint-consensus transition (D2, A4): every quorum needs a majority of each.
+// maxVoters caps a policy's voter set (A18).
+const maxVoters = 7
+
+// VoterConfig is the verified voter set of one policy at one epoch (A18).
+// Two quorum sets mean a joint-consensus change (D2, A4): every quorum needs a
+// majority of each. Members outside every quorum set (relays that are not
+// the witness) only record shadow accepts for the relay gate (A11).
 type VoterConfig struct {
-	block   *pb.LeaseSignedBlock
-	Epoch   uint64
-	members map[string]*pb.LeaseMember
-	sets    [][]string
-	voters  map[string]bool
+	PolicyID string
+	Epoch    uint64
+	members  map[string]*pb.LeaseMember
+	sets     [][]string
+	voters   map[string]bool
 	// memberIDs and relayIDs are sorted so message fan-out is deterministic.
 	memberIDs []string
 	relayIDs  []string
 	voterIDs  []string
 }
 
-func parseVoterConfig(block *pb.LeaseSignedBlock) (*VoterConfig, error) {
-	if block.GetKind() != pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG {
-		return nil, errors.New("lease block is not a voter config")
+func newVoterConfig(policyID string, epoch uint64, members []*pb.LeaseMember, sets []*pb.LeaseQuorumSet, closed bool) (*VoterConfig, error) {
+	config := &VoterConfig{PolicyID: policyID, Epoch: epoch, members: map[string]*pb.LeaseMember{}, voters: map[string]bool{}}
+	if closed && len(sets) == 0 {
+		return config, nil
 	}
-	value := &pb.LeaseVoterConfig{}
-	if err := proto.Unmarshal(block.GetPayload(), value); err != nil {
-		return nil, fmt.Errorf("decode lease voter config: %w", err)
+	if epoch == 0 {
+		return nil, errors.New("lease manifest voter epoch is missing")
 	}
-	if value.GetSchemaVersion() != 1 || value.GetEpoch() == 0 {
-		return nil, errors.New("lease voter config scope is invalid")
-	}
-	config := &VoterConfig{block: block, Epoch: value.GetEpoch(), members: map[string]*pb.LeaseMember{}, voters: map[string]bool{}}
-	for _, member := range value.GetMembers() {
+	for _, member := range members {
 		if member.GetId() == "" || len(member.GetPublicKey()) == 0 {
-			return nil, errors.New("lease voter config member is invalid")
+			return nil, errors.New("lease member is invalid")
 		}
 		if _, exists := config.members[member.GetId()]; exists {
 			return nil, fmt.Errorf("duplicate lease member %q", member.GetId())
@@ -129,10 +144,10 @@ func parseVoterConfig(block *pb.LeaseSignedBlock) (*VoterConfig, error) {
 			config.relayIDs = append(config.relayIDs, member.GetId())
 		}
 	}
-	if n := len(value.GetQuorumSets()); n != 1 && n != 2 {
-		return nil, errors.New("lease voter config needs one quorum set, or two while joint")
+	if n := len(sets); n != 1 && n != 2 {
+		return nil, errors.New("lease voters need one quorum set, or two while joint")
 	}
-	for _, set := range value.GetQuorumSets() {
+	for _, set := range sets {
 		seen := map[string]bool{}
 		for _, id := range set.GetVoterIds() {
 			if config.members[id] == nil || seen[id] {
@@ -141,8 +156,8 @@ func parseVoterConfig(block *pb.LeaseSignedBlock) (*VoterConfig, error) {
 			seen[id] = true
 			config.voters[id] = true
 		}
-		if len(seen) == 0 {
-			return nil, errors.New("lease quorum set is empty")
+		if len(seen) == 0 || len(seen) > maxVoters {
+			return nil, fmt.Errorf("lease quorum set has %d voters, want 1..%d", len(seen), maxVoters)
 		}
 		config.sets = append(config.sets, append([]string(nil), set.GetVoterIds()...))
 	}
@@ -192,6 +207,9 @@ func (c *VoterConfig) isRelay(id string) bool {
 }
 
 func (c *VoterConfig) publicKey(id string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
 	member := c.members[id]
 	if member == nil {
 		return nil, false
