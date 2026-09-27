@@ -1217,6 +1217,7 @@ Environment variables:
   GATEWAY_NODE_TOKEN            Same as --token
   GATEWAY_NODE_CERT_SHA256      Same as --gateway-cert-sha256
   GATEWAY_NODE_DAEMON_VERSION   Same as --version
+  GATEWAY_LEASE_WATCHDOG_VERSION  Lease watchdog release (default: latest)
   GATEWAY_DOCKER_MODE           Same as --mode
   GATEWAY_BUILDER_EGRESS_PROFILE Same as --builder-egress (internet or offline; default: internet)
   GATEWAY_RELEASES_API_URL      Override the Gateway release feed
@@ -1459,6 +1460,9 @@ dry_run_preview() {
     log "Verifying checksum..."
     ok "Checksum verified (dry run)"
     ok "docker-daemon installed (${RESOLVED_DAEMON_VERSION}; dry run)"
+    if [[ "$DOCKER_MODE" == "docker" ]]; then
+        ok "Lease watchdog installed as its own service (dry run)"
+    fi
     if [[ "$DOCKER_MODE" == "builder" ]]; then
         log "Downloading pinned Build Worker runtime components..."
         log "Verifying upstream runtime checksums..."
@@ -1870,6 +1874,117 @@ write_builder_profile_config() {
     ok "Builder docker profile written without Docker Engine access (egress: ${BUILDER_EGRESS_PROFILE})"
 }
 
+# ── Lease watchdog (own component, own unit) ─────────────────────────
+# Docker Availability lease mode needs an independent fence (A2, A12): the
+# watchdog kills a lease-mode container past its deadline without docker-daemon
+# or dockerd. It has its own release line (vX.Y.Z-watchdog), its own binary and
+# its own service unit, so a docker-daemon upgrade, downgrade or removal never
+# disarms it. Without it the node simply stays out of lease mode.
+LEASE_WATCHDOG_BIN="/usr/local/bin/gateway-lease-watchdog"
+LEASE_WATCHDOG_UNIT="gateway-lease-watchdog"
+LEASE_WATCHDOG_VERSION="${GATEWAY_LEASE_WATCHDOG_VERSION:-latest}"
+LEASE_WATCHDOG_INSTALLED=0
+
+install_lease_watchdog() {
+    [[ "$DOCKER_MODE" == "docker" ]] || return 0
+    local artifact="lease-watchdog-linux-${ARCH}"
+    local tag base checksums expected actual current
+    if [[ "$LEASE_WATCHDOG_VERSION" == "latest" ]]; then
+        tag=$(curl -fsSL "${RELEASES_API_URL}?component=lease-watchdog" 2>>"$LOG_FILE" \
+            | grep -o '"tag_name":"v[0-9]*\.[0-9]*\.[0-9]*\(-rc\.[0-9]*\)\{0,1\}-watchdog"' | head -1 | cut -d'"' -f4 || true)
+    else
+        tag="$(normalize_daemon_version "$LEASE_WATCHDOG_VERSION")-watchdog"
+    fi
+    if [[ -z "$tag" ]]; then
+        warn "No lease watchdog release found; Availability lease mode stays unavailable on this node."
+        return 0
+    fi
+    if [[ -x "$LEASE_WATCHDOG_BIN" ]]; then
+        current=$("$LEASE_WATCHDOG_BIN" version 2>/dev/null | awk '{print $2}' || true)
+        if [[ "${current}-watchdog" == "$tag" ]]; then
+            ok "Lease watchdog already installed (${current})"
+            LEASE_WATCHDOG_INSTALLED=1
+            return 0
+        fi
+    fi
+    base="${ARTIFACT_BASE_URL}/lease-watchdog/${tag}"
+    log "Downloading lease watchdog ${tag}..."
+    if ! download_with_progress "${base}/${artifact}" "${LEASE_WATCHDOG_BIN}.tmp"; then
+        rm -f "${LEASE_WATCHDOG_BIN}.tmp"
+        warn "Could not download the lease watchdog; Availability lease mode stays unavailable on this node."
+        return 0
+    fi
+    checksums=$(curl -fsSL "${base}/checksums.txt" 2>>"$LOG_FILE" || true)
+    expected=$(printf '%s\n' "$checksums" | grep " ${artifact}\$" | awk '{print $1}')
+    actual=$(sha256sum "${LEASE_WATCHDOG_BIN}.tmp" | awk '{print $1}')
+    if [[ -z "$expected" || "$expected" != "$actual" ]]; then
+        rm -f "${LEASE_WATCHDOG_BIN}.tmp"
+        die "Lease watchdog checksum verification failed."
+    fi
+    chmod 0755 "${LEASE_WATCHDOG_BIN}.tmp"
+    mv -f "${LEASE_WATCHDOG_BIN}.tmp" "$LEASE_WATCHDOG_BIN"
+    LEASE_WATCHDOG_INSTALLED=1
+    ok "Lease watchdog installed (${tag%-watchdog})"
+}
+
+start_lease_watchdog() {
+    [[ "$DOCKER_MODE" == "docker" && "$LEASE_WATCHDOG_INSTALLED" -eq 1 ]] || return 0
+    # Runs as root: it must kill container processes of any user. The records
+    # directory is owned by the docker-daemon user, which writes the deadlines.
+    local args="run --records-owner ${RUN_USER} --auto-update --releases-url ${RELEASES_API_URL} --artifact-base-url ${ARTIFACT_BASE_URL}"
+    if has_systemd; then
+        cat > "/etc/systemd/system/${LEASE_WATCHDOG_UNIT}.service" <<UNIT
+[Unit]
+Description=Gateway Availability Lease Watchdog
+# Deliberately independent of docker-daemon and docker: it must keep
+# enforcing lease deadlines when either one is stopped, hung or removed.
+After=local-fs.target
+
+[Service]
+Type=simple
+User=root
+ExecStart=${LEASE_WATCHDOG_BIN} ${args}
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+        systemctl daemon-reload >>"$LOG_FILE" 2>&1 || true
+        systemctl enable "$LEASE_WATCHDOG_UNIT" >>"$LOG_FILE" 2>&1 || true
+        if systemctl restart "$LEASE_WATCHDOG_UNIT" >>"$LOG_FILE" 2>&1; then
+            ok "Lease watchdog is running"
+        else
+            warn "Lease watchdog did not start; Availability lease mode stays unavailable on this node."
+        fi
+    elif has_openrc; then
+        cat > "/etc/init.d/${LEASE_WATCHDOG_UNIT}" <<UNIT
+#!/sbin/openrc-run
+name="Gateway Availability Lease Watchdog"
+command="${LEASE_WATCHDOG_BIN}"
+command_args="${args}"
+pidfile="/run/\${RC_SVCNAME}.pid"
+supervisor="supervise-daemon"
+respawn_delay=1
+output_log="/var/log/${LEASE_WATCHDOG_UNIT}.log"
+error_log="/var/log/${LEASE_WATCHDOG_UNIT}.err"
+
+depend() {
+    need localmount
+}
+UNIT
+        chmod +x "/etc/init.d/${LEASE_WATCHDOG_UNIT}"
+        rc-update add "$LEASE_WATCHDOG_UNIT" default >>"$LOG_FILE" 2>&1 || true
+        if rc-service "$LEASE_WATCHDOG_UNIT" restart >>"$LOG_FILE" 2>&1 || rc-service "$LEASE_WATCHDOG_UNIT" start >>"$LOG_FILE" 2>&1; then
+            ok "Lease watchdog is running"
+        else
+            warn "Lease watchdog did not start; Availability lease mode stays unavailable on this node."
+        fi
+    else
+        warn "No service manager for the lease watchdog; Availability lease mode stays unavailable on this node."
+    fi
+}
+
 # ── Step 3: Install and enroll ───────────────────────────────────────
 enroll_daemon() {
     local target="/usr/local/bin/docker-daemon"
@@ -2024,12 +2139,14 @@ UNIT
 # ── Run ──────────────────────────────────────────────────────────────
 create_directories
 install_daemon
+install_lease_watchdog
 install_builder_runtime
 preflight_builder_runtime
 setup_secure_runtime
 enroll_daemon
 write_database_profile_config
 write_builder_profile_config
+start_lease_watchdog
 start_daemon
 
 echo ""

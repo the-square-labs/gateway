@@ -319,6 +319,9 @@ elif [[ "$RELEASE_COMPONENT" == "docker" ]]; then
   publish_daemon docker docker-daemon docker "Docker Daemon" main
 elif [[ "$RELEASE_COMPONENT" == "monitoring" ]]; then
   publish_daemon monitoring monitoring-daemon monitoring "Monitoring Daemon" main
+elif [[ "$RELEASE_COMPONENT" == "watchdog" ]]; then
+  # The lease watchdog is released independently of docker-daemon (A12.5).
+  publish_daemon lease-watchdog lease-watchdog watchdog "Lease Watchdog" main
 else
   printf 'Tag %s is not a supported Gateway release tag\n' "$tag" >&2
   exit 1
