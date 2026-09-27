@@ -13,14 +13,14 @@ func TestForwardAvailabilityLeaseKeepsTheGatewayReportShape(t *testing.T) {
 	report := &relayv1.AvailabilityLeaseReport{
 		MemberId: "relay-1", IdentityPublicKey: []byte{1, 2}, Incarnation: 7, Epoch: 3,
 		TrustedPolicyKeyIds: []string{"k1"}, AcceptorAbstaining: true,
-		Manifests: []*relayv1.AvailabilityLeaseManifestAck{{PolicyId: "p1", ManifestVersion: 4, Closed: true}},
+		Manifests: []*relayv1.AvailabilityLeaseManifestAck{{PolicyId: "p1", ManifestVersion: 4, Closed: true, VoterEpoch: 2, Voter: true, Member: true}},
 		Acceptor: []*relayv1.AvailabilityLeaseKeyView{{
 			PolicyId: "p1", Slot: 1, State: "held", HolderId: "node-a", ReservedFor: "node-b",
 			Promised:  &relayv1.AvailabilityLeaseBallot{Round: 5, Incarnation: 6, ProposerId: "node-a"},
 			Committed: &relayv1.AvailabilityLeaseBallot{Round: 5, Incarnation: 6, ProposerId: "node-a"},
 			Epoch:     3, ManifestVersion: 4, GateOpen: true, GateReason: "relay only", GateRemainingMs: 1000,
 		}},
-		Voter: true, ConnectedMemberIds: []string{"node-a"},
+		ConnectedMemberIds: []string{"node-a"},
 	}
 	forwarded := forwardAvailabilityLease(report, nil)
 	if forwarded.GetMemberId() != "relay-1" || string(forwarded.GetIdentityPublicKey()) != "\x01\x02" || forwarded.GetIncarnation() != 7 ||

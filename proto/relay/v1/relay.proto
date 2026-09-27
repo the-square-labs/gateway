@@ -621,8 +621,11 @@ message AvailabilityLeaseReport {
   // external server certificate key).
   bytes identity_public_key = 2;
   uint64 incarnation = 3;
+  // Voters are per policy (A18): relays leave this 0 and report each
+  // policy's voter epoch in manifests[].voter_epoch.
   uint64 epoch = 4;
   repeated string trusted_policy_key_ids = 5;
+  // One entry per policy manifest the relay holds: the per-policy view.
   repeated AvailabilityLeaseManifestAck manifests = 6;
   // Daemons only; empty on relays.
   repeated AvailabilityLeaseHeld held = 7;
@@ -634,8 +637,7 @@ message AvailabilityLeaseReport {
   repeated AvailabilityLeaseEvent events = 11;
   // Daemons only.
   uint64 lease_revision = 12;
-  // Relay-only: in a quorum set of the current voter config.
-  bool voter = 20;
+  reserved 20;
   repeated string connected_member_ids = 21;
   // Relay-only: last detected host suspend (A17); zero when none.
   int64 last_suspend_unix_ms = 22;
@@ -646,6 +648,12 @@ message AvailabilityLeaseManifestAck {
   string policy_id = 1;
   uint64 manifest_version = 2;
   bool closed = 3;
+  // Relay-only per-policy voter view (A18): the adopted voter epoch (the
+  // per-policy A4 ack), whether this relay is in a quorum set (the policy's
+  // witness) or only a non-voting member keeping shadow accepts.
+  uint64 voter_epoch = 20;
+  bool voter = 21;
+  bool member = 22;
 }
 
 message AvailabilityLeaseHeld {

@@ -5276,11 +5276,14 @@ type AvailabilityLeaseReport struct {
 	MemberId string `protobuf:"bytes,1,opt,name=member_id,json=memberId,proto3" json:"member_id,omitempty"`
 	// PKIX DER ECDSA P-256 public key that signs this relay's frames (the
 	// external server certificate key).
-	IdentityPublicKey   []byte                          `protobuf:"bytes,2,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"`
-	Incarnation         uint64                          `protobuf:"varint,3,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
-	Epoch               uint64                          `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
-	TrustedPolicyKeyIds []string                        `protobuf:"bytes,5,rep,name=trusted_policy_key_ids,json=trustedPolicyKeyIds,proto3" json:"trusted_policy_key_ids,omitempty"`
-	Manifests           []*AvailabilityLeaseManifestAck `protobuf:"bytes,6,rep,name=manifests,proto3" json:"manifests,omitempty"`
+	IdentityPublicKey []byte `protobuf:"bytes,2,opt,name=identity_public_key,json=identityPublicKey,proto3" json:"identity_public_key,omitempty"`
+	Incarnation       uint64 `protobuf:"varint,3,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
+	// Voters are per policy (A18): relays leave this 0 and report each
+	// policy's voter epoch in manifests[].voter_epoch.
+	Epoch               uint64   `protobuf:"varint,4,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	TrustedPolicyKeyIds []string `protobuf:"bytes,5,rep,name=trusted_policy_key_ids,json=trustedPolicyKeyIds,proto3" json:"trusted_policy_key_ids,omitempty"`
+	// One entry per policy manifest the relay holds: the per-policy view.
+	Manifests []*AvailabilityLeaseManifestAck `protobuf:"bytes,6,rep,name=manifests,proto3" json:"manifests,omitempty"`
 	// Daemons only; empty on relays.
 	Held               []*AvailabilityLeaseHeld    `protobuf:"bytes,7,rep,name=held,proto3" json:"held,omitempty"`
 	Acceptor           []*AvailabilityLeaseKeyView `protobuf:"bytes,8,rep,name=acceptor,proto3" json:"acceptor,omitempty"`
@@ -5290,9 +5293,7 @@ type AvailabilityLeaseReport struct {
 	// Daemons only.
 	Events []*AvailabilityLeaseEvent `protobuf:"bytes,11,rep,name=events,proto3" json:"events,omitempty"`
 	// Daemons only.
-	LeaseRevision uint64 `protobuf:"varint,12,opt,name=lease_revision,json=leaseRevision,proto3" json:"lease_revision,omitempty"`
-	// Relay-only: in a quorum set of the current voter config.
-	Voter              bool     `protobuf:"varint,20,opt,name=voter,proto3" json:"voter,omitempty"`
+	LeaseRevision      uint64   `protobuf:"varint,12,opt,name=lease_revision,json=leaseRevision,proto3" json:"lease_revision,omitempty"`
 	ConnectedMemberIds []string `protobuf:"bytes,21,rep,name=connected_member_ids,json=connectedMemberIds,proto3" json:"connected_member_ids,omitempty"`
 	// Relay-only: last detected host suspend (A17); zero when none.
 	LastSuspendUnixMs     int64  `protobuf:"varint,22,opt,name=last_suspend_unix_ms,json=lastSuspendUnixMs,proto3" json:"last_suspend_unix_ms,omitempty"`
@@ -5415,13 +5416,6 @@ func (x *AvailabilityLeaseReport) GetLeaseRevision() uint64 {
 	return 0
 }
 
-func (x *AvailabilityLeaseReport) GetVoter() bool {
-	if x != nil {
-		return x.Voter
-	}
-	return false
-}
-
 func (x *AvailabilityLeaseReport) GetConnectedMemberIds() []string {
 	if x != nil {
 		return x.ConnectedMemberIds
@@ -5448,8 +5442,14 @@ type AvailabilityLeaseManifestAck struct {
 	PolicyId        string                 `protobuf:"bytes,1,opt,name=policy_id,json=policyId,proto3" json:"policy_id,omitempty"`
 	ManifestVersion uint64                 `protobuf:"varint,2,opt,name=manifest_version,json=manifestVersion,proto3" json:"manifest_version,omitempty"`
 	Closed          bool                   `protobuf:"varint,3,opt,name=closed,proto3" json:"closed,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Relay-only per-policy voter view (A18): the adopted voter epoch (the
+	// per-policy A4 ack), whether this relay is in a quorum set (the policy's
+	// witness) or only a non-voting member keeping shadow accepts.
+	VoterEpoch    uint64 `protobuf:"varint,20,opt,name=voter_epoch,json=voterEpoch,proto3" json:"voter_epoch,omitempty"`
+	Voter         bool   `protobuf:"varint,21,opt,name=voter,proto3" json:"voter,omitempty"`
+	Member        bool   `protobuf:"varint,22,opt,name=member,proto3" json:"member,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AvailabilityLeaseManifestAck) Reset() {
@@ -5499,6 +5499,27 @@ func (x *AvailabilityLeaseManifestAck) GetManifestVersion() uint64 {
 func (x *AvailabilityLeaseManifestAck) GetClosed() bool {
 	if x != nil {
 		return x.Closed
+	}
+	return false
+}
+
+func (x *AvailabilityLeaseManifestAck) GetVoterEpoch() uint64 {
+	if x != nil {
+		return x.VoterEpoch
+	}
+	return 0
+}
+
+func (x *AvailabilityLeaseManifestAck) GetVoter() bool {
+	if x != nil {
+		return x.Voter
+	}
+	return false
+}
+
+func (x *AvailabilityLeaseManifestAck) GetMember() bool {
+	if x != nil {
+		return x.Member
 	}
 	return false
 }
@@ -6314,7 +6335,7 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\tholder_id\x18\x05 \x01(\tR\bholderId\x12-\n" +
 	"\x06ballot\x18\x06 \x01(\v2\x15.relay.v1.LeaseBallotR\x06ballot\x12!\n" +
 	"\fremaining_ms\x18\a \x01(\x04R\vremainingMs\x12\x16\n" +
-	"\x06reason\x18\b \x01(\tR\x06reason\"\xf9\x05\n" +
+	"\x06reason\x18\b \x01(\tR\x06reason\"\xe9\x05\n" +
 	"\x17AvailabilityLeaseReport\x12\x1b\n" +
 	"\tmember_id\x18\x01 \x01(\tR\bmemberId\x12.\n" +
 	"\x13identity_public_key\x18\x02 \x01(\fR\x11identityPublicKey\x12 \n" +
@@ -6328,15 +6349,18 @@ const file_relay_v1_relay_proto_rawDesc = "" +
 	"\x0ewatchdog_ready\x18\n" +
 	" \x01(\bR\rwatchdogReady\x128\n" +
 	"\x06events\x18\v \x03(\v2 .relay.v1.AvailabilityLeaseEventR\x06events\x12%\n" +
-	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\x12\x14\n" +
-	"\x05voter\x18\x14 \x01(\bR\x05voter\x120\n" +
+	"\x0elease_revision\x18\f \x01(\x04R\rleaseRevision\x120\n" +
 	"\x14connected_member_ids\x18\x15 \x03(\tR\x12connectedMemberIds\x12/\n" +
 	"\x14last_suspend_unix_ms\x18\x16 \x01(\x03R\x11lastSuspendUnixMs\x127\n" +
-	"\x18last_suspend_duration_ms\x18\x17 \x01(\x04R\x15lastSuspendDurationMs\"~\n" +
+	"\x18last_suspend_duration_ms\x18\x17 \x01(\x04R\x15lastSuspendDurationMsJ\x04\b\x14\x10\x15\"\xcd\x01\n" +
 	"\x1cAvailabilityLeaseManifestAck\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12)\n" +
 	"\x10manifest_version\x18\x02 \x01(\x04R\x0fmanifestVersion\x12\x16\n" +
-	"\x06closed\x18\x03 \x01(\bR\x06closed\"\xae\x02\n" +
+	"\x06closed\x18\x03 \x01(\bR\x06closed\x12\x1f\n" +
+	"\vvoter_epoch\x18\x14 \x01(\x04R\n" +
+	"voterEpoch\x12\x14\n" +
+	"\x05voter\x18\x15 \x01(\bR\x05voter\x12\x16\n" +
+	"\x06member\x18\x16 \x01(\bR\x06member\"\xae\x02\n" +
 	"\x15AvailabilityLeaseHeld\x12\x1b\n" +
 	"\tpolicy_id\x18\x01 \x01(\tR\bpolicyId\x12\x12\n" +
 	"\x04slot\x18\x02 \x01(\rR\x04slot\x12\x12\n" +

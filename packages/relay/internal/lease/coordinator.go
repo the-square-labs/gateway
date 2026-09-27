@@ -120,13 +120,12 @@ func (c *Coordinator) loadSeeds(store availabilitylease.Store) error {
 	for name := range records {
 		names = append(names, name)
 	}
-	// Record names order configs by epoch.
 	sort.Strings(names)
 	for _, name := range names {
 		value := records[name]
 		block := &relayv1.LeaseSignedBlock{}
 		if proto.Unmarshal(value, block) == nil && len(block.GetPayload()) > 0 && len(block.GetSignature()) > 0 &&
-			(block.GetKind() == relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST || block.GetKind() == relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG) {
+			block.GetKind() == relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
 			c.seedBlocks = append(c.seedBlocks, block)
 			continue
 		}
@@ -233,7 +232,8 @@ func (c *Coordinator) ApplyPolicy(snapshot *policy.Snapshot) {
 	c.kick()
 }
 
-// ingest adopts rotation links and blocks into the node and the member view.
+// ingest adopts rotation links and policy manifests (which carry each
+// policy's voters, A18) into the node and the member view.
 // Anyone may forward them: both verify the policy-key signatures (A4, A14).
 func (c *Coordinator) ingest(links []*relayv1.LeasePolicyKeyRotation, blocks []*relayv1.LeaseSignedBlock) bool {
 	pending := links
@@ -250,24 +250,13 @@ func (c *Coordinator) ingest(links []*relayv1.LeasePolicyKeyRotation, blocks []*
 		pending = retry
 	}
 	c.view.adoptLinks(links)
-	ordered := append([]*relayv1.LeaseSignedBlock(nil), blocks...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return ordered[i].GetKind() == relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG &&
-			ordered[j].GetKind() != relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG
-	})
 	changed := false
-	for _, block := range ordered {
-		var err error
-		switch block.GetKind() {
-		case relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG:
-			_, err = c.node.AdoptVoterConfig(block)
-		case relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST:
-			_, err = c.node.AdoptManifest(block)
-		default:
+	for _, block := range blocks {
+		if block.GetKind() != relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST {
 			continue
 		}
-		if err != nil {
-			c.logger.Debug("availability lease block rejected", "error", err)
+		if _, err := c.node.AdoptManifest(block); err != nil {
+			c.logger.Debug("availability lease manifest rejected", "error", err)
 		}
 		if c.view.adoptBlock(block) {
 			changed = true

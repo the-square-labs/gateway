@@ -7,14 +7,16 @@ import (
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
-	"github.com/wiolett-industries/gateway/relay/internal/policy"
 	"google.golang.org/protobuf/proto"
 )
 
-func acquire(t *testing.T, h *harness, id string) {
+func acquire(t *testing.T, h *harness, id string) { acquirePolicy(t, h, policyID, id) }
+
+func acquirePolicy(t *testing.T, h *harness, policy, id string) {
 	t.Helper()
-	if !h.stepUntil(90*time.Second, func() bool { return h.holding(id) && h.relay.Admit(policyID, id).Open }) {
-		t.Fatalf("%s did not acquire with an open relay gate (admission %+v)", id, h.relay.Admit(policyID, id))
+	key := availabilitylease.Key{PolicyID: policy}
+	if !h.stepUntil(90*time.Second, func() bool { return h.daemons[id].HolderStatus(key).Holding && h.relay.Admit(policy, id).Open }) {
+		t.Fatalf("%s did not acquire %s with an open relay gate (admission %+v)", id, policy, h.relay.Admit(policy, id))
 	}
 }
 
@@ -29,7 +31,8 @@ func TestGateOpensOnlyForCommittedHolderAndClosesWhenStale(t *testing.T) {
 	if len(report.GetAcceptor()) != 1 || !report.GetAcceptor()[0].GetGateOpen() || report.GetAcceptor()[0].GetGateHolderId() != "d1" || report.GetAcceptor()[0].GetHolderId() != "d1" {
 		t.Fatalf("acceptor view = %v", report.GetAcceptor())
 	}
-	if !report.GetVoter() || report.GetEpoch() != 1 || len(report.GetManifests()) != 1 || len(report.GetTrustedPolicyKeyIds()) != 1 {
+	acks := report.GetManifests()
+	if len(acks) != 1 || !acks[0].GetVoter() || !acks[0].GetMember() || acks[0].GetVoterEpoch() != 1 || len(report.GetTrustedPolicyKeyIds()) != 1 {
 		t.Fatalf("report = %v", report)
 	}
 
@@ -94,8 +97,8 @@ func TestNonVotingRelayGatesFromShadowAccepts(t *testing.T) {
 	h := newHarness(t, false)
 	h.ready("d1", "d2")
 	acquire(t, h, "d1")
-	if h.relay.Report().GetVoter() {
-		t.Fatal("non-voting relay reports itself as a voter")
+	if acks := h.relay.Report().GetManifests(); len(acks) != 1 || acks[0].GetVoter() || !acks[0].GetMember() {
+		t.Fatalf("non-voting member view = %v", acks)
 	}
 	promises := relayPromises(t, h.relayFrames["d1"])
 	if len(promises) == 0 {
@@ -113,8 +116,8 @@ func TestClosedManifestUsesLegacyAdmissionAndUnknownPolicyStaysClosed(t *testing
 	if admission := h.relay.Admit("unknown-policy", "d1"); !admission.LeaseMode || admission.Open {
 		t.Fatalf("unknown policy admission = %+v", admission)
 	}
-	closed := h.signManifest([]string{"d1", "d2"}, true)
-	h.relay.ApplyPolicy(&policy.Snapshot{LeaseBlocks: []*relayv1.LeaseSignedBlock{h.config, closed}})
+	h.signManifest([]string{"d1", "d2"}, true)
+	h.relay.ApplyPolicy(h.snapshot())
 	if admission := h.relay.Admit(policyID, "d2"); admission.LeaseMode {
 		t.Fatalf("lease-closed policy admission = %+v", admission)
 	}
@@ -138,4 +141,39 @@ func relayPromises(t *testing.T, frames []*relayv1.CoordinationFrame) []*relayv1
 		}
 	}
 	return promises
+}
+
+// A18: the relay votes only for the policy whose manifest makes it the
+// witness; for another policy it is a non-voting member whose shadow accepts
+// still open its gate, and its promises there never count.
+func TestRelayVotesOnlyWhereItIsThePolicyWitness(t *testing.T) {
+	h := newHarness(t, true)
+	h.addPolicy("policy-2", []string{"d2", "d1"}, []string{"v1", "v2", "v3"})
+	h.ready("d1", "d2")
+	acquire(t, h, "d1")
+	acquirePolicy(t, h, "policy-2", "d2")
+	if admission := h.relay.Admit("policy-2", "d1"); admission.Open {
+		t.Fatalf("policy-2 admitted its non-holder: %+v", admission)
+	}
+	shadow := map[string]map[bool]bool{}
+	for _, promise := range relayPromises(t, append(h.relayFrames["d1"], h.relayFrames["d2"]...)) {
+		policy := promise.GetKey().GetPolicyId()
+		if shadow[policy] == nil {
+			shadow[policy] = map[bool]bool{}
+		}
+		shadow[policy][promise.GetShadow()] = true
+	}
+	if !shadow[policyID][false] || shadow[policyID][true] {
+		t.Fatalf("policy-1 promises (witness) = %v", shadow[policyID])
+	}
+	if !shadow["policy-2"][true] || shadow["policy-2"][false] {
+		t.Fatalf("policy-2 promises (non-voting member) = %v", shadow["policy-2"])
+	}
+	acks := map[string]*relayv1.AvailabilityLeaseManifestAck{}
+	for _, ack := range h.relay.Report().GetManifests() {
+		acks[ack.GetPolicyId()] = ack
+	}
+	if !acks[policyID].GetVoter() || acks["policy-2"].GetVoter() || !acks["policy-2"].GetMember() {
+		t.Fatalf("per-policy report = %v", acks)
+	}
 }
