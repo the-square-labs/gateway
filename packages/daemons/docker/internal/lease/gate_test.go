@@ -71,8 +71,12 @@ func TestDaemonVoterPersistsAndAbstainsAfterRestart(t *testing.T) {
 	if w.holderOf() != "d1" {
 		t.Fatal("holder lost its lease across a voter restart")
 	}
+	if len(w.daemon("d1").runtime.Report().Acceptor) != 0 {
+		t.Fatal("a non-voter must not report acceptor views (A18)")
+	}
 	report := d2.runtime.Report()
-	if report.MemberID != "d2" || report.Epoch != 1 || len(report.Manifests) != 1 || len(report.TrustedPolicyKeyIDs) != 1 {
+	if report.MemberID != "d2" || len(report.Manifests) != 1 || report.Manifests[0].VoterEpoch != 1 || len(report.TrustedPolicyKeyIDs) != 1 ||
+		len(report.Acceptor) != 1 || report.Acceptor[0].VoterEpoch != 1 || report.Acceptor[0].Holder != "d1" {
 		t.Fatalf("voter report incomplete: %+v", report)
 	}
 }

@@ -67,19 +67,16 @@ func leasePluginForTest(t *testing.T) *DockerPlugin {
 	plugin.lease = integration
 	public, private, _ := ed25519.GenerateKey(rand.Reader)
 	der, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
-	configPayload, _ := proto.Marshal(&relayv1.LeaseVoterConfig{
-		SchemaVersion: 1, Epoch: 1, QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: []string{"relay-1"}}},
-		Members: []*relayv1.LeaseMember{{Id: "relay-1", PublicKey: der, Role: relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY}},
-	})
 	manifestPayload, _ := proto.Marshal(&relayv1.LeaseManifest{
-		SchemaVersion: 1, PolicyId: "policy-1", ManifestVersion: 1, Slots: 1, Epoch: 1,
+		SchemaVersion: 1, PolicyId: "policy-1", ManifestVersion: 1, Slots: 1, VoterEpoch: 1,
 		Mode: relayv1.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: relayv1.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		Candidates: []*relayv1.LeaseCandidate{{Id: "node-1", PublicKey: der}},
+		Members:    []*relayv1.LeaseMember{{Id: "relay-1", PublicKey: der, Role: relayv1.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY}},
+		QuorumSets: []*relayv1.LeaseQuorumSet{{VoterIds: []string{"relay-1"}}},
 	})
 	err = runtime.ApplyLeaseBlocks(lease.BlockUpdate{
 		MemberID: "node-1", PolicyKeys: []lease.PolicyKey{{ID: "k1", PublicKey: public}},
-		VoterConfig: availabilitylease.SignPolicyBlock("k1", private, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, configPayload),
-		Manifests:   []*relayv1.LeaseSignedBlock{availabilitylease.SignPolicyBlock("k1", private, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, manifestPayload)},
+		Manifests: []*relayv1.LeaseSignedBlock{availabilitylease.SignPolicyBlock("k1", private, relayv1.LeaseBlockKind_LEASE_BLOCK_KIND_MANIFEST, manifestPayload)},
 	})
 	if err != nil || !runtime.LeaseMode("policy-1") {
 		t.Fatalf("lease manifest not adopted: %v", err)

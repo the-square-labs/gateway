@@ -12,21 +12,32 @@ import (
 type Report struct {
 	MemberID            string
 	Incarnation         uint64
-	Epoch               uint64
 	TrustedPolicyKeyIDs []string
 	Manifests           []ManifestAck
 	Held                []Held
-	Acceptor            []availabilitylease.KeyView
-	AcceptorAbstaining  bool
-	WatchdogReady       bool
-	Events              []ReportEvent
-	LeaseRevision       uint64
+	// Acceptor lists keys of the policies whose manifest names this node a
+	// voter (A18); shadow state kept for other policies is not reported.
+	Acceptor           []AcceptorView
+	AcceptorAbstaining bool
+	WatchdogReady      bool
+	Events             []ReportEvent
+	LeaseRevision      uint64
 }
 
 type ManifestAck struct {
 	PolicyID string
 	Version  uint64
-	Closed   bool
+	// VoterEpoch is the policy's persisted voter epoch (A4 ack per policy).
+	VoterEpoch uint64
+	Closed     bool
+}
+
+// AcceptorView is one key this node votes on, with its policy's voter epoch
+// and manifest version.
+type AcceptorView struct {
+	availabilitylease.KeyView
+	VoterEpoch      uint64
+	ManifestVersion uint64
 }
 
 // Held is one key this node proposes for, with the D12 mapping of the lease
@@ -54,11 +65,15 @@ type ReportEvent struct {
 // since the previous report.
 func (r *Runtime) Report() Report {
 	report := Report{
-		MemberID: r.opts.NodeID, Incarnation: r.node.Incarnation(), Epoch: r.node.Epoch(),
+		MemberID: r.opts.NodeID, Incarnation: r.node.Incarnation(),
 		WatchdogReady: r.opts.Fence.HeartbeatFresh(r.opts.Clock.Now()),
 	}
+	voting := map[string]availabilitylease.ManifestInfo{}
 	for _, manifest := range r.node.Manifests() {
-		report.Manifests = append(report.Manifests, ManifestAck{PolicyID: manifest.PolicyID, Version: manifest.Version, Closed: manifest.Closed})
+		report.Manifests = append(report.Manifests, ManifestAck{PolicyID: manifest.PolicyID, Version: manifest.Version, VoterEpoch: manifest.Epoch, Closed: manifest.Closed})
+		if manifest.IsVoter(r.opts.NodeID) {
+			voting[manifest.PolicyID] = manifest
+		}
 	}
 	for _, status := range r.node.Holders() {
 		held := Held{Key: status.Key, Role: status.Role.String(), Ballot: status.Ballot}
@@ -68,8 +83,12 @@ func (r *Runtime) Report() Report {
 		}
 		report.Held = append(report.Held, held)
 	}
-	report.Acceptor = r.node.AcceptorView()
-	for _, view := range report.Acceptor {
+	for _, view := range r.node.AcceptorView() {
+		manifest, votes := voting[view.Key.PolicyID]
+		if !votes {
+			continue
+		}
+		report.Acceptor = append(report.Acceptor, AcceptorView{KeyView: view, VoterEpoch: manifest.Epoch, ManifestVersion: manifest.Version})
 		report.AcceptorAbstaining = report.AcceptorAbstaining || view.Abstaining
 	}
 	report.TrustedPolicyKeyIDs = r.node.TrustedPolicyKeyIDs()

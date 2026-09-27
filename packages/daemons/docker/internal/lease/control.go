@@ -16,7 +16,7 @@ var ErrLeaseNotHeld = errors.New("availability lease is not held by this node")
 // DecodeBlockUpdate turns the opaque serialized relay.v1 messages of T3's
 // SyncAvailabilityLeaseCommand into a BlockUpdate. Nothing is trusted here:
 // signatures are verified when the node adopts the blocks.
-func DecodeBlockUpdate(revision uint64, memberID string, keys []PolicyKey, rotations [][]byte, voterConfig []byte, manifests [][]byte) (BlockUpdate, error) {
+func DecodeBlockUpdate(revision uint64, memberID string, keys []PolicyKey, rotations [][]byte, manifests [][]byte) (BlockUpdate, error) {
 	update := BlockUpdate{Revision: revision, MemberID: memberID, PolicyKeys: keys}
 	for _, data := range rotations {
 		link := &relayv1.LeasePolicyKeyRotation{}
@@ -24,12 +24,6 @@ func DecodeBlockUpdate(revision uint64, memberID string, keys []PolicyKey, rotat
 			return BlockUpdate{}, fmt.Errorf("decode lease key rotation: %w", err)
 		}
 		update.KeyRotations = append(update.KeyRotations, link)
-	}
-	if len(voterConfig) > 0 {
-		update.VoterConfig = &relayv1.LeaseSignedBlock{}
-		if err := proto.Unmarshal(voterConfig, update.VoterConfig); err != nil {
-			return BlockUpdate{}, fmt.Errorf("decode lease voter config: %w", err)
-		}
 	}
 	for _, data := range manifests {
 		block := &relayv1.LeaseSignedBlock{}
@@ -58,11 +52,6 @@ func (r *Runtime) ApplyLeaseBlocks(update BlockUpdate) error {
 	for _, link := range update.KeyRotations {
 		if err := r.node.AdoptKeyRotation(link); err != nil {
 			errs = append(errs, fmt.Errorf("key rotation %s: %w", link.GetKeyId(), err))
-		}
-	}
-	if update.VoterConfig != nil {
-		if _, err := r.node.AdoptVoterConfig(update.VoterConfig); err != nil {
-			errs = append(errs, fmt.Errorf("voter config: %w", err))
 		}
 	}
 	for _, block := range update.Manifests {

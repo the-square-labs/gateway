@@ -66,7 +66,6 @@ type world struct {
 	seq        int
 	log        []string
 	violations []string
-	config     *pb.LeaseSignedBlock
 	manifest   *pb.LeaseSignedBlock
 	manifestV  uint64
 	candidates []string
@@ -113,7 +112,7 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 		h.endpoints = &fakeEndpoints{w: w, host: id, serving: map[string]bool{}}
 		w.daemons = append(w.daemons, h)
 	}
-	w.buildBlocks()
+	w.buildManifest()
 	for _, relay := range w.relays {
 		node, err := availabilitylease.NewNode(availabilitylease.Config{
 			ID: relay.id, Clock: w.clock, Store: availabilitylease.NewMemoryStore(), Transport: w,
@@ -125,9 +124,6 @@ func newWorld(t *testing.T, spec worldSpec) *world {
 		relay.node = node
 		w.byID[relay.id] = relay
 		if err := node.TrustPolicyKey("k1", priv.Public().(ed25519.PublicKey)); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := node.AdoptVoterConfig(w.config); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := node.AdoptManifest(w.manifest); err != nil {
@@ -168,28 +164,10 @@ func (w *world) keyOf(id string) *ecdsa.PrivateKey {
 	return nil
 }
 
-func (w *world) buildBlocks() {
-	config := &pb.LeaseVoterConfig{SchemaVersion: 1, Epoch: 1}
-	members := map[string]bool{}
-	for _, relay := range w.relays {
-		members[relay.id] = true
-		config.Members = append(config.Members, &pb.LeaseMember{Id: relay.id, PublicKey: publicKeyDER(relay.key), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
-	}
-	for _, id := range w.voters {
-		if !members[id] {
-			config.Members = append(config.Members, &pb.LeaseMember{Id: id, PublicKey: publicKeyDER(w.keyOf(id)), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
-		}
-	}
-	config.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: append([]string(nil), w.voters...)}}
-	payload, _ := proto.Marshal(config)
-	w.config = availabilitylease.SignPolicyBlock("k1", w.policyPriv, pb.LeaseBlockKind_LEASE_BLOCK_KIND_VOTER_CONFIG, payload)
-	w.buildManifest()
-}
-
 func (w *world) buildManifest() {
 	w.manifestV++
 	manifest := &pb.LeaseManifest{
-		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: w.slots, Epoch: 1, Closed: w.closed,
+		SchemaVersion: 1, PolicyId: w.policyID, ManifestVersion: w.manifestV, Slots: w.slots, VoterEpoch: 1, Closed: w.closed,
 		Mode: pb.LeasePolicyMode_LEASE_POLICY_MODE_FAILOVER, PartitionMode: pb.LeasePartitionMode_LEASE_PARTITION_MODE_STRICT,
 		LeaseTermMs: 30000,
 	}
@@ -202,6 +180,19 @@ func (w *world) buildManifest() {
 	if w.available {
 		manifest.PartitionMode = pb.LeasePartitionMode_LEASE_PARTITION_MODE_AVAILABLE
 	}
+	// Per-policy voters (A18): every relay is a member (shadow accepts for
+	// its gate); the voters form the policy's single quorum set.
+	members := map[string]bool{}
+	for _, relay := range w.relays {
+		members[relay.id] = true
+		manifest.Members = append(manifest.Members, &pb.LeaseMember{Id: relay.id, PublicKey: publicKeyDER(relay.key), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_RELAY})
+	}
+	for _, id := range w.voters {
+		if !members[id] {
+			manifest.Members = append(manifest.Members, &pb.LeaseMember{Id: id, PublicKey: publicKeyDER(w.keyOf(id)), Role: pb.LeaseMemberRole_LEASE_MEMBER_ROLE_DAEMON})
+		}
+	}
+	manifest.QuorumSets = []*pb.LeaseQuorumSet{{VoterIds: append([]string(nil), w.voters...)}}
 	if w.bootstrap != "" {
 		manifest.BootstrapId = 1
 		manifest.Bootstrap = []*pb.LeaseBootstrapSlot{{Slot: 0, HolderId: w.bootstrap}}
@@ -235,7 +226,7 @@ func (w *world) publishManifest() {
 func (w *world) deliverBlocks(h *daemonHost) {
 	err := h.runtime.ApplyLeaseBlocks(BlockUpdate{
 		Revision: w.manifestV, MemberID: h.id, PolicyKeys: []PolicyKey{{ID: "k1", PublicKey: w.policyPriv.Public().(ed25519.PublicKey)}},
-		VoterConfig: w.config, Manifests: []*pb.LeaseSignedBlock{w.manifest},
+		Manifests: []*pb.LeaseSignedBlock{w.manifest},
 	})
 	if err != nil {
 		w.t.Fatalf("apply blocks on %s: %v", h.id, err)
