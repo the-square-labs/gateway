@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"regexp"
 	"sort"
 	"strings"
@@ -42,6 +43,9 @@ type fakeDockerEngine struct {
 	onStop func(*fakeContainer)
 	// onExec returns the raw attach stream and exit code of an exec.
 	onExec func(ctr *fakeContainer, cmd []string) ([]byte, int)
+	// onStats runs, without the engine lock held, before a one-off stats
+	// sample is answered; Docker itself waits for a second CPU reading.
+	onStats func(*fakeContainer)
 }
 
 type fakeContainer struct {
@@ -55,6 +59,8 @@ type fakeContainer struct {
 	PortBindings  network.PortMap
 	// Files holds file contents by absolute path, served by the archive API.
 	Files map[string]string
+	// Networks holds the container's address on each attached network.
+	Networks map[string]netip.Addr
 }
 
 type fakeExec struct {
@@ -190,6 +196,8 @@ func (e *fakeDockerEngine) serve(w http.ResponseWriter, r *http.Request) {
 		e.createContainer(w, r)
 	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "containers" && parts[2] == "json":
 		e.inspectContainer(w, parts[1])
+	case r.Method == http.MethodGet && len(parts) == 3 && parts[0] == "containers" && parts[2] == "stats":
+		e.containerStats(w, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "start":
 		e.startContainer(w, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "containers" && parts[2] == "stop":
@@ -295,8 +303,26 @@ func (e *fakeDockerEngine) inspectContainer(w http.ResponseWriter, ref string) {
 		},
 		NetworkSettings: &container.NetworkSettings{Networks: map[string]*network.EndpointSettings{}},
 	}
+	for name, address := range ctr.Networks {
+		response.NetworkSettings.Networks[name] = &network.EndpointSettings{IPAddress: address}
+	}
 	e.mu.Unlock()
 	writeFakeJSON(w, http.StatusOK, response)
+}
+
+func (e *fakeDockerEngine) containerStats(w http.ResponseWriter, ref string) {
+	e.mu.Lock()
+	ctr := e.lookupLocked(ref)
+	onStats := e.onStats
+	e.mu.Unlock()
+	if ctr == nil {
+		writeNoSuchContainer(w, ref)
+		return
+	}
+	if onStats != nil {
+		onStats(ctr)
+	}
+	writeFakeJSON(w, http.StatusOK, container.StatsResponse{ID: ctr.ID, Name: "/" + ctr.Name})
 }
 
 func (e *fakeDockerEngine) startContainer(w http.ResponseWriter, ref string) {

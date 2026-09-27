@@ -96,9 +96,12 @@ func (m *managedDatabaseManager) dialRecord(ctx context.Context, managedDatabase
 	if !managedDatabaseIDPattern.MatchString(managedDatabaseID) {
 		return nil, managedDatabaseRecord{}, errors.New("invalid managed database id")
 	}
-	m.mu.Lock()
+	// Without the manager lock: commands hold it for their whole run (a
+	// runtime stats sample takes about two seconds, lifecycle operations much
+	// longer), and every relay connection to every database on the node would
+	// wait behind them. Records are replaced atomically, and the container is
+	// verified live below.
 	record, err := m.loadRecord(managedDatabaseID)
-	m.mu.Unlock()
 	if err != nil || record.ID != managedDatabaseID {
 		return nil, managedDatabaseRecord{}, errors.New("managed database record not found")
 	}

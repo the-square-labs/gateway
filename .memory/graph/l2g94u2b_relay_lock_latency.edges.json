@@ -1,0 +1,25 @@
+{
+  "file_name": "l2g94u2b_relay_lock_latency",
+  "edges": [
+    {
+      "from_id": "l2g94u2b",
+      "to_id": "iois3ul4",
+      "relation": "same_workflow",
+      "weight": 0.93,
+      "reason": "Both document the managed-database relay data path, daemon tunnels, and operational behavior.",
+      "source": "auto",
+      "created_at": 1790524589765,
+      "updated_at": 1790524589765
+    },
+    {
+      "from_id": "l2g94u2b",
+      "to_id": "3ta908aa",
+      "relation": "same_workflow",
+      "weight": 0.88,
+      "reason": "Both concern the relay architecture and managed-database secure-link traffic through gateway daemons.",
+      "source": "auto",
+      "created_at": 1790524589765,
+      "updated_at": 1790524589765
+    }
+  ]
+}

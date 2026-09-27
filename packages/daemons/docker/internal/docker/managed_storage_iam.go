@@ -145,9 +145,10 @@ func (m *managedStorageManager) dial(ctx context.Context, storageID string) (net
 	if !managedStorageIDPattern.MatchString(storageID) {
 		return nil, errors.New("managed storage id must be a UUID")
 	}
-	m.mu.Lock()
+	// Without the manager lock, which commands hold for their whole run: relay
+	// connections must not wait behind a lifecycle operation. Records are
+	// replaced atomically, and privateEndpoint verifies the container live.
 	record, err := m.loadRecord(storageID)
-	m.mu.Unlock()
 	if err != nil || record.Removed {
 		return nil, errors.New("managed storage record not found")
 	}

@@ -382,12 +382,20 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 	if !managedDatabaseIDPattern.MatchString(id) {
 		return "", errors.New("invalid managed database id")
 	}
-	// Certificate reloads wait for the engine without the manager lock.
+	// Certificate reloads wait for the engine without the manager lock, and so
+	// does a stats sample: Docker answers it after a second CPU reading, about
+	// two seconds, which would hold up every other command on the node.
 	switch action {
 	case "reload_tls":
 		return m.handleTLSReload(ctx, id, configJSON)
 	case "probe_tls":
 		return m.handleTLSProbe(ctx, id)
+	case "stats":
+		record, err := m.loadRecord(id)
+		if err != nil {
+			return "", err
+		}
+		return m.runtimeStats(ctx, record)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -523,12 +531,6 @@ func (m *managedDatabaseManager) handle(ctx context.Context, action, id, configJ
 			status = managedDatabaseContainerStatus(inspect.Container.State)
 		}
 		return marshalManagedDatabaseDetail(record, status)
-	case "stats":
-		record, err := m.loadRecord(id)
-		if err != nil {
-			return "", err
-		}
-		return m.runtimeStats(ctx, record)
 	case "clickhouse_principal_apply_v1":
 		var input clickHousePrincipalCommand
 		if err := json.Unmarshal([]byte(configJSON), &input); err != nil {
