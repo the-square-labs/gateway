@@ -17,7 +17,6 @@ const (
 	domainFrame       = "gateway-availability-lease/frame/v1"
 	domainAccept      = "gateway-availability-lease/accept/v1"
 	domainManifest    = "gateway-availability-lease/manifest/v1"
-	domainVoterConfig = "gateway-availability-lease/voter-config/v1"
 	domainKeyRotation = "gateway-availability-lease/key-rotation/v1"
 )
 

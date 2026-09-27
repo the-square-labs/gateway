@@ -176,12 +176,12 @@ func TestR3AcceptorRestartAbstainsAndPersistsBallots(t *testing.T) {
 	if a.node.Incarnation() <= incarnation {
 		t.Fatal("incarnation did not increase on restart")
 	}
-	if a.node.voting(a.local()) {
+	if a.node.voting("p1", a.local()) {
 		t.Fatal("restarted acceptor votes during its abstention window")
 	}
 	restartProcess(w, a, true, 3*time.Second) // relay.db renamed
 	w.runUntil(w.now + 4*time.Second)
-	if a.node.voting(a.local()) {
+	if a.node.voting("p1", a.local()) {
 		t.Fatal("acceptor with fresh state votes during its abstention window")
 	}
 	w.waitHolderIs(t, keyP1, "d2", 120*time.Second)
@@ -204,12 +204,15 @@ func TestR4EpochChangeRejectsStaleProposerAndSpreadsNewerManifest(t *testing.T) 
 			t.Fatalf("holder %s, want d1", holder)
 		}
 		// P (d2) and B never hear from the Gateway again.
-		joint := w.gw.buildConfig([][]string{{"A", "B", "C"}, {"C", "D", "E"}})
+		policy := w.gw.policies["p1"]
+		policy.epoch, policy.sets = 2, [][]string{{"A", "B", "C"}, {"C", "D", "E"}}
+		joint := w.gw.buildManifest(policy)
 		for _, id := range []string{"d1", "A", "C", "D", "E", "r1"} {
 			w.gw.adopt(w.nodes[id], joint)
 		}
 		w.runUntil(w.now + 50*time.Second)
-		settled := w.gw.buildConfig([][]string{{"C", "D", "E"}})
+		policy.epoch, policy.sets = 3, [][]string{{"C", "D", "E"}}
+		settled := w.gw.buildManifest(policy)
 		for _, id := range []string{"d1", "C", "D", "E", "r1"} {
 			w.gw.adopt(w.nodes[id], settled)
 		}
@@ -231,7 +234,7 @@ func TestR4EpochChangeRejectsStaleProposerAndSpreadsNewerManifest(t *testing.T) 
 		if w.now-killed > failoverBudget+2*time.Second {
 			t.Fatalf("failover took %s", w.now-killed)
 		}
-		if w.nodes["d2"].node.Epoch() != w.gw.epoch {
+		if w.nodes["d2"].node.Epoch("p1") != policy.epoch {
 			t.Fatal("successor did not adopt the settled epoch from forwarded blocks")
 		}
 		w.requireClean(t)

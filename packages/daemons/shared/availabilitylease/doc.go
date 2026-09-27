@@ -17,12 +17,23 @@
 // persisted and bumped on every start (A3). Every acquisition and every
 // renewal is a fresh prepare/propose round with a new ballot (A11).
 //
+// Voters are per policy (A18). Every manifest carries its policy's voter
+// set: members (the voters plus every relay serving the policy, with their
+// identity keys), one quorum set (two during a joint-consensus change) and a
+// per-policy voter epoch. There is no cluster-wide voter set. A node that
+// votes for policy A has no vote in policy B: every membership check, QC and
+// gate is evaluated against the key's own policy.
+//
 // One Node per process plays every role it is configured for:
-//   - acceptor, when the node is a member of the voter config. Members in a
-//     quorum set vote; other members (non-voting relays) and voters inside
-//     their restart abstention only record shadow promises and accepts;
-//   - proposer, for every policy whose manifest lists the node as a
-//     candidate and that the daemon marked ready;
+//   - acceptor, per policy, when the policy's manifest lists the node as a
+//     member. Members in a quorum set vote; other members (relays that are
+//     not the witness) and voters inside their restart abstention only record
+//     shadow promises and accepts, which the relay gate uses;
+//   - proposer, for every slot of every policy whose manifest lists the node
+//     as a candidate and that the daemon marked ready. Candidates need not be
+//     voters (A18 cap of 7). A slot the latest manifest removed (scale-down,
+//     lowered surge) gets no new rounds or queries; a holder of it keeps its
+//     deadline until the daemon releases it (A6) or the timer fences it;
 //   - relay gate evaluator (Gate), on relays.
 //
 // # Timing (D5, A1, A3, A11)
@@ -68,16 +79,17 @@
 // Trust and blocks. Call TrustPolicyKey with the Gateway policy signing key
 // received over an authenticated channel (daemon CommandStream; relay
 // verified policy envelope), AdoptKeyRotation for rotation links, and
-// AdoptVoterConfig / AdoptManifest for signed blocks. They return true once
-// the block is durably adopted: that is the "persisted ack" the Gateway
-// waits for (A4). Nodes also adopt newer blocks and rotation links that
+// AdoptManifest for signed manifests, which include the policy's voters. It
+// returns true once the manifest is durably adopted: that is the "persisted
+// ack" the Gateway waits for (A4). A manifest whose voter epoch goes back is
+// rejected. Epoch(policy) and ManifestVersion(policy) report what is adopted. Nodes also adopt newer blocks and rotation links that
 // arrive inside frames, and forward theirs to lagging peers on first
 // contact, on NACKs and on lag reports, so failover never waits for the
 // Gateway (A4, A14).
 //
 // Driving. Hand every frame addressed to this node to ReceiveFrame; it
-// verifies the ECDSA signature against the sender's key from the voter
-// config or the manifest candidates. ErrUnknownSender means the node lacks
+// verifies the ECDSA signature against the sender's key from the members or
+// candidates of any adopted manifest. ErrUnknownSender means the node lacks
 // the blocks that name the sender; it answers with a lag report. Call Tick
 // at NextWakeup (a local clock value) or at least every 250 ms.
 //
@@ -133,32 +145,39 @@
 // own promise, while nothing supersedes it, and for at most GateWindow of
 // local time after that promise. Re-evaluate on every registration and
 // tunnel and at least every second; Until says when it closes. AcceptorView
-// feeds GetHealth. Only relays of operator-owned pools may be voters (A9);
-// that is enforced by the Gateway when it builds the voter config.
+// feeds GetHealth. A relay votes for a policy only when it is that policy's
+// witness; to keep shadow accepts for its gate it must be listed as a member
+// of every policy whose traffic it carries (A18). Only relays of
+// operator-owned pools may be witnesses (A9), enforced by the Gateway.
 //
 // # nginx daemon (T5)
 //
-// An nginx daemon runs a Node like any other member. When the voter config
-// lists it in a quorum set it votes; otherwise it only observes. Socket state
-// comes from the relay gate views it learns, each with a TTL of at most T.
+// nginx daemons are observers only (A18): they are never voters. Socket
+// state comes from the relay gate views they learn, each with a TTL of at
+// most T.
 //
 // # Gateway obligations (T3, T6)
 //
-//   - Sign manifests and voter configs with the relay policy key (Ed25519)
-//     over "gateway-availability-lease/manifest/v1" 0x00 || payload and
-//     "gateway-availability-lease/voter-config/v1" 0x00 || payload. The
-//     domain prefix keeps these signatures apart from policy envelopes,
-//     which the same key signs over raw bytes.
-//   - Voter config: every relay is a member (role RELAY); relays and daemons
-//     in a quorum set vote. An epoch change publishes a joint config (epoch
-//     E+1 with quorum sets old and new), then a settled config (epoch E+2,
-//     new set only) once a majority of both sets acked E+1, every active
-//     lease renewed under E+1, and at least T x 1.1 / 0.9 (37 s) passed
-//     since those acks, so no lease that only a majority of the old set
-//     holds can remain (D2, A4).
+//   - Sign manifests with the relay policy key (Ed25519) over
+//     "gateway-availability-lease/manifest/v1" 0x00 || payload. The domain
+//     prefix keeps these signatures apart from policy envelopes, which the
+//     same key signs over raw bytes.
 //   - Manifest: candidates in rank order with their identity keys, mode,
-//     partition mode, slots, the epoch it was built for, lease_term_ms 0 or
-//     30000. Bump manifest_version on every change.
+//     partition mode, slots, lease_term_ms 0 or 30000, and the policy's
+//     voters (A18, A19, A20): members, quorum_sets, voter_epoch. The voters
+//     are the distinct hosts among the candidates in rank order plus
+//     witness(es) up to an odd count of at least 3, at most 7 per quorum set,
+//     deduplicated by physical host across docker, nginx and relay (the
+//     library only rejects duplicate member ids). Members also list every
+//     relay that serves the policy (role RELAY, outside the quorum sets) so
+//     its gate keeps shadow accepts. Bump manifest_version on every change
+//     and voter_epoch on every voter change; voter_epoch never goes back.
+//   - Voter change (candidate or witness change), per policy: publish a
+//     joint manifest (voter_epoch E+1, quorum sets old and new), then a
+//     settled one (E+2, new set only) once a majority of both sets acked E+1
+//     (Epoch(policy) >= E+1 after AdoptManifest), every active lease of the
+//     policy renewed under E+1, and at least T x 1.1 / 0.9 (37 s) passed
+//     since those acks (D2, A4, A16).
 //   - Bootstrap (A5): name the serving placement per slot with a new
 //     bootstrap_id and keep the entry in every version until that holder
 //     reported acquiring. Also the way to switch available to strict (A7):
@@ -168,10 +187,10 @@
 //     holder acks the close, or a majority of acceptors acked it and
 //     T x 1.1 plus the fence margin passed.
 //   - Key rotation (A14): publish the link signed by the previous key, sign
-//     with the new key only after a majority of voters trust it
-//     (TrustsPolicyKey), then re-sign the current config and manifests with
-//     the new key (same payload) so peers that only trust the new key can
-//     verify forwarded blocks.
+//     with the new key only after a majority of the voters of every policy
+//     trust it (TrustsPolicyKey), then re-sign the current
+//     manifests with the new key (same payload) so peers that only trust the
+//     new key can verify forwarded blocks.
 //
 // # Frames and proto mapping (proto/relay/v1)
 //
@@ -182,7 +201,7 @@
 // inside the signed payload, has a message id for deduplication, and may
 // carry LeaseSignedBlock and LeasePolicyKeyRotation entries. Items:
 //
-//	prepare      proposer -> every member      phase 1, (epoch, manifest version)
+//	prepare      proposer -> policy members    phase 1, (voter epoch, manifest version)
 //	promise      acceptor -> proposer          echo nonce; shadow when not voting
 //	propose      proposer -> each promiser     phase 2, echoes that promise
 //	accepted     acceptor -> proposer          signed accept statement

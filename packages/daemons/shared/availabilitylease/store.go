@@ -22,7 +22,7 @@ type Store interface {
 const (
 	recordIncarnation = "incarnation"
 	recordKeyChain    = "keychain"
-	prefixConfig      = "config/"
+	prefixVoters      = "voters/"
 	prefixManifest    = "manifest/"
 	prefixKey         = "key/"
 	prefixLink        = "link/"

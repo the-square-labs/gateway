@@ -23,7 +23,7 @@ func (n *Node) commitQuorum(commit *pb.LeaseCommit, manifest *Manifest) (bool, e
 	if !ok || manifest == nil || key.PolicyID != manifest.PolicyID {
 		return false, errors.New("lease commit key is invalid")
 	}
-	config := n.configByEpoch(commit.GetEpoch())
+	config := n.configByEpoch(key.PolicyID, commit.GetEpoch())
 	if config == nil {
 		return false, fmt.Errorf("lease commit epoch %d is unknown", commit.GetEpoch())
 	}
@@ -151,7 +151,7 @@ func (n *Node) AcceptorView() []KeyView {
 		state, holder, reserved := n.keyState(ak, n.manifests[key.PolicyID], key, now)
 		views = append(views, KeyView{
 			Key: key, State: state, Holder: holder, ReservedFor: reserved, Promised: ak.promised(),
-			CommitBallot: ak.commitBallot, Abstaining: !n.voting(now),
+			CommitBallot: ak.commitBallot, Abstaining: !n.voting(key.PolicyID, now),
 		})
 	}
 	return views

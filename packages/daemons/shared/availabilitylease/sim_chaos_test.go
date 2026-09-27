@@ -22,13 +22,14 @@ const (
 	faultHealthRelease
 	faultKeyRotation
 	faultRateChange
+	faultSiteOutage
 	faultKinds
 )
 
 var faultNames = [...]string{
 	"partition", "isolate-holder", "loss-burst", "delay-spike", "acceptor-restart", "proposer-restart",
 	"freeze", "host-reboot", "docker-hang", "epoch-change", "manifest-bump", "handoff", "health-release",
-	"key-rotation", "rate-change",
+	"key-rotation", "rate-change", "site-outage",
 }
 
 // scheduleChaos places random faults between 3 s and chaosEnd-5 s. The
@@ -151,7 +152,8 @@ func applyFault(w *simWorld, topo simTopology, kind faultKind) {
 			}
 		})
 	case faultAcceptorRestart:
-		n := w.nodes[w.pick(w.gw.sets[len(w.gw.sets)-1])]
+		policy := w.gw.policies[w.pick(sortedKeys(w.gw.policies))]
+		n := w.nodes[w.pick(policy.sets[len(policy.sets)-1])]
 		wipe := w.rng.Float64() < 0.4
 		restartProcess(w, n, wipe, w.randDuration(500*time.Millisecond, 15*time.Second))
 	case faultProposerRestart:
@@ -179,7 +181,9 @@ func applyFault(w *simWorld, topo simTopology, kind faultKind) {
 		n := w.nodes[w.pick(topo.candidates)]
 		n.hangUntil = w.now + w.randDuration(5*time.Second, 30*time.Second)
 	case faultEpochChange:
-		w.gw.changeVoters(pickVoters(w, len(w.relays)), 0.6)
+		// A witness (or voter) change of one policy, mid-lease (A18).
+		policy := w.gw.policies[w.pick(sortedKeys(w.gw.policies))]
+		w.gw.changeVoters(policy.id, policyVoters(w, policy.candidates), 0.6)
 	case faultManifestBump:
 		policy := w.gw.policies["p1"]
 		if w.rng.Intn(2) == 0 {
@@ -221,6 +225,21 @@ func applyFault(w *simWorld, topo simTopology, kind faultKind) {
 				}
 			})
 		}
+	case faultSiteOutage:
+		// A whole site goes dark: one daemon and one relay together.
+		site := []*simNode{w.nodes[w.pick(w.daemons)], w.nodes[w.pick(w.relays)]}
+		for _, n := range site {
+			if n.hostUp {
+				n.crashHost()
+			}
+		}
+		w.after(w.randDuration(10*time.Second, 60*time.Second), func() {
+			for _, n := range site {
+				if !n.hostUp && !w.chaosOver {
+					n.bootHost()
+				}
+			}
+		})
 	case faultRateChange:
 		n := w.nodes[w.pick(w.ids)]
 		n.setRate(1 - MaxClockDrift + w.rng.Float64()*2*MaxClockDrift)
