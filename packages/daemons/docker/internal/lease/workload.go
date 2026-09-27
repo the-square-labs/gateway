@@ -113,7 +113,7 @@ func (r *Runtime) reconcileLocked(manifest availabilitylease.ManifestInfo, statu
 		// renewal succeeds.
 		r.armRecordsLocked(status, serve, containers)
 		if anyRunning(serve) && wl.phase == phaseIdle {
-			adoptServingLocked(wl, serve, now)
+			adoptServingLocked(wl, serve, now-stableBeforeReady)
 		}
 	case availabilitylease.RoleFencing:
 		r.stopLocked(wl, status, containers, purposeFence)
@@ -176,7 +176,7 @@ func (r *Runtime) serveLocked(wl *workload, status availabilitylease.HolderStatu
 			}
 		}
 		if len(serve) > 0 && len(stopped) == 0 {
-			adoptServingLocked(wl, serve, now)
+			adoptServingLocked(wl, serve, now-stableBeforeReady)
 			return
 		}
 		if len(stopped) > 0 {

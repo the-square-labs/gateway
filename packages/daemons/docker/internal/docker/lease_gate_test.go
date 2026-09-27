@@ -19,6 +19,7 @@ import (
 	pb "github.com/wiolett-industries/gateway/daemon-shared/gatewayv1"
 	"github.com/wiolett-industries/gateway/daemon-shared/leasefence"
 	relayv1 "github.com/wiolett-industries/gateway/daemon-shared/relayv1"
+	"github.com/wiolett-industries/gateway/daemon-shared/securelink"
 	"github.com/wiolett-industries/gateway/docker-daemon/internal/lease"
 	"google.golang.org/protobuf/proto"
 )
@@ -53,7 +54,7 @@ func leasePluginForTest(t *testing.T) *DockerPlugin {
 	t.Helper()
 	plugin := availabilityPluginForTest(t)
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	integration := &leaseIntegration{plugin: plugin, serving: map[string]bool{}, linkPolicies: map[string]string{}}
+	integration := &leaseIntegration{plugin: plugin, serving: map[string]bool{}}
 	runtime, err := lease.New(lease.Options{
 		NodeID: "node-1", StateDir: t.TempDir(), Signer: availabilitylease.ECDSASigner{Key: key},
 		Engine: gateTestEngine{}, Fence: gateTestFence{}, Endpoints: integration, Placements: integration,
@@ -154,7 +155,19 @@ func TestLeaseCreateConfigForcesRestartPolicyNo(t *testing.T) {
 func TestLeaseEndpointGateFollowsServingFlag(t *testing.T) {
 	plugin := leasePluginForTest(t)
 	integration := plugin.lease
-	integration.linkPolicies = map[string]string{"link-lease": "policy-1", "link-legacy": "legacy-policy"}
+	store, err := securelink.NewStateStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// T3 marks availability members, including deployment router targets and
+	// dormant standbys, with availability_policy_id.
+	if err := store.Commit(&pb.SyncProxySecureLinksCommand{Bindings: []*pb.ProxySecureLinkBinding{
+		{LinkId: "link-lease", Role: "target", TargetContainer: "router-1", AvailabilityPolicyId: "policy-1", AvailabilityCandidateId: "node-1", Dormant: true},
+		{LinkId: "link-legacy", Role: "target", TargetContainer: "app", AvailabilityPolicyId: "legacy-policy"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	plugin.secureLinkState = store
 	if integration.endpointAllowed("link-lease") {
 		t.Fatal("a lease-mode endpoint must not register before this node serves it (D8)")
 	}

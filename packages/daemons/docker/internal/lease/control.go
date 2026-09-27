@@ -79,6 +79,16 @@ func (r *Runtime) ApplyLeaseBlocks(update BlockUpdate) error {
 	return errors.Join(errs...)
 }
 
+// BootstrapPending reports whether this node is the named initial holder of
+// a slot of the policy and has not acquired it yet (A5).
+func (r *Runtime) BootstrapPending(policyID string) bool {
+	manifest, ok := r.node.ManifestInfo(policyID)
+	if !ok {
+		return false
+	}
+	return r.bootstrapPendingLocked(manifest)
+}
+
 // LeaseMode reports whether the policy runs under a lease manifest that is
 // not closed.
 func (r *Runtime) LeaseMode(policyID string) bool { return r.node.LeaseMode(policyID) }

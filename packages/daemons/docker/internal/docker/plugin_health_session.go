@@ -11,6 +11,9 @@ func (p *DockerPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
 		return base
 	}
 	base.DockerVersion = p.version
+	// Lease state goes first: it must reach the Gateway even when Docker
+	// itself does not answer.
+	base.AvailabilityLease = p.availabilityLeaseReport()
 	if p.storageManager != nil {
 		mount, err := p.storageManager.storageRootHealthMount()
 		if err != nil {

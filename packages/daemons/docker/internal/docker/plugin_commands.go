@@ -109,6 +109,12 @@ func (p *DockerPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 	case *pb.GatewayCommand_DockerAvailability:
 		p.handleAvailabilityCommand(payload.DockerAvailability, result)
 
+	case *pb.GatewayCommand_SyncAvailabilityLease:
+		p.handleAvailabilityLeaseSync(payload.SyncAvailabilityLease, result)
+
+	case *pb.GatewayCommand_AvailabilityLeaseHandoff:
+		p.handleAvailabilityLeaseHandoff(payload.AvailabilityLeaseHandoff, result)
+
 	case *pb.GatewayCommand_DockerExec:
 		p.handleExecCommand(payload.DockerExec, result)
 

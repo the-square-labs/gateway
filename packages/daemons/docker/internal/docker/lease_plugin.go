@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"os"
@@ -34,9 +35,12 @@ type leaseIntegration struct {
 	fence   lease.DirFence
 	cancel  context.CancelFunc
 
-	mu           sync.Mutex
-	serving      map[string]bool
-	linkPolicies map[string]string
+	// identity returns the PKIX DER public key that signs lease frames,
+	// for AvailabilityLeaseReport.identity_public_key.
+	identity func() []byte
+
+	mu      sync.Mutex
+	serving map[string]bool
 }
 
 // initAvailabilityLease starts the lease runtime on a general Docker node.
@@ -59,7 +63,7 @@ func (p *DockerPlugin) initAvailabilityLease() {
 	}
 	integration := &leaseIntegration{
 		plugin: p, fence: lease.DirFence{Dir: leasefence.Dir{Root: root}},
-		serving: map[string]bool{}, linkPolicies: map[string]string{},
+		identity: signer.publicKeyDER, serving: map[string]bool{},
 	}
 	runtime, err := lease.New(lease.Options{
 		NodeID: stored.NodeID, StateDir: p.cfg.StateDir, Signer: signer,
@@ -105,7 +109,13 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	l.mu.Lock()
 	l.serving[policyID] = serving
 	l.mu.Unlock()
-	l.refreshLinkPolicies()
+	if serving && l.plugin.secureLinks != nil {
+		// A dormant target binding could not be prepared while its standby
+		// was stopped; bind it now that the container runs.
+		if err := l.plugin.secureLinks.restoreBindingsCoalesced(true); err != nil {
+			l.plugin.logger.Warn("secure-link restore before serving failed", "policy_id", policyID, "error", err)
+		}
+	}
 	closed := l.plugin.reconcileRelayRegistrations()
 	if serving {
 		return
@@ -122,54 +132,39 @@ func (l *leaseIntegration) SetServing(policyID string, serving bool) {
 	}
 }
 
-// endpointAllowed is the registration gate (D8, A8): a Secure Link endpoint
-// of a lease-mode policy registers only while this node serves it.
+// endpointAllowed is the registration gate (D8, A8): the Secure Link
+// endpoint of an availability member (T3's binding availability_policy_id,
+// set for serving and dormant members alike, deployment routers included)
+// registers only while this node serves the policy's lease. Links of
+// policies outside lease mode keep today's behavior.
 func (l *leaseIntegration) endpointAllowed(linkID string) bool {
 	if l == nil || l.runtime == nil {
 		return true
 	}
-	l.mu.Lock()
-	policyID := l.linkPolicies[linkID]
-	serving := l.serving[policyID]
-	l.mu.Unlock()
+	policyID := l.linkPolicy(linkID)
 	if policyID == "" || !l.runtime.LeaseMode(policyID) {
 		return true
 	}
-	return serving
-}
-
-// refreshLinkPolicies maps Secure Link ids to availability policies through
-// the target container labels. Integration point: once T3's
-// ProxySecureLinkBinding.availability_policy_id lands, use it directly.
-func (l *leaseIntegration) refreshLinkPolicies() {
-	p := l.plugin
-	if p.secureLinkState == nil || p.client == nil {
-		return
-	}
-	bindings := p.secureLinkState.Get().GetBindings()
-	if len(bindings) == 0 {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	containers, err := p.client.ListContainers(ctx)
-	if err != nil {
-		return
-	}
-	labels := map[string]map[string]string{}
-	for _, c := range containers {
-		labels[c.Name] = c.Labels
-		labels[c.ID] = c.Labels
-	}
-	next := map[string]string{}
-	for _, binding := range bindings {
-		if binding.GetRole() == "target" {
-			next[binding.GetLinkId()] = labels[binding.GetTargetContainer()][availabilityPolicyLabel]
-		}
+	// The named bootstrap holder keeps its legacy registration until its
+	// first commit; relays admit it the same way (A5, T2).
+	if l.runtime.BootstrapPending(policyID) {
+		return true
 	}
 	l.mu.Lock()
-	l.linkPolicies = next
-	l.mu.Unlock()
+	defer l.mu.Unlock()
+	return l.serving[policyID]
+}
+
+func (l *leaseIntegration) linkPolicy(linkID string) string {
+	if l.plugin.secureLinkState == nil {
+		return ""
+	}
+	for _, binding := range l.plugin.secureLinkState.Get().GetBindings() {
+		if binding.GetLinkId() == linkID && binding.GetRole() == "target" {
+			return binding.GetAvailabilityPolicyId()
+		}
+	}
+	return ""
 }
 
 // Local implements lease.Placements from the persisted availability state.
@@ -248,6 +243,18 @@ func (s *identityKeySigner) current() (crypto.Signer, error) {
 	}
 	s.key, s.modTime = key, info.ModTime()
 	return key, nil
+}
+
+func (s *identityKeySigner) publicKeyDER() []byte {
+	key, err := s.current()
+	if err != nil {
+		return nil
+	}
+	der, err := x509.MarshalPKIXPublicKey(key.Public())
+	if err != nil {
+		return nil
+	}
+	return der
 }
 
 func (s *identityKeySigner) Sign(message []byte) ([]byte, error) {

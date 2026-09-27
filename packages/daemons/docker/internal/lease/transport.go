@@ -13,10 +13,6 @@ import (
 	"google.golang.org/grpc"
 )
 
-// CoordinateMethod is T2's relay RPC:
-// service TunnelBroker { rpc Coordinate(stream CoordinationFrame) returns (stream CoordinationFrame); }
-const CoordinateMethod = "/relay.v1.TunnelBroker/Coordinate"
-
 // maxRelaysPerFrame is how many relay streams carry a frame to a daemon (D3).
 const maxRelaysPerFrame = 2
 
@@ -33,15 +29,10 @@ type FrameStream interface {
 	CloseSend() error
 }
 
-// OpenCoordinateStream opens the Coordinate RPC on an existing relay
-// connection. It is wire-compatible with T2's generated client and works
-// before relayv1 regains a generated Coordinate method.
+// OpenCoordinateStream opens T2's TunnelBroker.Coordinate stream on an
+// existing relay connection (the daemon's mTLS identity is the sender).
 func OpenCoordinateStream(ctx context.Context, conn grpc.ClientConnInterface) (FrameStream, error) {
-	stream, err := conn.NewStream(ctx, &grpc.StreamDesc{StreamName: "Coordinate", ServerStreams: true, ClientStreams: true}, CoordinateMethod)
-	if err != nil {
-		return nil, err
-	}
-	return &grpc.GenericClientStream[relayv1.CoordinationFrame, relayv1.CoordinationFrame]{ClientStream: stream}, nil
+	return relayv1.NewTunnelBrokerClient(conn).Coordinate(ctx)
 }
 
 // RelayTransport sends lease frames over every relay transport the daemon

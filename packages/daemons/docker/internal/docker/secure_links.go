@@ -150,21 +150,11 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
-	desiredNetworks := map[string]struct{}{}
-	resolved := make([]resolvedSecureLinkTarget, 0, len(bindings))
-	for _, binding := range bindings {
-		targetIP, networkName, err := m.resolveTarget(
-			ctx,
-			binding.TargetContainer,
-			binding.TargetNetwork,
-			binding.TargetHost,
-			binding.AllowNetworkReselection,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("resolve secure-link %s: %w", binding.LinkId, err)
-		}
-		desiredNetworks[networkName] = struct{}{}
-		resolved = append(resolved, resolvedSecureLinkTarget{binding: binding, host: targetIP, network: networkName})
+	resolved, desiredNetworks, err := resolveSecureLinkTargets(bindings, func(binding *pb.ProxySecureLinkBinding) (string, string, error) {
+		return m.resolveTarget(ctx, binding.TargetContainer, binding.TargetNetwork, binding.TargetHost, binding.AllowNetworkReselection)
+	})
+	if err != nil {
+		return nil, err
 	}
 	// Resolve and validate the complete target set before the write-ahead save,
 	// so an invalid command cannot poison restart recovery for existing links.
@@ -219,7 +209,7 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 		}
 		statuses = append(statuses, dockerSecureLinkStatus{LinkID: status.ID, Generation: status.Generation, Port: status.Port, TargetNetwork: target.network})
 	}
-	if len(next) != len(bindings) {
+	if len(next) != len(resolved) {
 		m.failClosed(context.Background())
 		return nil, errors.New("secure-link connector returned an incomplete binding set")
 	}
@@ -245,6 +235,30 @@ func (m *dockerSecureLinkManager) syncWithPersistence(
 	}
 	sort.Slice(statuses, func(i, j int) bool { return statuses[i].LinkID < statuses[j].LinkID })
 	return statuses, nil
+}
+
+// resolveSecureLinkTargets resolves every target binding. A dormant
+// availability member targets a created, stopped standby (D7): it is left
+// out of the connector, stays in the committed state, and is bound by the
+// restore that runs once this node serves the lease.
+func resolveSecureLinkTargets(
+	bindings []*pb.ProxySecureLinkBinding,
+	resolve func(*pb.ProxySecureLinkBinding) (string, string, error),
+) ([]resolvedSecureLinkTarget, map[string]struct{}, error) {
+	networks := map[string]struct{}{}
+	resolved := make([]resolvedSecureLinkTarget, 0, len(bindings))
+	for _, binding := range bindings {
+		host, network, err := resolve(binding)
+		if err != nil {
+			if binding.GetDormant() && errors.Is(err, errSecureLinkTargetUnavailable) {
+				continue
+			}
+			return nil, nil, fmt.Errorf("resolve secure-link %s: %w", binding.LinkId, err)
+		}
+		networks[network] = struct{}{}
+		resolved = append(resolved, resolvedSecureLinkTarget{binding: binding, host: host, network: network})
+	}
+	return resolved, networks, nil
 }
 
 func allowedSecureLinkConnectorImage(image string) bool {
@@ -629,7 +643,7 @@ func (p *DockerPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksComm
 		return "", err
 	}
 	if p.lease != nil {
-		p.lease.refreshLinkPolicies()
+		// Lease-gated links may have appeared or changed policy.
 		p.reconcileRelayRegistrations()
 	}
 	detail, err := json.Marshal(map[string]any{"bindings": statuses})
@@ -646,7 +660,9 @@ func normalizeResolvedTargetBindings(
 		networks[target.binding.LinkId] = target.network
 	}
 	for _, binding := range normalized.Bindings {
-		binding.TargetNetwork = networks[binding.LinkId]
+		if network, ok := networks[binding.LinkId]; ok {
+			binding.TargetNetwork = network
+		}
 		binding.TargetHost = ""
 	}
 	return normalized
