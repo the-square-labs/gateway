@@ -14,8 +14,12 @@ import (
 )
 
 const (
-	Audience  = "wiolett-relay"
-	MaxTTL    = 48 * time.Hour
+	Audience = "wiolett-relay"
+	// MaxTTL is the longest grant lifetime this relay build accepts. Gateway only
+	// issues a grant this long to a relay instance that advertised
+	// policy.LongLeaseCapability; otherwise it keeps issuing the legacy 48-hour
+	// grants an older relay still enforces.
+	MaxTTL    = 240 * time.Hour
 	ClockSkew = 5 * time.Minute
 )
 

@@ -21,7 +21,12 @@ import (
 )
 
 const (
-	PolicyLease       = 15 * time.Minute
+	// MaxPolicyLease is the longest lease this relay build accepts between a
+	// policy envelope's issuedAt and expiresAt. Gateway normally issues shorter
+	// leases (see the relayPolicyLeaseHours setting); this is only the cap a
+	// relay enforces so a compromised or misconfigured signer cannot mint one
+	// that outlives it by an unbounded amount.
+	MaxPolicyLease    = 7 * 24 * time.Hour
 	IssuedAtClockSkew = 5 * time.Minute
 	// LeaseExpiryClockSkew lets a relay whose clock runs ahead of Gateway keep a
 	// lease Gateway still considers current. It only delays how long a relay
@@ -32,6 +37,12 @@ const (
 	// TrustResetCapability tells Gateway that this local relay implements
 	// ResetLocalPolicyTrust, so a trust lockout can be repaired without an operator.
 	TrustResetCapability = "policy_trust_reset_v1"
+	// LongLeaseCapability tells Gateway that this relay build accepts a policy
+	// lease up to MaxPolicyLease and a grant up to grant.MaxTTL, instead of the
+	// legacy 15-minute lease / 48-hour grant caps. Gateway must not issue the
+	// longer lease or grant to a relay that does not advertise it, or an older
+	// relay instance rejects the envelope outright.
+	LongLeaseCapability = "policy_long_lease_v1"
 )
 
 var (
@@ -494,7 +505,7 @@ func (s *Store) normalizeSignedPayload(payload *relayv1.PolicyEnvelopePayload, d
 	}
 	issuedAt, expiresAt := time.Unix(payload.IssuedAtUnix, 0), time.Unix(payload.ExpiresAtUnix, 0)
 	now := s.now()
-	if expiresAt.Sub(issuedAt) <= 0 || expiresAt.Sub(issuedAt) > PolicyLease {
+	if expiresAt.Sub(issuedAt) <= 0 || expiresAt.Sub(issuedAt) > MaxPolicyLease {
 		return nil, nil, fmt.Errorf("policy envelope lease is invalid")
 	}
 	// A reload checks neither end of the lease: a relay whose clock starts
