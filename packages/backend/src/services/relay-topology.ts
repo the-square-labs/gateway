@@ -22,9 +22,10 @@ export interface EndpointLatencyPath {
 }
 
 /**
- * The primary group has its own hysteresis. A relay joins it within both 20% and 3 ms of the
- * group's anchor cost, and leaves it only beyond 35% or 6 ms; in between it keeps the role it
- * has, so a relay whose cost wobbles across one line never flips and never restarts the settle.
+ * The primary group has its own hysteresis. A relay joins it within 20% or 3 ms of the group's
+ * anchor cost, so relays in one data center share the load even at sub-millisecond costs, and
+ * leaves it only beyond both 35% and 6 ms; in between it keeps the role it has, so a relay whose
+ * cost wobbles across one line never flips and never restarts the settle.
  */
 const PRIMARY_ENTER_RATIO = 1.2;
 const PRIMARY_ENTER_MS = 3;
@@ -95,11 +96,11 @@ export function relayPathCost(path: EndpointLatencyPath, instanceId: string): nu
 }
 
 function entersPrimaryGroup(cost: number, anchor: number): boolean {
-  return cost <= anchor * PRIMARY_ENTER_RATIO && cost <= anchor + PRIMARY_ENTER_MS;
+  return cost <= anchor * PRIMARY_ENTER_RATIO || cost <= anchor + PRIMARY_ENTER_MS;
 }
 
 function leavesPrimaryGroup(cost: number, anchor: number): boolean {
-  return cost > anchor * PRIMARY_LEAVE_RATIO || cost > anchor + PRIMARY_LEAVE_MS;
+  return cost > anchor * PRIMARY_LEAVE_RATIO && cost > anchor + PRIMARY_LEAVE_MS;
 }
 
 /**

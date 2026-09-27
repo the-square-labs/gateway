@@ -20,7 +20,7 @@ const pool = [nearA, nearB, far, farther];
 
 /** Endpoint and source both sit next to near-a and near-b. */
 function path(overrides: Record<string, number> = {}): EndpointLatencyPath {
-  const rtts = { 'near-a': 0.8, 'near-b': 0.9, far: 18, farther: 35, ...overrides };
+  const rtts = { 'near-a': 0.4, 'near-b': 0.9, far: 18, farther: 35, ...overrides };
   return { endpoint: new Map(Object.entries(rtts)), sources: [new Map(Object.entries(rtts))] };
 }
 
@@ -63,55 +63,61 @@ describe('relay placement by network distance', () => {
     expect(plan(chooseRelayAssignments(ENDPOINT, pool, 1, path()))).toEqual(['near-a:primary']);
   });
 
-  it('lets a relay join the primaries only within both 20% and 3 ms of the best', () => {
-    const pair = [nearA, nearB];
-    // 20 ms against 23 ms: within both.
-    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 11.5 })))).toEqual([
+  it('makes two relays in one data center both primary at sub-millisecond costs', () => {
+    // 0.8 ms against 1.8 ms: more than 20% apart, but within 3 ms.
+    expect(plan(chooseRelayAssignments(ENDPOINT, [nearA, nearB, far], 2, path()))).toEqual([
       'near-a:primary',
       'near-b:primary',
     ]);
-    // 1 ms against 2 ms: within 3 ms, but twice the cost.
-    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 0.5, 'near-b': 1 })))).toEqual([
-      'near-a:primary',
-      'near-b:fallback',
-    ]);
-    // 60 ms against 70 ms: within 20%, but 10 ms slower.
-    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 30, 'near-b': 35 })))).toEqual([
-      'near-a:primary',
-      'near-b:fallback',
-    ]);
   });
 
-  it('keeps a primary until it is beyond 35% or 6 ms of the best', () => {
+  it('lets a relay join the primaries within 20% or 3 ms of the best', () => {
+    const pair = [nearA, nearB];
+    const joined = (nearAms: number, nearBms: number) =>
+      plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': nearAms, 'near-b': nearBms })));
+    // 1 ms against 2 ms: twice the cost, but within 3 ms.
+    expect(joined(0.5, 1)).toEqual(['near-a:primary', 'near-b:primary']);
+    // 60 ms against 70 ms: 10 ms slower, but within 20%.
+    expect(joined(30, 35)).toEqual(['near-a:primary', 'near-b:primary']);
+    // 20 ms against 30 ms: outside both.
+    expect(joined(10, 15)).toEqual(['near-a:primary', 'near-b:fallback']);
+  });
+
+  it('keeps a primary until it is beyond both 35% and 6 ms of the best', () => {
     const pair = [nearA, nearB];
     const both = [
       { relayInstanceId: 'near-a', role: 'primary' },
       { relayInstanceId: 'near-b', role: 'primary' },
     ];
-    // 20 ms against 26 ms: past the joining line, inside the leaving one.
-    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 13 }), both))).toEqual([
-      'near-a:primary',
-      'near-b:primary',
-    ]);
-    // 20 ms against 28 ms: 40% slower.
-    expect(plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': 10, 'near-b': 14 }), both))).toEqual([
-      'near-a:primary',
-      'near-b:fallback',
-    ]);
+    const kept = (nearAms: number, nearBms: number) =>
+      plan(chooseRelayAssignments(ENDPOINT, pair, 2, path({ 'near-a': nearAms, 'near-b': nearBms }), both));
+    // 20 ms against 26 ms: past the joining lines, inside the leaving ones.
+    expect(kept(10, 13)).toEqual(['near-a:primary', 'near-b:primary']);
+    // 1 ms against 6.5 ms: far beyond 35%, but within 6 ms.
+    expect(kept(0.5, 3.25)).toEqual(['near-a:primary', 'near-b:primary']);
+    // 20 ms against 28 ms: beyond both.
+    expect(kept(10, 14)).toEqual(['near-a:primary', 'near-b:fallback']);
   });
 
-  it('never changes the roles of a placed endpoint for a cost wobbling across the 20% line', () => {
+  it('never changes the roles of a placed endpoint for a cost wobbling across the joining line', () => {
     const pair = [nearA, nearB];
-    // near-a costs 20 ms; near-b alternates between 23.8 ms and 24.6 ms around the 24 ms line.
-    for (const nearBRole of ['primary', 'fallback']) {
-      const active = [
-        { relayInstanceId: 'near-a', role: 'primary' },
-        { relayInstanceId: 'near-b', role: nearBRole },
-      ];
-      for (let round = 0; round < 8; round += 1) {
-        const measured = path({ 'near-a': 10, 'near-b': round % 2 ? 12.3 : 11.9 });
-        const planned = chooseRelayAssignments(ENDPOINT, pair, 2, measured, active);
-        expect(samePlannedAssignments(active, planned)).toBe(true);
+    // near-a at 20 ms with near-b around the 24 ms (20%) line; near-a at 0.8 ms with near-b around
+    // the 3.8 ms (+3 ms) line.
+    const scenarios = [
+      { nearA: 10, below: 11.9, above: 12.3 },
+      { nearA: 0.4, below: 1.85, above: 1.95 },
+    ];
+    for (const { nearA: nearAms, below, above } of scenarios) {
+      for (const nearBRole of ['primary', 'fallback']) {
+        const active = [
+          { relayInstanceId: 'near-a', role: 'primary' },
+          { relayInstanceId: 'near-b', role: nearBRole },
+        ];
+        for (let round = 0; round < 8; round += 1) {
+          const measured = path({ 'near-a': nearAms, 'near-b': round % 2 ? above : below });
+          const planned = chooseRelayAssignments(ENDPOINT, pair, 2, measured, active);
+          expect(samePlannedAssignments(active, planned)).toBe(true);
+        }
       }
     }
   });

@@ -973,9 +973,9 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     const { pool, policy } = service(queuedDb(rows).db);
     (policy as any).poolIncapableEndpointIds = vi.fn().mockResolvedValue(new Set());
     let round = 0;
-    // near-b alternates across the line 20% above near-a on every reconciliation.
+    // near-b alternates across the joining line (near-a + 3 ms) on every reconciliation.
     const endpointPaths = vi.fn(async () => {
-      const nearB = round++ % 2 ? 12.3 : 11.9;
+      const nearB = round++ % 2 ? 13.1 : 12.9;
       const endpoint = new Map([
         ['near-a', 10],
         ['near-b', nearB],
