@@ -1,6 +1,7 @@
 package lease
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
@@ -39,8 +40,9 @@ type viewManifest struct {
 	slots      uint32
 	closed     bool
 	candidates map[string]bool
-	members    map[string]bool
-	voters     map[string]bool
+	// members maps each member id to its listed PKIX DER identity key.
+	members map[string][]byte
+	voters  map[string]bool
 }
 
 func newMemberView() *memberView {
@@ -131,13 +133,13 @@ func (v *memberView) adoptManifestLocked(payload []byte) bool {
 	}
 	manifest := viewManifest{
 		version: value.GetManifestVersion(), voterEpoch: value.GetVoterEpoch(), slots: value.GetSlots(), closed: value.GetClosed(),
-		candidates: map[string]bool{}, members: map[string]bool{}, voters: map[string]bool{},
+		candidates: map[string]bool{}, members: map[string][]byte{}, voters: map[string]bool{},
 	}
 	for _, candidate := range value.GetCandidates() {
 		manifest.candidates[candidate.GetId()] = true
 	}
 	for _, member := range value.GetMembers() {
-		manifest.members[member.GetId()] = true
+		manifest.members[member.GetId()] = append([]byte(nil), member.GetPublicKey()...)
 	}
 	for _, set := range value.GetQuorumSets() {
 		for _, id := range set.GetVoterIds() {
@@ -157,7 +159,28 @@ func (v *memberView) authorized(id string) bool {
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	for _, manifest := range v.manifests {
-		if manifest.candidates[id] || manifest.members[id] {
+		if _, member := manifest.members[id]; member || manifest.candidates[id] {
+			return true
+		}
+	}
+	return false
+}
+
+// memberKey returns the identity key a policy's manifest lists for id.
+func (v *memberView) memberKey(policyID, id string) ([]byte, bool) {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	key, ok := v.manifests[policyID].members[id]
+	return key, ok
+}
+
+// listsOtherKey reports whether an open manifest names id with a key other
+// than key: peers holding it still verify id against the older key.
+func (v *memberView) listsOtherKey(id string, key []byte) bool {
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	for _, manifest := range v.manifests {
+		if listed, ok := manifest.members[id]; ok && !manifest.closed && !bytes.Equal(listed, key) {
 			return true
 		}
 	}

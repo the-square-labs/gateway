@@ -90,6 +90,9 @@ func New(cfg Config) (*Coordinator, error) {
 		logger: cfg.Logger.With("component", "availability_lease"), view: newMemberView(),
 		streams: map[string][]*memberStream{}, notify: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 	}
+	if signer, ok := cfg.Signer.(*IdentitySigner); ok {
+		signer.bind(c.view, cfg.Wall)
+	}
 	if err := c.loadSeeds(cfg.Store); err != nil {
 		return nil, err
 	}

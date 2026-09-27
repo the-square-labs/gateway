@@ -181,7 +181,7 @@ func startLease(cfg config.Config, state *policy.Store, identityStore *identity.
 		slog.Error("availability lease state unavailable; lease coordination disabled", "error", err)
 		return nil
 	}
-	signer := lease.IdentitySigner{Identity: identityStore}
+	signer := lease.NewIdentitySigner(cfg.InstanceID, lease.StoreKeys{Identity: identityStore})
 	coordinator, err := lease.New(lease.Config{
 		ID: cfg.InstanceID, Store: leaseState, Signer: signer, PublicKey: signer.PublicKey,
 		TrustedKeys: state.TrustedPolicyKeys, Logger: slog.Default(),

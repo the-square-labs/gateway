@@ -137,7 +137,7 @@ func (c *Coordinator) Report() *relayv1.AvailabilityLeaseReport {
 			manifest, _ := c.view.manifest(policyID)
 			report.Manifests = append(report.Manifests, &relayv1.AvailabilityLeaseManifestAck{
 				PolicyId: policyID, ManifestVersion: version, Closed: !c.node.LeaseMode(policyID),
-				VoterEpoch: c.node.Epoch(policyID), Voter: manifest.voters[c.id], Member: manifest.members[c.id],
+				VoterEpoch: c.node.Epoch(policyID), Voter: manifest.voters[c.id], Member: manifest.members[c.id] != nil,
 			})
 		}
 	}
