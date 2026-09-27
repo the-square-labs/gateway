@@ -63,6 +63,17 @@ type sourceLinkBinding struct {
 	activeMu   sync.Mutex
 	active     map[net.Conn]bool
 	socketOnly bool
+
+	// Availability data-plane lease (D8, A8): a lease-gated binding's Unix
+	// socket listens only while a relay gate view says availabilityCandidateID
+	// holds the lease for availabilityPolicyID. leaseMu guards toggling unix
+	// independently of the accept-loop bookkeeping above.
+	leaseMu                 sync.Mutex
+	leaseGated              bool
+	leaseOpen               bool
+	availabilityPolicyID    string
+	availabilityCandidateID string
+	dormant                 bool
 }
 
 type sourceLinkStatus struct {
@@ -230,6 +241,7 @@ func (m *sourceLinkManager) sync(command *pb.SyncProxySecureLinksCommand) ([]sou
 			created.listener = listener
 			created.socketOnly = false
 		}
+		applyLeaseMetadata(created, binding)
 		staged[id] = created
 	}
 	type publishedRotation struct {
@@ -432,59 +444,60 @@ func (m *sourceLinkManager) createAtPath(
 			return nil, err
 		}
 	}
-	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
-		if listener != nil {
-			_ = listener.Close()
-		}
-		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
-	}
-	if err := removeExistingSocket(socketPath); err != nil {
-		if listener != nil {
-			_ = listener.Close()
-		}
-		return nil, err
-	}
-	unixListener, err := net.Listen("unix", socketPath)
+	unixListener, err := m.listenUnixSocket(socketPath)
 	if err != nil {
 		if listener != nil {
 			_ = listener.Close()
 		}
-		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", id, err)
-	}
-	ownerUID, err := m.socketOwnerUID()
-	if err != nil {
-		_ = unixListener.Close()
-		if listener != nil {
-			_ = listener.Close()
-		}
-		_ = os.Remove(socketPath)
-		return nil, fmt.Errorf("resolve managed nginx worker uid: %w", err)
-	}
-	if err := os.Chown(socketPath, ownerUID, -1); err != nil {
-		_ = unixListener.Close()
-		if listener != nil {
-			_ = listener.Close()
-		}
-		_ = os.Remove(socketPath)
-		return nil, fmt.Errorf("set proxy secure-link socket owner: %w", err)
-	}
-	if err := os.Chmod(socketPath, 0o600); err != nil {
-		_ = unixListener.Close()
-		if listener != nil {
-			_ = listener.Close()
-		}
-		_ = os.Remove(socketPath)
 		return nil, err
 	}
 	binding := &sourceLinkBinding{generation: generation, listener: listener, unix: unixListener, socketPath: socketPath, done: make(chan struct{}), active: map[net.Conn]bool{}, socketOnly: socketOnly}
 	return binding, nil
 }
 
+// listenUnixSocket creates the authenticated Unix listener at socketPath,
+// owned by the managed nginx worker. It is shared by binding creation and by
+// reopening a lease-gated binding's socket once its candidate holds the
+// lease (D8, A8).
+func (m *sourceLinkManager) listenUnixSocket(socketPath string) (net.Listener, error) {
+	if err := os.MkdirAll(m.socketDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create proxy secure-link socket directory: %w", err)
+	}
+	if err := removeExistingSocket(socketPath); err != nil {
+		return nil, err
+	}
+	unixListener, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, fmt.Errorf("listen on proxy secure-link socket %s: %w", socketPath, err)
+	}
+	ownerUID, err := m.socketOwnerUID()
+	if err != nil {
+		_ = unixListener.Close()
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("resolve managed nginx worker uid: %w", err)
+	}
+	if err := os.Chown(socketPath, ownerUID, -1); err != nil {
+		_ = unixListener.Close()
+		_ = os.Remove(socketPath)
+		return nil, fmt.Errorf("set proxy secure-link socket owner: %w", err)
+	}
+	if err := os.Chmod(socketPath, 0o600); err != nil {
+		_ = unixListener.Close()
+		_ = os.Remove(socketPath)
+		return nil, err
+	}
+	return unixListener, nil
+}
+
 func (m *sourceLinkManager) start(id string, binding *sourceLinkBinding) {
 	if binding.listener != nil {
 		m.accept(id, binding, binding.listener, false)
 	}
-	m.accept(id, binding, binding.unix, true)
+	// A lease-gated binding starts with its Unix socket closed (D8, A8): it is
+	// opened later, once a relay gate view says its candidate holds the lease.
+	if binding.unix != nil {
+		m.accept(id, binding, binding.unix, true)
+	}
 }
 
 func (m *sourceLinkManager) accept(id string, binding *sourceLinkBinding, listener net.Listener, authorizePeer bool) {
@@ -534,11 +547,13 @@ func (b *sourceLinkBinding) closeBinding(removeSocketPath bool) {
 	case <-b.done:
 		return
 	default:
-		close(b.done)
+close(b.done)
 		if b.listener != nil {
 			_ = b.listener.Close()
 		}
-		_ = b.unix.Close()
+		if b.unix != nil {
+			_ = b.unix.Close()
+		}
 		if removeSocketPath {
 			_ = os.Remove(b.socketPath)
 		}
@@ -655,6 +670,12 @@ func (p *NginxPlugin) SyncProxySecureLinks(command *pb.SyncProxySecureLinksComma
 		_, _ = p.secureLinks.sync(&pb.SyncProxySecureLinksCommand{})
 		return "", err
 	}
+	if p.availabilityLease != nil {
+		// New or resynced availability members already have a lease-gated
+		// binding at this point; open ones whose candidate already holds the
+		// lease without waiting for the next periodic sweep (D8, A8).
+		p.availabilityLease.reconcileSockets()
+	}
 	detail, err := json.Marshal(map[string]any{"bindings": statuses})
 	return string(detail), err
 }
@@ -747,6 +768,9 @@ func (p *NginxPlugin) RunRelayTargetTunnels(ctx context.Context, conn *grpc.Clie
 	p.relayTunnels = append(p.relayTunnels, tunnel)
 	p.relayTunnelMu.Unlock()
 	p.logger.Debug("proxy secure-link relay lane ready")
+	if p.availabilityLease != nil {
+		go p.availabilityLease.runForTarget(ctx, conn, relayInstanceID)
+	}
 	<-ctx.Done()
 	p.relayTunnelMu.Lock()
 	for index, candidate := range p.relayTunnels {

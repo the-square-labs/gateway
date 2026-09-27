@@ -3,6 +3,7 @@ package daemon
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -39,6 +40,7 @@ type NginxPlugin struct {
 	secureLinks                 *sourceLinkManager
 	registryLinks               *sourceLinkManager
 	secureLinkState             *securelink.StateStore
+	availabilityLease           *availabilityLeaseCoordinator
 	pagesRuntime                *pages.Runtime
 	pagesV1Available            bool
 	pagesRuntimeConfigAvailable bool
@@ -60,6 +62,7 @@ type NginxPlugin struct {
 var _ lifecycle.ProxySecureLinkPlugin = (*NginxPlugin)(nil)
 var _ lifecycle.ProxySecureLinkProbePlugin = (*NginxPlugin)(nil)
 var _ lifecycle.PagesRouteProbePlugin = (*NginxPlugin)(nil)
+var _ lifecycle.ShutdownPlugin = (*NginxPlugin)(nil)
 
 func secureLinkProxyPassPattern(linkID string, port int) *regexp.Regexp {
 	portPattern := `[0-9]+`
@@ -148,6 +151,8 @@ func (p *NginxPlugin) Init(baseCfg *lifecycle.BaseConfig, logger *slog.Logger) e
 	if err != nil {
 		return fmt.Errorf("initialize proxy secure-link state: %w", err)
 	}
+	p.availabilityLease = newAvailabilityLeaseCoordinator(baseCfg.StateDir, p.secureLinks, logger)
+	p.availabilityLease.start()
 	p.pagesRuntime, err = pages.New(p.cfg.Nginx.PagesRoot, p.cfg.Nginx.ConfigDir, p.cfg.Nginx.CertsDir, p.mgr)
 	if err != nil {
 		logger.Warn("Gateway Pages runtime is unavailable; Pages capability is disabled", "error", err)
@@ -298,6 +303,12 @@ func (p *NginxPlugin) BuildRegisterMessage(nodeID string) *pb.RegisterMessage {
 
 	configVersionHash := p.state.GetExtraString("config_version_hash")
 
+	if p.availabilityLease != nil {
+		if err := p.availabilityLease.ensureNode(nodeID, p.baseCfg.TLS.ClientCert, p.baseCfg.TLS.ClientKey); err != nil {
+			p.logger.Warn("availability lease coordination is unavailable", "error", err)
+		}
+	}
+
 	return &pb.RegisterMessage{
 		NodeId:             nodeID,
 		Hostname:           hostname,
@@ -327,11 +338,44 @@ func (p *NginxPlugin) HandleCommand(cmd *pb.GatewayCommand) *pb.CommandResult {
 		}
 		return result
 	}
+	if payload, ok := cmd.Payload.(*pb.GatewayCommand_SyncAvailabilityLease); ok {
+		result := &pb.CommandResult{CommandId: cmd.CommandId, Success: true}
+		detail, err := p.SyncAvailabilityLease(payload.SyncAvailabilityLease)
+		if err != nil {
+			result.Success = false
+			result.Error = err.Error()
+		} else {
+			result.Detail = detail
+		}
+		return result
+	}
 	return p.handler.HandleCommand(cmd)
 }
 
+// SyncAvailabilityLease adopts policy keys, key rotations, the voter config
+// and every policy manifest carried by GatewayCommand 75 (T3's contract).
+func (p *NginxPlugin) SyncAvailabilityLease(command *pb.SyncAvailabilityLeaseCommand) (string, error) {
+	if p.availabilityLease == nil {
+		return "", errors.New("availability lease coordination is unavailable")
+	}
+	return p.availabilityLease.apply(command)
+}
+
 func (p *NginxPlugin) CollectHealth(base *pb.HealthReport) *pb.HealthReport {
-	return p.reporter.CollectHealth(base)
+	report := p.reporter.CollectHealth(base)
+	if p.availabilityLease != nil {
+		if lease := p.availabilityLease.buildReport(); lease != nil {
+			report.AvailabilityLease = lease
+		}
+	}
+	return report
+}
+
+// Shutdown stops the availability-lease coordinator's background loops.
+func (p *NginxPlugin) Shutdown() {
+	if p.availabilityLease != nil {
+		p.availabilityLease.close()
+	}
 }
 
 func (p *NginxPlugin) CollectStats() *pb.StatsReport {
@@ -351,6 +395,9 @@ func (p *NginxPlugin) capabilities() []string {
 		if p.pagesV1Available {
 			capabilities = append(capabilities, "nginx_pages_reconcile_v1")
 		}
+	}
+	if p.availabilityLease != nil && p.availabilityLease.ready() {
+		capabilities = append(capabilities, availabilityLeaseCapability)
 	}
 	return capabilities
 }
