@@ -9,6 +9,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { useRealtime } from "@/hooks/use-realtime";
 import { api } from "@/services/api";
 import type { DockerAvailabilityPolicy, DockerAvailabilityResource } from "@/types";
+import { AvailabilityLeaseSummaryRows } from "./AvailabilityLeaseSummaryRows";
 import { AvailabilityOperationsPanel } from "./AvailabilityOperationsPanel";
 import { AvailabilityPrioritySummaryRows } from "./AvailabilityPrioritySummaryRows";
 import { resolveAvailabilitySurfaceStatus } from "./availability-status";
@@ -153,6 +154,7 @@ export function AvailabilitySummary({
             value={stopped ? "Stopped" : `${serving || (mode === "single" ? 1 : 0)}/${desired}`}
           />
           {policy && !stopped ? <AvailabilityPrioritySummaryRows policy={policy} /> : null}
+          {policy && !stopped ? <AvailabilityLeaseSummaryRows policy={policy} /> : null}
           <DetailRow
             label="Placement health"
             value={stopped ? "Stopped" : unhealthy > 0 ? `${unhealthy} need attention` : "Healthy"}

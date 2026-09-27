@@ -92,4 +92,30 @@ describe("Availability public preview consent", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Enable Tech Preview" }));
     await waitFor(() => expect(api.enableDockerAvailability).toHaveBeenCalledOnce());
   });
+
+  it("warns about double copies when available mode is turned on, and wires it through enable", async () => {
+    render(
+      <AvailabilitySection
+        resource={{ type: "deployment", deploymentId: "deployment-1" }}
+        canManage
+      />
+    );
+    await screen.findByText("Tech Preview");
+    expect(
+      screen.queryByText(/may briefly run two copies during a network split/i)
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Enable Availability" }));
+    fireEvent.click(screen.getByRole("button", { name: "Allow available mode" }));
+    expect(
+      screen.getByText(/may briefly run two copies during a network split/i)
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Enable Tech Preview" }));
+    await waitFor(() => expect(api.enableDockerAvailability).toHaveBeenCalledOnce());
+    expect(api.enableDockerAvailability).toHaveBeenCalledWith(
+      expect.objectContaining({ partitionMode: "available" })
+    );
+  });
 });
