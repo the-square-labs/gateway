@@ -696,3 +696,17 @@ func TestAcceptTunnelEndsWhenOpenerLeavesBeforeBridging(t *testing.T) {
 		t.Fatal("accept stream stayed open after the opener left")
 	}
 }
+
+func TestIncomingTunnelNamesTheAdmittedRoute(t *testing.T) {
+	deadline := time.Unix(1_700_000_000, 0)
+	session := &activeTunnel{routeID: "route-1", routeGeneration: 3, sourceKind: "daemon", sourceID: "node-source", assignmentGeneration: 7}
+	incoming := incomingTunnel("session-1", "token-1", deadline, session)
+	if incoming.SessionId != "session-1" || incoming.AcceptToken != "token-1" || incoming.AcceptExpiresAtUnix != deadline.Unix() {
+		t.Fatalf("incoming tunnel = %+v", incoming)
+	}
+	route := incoming.GetRoute()
+	if route.GetRouteId() != "route-1" || route.GetRouteGeneration() != 3 || route.GetSourceKind() != "daemon" ||
+		route.GetSourceId() != "node-source" || route.GetAssignmentGeneration() != 7 {
+		t.Fatalf("incoming route = %+v", route)
+	}
+}

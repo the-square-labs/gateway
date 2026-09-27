@@ -161,7 +161,7 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	deadline := time.Now().Add(AcceptTimeout)
 	timer := time.NewTimer(time.Until(deadline))
 	defer timer.Stop()
-	incoming := &relayv1.IncomingTunnel{SessionId: sessionID, AcceptToken: token, AcceptExpiresAtUnix: deadline.Unix()}
+	incoming := incomingTunnel(sessionID, token, deadline, session)
 	select {
 	case registration.incoming <- incoming:
 	case <-registration.stop:
@@ -195,6 +195,18 @@ func (b *Broker) OpenTunnel(stream relayv1.TunnelBroker_OpenTunnelServer) (resul
 	bridgeErr := bridge(stream, accepted.stream, frameLimit, session.stop, route.DisableIdleTimeout, trafficClass == admission.TrafficClassProxy, metrics)
 	accepted.result <- bridgeErr
 	return bridgeErr
+}
+
+// incomingTunnel names the route the tunnel was admitted for, so an endpoint
+// can refuse a route Gateway revoked while this relay missed that policy.
+func incomingTunnel(sessionID, token string, deadline time.Time, session *activeTunnel) *relayv1.IncomingTunnel {
+	return &relayv1.IncomingTunnel{
+		SessionId: sessionID, AcceptToken: token, AcceptExpiresAtUnix: deadline.Unix(),
+		Route: &relayv1.IncomingTunnelRoute{
+			RouteId: session.routeID, RouteGeneration: session.routeGeneration, SourceKind: session.sourceKind,
+			SourceId: session.sourceID, AssignmentGeneration: session.assignmentGeneration,
+		},
+	}
 }
 
 func routeTrafficClass(route *relayv1.RoutePolicy) string {
