@@ -4,29 +4,22 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
-	"encoding/binary"
-	"errors"
 	"time"
 
 	"github.com/wiolett-industries/gateway/daemon-shared/availabilitylease"
 	"github.com/wiolett-industries/gateway/relay/internal/identity"
 )
 
-// KeyOverlap bounds how long the relay keeps signing with its previous
-// identity key after a certificate renewal changed the key (H3).
-const KeyOverlap = 24 * time.Hour
-
-const domainAccept = "gateway-availability-lease/accept/v1"
-
-// IdentityKeys yields the relay's identity keys: the current external server
-// certificate key and, after a renewal replaced it, the previous one with the
-// time the current certificate became valid.
+// IdentityKeys yields the relay's lease identity keys: the current external
+// server certificate key (ECDSA P-256, the identity daemons verify the relay
+// by) and, after a renewal replaced it, the previous one with the time the
+// current certificate became valid.
 type IdentityKeys interface {
 	Keys() (current, previous crypto.Signer, renewedAt time.Time)
 }
 
 // StoreKeys reads the keys from the relay identity store. The previous key is
-// the retained external-server.previous.* pair, which also survives restarts.
+// the retained external-server.previous.* pair, so it survives restarts.
 type StoreKeys struct {
 	Identity *identity.Store
 }
@@ -48,89 +41,44 @@ func (k StoreKeys) Keys() (crypto.Signer, crypto.Signer, time.Time) {
 	return current, previous, renewedAt
 }
 
-// IdentitySigner signs lease frames and accept statements with the relay's
-// identity (ECDSA P-256). After a renewal changed the key, peers verify the
-// relay against the key their adopted manifests list, so the relay keeps the
-// previous key while any open manifest naming it still lists that key, for at
-// most KeyOverlap (H3):
-//   - an accept statement is signed with the key its own policy's manifest
-//     lists for the relay, so QCs verify under that manifest;
-//   - a frame is signed with every key in use (SignAll), the previous key
-//     first, so a peer holding either manifest version verifies it.
-type IdentitySigner struct {
-	ID   string
-	Keys IdentityKeys
-	// view tells which keys the adopted manifests list for this relay.
-	view *memberView
-	wall func() time.Time
+// initialSigner picks the key the lease node starts with. Within
+// IdentityKeyOverlap of a renewal that changed the key, it is the previous
+// key, and the caller rotates to the current one so the node dual-signs until
+// every manifest naming the relay lists the new key (H3). The node keeps the
+// overlap in memory only, so this restores it after a restart.
+func initialSigner(keys IdentityKeys, now time.Time) (start crypto.Signer, rotateTo crypto.Signer) {
+	current, previous, renewedAt := keys.Keys()
+	if current == nil || previous == nil {
+		return current, nil
+	}
+	if bytes.Equal(publicKeyDER(previous), publicKeyDER(current)) ||
+		(!renewedAt.IsZero() && !now.Before(renewedAt.Add(availabilitylease.IdentityKeyOverlap))) {
+		return current, nil
+	}
+	return previous, current
 }
 
-// NewIdentitySigner builds the relay signer. The coordinator attaches its
-// member view with bind before the first signature.
-func NewIdentitySigner(id string, keys IdentityKeys) *IdentitySigner {
-	return &IdentitySigner{ID: id, Keys: keys, wall: time.Now}
-}
-
-func (s *IdentitySigner) bind(view *memberView, wall func() time.Time) {
-	s.view, s.wall = view, wall
-}
-
-// signingKeys returns the keys to sign with, primary first.
-func (s *IdentitySigner) signingKeys(message []byte) ([]crypto.Signer, error) {
-	current, previous, renewedAt := s.Keys.Keys()
-	if current == nil {
-		return nil, errors.New("relay identity key cannot sign")
+// checkIdentityKey rotates the node to a renewed identity key as soon as the
+// relay serves it; the node then dual-signs frames and accepts with the
+// previous key until every adopted manifest naming the relay lists the new
+// key, or for IdentityKeyOverlap (H3).
+func (c *Coordinator) checkIdentityKey() {
+	current, _, _ := c.keys.Keys()
+	encoded := publicKeyDER(current)
+	c.mu.Lock()
+	changed := encoded != nil && !bytes.Equal(encoded, c.identityKey)
+	if changed {
+		c.identityKey = encoded
 	}
-	previousDER := publicKeyDER(previous)
-	currentDER := publicKeyDER(current)
-	if previous == nil || previousDER == nil || bytes.Equal(previousDER, currentDER) || s.view == nil ||
-		(!renewedAt.IsZero() && !s.wall().Before(renewedAt.Add(KeyOverlap))) {
-		return []crypto.Signer{current}, nil
+	c.mu.Unlock()
+	if !changed {
+		return
 	}
-	if policyID, ok := acceptPolicy(message); ok {
-		if listed, found := s.view.memberKey(policyID, s.ID); found && bytes.Equal(listed, previousDER) {
-			return []crypto.Signer{previous}, nil
-		}
-		return []crypto.Signer{current}, nil
+	if err := c.node.RotateIdentityKey(availabilitylease.ECDSASigner{Key: current}, encoded); err != nil {
+		c.logger.Error("availability lease identity key rotation failed", "error", err)
+		return
 	}
-	if s.view.listsOtherKey(s.ID, currentDER) {
-		return []crypto.Signer{previous, current}, nil
-	}
-	return []crypto.Signer{current}, nil
-}
-
-// Sign signs with the primary key: the previous one while open manifests
-// still list it, else the current one.
-func (s *IdentitySigner) Sign(message []byte) ([]byte, error) {
-	keys, err := s.signingKeys(message)
-	if err != nil {
-		return nil, err
-	}
-	return availabilitylease.ECDSASigner{Key: keys[0]}.Sign(message)
-}
-
-// SignAll signs with every key in use, primary first.
-func (s *IdentitySigner) SignAll(message []byte) ([][]byte, error) {
-	keys, err := s.signingKeys(message)
-	if err != nil {
-		return nil, err
-	}
-	signatures := make([][]byte, 0, len(keys))
-	for _, key := range keys {
-		signature, err := availabilitylease.ECDSASigner{Key: key}.Sign(message)
-		if err != nil {
-			return nil, err
-		}
-		signatures = append(signatures, signature)
-	}
-	return signatures, nil
-}
-
-// PublicKey returns the PKIX DER current public key, reported to Gateway as
-// the relay's lease identity key so it publishes it in the next manifests.
-func (s *IdentitySigner) PublicKey() []byte {
-	current, _, _ := s.Keys.Keys()
-	return publicKeyDER(current)
+	c.logger.Info("availability lease identity key renewed; signing with the previous key too until manifests list the new one")
 }
 
 func publicKeyDER(key crypto.Signer) []byte {
@@ -142,19 +90,4 @@ func publicKeyDER(key crypto.Signer) []byte {
 		return nil
 	}
 	return encoded
-}
-
-// acceptPolicy extracts the policy id of an accept statement (doc.go wire
-// contract: domain 0x00 str(policy_id) ...).
-func acceptPolicy(message []byte) (string, bool) {
-	prefix := append([]byte(domainAccept), 0)
-	if !bytes.HasPrefix(message, prefix) || len(message) < len(prefix)+4 {
-		return "", false
-	}
-	rest := message[len(prefix):]
-	size := binary.BigEndian.Uint32(rest)
-	if uint64(len(rest)-4) < uint64(size) {
-		return "", false
-	}
-	return string(rest[4 : 4+size]), true
 }

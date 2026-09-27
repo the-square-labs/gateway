@@ -1,7 +1,6 @@
 package lease
 
 import (
-	"bytes"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
@@ -160,27 +159,6 @@ func (v *memberView) authorized(id string) bool {
 	defer v.mu.RUnlock()
 	for _, manifest := range v.manifests {
 		if _, member := manifest.members[id]; member || manifest.candidates[id] {
-			return true
-		}
-	}
-	return false
-}
-
-// memberKey returns the identity key a policy's manifest lists for id.
-func (v *memberView) memberKey(policyID, id string) ([]byte, bool) {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	key, ok := v.manifests[policyID].members[id]
-	return key, ok
-}
-
-// listsOtherKey reports whether an open manifest names id with a key other
-// than key: peers holding it still verify id against the older key.
-func (v *memberView) listsOtherKey(id string, key []byte) bool {
-	v.mu.RLock()
-	defer v.mu.RUnlock()
-	for _, manifest := range v.manifests {
-		if listed, ok := manifest.members[id]; ok && !manifest.closed && !bytes.Equal(listed, key) {
 			return true
 		}
 	}

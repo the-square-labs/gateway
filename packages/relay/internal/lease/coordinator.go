@@ -23,11 +23,10 @@ const tickCeiling = 250 * time.Millisecond
 
 type Config struct {
 	// ID is this relay's lease member id: its relay instance id.
-	ID     string
-	Store  availabilitylease.Store
-	Signer availabilitylease.Signer
-	// PublicKey returns the PKIX DER public key of Signer, for the report.
-	PublicKey func() []byte
+	ID    string
+	Store availabilitylease.Store
+	// Keys yields the relay identity keys that sign frames and accepts.
+	Keys IdentityKeys
 	// TrustedKeys returns the policy signing keys the relay pins, oldest first.
 	TrustedKeys func() []policy.TrustedPolicyKey
 	Clock       availabilitylease.Clock
@@ -41,7 +40,7 @@ type Coordinator struct {
 	node        *availabilitylease.Node
 	clock       availabilitylease.Clock
 	wall        func() time.Time
-	publicKey   func() []byte
+	keys        IdentityKeys
 	trustedKeys func() []policy.TrustedPolicyKey
 	logger      *slog.Logger
 	view        *memberView
@@ -61,6 +60,8 @@ type Coordinator struct {
 	lastSuspendWall time.Time
 	lastSuspend     time.Duration
 	enforce         func() time.Duration
+	// identityKey is the PKIX DER key the node signs with (the current one).
+	identityKey []byte
 
 	notify chan struct{}
 	stop   chan struct{}
@@ -70,8 +71,8 @@ type Coordinator struct {
 // New loads the acceptor state, bumps and persists the incarnation and starts
 // the restart abstention window (A3).
 func New(cfg Config) (*Coordinator, error) {
-	if cfg.ID == "" || cfg.Store == nil || cfg.Signer == nil || cfg.TrustedKeys == nil {
-		return nil, errors.New("availability lease coordinator needs an id, a store, a signer and trusted keys")
+	if cfg.ID == "" || cfg.Store == nil || cfg.Keys == nil || cfg.TrustedKeys == nil {
+		return nil, errors.New("availability lease coordinator needs an id, a store, identity keys and trusted keys")
 	}
 	if cfg.Clock == nil {
 		cfg.Clock = availabilitylease.SystemClock()
@@ -82,22 +83,20 @@ func New(cfg Config) (*Coordinator, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
-	if cfg.PublicKey == nil {
-		cfg.PublicKey = func() []byte { return nil }
-	}
 	c := &Coordinator{
-		id: cfg.ID, clock: cfg.Clock, wall: cfg.Wall, publicKey: cfg.PublicKey, trustedKeys: cfg.TrustedKeys,
+		id: cfg.ID, clock: cfg.Clock, wall: cfg.Wall, keys: cfg.Keys, trustedKeys: cfg.TrustedKeys,
 		logger: cfg.Logger.With("component", "availability_lease"), view: newMemberView(),
 		streams: map[string][]*memberStream{}, notify: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{}),
 	}
-	if signer, ok := cfg.Signer.(*IdentitySigner); ok {
-		signer.bind(c.view, cfg.Wall)
+	start, rotateTo := initialSigner(cfg.Keys, cfg.Wall())
+	if start == nil {
+		return nil, errors.New("relay identity key cannot sign")
 	}
 	if err := c.loadSeeds(cfg.Store); err != nil {
 		return nil, err
 	}
 	node, err := availabilitylease.NewNode(availabilitylease.Config{
-		ID: cfg.ID, Clock: cfg.Clock, Store: cfg.Store, Transport: c, Signer: cfg.Signer,
+		ID: cfg.ID, Clock: cfg.Clock, Store: cfg.Store, Transport: c, Signer: availabilitylease.ECDSASigner{Key: start},
 		Logf: func(format string, args ...any) { c.logger.Debug(fmt.Sprintf(format, args...)) },
 		// Keeps incarnations increasing when relay.db was renamed (A3, A16).
 		IncarnationFloor: uint64(cfg.Wall().UnixMilli()),
@@ -106,6 +105,11 @@ func New(cfg Config) (*Coordinator, error) {
 		return nil, err
 	}
 	c.node = node
+	c.identityKey = publicKeyDER(start)
+	if rotateTo != nil {
+		// Restarted within the overlap of a key renewal: keep dual-signing.
+		c.checkIdentityKey()
+	}
 	c.startedAt = cfg.Clock.Now()
 	c.suspend = newSuspendDetector(cfg.Wall, cfg.Clock.Now)
 	return c, nil
@@ -181,6 +185,7 @@ func (c *Coordinator) loop() {
 		case <-c.notify:
 		}
 		c.observeSuspend()
+		c.checkIdentityKey()
 		c.node.Tick()
 		c.node.DrainEvents()
 		wait := tickCeiling

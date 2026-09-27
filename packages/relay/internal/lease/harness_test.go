@@ -1,6 +1,7 @@
 package lease
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -63,6 +64,9 @@ type harness struct {
 	voters    []string
 	relayVote bool
 	fresh     bool
+	// previousRelayKey and renewedAt model a relay certificate renewal.
+	previousRelayKey *ecdsa.PrivateKey
+	renewedAt        time.Time
 	// manifests holds the latest signed manifest per policy; each carries
 	// the policy's own voters (A18).
 	manifests map[string]*relayv1.LeaseSignedBlock
@@ -152,7 +156,7 @@ func (h *harness) openRelay() {
 		h.t.Fatal(err)
 	}
 	coordinator, err := New(Config{
-		ID: relayID, Store: state, Signer: recordingSigner{h: h}, PublicKey: func() []byte { return h.publicKey(relayID) },
+		ID: relayID, Store: state, Keys: harnessKeys{h: h},
 		TrustedKeys: func() []policy.TrustedPolicyKey {
 			return []policy.TrustedPolicyKey{{KeyID: policyKey, PublicKey: h.policyPub}}
 		},
@@ -183,10 +187,26 @@ func (h *harness) restartRelay(wipe bool) {
 	h.openRelay()
 }
 
-type recordingSigner struct{ h *harness }
+// harnessKeys serves the relay identity keys; renewRelayKey swaps them.
+type harnessKeys struct{ h *harness }
 
-func (s recordingSigner) Sign(message []byte) ([]byte, error) {
-	return availabilitylease.ECDSASigner{Key: s.h.keys[relayID]}.Sign(message)
+func (k harnessKeys) Keys() (crypto.Signer, crypto.Signer, time.Time) {
+	var previous crypto.Signer
+	if k.h.previousRelayKey != nil {
+		previous = k.h.previousRelayKey
+	}
+	return k.h.keys[relayID], previous, k.h.renewedAt
+}
+
+// renewRelayKey installs a new relay identity key and keeps the old one as
+// the previous key, like a certificate renewal with the rollover files.
+func (h *harness) renewRelayKey() {
+	h.t.Helper()
+	next, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.previousRelayKey, h.keys[relayID], h.renewedAt = h.keys[relayID], next, h.wall()
 }
 
 func (h *harness) connect(id string) {
@@ -326,6 +346,7 @@ func (h *harness) step(total time.Duration) {
 				h.daemons[id].Tick()
 			}
 		}
+		h.relay.checkIdentityKey()
 		h.relay.node.Tick()
 		h.pump()
 	}
