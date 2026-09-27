@@ -31,6 +31,7 @@ type relayTunnelRouter struct {
 	targetID      string
 	mu            sync.Mutex
 	registrations map[string]*relayEndpointRegistration
+	accepted      map[*acceptedRelayTunnel]struct{}
 	listener      net.Listener
 	active        atomic.Int64
 }
@@ -126,6 +127,7 @@ func (p *DockerPlugin) RelayTunnelRuntimeChanged() <-chan struct{} {
 
 func (r *relayTunnelRouter) reconcileRegistrations() {
 	bundle := r.plugin.relayGrants.get()
+	r.enforceRevocationFences(bundle)
 	desired := map[string]*pb.RelayGrantAssignment{}
 	if r.plugin.cfg.Docker.IsStorageProfile() {
 		for _, assignment := range bundle.Grants {
@@ -300,6 +302,12 @@ func (r *relayTunnelRouter) runRegistration(ctx context.Context, assignment *pb.
 func (r *relayTunnelRouter) acceptIncoming(ctx context.Context, assignment *pb.RelayGrantAssignment, incoming *relayv1.IncomingTunnel) {
 	tunnelCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	// Refused tunnels are never accepted: the relay times the opener out.
+	release, refusal := r.admitIncoming(assignment, incoming, cancel)
+	if refusal != "" {
+		return
+	}
+	defer release()
 	stream, err := r.client.AcceptTunnel(tunnelCtx)
 	if err != nil {
 		r.plugin.logger.Warn("relay endpoint tunnel failed", "owner_kind", assignment.OwnerKind, "owner_id", assignment.OwnerId, "stage", "accept", "error", err)

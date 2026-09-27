@@ -398,6 +398,12 @@ export const ALERT_CATEGORIES: CategoryDefinition[] = [
       { id: 'relay.recovering', label: 'Relay Recovering', defaultSeverity: 'warning', supportsThreshold: true },
       { id: 'relay.unavailable', label: 'Relay Unavailable', defaultSeverity: 'critical', supportsThreshold: true },
       {
+        id: 'relay.revocation_stale',
+        label: 'Relay Missed Route Revocation',
+        defaultSeverity: 'warning',
+        supportsThreshold: true,
+      },
+      {
         id: 'license.expired_grace',
         label: 'License Expired (Grace Period)',
         defaultSeverity: 'critical',

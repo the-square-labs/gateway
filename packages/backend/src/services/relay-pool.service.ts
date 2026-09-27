@@ -33,6 +33,8 @@ import {
   samePlannedAssignments,
 } from './relay-topology.js';
 import type { RelayTopologyService } from './relay-topology.service.js';
+import { describeRelayRevocation } from './relay-revocation-fence.js';
+import { RelayRevocationFenceService } from './relay-revocation-fence.service.js';
 
 type RelayInstanceRow = typeof relayInstances.$inferSelect;
 const AUTO_REBALANCE_SETTLE_MS = 30_000;
@@ -107,6 +109,7 @@ export class RelayPoolService {
   private stablePlan: { key: string; since: number } | null = null;
   private retryAfter = 0;
   private readonly startedAt = Date.now();
+  private readonly revocations: Pick<RelayRevocationFenceService, 'evaluate'>;
   private nextUpdateDrainReleaseAt = 0;
   private certificateRenewal?: Pick<
     RelayCertificateRenewalService,
@@ -121,7 +124,9 @@ export class RelayPoolService {
     private readonly events: EventBusService,
     private readonly audit: AuditService,
     private readonly settings: GeneralSettingsService
-  ) {}
+  ) {
+    this.revocations = new RelayRevocationFenceService(db);
+  }
 
   startReconciliation(): void {
     if (this.reconciliationTimer) return;
@@ -212,6 +217,9 @@ export class RelayPoolService {
       ?.renewDueIfScheduled()
       .catch((error) => logger.warn('Relay certificate renewal check failed', { error: String(error) }));
     await this.fenceSilentRemoteInstances();
+    await this.enforceRevocationDeadlines().catch((error) =>
+      logger.warn('Relay revocation deadline check failed', { error: String(error) })
+    );
     await this.reconcileManualDrains();
     await this.releaseOrphanedUpdateDrains().catch((error) =>
       logger.warn('Relay update drain release deferred', { error: String(error) })
@@ -330,6 +338,40 @@ export class RelayPoolService {
       this.events.publish('system.relay.health.changed', { poolId: 'system', action: 'instances_offline' });
     }
     return fenced.length;
+  }
+
+  /**
+   * A relay that has not applied a revoking policy within the deadline may still admit the
+   * revoked routes for as long as its policy lease lasts. Daemons then keep sources away from it
+   * for those routes and endpoints refuse them through it; its other routes keep working. The
+   * state clears when the relay applies the revoking revision.
+   */
+  async enforceRevocationDeadlines(now = new Date()): Promise<void> {
+    const outcome = await this.revocations.evaluate(now, this.startedAt);
+    for (const transition of outcome.transitions) {
+      if (transition.stale) {
+        logger.warn('Relay missed a route revocation; daemons refuse the revoked routes through it', transition);
+      } else {
+        logger.info('Relay applied the route revocations it had missed', transition);
+      }
+      this.events.publish('system.relay.health.changed', {
+        poolId: transition.poolId,
+        instanceId: transition.instanceId,
+        instanceName: transition.displayName,
+        action: 'revocation_fence',
+        revocationStale: transition.stale,
+        staleRoutes: transition.staleRoutes,
+      });
+    }
+    if (!outcome.nodeIds.length) return;
+    const results = await Promise.allSettled(outcome.nodeIds.map((nodeId) => this.policy.syncNodeGrants(nodeId)));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected')
+        logger.warn('Relay revocation fence delivery deferred to the next grant refresh', {
+          nodeId: outcome.nodeIds[index],
+          error: String(result.reason),
+        });
+    });
   }
 
   /**
@@ -774,7 +816,11 @@ export class RelayPoolService {
     const worstPressure = Math.max(0, ...instances.map((instance) => instance.health?.pressurePercent ?? 0));
     const unavailable =
       instances.length === 0 || instances.every(({ state }) => !['ready', 'draining'].includes(state));
-    const degraded = !unavailable && instances.some(({ state }) => ['offline', 'error'].includes(state));
+    const revocations = new Map(instances.map(({ id, policyRoutes }) => [id, describeRelayRevocation(policyRoutes)]));
+    const degraded =
+      !unavailable &&
+      (instances.some(({ state }) => ['offline', 'error'].includes(state)) ||
+        [...revocations.values()].some((revocation) => revocation?.state === 'stale'));
     return {
       poolId: 'system',
       state: unavailable
@@ -800,7 +846,7 @@ export class RelayPoolService {
       registeredEndpoints,
       worstPressurePercent: worstPressure,
       endpointCount: endpoints.length,
-      instances: instances.map((instance) => {
+      instances: instances.map(({ policyRoutes: _routeHistory, ...instance }) => {
         let activeAssignments = 0;
         for (const generation of activeByEndpoint.values()) {
           for (const assignment of assignmentsByGeneration.get(generation.id) ?? []) {
@@ -822,6 +868,8 @@ export class RelayPoolService {
           updateStep: updateStepByInstance.get(instance.id) ?? null,
           policyTrust: policyTrust.get(instance.id) ?? null,
           certificate: certificates.get(instance.id) ?? null,
+          /** Revoked routes this relay has not applied; `stale` once past the deadline. */
+          revocation: revocations.get(instance.id) ?? null,
         };
       }),
       staging: [...stagingByEndpoint.values()],

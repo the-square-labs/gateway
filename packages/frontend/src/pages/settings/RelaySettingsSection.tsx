@@ -46,6 +46,7 @@ import type {
   DashboardRelayInstance,
   DashboardRelaySnapshot,
   RelayReenrollment,
+  RelayRevocationStatus,
 } from "@/types";
 
 const MAX_HISTORY = 60;
@@ -123,6 +124,15 @@ function canReenroll(instance: DashboardRelayInstance): boolean {
       instance.certificate?.state === "expired" ||
       ["synchronizing", "offline", "error"].includes(instance.state))
   );
+}
+
+/** Which revoked routes a relay still holds, from the counts the pool status reports. */
+function revocationSummary(revocation: RelayRevocationStatus): string {
+  const routes = revocation.state === "stale" ? revocation.staleRoutes : revocation.pendingRoutes;
+  const label = `${routes} revoked route${routes === 1 ? "" : "s"}`;
+  return revocation.state === "stale"
+    ? `Stale for revocation of ${label}`
+    : `Revocation of ${label} pending`;
 }
 
 /** A remote relay whose certificate Gateway should renew now. */
@@ -580,6 +590,17 @@ export function RelaySettingsSection({ canEdit }: { canEdit: boolean }) {
                 }`}
               >
                 {row.certificate.message}
+              </p>
+            )}
+            {row.revocation && (
+              <p
+                role={row.revocation.state === "stale" ? "alert" : undefined}
+                className={`max-w-md text-xs ${
+                  row.revocation.state === "stale" ? "text-destructive" : "text-warning-text"
+                }`}
+              >
+                {revocationSummary(row.revocation)} since{" "}
+                <RelativeTime value={row.revocation.since} />. {row.revocation.message}
               </p>
             )}
             {!row.policyTrust && row.state !== "ready" && row.health?.lastError && (

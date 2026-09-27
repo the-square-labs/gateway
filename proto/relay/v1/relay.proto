@@ -53,6 +53,20 @@ message IncomingTunnel {
   string session_id = 1;
   string accept_token = 2;
   int64 accept_expires_at_unix = 3;
+  // The route this relay admitted the tunnel for, from the policy it holds.
+  // Unset from relays built before the field existed.
+  IncomingTunnelRoute route = 4;
+}
+
+// An endpoint refuses a route Gateway revoked while this relay missed the
+// revoking policy; the relay is trusted to report what it admitted, not to
+// hold current policy.
+message IncomingTunnelRoute {
+  string route_id = 1;
+  uint64 route_generation = 2;
+  string source_kind = 3;
+  string source_id = 4;
+  uint64 assignment_generation = 5;
 }
 
 message TunnelFrame {

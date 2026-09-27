@@ -656,6 +656,7 @@ export class NodeDispatchService {
             managedDatabaseListener: assignment.managedDatabaseListener,
           })),
           relayLatencyTargets: bundle.relayLatencyTargets ?? [],
+          revocationFences: bundle.revocationFences ?? [],
         },
       },
       timeoutMs

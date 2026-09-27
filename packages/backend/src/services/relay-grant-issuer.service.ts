@@ -19,6 +19,8 @@ import {
 } from '@/modules/settings/general-settings.service.js';
 import type { GeneralSettingsService } from '@/modules/settings/general-settings.service.js';
 import type { CryptoService } from './crypto.service.js';
+import type { RelayRevokedRouteFence } from './relay-revocation-fence.js';
+import { loadRevocationFenceState } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 import { candidateTopology } from './relay-topology.js';
 import { type RelayLatencyTarget, RelayTopologyService } from './relay-topology.service.js';
@@ -91,6 +93,8 @@ export interface RelayGrantBundle {
   dataLanes?: number;
   readChunkBytes?: number;
   relayLatencyTargets?: RelayLatencyTarget[];
+  /** Stale relays this daemon's endpoints must refuse revoked routes through. */
+  revocationFences?: RelayRevokedRouteFence[];
 }
 
 export class RelayPolicyNotAcknowledgedError extends Error {
@@ -171,8 +175,12 @@ export class RelayGrantIssuerService {
     ]);
     const activeEndpointIds = new Set(targetEndpoints.filter(({ status }) => status === 'active').map(({ id }) => id));
     const grants: RelayGrantAssignment[] = [];
-    const poolProjection = await this.getPoolProjection();
-    for (const endpoint of endpoints.filter(({ status }) => status === 'active')) {
+    const [poolProjection, revocations] = await Promise.all([
+      this.getPoolProjection(),
+      loadRevocationFenceState(this.db),
+    ]);
+    const activeOwnEndpoints = endpoints.filter(({ status }) => status === 'active');
+    for (const endpoint of activeOwnEndpoints) {
       const grant = await this.signGrant({
         kind: 'endpoint',
         subjectKind: endpoint.subjectKind,
@@ -213,9 +221,14 @@ export class RelayGrantIssuerService {
         maxFrameBytes: route.maxFrameBytes,
       });
       const endpoint = targetEndpoints.find(({ id }) => id === route.targetEndpointId);
+      // A relay stale for this route may still admit a revoked tuple of it; never send the
+      // source there. The current tuple would not pass that relay's policy anyway.
+      const staleRelays = revocations.staleRelaysByRoute.get(route.id);
       const candidates = endpoint
         ? await this.issueCandidates(
-            poolProjection.get(route.targetEndpointId) ?? [],
+            (poolProjection.get(route.targetEndpointId) ?? []).filter(
+              ({ instanceId }) => !staleRelays?.has(instanceId)
+            ),
             'connect',
             nodeId,
             node.certificateFingerprint,
@@ -240,12 +253,14 @@ export class RelayGrantIssuerService {
     }
     // Latency only orders relays; it must never hold grants back.
     const relayLatencyTargets = await this.topology.completeGrantBundle(grants, targetEndpoints).catch(() => []);
+    const revocationFences = await revocations.fencesForEndpoints(activeOwnEndpoints.map(({ id }) => id));
     this.lastBundleGeneratedAtMs = Math.max(Date.now(), this.lastBundleGeneratedAtMs + 1);
     return {
       revision: String(state.revision),
       generatedAtUnixMs: String(this.lastBundleGeneratedAtMs),
       grants,
       relayLatencyTargets,
+      ...(revocationFences.length ? { revocationFences } : {}),
     };
   }
 
@@ -500,8 +515,9 @@ export class RelayGrantIssuerService {
       maxConcurrentSessions: effectiveRelayMaxConcurrentSessions(route),
       maxFrameBytes: route.maxFrameBytes,
     });
-    const projection = await this.getPoolProjection();
-    const assignments = projection.get(endpoint.id) ?? [];
+    const [projection, revocations] = await Promise.all([this.getPoolProjection(), loadRevocationFenceState(this.db)]);
+    const staleRelays = revocations.staleRelaysByRoute.get(route.id);
+    const assignments = (projection.get(endpoint.id) ?? []).filter(({ instanceId }) => !staleRelays?.has(instanceId));
     const candidates = await this.issueCandidates(
       assignments,
       'connect',

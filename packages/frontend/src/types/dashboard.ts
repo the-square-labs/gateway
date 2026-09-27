@@ -144,6 +144,21 @@ export interface DashboardRelayInstance {
   policyTrust?: RelayPolicyTrustStatus | null;
   /** Certificate expiry or renewal problems; null when the certificate is fine. */
   certificate?: RelayCertificateStatus | null;
+  /** Route revocations this relay has not applied; null when it holds none. */
+  revocation?: RelayRevocationStatus | null;
+}
+
+/**
+ * `stale`: the relay missed the acknowledgement deadline, so daemons refuse the revoked routes
+ * through it (its other routes keep working). `pending`: still inside the deadline.
+ */
+export interface RelayRevocationStatus {
+  state: "pending" | "stale";
+  message: string;
+  staleRoutes: number;
+  pendingRoutes: number;
+  requiredRevision: number;
+  since: string;
 }
 
 export interface RelayCertificateStatus {

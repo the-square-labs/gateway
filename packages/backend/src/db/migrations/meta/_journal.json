@@ -1506,6 +1506,13 @@
       "when": 1790540205548,
       "tag": "0214_relay_grant_key_publication_revision",
       "breakpoints": true
+    },
+    {
+      "idx": 215,
+      "version": "7",
+      "when": 1790540786402,
+      "tag": "0215_relay_revocation_fence",
+      "breakpoints": true
     }
   ]
 }

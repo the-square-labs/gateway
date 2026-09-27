@@ -556,6 +556,9 @@ message SyncRelayGrantsCommand {
   int64 generated_at_unix_ms = 3;
   uint32 data_lanes = 4;
   uint32 read_chunk_bytes = 5;
+  // Relays that did not acknowledge a revoking policy in time, per endpoint
+  // of this daemon. The endpoint refuses the listed routes through them.
+  repeated RelayRevocationFence revocation_fences = 16;
   // Every relay of the pool, so the daemon measures its distance to relays
   // it holds no transport to yet. Measurement only: never a tunnel target.
   repeated RelayLatencyTarget relay_latency_targets = 20;
@@ -565,6 +568,22 @@ message RelayLatencyTarget {
   string relay_instance_id = 1;
   repeated string addresses = 2;
   uint32 port = 3;
+}
+
+// A relay that may still admit routes Gateway revoked for one endpoint. A
+// relay that does not name the route of an incoming tunnel is refused
+// entirely for this endpoint while the fence stands.
+message RelayRevocationFence {
+  string relay_instance_id = 1;
+  string endpoint_id = 2;
+  repeated RelayRevokedRoute routes = 3;
+}
+
+message RelayRevokedRoute {
+  string route_id = 1;
+  // The only generation the endpoint still accepts through the fenced relay;
+  // 0 when the route no longer targets the endpoint.
+  uint64 allowed_generation = 2;
 }
 
 message RelayGrantAssignment {

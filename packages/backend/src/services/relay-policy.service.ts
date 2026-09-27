@@ -49,6 +49,7 @@ import {
   RelayPolicySigningKeyService,
   type RelayPolicyTrustAnchor,
 } from './relay-policy-signing-key.service.js';
+import { RELAY_POLICY_REVISION_LOCK, recordBuiltPolicyRoutes } from './relay-revocation-fence.service.js';
 import { effectiveRelayMaxConcurrentSessions } from './relay-session-limits.js';
 
 export type { RelayGrantAssignment, RelayGrantBundle, RelayGrantClaims } from './relay-grant-issuer.service.js';
@@ -1867,7 +1868,7 @@ export class RelayPolicyService {
     const relaySettings = generalSettings.relay;
     const issuedAt = new Date();
     const projection = await this.db.transaction(async (tx) => {
-      await tx.execute(sql`select pg_advisory_xact_lock(hashtext('gateway-relay-remote-policy-revision'))`);
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${RELAY_POLICY_REVISION_LOCK}))`);
       // Writers bump this row in the same transaction as projection changes.
       // Holding SHARE until the projection is built prevents mixed revisions
       // under READ COMMITTED, while allowing writers to proceed during RPC I/O.
@@ -1936,6 +1937,21 @@ export class RelayPolicyService {
         .where(eq(relayPools.id, instance.poolId))
         .returning({ revision: relayPools.desiredPolicyRevision });
       if (!poolRevision) throw new Error('Relay pool is unavailable');
+      // Under the revision lock, so a revocation is always judged against the snapshots built.
+      const endpointGenerations = new Map(endpoints.map((endpoint) => [endpoint.id, endpoint.generation]));
+      await recordBuiltPolicyRoutes(
+        tx,
+        instance,
+        selectedAssignments.flatMap(({ endpointId }) =>
+          routes.flatMap((route) => {
+            const endpointGeneration = endpointGenerations.get(endpointId);
+            return route.targetEndpointId !== endpointId || endpointGeneration === undefined
+              ? []
+              : [{ routeId: route.id, endpointId, routeGeneration: route.generation, endpointGeneration }];
+          })
+        ),
+        poolRevision.revision
+      );
       return { instance, state, grantKeys, selectedAssignments, endpoints, routes, revision: poolRevision.revision };
     });
 

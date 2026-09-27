@@ -92,6 +92,7 @@ function reconciliationHarness() {
   vi.spyOn(pool, 'retireDrainedGenerations').mockResolvedValue(0);
   vi.spyOn(pool, 'reconcileManualDrains').mockResolvedValue(undefined);
   vi.spyOn(pool, 'fenceSilentRemoteInstances').mockResolvedValue(0);
+  vi.spyOn(pool, 'enforceRevocationDeadlines').mockResolvedValue(undefined);
   vi.spyOn(pool, 'releaseOrphanedUpdateDrains').mockResolvedValue(0);
   vi.spyOn(pool, 'getSnapshot').mockImplementation(async () => snapshot);
   const stage = vi.spyOn(pool, 'stageRebalance').mockResolvedValue([]);
@@ -636,11 +637,12 @@ describe('RelayPoolService status', () => {
     expect(query.params.at(-1)).toBe(20);
   });
 
-  function snapshotDb(latest: any[], kind = 'test', capable = true, updateState?: string) {
+  function snapshotDb(latest: any[], kind = 'test', capable = true, updateState?: string, extra: object = {}) {
     const relay = {
       ...instance('relay', 'host'),
       kind: 'local',
       capabilities: { features: capable ? ['relay_pool_v1'] : [] },
+      ...extra,
     };
     const active = { id: 'old', endpointId: 'endpoint', generation: 1, state: 'active' };
     return queuedDb([
@@ -714,6 +716,29 @@ describe('RelayPoolService status', () => {
     const status = { state: 'reenrollment_required', message: 'Re-enroll it', observedAt: 'now', trustedKeyIds: [] };
     (policy as any).describePolicyTrust = vi.fn().mockResolvedValue(new Map([['relay', status]]));
     expect((await pool.getSnapshot()).instances[0]).toMatchObject({ policyTrust: status });
+  });
+
+  it('reports a relay that missed a route revocation next to the instance, without its route history', async () => {
+    const policyRoutes = [
+      { routeId: 'kept', endpointId: 'endpoint', routeGeneration: 1, endpointGeneration: 1 },
+      {
+        routeId: 'revoked',
+        endpointId: 'endpoint',
+        routeGeneration: 1,
+        endpointGeneration: 1,
+        removedAtRevision: 42,
+        revokedAt: '2026-09-27T10:00:00.000Z',
+        staleAt: '2026-09-27T10:01:30.000Z',
+      },
+    ];
+    const { db } = snapshotDb([], 'test', true, undefined, { policyRoutes });
+    const { pool } = service(db);
+    const snapshot = await pool.getSnapshot();
+    expect(snapshot.state).toBe('degraded');
+    expect(snapshot.instances[0]).toMatchObject({
+      revocation: { state: 'stale', staleRoutes: 1, pendingRoutes: 0, requiredRevision: 42 },
+    });
+    expect(snapshot.instances[0]).not.toHaveProperty('policyRoutes');
   });
 
   it('keeps the pool status available when trust cannot be assessed', async () => {
@@ -1073,5 +1098,39 @@ describe('RelayPoolService placement during updates and mixed versions', () => {
     vi.advanceTimersByTime(30_000);
     await pool.reconcile();
     expect(evacuate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('RelayPoolService revocation deadlines', () => {
+  it('announces a stale relay per instance and resends the affected daemons their grants', async () => {
+    const { pool, events } = service();
+    const policy = { syncNodeGrants: vi.fn().mockResolvedValue(undefined) };
+    (pool as any).policy = policy;
+    (pool as any).revocations = {
+      evaluate: vi.fn().mockResolvedValue({
+        transitions: [{ instanceId: 'relay-1', poolId: 'system', displayName: 'edge-1', stale: true, staleRoutes: 2 }],
+        nodeIds: ['node-source', 'node-target'],
+      }),
+    };
+    await pool.enforceRevocationDeadlines(new Date('2026-09-27T10:01:30Z'));
+    expect(events.publish).toHaveBeenCalledWith('system.relay.health.changed', {
+      poolId: 'system',
+      instanceId: 'relay-1',
+      instanceName: 'edge-1',
+      action: 'revocation_fence',
+      revocationStale: true,
+      staleRoutes: 2,
+    });
+    expect(policy.syncNodeGrants.mock.calls).toEqual([['node-source'], ['node-target']]);
+  });
+
+  it('stays quiet while every relay acknowledges in time', async () => {
+    const { pool, events } = service();
+    const policy = { syncNodeGrants: vi.fn() };
+    (pool as any).policy = policy;
+    (pool as any).revocations = { evaluate: vi.fn().mockResolvedValue({ transitions: [], nodeIds: [] }) };
+    await pool.enforceRevocationDeadlines();
+    expect(events.publish).not.toHaveBeenCalled();
+    expect(policy.syncNodeGrants).not.toHaveBeenCalled();
   });
 });
